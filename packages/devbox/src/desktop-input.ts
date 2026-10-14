@@ -100,54 +100,69 @@ export const SCREENSHOT = 'f=$(mktemp --suffix=.png) && scrot -o -p "$f" && cat 
 
 const xy = ([x, y]: readonly [number, number]): string[] => [String(x), String(y)];
 
-/** One xdotool invocation, and what releases anything it holds down if it is cut short. */
-export interface XdotoolRun {
-  readonly argv: string[];
-  readonly release: string[] | null;
-}
+/**
+ * What a run that did not end cleanly left down, let up (D89): every key the X server holds down (XQueryKeymap) and
+ * every pointer button (XQueryPointer's mask), released through XTEST as xdotool presses them. Read from X itself, so it
+ * covers any action, a chord's every key, a click's button and the modifiers it held, with no list of its own to miss
+ * one. It prints what it let up.
+ */
+export const LET_UP_PY = String.raw`import ctypes, sys
+x = ctypes.cdll.LoadLibrary('libX11.so.6')
+xtest = ctypes.cdll.LoadLibrary('libXtst.so.6')
+x.XOpenDisplay.restype = ctypes.c_void_p
+x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+x.XDefaultRootWindow.restype = ctypes.c_ulong
+opened = x.XOpenDisplay(b':0')
+if not opened:
+    sys.exit('the desktop has no display :0')
+display = ctypes.c_void_p(opened)
+keymap = ctypes.create_string_buffer(32)
+x.XQueryKeymap(display, keymap)
+keys = [at * 8 + bit for at, byte in enumerate(keymap.raw) for bit in range(8) if byte >> bit & 1]
+for code in keys:
+    xtest.XTestFakeKeyEvent(display, code, 0, 0)
+root, child, mask = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_uint()
+where = [ctypes.c_int() for _ in range(4)]
+x.XQueryPointer(display, ctypes.c_ulong(x.XDefaultRootWindow(display)), ctypes.byref(root), ctypes.byref(child), *[ctypes.byref(c) for c in where], ctypes.byref(mask))
+buttons = [button for button in range(1, 6) if mask.value >> (7 + button) & 1]
+for button in buttons:
+    xtest.XTestFakeButtonEvent(display, button, 0, 0)
+x.XSync(display, 0)
+print('keys', *keys, 'buttons', *buttons)
+`;
 
 /**
- * The xdotool argv that performs `action`, one invocation, and what releases anything it holds down if it is cut short.
- * No `mousemove --sync`: it waits for the pointer to leave where it was, about 15 s when it is already at the point, and
- * a warp then a click on one X connection are served in order without it.
+ * The xdotool argv that performs `action`, one invocation. No `mousemove --sync`: it waits for the pointer to leave
+ * where it was, about 15 s when it is already at the point, and a warp then a click on one X connection are served in
+ * order without it. What a run cut short leaves down is let up by {@link LET_UP_PY}, whatever the action.
  */
-export function xdotoolOf(action: Exclude<DesktopAction, { kind: 'screenshot' | 'watch' }>): XdotoolRun {
+export function xdotoolOf(action: Exclude<DesktopAction, { kind: 'screenshot' | 'watch' }>): string[] {
   switch (action.kind) {
-    case 'click': {
-      const down = action.hold.flatMap((key) => ['keydown', key]);
-      const up = action.hold.flatMap((key) => ['keyup', key]);
-
-      return {
-        argv: ['xdotool', ...down, 'mousemove', ...xy(action.at), 'click', '--repeat', String(action.count), '--delay', '80', BUTTONS[action.button], ...up],
-        release: up.length === 0 ? null : ['xdotool', ...up],
-      };
-    }
-
+    case 'click':
+      return ['xdotool', ...action.hold.flatMap((key) => ['keydown', key]), 'mousemove', ...xy(action.at),
+        'click', '--repeat', String(action.count), '--delay', '80', BUTTONS[action.button], ...action.hold.flatMap((key) => ['keyup', key])];
     case 'type':
-      return { argv: ['xdotool', 'type', '--delay', '12', '--', action.text], release: null };
+      return ['xdotool', 'type', '--delay', '12', '--', action.text];
     case 'key':
-      // Held: down, a wait, up, in the one run; cut short, the release lets it go.
+      // Held: down, a wait, up, in the one run.
       return action.holdMs === undefined
-        ? { argv: ['xdotool', 'key', '--', action.keys], release: null }
-        : { argv: ['xdotool', 'keydown', action.keys, 'sleep', String(action.holdMs / 1000), 'keyup', action.keys], release: ['xdotool', 'keyup', action.keys] };
+        ? ['xdotool', 'key', '--', action.keys]
+        : ['xdotool', 'keydown', action.keys, 'sleep', String(action.holdMs / 1000), 'keyup', action.keys];
     case 'scroll': {
-      // Wheel buttons: 4 up, 5 down, 6 left, 7 right. xdotool's own 100 ms a click would outlast the bound.
+      // Wheel buttons: 4 up, 5 down, 6 left, 7 right, 20 ms apart rather than xdotool's own 100 ms.
       const turns = (clicks: number, back: string, on: string): string[] => (clicks === 0 ? [] : ['click', '--repeat', String(Math.abs(clicks)), '--delay', '20', clicks < 0 ? back : on]);
 
-      return { argv: ['xdotool', 'mousemove', ...xy(action.at), ...turns(action.dy, '4', '5'), ...turns(action.dx, '6', '7')], release: null };
+      return ['xdotool', 'mousemove', ...xy(action.at), ...turns(action.dy, '4', '5'), ...turns(action.dx, '6', '7')];
     }
 
     case 'move':
-      return { argv: ['xdotool', 'mousemove', ...xy(action.at)], release: null };
+      return ['xdotool', 'mousemove', ...xy(action.at)];
     case 'drag': {
       // Moved through its midpoint: an app that reads a drag from motion sees one.
       const middle: [number, number] = [Math.round((action.from[0] + action.to[0]) / 2), Math.round((action.from[1] + action.to[1]) / 2)];
 
-      return {
-        argv: ['xdotool', 'mousemove', ...xy(action.from), 'mousedown', '1', 'sleep', '0.05', 'mousemove', ...xy(middle), 'sleep', '0.05',
-          'mousemove', ...xy(action.to), 'sleep', '0.05', 'mouseup', '1'],
-        release: ['xdotool', 'mouseup', '1'],
-      };
+      return ['xdotool', 'mousemove', ...xy(action.from), 'mousedown', '1', 'sleep', '0.05', 'mousemove', ...xy(middle), 'sleep', '0.05',
+        'mousemove', ...xy(action.to), 'sleep', '0.05', 'mouseup', '1'];
     }
   }
 }

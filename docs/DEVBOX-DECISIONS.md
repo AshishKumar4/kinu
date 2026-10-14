@@ -4660,7 +4660,9 @@ also runs, single-flight, so a look and a pane opened at once share one session;
 the session that died and ends by printing X's own geometry. The session's files and its background are written only
 by a run that starts X, so a check on a running desktop costs a few `pgrep`s. No clock bounds it or any action: a
 call whose program is stopped waits no longer, for the check or for its turn, and a check nobody waits on any more is
-ended by `killExec`, so an X that stays alive and never opens its port holds no call for good. A point off that screen
+ended by `killExec`, so an X that stays alive and never opens its port holds no call for good. The call that runs the
+check is not interrupted from taking it to letting it go: on a real box a look stopped as it began left the check
+owned by nobody, and the next look waited on it for 270 s, until the edge cancelled it. A point off that screen
 is refused before any input.
 One agent drives at a time: an agent takes the screen by looking when nobody holds it, and holds it until its turns
 end, it is stopped, or X starts afresh, however long it thinks between looks. The workspace lets it go as the agent's
@@ -4668,8 +4670,11 @@ last open turn closes, or as it is stopped; it asks the box only for an agent th
 it go, so a turn that never touched the desktop calls no box (D56). Input is taken only from the agent holding the
 screen, so every action lands on a screen its agent saw. The owner is not a driver. Each action is one run on D69's
 canonical exec path, in its own group under the caller's `execId`: the program's stop is the caller's `killExec`, which
-ends that group, and the call settles only once its process has gone and what a click holds, a drag presses or a key
-is held for has been let go, run after the process however it ended. No `mousemove --sync`, which waits about 15 s
+ends that group, and the call settles only once its process has gone. A run that did not end cleanly, killed or
+failed, may be cut between any press and its release: a chord's keys, one click of three, a character of a long text, a
+drag's button. So after it, whatever X holds down is let up, read from X itself (XQueryKeymap, and XQueryPointer's
+button mask) and released through XTEST; no action keeps a list of its own to miss one. A key or button the owner holds
+at that moment is let up too. A run that exits cleanly let up all it pressed itself, and asks for nothing. No `mousemove --sync`, which waits about 15 s
 when the pointer is already at the point. It runs under a UTF-8 locale: on a real box, under the C
 locale the box starts in, `xdotool type -- "aüb"` typed "a" and stopped at an invalid multi-byte sequence. Under
 UTF-8 it typed "ab": Chromium dropped the ü, whose key xdotool binds for the moment of the press, at 12 ms a
@@ -4680,8 +4685,7 @@ thumbnails into one PNG, two to a row up to four frames and four to a row up to 
 tools tarball carries for the wallpaper too) does the tiling. Measured on two vision models, four half-size frames in one sheet
 cost what one screenshot does and read motion, a large word and 11 px text as well as four separate screenshots; eight
 at a third of the size lost 11 px text on both. A held key is `keydown`, a wait, `keyup` in one run, at most 10 s;
-stopped mid-hold, its group is ended and `keyup` runs at once: on a real box the page saw the key let go and the X
-server reported no key down. The canonical path takes an argv as well as a command string, so xdotool's argv carries
+stopped mid-hold, its group is ended and what is down is let up at once. The canonical path takes an argv as well as a command string, so xdotool's argv carries
 typed text without a shell to quote it, and it reads a capture's output as bytes. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
 screenshot 800 high to 1228×768 at their default detail, and none Kinu serves resizes one 768 high, so an agent's
 points are the screen's own pixels. Every process the box starts gets `DISPLAY=:0`, so a window a program opens
