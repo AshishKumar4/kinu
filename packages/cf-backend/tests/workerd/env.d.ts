@@ -17,7 +17,7 @@ import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 import type { AddressedAnswers, AlarmAfterDestroy, FailedStartAnswers } from './addressed-name-shapes';
-import type { CraftedFromNodeObservation, OnePlaneObservation, RelayedAnswer } from './agent-facet-shapes';
+import type { CraftedFromNodeObservation, HandedStream, OnePlaneObservation, RelayedAnswer } from './agent-facet-shapes';
 import type { AttributedLine } from './attribution-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
@@ -262,6 +262,7 @@ interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
   agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
   agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>>;
   slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>>;
+  slateBindingStreams(workspace: string): Promise<readonly HandedStream[]>;
   programHostAnswer(workspace: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
   swarmJobNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
   jobWindowArmed(workspace: string, count: number): Promise<void>;
