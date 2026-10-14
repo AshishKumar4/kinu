@@ -95,10 +95,9 @@ export function applyPromotionDecision(
 
     if (events.actorId !== rt.actor.actorId) return yield* new KinuError('denied', 'a scaffold decision requires its actor event recorder');
     const sql = rt.storage.sql;
-    // The pointer as it stands, never a number derived from the pending one: rollbacks leave gaps in the numbering.
-    const currentVersion = getCurrentScaffoldVersion(sql, rt.actor);
-
-    if (currentVersion === null) return yield* new KinuError('missing', 'this agent has no current scaffold version to decide against');
+    // The pointer as it stands, never a number derived from the pending one: rollbacks leave gaps in the numbering. An
+    // agent no version was recorded for runs the initial source, v0.
+    const currentVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? 0;
 
     if (decision === 'promote') {
       // Re-check misevolution against the version file bytes that will actually run.
