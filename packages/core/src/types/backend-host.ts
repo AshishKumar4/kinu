@@ -4,7 +4,7 @@
 import type { JsonObject } from '../utils/json';
 import type { PlanReview } from './plans';
 import type { OutputChunk } from './primitives';
-import type { TurnAuthorship } from './turn';
+import type { TurnAuthorship, WorkMode } from './turn';
 
 /** A typed event fanned out to connected clients. Fire-and-forget. */
 export interface BroadcastEvent {
@@ -61,6 +61,8 @@ export interface OperatorSend {
   readonly id: string;
   readonly text: string;
   readonly files?: readonly PromptFile[];
+  /** What it was typed under, where its sender chose. */
+  readonly mode?: WorkMode;
 }
 
 /** ai-sdk FileUIPart payload; `url` is a data: URL so it crosses every transport unfetched. */

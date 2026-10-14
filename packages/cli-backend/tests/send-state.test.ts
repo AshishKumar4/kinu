@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { LanguageModelV2StreamPart } from '@ai-sdk/provider';
-import { PendingSendStore } from '@kinu.run/core';
+import { PendingSendStore, type JsonObject, type WorkMode } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { fakeModel, gatedFactCallStream, setup, steerStatuses, textStream, transcript, turnStarts } from './helpers/local-session';
@@ -135,11 +135,11 @@ describe('a send asked where it stands, from its durable facts', () => {
 
 describe('a send its process died owing', () => {
   /** A reservation the dead process acknowledged, and the next process that restores it. */
-  function restored(rows: readonly { readonly id: string; readonly text: string; readonly turnId: string | null }[]) {
+  function restored(rows: readonly { readonly id: string; readonly text: string; readonly turnId: string | null; readonly metadata?: JsonObject; readonly mode?: WorkMode }[]) {
     const { db, rt, session } = setup('unused');
     const pending = new PendingSendStore(rt.storage.sql, rt.actor.actorId);
 
-    for (const row of rows) pending.reserve({ ...row, mode: 'build' });
+    for (const row of rows) pending.reserve({ ...row, mode: row.mode ?? 'build' });
     const events = new AwaitedList<SessionEvent>();
     const next = new LocalAgentSession({ rt, db, model: fakeModel('restored answer'), onEvent: (event) => events.push(event) });
 
@@ -167,6 +167,33 @@ describe('a send its process died owing', () => {
     const users = (await transcript(rt)).filter((row) => row.role === 'user').map((row) => [row.id, row.content]);
 
     expect(users).toEqual([['dead-1', 'first words'], ['dead-2', 'second words']]);
+    await session.end();
+    await next.end();
+  });
+
+  test('those bound to a dead turn rerun under plan if any of them was typed under plan', async () => {
+    const { session, next, events } = restored([
+      { id: 'dead-1', text: 'build this', turnId: 'dead-turn', mode: 'build' },
+      { id: 'dead-2', text: 'plan that', turnId: 'dead-turn', mode: 'plan' },
+    ]);
+
+    await next.awaitSend('dead-2');
+
+    expect(turnStarts(events).filter((start) => start.turnId === 'dead-1').map((start) => start.workMode)).toEqual(['plan']);
+    await session.end();
+    await next.end();
+  });
+
+  // As the live inbox reruns them: the first send's own metadata (the card it answered) rides the rerun.
+  test('those bound to a dead turn rerun under their first send\'s metadata', async () => {
+    const { session, next, events } = restored([
+      { id: 'dead-1', text: 'first words', turnId: 'dead-turn', metadata: { kinuEvent: 'card_reply' } },
+      { id: 'dead-2', text: 'second words', turnId: 'dead-turn' },
+    ]);
+
+    await next.awaitSend('dead-2');
+
+    expect(turnStarts(events).filter((start) => start.turnId === 'dead-1').map((start) => start.event)).toEqual(['card_reply']);
     await session.end();
     await next.end();
   });

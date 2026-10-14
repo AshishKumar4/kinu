@@ -21,7 +21,7 @@ import { Effect, Result } from 'effect';
 import type { ChatEvent } from '../chat';
 import type { CompactionTrigger } from '../extension';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
-import { runWorkModeInvocation } from '../execution/work-mode';
+import { narrowestMode, runWorkModeInvocation } from '../execution/work-mode';
 import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
@@ -549,30 +549,11 @@ export class ChatSession {
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     // The operator's immediate next turn, answered at admission: its settle is on this pump's stack.
     if (input.origin === 'user') {
-      const sends = input.sends ?? [];
-      const steerIds = sends.map((send) => send.id);
-      const files = sends.flatMap((send) => send.files ?? []);
-
-      const item: QueueItem = {
-        text: input.text,
-        kind: 'user',
-        ...(files.length > 0 && { files }),
-        metadata: input.metadata,
-        rerun: true,
-        // Opened under its first send's id; only a rerun carrying none mints one.
-        turnId: steerIds[0] ?? crypto.randomUUID(),
-        // Retired with this rerun's row in the same transaction.
-        steerIds,
-        sends,
-        settle: (failure) => {
-          this.settleLandings(steerIds, failure ?? 'turn');
-        },
-      };
-
+      const item = this.leftoverRerun(input.sends ?? [], input.metadata);
       // Each merged id is bound to this turn before admission; `OR IGNORE` because rerun ids already carry theirs.
-      const mode: WorkMode = workModeForTurnMetadata(input.metadata) === 'plan' ? 'plan' : 'build';
+      const mode: WorkMode = workModeForTurnMetadata(item.metadata) === 'plan' ? 'plan' : 'build';
 
-      for (const send of sends) {
+      for (const send of item.sends ?? []) {
         this.pendingSends.ensureReserved({ id: send.id, turnId: item.turnId ?? null, mode, text: send.text });
       }
 
@@ -2437,6 +2418,31 @@ export class ChatSession {
     if (this.pendingSends.runEnds().length > 0) queueMicrotask(() => { if (!this.ended) this.ports.runs?.tell(); });
   }
 
+  /**
+   * Sends a turn left unanswered, rerun as one user turn under its first send's id, the live inbox's and a restart's
+   * alike: in acceptance order, under the narrowest of their chosen modes, with the first send's metadata.
+   */
+  private leftoverRerun(sends: readonly OperatorSend[], metadata: JsonObject | undefined): QueueItem {
+    const steerIds = sends.map((send) => send.id);
+    const files = sends.flatMap((send) => send.files ?? []);
+
+    return {
+      text: sends.map((send) => send.text).join('\n\n'),
+      kind: 'user',
+      ...(files.length > 0 && { files }),
+      metadata: { ...metadata, ...(sends.some((send) => send.mode !== undefined) && { kinuMode: narrowestMode(sends.map((send) => send.mode)) }) },
+      rerun: true,
+      // Opened under its first send's id; only a rerun carrying none mints one.
+      turnId: steerIds[0] ?? crypto.randomUUID(),
+      // Retired with this rerun's row in the same transaction.
+      steerIds,
+      sends: sends.map(({ id, text, files: attached }) => ({ id, text, ...(attached !== undefined && { files: attached }) })),
+      settle: (failure) => {
+        this.settleLandings(steerIds, failure ?? 'turn');
+      },
+    };
+  }
+
   /** Mid-turn rows re-enter the inbox; idle rows re-enter the pump in sequence order. */
   private restorePendingSends(): void {
     // Rows bound to the re-opened turn land in its first step.
@@ -2473,19 +2479,9 @@ export class ChatSession {
     }
 
     for (const group of dead.values()) {
-      const mode: WorkMode = group.some((row) => row.mode === 'plan') ? 'plan' : 'build';
+      const sends = group.map((row) => ({ id: row.id, text: row.text, files: this.pendingSends.files(row.id), mode: row.mode }));
 
-      const sends = group.map((row) => ({ id: row.id, text: row.text, files: this.pendingSends.files(row.id) }));
-
-      this.queue.push({
-        text: group.map((row) => row.text).join('\n\n'), kind: 'user', turnId: group[0]?.id,
-        rerun: true,
-        steerIds: sends.map((send) => send.id),
-        sends,
-        metadata: { kinuMode: mode },
-        files: sends.flatMap((send) => send.files),
-        settle: () => {},
-      });
+      this.queue.push(this.leftoverRerun(sends, group[0] === undefined ? undefined : this.pendingSends.metadata(group[0].id)));
       queued += 1;
     }
 
