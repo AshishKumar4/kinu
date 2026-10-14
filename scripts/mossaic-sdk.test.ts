@@ -53,7 +53,7 @@ test('the vendored closure matches the pinned upstream commit', () => {
   const verdict = verifyPinnedSource();
 
   expect(verdict.drift).toEqual([]);
-  expect(verdict.commit).toBe('5935e3de4dfa568a428e367199e58c16ffac6eab');
+  expect(verdict.commit).toBe('7f4089ec1f6ef1b133becce91aba941c7b9b31b5');
   expect(verdict.checked).toBe(pinned().length);
 
   // The three roots the SDK build needs: its own source, the `@shared` alias

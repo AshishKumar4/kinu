@@ -31,6 +31,13 @@ export interface RelayedAnswer<T> {
   readonly carriesDisposer: boolean;
 }
 
+/** A streamed answer a slate's binding handed on: `ai.stream`'s or `agent.ask`'s, whose stream it was, and its text. */
+export interface HandedStream {
+  readonly member: 'ai.stream' | 'agent.ask';
+  readonly stream: 'received' | 'own';
+  readonly text: string;
+}
+
 export interface AgentFacetClaim {
   readonly actorId: string;
   readonly turnId: string;

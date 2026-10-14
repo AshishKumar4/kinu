@@ -17,9 +17,9 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { SlateBinding } from '../../src/slates/bindings';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
-import { SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
+import { isJsonAnswer, SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { CraftedFromNodeObservation, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
+import type { CraftedFromNodeObservation, HandedStream, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
@@ -345,6 +345,30 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
     const answer = await binding.call(['get'], ['seen'], null);
 
     return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer };
+  }
+
+  /** What the binding hands a slate for `ai.stream` and `agent.ask`, the owner answering each with a stream here. */
+  async slateBindingStreams(workspace: string): Promise<readonly HandedStream[]> {
+    // `workspace` is the binding a slate's class calls its surface through.
+    const props = { workspace, id: 'relay-probe', name: 'workspace', caller: ROOT_SLATE_CALLER };
+    const seen: HandedStream[] = [];
+
+    for (const member of ['ai.stream', 'agent.ask'] as const) {
+      const received = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(`${member} text`)); controller.close(); } });
+      const answer: SlateSurfaceResult = { ok: true, value: member === 'ai.stream' ? received : { reply: received } };
+      const owners = this.env.OrchestratorAgent;
+      // The owner's stub answers `slateCallAs` from here; nothing else of it is read.
+      const owner = { idFromName: (name: string) => owners.idFromName(name), get: (id: DurableObjectId) => new Proxy(owners.get(id), { get: (_stub, key) => (key === 'slateCallAs' ? async () => answer : undefined) }) };
+      const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), { ...this.env, OrchestratorAgent: owner });
+      const handed = await binding.call(member.split('.'), [], null);
+
+      if (!handed.ok || isJsonAnswer(handed.value)) throw new Error(`the binding answered ${member} with no stream`);
+      const stream = handed.value instanceof ReadableStream ? handed.value : handed.value.reply;
+
+      seen.push({ member, stream: stream === received ? 'received' : 'own', text: await new Response(stream).text() });
+    }
+
+    return seen;
   }
 
   /** A program's host call answering with what the host got over RPC, as a tool call's result reaches it. */
