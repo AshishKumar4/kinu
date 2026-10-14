@@ -5,10 +5,7 @@
  */
 import * as v from 'valibot';
 import { ExecutorPortSchema } from '../execution/types';
-import {
-  ButtonSchema, ClickCountSchema, DesktopPointSchema, KeyHoldSchema, KeysSchema, TypedTextSchema, WATCH_DEFAULT_FRAMES, WatchFpsSchema,
-  WatchSecondsSchema, WheelClicksSchema, watchSheet, type DesktopScreen,
-} from '../execution/desktop';
+import { DESKTOP_INPUTS, WATCH_DEFAULT_FRAMES, watchSheet, type DesktopScreen } from '../execution/desktop';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { defineOperation, type Impact, type Operation } from './operation';
 
@@ -163,58 +160,63 @@ function watchPays(screen: DesktopScreen): string {
     + `${made(WATCH_DEFAULT_FRAMES)}; ${made(most)}.`;
 }
 
+/** A desktop member's input as the model reads it: its fields as the desktop declares them (`DESKTOP_INPUTS`), each
+ *  with its words, inside its `optional` where it has one. */
+function deskInput<const E extends v.ObjectEntries>(entries: E, words: { readonly [F in keyof E]: string }) {
+  const said = new Map<string, string>(Object.entries(words));
+
+  return v.strictObject(Object.fromEntries(Object.entries(entries).map(([field, schema]) => {
+    const text = said.get(field) ?? '';
+
+    return [field, v.isOfType('optional', schema) ? v.optional(described(schema.wrapped, text)) : described(schema, text)];
+  })));
+}
+
 /** The desktop's members over the screen the box runs, its size declared once, where the model reads it (D89). */
 export function computerDesktop(screen: DesktopScreen) {
   const size = `${String(screen.width)}×${String(screen.height)}`;
-  const Point = described(DesktopPointSchema, `A point on the screen, [x, y]: pixels from its top left, x below ${String(screen.width)} and y below ${String(screen.height)}.`);
+  const point = `A point on the screen, [x, y]: pixels from its top left, x below ${String(screen.width)} and y below ${String(screen.height)}.`;
   const Image = described(v.string(), 'A PNG data URL. Returned from the program, it is shown to you.');
 
   return {
     screenshot: desk({
-      name: 'screenshot', impact: 'observe', input: v.strictObject({}), output: Image,
+      name: 'screenshot', impact: 'observe', input: deskInput(DESKTOP_INPUTS.screenshot, {}), output: Image,
       help: `The desktop: the screen the owner watches in the Computer pane, ${size}, as an image. Starts the desktop if it `
         + 'is not running; start programs that open windows after it. Return it from the program to see it.',
     }),
     watch: desk({
       name: 'watch', impact: 'observe', output: Image,
       help: 'The desktop over a few seconds, to see what moves or changes: its frames, taken evenly, in one image.',
-      input: v.strictObject({
-        seconds: described(WatchSecondsSchema, 'How long to watch, at most 10.'),
-        fps: v.optional(described(WatchFpsSchema, watchPays(screen))),
-      }),
+      input: deskInput(DESKTOP_INPUTS.watch, { seconds: 'How long to watch, at most 10.', fps: watchPays(screen) }),
     }),
     click: desk({
       name: 'click', impact: 'execute', output: v.null(), help: 'Click at a point.',
-      input: v.strictObject({
-        at: Point,
-        button: v.optional(described(ButtonSchema, 'Default "left".')),
-        count: v.optional(described(ClickCountSchema, '2 double-clicks, 3 triple-clicks; default 1.')),
-        hold: v.optional(described(KeysSchema, 'Modifiers held during the click: "ctrl", "shift", "alt", "super", or several joined by "+".')),
+      input: deskInput(DESKTOP_INPUTS.click, {
+        at: point,
+        button: 'Default "left".',
+        count: '2 double-clicks, 3 triple-clicks; default 1.',
+        hold: 'Modifiers held during the click: "ctrl", "shift", "alt", "super", or several joined by "+".',
       }),
     }),
     type: desk({
       name: 'type', impact: 'execute', output: v.null(), help: 'Type text at the keyboard focus. "\\n" presses Return.',
-      input: v.strictObject({ text: described(TypedTextSchema, 'At most 4,000 characters.') }),
+      input: deskInput(DESKTOP_INPUTS.type, { text: 'At most 4,000 characters.' }),
     }),
     key: desk({
       name: 'key', impact: 'execute', output: v.null(), help: 'Press a key, or a chord of modifiers and a key.',
-      input: v.strictObject({
-        keys: described(KeysSchema, KEYS_ARE),
-        hold: v.optional(described(KeyHoldSchema, 'Milliseconds to hold it down, as a game reads a held key; at most 10,000.')),
-      }),
+      input: deskInput(DESKTOP_INPUTS.key, { keys: KEYS_ARE, hold: 'Milliseconds to hold it down, as a game reads a held key; at most 10,000.' }),
     }),
     scroll: desk({
       name: 'scroll', impact: 'execute', output: v.null(), help: 'Turn the mouse wheel over a point: what is under it scrolls.',
-      input: v.strictObject({
-        at: Point,
-        dy: described(WheelClicksSchema, 'Wheel clicks down; negative scrolls up.'),
-        dx: v.optional(described(WheelClicksSchema, 'Wheel clicks right; negative scrolls left.')),
-      }),
+      input: deskInput(DESKTOP_INPUTS.scroll, { at: point, dy: 'Wheel clicks down; negative scrolls up.', dx: 'Wheel clicks right; negative scrolls left.' }),
     }),
-    move: desk({ name: 'move', impact: 'execute', output: v.null(), help: 'Move the pointer to a point without clicking, to hover.', input: v.strictObject({ at: Point }) }),
+    move: desk({
+      name: 'move', impact: 'execute', output: v.null(), help: 'Move the pointer to a point without clicking, to hover.',
+      input: deskInput(DESKTOP_INPUTS.move, { at: point }),
+    }),
     drag: desk({
       name: 'drag', impact: 'execute', output: v.null(), help: 'Press the left button at one point, move to another, release.',
-      input: v.strictObject({ from: described(Point, 'Where the drag starts.'), to: described(Point, 'Where it ends.') }),
+      input: deskInput(DESKTOP_INPUTS.drag, { from: 'Where the drag starts.', to: 'Where it ends.' }),
     }),
   } as const;
 }

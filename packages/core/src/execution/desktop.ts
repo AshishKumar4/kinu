@@ -54,25 +54,25 @@ type DesktopMember = (typeof DESKTOP_MEMBERS)[number];
 const Coordinate = v.pipe(v.number(), v.integer(), v.minValue(0));
 
 /** A point of the screen; its size is the box's to check. */
-export const DesktopPointSchema = v.tuple([Coordinate, Coordinate]);
+const DesktopPointSchema = v.tuple([Coordinate, Coordinate]);
 
 /** Wheel clicks: the largest scroll is one call of about 2 s at the box's 20 ms a click. */
-export const WheelClicksSchema = v.pipe(v.number(), v.integer(), v.minValue(-50), v.maxValue(50));
+const WheelClicksSchema = v.pipe(v.number(), v.integer(), v.minValue(-50), v.maxValue(50));
 
 /** A chord as a program writes it; {@link desktopChord} reads it. */
-export const KeysSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(64));
+const KeysSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(64));
 
-export const ButtonSchema = v.picklist(['left', 'right', 'middle']);
+const ButtonSchema = v.picklist(['left', 'right', 'middle']);
 
-export const ClickCountSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(3));
+const ClickCountSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(3));
 
-export const TypedTextSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(4_000));
+const TypedTextSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(4_000));
 
 /** How long `watch` looks: long enough for an animation or a page's load, short enough to stay one call. */
-export const WatchSecondsSchema = v.pipe(v.number(), v.minValue(0.5), v.maxValue(10));
+const WatchSecondsSchema = v.pipe(v.number(), v.minValue(0.5), v.maxValue(10));
 
 /** Frames a second `watch` samples; it never takes more frames than its sheet's layout holds. */
-export const WatchFpsSchema = v.pipe(v.number(), v.minValue(0.1), v.maxValue(30));
+const WatchFpsSchema = v.pipe(v.number(), v.minValue(0.1), v.maxValue(30));
 
 /** The frames a `watch` takes when not asked. */
 export const WATCH_DEFAULT_FRAMES = 4;
@@ -106,7 +106,7 @@ export function watchSheet(screen: DesktopScreen, frames: number): WatchImage {
 }
 
 /** How long `key` holds its chord down, as a game reads a held key. */
-export const KeyHoldSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(10_000));
+const KeyHoldSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(10_000));
 
 /** Characters per typed action: Stop is checked between them. The reference demo's chunk, at its 12 ms a character. */
 const TYPED_CHUNK = 50;
@@ -201,9 +201,18 @@ function typedActions(text: string): DesktopAction[] {
   });
 }
 
-const ClickSchema = v.object({
-  at: DesktopPointSchema, button: v.optional(ButtonSchema), count: v.optional(ClickCountSchema), hold: v.optional(KeysSchema),
-});
+/** What each member takes, by field, declared once: read bare where the members run, here, and described for the model
+ *  where they are declared (`computerDesktop`). */
+export const DESKTOP_INPUTS = {
+  screenshot: {},
+  watch: { seconds: WatchSecondsSchema, fps: v.optional(WatchFpsSchema) },
+  click: { at: DesktopPointSchema, button: v.optional(ButtonSchema), count: v.optional(ClickCountSchema), hold: v.optional(KeysSchema) },
+  type: { text: TypedTextSchema },
+  key: { keys: KeysSchema, hold: v.optional(KeyHoldSchema) },
+  scroll: { at: DesktopPointSchema, dy: WheelClicksSchema, dx: v.optional(WheelClicksSchema) },
+  move: { at: DesktopPointSchema },
+  drag: { from: DesktopPointSchema, to: DesktopPointSchema },
+} as const satisfies Record<DesktopMember, v.ObjectEntries>;
 
 /** What a desktop call carries beyond its input, as an `exec` does: its program's stop signal, and the signal its
  *  program was moved to the background with. */
@@ -320,28 +329,28 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
   });
 
   const members = {
-    screenshot: member('screenshot', 'The desktop the owner watches, as a PNG data URL.', v.object({}), () => [{ kind: 'screenshot' }]),
-    watch: member('watch', 'The desktop over a few seconds, as one PNG data URL of its frames.', v.object({ seconds: WatchSecondsSchema, fps: v.optional(WatchFpsSchema) }), ({ seconds, fps }) => [{
+    screenshot: member('screenshot', 'The desktop the owner watches, as a PNG data URL.', v.strictObject(DESKTOP_INPUTS.screenshot), () => [{ kind: 'screenshot' }]),
+    watch: member('watch', 'The desktop over a few seconds, as one PNG data URL of its frames.', v.strictObject(DESKTOP_INPUTS.watch), ({ seconds, fps }) => [{
       kind: 'watch', seconds, frames: fps === undefined ? Math.min(WATCH_DEFAULT_FRAMES, deps.frames) : Math.max(1, Math.min(deps.frames, Math.round(seconds * fps))),
     }]),
-    click: member('click', 'Click at a point of the screen.', ClickSchema, ({ at, button = 'left', count = 1, hold }) => {
+    click: member('click', 'Click at a point of the screen.', v.strictObject(DESKTOP_INPUTS.click), ({ at, button = 'left', count = 1, hold }) => {
       const held = hold === undefined ? [] : desktopChord(hold, true);
 
       return held instanceof KinuError ? held : [{ kind: 'click', at, button, count, hold: held }];
     }),
-    type: member('type', 'Type text at the keyboard focus.', v.object({ text: TypedTextSchema }), ({ text }) => typedActions(text)),
-    key: member('key', 'Press a key or a chord, or hold it down.', v.object({ keys: KeysSchema, hold: v.optional(KeyHoldSchema) }), ({ keys, hold }) => {
+    type: member('type', 'Type text at the keyboard focus.', v.strictObject(DESKTOP_INPUTS.type), ({ text }) => typedActions(text)),
+    key: member('key', 'Press a key or a chord, or hold it down.', v.strictObject(DESKTOP_INPUTS.key), ({ keys, hold }) => {
       const chord = desktopChord(keys);
 
       if (chord instanceof KinuError) return chord;
 
       return [{ kind: 'key', keys: chord.join('+'), ...(hold !== undefined && { holdMs: hold }) }];
     }),
-    scroll: member('scroll', 'Turn the mouse wheel over a point.', v.object({ at: DesktopPointSchema, dy: WheelClicksSchema, dx: v.optional(WheelClicksSchema) }), ({ at, dy, dx = 0 }) => (
+    scroll: member('scroll', 'Turn the mouse wheel over a point.', v.strictObject(DESKTOP_INPUTS.scroll), ({ at, dy, dx = 0 }) => (
       dy === 0 && dx === 0 ? new KinuError('bad_input', 'nothing to scroll: dy and dx are both 0.') : [{ kind: 'scroll', at, dy, dx }]
     )),
-    move: member('move', 'Move the pointer to a point.', v.object({ at: DesktopPointSchema }), ({ at }) => [{ kind: 'move', at }]),
-    drag: member('drag', 'Drag with the left button from one point to another.', v.object({ from: DesktopPointSchema, to: DesktopPointSchema }), ({ from, to }) => [{ kind: 'drag', from, to }]),
+    move: member('move', 'Move the pointer to a point.', v.strictObject(DESKTOP_INPUTS.move), ({ at }) => [{ kind: 'move', at }]),
+    drag: member('drag', 'Drag with the left button from one point to another.', v.strictObject(DESKTOP_INPUTS.drag), ({ from, to }) => [{ kind: 'drag', from, to }]),
   } satisfies Record<DesktopMember, { readonly description: string }>;
 
   return Object.fromEntries(Object.entries(members).map(([name, { run, ...declared }]): [string, ExecutorTool] => [name, {
