@@ -356,8 +356,10 @@ export class FakeSandbox {
   portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
   /** The desktop check's answer: it ends by printing the screen's size. */
   desktopStart: ExecResult = { stdout: '1280 768\n', stderr: '', exitCode: 0 };
-  /** What the box's terminal sessions read answers (D90): tab-separated `P`, `L` and `B` rows. */
+  /** What the box's terminal sessions read answers (D90): space-separated `P`, `L`, `B` and `W` rows. */
   sessionsRead: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
+  /** What saving the sessions as the box stops answers (D97), or `gone` for an exec the container refuses. */
+  sessionsSave: ExecResult | 'gone' = { stdout: '', stderr: '', exitCode: 0 };
   /** What naming the box answers (D96): its script's report, or `gone` for an exec the container refuses. */
   nameBox: ExecResult | 'gone' = { stdout: 'named=yes 10.0.0.1 fd00::11\n', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
@@ -1051,6 +1053,14 @@ export class FakeSandbox {
       this.sequence.push('sessions');
 
       return processResult(Promise.resolve(this.sessionsRead), pid);
+    }
+
+    if (args[3] === 'sessions-save') {
+      this.sequence.push(`save:${args.slice(4).join(' ')}`);
+
+      if (this.sessionsSave === 'gone') throw new Error('Container is not running');
+
+      return processResult(Promise.resolve(this.sessionsSave), pid);
     }
 
     if (args[3] === 'devbox-reset') {
