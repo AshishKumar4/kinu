@@ -3,7 +3,7 @@
 import { Cause, Data, Effect } from 'effect';
 import { settle, settleSync } from '@kinu.run/core/obs';
 import {
-  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, parseEvalAccount, timingSafeEqual,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, err, json, parseEvalAccount, timingSafeEqual,
 } from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, accountIdFor, verifySession,
@@ -207,10 +207,43 @@ export function crossSiteRejection(request: Request): Response | null {
 
   if (stated === expected) return null;
 
-  return new Response(
-    JSON.stringify({ error: 'Cross-site request rejected', code: 'CROSS_SITE' }),
-    { status: 403, headers: { 'content-type': 'application/json' } },
-  );
+  return json({ body: { error: 'Cross-site request rejected', code: 'CROSS_SITE' } }, { status: 403 });
+}
+
+/**
+ * The one session gate every signed-in surface passes: who asks, then the cross-site rule. No one signed in is refused
+ * in `err()`'s rendering, except a page a browser asked for, which is sent to sign-in and back.
+ */
+export function sessionGate<Id>(request: Request, env: AuthEnv<Id>): Effect.Effect<AuthIdentity | Response> {
+  return Effect.gen(function* () {
+    const identity = yield* Effect.catchCause(Effect.promise(() => authenticateRequest(request, env)), (failed) => {
+      const refused = Cause.squash(failed);
+
+      return refused instanceof AuthError ? Effect.succeed(authRefusal(request, refused)) : Effect.failCause(failed);
+    });
+
+    if (identity instanceof Response) return identity;
+
+    return crossSiteRejection(request) ?? identity;
+  });
+}
+
+function authRefusal(request: Request, refused: AuthError): Response {
+  if (refused.status !== 401 || !wantsPage(request)) return err(refused.status, refused.message);
+  const url = new URL(request.url);
+  const login = new URL('/login', url.origin);
+
+  login.searchParams.set('return_to', url.pathname + url.search + url.hash);
+
+  return new Response(null, { status: 302, headers: { location: login.toString(), 'cache-control': 'no-store' } });
+}
+
+/** A browser navigating to a page; the agent transport never is one. */
+function wantsPage(request: Request): boolean {
+  if (new URL(request.url).pathname.startsWith('/agents/')) return false;
+  const accept = request.headers.get('accept') ?? '';
+
+  return request.method === 'GET' && (accept.includes('text/html') || accept.includes('*/*'));
 }
 
 function originOf(value: string | null): string | null {

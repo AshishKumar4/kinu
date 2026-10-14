@@ -1,11 +1,11 @@
 /** `/api/*` as one Hono app: registration order is dispatch order, so this file's order is the gate order. */
 import { Hono, type ExecutionContext as HonoExecutionContext } from 'hono';
-import { Cause, Effect } from 'effect';
+import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import { healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
-import { AuthError, authenticateRequest, crossSiteRejection } from '../auth/session';
+import { sessionGate } from '../auth/session';
 import { authApiRoutes } from '../auth/routes';
 import { builtinAccountRoutes, builtinAuthRoutes } from '../auth/builtin';
 import { CONTROL_PLANE_API_ROUTE } from '../control-plane/access-gate';
@@ -71,28 +71,14 @@ app.all('/api/auth/*', beneath<FamilyEnv<Env>>('/api/auth', async (c) => serveAp
 mount(webhookDeliveryRoutes(workspaceAgent));
 
 app.use('/api/*', (c, next) => settle(Effect.gen(function* () {
-  const identity = yield* Effect.catchCause(Effect.promise(() => authenticateRequest(c.req.raw, c.env)), (failed) => {
-    const refused = Cause.squash(failed);
+  const identity = yield* sessionGate(c.req.raw, c.env);
 
-    return refused instanceof AuthError ? Effect.succeed(refused) : Effect.failCause(failed);
-  });
-
-  if (identity instanceof AuthError) {
-    return new Response(JSON.stringify({ error: identity.message }), { status: identity.status, headers: { 'content-type': 'application/json' } });
-  }
-
-  const crossSite = crossSiteRejection(c.req.raw);
-
-  if (crossSite) return crossSite;
+  if (identity instanceof Response) return identity;
+  // After the cross-site check: cross-site requests never feed the index.
+  observeIdentity(c.env, identity, { retain: c.executionCtx });
   c.set('identity', identity);
   yield* Effect.promise(() => next());
 })));
-
-// After the cross-site check: cross-site requests never feed the index.
-app.use('/api/*', async (c, next) => {
-  observeIdentity(c.env, c.get('identity'), { retain: c.executionCtx });
-  await next();
-});
 
 mount(feedbackRoutes);
 

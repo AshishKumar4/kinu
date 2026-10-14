@@ -995,6 +995,9 @@ describe('worker wiring', () => {
       const forged = await api.fetch(new Request(url, { method, headers: { cookie, origin: 'https://evil.example' } }), env, ctx);
       expect(forged.status, `${method} ${route.path}`).toBe(403);
       expect(v.parse(v.object({ code: v.string() }), await forged.json()).code).toBe('CROSS_SITE');
+
+      // A refusal is never cached: a shared cache must not answer the next person with it.
+      for (const refusal of [anonymous, forged]) expect(refusal.headers.get('cache-control'), `${method} ${route.path}`).toContain('no-store');
     }
   });
 

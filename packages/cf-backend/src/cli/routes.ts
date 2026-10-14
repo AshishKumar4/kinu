@@ -4,7 +4,7 @@ import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
 import {
-  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, crossSiteRejection, isFreshAuthTime, readCookie,
+  CLI_APPROVAL_CSRF_COOKIE_NAME, isFreshAuthTime, readCookie, sessionGate,
   type AuthEnv,
 } from '../auth/session';
 import { publicHtmlHeaders } from '@kinu.run/core';
@@ -528,10 +528,7 @@ function clientKey(request: Request): string {
 
 function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
-    const identity = yield* Effect.catchCause(
-      Effect.promise(() => authenticateRequest(request, env)),
-      (failed) => accessError(toError({ cause: Cause.squash(failed) }), request),
-    );
+    const identity = yield* sessionGate(request, env);
 
     if (identity instanceof Response) return identity;
     const url = new URL(request.url);
@@ -580,17 +577,10 @@ function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Eff
 
 function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
-    const identity = yield* Effect.catchCause(
-      Effect.promise(() => authenticateRequest(request, env)),
-      (failed) => accessError(toError({ cause: Cause.squash(failed) }), request),
-    );
+    // The Worker's own gate: this page answers ahead of it.
+    const identity = yield* sessionGate(request, env);
 
     if (identity instanceof Response) return identity;
-
-    // The one same-origin rule the Worker gate keeps; this page answers ahead of that gate.
-    if (crossSiteRejection(request) !== null) {
-      return html('Connect the Kinu CLI', '<p>This approval did not come from the approval page. Open the link from your terminal again.</p>', 403);
-    }
 
     const form = yield* Effect.catchCause(Effect.promise(() => request.formData()), (failed) => (classify({ cause: Cause.squash(failed) }) === 'malformed-input'
       ? Effect.succeed(html('Connect the Kinu CLI', '<p>The approval form was incomplete. Refresh the page and try again.</p>', 400))
@@ -1156,24 +1146,6 @@ function cliAuthError(e: Error): Effect.Effect<Response, KinuError> {
   return Effect.fail(toKinuError({ doing: 'answering a CLI sign-in request', cause: e, otherwise: 'io' }));
 }
 
-function accessError(e: Error, request?: Request): Effect.Effect<Response, KinuError> {
-  if (e instanceof AuthError) {
-    if (e.status === 401 && request?.method === 'GET') {
-      const url = new URL(request.url);
-      const login = new URL('/login', url.origin);
-      login.searchParams.set('return_to', url.pathname + url.search + url.hash);
-
-      return Effect.succeed(new Response(null, {
-        status: 302,
-        headers: { location: login.toString(), 'cache-control': 'no-store' },
-      }));
-    }
-
-    return Effect.succeed(err(e.status, e.message));
-  }
-
-  return Effect.fail(toKinuError({ doing: 'approving a CLI sign-in', cause: e, otherwise: 'io' }));
-}
 
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {
   const headers = new Headers(publicHtmlHeaders());
