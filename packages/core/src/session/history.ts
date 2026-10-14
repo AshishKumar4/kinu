@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
-import { SessionMessages, type PreparedMessage, type MessageReference, type MessagePartReference, type MessageOrigin } from './messages';
+import { SessionMessages, type ClaimFences, type PreparedMessage, type MessageReference, type MessagePartReference, type MessageOrigin } from './messages';
 import { SessionPayloads, type SessionFilePlane } from './payload';
 import { SessionContext, type ContextSelection, type ContextEntry } from './context';
 import { SessionProposals, type ContextProposal } from './proposals';
@@ -20,6 +20,7 @@ export interface SessionHistoryDependencies {
   readonly sql: SqlExecutor;
   readonly transactionSync: <T>(write: () => T) => T;
   readonly files: () => Promise<SessionFilePlane>;
+  readonly claims: ClaimFences;
 }
 
 /** Actor-bound context operations. Preparation may await VFS; publication is one fenced SQL transaction. */
@@ -90,10 +91,17 @@ export class SessionHistory {
     this.dependencies.actor.assertCurrent();
     const actorId = this.dependencies.actor.actorId;
 
-    const abandoned = () => this.dependencies.sql<{ message_id: string; origin: string }>`SELECT m.message_id,m.origin FROM session_messages m
-      JOIN actor_requests r ON r.actor_id=m.actor_id AND r.request_id=m.request_id
-      LEFT JOIN actor_turn_claims c ON c.actor_id=r.actor_id AND c.turn_id=r.turn_id
-      WHERE m.actor_id=${actorId} AND m.sealed_at IS NULL AND (c.turn_id IS NULL OR c.outcome IS NOT NULL OR c.epoch!=r.epoch) ORDER BY m.rowid`;
+    // The open claims are read only where a message is unsealed: an activation with none runs one statement.
+    const abandoned = () => {
+      const unsealed = this.dependencies.sql<{ message_id: string; origin: string; turn_id: string; epoch: number }>`SELECT m.message_id,m.origin,r.turn_id,r.epoch FROM session_messages m
+        JOIN actor_requests r ON r.actor_id=m.actor_id AND r.request_id=m.request_id
+        WHERE m.actor_id=${actorId} AND m.sealed_at IS NULL ORDER BY m.rowid`;
+
+      if (unsealed.length === 0) return unsealed;
+      const open = this.dependencies.claims.openClaims();
+
+      return unsealed.filter((row) => open.get(row.turn_id) !== row.epoch);
+    };
 
     for (const row of abandoned()) {
       const parts = await this.messages.openParts(row.message_id);
@@ -361,9 +369,9 @@ export class SessionHistory {
     const { proposalId, selection, status, turnId, events } = edit;
 
     if (events === null || turnId === null) return null;
-    const claim = this.dependencies.sql<{ run_id: string; outcome: string | null }>`SELECT run_id,outcome FROM actor_turn_claims WHERE actor_id=${this.dependencies.actor.actorId} AND turn_id=${turnId}`[0];
+    const runId = this.dependencies.claims.openRun(turnId);
 
-    if (claim === undefined || claim.outcome !== null) return null;
+    if (runId === null) return null;
     const proposal = this.proposals.inspect(proposalId);
 
     if (proposal === null) throw new KinuError('missing', 'context proposal disappeared before its audit event');
@@ -371,7 +379,7 @@ export class SessionHistory {
 
     if (via !== 'file' && via !== 'session' && via !== 'owner') return null;
 
-    return events.emitDeferred(claim.run_id, { type: 'context_edit', contextId: selection.contextId, proposalId,
+    return events.emitDeferred(runId, { type: 'context_edit', contextId: selection.contextId, proposalId,
       revision: selection.revision, baseRevision: proposal.metadata.base_revision, author: proposal.metadata.author, via, status,
       messageCount: status === 'staged' ? proposal.entries.length : this.context.entries(selection).length,
       effectiveAt: 'step', turnId, stepIndex: null });
@@ -465,22 +473,16 @@ export class SessionHistory {
     return reference;
   }
 
-  assertClaimEpoch(turnId: string, epoch: number): void {
-    this.dependencies.actor.assertCurrent();
-    const claim = this.dependencies.sql<{ epoch: number }>`SELECT epoch FROM actor_turn_claims WHERE actor_id=${this.dependencies.actor.actorId} AND turn_id=${turnId}`[0];
-
-    if (claim?.epoch !== epoch) throw new KinuError('denied', 'actor claim epoch is no longer current');
-  }
-
   epochCurrent(turnId: string, epoch: number): boolean {
-    this.dependencies.actor.assertCurrent();
-    const actorId = this.dependencies.actor.actorId;
-    const claim = this.dependencies.sql<{ epoch: number; outcome: string | null }>`SELECT epoch,outcome FROM actor_turn_claims WHERE actor_id=${actorId} AND turn_id=${turnId}`[0];
-
-    return claim?.epoch === epoch && claim.outcome === null;
+    return this.dependencies.claims.live(turnId, epoch);
   }
 
   assertEpoch(turnId: string, epoch: number): void {
-    if (!this.epochCurrent(turnId, epoch)) throw new KinuError('denied', 'actor execution epoch is no longer current');
+    this.dependencies.claims.assertLive(turnId, epoch);
+  }
+
+  /** {@link ClaimFences.assertOwned}. */
+  assertClaimOwned(turnId: string, epoch: number): void {
+    this.dependencies.claims.assertOwned(turnId, epoch);
   }
 }

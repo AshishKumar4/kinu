@@ -1088,7 +1088,7 @@ export class ActorSession {
     const prepared = await this.canonical.messages.prepare({ role: 'assistant', content: text }, id);
 
     return this.runtime.storage.transactionSync(() => {
-      this.canonical.assertClaimEpoch(claim.turnId, claim.epoch);
+      this.canonical.assertClaimOwned(claim.turnId, claim.epoch);
       this.canonical.messages.insert(prepared, 'render');
 
       return { messageId: id, partNo: 0 };

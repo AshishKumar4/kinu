@@ -15,6 +15,7 @@ import type { Schedule } from '../src/types/primitives';
 import { createTestWorkspace, createWorkspaceBundle, makeSql, makeSqlExec } from './helpers';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { hostDeliveries, seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
@@ -26,6 +27,7 @@ function chatStore(db: Database) {
   const history = new SessionHistory({
     sql, actor, transactionSync: (write) => db.transaction(write)(),
     files: async () => ({ vfs: createWorkspaceBundle(db).vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(sql, actor),
   });
 
   const transcript = history.transcript(CHAT_SESSION_ID);

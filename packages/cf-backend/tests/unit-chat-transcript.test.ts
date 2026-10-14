@@ -6,6 +6,7 @@ import {
   initActorClaimTables,
   type JsonObject, type MessagePartReference,
 } from '@kinu.run/core';
+import { claimFences } from '@kinu.run/core';
 
 const databases: Database[] = [];
 
@@ -21,6 +22,7 @@ function transcript() {
   const history = new SessionHistory({
     sql, actor, transactionSync: (write) => db.transaction(write)(),
     files: async () => ({ vfs: workspace.vfs, artifactDirectory: '/home/main/.kinu/context' }),
+    claims: claimFences(sql, actor),
   });
 
   const store = history.transcript(CHAT_SESSION_ID);

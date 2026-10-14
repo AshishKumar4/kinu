@@ -26,6 +26,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import { JsonValueSchema, type JsonValue, type JsonObject } from '../src/utils/json';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 const PROGRAM = { kind: 'builtin' as const, version: 0, digest: null, build: null };
 
@@ -94,7 +95,8 @@ function workspace(): Workspace {
       const handle = actorId === actors.main.actorId ? actors.main : actors.sibling(actorId);
 
       const history = new SessionHistory({ sql, actor: handle, transactionSync,
-        files: async () => ({ vfs, artifactDirectory: `/actors/${actorId}/.kinu/context` }) });
+        files: async () => ({ vfs, artifactDirectory: `/actors/${actorId}/.kinu/context` }),
+        claims: claimFences(sql, handle), });
 
       const claims = new ActorClaimStore(sql, handle, transactionSync, history);
 
@@ -399,7 +401,8 @@ test('a retired actor stops authorising context reads and writes at its own hand
   const handle = testActorHandle(sql, { actorId: actors.main.actorId, live: () => live });
 
   const history = new SessionHistory({ sql, actor: handle, transactionSync: (write) => write(),
-    files: async () => ({ vfs: files, artifactDirectory: '/actors/actor-retired/.kinu/context' }) });
+    files: async () => ({ vfs: files, artifactDirectory: '/actors/actor-retired/.kinu/context' }),
+    claims: claimFences(sql, handle), });
 
   const claims = new ActorClaimStore(sql, handle, (write) => write(), history);
   const bound: Bound = { handle, claims, history, stores: { claims, events: null } };

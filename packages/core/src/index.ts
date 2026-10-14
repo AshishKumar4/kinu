@@ -1718,7 +1718,7 @@ export {
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
 export {
-  ActorClaimStore, initActorClaimTables, programIdentityOf, turnAttemptOf, verifyClaimedProgram,
+  ActorClaimStore, claimFences, initActorClaimTables, programIdentityOf, turnAttemptOf, verifyClaimedProgram,
   type ActorProgramIdentity, type ActorTurnClaim, type StoredActorClaim,
   type ContextRevision, type ConsumedContext, type ClaimOutcome, type ClaimRecovery,
 } from './orchestrator/actor-claims';

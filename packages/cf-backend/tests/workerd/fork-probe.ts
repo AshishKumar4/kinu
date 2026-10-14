@@ -18,6 +18,7 @@ import { storeFiles } from '@kinu.run/core/workspace';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { claimFences } from '@kinu.run/core';
 
 /** Small on purpose: every chunk crosses in a frame of its own, so a file's chunks are several frames. */
 const PROBE_FRAME_BYTES = 64;
@@ -208,6 +209,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       sql: this.sql,
       transactionSync: <Result>(write: () => Result): Result => this.ctx.storage.transactionSync(write),
       files: async () => ({ vfs: files, artifactDirectory: PROBE_ARTIFACTS }),
+      claims: claimFences(this.sql, actor),
     });
 
     const transcript = history.transcript(CHAT_SESSION_ID);

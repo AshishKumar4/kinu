@@ -62,6 +62,7 @@ import {
 import { serveObject } from './programmatic-host';
 import { makeCtx, stubOf } from './platform-context';
 import { wrapDatabase } from '@kinu.run/core/identity';
+import { claimFences } from '@kinu.run/core';
 
 mockAgentsSdk();
 
@@ -864,6 +865,7 @@ export function historyOver(
   return new SessionHistory({
     sql: wrapDatabase(harness.db).sql, actor, transactionSync: (write) => harness.db.transaction(write)(),
     files: async () => ({ vfs: workspaceFiles(harness.agent), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) }),
+    claims: claimFences(wrapDatabase(harness.db).sql, actor),
   });
 }
 
