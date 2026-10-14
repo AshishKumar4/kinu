@@ -20,7 +20,10 @@ import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import { bridgeSockets } from './socket-bridge';
 import { DESKTOP_CHECK, DESKTOP_PORT } from './desktop';
-import { DESKTOP_ACTION_MS, DESKTOP_CHECK_MS, DesktopLease, DesktopRequestSchema, SCREENSHOT, offScreen, pngSize, xdotoolOf, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop-input';
+import {
+  DESKTOP_ACTION_MS, DESKTOP_CHECK_MS, DesktopLease, DesktopRequestSchema, SCREENSHOT, actionBoundMs, offScreen, pngSize, watchArgv, xdotoolOf,
+  type DesktopAnswer, type DesktopRequest, type DesktopScreen,
+} from './desktop-input';
 import { LABEL_LIMIT, LABEL_NAME, ZoneSchema, previewAddress, type PreviewAddress } from './preview';
 import { Deferred, Effect, Result, Semaphore } from 'effect';
 
@@ -3080,7 +3083,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /**
    * One action on the desktop the owner watches, for the agent `request.driver` (D89). The desktop is checked first,
    * under the box's own readiness; then the action's points against the screen and the driver against the lease, before
-   * any input. Actions run one at a time; each xdotool run is bounded, and what it holds down is released however it ends.
+   * any input. Actions run one at a time; each run is bounded at its own wait and a margin, and what it holds down is
+   * released however it ends.
    */
   async desktop(request: DesktopRequest): Promise<DesktopAnswer> {
     return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
@@ -3093,16 +3097,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const outside = offScreen(action, screen);
 
       if (outside !== null) return { kind: 'refused', reason: 'off_screen', detail: outside } satisfies DesktopAnswer;
-      const refused = this.#desktopLease.admit(driver, action.kind === 'screenshot', Date.now());
+      const refused = this.#desktopLease.admit(driver, action.kind === 'screenshot' || action.kind === 'watch', Date.now());
 
       if (refused !== null) return refused;
+      const bound = AbortSignal.timeout(actionBoundMs(action));
 
-      if (action.kind === 'screenshot') {
-        const shot = yield* attempt('io', async () => await (await launch(container, ['/bin/bash', '-c', SCREENSHOT, 'devbox-screenshot'], { signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output());
+      if (action.kind === 'screenshot' || action.kind === 'watch') {
+        const argv = action.kind === 'watch' ? watchArgv(action) : ['/bin/bash', '-c', SCREENSHOT, 'devbox-screenshot'];
+        const shot = yield* attempt('io', async () => await (await launch(container, argv, { signal: bound })).output());
         const png = new Uint8Array(shot.stdout);
         const size = pngSize(png);
 
-        if (shot.exitCode !== 0 || size === null) return yield* Effect.fail(new DevboxError('io', `the screenshot failed: ${new TextDecoder().decode(shot.stderr).trim()}`));
+        if (shot.exitCode !== 0 || size === null) return yield* Effect.fail(new DevboxError('io', `the ${action.kind} failed: ${new TextDecoder().decode(shot.stderr).trim()}`));
 
         return { kind: 'screen', png: Buffer.from(png).toString('base64'), ...size } satisfies DesktopAnswer;
       }
@@ -3117,7 +3123,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       );
 
       // A UTF-8 locale: under the box's default C locale xdotool's `type` stops at the first character past ASCII.
-      const ran = yield* attempt('io', async () => decoded(await (await launch(container, argv, { env: UTF8, signal: AbortSignal.timeout(DESKTOP_ACTION_MS) })).output()))
+      const ran = yield* attempt('io', async () => decoded(await (await launch(container, argv, { env: UTF8, signal: bound })).output()))
         .pipe(Effect.ensuring(released));
 
       if (ran.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `xdotool ${action.kind} failed: ${ran.stderr.trim()}`));

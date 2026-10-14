@@ -27,9 +27,9 @@ const box: SandboxHandle = {
   desktop: async () => ({ kind: 'screen', png: PNG, width: 1280, height: 768 }),
 };
 
-test('a program that returns the screenshot hands the model the screen as an image part, its size as text', async () => {
+test('a program that returns the screenshot hands the model the screen as an image part', async () => {
   const { rt } = createTestRuntime();
-  const computer = executorNamespace(gateProviderExec(createSandboxExecutor(box, { driver: 'main' }), { mode: () => 'strict' }));
+  const computer = executorNamespace(gateProviderExec(createSandboxExecutor(box, { desktop: { driver: 'main', screen: { width: 1280, height: 768 } } }), { mode: () => 'strict' }));
 
   // As an actor's eval is built: the program runner, its result clamped with images (delegation/actor-tools.ts).
   const evalTool = withClampedToolResult(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [computer] })({
@@ -38,11 +38,11 @@ test('a program that returns the screenshot hands the model the screen as an ima
 
   const output = await toolExecute<{ code: string }, unknown>(evalTool)({ code: 'return await computer.screenshot();' });
 
-  expect(v.parse(v.object({ output: v.object({ result: v.unknown() }) }), output).output.result).toEqual({ image: '[image 1]', width: 1280, height: 768 });
+  expect(v.parse(v.object({ output: v.object({ result: v.unknown() }) }), output).output.result).toBe('[image 1]');
   expect(await evalTool.toModelOutput?.({ toolCallId: 'c1', input: { code: '' }, output })).toEqual({
     type: 'content',
     value: [
-      { type: 'text', text: expect.stringContaining('"width":1280') },
+      { type: 'text', text: expect.stringContaining('[image 1]') },
       { type: 'file', data: { type: 'data', data: PNG }, mediaType: 'image/png' },
     ],
   });

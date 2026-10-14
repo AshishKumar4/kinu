@@ -9,7 +9,7 @@ import type { ExecutorProviderSurface } from '../execution/types';
 import { answeredRefusal } from '../execution/exec-result';
 import { KinuError, settleSync } from '../obs/index';
 import { serve, type Operation, type Served } from '../operations/operation';
-import { COMPUTER, computerResize, DEVICE, PARENT, WORKSPACE } from '../operations/executors';
+import { COMPUTER, computerDesktop, computerResize, DEVICE, PARENT, WORKSPACE } from '../operations/executors';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { DESKTOP_MEMBERS } from '../execution/desktop';
 import type { ExecCallContext } from '../execution/signal';
@@ -79,9 +79,16 @@ export function executorNamespace(provider: ExecutorProviderSurface): CodemodePr
   const declared = DECLARED.get(provider.name);
 
   if (declared === undefined) return settleSync(Effect.die(new Error(`executor ${provider.name} has no declared members`)));
-  // Only a computer with sizes has `resize`, declared over them.
-  const sizes = provider.tools.resize === undefined ? undefined : provider.getStatus?.().sizes;
-  const ops = sizes === undefined ? Object.values(declared.ops) : [...Object.values(declared.ops), computerResize(sizes.sizes)];
+  // Only a computer with sizes has `resize`, declared over them; only one with a desktop has its members, over its screen.
+  const status = provider.getStatus?.();
+  const sizes = provider.tools.resize === undefined ? undefined : status?.sizes;
+
+  const ops = [
+    ...Object.values(declared.ops),
+    ...sizes === undefined ? [] : [computerResize(sizes.sizes)],
+    ...status?.screen === undefined ? [] : Object.values(computerDesktop(status.screen)),
+  ];
+
   const namespace = codemodeNamespace(provider.name, declared.summary, forwarded(provider, ops));
   const slates = provider.tools.slates;
 

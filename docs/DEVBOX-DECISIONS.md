@@ -4670,7 +4670,12 @@ locale the box starts in, `xdotool type -- "aüb"` typed "a" and stopped at an i
 UTF-8 it typed "ab": Chromium dropped the ü, whose key xdotool binds for the moment of the press, at 12 ms a
 character, and took it at 150 ms. So a character past ASCII is never typed: core sends it as its own key,
 `key U00FC`, which reached Chromium every time. The capture is `scrot -p`, read back as bytes in the same
-run. Both run on the container runtime's exec directly rather than D87's `exec`: they are the box's own fixed
+run. A watch takes `scrot -p -t 50` at even times over its window, at most 10 s, and tiles the half-size
+thumbnails into one PNG, two to a row up to four frames and four to a row up to eight; a small Python program does
+it, as the image carries Python and no image tool. Measured on two vision models, four half-size frames in one sheet
+cost what one screenshot does and read motion, a large word and 11 px text as well as four separate screenshots; eight
+at a third of the size lost 11 px text on both. A held key is `keydown`, a wait, `keyup` in one run, at most 10 s,
+with `keyup` again however the run ends; an action's bound is its own wait plus 5 s. Both run on the container runtime's exec directly rather than D87's `exec`: they are the box's own fixed
 commands, not a caller's; the capture is binary, which `exec` decodes as text; and xdotool's argv carries typed text
 without a shell to quote it. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
 screenshot 800 high to 1228×768 at their default detail, and none Kinu serves resizes one 768 high, so an agent's

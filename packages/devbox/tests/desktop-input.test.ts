@@ -48,7 +48,7 @@ async function desktopBox(answer: (argv: readonly string[]) => ExecProcess | und
       return ended(new TextEncoder().encode(fresh ? '1280 768\nfresh\n' : '1280 768\n'));
     }
 
-    return answer(argv) ?? (argv[3] === 'devbox-screenshot' ? ended(PNG) : ended(new Uint8Array()));
+    return answer(argv) ?? (argv[3] === 'devbox-screenshot' || argv[3] === 'devbox-watch' ? ended(PNG) : ended(new Uint8Array()));
   });
 
   await box.devboxStartup();
@@ -97,6 +97,27 @@ describe("an agent's desktop action on the box", () => {
     await box.desktop({ driver: 'main', action: { kind: 'type', text: 'aüb' } });
 
     expect(runs.filter((run) => run.argv[1] === 'type').map((run) => [run.argv.at(-1), run.locale])).toEqual([['aüb', 'C.UTF-8']]);
+  });
+
+  test('a watch is one bounded run that looks over its window, its sheet laid out by its frames, and it takes the screen as a look does', async () => {
+    const { box, runs } = await desktopBox();
+
+    expect(await box.desktop({ driver: 'main', action: { kind: 'watch', seconds: 3, frames: 4 } })).toMatchObject({ kind: 'screen', width: 1280, height: 768 });
+    await box.desktop({ driver: 'main', action: { kind: 'watch', seconds: 2, frames: 8 } });
+    expect(await box.desktop(click('main'))).toEqual({ kind: 'done' });
+
+    expect(runs.filter((run) => run.argv[3] === 'devbox-watch').map((run) => [...run.argv.slice(4), run.bounded])).toEqual([
+      ['3', '4', '50', '2', true], ['2', '8', '50', '4', true],
+    ]);
+  });
+
+  test('a held key is pressed, held and let go in one run, and let go even when the run fails', async () => {
+    const { box, input } = await desktopBox((argv) => (argv.includes('keydown') ? ended(new Uint8Array(), 1, 'killed') : undefined));
+
+    await box.desktop(look('main'));
+
+    await expect(box.desktop({ driver: 'main', action: { kind: 'key', keys: 'w', holdMs: 800 } })).rejects.toThrow('killed');
+    expect(input()).toEqual(['xdotool keydown w sleep 0.8 keyup w', 'xdotool keyup w']);
   });
 
   test('a screenshot is the PNG the box captured, byte for byte, with the size its header names', async () => {

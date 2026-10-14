@@ -2,7 +2,7 @@
  * The computer's desktop as a program drives it: the screen the owner watches in the Computer pane, seen as an image
  * and acted on at its pixels. Each member's call is checked here before anything reaches the screen, and runs whole:
  * one call at a time, stopped with its program, and refused once its program was moved to the background, which Stop
- * no longer reaches. The box checks what only it knows: the screen's size, and which agent drives it.
+ * no longer reaches. The box checks what only it knows: the screen's size, and which agent drives it (D89).
  */
 import { Effect, Semaphore } from 'effect';
 import * as v from 'valibot';
@@ -20,9 +20,10 @@ type DesktopButton = 'left' | 'right' | 'middle';
  */
 export type DesktopAction =
   | { readonly kind: 'screenshot' }
+  | { readonly kind: 'watch'; readonly seconds: number; readonly frames: number }
   | { readonly kind: 'click'; readonly at: DesktopPoint; readonly button: DesktopButton; readonly count: number; readonly hold: readonly string[] }
   | { readonly kind: 'type'; readonly text: string }
-  | { readonly kind: 'key'; readonly keys: string }
+  | { readonly kind: 'key'; readonly keys: string; readonly holdMs?: number }
   | { readonly kind: 'scroll'; readonly at: DesktopPoint; readonly dy: number; readonly dx: number }
   | { readonly kind: 'move'; readonly at: DesktopPoint }
   | { readonly kind: 'drag'; readonly from: DesktopPoint; readonly to: DesktopPoint };
@@ -43,10 +44,10 @@ export type DesktopAnswer =
   | { readonly kind: 'screen'; readonly png: string; readonly width: number; readonly height: number }
   | { readonly kind: 'refused'; readonly reason: DesktopRefusal; readonly detail: string };
 
-/** The members that act on the screen, and so need the owner's consent (`desktop-input`). */
-export const DESKTOP_INPUT_MEMBERS = ['click', 'type', 'key', 'scroll', 'move', 'drag'] as const;
+/** The members that look, which Plan keeps and a program moved to the background may still call. */
+const LOOKING = ['screenshot', 'watch'] as const;
 
-export const DESKTOP_MEMBERS = ['screenshot', ...DESKTOP_INPUT_MEMBERS] as const;
+export const DESKTOP_MEMBERS = [...LOOKING, 'click', 'type', 'key', 'scroll', 'move', 'drag'] as const;
 
 type DesktopMember = (typeof DESKTOP_MEMBERS)[number];
 
@@ -66,6 +67,21 @@ export const ButtonSchema = v.picklist(['left', 'right', 'middle']);
 export const ClickCountSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(3));
 
 export const TypedTextSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(4_000));
+
+/** How long `watch` looks: long enough for an animation or a page's load, short enough to stay one call. */
+export const WatchSecondsSchema = v.pipe(v.number(), v.minValue(0.5), v.maxValue(10));
+
+/** Frames a second `watch` samples; it never takes more than {@link WATCH_FRAMES} over its window. */
+export const WatchFpsSchema = v.pipe(v.number(), v.minValue(0.1), v.maxValue(30));
+
+/** The most frames one `watch` returns, in one image. */
+export const WATCH_FRAMES = 8;
+
+/** The frames a `watch` takes when not asked: four half-size frames cost what one screenshot does (D89). */
+export const WATCH_DEFAULT_FRAMES = 4;
+
+/** How long `key` holds its chord down, as a game reads a held key. */
+export const KeyHoldSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(10_000));
 
 /** Characters per typed action: Stop is checked between them. The reference demo's chunk, at its 12 ms a character. */
 const TYPED_CHUNK = 50;
@@ -177,7 +193,7 @@ function answered(member: DesktopMember, answer: DesktopAnswer): ExecutorToolRes
     case 'done':
       return null;
     case 'screen':
-      return { image: `data:image/png;base64,${answer.png}`, width: answer.width, height: answer.height };
+      return `data:image/png;base64,${answer.png}`;
     case 'refused':
       return refusalOf(new KinuError(REFUSED_AS[answer.reason], `computer.${member}: ${answer.detail}`));
   }
@@ -211,7 +227,7 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
     for (const action of planned) {
       if (context.signal?.aborted === true) return refusalOf(new KinuError('cancelled', `computer.${member}: its program stopped, so the rest did not reach the screen.`));
 
-      if (member !== 'screenshot' && context.detached?.aborted === true) {
+      if (!LOOKING.some((looking) => looking === member) && context.detached?.aborted === true) {
         return refusalOf(new KinuError('denied', `computer.${member}: this program was moved to the background; the screen is driven from the turn in the foreground.`));
       }
 
@@ -231,7 +247,7 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
     name: DesktopMember, description: string, schema: S, plan: (input: v.InferOutput<S>) => readonly DesktopAction[] | KinuError,
   ) => ({
     description,
-    ...(name === 'screenshot' && { planAllowed: true }),
+    ...(LOOKING.some((looking) => looking === name) && { planAllowed: true }),
     run: (args: readonly unknown[]): Effect.Effect<ExecutorToolResult | Refusal> => {
       const input = v.safeParse(schema, args[0]);
       const context = v.safeParse(CallContextSchema, args[1]);
@@ -241,17 +257,22 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
   });
 
   const members = {
-    screenshot: member('screenshot', 'The desktop the owner watches, as a PNG data URL with its width and height.', v.object({}), () => [{ kind: 'screenshot' }]),
+    screenshot: member('screenshot', 'The desktop the owner watches, as a PNG data URL.', v.object({}), () => [{ kind: 'screenshot' }]),
+    watch: member('watch', 'The desktop over a few seconds, as one PNG data URL of its frames.', v.object({ seconds: WatchSecondsSchema, fps: v.optional(WatchFpsSchema) }), ({ seconds, fps }) => [{
+      kind: 'watch', seconds, frames: fps === undefined ? WATCH_DEFAULT_FRAMES : Math.max(1, Math.min(WATCH_FRAMES, Math.round(seconds * fps))),
+    }]),
     click: member('click', 'Click at a point of the screen.', ClickSchema, ({ at, button = 'left', count = 1, hold }) => {
       const held = hold === undefined ? [] : desktopChord(hold, true);
 
       return held instanceof KinuError ? held : [{ kind: 'click', at, button, count, hold: held }];
     }),
     type: member('type', 'Type text at the keyboard focus.', v.object({ text: TypedTextSchema }), ({ text }) => typedActions(text)),
-    key: member('key', 'Press a key or a chord.', v.object({ keys: KeysSchema }), ({ keys }) => {
+    key: member('key', 'Press a key or a chord, or hold it down.', v.object({ keys: KeysSchema, hold: v.optional(KeyHoldSchema) }), ({ keys, hold }) => {
       const chord = desktopChord(keys);
 
-      return chord instanceof KinuError ? chord : [{ kind: 'key', keys: chord.join('+') }];
+      if (chord instanceof KinuError) return chord;
+
+      return [{ kind: 'key', keys: chord.join('+'), ...(hold !== undefined && { holdMs: hold }) }];
     }),
     scroll: member('scroll', 'Turn the mouse wheel over a point.', v.object({ at: DesktopPointSchema, dy: WheelClicksSchema, dx: v.optional(WheelClicksSchema) }), ({ at, dy, dx = 0 }) => (
       dy === 0 && dx === 0 ? new KinuError('bad_input', 'nothing to scroll: dy and dx are both 0.') : [{ kind: 'scroll', at, dy, dx }]

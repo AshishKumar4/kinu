@@ -178,7 +178,7 @@ export const DESKTOP_PROGRAM = [
   'return await computer.screenshot();',
 ].join('\n');
 
-export const DESKTOP_ASK = 'With eval, run this program exactly and reply with the size of the screenshot it returns:\n'
+export const DESKTOP_ASK = 'With eval, run this program exactly and reply with what the screenshot it returns shows:\n'
   + DESKTOP_PROGRAM;
 
 /**

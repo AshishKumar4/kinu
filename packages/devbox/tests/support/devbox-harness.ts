@@ -967,7 +967,7 @@ export class FakeSandbox {
     // in argv (`file-digest-write.ts`).
     const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
       || args[3] === 'devbox-desktop' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true)
-      || args[0] === 'xdotool' || args[3] === 'devbox-screenshot';
+      || args[0] === 'xdotool' || args[3] === 'devbox-screenshot' || args[3] === 'devbox-watch';
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 

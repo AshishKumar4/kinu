@@ -22,7 +22,7 @@ import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/co
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
-import { GRID, GRID_POINTS, RANGE, SCROLL, TEXT } from './fixtures/devbox-e2e/desktop-pages';
+import { GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sheet } from './fixtures/devbox-e2e/desktop-pages';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -43,8 +43,8 @@ const Json = v.looseObject({ error: v.optional(v.string()) });
 
 const Exec = v.object({ exitCode: v.number(), stdout: v.string(), stderr: v.string() });
 
-/** What `computer.screenshot()` answers a program. */
-const Screen = v.object({ image: v.string(), width: v.number(), height: v.number() });
+/** What `computer.screenshot()` and `computer.watch()` answer a program: a PNG data URL. */
+const Screen = v.pipe(v.string(), v.startsWith('data:image/png;base64,'));
 
 /** A refusal a program branches on. */
 const Refused = v.object({ success: v.literal(false), reason: v.string(), error: v.string() });
@@ -514,8 +514,7 @@ async function main(): Promise<void> {
       const one = 'Xkasmvnc=1 openbox=1 tint2=1 Xvfb=0';
 
       // A box whose desktop never opened: the first look starts it, at the screen's size; looks at once share it.
-      const first = v.parse(Screen, await desk('screenshot'));
-      requireEqual([first.width, first.height, first.image.startsWith('data:image/png;base64,iVBORw0KGgo')], [1280, 768, true]);
+      requireEqual(sheet(v.parse(Screen, await desk('screenshot'))).size, [1280, 768]);
       await Promise.all([desk('screenshot'), desk('screenshot', [], 'other'), desk('screenshot')]);
       requireEqual(await sessions(), one);
       await sh('pkill -x tint2; pkill -x openbox; true');
@@ -524,7 +523,7 @@ async function main(): Promise<void> {
 
       // The agent's shell runs on that screen.
       requireEqual(await sh('echo "$DISPLAY"'), ':0');
-      const pages = Object.entries({ grid: GRID, text: TEXT, scroll: SCROLL, range: RANGE });
+      const pages = Object.entries({ grid: GRID, text: TEXT, scroll: SCROLL, range: RANGE, hold: HOLD, ticker: TICKER });
       await sh(`mkdir -p /tmp/kinu-desk && ${pages.map(([name, html]) => `printf %s ${shellQuote(html)} >/tmp/kinu-desk/${name}.html`).join(' && ')}`);
       await sh('setsid -f python3 -m http.server 8765 --bind 127.0.0.1 --directory /tmp/kinu-desk >/dev/null 2>&1');
 
@@ -585,9 +584,24 @@ async function main(): Promise<void> {
       await desk('drag', [[4, 150], [1276, 150]]);
       await until('the range dragged to its end', (now) => /^range (?:9\d|100)$/u.test(now));
 
+      // A held key is held as long as asked, and let go.
+      await open('hold');
+      requireEqual(await desk('key', ['w', { hold: 800 }]), null);
+      const held = Number(/^held w (\d+)$/u.exec(await until('the key let go', (now) => now.startsWith('held w ')))?.[1]);
+
+      if (!(held >= 700 && held <= 1_500)) throw new Error(`a key held for 800 ms was down ${String(held)} ms`);
+
+      // A watch is one image of frames over its window: four by default, two to a row; eight, four to a row. Each frame
+      // shows the page as it changed, so no two tiles are alike.
+      await open('ticker');
+      const four = sheet(v.parse(Screen, await desk('watch', [2])));
+      const eight = sheet(v.parse(Screen, await desk('watch', [2, { fps: 4 }])));
+      requireEqual([four.size, four.distinct(2, 2), eight.size, eight.distinct(4, 2)], [[1280, 768], 4, [2560, 768], 8]);
+
       return 'a fresh box\'s desktop came up for an agent\'s look at 1280×768, once, and came back after its parts died; '
         + 'clicks of every kind, keys, text with breaks, both wheels and a drag landed where its screenshot put them; '
-        + 'nothing stayed held; a point off the screen and a second agent\'s input were refused before reaching it';
+        + 'nothing stayed held; a point off the screen and a second agent\'s input were refused before reaching it; a key '
+        + 'was held as long as asked; a watch answered one sheet of frames that each showed the page changing';
     });
   };
 

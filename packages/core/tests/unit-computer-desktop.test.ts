@@ -1,17 +1,12 @@
 /**
- * The computer's desktop as a program calls it (D89): `computer.screenshot` and six input members, each read and
- * checked in core before the box is asked, gated by one consent, run whole one call at a time, and stopped with its
- * program. The box is faked at its handle; what the box itself checks is proved in the devbox's own tests.
+ * The computer's desktop as a program calls it (D89): `computer.screenshot`, `watch` and six input members, each read
+ * and checked in core before the box is asked, run whole one call at a time, and stopped with its program. The box is
+ * faked at its handle; what the box itself checks is proved in the devbox's own tests.
  */
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { Effect } from 'effect';
-import { createTestActors } from '@kinu.run/test-utils';
-import {
-  DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, formatApprovalGrant, type ShellApprovalPolicy,
-} from '../src/index';
+import type { ShellApprovalPolicy } from '../src/index';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
-import { DESKTOP_MEMBERS, type DesktopAction, type DesktopAnswer, type DesktopRequest } from '../src/execution/desktop';
+import { DESKTOP_MEMBERS, WATCH_DEFAULT_FRAMES, WATCH_FRAMES, type DesktopAction, type DesktopAnswer, type DesktopRequest } from '../src/execution/desktop';
 import { gateProviderExec } from '../src/execution/approval';
 import { providersInWorkMode } from '../src/execution/work-mode';
 import { executorNamespace } from '../src/tools/executor-operations';
@@ -20,15 +15,16 @@ import { DeviceRequestOwnership, execContext } from '../src/jobs/device-ownershi
 import { slateAddressImpact } from '../src/slates/members';
 import type { CodemodeProvider } from '../src/types/codemode';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
-import { makeExecRaw, makeSql } from './helpers';
 import { projectJsonValue, type JsonValue } from '../src/utils/json';
 
 const PNG = 'iVBORw0KGgo=';
 
 /** What a box answers when it accepts: the screen for a look, done for the rest. */
 function accepted(action: DesktopAction): DesktopAnswer {
-  return action.kind === 'screenshot' ? { kind: 'screen', png: PNG, width: 1280, height: 768 } : { kind: 'done' };
+  return action.kind === 'screenshot' || action.kind === 'watch' ? { kind: 'screen', png: PNG, width: 1280, height: 768 } : { kind: 'done' };
 }
+
+const SHOWN = `data:image/png;base64,${PNG}`;
 
 /** A computer whose box records each desktop request and answers as `answer` says; nothing else is reachable. */
 function desktopBox(answer: (action: DesktopAction) => DesktopAnswer | Promise<DesktopAnswer> = accepted) {
@@ -52,12 +48,25 @@ function desktopBox(answer: (action: DesktopAction) => DesktopAnswer | Promise<D
   return { box, sent, actions: () => sent.map((request) => request.action) };
 }
 
-/** Desktop input the owner already consented to on this computer. */
-const CONSENTED: ShellApprovalPolicy = { mode: () => 'strict', granted: (grant) => grant.rule === 'desktop-input' && grant.executor === 'computer' };
+/** An owner who is asked nothing: strict, and every ask recorded. */
+function strictOwner() {
+  const asked: string[] = [];
+
+  const policy: ShellApprovalPolicy = {
+    mode: () => 'strict',
+    requestApproval: async (request) => {
+      asked.push(request.command);
+
+      return 'deny';
+    },
+  };
+
+  return { policy, asked };
+}
 
 /** The computer's namespace as a program reaches it: the executor, gated at registration as the router gates it. */
-function computerOf(box: SandboxHandle, policy: ShellApprovalPolicy = CONSENTED): CodemodeProvider {
-  return executorNamespace(gateProviderExec(createSandboxExecutor(box, { driver: 'main' }), policy));
+function computerOf(box: SandboxHandle, policy: ShellApprovalPolicy = strictOwner().policy): CodemodeProvider {
+  return executorNamespace(gateProviderExec(createSandboxExecutor(box, { desktop: { driver: 'main', screen: { width: 1280, height: 768 } } }), policy));
 }
 
 /** A program's call of `member` with positional arguments, as `computer.<member>(...)` makes it: its value, or the
@@ -76,16 +85,20 @@ describe('the desktop members', () => {
     const computer = computerOf(box);
 
     expect(Object.fromEntries(DESKTOP_MEMBERS.map((member) => [member, computer.declarations?.[member]?.call]))).toEqual({
-      screenshot: 'screenshot()', click: 'click(at, { button, count, hold })', type: 'type(text)', key: 'key(keys)',
-      scroll: 'scroll(at, dy, { dx })', move: 'move(at)', drag: 'drag(from, to)',
+      screenshot: 'screenshot()', watch: 'watch(seconds, { fps })', click: 'click(at, { button, count, hold })', type: 'type(text)',
+      key: 'key(keys, { hold })', scroll: 'scroll(at, dy, { dx })', move: 'move(at)', drag: 'drag(from, to)',
     });
     expect(DESKTOP_MEMBERS.map((member) => slateAddressImpact({ namespace: 'computer', member }))).toEqual(DESKTOP_MEMBERS.map(() => null));
 
-    expect(await call(computer, 'screenshot')).toEqual({ image: `data:image/png;base64,${PNG}`, width: 1280, height: 768 });
+    // The screen is the image alone; its size is said once, where the model reads the member.
+    expect(await call(computer, 'screenshot')).toBe(SHOWN);
+    expect(computer.declarations?.['screenshot']?.full).toContain('1280×768');
+    expect(computer.declarations?.['click']?.full).toContain('x below 1280 and y below 768');
     await call(computer, 'click', [10, 20], { button: 'right', count: 2, hold: 'Ctrl+cmd' });
     await call(computer, 'type', 'hi');
     await call(computer, 'key', 'Enter');
     await call(computer, 'key', 'ctrl+/');
+    await call(computer, 'key', 'w', { hold: 800 });
     await call(computer, 'scroll', [5, 6], -3, { dx: 2 });
     await call(computer, 'move', [7, 8]);
     expect(await call(computer, 'drag', [1, 2], [3, 4])).toBeNull();
@@ -96,12 +109,39 @@ describe('the desktop members', () => {
       { kind: 'type', text: 'hi' },
       { kind: 'key', keys: 'Return' },
       { kind: 'key', keys: 'ctrl+slash' },
+      { kind: 'key', keys: 'w', holdMs: 800 },
       { kind: 'scroll', at: [5, 6], dy: -3, dx: 2 },
       { kind: 'move', at: [7, 8] },
       { kind: 'drag', from: [1, 2], to: [3, 4] },
     ];
 
     expect(sent).toEqual(expected.map((action) => ({ driver: 'main', action })));
+  });
+
+  test('watch looks over a window and answers one image; its frames are capped, and a window past 10 s is refused', async () => {
+    const { box, actions } = desktopBox();
+    const computer = computerOf(box);
+
+    expect(await call(computer, 'watch', 3)).toBe(SHOWN);
+    expect(await call(computer, 'watch', 2, { fps: 1 })).toBe(SHOWN);
+    expect(await call(computer, 'watch', 10, { fps: 30 })).toBe(SHOWN);
+    expect(await call(computer, 'watch', 11)).toMatchObject({ success: false, reason: 'bad_input' });
+
+    const expected: DesktopAction[] = [
+      { kind: 'watch', seconds: 3, frames: WATCH_DEFAULT_FRAMES }, { kind: 'watch', seconds: 2, frames: 2 }, { kind: 'watch', seconds: 10, frames: WATCH_FRAMES },
+    ];
+
+    expect(actions()).toEqual(expected);
+  });
+
+  test('desktop input runs as the computer\'s shell does there: nothing asks the owner, whatever the mode', async () => {
+    const { box, actions } = desktopBox();
+    const owner = strictOwner();
+    const computer = computerOf(box, owner.policy);
+
+    expect(await call(computer, 'click', [1, 2])).toBeNull();
+    expect(await call(computer, 'type', 'ok')).toBeNull();
+    expect({ asked: owner.asked, sent: actions().map((action) => action.kind) }).toEqual({ asked: [], sent: ['click', 'type'] });
   });
 
   test('typed text reaches the box in runs it can type, with Return where a line breaks and Tab where it tabs', async () => {
@@ -138,6 +178,7 @@ describe('the desktop members', () => {
     const refused: JsonValue[] = await Promise.all([
       call(computer, 'key', 'Entr'), call(computer, 'key', 'ctrl+Entr'), call(computer, 'key', 'ctrl++'),
       call(computer, 'key', 'a+ctrl'), call(computer, 'click', [1, 2], { hold: 'q' }), call(computer, 'scroll', [1, 2], 0),
+      call(computer, 'key', 'w', { hold: 10_001 }), call(computer, 'key', 'w', { hold: 0 }),
     ]);
 
     expect(refused).toEqual(refused.map(() => expect.objectContaining({ success: false, reason: 'bad_input' })));
@@ -161,7 +202,8 @@ describe('the desktop members', () => {
 
     if (planned === undefined) throw new Error('Plan dropped the computer');
 
-    expect(await call(planned, 'screenshot')).toMatchObject({ width: 1280, height: 768 });
+    expect(await call(planned, 'screenshot')).toBe(SHOWN);
+    expect(await call(planned, 'watch', 1)).toBe(SHOWN);
 
     const acting: Array<[string, JsonValue[]]> = [['click', [[1, 2]]], ['type', ['x']], ['key', ['Return']], ['scroll', [[1, 2], 1]], ['move', [[1, 2]]], ['drag', [[1, 2], [3, 4]]]];
 
@@ -169,71 +211,7 @@ describe('the desktop members', () => {
       expect(await call(planned, member, ...args)).toMatchObject({ success: false, reason: 'denied' });
     }
 
-    expect(actions()).toEqual([{ kind: 'screenshot' }]);
-  });
-});
-
-describe('consent to drive the desktop', () => {
-  /** A computer over the real approval queue, asked through a live prompt that answers in turn. */
-  function consenting(answers: Array<'allow' | 'allow_always' | 'deny'>) {
-    const held = new Set<string>();
-    const asked: string[] = [];
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    const execRaw = makeExecRaw(db);
-    let seq = 0;
-    let mode: ReturnType<ShellApprovalPolicy['mode']> = 'strict';
-
-    initDeferredApprovalsTable(execRaw);
-
-    const queue = new DeferredApprovalQueue({
-      writes: null,
-      store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main),
-      wake: () => Effect.void,
-      remember: (grants) => { for (const grant of grants) held.add(formatApprovalGrant(grant)); },
-      newId: () => `ask-${String(seq += 1)}`,
-    });
-
-    const policy: ShellApprovalPolicy = {
-      mode: () => mode,
-      granted: (grant) => held.has(formatApprovalGrant(grant)),
-      deferrals: queue.channel,
-      requestApproval: async (request) => {
-        asked.push(request.command);
-
-        return answers.shift() ?? 'deny';
-      },
-    };
-
-    const { box, actions } = desktopBox();
-
-    return { computer: computerOf(box, policy), actions, asked, held, deny: () => { mode = 'deny_all'; } };
-  }
-
-  test('input asks, naming the call; a refused call sends nothing and stays refused, and an always-answer grants every later input on that computer', async () => {
-    const owner = consenting(['deny', 'allow_always']);
-
-    expect(await call(owner.computer, 'click', [1, 2])).toMatchObject({ success: false, reason: 'denied' });
-    expect(await call(owner.computer, 'click', [1, 2])).toMatchObject({ success: false, reason: 'denied' });
-    expect(owner.actions()).toEqual([]);
-
-    expect(await call(owner.computer, 'click', [3, 4])).toBeNull();
-    expect(await call(owner.computer, 'type', 'ok')).toBeNull();
-
-    expect({ asked: owner.asked, held: [...owner.held], sent: owner.actions().map((action) => action.kind) }).toEqual({
-      asked: ['computer.click({"at":[1,2]})', 'computer.click({"at":[3,4]})'], held: ['desktop-input@computer'], sent: ['click', 'type'],
-    });
-  });
-
-  test('deny_all refuses desktop input even under a standing grant, and still lets the agent look', async () => {
-    const owner = consenting(['allow_always']);
-
-    expect(await call(owner.computer, 'move', [1, 2])).toBeNull();
-    owner.deny();
-
-    expect(await call(owner.computer, 'move', [3, 4])).toMatchObject({ success: false, reason: 'denied' });
-    expect(await call(owner.computer, 'screenshot')).toMatchObject({ width: 1280 });
-    expect(owner.actions().map((action) => action.kind)).toEqual(['move', 'screenshot']);
+    expect(actions().map((action) => action.kind)).toEqual(['screenshot', 'watch']);
   });
 });
 
@@ -318,10 +296,10 @@ describe('a program driving the desktop', () => {
       // As the background wrapper moves a program that outlived its window.
       job.drain('job-1');
 
-      return { result: [before, await call(computer, 'click', [3, 4]), await call(computer, 'screenshot')] };
+      return { result: [before, await call(computer, 'click', [3, 4]), await call(computer, 'key', 'w', { hold: 500 }), await call(computer, 'screenshot'), await call(computer, 'watch', 1)] };
     }, undefined, execContext({ channel: job }));
 
-    expect(result).toEqual([null, expect.objectContaining({ success: false, reason: 'denied' }), expect.objectContaining({ width: 1280 })]);
-    expect(actions().map((action) => action.kind)).toEqual(['click', 'screenshot']);
+    expect(result).toEqual([null, expect.objectContaining({ success: false, reason: 'denied' }), expect.objectContaining({ success: false, reason: 'denied' }), SHOWN, SHOWN]);
+    expect(actions().map((action) => action.kind)).toEqual(['click', 'screenshot', 'watch']);
   });
 });

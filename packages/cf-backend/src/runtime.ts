@@ -29,6 +29,7 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 import { diagnostics, toKinuError, detach } from "@kinu.run/core/obs";
 import { Effect } from 'effect';
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
+import { DESKTOP_SIZE } from "@kinu.run/devbox/desktop";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
@@ -436,7 +437,7 @@ export function createCFRuntime(
         sizes: SANDBOX_SIZES,
         shells: machineShells,
         // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
-        driver: actor.actor.actorId,
+        desktop: { driver: actor.actor.actorId, screen: DESKTOP_SIZE },
       }));
       diagnostics.event('computer.executor_registered', {
         sandboxId,

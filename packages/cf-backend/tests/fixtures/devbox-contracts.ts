@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import { Devbox, GOLDEN_NAME, type DevboxState } from '../../../devbox/src/index';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
+import { DESKTOP_SIZE } from '../../../devbox/src/desktop';
 import { settle } from '../../../devbox/src/errors';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
@@ -212,7 +213,7 @@ export class ContractBox extends Devbox<Env> {
    */
   async agentDesktop(driver: string, member: string, args: readonly JsonValue[]): Promise<JsonValue> {
     const consented: ShellApprovalPolicy = { mode: () => 'strict', granted: (grant) => grant.rule === 'desktop-input' };
-    const computer = executorNamespace(gateProviderExec(createSandboxExecutor(adaptCloudflareSandbox(this, async () => {}, null), { driver }), consented));
+    const computer = executorNamespace(gateProviderExec(createSandboxExecutor(adaptCloudflareSandbox(this, async () => {}, null), { desktop: { driver, screen: DESKTOP_SIZE } }), consented));
     const tool = computer.tools[member];
 
     if (tool === undefined) throw new Error(`computer has no ${member}`);

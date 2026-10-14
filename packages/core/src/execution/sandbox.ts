@@ -273,13 +273,14 @@ export interface SandboxExecutorOptions {
   readonly sizes?: SandboxSizes;
   /** Where this agent's named shells keep their state; without it a name is refused. */
   readonly shells?: MachineShells;
-  /** This agent, as the box tells the desktop's drivers apart; without it the computer offers no desktop. */
-  readonly driver?: string;
+  /** The desktop: this agent, as the box tells its drivers apart, and the screen's size, which the box's own constant
+   *  sets; without it the computer offers no desktop. */
+  readonly desktop?: { readonly driver: string; readonly screen: { readonly width: number; readonly height: number } };
 }
 
 /** Pass no handle for a "not configured" stub. */
 export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxExecutorOptions = {}): ExecutorProvider {
-  const { previewHostSuffix, activated, sizes, shells, driver } = options;
+  const { previewHostSuffix, activated, sizes, shells, desktop } = options;
   // One call at a time per name, and a name a detached job holds answers at once.
   const names = createShellSession({ home: WORKSPACE_BACKUP_DIR, userRoots: () => [] });
   const connected = handle != null;
@@ -630,8 +631,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     },
   };
 
-  if (driver !== undefined) {
-    Object.assign(tools, desktopTools({ box: handle && ((request) => touch(() => handle.desktop(request))), driver, notConfigured }));
+  if (desktop !== undefined) {
+    Object.assign(tools, desktopTools({ box: handle && ((request) => touch(() => handle.desktop(request))), driver: desktop.driver, notConfigured }));
   }
 
   if (sizes !== undefined) {
@@ -678,6 +679,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       if (!connected) return { ...seen, status: 'not_configured', reason: NOT_CONFIGURED };
 
       if (sizes !== undefined) seen.sizes = sizes;
+
+      if (desktop !== undefined) seen.screen = desktop.screen;
 
       if (!previews) return { ...seen, status: active ? 'active' : 'idle', reason: PREVIEWS_NOT_CONFIGURED };
 

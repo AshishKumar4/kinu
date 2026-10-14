@@ -40,7 +40,8 @@ import {
   type Summarizer,
   type Turn,
 } from '@better-compact/core';
-import { kinuAttachments, type AttachmentDeps } from './attachments';
+import { attachmentStore, kinuAttachments, type AttachmentDeps } from './attachments';
+import { moveStepImages } from './step-images';
 import { kinuCodec, kinuSpec } from './codec';
 import {
   deriveArchiveRange,
@@ -323,8 +324,18 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     return replayed === null ? cut : kinuCodec.decode(withArchiveManifest(replayed, renderArchiveManifest(deps.archive.list(ctx.sessionKey))), messages);
   }
 
+  // A turn's steps move older images out (step-images.ts); what they stored, by payload, for the turn's later steps.
+  const stepLinks = new Map<unknown, string | null>();
+  const stepStore = attachmentStore(deps.attachments);
+
   return {
     name: 'compaction',
+
+    onTurnStart() {
+      stepLinks.clear();
+    },
+
+    prepareStep: (ctx) => moveStepImages(ctx.messages, stepStore, stepLinks),
 
     async transformContext(unsized: TransformContext): Promise<ModelMessage[] | undefined> {
       unsized.abortSignal?.throwIfAborted();
