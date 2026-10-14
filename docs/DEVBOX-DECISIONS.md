@@ -4651,6 +4651,17 @@ staging `c6dc27da1`'s box, by hand, on two X servers started beside the real one
 picture filled the screen exactly, the mark sat at the centre above a full-width panel, and the theme drew the
 frames. The container tier's desktop check reads the glow above the panel as well as the ground and the panel.
 
+D91. The computer answers to its workspace's name, not to "computer" (2026-10-13; reverses D83's fixed name). The
+owner, on `root@computer`: "something nice and sensible, workspace related (maybe workspace name?)". `KinuDevbox`
+reads the workspace's display name from the workspace itself at each `configureContainer`, through the same root agent
+its notices reach, and names the box with it as one DNS label (`workspaceHostLabel`): lowercase, each run of anything
+outside `[a-z0-9]` one hyphen, none at either end, at most 63 characters; the slug's label where the name is a
+placeholder, unread, or leaves nothing. "Storefront" is `root@storefront`, "Coupon fixes" `root@coupon-fixes`. The box
+keeps no copy of the name: a rename names it at its next start, or at the next `configureEgress`, which configures a
+running box again. A name that cannot be read is logged (`computer.name_unread`) and the slug names the box. D83's
+mechanism stands: the kernel's name, `/etc/hostname` and `/etc/hosts`, set at every start. The executor's label in the
+product and the prompt stays "computer".
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

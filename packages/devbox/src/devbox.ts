@@ -2952,17 +2952,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
-  /** The name the box answers to in its prompt, its desktop and its processes; unset, the platform's container id. */
-  protected get hostname(): string | undefined { return undefined; }
+  /** The name the box answers to in its prompt, its desktop and its processes, read at each start; unset, the
+   *  platform's container id. */
+  protected async hostname(): Promise<string | undefined> { return undefined; }
   /** The mark at the centre of the desktop's wallpaper, an SVG document drawn in its own colour (D88); unset, none. */
   protected get desktopMark(): string | undefined { return undefined; }
 
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
-    const name = this.hostname;
+    const name = await this.hostname();
 
-    // The kernel keeps a name for the boot alone, so each start names the box again (D83).
+    // The kernel keeps a name for the boot alone, so each start names the box again (D83, D91).
     if (name !== undefined) await nameBox(this.#container(), name);
   }
 

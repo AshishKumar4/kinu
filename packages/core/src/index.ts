@@ -175,7 +175,7 @@ export {
   planWorkspaceTitle, autoTitleMayReplace, nameOriginOf, persistAutoTitle, titleActorFromMessage,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
-  workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, codenameFor,
+  workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, workspaceHostLabel, codenameFor,
   type NameOrigin,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
