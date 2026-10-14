@@ -235,6 +235,27 @@ const asked = (at: Machine, method: string) => at.frames.filter((frame) => frame
 
 const OWNER = '0123456789abcdef0123456789abcd01';
 
+describe('a machine that dials again before its first connect has answered', () => {
+  it('gets both upgrades: the later socket replaces the earlier, and neither connect fails', async () => {
+    // Staging f9c17ac7b: the earlier connect, replaced while it still awaited, sent its token on the closed socket
+    // and the account object ended in an uncaught exception.
+    const { tickets } = await account('0123456789abcdef0123456789abcd02').reconnecting('ashish@studio');
+
+    const dial = (ticket: string) => account('0123456789abcdef0123456789abcd02')
+      .fetch(`http://probe${DEVICE_CONNECT_PATH}?ticket=${encodeURIComponent(ticket)}`, { headers: { Upgrade: 'websocket' } });
+
+    const upgraded = await Promise.all(tickets.map(async (ticket) => settling(dial(ticket))));
+
+    expect(upgraded.map((answer) => (answer.ok ? answer.value.status : answer.error))).toEqual([101, 101]);
+
+    for (const answer of upgraded) {
+      if (!answer.ok) continue;
+      answer.value.webSocket?.accept();
+      answer.value.webSocket?.close(1000, 'machine done');
+    }
+  });
+});
+
 describe('a machine that answers a cancellation for another command', () => {
   it('confirms nothing on a Stop or on the tool\'s own abort, keeps the request live, and is counted as unstopped', async () => {
     // Believing this kill claim would delete a row whose processes are still running.

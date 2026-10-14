@@ -873,7 +873,8 @@ export class UserDO extends Agent<Env> {
         this.sqlx(`INSERT OR IGNORE INTO user_device_protocol_refusals (device_id) VALUES (?)`, deviceId);
         // The protocol before this one is pushed the build that brings it here, and nothing else.
         const previous = v.safeParse(DeviceUpdateHelloSchema, announced);
-        const update = admitted === 'update' && previous.success ? await this.devices.deviceUpdateFrame(deviceId, previous.output) : null;
+        // Decided and sent in the turn the HELLO arrived, on its socket: nothing is awaited before the send.
+        const update = admitted === 'update' && previous.success ? this.devices.deviceUpdateFrame(deviceId, previous.output) : null;
 
         if (update === null || !previous.success) {
           this.devices._devices.refuse(deviceId);
@@ -888,15 +889,18 @@ export class UserDO extends Agent<Env> {
       }
 
       this.devices.recordDeviceHello(deviceId, hello.output);
-      await this.devices.devicesMoved();
-      const frame = await this.devices.deviceUpdateFrame(deviceId, hello.output);
+      // Sent before the first wait, in the turn the HELLO arrived on its socket.
+      const frame = this.devices.deviceUpdateFrame(deviceId, hello.output);
 
       if (frame !== null) {
         diagnostics.event('device.update_pushed', { device: deviceId, from: hello.output.version ?? '', to: frame.version });
         ws.send(JSON.stringify(frame));
+        await this.devices.devicesMoved();
 
         return;
       }
+
+      await this.devices.devicesMoved();
 
       return settle(this.chatgpt.continueChatGptSignIn(deviceId));
     }
