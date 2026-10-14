@@ -120,18 +120,26 @@ export function createDecisionPort(opts: {
 }
 
 
-/** Through the deployment's Workers AI binding, which answers a decision as a whole object. */
+/**
+ * Through the deployment's Workers AI binding, which answers a decision as a whole object. `Ai.run` rereads its options
+ * from the shared binding after awaiting, so a raw-response call made meanwhile (binding-completions.ts) hands this
+ * one its Response, or that Response's body; either still holds the decision, read here as REST's is.
+ */
 export function bindingDecisionRun(binding: WorkersAIRunBinding): DecisionRun {
   return async (modelId, body) => {
     const answer = await binding.run(modelId, body);
+    const url = `${BINDING_PLACE}/${modelId}`;
 
-    if (answer instanceof Response || answer instanceof ReadableStream) {
-      return settle(Effect.fail(new KinuError('unavailable', `${modelId} streamed instead of answering`)));
-    }
+    if (answer instanceof Response) return answerOf(answer, modelId, url, body);
+
+    if (answer instanceof ReadableStream) return answerOf(new Response(answer), modelId, url, body);
 
     return answer;
   };
 }
+
+/** Where a binding's answer is said to come from, in a refusal's details. */
+const BINDING_PLACE = 'workers-ai-binding:run';
 
 const PLACEHOLDER = 'https://kinu-decision.invalid';
 
@@ -169,22 +177,27 @@ export function restDecisionRun(opts: {
       body: JSON.stringify(body),
     });
 
-    const text = await res.text();
-    const answer = tolerate(() => readJsonObjectText(text), 'malformed-input');
-
-    if (res.ok && answer) return answer;
-
-    const detail = v.safeParse(ErrorBodySchema, answer);
-    const message = detail.success ? detail.output.error?.message ?? detail.output.errors?.[0]?.message : undefined;
-
-    // Read as the model stack reads a refusal: its status, headers and body kept, a spent allowance as budget.
-    const refused = new APICallError({
-      message: `${modelId} answered ${res.status}${message ? `: ${message}` : ''}`,
-      url, requestBodyValues: body, statusCode: res.status, responseHeaders: Object.fromEntries(res.headers), responseBody: text,
-    });
-
-    const refusal = spentAllowanceRefusal(refused) ?? refused;
-
-    return settle(Effect.fail(new KinuError(providerRefusalCode({ cause: refusal }) ?? 'unavailable', refused.message, { cause: refusal })));
+    return answerOf(res, modelId, url, body);
   };
+}
+
+/** A decision answered over HTTP: its whole object, or its refusal read as the model stack reads one. */
+async function answerOf(res: Response, modelId: string, url: string, body: JsonObject): Promise<JsonObject> {
+  const text = await res.text();
+  const answer = tolerate(() => readJsonObjectText(text), 'malformed-input');
+
+  if (res.ok && answer) return answer;
+
+  const detail = v.safeParse(ErrorBodySchema, answer);
+  const message = detail.success ? detail.output.error?.message ?? detail.output.errors?.[0]?.message : undefined;
+
+  // Its status, headers and body kept, a spent allowance as budget.
+  const refused = new APICallError({
+    message: `${modelId} answered ${res.status}${message ? `: ${message}` : ''}`,
+    url, requestBodyValues: body, statusCode: res.status, responseHeaders: Object.fromEntries(res.headers), responseBody: text,
+  });
+
+  const refusal = spentAllowanceRefusal(refused) ?? refused;
+
+  return settle(Effect.fail(new KinuError(providerRefusalCode({ cause: refusal }) ?? 'unavailable', refused.message, { cause: refusal })));
 }
