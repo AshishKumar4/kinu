@@ -105,7 +105,11 @@ function Who({ as, workspace }: { as: AgentStatus; workspace: string | undefined
   );
 }
 
-function Knows({ memory, memoryContent, onSearchMemory, facts, factsResource, reloadFacts, workspace }: {
+/** Whether the workspace's read has come back: "nothing it knows" may only be said of one that did. */
+type Read = { readonly state: "loading" } | { readonly state: "failed"; readonly retry: () => void } | { readonly state: "loaded" };
+
+function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResource, reloadFacts, workspace }: {
+  read: Read;
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
@@ -117,10 +121,12 @@ function Knows({ memory, memoryContent, onSearchMemory, facts, factsResource, re
   const [search, setSearch] = useState("");
   const searching = search !== "";
   const notes = [...memory].reverse();
-  const empty = !searching && notes.length === 0 && memoryContent === "" && facts.length === 0 && factsResource.status !== "error";
+
+  const empty = read.state === "loaded" && !searching && notes.length === 0 && memoryContent === "" && facts.length === 0
+    && factsResource.status !== "error";
 
   return (
-    <Section id="agent-knows" title="What it knows" icon={<BrainIcon size={14} className="p-text-2" />}
+    <Section id="memory" title="What it knows" icon={<BrainIcon size={14} className="p-text-2" />}
       badge={facts.length + notes.length > 0 ? <Badge variant="secondary">{facts.length + notes.length}</Badge> : undefined}>
       <div className="space-y-3">
         <label className="flex h-8 items-center gap-2 rounded-lg border p-border p-elevated px-2.5 focus-within:ring-1 focus-within:ring-[var(--c-accent)]">
@@ -130,7 +136,10 @@ function Knows({ memory, memoryContent, onSearchMemory, facts, factsResource, re
             className="min-w-0 flex-1 bg-transparent text-sm p-text placeholder:p-text-3 focus:outline-none" />
         </label>
 
-        {empty && <Quiet>Nothing yet. It keeps notes and facts as it works, and you can ask it to remember something.</Quiet>}
+        {/* The page's notice gives the reason once; this offers the retry. */}
+        {read.state === "failed" && <LoadFailure what="what it knows" onRetry={read.retry} />}
+        {read.state === "loading" && <div className="flex h-16 items-center justify-center"><Loader size="sm" /></div>}
+        {empty && <p data-empty className="p-row-text p-text-3">Nothing yet. It keeps notes and facts as it works, and you can ask it to remember something.</p>}
 
         {searching && notes.length === 0 && <Quiet>Nothing it knows matches.</Quiet>}
 
@@ -183,6 +192,12 @@ function Knows({ memory, memoryContent, onSearchMemory, facts, factsResource, re
   );
 }
 
+function readOf(loaded: boolean, failed: boolean, retry: () => void): Read {
+  if (loaded) return { state: "loaded" };
+
+  return failed ? { state: "failed", retry } : { state: "loading" };
+}
+
 function Changing({ rpc, readMoves, onChangelogSeen, version }: {
   rpc: Rpc; readMoves: ReadMoves; onChangelogSeen: (() => void) | undefined; version: number | null;
 }) {
@@ -230,11 +245,9 @@ export function AgentSurface(
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {as === null && snapshot.status === "error" && <LoadFailure what="this agent" onRetry={onRetryLoad} />}
-      {as === null && snapshot.status !== "error" && <div className="flex h-32 items-center justify-center"><Loader size="base" /></div>}
       {as !== null && <Who as={as} workspace={workspace} />}
-      <Knows memory={memory} memoryContent={memoryContent} onSearchMemory={onSearchMemory} facts={facts} factsResource={factsResource}
-        reloadFacts={reloadFacts} workspace={as?.name ?? null} />
+      <Knows read={readOf(as !== null, snapshot.status === "error", onRetryLoad)} memory={memory} memoryContent={memoryContent}
+        onSearchMemory={onSearchMemory} facts={facts} factsResource={factsResource} reloadFacts={reloadFacts} workspace={as?.name ?? null} />
       <Section id="agent-doing" title="How it's doing" icon={<ChartLineUpIcon size={14} className="p-text-2" />}>
         <QualityView rpc={rpc} moved={readMoves.getQuality ?? 0} />
       </Section>
