@@ -10,7 +10,7 @@ import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilI
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { ParkedWriteChange } from "@/components/surfaces/WorkTab";
+import { ParkedCommands, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -28,6 +28,12 @@ export interface AttentionStackProps {
   readonly onReview: (plan: PlanPageRef) => void;
   /** The owner's answer to an account-memory proposal; the user object then sends what still waits. */
   readonly decideMemory: (id: string, decision: "accept" | "decline") => Promise<void>;
+  /** The card shown first, when the page chooses it (a Work row opens its ask here); else the stack's own choice. */
+  readonly focus?: { readonly chosen: string | null; readonly choose: (key: string | null) => void };
+}
+
+function isParked(ask: OwnerAsk): ask is OwnerAsk & { kind: "action" } {
+  return ask.kind === "action" && ask.action.kind === "deferred_action";
 }
 
 /** Collapsed cards drawn behind the open one; the rest are counted on the last. */
@@ -220,7 +226,9 @@ function useAnswered(asks: readonly OwnerAsk[]) {
 export function AttentionStack(props: AttentionStackProps): ReactNode {
   const { asks, rpc, onDecided, owedIntents = [] } = props;
   const { answered, mark } = useAnswered(asks);
-  const [chosen, setChosen] = useState<string | null>(null);
+  const [ownChoice, setOwnChoice] = useState<string | null>(null);
+  const chosen = props.focus?.chosen ?? ownChoice;
+  const setChosen = props.focus?.choose ?? setOwnChoice;
   // The card whose answer is in flight: its buttons wait for it, and the next card's are live as soon as it opens.
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
@@ -229,7 +237,13 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const front = waiting.find((ask) => ask.key === chosen) ?? waiting[0];
 
   if (front === undefined) return null;
-  const behind = waiting.filter((ask) => ask !== front);
+
+  // Two or more parked commands are one card: chosen by their boxes and decided together.
+  const parked = isParked(front) ? waiting.filter(isParked) : [];
+  const batched = parked.length > 1;
+  const behind = waiting.filter((ask) => ask !== front && !(batched && isParked(ask)));
+  // The cards there are: the open one and those behind it.
+  const cards = behind.length + 1;
   const shown = behind.slice(0, SHOWN_BEHIND).reverse();
   const unshown = behind.length - shown.length;
 
@@ -284,20 +298,28 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
           <FrontIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden />
           <span>{answerOwed ? "Answer sent" : "Waiting on you"}</span>
-          {waiting.length > 1 && <span className="tabular-nums" data-attention-position>· 1 of {waiting.length}</span>}
+          {cards > 1 && <span className="tabular-nums" data-attention-position>· 1 of {cards}</span>}
         </div>
         {front.kind === "consent" && <ConsentBody consent={front.consent} />}
         {front.kind === "memory" && <MemoryBody memory={front.memory} />}
-        {front.kind === "action" && <ActionBody action={front.action} rpc={rpc} />}
+        {front.kind === "action" && (batched
+          ? <ParkedCommands actions={parked.map((ask) => ask.action)} rpc={rpc} onDecided={(decided) => {
+              for (const id of decided) mark(`action:${id}`);
+              setChosen(null);
+              detach(Effect.promise(onDecided));
+            }} />
+          : <ActionBody action={front.action} rpc={rpc} />)}
         {front.kind === "question" && (
           <QuestionCard asking={front.question} busy={busy === front.key || answerOwed} owed={answerOwed}
             onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]) }))}
             onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
         )}
         {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
-        <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
-          {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}
-        </div>
+        {!batched && (
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+            {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}
+          </div>
+        )}
       </div>
     </section>
   );

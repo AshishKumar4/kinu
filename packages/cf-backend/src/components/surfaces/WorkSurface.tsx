@@ -111,8 +111,8 @@ export interface WorkSurfaceProps {
   inspectedWork: readonly InspectedWork[];
   onRefreshJobs: () => void;
   pendingActions: PendingAction[];
-  /** Called after a decision so the decided row leaves on click, not on the next poll. */
-  onRefreshQueue?: () => void;
+  /** Opens an ask's card in the chat's attention stack, where Work's parked commands and proposals are decided. */
+  onOpenAsk?: (key: string) => void | Promise<void>;
   onChangelogSeen?: () => void;
   slates?: readonly SlateSummary[];
   slateReloads?: ReadonlyMap<string, number>;
@@ -293,7 +293,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               onOpenPlan={planPages.show}
               onReviewActor={props.onReviewActor}
               pendingActions={props.pendingActions}
-              onRefreshQueue={props.onRefreshQueue}
+              {...(props.onOpenAsk !== undefined && { onOpenAsk: props.onOpenAsk })}
               backgroundJobs={props.backgroundJobs}
               inspectedWork={props.inspectedWork}
               onRefreshJobs={props.onRefreshJobs}

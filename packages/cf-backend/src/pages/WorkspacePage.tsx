@@ -689,6 +689,17 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // The workspace agent's questions, for each call's record in the transcript.
   const asked = useMemo(() => askedBy(state.ownerQuestions, null), [state.ownerQuestions]);
 
+  // The card the stack shows first: a Work row opens its ask here, on the workspace's own chat, which stacks them all.
+  const [askFocus, setAskFocus] = useState<string | null>(null);
+
+  // On an agent's chat, the workspace's own chat is opened: its stack holds every ask.
+  const openAsk = useCallback(async (key: string): Promise<void> => {
+    setAskFocus(key);
+
+    if (subName !== undefined) await navigate(`/workspace/${encodeURIComponent(agentId ?? "")}`);
+    workbench.current?.showChat();
+  }, [subName, navigate, agentId, workbench]);
+
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
     owedIntents: state.owedIntents,
@@ -696,7 +707,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     onDecided: refreshPendingActions,
     onReview: (plan) => show(planSurface(plan)),
     decideMemory: decideAccountProposal,
-  }), [workspaceRpc, state.owedIntents, resolveConsent, refreshPendingActions, show, decideAccountProposal]);
+    focus: { chosen: askFocus, choose: setAskFocus },
+  }), [workspaceRpc, state.owedIntents, resolveConsent, refreshPendingActions, show, decideAccountProposal, askFocus]);
 
   const mainPane = `${agentId ?? ""}/main`;
   const ui = useConversationUiState(mainPane);
@@ -981,7 +993,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             inspectedWork={state.inspectedWork}
             onRefreshJobs={(...args: Parameters<typeof state.refreshBackgroundJobs>) => detach(Effect.promise(async () => state.refreshBackgroundJobs(...args)))}
             pendingActions={state.pendingActions}
-            onRefreshQueue={(...args: Parameters<typeof state.refreshPendingActions>) => detach(Effect.promise(async () => state.refreshPendingActions(...args)))}
+            onOpenAsk={openAsk}
             onChangelogSeen={state.clearChangelogUnseen}
             slates={state.slates}
             slateReloads={state.slateReloads}

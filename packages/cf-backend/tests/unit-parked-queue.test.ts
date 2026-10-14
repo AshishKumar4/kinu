@@ -1,12 +1,12 @@
 /**
- * The parked-command queue's decision half: a bulk decide must not reset the selection to null (null means everything)
+ * The attention stack's parked-command card, its decision half: a bulk decide must not reset the selection to null (null means everything)
  * and must re-read the queue. `ParkedDecisionFlow` is a plain object, so this drives it without a browser.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ParkedCommands, ParkedDecisionFlow, type ParkedDecision, type ParkedDecisionDeps } from '../src/components/surfaces/WorkTab';
+import { ParkedCommands, ParkedDecisionFlow, type ParkedDecision, type ParkedDecisionDeps } from '../src/components/ParkedCommands';
 import { workspaceRpc } from '../src/lib/workspace-rpc';
 import type { PendingAction } from '@kinu.run/core';
 

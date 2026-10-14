@@ -862,7 +862,8 @@ export interface WorkspaceProposalVerdict {
   readonly created: { readonly name: string; readonly displayName: string } | null;
 }
 
-const PROPOSAL_CARD = '#inspector [data-workspace-proposal]';
+/** The proposal's card in the chat's attention stack, where Work's row for it opens it. */
+const PROPOSAL_CARD = '#chat [data-workspace-proposal]';
 
 /** A button in the proposal card, by its words. */
 function proposalButton(words: string): string {
@@ -870,8 +871,9 @@ function proposalButton(words: string): string {
 }
 
 /**
- * Row: the workspace's main agent proposes a new workspace, the owner approves it once in Work → Needs you, and it
- * exists under the owner's account with the proposed name, while the agent that asked is woken with its link.
+ * Row: the workspace's main agent proposes a new workspace, Work → Needs you lists it, its row opens its card in the
+ * chat's attention stack, the owner approves it there once, and it exists under the owner's account with the proposed
+ * name, while the agent that asked is woken with its link.
  */
 export async function agentProposesAWorkspace(target: FlowTarget): Promise<WorkspaceProposalVerdict> {
   const workspace = await createFlowWorkspace(target, 'proposal');
@@ -883,7 +885,9 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
     await sendAndSettle(page, WORKSPACE_PROPOSAL_ASK);
     await openInspector(page);
     await page.evaluate(stripTab('Work'));
-    await until(page, 'the proposal in Work → Needs you', `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
+    await until(page, 'the proposal in Work → Needs you', `document.querySelector('#inspector [data-section="work-needs-you"] [data-pending-action]') !== null`);
+    await page.click('#inspector [data-section="work-needs-you"] [data-pending-action]');
+    await until(page, "the proposal's card in the chat", `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
     const cardTitle = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(PROPOSAL_CARD)})?.textContent ?? ''`));
 
     await page.evaluate(proposalButton('/show its soul/iu'));
