@@ -2,7 +2,10 @@ import { WALLPAPER_PY } from './desktop-wallpaper';
 
 export const DESKTOP_PORT = 6080;
 
-const LOG = '/tmp/devbox-desktop.log';
+/** Where the desktop's parts write what went wrong; the container tier reads it when the desktop does not paint. */
+export const DESKTOP_LOG = '/tmp/devbox-desktop.log';
+
+const LOG = DESKTOP_LOG;
 
 /** The session's own files: its two launchers and its panel's configuration. */
 const SESSION = '/usr/local/share/devbox/desktop';

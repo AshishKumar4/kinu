@@ -21,7 +21,7 @@ import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
-import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
+import { DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 
 const REPO = join(import.meta.dir, '..');
@@ -520,9 +520,12 @@ async function main(): Promise<void> {
         }
 
         if (seen === null || !drawn(seen)) {
+          // The desktop's own log says why a part did not paint: the wallpaper's and the panel's errors land there.
+          const log = await shell(`tail -n 30 ${DESKTOP_LOG} 2>&1; true`, fresh);
+
           throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, glow: seen?.glow, panel: seen?.panel })} `
             + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its ground ${DESKTOP_COLOURS.background}, the wallpaper's glow `
-            + `and the panel ${DESKTOP_COLOURS.panel}`);
+            + `and the panel ${DESKTOP_COLOURS.panel}; its log:\n${log}`);
         }
 
         const rect = seen.rect;
