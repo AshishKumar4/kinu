@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { isSubordinateOrigin, type WorkspaceActorDirectory } from '../identity/workspace-actors';
+import { actorStanding, isSubordinateOrigin, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
 import { actorReadHandle } from '../read-models/workspace-work';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
@@ -106,7 +106,7 @@ function retainedDescendant(access: SubordinateInspectionAccess, ancestor: Actor
 
   if (record === null) return null;
 
-  if (record.retiringAt === null && record.deletedAt === null) {
+  if (actorStanding(record) === 'live') {
     const actor = access.directory.open(actorId);
 
     return { actor, transcript: access.transcriptFor(actor) };

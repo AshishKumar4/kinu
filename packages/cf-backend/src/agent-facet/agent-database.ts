@@ -8,7 +8,7 @@ import {
   drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
-  localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
+  actorStanding, localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
@@ -434,7 +434,7 @@ export class AgentDatabase {
 
     if (record === null) return settleSync(Effect.fail(new KinuError('missing', 'The agent is not in its own database.')));
 
-    if (record.retiringAt === null && record.deletedAt === null) {
+    if (actorStanding(record) === 'live') {
       const bound = this.actorHost().bindStores(this.reference());
 
       return { actor: bound.handle, transcript: bound.stores.history.transcript(CHAT_SESSION_ID) };
