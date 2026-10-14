@@ -738,7 +738,7 @@ export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemo
 
 export { repairToolCall } from './tools/repair-tool-call';
 
-export { McpToolError, McpProtocolFailureSchema } from './tools/mcp-error';
+export { McpToolError, McpProtocolFailureSchema, mcpCallResult } from './tools/mcp-error';
 
 export {
   clampToolResult,
@@ -1061,7 +1061,6 @@ export {
   type SandboxSize, type SandboxSizes,
   commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, type OutputSpill, type SpillOutcome,
-  unsandboxedCommandEnvironment,
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
@@ -2262,10 +2261,10 @@ export {
   releaseArtifact, releaseArtifactHead, type ReleaseArtifactObject, type ReleaseArtifactStore,
 } from './http/release-artifact';
 
-export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV } from './http/release-message';
+export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, verifyRelease } from './http/release-message';
 
 export {
-  SignedReleaseSchema, signRelease, verifyRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
+  SignedReleaseSchema, signRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
 } from './http/release-signing';
 
 export {
@@ -2440,6 +2439,10 @@ export {
   type AgentRpcMethod,
   type HostedWindowActor,
 } from './cli/agent-rpc-access';
+
+export {
+  launchDotenv, launchDotenvFiles, PROVIDER_KEY_ENV, SESSION_CREDENTIAL_ENV, unsandboxedCommandEnvironment, type LaunchDotenv,
+} from './cli/command-env';
 
 export {
   bunResolutionShell,

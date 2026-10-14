@@ -46,9 +46,9 @@ import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, localPlanes, SOUL_PATH } from '@kinu.run/core';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
-import { dotenvLoadedNames } from './dotenv-provenance';
+import { readLaunchDotenv } from './dotenv-provenance';
 import {
-  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV, workersAiRoute,
+  createLocalModelResolver, createLocalProviderLLM, workersAiRoute,
   type LocalCloudSession, type LocalModelResolver, type ProviderCredentialSource,
 } from './model-resolver';
 import {
@@ -62,8 +62,6 @@ import { Effect } from 'effect';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from '@kinu.run/core';
 import * as v from 'valibot';
 import { stampSchemaGenesis } from './schema-genesis';
-
-const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV];
 
 /** Where a local owner changes a tier's model, as a refusal notice names it. */
 const LOCAL_MODEL_SETTINGS = 'your model settings';
@@ -722,7 +720,7 @@ async function buildCLIHeadRuntime(
 const EXITED_COMMAND_DRAIN_MS = 250;
 
 export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process.env): Shell {
-  const env = unsandboxedCommandEnvironment(source, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), source)]));
+  const env = unsandboxedCommandEnvironment(source, readLaunchDotenv(process.cwd(), source.NODE_ENV));
 
   return {
     exec(command: string, stdinOrOptions?: string | ShellExecOptions) {

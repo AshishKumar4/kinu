@@ -3,8 +3,8 @@
 
 import { Effect, Cause } from 'effect';
 import {
-  describeMcpTool, decodeJsonValue, JsonObjectSchema, listMcpToolsLeniently, McpToolError, NO_TIMER_DEADLINE_MS,
-  type JsonObject, type ListedMcpTools, type McpToolRefusal, type RemoteMcpTool, type SerializableToolDescriptor,
+  decodeJsonValue, describeMcpTool, JsonObjectSchema, listMcpToolsLeniently, NO_TIMER_DEADLINE_MS,
+  type JsonObject, type JsonValue, type ListedMcpTools, type McpToolRefusal, type RemoteMcpTool, type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -31,7 +31,8 @@ interface McpConnection {
    *  each turn. `serverId` is the config key, unique per agent. */
   readonly descriptors: SerializableToolDescriptor[];
   readonly refused: McpToolRefusal[];
-  call(serverName: string, toolName: string, args: JsonObject, signal?: AbortSignal): Promise<string>;
+  /** The server's whole response; core reads it (`mcpCallResult`). */
+  call(serverName: string, toolName: string, args: JsonObject, signal?: AbortSignal): Promise<JsonValue>;
   readonly diagnostics: McpConnectionDiagnostic[];
   /** Disconnect every server (kills the child processes). */
   close(): Promise<void>;
@@ -139,9 +140,7 @@ export function connectMcpServers(
             { timeout, signal: callSignal },
           ));
 
-          if (res.isError === true) return yield* Effect.die(new McpToolError(decodeJsonValue({ value: res })));
-
-          return formatMcpResult(res);
+          return decodeJsonValue({ value: res });
         }));
       },
       close() {
@@ -198,12 +197,4 @@ async function listServerTools(client: Client, serverName: string, signal?: Abor
   }
 }
 
-type McpToolResult = Awaited<ReturnType<Client['callTool']>>;
-
-function formatMcpResult(res: McpToolResult): string {
-  const content = Array.isArray(res?.content) ? res.content : [];
-  const text = content.map((c) => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`)).join('\n');
-
-  return text || '(no output)';
-}
 

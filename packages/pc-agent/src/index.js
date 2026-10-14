@@ -193,6 +193,10 @@ const { elidedOutput } = require('../../core/src/execution/bounded-output.ts');
 
 const update = require('./update.js');
 
+const { KINU_BUN_VERSION, approvedBun, bunResolutionShell } = require('../../core/src/cli/bun-runtime.ts');
+
+const { DAEMON_PREDECESSOR_ENV } = require('../../core/src/cli/command-env.ts');
+
 const protocol = require('./device-protocol.json');
 
 const METHODS = Object.fromEntries(Object.keys(protocol.methods).map((name) => [name, name]));
@@ -3068,7 +3072,7 @@ async function processRunsThisDaemon(pid) {
  * nobody.
  */
 function isPredecessor(pid) {
-  const named = Number(process.env[update.PREDECESSOR_ENV]);
+  const named = Number(process.env[DAEMON_PREDECESSOR_ENV]);
 
   return Number.isInteger(named) && named > 0 && named === pid && pid === process.ppid;
 }
@@ -3416,6 +3420,42 @@ function hubOrigin(cfg) {
   return cfg.origin.replace(/\/+$/, '');
 }
 
+// The runtime. An updater starts its successor on the Bun it runs on, so a build can wake on a Bun older than the one
+// it was tested on; it leaves that Bun the way the launcher does, before it claims anything.
+
+/** Whether this process runs on the approved Bun or a newer one; any other runtime does not. */
+function onApprovedBun() {
+  const running = process.versions.bun;
+
+  return running !== undefined && approvedBun(running);
+}
+
+/**
+ * The approved Bun's absolute path, provided by the launcher's own `provide_bun`: a compatible Bun this machine
+ * already has, or the approved one installed under `$KINU_HOME/runtime`. Rejects with what the provisioning said
+ * last; everything it said goes to the log.
+ */
+async function provideApprovedBun(deviceHome) {
+  const script = ['set -euo pipefail', 'die() { echo "$*" >&2; exit 1; }', bunResolutionShell(), 'provide_bun', 'printf \'%s\' "$KINU_BUN"'];
+
+  const { error, stdout, stderr } = await update.runToExit('bash', ['-c', script.join('\n')], {
+    env: { ...process.env, KINU_HOME: deviceHome },
+    encoding: 'utf8',
+  });
+
+  const said = String(stderr).trim();
+
+  if (said !== '') log('device.runtime_provisioning', said);
+
+  if (error === null) return String(stdout);
+
+  if (!Number.isInteger(error.code)) throw new Error(`Bun ${KINU_BUN_VERSION} could not be provided: ${error.message}`);
+
+  const lines = said.split('\n');
+
+  throw new Error(`Bun ${KINU_BUN_VERSION} could not be provided: ${said === '' ? `bash exited ${String(error.code)}` : lines[lines.length - 1]}`);
+}
+
 /**
  * The daemon, on the Bun it was tested on. One woken on an older runtime (an
  * older daemon's updater starts its successor on the runtime it had) first
@@ -3424,7 +3464,7 @@ function hubOrigin(cfg) {
  * among them. Nothing is claimed or served before that.
  */
 async function startOnApprovedBun() {
-  if (!update.onApprovedBun()) await moveToApprovedBun();
+  if (!onApprovedBun()) await moveToApprovedBun();
   await main();
 }
 
@@ -3440,14 +3480,14 @@ async function moveToApprovedBun() {
   try {
     // Bun 1.3.12 has no process.execve: it cannot go on as this process on another runtime.
     if (!(process.execve instanceof Function)) throw new Error(`${running} cannot restart this daemon on another runtime`);
-    bun = await update.provideApprovedBun(DEVICE_HOME, log);
+    bun = await provideApprovedBun(DEVICE_HOME);
   } catch (err) {
     await refuse(running, `this machine runs ${running}, and ${errorDetail(err)}`);
 
     return;
   }
 
-  log('device.runtime_provided', `${running}; going on as Bun ${update.KINU_BUN_VERSION} or newer at ${bun}`);
+  log('device.runtime_provided', `${running}; going on as Bun ${KINU_BUN_VERSION} or newer at ${bun}`);
   process.execve(bun, [bun, ...process.execArgv, ...process.argv.slice(1)], process.env);
 }
 

@@ -159,7 +159,7 @@ import {
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
-  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
+  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission,
   type ResolvedTurnProfile, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   childContextResolver,
@@ -1984,11 +1984,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
           this.noteGitHubCall(d, args, rawResult, this.actorHandle().actorId);
 
-          const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
-
-          if (v.is(McpProtocolFailureSchema, response)) throw new McpToolError(response);
-
-          return response;
+          return v.parse(JsonValueSchema, JSON.parse(rawResult));
         },
         effectClaims: {
           actor: this.actorHandle(),

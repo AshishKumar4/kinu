@@ -76,13 +76,6 @@ export interface LocalProviderCredentials {
  *  replaces or removes reaches an open session at its next request, as an OAuth login does. */
 export type ProviderCredentialSource = () => LocalProviderCredentials;
 
-export const PROVIDER_CREDENTIAL_ENV = {
-  openaiApiKey: 'OPENAI_API_KEY',
-  anthropicApiKey: 'ANTHROPIC_API_KEY',
-  openrouterApiKey: 'OPENROUTER_API_KEY',
-} as const satisfies Record<Exclude<keyof LocalProviderCredentials, 'openaiCompat' | 'apiKeyAccounts'>, string>;
-
-export const SESSION_CREDENTIAL_ENV = ['KINU_TOKEN', 'KINU_AUTH', 'AI_GATEWAY_AUTH'] as const;
 
 /** Signed-in Kinu session: local agents use the user's Cloudflare AI through
  *  the worker's /api/user/ai/v1 proxy, with no Cloudflare token on this machine. */

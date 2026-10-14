@@ -20,11 +20,12 @@ import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
 import { compactedScreenshots, screenshot } from '../../compaction/tests/helpers';
-import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
+import { RELEASE_SIGNING_PUBLIC_KEY_ENV } from '@kinu.run/core';
+import { DAEMON_PREDECESSOR_ENV, PROVIDER_KEY_ENV, SESSION_CREDENTIAL_ENV } from '../../core/src/cli/command-env';
 
-/** Every name the harness reads a credential from, as the declaring modules name them. */
+/** Every name Kinu reads a credential or its own setting from, as the declaring modules name them. */
 const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
-  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV,
+  ...Object.values(PROVIDER_KEY_ENV), ...Object.values(SESSION_CREDENTIAL_ENV), RELEASE_SIGNING_PUBLIC_KEY_ENV, DAEMON_PREDECESSOR_ENV,
 ];
 
 const DevicePlanSchema = v.object({ env: v.record(v.string(), v.string()) });

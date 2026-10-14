@@ -17,6 +17,8 @@ import {
   type ModelInfo,
   type OpenAICompatCredential,
   type ProfileCatalogEnvelope,
+  PROVIDER_KEY_ENV,
+  SESSION_CREDENTIAL_ENV,
   CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
 } from '@kinu.run/core';
@@ -418,7 +420,7 @@ export function sessionExpired(config: KinuConfig): boolean {
 /** CI's `KINU_TOKEN` (usually a scoped `pta_…` token) wins over the stored session; the server decides validity.
  *  An unreadable config throws: it is not a signed-out user. */
 export function resolveCloudSession(): LocalCloudSession | null {
-  const envToken = process.env.KINU_TOKEN?.trim();
+  const envToken = process.env[SESSION_CREDENTIAL_ENV.token]?.trim();
 
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
   const config = loadConfigFile();
@@ -510,8 +512,8 @@ export function resolveLLMConfig(opts?: {
     ?? process.env.AI_GATEWAY_BASE_URL;
 
   const auth = opts?.auth
-    ?? process.env.KINU_AUTH
-    ?? process.env.AI_GATEWAY_AUTH;
+    ?? process.env[SESSION_CREDENTIAL_ENV.auth]
+    ?? process.env[SESSION_CREDENTIAL_ENV.gatewayAuth];
 
   const named = opts?.model
     ?? process.env.KINU_MODEL
@@ -583,9 +585,10 @@ export function resolveProviderCredentials(): LocalProviderCredentials {
   const file = loadConfigFile();
 
   return {
-    openaiApiKey: process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? file.providers?.anthropic?.apiKey,
-    openrouterApiKey: process.env.OPENROUTER_API_KEY ?? file.providers?.openrouter?.apiKey,
+    // Read from the names core withholds from every command (`PROVIDER_KEY_ENV`).
+    openaiApiKey: process.env[PROVIDER_KEY_ENV.openaiApiKey] ?? file.providers?.openai?.apiKey,
+    anthropicApiKey: process.env[PROVIDER_KEY_ENV.anthropicApiKey] ?? file.providers?.anthropic?.apiKey,
+    openrouterApiKey: process.env[PROVIDER_KEY_ENV.openrouterApiKey] ?? file.providers?.openrouter?.apiKey,
     openaiCompat: file.providers?.openaiCompat === undefined ? undefined
       : Object.fromEntries(Object.entries(file.providers.openaiCompat).map(([name, compat]) => [name, compatCredential(compat)])),
     apiKeyAccounts: localApiKeyAccounts(file),
