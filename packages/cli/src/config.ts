@@ -2,15 +2,11 @@ import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
-  ANTHROPIC_BASE_URL,
   ANTHROPIC_DEFAULT_MODEL,
-  CHATGPT_BASE_URL,
   CHATGPT_DEFAULT_MODEL,
   DEFAULT_WORKERS_AI_MODEL_ID,
   WORKERS_AI_PROVIDER_ID, WORKERS_AI_MODEL_ID_PREFIX,
-  OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
-  OPENROUTER_BASE_URL,
   OPENROUTER_DEFAULT_MODEL,
   accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
   type LLMProviderConfig,
@@ -19,7 +15,6 @@ import {
   PROVIDER_KEY_ENV,
   SESSION_CREDENTIAL_ENV,
   CLOUD_PROXY_PROVIDER_IDS,
-  cloudProxyBaseURL,
 } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -388,80 +383,75 @@ export function validateWorkspaceId(workspaceId: string): void {
   validateIdentifier(workspaceId, 'Workspace id');
 }
 
-/** Default endpoint for bare model ids, null when nothing derives one; see {@link requireLLMConfig}. */
-export function resolveLLMConfig(opts?: {
+/** This machine's model choice: the spec a bare id or no choice means, and an endpoint the process was given. */
+export interface LocalModelDefaults {
+  /** A full spec (`provider/model`), resolved by the registry with this machine's credentials; null where nothing
+   *  derives one. */
+  readonly spec: string | null;
+  /** An endpoint the process was given (`--base-url` and `--auth`, or `KINU_BASE_URL` and `KINU_AUTH`), served as
+   *  itself; null without one. */
+  readonly endpoint: LLMProviderConfig | null;
+}
+
+interface ModelChoice {
   model?: string;
   baseUrl?: string;
   auth?: string;
   defaultModel?: string;
-}): LLMProviderConfig | null {
+}
+
+/** What the invocation names, over the environment: a base URL, its auth, and the model (its account dropped). */
+function chosenModel(opts: ModelChoice | undefined) {
+  const named = opts?.model ?? process.env.KINU_MODEL ?? process.env.AI_GATEWAY_MODEL ?? opts?.defaultModel;
+
+  return {
+    baseURL: opts?.baseUrl ?? process.env.KINU_BASE_URL ?? process.env.AI_GATEWAY_BASE_URL,
+    auth: opts?.auth ?? process.env[SESSION_CREDENTIAL_ENV.auth] ?? process.env[SESSION_CREDENTIAL_ENV.gatewayAuth],
+    model: named === undefined ? undefined : specWithoutAccount(named),
+  };
+}
+
+/** An endpoint the process was given, serving `model` (Workers AI's default where none is named) as itself: named
+ *  Workers AI for a named Workers AI model, else compatible, and spelled as Workers AI wherever it serves one. */
+function givenEndpoint(baseURL: string, auth: string, model: string | undefined): LocalModelDefaults {
+  const name = model?.startsWith('@cf/') ? WORKERS_AI_PROVIDER_ID : 'openai-compat';
+  const endpointModel = directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID);
+  const served = endpointModel.startsWith('@cf/') ? WORKERS_AI_PROVIDER_ID : name;
+
+  return { spec: `${served}/${endpointModel}`, endpoint: { name, baseURL, headers: { 'Authorization': auth }, model: endpointModel } };
+}
+
+/** The model this machine uses where none is chosen; see {@link requireModelDefaults}. */
+export function resolveModelDefaults(opts?: ModelChoice): LocalModelDefaults {
   const file = loadConfigFile();
+  const { baseURL, auth, model } = chosenModel(opts);
 
-  const baseURL = opts?.baseUrl
-    ?? process.env.KINU_BASE_URL
-    ?? process.env.AI_GATEWAY_BASE_URL;
-
-  const auth = opts?.auth
-    ?? process.env[SESSION_CREDENTIAL_ENV.auth]
-    ?? process.env[SESSION_CREDENTIAL_ENV.gatewayAuth];
-
-  const named = opts?.model
-    ?? process.env.KINU_MODEL
-    ?? process.env.AI_GATEWAY_MODEL
-    ?? opts?.defaultModel;
-
-  const model = named === undefined ? undefined : specWithoutAccount(named);
-
-  if (baseURL && auth) {
-    return {
-      name: model?.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
-      baseURL,
-      headers: { 'Authorization': auth },
-      model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID),
-    };
-  }
-
-  const cloud = resolveCloudSession();
+  if (baseURL && auth) return givenEndpoint(baseURL, auth, model);
 
   // The signed-in account is the default path and owns native model families (`workers-ai`, `my-gateway`, `@cf/`);
   // a local endpoint would accept those ids and serve something else. Explicitly picked BYO models still win.
-  const cloudConfig: LLMProviderConfig | null = cloud
-    ? {
-        name: 'workers-ai',
-        baseURL: cloudProxyBaseURL(cloud.origin),
-        headers: { Authorization: `Bearer ${cloud.token}` },
-        model: workersAIModelId(model),
-      }
-    : null;
+  const signedIn = resolveCloudSession() !== null;
+  const workersAi = `${WORKERS_AI_PROVIDER_ID}/${workersAIModelId(model)}`;
 
-  if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
+  if (signedIn && (!model || isNativeCloudSpec(model))) return { spec: workersAi, endpoint: null };
 
-  // An explicit registry-only spec resolves to that family ahead of any credential default.
-  const family = registryFamilyMarker(model ?? preferredModelFromCredentials(file));
+  const spec = credentialedSpec(file, model) ?? (signedIn ? workersAi : null);
 
-  if (family) return family;
-
-  const derived = deriveLLMConfigFromProviderCredentials(file, model);
-
-  if (derived) return derived;
-
-  if (cloudConfig) return cloudConfig;
-
-  if (baseURL && !auth) {
+  if (spec === null && baseURL && !auth) {
     throw new Error(
       'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n' +
       '  Set both, or unset the base URL and run kinu setup to pick a model provider.'
     );
   }
 
-  return null;
+  return { spec, endpoint: null };
 }
 
-/** For seams that must hand core an endpoint object (workspace creation, evolution); the failure names every fix. */
-export function requireLLMConfig(opts?: Parameters<typeof resolveLLMConfig>[0]): LLMProviderConfig {
-  const config = resolveLLMConfig(opts);
+/** For seams that must name a model before any is chosen (workspace creation); the failure names every fix. */
+export function requireModelDefaults(opts?: Parameters<typeof resolveModelDefaults>[0]): LocalModelDefaults {
+  const defaults = resolveModelDefaults(opts);
 
-  if (config) return config;
+  if (defaults.spec !== null) return defaults;
   throw new Error(
     'No model is set up.\n' +
     '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
@@ -522,64 +512,50 @@ export function resolveMcpServers(): Record<string, McpServerConfig> {
   return loadConfigFile().mcpServers ?? {};
 }
 
-function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string | undefined): LLMProviderConfig | null {
-  const providerModel = model ?? preferredModelFromCredentials(file);
+/**
+ * The spec `model` names on this machine's credentials, or the one they suggest where none is named: a family the
+ * registry serves from its own login (Claude's, opencode's), a bare id on ChatGPT's or OpenAI's account, a spec of a
+ * provider whose key is connected, or the configured OpenAI-compatible endpoint's. Null when no credential serves it.
+ */
+function credentialedSpec(file: KinuConfig, model: string | undefined): string | null {
+  const wanted = model ?? preferredModelFromCredentials(file);
 
-  if (file.providers?.chatgpt?.accessToken !== undefined && (!providerModel || providerModel.startsWith('chatgpt/') || !providerModel.includes('/'))) {
-    return {
-      name: 'chatgpt',
-      baseURL: CHATGPT_BASE_URL,
-      headers: {},
-      model: stripProvider(providerModel ?? CHATGPT_DEFAULT_MODEL, 'chatgpt'),
-    };
+  if (wanted?.startsWith('claude/') || wanted?.startsWith('opencode/')) return wanted;
+
+  return accountSpec(file, wanted) ?? keyedSpec(file, wanted) ?? compatSpec(file, wanted);
+}
+
+/** The key a provider's calls carry: the environment's, over the config's. */
+function apiKeyOf(file: KinuConfig, provider: 'openai' | 'openrouter' | 'anthropic'): string | undefined {
+  return process.env[PROVIDER_KEY_ENV[`${provider}ApiKey`]] ?? file.providers?.[provider]?.apiKey;
+}
+
+/** A bare id, or no choice, on ChatGPT's login or OpenAI's key, in that order; either's own spec too. */
+function accountSpec(file: KinuConfig, wanted: string | undefined): string | null {
+  const takes = (provider: string): boolean => !wanted || wanted.startsWith(`${provider}/`) || !wanted.includes('/');
+
+  if (file.providers?.chatgpt?.accessToken !== undefined && takes('chatgpt')) {
+    return `chatgpt/${stripProvider(wanted ?? CHATGPT_DEFAULT_MODEL, 'chatgpt')}`;
   }
 
-  const openaiKey = process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey;
-
-  if (openaiKey && (!providerModel || providerModel.startsWith('openai/') || !providerModel.includes('/'))) {
-    return {
-      name: 'openai',
-      baseURL: OPENAI_BASE_URL,
-      headers: credentialToHeaders('openai.bearer', { kind: 'bearer', token: openaiKey }),
-      model: stripProvider(providerModel ?? OPENAI_DEFAULT_MODEL, 'openai'),
-    };
-  }
-
-  const openrouterKey = process.env.OPENROUTER_API_KEY ?? file.providers?.openrouter?.apiKey;
-
-  if (openrouterKey && providerModel?.startsWith('openrouter/')) {
-    return {
-      name: 'openrouter',
-      baseURL: OPENROUTER_BASE_URL,
-      headers: { ...credentialToHeaders('openrouter.bearer', { kind: 'bearer', token: openrouterKey }), 'X-Title': 'Kinu CLI' },
-      model: stripProvider(providerModel, 'openrouter'),
-    };
-  }
-
-  const anthropicKey = process.env.ANTHROPIC_API_KEY ?? file.providers?.anthropic?.apiKey;
-
-  if (anthropicKey && providerModel?.startsWith('anthropic/')) {
-    return {
-      name: 'anthropic',
-      baseURL: ANTHROPIC_BASE_URL,
-      headers: credentialToHeaders('anthropic.bearer', { kind: 'bearer', token: anthropicKey }),
-      model: stripProvider(providerModel, 'anthropic'),
-    };
-  }
-
-  const compat = file.providers?.openaiCompat?.default;
-
-  // A local Ollama accepts `@cf/deepseek-ai/…` as a model name and serves something else.
-  if (compat && providerModel && !isNativeCloudSpec(providerModel)) {
-    return {
-      name: 'openai-compat',
-      baseURL: compat.baseURL,
-      headers: compatHeaders(compat),
-      model: stripProvider(providerModel, 'openai-compat'),
-    };
-  }
+  if (apiKeyOf(file, 'openai') && takes('openai')) return `openai/${stripProvider(wanted ?? OPENAI_DEFAULT_MODEL, 'openai')}`;
 
   return null;
+}
+
+/** A spec of OpenRouter or Anthropic, whose key is connected. */
+function keyedSpec(file: KinuConfig, wanted: string | undefined): string | null {
+  return (['openrouter', 'anthropic'] as const).some((provider) => apiKeyOf(file, provider) && wanted?.startsWith(`${provider}/`))
+    ? wanted ?? null
+    : null;
+}
+
+/** The configured OpenAI-compatible endpoint's model. A local Ollama accepts `@cf/deepseek-ai/…` as a model name and
+ *  serves something else, so a native spec is never its. */
+function compatSpec(file: KinuConfig, wanted: string | undefined): string | null {
+  if (!file.providers?.openaiCompat?.default || !wanted || isNativeCloudSpec(wanted)) return null;
+
+  return `openai-compat/${stripProvider(wanted, 'openai-compat')}`;
 }
 
 export async function firstOpenAiCompatModel(): Promise<string | null> {
@@ -600,21 +576,6 @@ export async function firstOpenAiCompatModel(): Promise<string | null> {
   }
 
   return `openai-compat/${first.id}`;
-}
-
-/** Families the registry serves from their own logins (Claude's, opencode's auth.json); the endpoint is only a marker. */
-function registryFamilyMarker(model: string | undefined): LLMProviderConfig | null {
-  if (!model) return null;
-
-  if (model.startsWith('claude/')) {
-    return { name: 'claude', baseURL: '', headers: {}, model: stripProvider(model, 'claude') };
-  }
-
-  if (model.startsWith('opencode/')) {
-    return { name: 'opencode', baseURL: '', headers: {}, model: stripProvider(model, 'opencode') };
-  }
-
-  return null;
 }
 
 function preferredModelFromCredentials(file: KinuConfig): string | undefined {

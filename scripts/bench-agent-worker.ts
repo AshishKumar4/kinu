@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   if (fresh) {
     // A v0 workspace: bootstrap scaffold, empty memory, empty CraftStore, no
     // lessons. This is the "stateless" arm's starting point, and it is one call.
-    await createWorkspace(db, { name: input.workspaceName, purpose: input.purpose, llm: meteredLLM, home: workspaceHome(db) });
+    await createWorkspace(db, { name: input.workspaceName, purpose: input.purpose, home: workspaceHome(db) });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
     // tables for the stateless arm's starting point.
     const sql = makeSql(db);

@@ -76,7 +76,7 @@ export async function provisionLocalTarget(opts: LocalTargetOptions): Promise<Lo
   const dbPath = join(opts.dir, 'agent.db');
   const db = workspaceDatabase(dbPath);
 
-  await createWorkspace(db, { name: opts.workspace, purpose: opts.purpose, llm: opts.llm, home: workspaceHome(db) });
+  await createWorkspace(db, { name: opts.workspace, purpose: opts.purpose, home: workspaceHome(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const folder = localTargetFolder(opts.dir);
   mkdirSync(folder, { recursive: true });

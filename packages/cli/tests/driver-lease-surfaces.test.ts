@@ -39,7 +39,7 @@ async function scenario(body: string): Promise<JsonObject> {
     const { makeExecRaw, makeSql, makeWorkspaceSchemaSql, workspaceHome } =
       await import('./packages/cli-backend/src/index.ts');
     const { leaseHolder } = await import('./packages/cli-backend/tests/driver-lease-probe.ts');
-    const { resolveLLMConfig, placeLocalWorkspace } = await import('./packages/cli/src/config.ts');
+    const { placeLocalWorkspace } = await import('./packages/cli/src/config.ts');
     const { openLocalAgentClient } = await import('./packages/cli/src/local-agent-client.ts');
     const { daemonCommand } = await import('./packages/cli/src/commands/daemon.ts');
 
@@ -49,7 +49,7 @@ async function scenario(body: string): Promise<JsonObject> {
     {
       const { workspaceDatabase } = await import('@kinu.run/test-utils');
       const seed = workspaceDatabase(dbPath);
-      await createWorkspace(seed, { name: 'leasebot', purpose: 'lease', llm: resolveLLMConfig(), home: workspaceHome(seed) });
+      await createWorkspace(seed, { name: 'leasebot', purpose: 'lease', home: workspaceHome(seed) });
       initWorkspaceSchema(makeWorkspaceSchemaSql(seed));
       seed.close();
     }

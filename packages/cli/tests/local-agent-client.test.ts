@@ -226,7 +226,7 @@ async function hostedClient(
     const db = workspaceDatabase(dbPath, { create: true });
 
     try {
-      await createWorkspace(db, { name: 'jarvis', purpose: 'test agent', llm: DUMMY_LLM, home: workspaceHome(db) });
+      await createWorkspace(db, { name: 'jarvis', purpose: 'test agent', home: workspaceHome(db) });
     } finally {
       db.close();
     }

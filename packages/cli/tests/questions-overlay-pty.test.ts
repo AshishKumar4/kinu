@@ -6,7 +6,7 @@
 import { expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { initWorkspaceSchema, OwnerQuestionStore, WorkspaceActorDirectory, type JsonObject, type LLMProviderConfig } from '@kinu.run/core';
+import { initWorkspaceSchema, OwnerQuestionStore, WorkspaceActorDirectory, type JsonObject } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { makeSql, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
 import { runToExit, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
@@ -18,7 +18,6 @@ const repoRoot = resolve(import.meta.dir, '../../..');
 
 const cliBin = resolve(import.meta.dir, '../bin/cli.ts');
 
-const BIRTH_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' };
 
 const ASK: JsonObject = {
   questions: [
@@ -58,7 +57,7 @@ async function workspaceThatAsked(home: string, name: string): Promise<string> {
   const db = workspaceDatabase(path);
 
   try {
-    await createWorkspace(db, { name, purpose: 'Keep the shop running', llm: BIRTH_LLM, home: workspaceHome(db) });
+    await createWorkspace(db, { name, purpose: 'Keep the shop running', home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const identity = db.query<{ id: string; owner_user_id: string | null }, []>('SELECT id, owner_user_id FROM workspace_identity').get();
 
