@@ -31,7 +31,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
-import { rgba, withGallery } from '../../scripts/gallery-harness';
+import { withGallery } from '../../scripts/gallery-harness';
 import { executorLabel, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
@@ -2310,6 +2310,25 @@ describe('Files at every width it is drawn', () => {
     });
   });
 
+  test('a machine that is away reads the same in the tree as in the list, and connects from either', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=files&offline=device&connect=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-files-offline-mount]');
+      // The tree has drawn the root's listing, and the machines that are away with it.
+      await page.waitForSelector('[data-files-tree-node="/home"]');
+
+      // No way in: a folder there would only answer with the machine's refusal.
+      expect(await page.$('[data-files-tree-node="/pc"]')).toBeNull();
+      expect(await page.$('[data-files-tree-offline="pc"]')).not.toBeNull();
+      await page.hover('[data-files-tree-offline="pc"]');
+      await page.click('[data-files-tree-offline="pc"] [data-files-tree-connect]');
+      await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
+      await page.close();
+    });
+  });
+
   test("a row's menu waits for the pointer, and a touch screen shows it on every row", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const menuShown = (page: Page, name: string) => page.$eval(
@@ -3090,6 +3109,8 @@ describe('Now lists what is still owed, by the phase its store records', () => {
       expect(await owedRows(page)).toEqual(['turn blocked', ...owed]);
 
       await claimIs(page, { kind: 'stranded', turnId: 'turn-stranded', claimedAt: 1 });
+      // The pushed claim renders on the page's next commit, not within the dispatch.
+      await page.waitForSelector('[data-composer-root] button[aria-label="Recover this turn"]');
       await page.click('[data-composer-root] button[aria-label="Recover this turn"]');
       await page.waitForFunction((left) => document.querySelectorAll('[data-inspected]').length === left, {}, owed.length);
 
@@ -3652,14 +3673,19 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.waitForSelector('[aria-label="Work"]');
       await waitForInspectorWidth(page, 340);
 
-      // The rule's colour once its transition has run.
-      const ruleAlpha = async (): Promise<number> => {
+      // What the reader sees down the column's edge: the handle's own pixels, once its transition has run.
+      const edge = async (): Promise<Uint8Array> => {
         await page.waitForFunction(() => document.querySelector('[data-separator] > span')?.getAnimations().length === 0);
 
-        return rgba(await page.$eval('[data-separator] > span', (rule) => getComputedStyle(rule).backgroundColor)).a;
+        return present(await page.$('[data-separator]'), 'the inspector separator').screenshot();
       };
 
+      const same = (left: Uint8Array, right: Uint8Array): boolean => Buffer.from(left).equals(Buffer.from(right));
+
+      await page.mouse.move(200, 450);
+      const untouched = await edge();
       const { x, y } = await separatorCentre(page);
+
       await page.mouse.move(x, y);
       await page.mouse.down();
       await page.mouse.move(x - 40, y, { steps: 4 });
@@ -3668,14 +3694,14 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       // The handle keeps the focus the press gave it; the owner saw that as an accent line standing down the column.
       expect(await page.evaluate(() => document.activeElement?.hasAttribute('data-separator'))).toBe(true);
-      expect(await ruleAlpha()).toBe(0);
+      expect(same(await edge(), untouched)).toBe(true);
 
       await page.keyboard.press('Tab');
       await page.keyboard.down('Shift');
       await page.keyboard.press('Tab');
       await page.keyboard.up('Shift');
       expect(await page.evaluate(() => document.activeElement?.hasAttribute('data-separator'))).toBe(true);
-      expect(await ruleAlpha()).toBeGreaterThan(0);
+      expect(same(await edge(), untouched)).toBe(false);
 
       await page.close();
     });

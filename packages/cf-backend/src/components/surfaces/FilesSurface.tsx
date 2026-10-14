@@ -63,8 +63,14 @@ const UNDER_MENU = "pointer-fine:group-hover:invisible pointer-fine:group-has-[[
 /** A row a finger can take on a touch screen; dense under a pointer. */
 const ROW_HEIGHT = "min-h-8 pointer-coarse:min-h-11";
 
-/** A machine that is not there, in the list where its folder would be. */
-interface OfflineRow { readonly mount: MountInfo; readonly name: string }
+/** A machine that is not there, in the list and the tree where its folder would be. */
+interface OfflineRow {
+  readonly name: string;
+  /** Its own name, where it says more than the folder's. */
+  readonly label: string | null;
+  readonly reason: string;
+  readonly onConnect?: () => void;
+}
 
 type ListRow = { readonly entry: DirEntry; readonly index: number } | OfflineRow;
 
@@ -96,6 +102,34 @@ function saveAs(href: string): void {
 }
 
 
+
+/** The root's machines as Files shows them: a live one's own name beside its folder, and one that is away as a row. */
+function useMachines(executors: readonly ExecutorInfo[], mounts: readonly MountInfo[], onConnectDevice: () => void) {
+  const deviceLabel = executors.find((e) => e.name === "device")?.label;
+
+  return useMemo(() => {
+    const labelOf = (executor: string) => (executor === "device" ? deviceLabel ?? executorLabel("device") : executorLabel(executor));
+
+    // A machine that is not there keeps its place among the root's folders, in the list and the tree alike; a listed
+    // folder of its name would only refuse.
+    const away = mounts.flatMap((mount): OfflineRow[] => {
+      const name = Object.keys(MOUNT_EXECUTOR).find((point) => MOUNT_EXECUTOR[point] === mount.name);
+
+      return name === undefined || mount.live ? [] : [{
+        name, label: beside(labelOf(mount.name), name), reason: mount.reason ?? "not available",
+        ...(mount.name === "device" && { onConnect: onConnectDevice }),
+      }];
+    });
+
+    const badgeFor = (name: string): string | null => {
+      const executor = MOUNT_EXECUTOR[name];
+
+      return executor !== undefined && mounts.some((m) => m.name === executor && m.live) ? beside(labelOf(executor), name) : null;
+    };
+
+    return { away, badgeFor };
+  }, [deviceLabel, mounts, onConnectDevice]);
+}
 
 export interface FilesSurfaceProps {
   rpc: WorkspaceRpc;
@@ -253,34 +287,13 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const segments = path.split("/").filter(Boolean);
 
   const needle = filter.trim().toLowerCase();
-
-  // A machine that is not there keeps its place among the folders; a listed folder of its name would only refuse.
-  const offline = useMemo(() => (atRoot ? mounts : []).flatMap((mount): OfflineRow[] => {
-    const name = Object.keys(MOUNT_EXECUTOR).find((point) => MOUNT_EXECUTOR[point] === mount.name);
-
-    return name !== undefined && !mount.live && name.includes(needle) ? [{ mount, name }] : [];
-  }), [atRoot, mounts, needle]);
+  const { away, badgeFor } = useMachines(executors, mounts, onConnectDevice);
+  const offline = atRoot ? away.filter((row) => row.name.includes(needle)) : [];
 
   const filtered = useMemo(
-    () => entries.filter((e) => e.name.toLowerCase().includes(needle) && !offline.some((row) => row.name === e.name)),
-    [entries, needle, offline],
+    () => entries.filter((e) => e.name.toLowerCase().includes(needle) && !(atRoot && away.some((row) => row.name === e.name))),
+    [atRoot, away, entries, needle],
   );
-
-  const deviceLabel = executors.find((e) => e.name === "device")?.label;
-
-  const machineLabel = useCallback(
-    (executor: string) => (executor === "device" ? deviceLabel ?? executorLabel("device") : executorLabel(executor)),
-    [deviceLabel],
-  );
-
-  const badgeFor = useCallback((entryName: string): string | null => {
-    if (!atRoot) return null;
-    const executor = MOUNT_EXECUTOR[entryName];
-
-    if (!executor || !mounts.some((m) => m.name === executor && m.live)) return null;
-
-    return beside(machineLabel(executor), entryName);
-  }, [atRoot, machineLabel, mounts]);
 
   const open = useCallback((entry: DirEntry) => {
     const full = joinDir(path, entry.name);
@@ -336,7 +349,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
         <TreeNode
           dir="/" label="Workspace" depth={0}
           path={path} previewPath={preview} expanded={expanded} cache={treeCache}
-          badgeFor={badgeFor}
+          badgeFor={badgeFor} away={away}
           onNavigate={(dir) => { setFilter(""); setPath(dir); }}
           onOpenFile={setPreview}
           onToggle={(dir) => run(Effect.gen(function* () {
@@ -455,16 +468,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               ><ArrowUpIcon size={16} /><span className="p-row-text">..</span></button>
             )}
             {!loading && placeOffline(filtered, offline).map((row) => {
-              if (!("entry" in row)) {
-                const { mount, name } = row;
-
-                return (
-                  <OfflineMountRow key={`offline-${name}`} name={name}
-                    label={beside(machineLabel(mount.name), name)}
-                    reason={mount.reason ?? "not available"}
-                    {...(mount.name === "device" && { onConnect: onConnectDevice })} />
-                );
-              }
+              if (!("entry" in row)) return <OfflineMountRow key={`offline-${row.name}`} row={row} />;
 
               const { entry, index } = row;
               const full = joinDir(path, entry.name);
@@ -472,7 +476,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               return (
                 <EntryRow
                   key={entry.name}
-                  entry={entry} badge={badgeFor(entry.name)}
+                  entry={entry} badge={atRoot ? badgeFor(entry.name) : null}
                   selected={index === selected}
                   previewing={preview === full}
                   renaming={renaming?.path === full ? renaming.draft : null}
@@ -519,7 +523,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   );
 }
 
-function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badgeFor, onNavigate, onOpenFile, onToggle }: {
+function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badgeFor, away = [], onNavigate, onOpenFile, onToggle }: {
   dir: string;
   label: string;
   depth: number;
@@ -528,12 +532,15 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
   expanded: ReadonlySet<string>;
   cache: ReadonlyMap<string, CachedDir>;
   badgeFor: (name: string) => string | null;
+  /** The root's machines that are not there, placed as the list places them. */
+  away?: readonly OfflineRow[];
   onNavigate: (dir: string) => void;
   onOpenFile: (path: string) => void;
   onToggle: (dir: string) => Promise<void>;
 }) {
   const isOpen = expanded.has(dir);
-  const children = cache.get(dir)?.entries;
+  const listed = cache.get(dir)?.entries;
+  const children = listed && placeOffline(listed.filter((child) => !away.some((row) => row.name === child.name)), away);
   const active = path === dir;
 
   return (
@@ -565,7 +572,9 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
       {isOpen && children === undefined && (
         <div className="p-text-4 p-meta" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
       )}
-      {isOpen && children?.map((child) => {
+      {isOpen && children?.map((row) => {
+        if (!("entry" in row)) return <OfflineTreeRow key={`offline-${row.name}`} row={row} depth={depth + 1} />;
+        const child = row.entry;
         const full = joinDir(dir, child.name);
 
         return child.type === "dir" ? (
@@ -594,20 +603,40 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
   );
 }
 
-/** A machine that is not there, as a row of the list: its name where its folder would be, and the way to bring it. */
-function OfflineMountRow({ name, label, reason, onConnect }: { name: string; label: string | null; reason: string; onConnect?: () => void }) {
+/** The tree's row for a machine that is not there: as the list says it, with no way in until it connects. */
+function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
   return (
-    <div data-files-offline-mount title={reason} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
+    <div data-files-tree-offline={row.name} title={`${row.label ?? row.name}: ${row.reason}`}
+      className="group flex items-center gap-1 pr-2 py-0.5 text-xs p-text-4"
+      style={{ paddingLeft: `${22 + depth * 12}px` }}>
+      {/* Where a folder's icon stands beside its caret. */}
+      <PlugIcon size={13} className="shrink-0" />
+      <span className="truncate">{row.name}</span>
+      <span className="ml-1 truncate p-meta">offline</span>
+      {row.onConnect && (
+        <button type="button" data-files-tree-connect onClick={row.onConnect}
+          className="ml-auto shrink-0 p-meta font-medium p-accent hover:underline opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
+          Connect
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** A machine that is not there, as a row of the list: its name where its folder would be, and the way to bring it. */
+function OfflineMountRow({ row }: { row: OfflineRow }) {
+  return (
+    <div data-files-offline-mount title={row.reason} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
       <PlugIcon size={16} className="p-text-4" />
       <span className="flex min-w-0 items-baseline gap-2">
-        <span className="truncate p-row-text p-text-3">{name}</span>
+        <span className="truncate p-row-text p-text-3">{row.name}</span>
         <span data-mount-badge className="truncate p-meta p-text-4">
-          {label === null ? "offline" : `${label} · offline`}
+          {row.label === null ? "offline" : `${row.label} · offline`}
         </span>
       </span>
       <span className="text-right @[26rem]:col-span-2">
-        {onConnect && (
-          <button type="button" data-files-connect onClick={onConnect}
+        {row.onConnect && (
+          <button type="button" data-files-connect onClick={row.onConnect}
             className="p-meta font-medium p-accent hover:underline">Connect</button>
         )}
       </span>
