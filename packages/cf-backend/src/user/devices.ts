@@ -145,10 +145,10 @@ export interface UserDevicesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'r
   chatgptSignIns(): Promise<ReadonlyArray<{ readonly id: string; readonly label: string; readonly status: DeviceChatGptStatus | null }>>;
 }
 
-/** The owner's machines: tunnels, tokens, consents, tiers and requests. */
 /** The served build as the connect that opened a device's socket read it. */
 const SERVED_STAMP_KEY = 'devices.served_stamp';
 
+/** The owner's machines: tunnels, tokens, consents, tiers and requests. */
 export class UserDevices {
   // The reverse-WS tunnel from a user's machine terminates here, not on an agent, so every agent
   // can reach the device via `deviceRpc()`. A WebSocket cannot cross RPC; the worker forwards the upgrade.
