@@ -203,6 +203,16 @@ function leave(onExit: ChatAppOpts['onExit']): void | Promise<void> {
   return onExit ? onExit() : globalExit?.();
 }
 
+/** The model a status names; none before the first status arrives. */
+function modelOf(status: AgentClientStatus | null): string {
+  return status?.model ?? '';
+}
+
+/** A status update setting its model; none before the first status arrives. */
+function withModel(spec: string): (current: AgentClientStatus | null) => AgentClientStatus | null {
+  return (current) => current === null ? current : { ...current, model: spec };
+}
+
 export function ChatApp(props: ChatAppOpts) {
   return (
     <TuiProductProvider runtime={props.tui}>
@@ -245,7 +255,7 @@ function ChatScene({
   const [ready, setReady] = useState(false);
   // The workspace's configuration as one snapshot (model, effort, role): each operation updates it once.
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
-  const modelSpec = status?.model ?? '';
+  const modelSpec = modelOf(status);
   const [nextTier, setNextTier] = useState<TierId | null>(null);
   const [liveContext, setLiveContext] = useState<ContextNumber | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
@@ -854,7 +864,7 @@ function ChatScene({
 
     try {
       const result = await client.setModel(spec);
-      setStatus((current) => current === null ? current : { ...current, model: result.spec });
+      setStatus(withModel(result.spec));
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
       addError({ cause: err });
@@ -952,7 +962,7 @@ function ChatScene({
 
         return;
       case 'model-set':
-        setStatus((current) => current === null ? current : { ...current, model: outcome.spec });
+        setStatus(withModel(outcome.spec));
         addMessage({ role: 'system', content: `Model: ${outcome.spec}` });
 
         return;
