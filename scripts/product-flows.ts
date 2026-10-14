@@ -28,7 +28,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { beatWorkspace } from '../evals/src/session';
-import { webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
+import { createWorkspace, deleteWorkspace, listWorkspaces, webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
@@ -132,24 +132,13 @@ async function reloadedAfterNetworkChange(page: Page, what: string, deadEnd: str
   return true;
 }
 
-const CreatedSchema = v.object({ name: v.string() });
-
 /** A workspace made for one row through the app's own create route, with no
  *  mission, so no turn runs before the row's own. */
 /** The beat each row's workspace keeps until it is removed, so no eval run's sweep takes it mid-row. */
 const beats = new Map<string, () => void>();
 
 export async function createFlowWorkspace(target: FlowTarget, subject: string): Promise<string> {
-  const response = await fetch(`${target.origin}/api/user/workspaces`, {
-    method: 'POST',
-    headers: { ...webHeaders(target.identity), 'content-type': 'application/json' },
-    body: JSON.stringify({ name: evalWorkspaceName(`browser-${subject}`) }),
-  });
-
-  const text = await response.text();
-
-  if (!response.ok) throw new Error(`creating a workspace answered ${String(response.status)}: ${text.slice(0, 400)}`);
-  const { name } = v.parse(CreatedSchema, JSON.parse(text));
+  const name = await createWorkspace(target.origin, target.identity, { name: evalWorkspaceName(`browser-${subject}`) });
 
   beats.set(name, beatWorkspace(target.origin, target.identity, name));
 
@@ -162,14 +151,10 @@ export async function removeFlowWorkspace(target: FlowTarget, workspace: string)
   beats.get(workspace)?.();
   beats.delete(workspace);
 
-  const response = await fetch(`${target.origin}/api/user/workspaces/${encodeURIComponent(workspace)}`, {
-    method: 'DELETE',
-    headers: webHeaders(target.identity),
-  });
-
-  if (!response.ok) {
-    console.warn(`product-flows: removing ${workspace} answered ${String(response.status)}: `
-      + `${(await response.text()).slice(0, 200)}`);
+  try {
+    await deleteWorkspace(target.origin, target.identity, workspace);
+  } catch (error) {
+    console.warn(`product-flows: removing ${workspace} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -926,27 +911,6 @@ export interface WorkspaceProposalVerdict {
 
 const PROPOSAL_CARD = '#inspector [data-workspace-proposal]';
 
-const ListedSchema = v.object({
-  entries: v.array(v.object({ name: v.string(), displayName: v.optional(v.string()) })),
-  nextCursor: v.nullable(v.string()),
-});
-
-/** Every workspace on the account with its title, page by page, as the sidebar's roster lists them. */
-async function listedWorkspaces(target: FlowTarget): Promise<Array<{ name: string; displayName: string }>> {
-  const rows: Array<{ name: string; displayName: string }> = [];
-  let cursor: string | null = null;
-
-  do {
-    const url = `${target.origin}/api/user/workspaces${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`;
-    const page: v.InferOutput<typeof ListedSchema> = v.parse(ListedSchema, await (await fetch(url, { headers: webHeaders(target.identity) })).json());
-
-    rows.push(...page.entries.map((entry) => ({ name: entry.name, displayName: entry.displayName ?? '' })));
-    cursor = page.nextCursor;
-  } while (cursor !== null);
-
-  return rows;
-}
-
 /** A button in the proposal card, by its words. */
 function proposalButton(words: string): string {
   return `[...document.querySelectorAll(${JSON.stringify(`${PROPOSAL_CARD} button`)})].find((button) => ${words}.test(button.textContent ?? ''))?.click()`;
@@ -972,7 +936,7 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
     await page.evaluate(proposalButton('/show its soul/iu'));
     await until(page, 'the soul approving writes', `document.querySelector('[data-workspace-proposal-soul]') !== null`);
     const cardSoul = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-workspace-proposal-soul]')?.textContent ?? ''`));
-    const before = new Set((await listedWorkspaces(target)).map((row) => row.name));
+    const before = new Set((await listWorkspaces(target.origin, target.identity)).map((row) => row.name));
 
     await page.evaluate(proposalButton('/create workspace/iu'));
     await until(page, "the agent's reply with the new workspace's link",
@@ -981,9 +945,12 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
     const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(PROPOSAL_LINK_REPLY)))?.[0] ?? '';
 
     created = /\/workspace\/([a-z0-9-]+)$/u.exec(link)?.[1] ?? null;
-    const row = (await listedWorkspaces(target)).find((entry) => entry.name === created);
+    const row = (await listWorkspaces(target.origin, target.identity)).find((entry) => entry.name === created);
 
-    return { cardTitle, cardSoul, link, existedBeforeApproval: created !== null && before.has(created), created: row ?? null };
+    return {
+      cardTitle, cardSoul, link, existedBeforeApproval: created !== null && before.has(created),
+      created: row === undefined ? null : { name: row.name, displayName: row.displayName ?? '' },
+    };
   } finally {
     await removeFlowWorkspace(target, workspace);
 

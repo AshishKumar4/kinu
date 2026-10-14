@@ -43,7 +43,8 @@ import { execFileSync } from 'node:child_process';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 
-import { withLiveApp, createWorkspace, deleteWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
+import { withLiveApp, type LiveApp } from './live-app-harness';
+import { createWorkspace, deleteWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
 import { PLAN_MISSION, SLATE_TITLE, countingScript, planWalkthrough, registerScriptedModel, startScriptedModel } from './scripted-model';
 import type { ScriptedModel } from './scripted-protocol';
 import { scratchDir } from '../packages/test-utils/src/scratch';
@@ -657,11 +658,11 @@ export async function filmPlanReview(
   // The roster the film's sidebar shows is this identity's alone; a workspace
   // an earlier run of this recorder left on it would read as clutter, so it
   // goes before the workspace the film names is created.
-  for (const stale of await listWorkspaces(app.origin)) {
-    await deleteWorkspace(app.origin, stale);
+  for (const { name: stale } of await listWorkspaces(app.origin, LOOPBACK_IDENTITY)) {
+    await deleteWorkspace(app.origin, LOOPBACK_IDENTITY, stale);
   }
 
-  const workspace = await createWorkspace(app.origin, {
+  const workspace = await createWorkspace(app.origin, LOOPBACK_IDENTITY, {
     name: `plan-demo-${crypto.randomUUID().slice(0, 8)}`,
     purpose: WORKSPACE_PURPOSE,
     model: SCRIPTED_MODEL_SPEC,

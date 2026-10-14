@@ -18,7 +18,8 @@ import { TurnClaimFrameSchema } from '@kinu.run/core';
 import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
-import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
+import { DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
+import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, recordDeadEnds,
   countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
@@ -148,7 +149,7 @@ interface StateVerdict {
   readonly root: string;
   /** The Durable Object namespaces under it, from the plugin's `v3/do` tree. */
   readonly namespaces: readonly string[];
-  /** Workspaces on the LOCAL server's roster that this run did not create. A
+  /** Workspaces on the local server's roster that this run did not create. A
    *  state directory that held anything before the boot names it here. */
   readonly foreign: readonly string[];
 }
@@ -257,7 +258,7 @@ const CHAT_TAIL = `(document.querySelector('#chat')?.textContent ?? '').slice(-2
  *  stream (`pacedTurn`). */
 async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string): Promise<LiveIndicatorVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-indicator-${RUN_ID}`, purpose: 'live indicator probe', model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-indicator-${RUN_ID}`, purpose: 'live indicator probe', model: SCRIPTED_MODEL_SPEC });
 
   const page = await openWorkspace(newPage, origin, workspace);
   const turns = await watchTurns(page);
@@ -332,7 +333,7 @@ const probeLayoutScript = `({ inspectorWidth: ${INSPECTOR_WIDTH}, railLane: ${RA
 
 async function measureControls(newPage: LiveApp['newPage'], origin: string): Promise<ControlsVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-controls-${RUN_ID}`, purpose: 'collapse controls probe', model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-controls-${RUN_ID}`, purpose: 'collapse controls probe', model: SCRIPTED_MODEL_SPEC });
 
   const page = await openWorkspace(newPage, origin, workspace);
 
@@ -392,7 +393,7 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
  *  the recorder is that drive plus a camera. */
 async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): Promise<WalkthroughVerdict> {
   const workspace = await createWorkspace(
-    origin,
+    origin, LOOPBACK_IDENTITY,
     { name: `live-row-plan-flow-${RUN_ID}`, purpose: 'plan review walkthrough', model: SCRIPTED_MODEL_SPEC });
 
   const page = await newPage();
@@ -407,7 +408,7 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
 /** The walkthrough again, in a workspace of its own, read for the slate its implement turn wrote. */
 async function measureOwnServer(newPage: LiveApp['newPage'], origin: string): Promise<OwnServerVerdict> {
   const workspace = await createWorkspace(
-    origin,
+    origin, LOOPBACK_IDENTITY,
     { name: `live-row-own-server-${RUN_ID}`, purpose: 'own-server slate in the chat', model: SCRIPTED_MODEL_SPEC });
 
   const page = await newPage();
@@ -699,7 +700,7 @@ async function measureOpenedMidTurn(
   newPage: LiveApp['newPage'], origin: string, firstTurn: HeldCall,
 ): Promise<OpenedMidTurnVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-mid-turn-${RUN_ID}`, purpose: PACED_FIRST_TURN_MISSION, model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-mid-turn-${RUN_ID}`, purpose: PACED_FIRST_TURN_MISSION, model: SCRIPTED_MODEL_SPEC });
 
   const page = await newPage();
   const turns = await watchTurns(page);
@@ -854,7 +855,7 @@ async function answerAfterReplay(page: Page): Promise<string[]> {
  *  a tool, then it waits on a held model call, so it is still running through the drop and the replay. */
 async function measureReconnect(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<ReconnectVerdict> {
   const workspace = await named('the reconnect workspace to be created', () => createWorkspace(
-    origin, { name: `live-row-reconnect-${RUN_ID}`, purpose: 'reconnect probe', model: SCRIPTED_MODEL_SPEC }));
+    origin, LOOPBACK_IDENTITY, { name: `live-row-reconnect-${RUN_ID}`, purpose: 'reconnect probe', model: SCRIPTED_MODEL_SPEC }));
 
   const page = await openRecorded(newPage, origin, workspace);
 
@@ -875,7 +876,7 @@ async function measureReconnect(newPage: LiveApp['newPage'], origin: string, hel
 /** Row 11 (#30): the same, on a page that only watched the turn: another tab sent it. */
 async function measureObservedReconnect(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<ReconnectVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-observed-${RUN_ID}`, purpose: 'observed reconnect probe', model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-observed-${RUN_ID}`, purpose: 'observed reconnect probe', model: SCRIPTED_MODEL_SPEC });
 
   const watcher = await openRecorded(newPage, origin, workspace);
   const sender = await openRecorded(newPage, origin, workspace);
@@ -923,7 +924,7 @@ async function wakeAndRead(page: Page, heard: v.InferOutput<typeof HeardSchema>,
  *  awake shows it, and offers no Stop. */
 async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<SleptVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-slept-${RUN_ID}`, purpose: 'slept probe', model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-slept-${RUN_ID}`, purpose: 'slept probe', model: SCRIPTED_MODEL_SPEC });
 
   const sleeper = await openRecorded(newPage, origin, workspace);
   const awake = await openRecorded(newPage, origin, workspace);
@@ -998,7 +999,7 @@ const WATCH_STOP = `(() => {
  */
 async function measureUnansweredProbe(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<UnansweredProbeVerdict> {
   const workspace = await named('the probe-wait workspace to be created', () => createWorkspace(
-    origin, { name: `live-row-probe-wait-${RUN_ID}`, purpose: 'probe wait probe', model: SCRIPTED_MODEL_SPEC }));
+    origin, LOOPBACK_IDENTITY, { name: `live-row-probe-wait-${RUN_ID}`, purpose: 'probe wait probe', model: SCRIPTED_MODEL_SPEC }));
 
   const page = await openRecorded(newPage, origin, workspace);
 
@@ -1060,7 +1061,7 @@ const PROBE_ANSWERED_LAST = `(() => {
  *  hook's probe is answered last ({@link PROBE_ANSWERED_LAST}). */
 async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<SleptVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-watched-slept-${RUN_ID}`, purpose: 'watched slept probe', model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-watched-slept-${RUN_ID}`, purpose: 'watched slept probe', model: SCRIPTED_MODEL_SPEC });
 
   const watcher = await openRecorded(newPage, origin, workspace);
   const sender = await openRecorded(newPage, origin, workspace);
@@ -1119,7 +1120,7 @@ async function measureAnswered(
   newPage: LiveApp['newPage'], origin: string, held: { answered: HeldCall; watched: HeldCall }, told: Promise<ScriptedRequest>,
 ): Promise<AnsweredVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-answered-${RUN_ID}`, purpose: 'answered probe', model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-answered-${RUN_ID}`, purpose: 'answered probe', model: SCRIPTED_MODEL_SPEC });
 
   const page = await openRecorded(newPage, origin, workspace);
   let sender: Page | null = null;
@@ -1151,7 +1152,7 @@ async function measureAnswered(
 /** Row 16 (#30): and a turn no page sent, the workspace's own first turn, on a page open while it runs. */
 async function measureUnsentAnswer(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<AnsweredThroughVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-unsent-${RUN_ID}`, purpose: UNSENT_TURN_MISSION, model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-unsent-${RUN_ID}`, purpose: UNSENT_TURN_MISSION, model: SCRIPTED_MODEL_SPEC });
 
   // Not `openRecorded`, which waits for the first turn to end: here that turn is the one held.
   const page = await openWorkspace(newPage, origin, workspace);
@@ -1175,7 +1176,7 @@ const WORK_TAB = `document.querySelector('#inspector nav[aria-label="Workspace"]
  *  empty Work ends the row there, naming the read the page made after it. */
 async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Promise<KeptTabVerdict> {
   const workspace = await createWorkspace(
-    origin, { name: `live-row-kept-tab-${RUN_ID}`, purpose: 'kept tab probe', model: SCRIPTED_MODEL_SPEC });
+    origin, LOOPBACK_IDENTITY, { name: `live-row-kept-tab-${RUN_ID}`, purpose: 'kept tab probe', model: SCRIPTED_MODEL_SPEC });
 
   const page = await openWorkspace(newPage, origin, workspace);
   const turns = await watchTurns(page);
@@ -1258,8 +1259,8 @@ async function pagesUntilSettled(page: Page, counter: RpcCounter): Promise<numbe
 }
 
 async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): Promise<ChatScrollVerdict> {
-  const long = await createWorkspace(origin, { name: `live-row-long-${RUN_ID}`, purpose: 'long chat', model: SCRIPTED_MODEL_SPEC });
-  const other = await createWorkspace(origin, { name: `live-row-short-${RUN_ID}`, purpose: 'short chat', model: SCRIPTED_MODEL_SPEC });
+  const long = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-long-${RUN_ID}`, purpose: 'long chat', model: SCRIPTED_MODEL_SPEC });
+  const other = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-short-${RUN_ID}`, purpose: 'short chat', model: SCRIPTED_MODEL_SPEC });
   const socket = openPublicSocket(origin, { kind: 'loopback' }, `/agents/orchestrator-agent/${long}`, new AbortController().signal);
 
   if (!(await socket.opened)) throw new Error('the seeding socket did not open');
@@ -1365,7 +1366,7 @@ function recordReports(page: Page, into: { status: number; event: string; refusa
  *  model reasons, and a page opened on a slow link while it reasons, each join the stream part-way through a
  *  reasoning part; each must read the whole turn without a stream error. */
 async function measureMidThought(newPage: LiveApp['newPage'], origin: string): Promise<MidThoughtVerdict> {
-  const workspace = await createWorkspace(origin, { name: `live-row-thought-${RUN_ID}`, purpose: 'reasoning probe', model: SCRIPTED_MODEL_SPEC });
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-thought-${RUN_ID}`, purpose: 'reasoning probe', model: SCRIPTED_MODEL_SPEC });
   const reports: { status: number; event: string; refusal: string }[] = [];
   const sender = await openRecorded(newPage, origin, workspace);
   const joiner = await newPage();
@@ -1422,7 +1423,7 @@ interface DroppedFileVerdict {
 /** Issue #33: a file dropped on the chat column rides the next message into the agent's turn, through the real
  *  composer, upload and turn; the scripted model answers with whether the file's row reached it. */
 async function measureDroppedFile(newPage: LiveApp['newPage'], origin: string): Promise<DroppedFileVerdict> {
-  const workspace = await createWorkspace(origin, { name: `live-row-drop-${RUN_ID}`, purpose: 'dropped file probe', model: SCRIPTED_MODEL_SPEC });
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-drop-${RUN_ID}`, purpose: 'dropped file probe', model: SCRIPTED_MODEL_SPEC });
   const page = await openWorkspace(newPage, origin, workspace);
 
   try {
@@ -1616,7 +1617,7 @@ async function openedInWorkSurface(page: Page): Promise<string> {
 
 /** An answer with two blocks is drawn as two slates, each its own page, and a reload draws them again from the stored answer. */
 async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard: Promise<ScriptedRequest>): Promise<SlateUiVerdict> {
-  const workspace = await createWorkspace(origin, { name: `live-row-slate-ui-${RUN_ID}`, purpose: 'slate ui probe', model: SCRIPTED_MODEL_SPEC });
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-slate-ui-${RUN_ID}`, purpose: 'slate ui probe', model: SCRIPTED_MODEL_SPEC });
   const page = await openRecorded(newPage, origin, workspace);
 
   try {
@@ -1654,7 +1655,7 @@ async function pressButton(page: Page, buttons: string, words: string): Promise<
 /** The plan's tasks, from the turn an approval hands off. A chore added before any plan stays apart from it; the
  *  approved plan's step, its subtask and a step a program adds are the plan's, the subtask under its step. */
 async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Promise<PlanTasksVerdict> {
-  const workspace = await createWorkspace(origin, { name: `live-row-plan-tasks-${RUN_ID}`, purpose: 'plan tasks probe', model: SCRIPTED_MODEL_SPEC });
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-plan-tasks-${RUN_ID}`, purpose: 'plan tasks probe', model: SCRIPTED_MODEL_SPEC });
   const page = await openRecorded(newPage, origin, workspace);
 
   try {
@@ -1737,7 +1738,7 @@ async function reloadHoldsAsk(page: Page): Promise<boolean> {
 /** Release-1 review F4: Clear Main while a turn runs is refused in its dialog and keeps every message, reload or not;
  *  once the turn has ended it empties Main, and a reload finds it empty. */
 async function measureCleared(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<ClearedVerdict> {
-  const workspace = await createWorkspace(origin, { name: `live-row-clear-${RUN_ID}`, purpose: 'clear probe', model: SCRIPTED_MODEL_SPEC });
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-clear-${RUN_ID}`, purpose: 'clear probe', model: SCRIPTED_MODEL_SPEC });
   const page = await openRecorded(newPage, origin, workspace);
 
   try {
@@ -1809,7 +1810,7 @@ async function drawLogoFromSettings(newPage: LiveApp['newPage'], origin: string,
 /** #88: a background call's provider wait (the workspace's logo) never stands over the composer as if a turn were
  *  blocked; a turn's own wait does, counting down to its end and never reading 0s. */
 async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, probe: ProviderWaitProbe): Promise<ProviderWaitVerdict> {
-  const drawn = await createWorkspace(origin, { name: `live-row-logo-wait-${RUN_ID}`, purpose: LOGO_WAITED_MISSION, model: SCRIPTED_MODEL_SPEC });
+  const drawn = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-logo-wait-${RUN_ID}`, purpose: LOGO_WAITED_MISSION, model: SCRIPTED_MODEL_SPEC });
   const chat = await openRecorded(newPage, origin, drawn);
   let whileLogoWaited: readonly string[];
 
@@ -1826,7 +1827,7 @@ async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, 
     await chat.close();
   }
 
-  const waited = await createWorkspace(origin, { name: `live-row-turn-wait-${RUN_ID}`, purpose: 'turn wait probe', model: SCRIPTED_MODEL_SPEC });
+  const waited = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-turn-wait-${RUN_ID}`, purpose: 'turn wait probe', model: SCRIPTED_MODEL_SPEC });
   const page = await openRecorded(newPage, origin, waited);
 
   try {
@@ -1853,12 +1854,12 @@ async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, 
   }
 }
 
-/** Row 7: the run's own state directory, measured on the LOCAL server in both
+/** Row 7: the run's own state directory, measured on the local server in both
  *  modes — the question is what the harness booted on, not what a deployment
  *  holds. The roster read goes through UserDO, so its namespace directory is
  *  written by the time the plugin's tree below is listed. */
 async function measureState(app: LiveApp): Promise<StateVerdict> {
-  const foreign = (await listWorkspaces(app.origin)).filter((name) => !name.includes(RUN_ID));
+  const foreign = (await listWorkspaces(app.origin, LOOPBACK_IDENTITY)).map((row) => row.name).filter((name) => !name.includes(RUN_ID));
   const tree = join(app.statePath, 'v3', 'do');
 
   return {
