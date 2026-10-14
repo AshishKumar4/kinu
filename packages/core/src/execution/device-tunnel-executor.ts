@@ -12,7 +12,7 @@ import type { CheckpointFiles, OutputSink } from '../types/primitives';
 import { isVfsErrorCode, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResult, commandResultAt } from './exec-result';
+import { commandResultAt } from './exec-result';
 import { causeCodes, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
 import { DEVICE_METHOD } from './device-protocol';
@@ -32,7 +32,7 @@ import {
 } from './device-tunnel';
 import { readDeviceOwnershipContext } from './signal';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
-import { namedShellState, pinnedShellMoved } from '../safety/approval-gate';
+import { namedShellCall } from '../safety/approval-gate';
 import { isPrefixName, RESERVED_ROOTS } from '../vfs/resolve';
 import { isJsonObject, JsonValueSchema, parseInput, type JsonValue } from '../utils/json';
 
@@ -380,19 +380,16 @@ export function createDeviceTunnelExecutor(
       const { name } = options;
 
       // What the named shell restores, read on that machine; an approval binds it, and the run checks it again.
-      const state = name === undefined || shells === undefined ? undefined : () => namedShellState(async () => (await machineShellCwd({
+      const named = namedShellCall({ ...read, context: { ...read.context, ...machine } }, name, shells === undefined ? undefined : async (shell) => (await machineShellCwd({
         exec: async (script) => {
           const readOpts: DeviceExecOptions = { timeoutMs: 0, requestId: nextDeviceRequestId(), ...(deviceId !== undefined && { deviceId }) };
 
           return v.parse(DeviceExecResultSchema, await rpc(DEVICE_METHOD.exec, [script], readOpts));
         },
-      }, name, shells))?.state ?? null, name);
+      }, shell, shells))?.state ?? null);
 
-      return { call: { ...read, context: { ...read.context, ...machine }, ...(state !== undefined && { shellState: state }) }, run: (pinned) => settle(Effect.tryPromise({
-        try: () => names.hold(held, callJob(options), async () => {
-          const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
-
-          if (moved !== null) return refusalOf(moved);
+      return { call: named.call, run: (pinned) => settle(Effect.tryPromise({
+        try: () => names.hold(held, callJob(options), () => named.run(pinned, async () => {
           const requestId = nextDeviceRequestId();
           ownership.report?.(requestId);
           const backgroundJobId = ownership.owner?.() ?? null;
@@ -409,10 +406,8 @@ export function createDeviceTunnelExecutor(
             () => settle(terminateDeviceExec(rpc, requestId, deviceId)),
           );
 
-          const settled = call.settle(v.parse(DeviceExecResultSchema, result));
-
-          return reportCwd ? commandResultAt(settled) : commandResult(settled);
-        }, (message) => refusalOf(new KinuError('unavailable', message))),
+          return commandResultAt(call.settle(v.parse(DeviceExecResultSchema, result)), reportCwd);
+        }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message))),
         catch: (cause) => ({ cause }),
       }).pipe(Effect.catch((failed) => {
         if (isAbortError(failed.cause)) return Effect.die(failed.cause);

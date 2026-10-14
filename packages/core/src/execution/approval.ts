@@ -5,7 +5,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 import { wasNotDispatched } from '@kinu.run/agent-utils';
 import { literalWords, onUserRoots, type FileAccess, type GatedExecutor } from '../safety/command-review';
-import { approveFileAccess, gateExec, namedShellState, pinnedShellMoved, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { approveFileAccess, gateExec, namedShellCall, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 import { shellCall } from './command-call';
 import { asBytes, currentBytes } from '../safety/bound-write';
 import { answeredRefusal } from './exec-result';
@@ -40,17 +40,11 @@ export function withApprovalGatedShell(
   // the whole call is inside the shell's hold, so nothing of this agent moves it in between.
   const execute = (command: string, options: ShellExecOptions) => gateExec<ShellExecResult>(
     () => {
-      const { name } = options;
-      const read = shell.state?.bind(shell);
-      const state = name === undefined || read === undefined ? undefined : () => namedShellState(() => read(name), name);
+      const named = namedShellCall(shellCall(command, options, { stdin: true }), options.name, shell.state?.bind(shell));
 
       return {
-        call: { ...shellCall(command, options, { stdin: true }), ...(state !== undefined && { shellState: state }) },
-        run: async (pinned) => {
-          const moved = pinned === undefined ? null : await pinnedShellMoved(pinned, name ?? '', state);
-
-          return moved === null ? shell.exec(command, options) : notRun(moved);
-        },
+        call: named.call,
+        run: (pinned) => named.run(pinned, () => shell.exec(command, options), notRun),
       };
     },
     notRun,
