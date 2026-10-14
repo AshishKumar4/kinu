@@ -1827,6 +1827,13 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
+  // Records the server answers, read by their fields: the blanket `[]` below has none.
+  if (method === "getAlwaysActiveSkills") return rpcResult({ names: [] }).json<T>();
+
+  if (method === "listTriggers") return rpcResult({ triggers: [] }).json<T>();
+
+  if (method === "getGepaRun") return rpcResult({ run: null, candidates: [], pareto: [] }).json<T>();
+
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
 
   return rpcResult({}).json<T>();
