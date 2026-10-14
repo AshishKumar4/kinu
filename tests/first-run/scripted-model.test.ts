@@ -391,7 +391,8 @@ describe("the agent-job row's job", () => {
     ], ['eval'])).content;
 
     expect({ started, ran }).toEqual({ started: [{ command: JOB_COMMAND }], ran: JSON.stringify({ processId: 'job-1', restartable: true }) });
-    expect(await answered(JSON.stringify({ processId: 'job-1', restartable: true }))).toBe(JOB_STARTED);
+    // As the eval tool answers it: the program's value, a JSON string, inside the tool's own JSON.
+    expect(await answered(JSON.stringify({ result: JSON.stringify({ processId: 'job-1', restartable: true }) }))).toBe(JOB_STARTED);
     expect(await answered(JSON.stringify({ success: false, reason: 'bad_input', error: 'refused' }))).not.toBe(JOB_STARTED);
   });
 });
