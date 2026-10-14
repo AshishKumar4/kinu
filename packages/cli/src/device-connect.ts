@@ -4,15 +4,17 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Effect } from 'effect';
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { isolatedBunArgs } from '@kinu.run/core';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleSync, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
-import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
+import {
+  claimMachine, enforceOwnerOnly, ensureSecretDir, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
+} from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import { buildDaemonFiles, type DaemonFiles } from './daemon-build';
@@ -22,9 +24,6 @@ import { parseDeviceConfig, type DeviceConfig } from '../../pc-agent/src/index.j
 import { DIM, VERSION } from './display';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
-
-/** Where a pidfile's contents are written before they are linked into place; the daemon writes its claim here too. */
-const CLAIMS_DIR = join(AGENT_HOME, 'pc-agent.pid.claims');
 
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
 
@@ -136,8 +135,8 @@ export interface DaemonStatus {
 }
 
 /** Read-only; a successor that dies before connecting is rolled back by the daemon (`pc-agent/src/update.js`). */
-export function daemonStatus(): DaemonStatus {
-  return settleSync(Effect.map(runningDaemonPid(), (daemonPid) => ({
+export function daemonStatus(): Promise<DaemonStatus> {
+  return settle(Effect.map(runningDaemonPid(), (daemonPid) => ({
     deviceConfigPresent: existsSync(DEVICE_CONFIG_PATH),
     logPresent: existsSync(DAEMON_LOG_PATH),
     daemonPid,
@@ -653,110 +652,31 @@ function spawnDaemonChild(runtime: string, session: boolean): Effect.Effect<Daem
   });
 }
 
-function recordedDaemonPid(): Effect.Effect<number | null, KinuError> {
-  if (!existsSync(PID_PATH)) return Effect.succeed(null);
-
-  return Effect.map(io(`reading the device daemon pidfile at ${PID_PATH}`, () => readFileSync(PID_PATH, 'utf-8')), (contents) => {
-    const pid = Number(contents.trim());
-
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
-  });
+/** The machine's pidfile protocol (`machine-pidfile.ts`, which the daemon claims through too), its failures as
+ *  `KinuError`s naming what this connect was doing. */
+function pidfile<T>(doing: string, run: () => T | Promise<T>): Effect.Effect<T, KinuError> {
+  return Effect.tryPromise({ try: async () => await run(), catch: (cause) => toKinuError({ doing, cause, otherwise: 'io' }) });
 }
 
+/** The live installed daemon the pidfile names, or null: a gone process, or another program, is none. */
 function runningDaemonPid(): Effect.Effect<number | null, KinuError> {
-  return Effect.flatMap(recordedDaemonPid(), (pid) => (pid === null
-    ? Effect.succeed(null)
-    : Effect.map(processAlive(pid), (alive) => (alive ? pid : null))));
+  return pidfile('reading which device daemon runs', () => runningMachineDaemon(PID_PATH, SCRIPT_PATH));
 }
 
+/** Takes the machine for the daemon this connect started; false while another live daemon holds it. */
 function claimDaemonPid(pid: number): Effect.Effect<boolean, KinuError> {
-  return Effect.gen(function* () {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (yield* writePidfile(pid)) return true;
-
-      const recorded = yield* recordedDaemonPid();
-
-      // The daemon claims this same file, so a pidfile naming this pid is this claim.
-      if (recorded === pid) return true;
-
-      if (recorded !== null && (yield* processAlive(recorded))) return false;
-      yield* removePidfileNaming(recorded);
-    }
-
-    return false;
-  });
-}
-
-/**
- * Publishes `pid` as the machine's daemon, or answers false when a pidfile is already there. The pidfile appears whole
- * or not at all: the pid is written to a file of its own under {@link CLAIMS_DIR} and linked into place, which fails
- * when one exists. An exclusive create written afterwards left an empty pidfile for a moment, which the other claimant
- * (this or the daemon's `claimMachine`) read as stale and removed: two connects at once each claimed and returned with
- * two daemons running (4 in 360 runs of "concurrent connects leave one daemon owner", 2026-10-08). The daemon claims
- * the same way.
- */
-function writePidfile(pid: number): Effect.Effect<boolean, KinuError> {
-  const claim = join(CLAIMS_DIR, `${pid}-${randomBytes(8).toString('hex')}`);
-
-  const publish = Effect.try({
-    try: () => {
-      mkdirSync(CLAIMS_DIR, { recursive: true, mode: 0o700 });
-      const descriptor = openSync(claim, 'wx', 0o600);
-
-      try {
-        writeFileSync(descriptor, `${pid}\n`);
-        fsyncSync(descriptor);
-      } finally {
-        closeSync(descriptor);
-      }
-
-      linkSync(claim, PID_PATH);
-      syncAgentDirectory();
-
-      return true;
-    },
-    catch: (cause) => cause,
-  }).pipe(Effect.catch((cause) => (classify({ cause }) === 'eexist'
-    ? Effect.succeed(false)
-    : Effect.fail(toKinuError({ doing: `writing the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' })))));
-
-  return Effect.ensuring(publish, Effect.sync(() => { rmSync(claim, { force: true }); }));
+  return Effect.map(pidfile(`claiming the device daemon pidfile at ${PID_PATH}`, () => claimMachine(PID_PATH, pid, SCRIPT_PATH)), (claim) => claim.held);
 }
 
 function stopRunningDaemon(): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
-    const recorded = yield* recordedDaemonPid();
-    const running = recorded !== null && (yield* processAlive(recorded));
+    const recorded = yield* pidfile(`reading the device daemon pidfile at ${PID_PATH}`, () => readMachinePid(PID_PATH));
+    const running = yield* runningDaemonPid();
 
-    if (running && (yield* processIsInstalledDaemon(recorded))) yield* stopInstalledDaemon(recorded);
+    // Only the installed daemon is signalled: a pid the system gave another program is never.
+    if (running !== null) yield* stopInstalledDaemon(running);
 
-    yield* removePidfileNaming(recorded);
-  });
-}
-
-/**
- * Removes the pidfile only while it still names `pid` (null: one naming no pid). It is moved aside whole and read; one
- * naming another pid is a claim made since `pid` was read, and is linked back. A plain remove after the check removed
- * such a claim: a connect that waited for the old daemon to exit removed the claim another connect made meanwhile, and
- * both started a daemon (2026-10-08). The daemon removes its pidfile the same way.
- */
-function removePidfileNaming(pid: number | null): Effect.Effect<void, KinuError> {
-  const aside = join(CLAIMS_DIR, `aside-${process.pid}-${randomBytes(8).toString('hex')}`);
-
-  return io(`removing the stale device daemon pidfile at ${PID_PATH}`, () => {
-    mkdirSync(CLAIMS_DIR, { recursive: true, mode: 0o700 });
-
-    const moved = tolerate(() => {
-      renameSync(PID_PATH, aside);
-
-      return true;
-    }, 'enoent');
-
-    if (moved === undefined) return;
-    const named = Number(readFileSync(aside, 'utf-8').trim());
-
-    if ((Number.isInteger(named) && named > 0 ? named : null) !== pid) tolerate(() => { linkSync(aside, PID_PATH); }, 'eexist');
-    rmSync(aside, { force: true });
+    yield* pidfile(`removing the stale device daemon pidfile at ${PID_PATH}`, () => { removeMachinePid(PID_PATH, recorded); });
   });
 }
 
@@ -785,82 +705,10 @@ function stopInstalledDaemon(pid: number): Effect.Effect<void, KinuError> {
   return Effect.andThen(
     io(`stopping the device daemon (pid ${pid})`, () => tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch')),
     Effect.tryPromise({
-      try: () => waitForAnswer(async () => (stillInstalledDaemon(pid) ? undefined : true), { intervalMs: STOP_POLL_MS }),
+      try: () => waitForAnswer(async () => (machineProcessAlive(pid) && await runsMachineDaemon(pid, SCRIPT_PATH) ? undefined : true), { intervalMs: STOP_POLL_MS }),
       catch: (cause) => toKinuError({ doing: `waiting for the device daemon (pid ${pid}) to exit`, cause, otherwise: 'io' }),
     }),
   );
-}
-
-/** On Linux by {@link linuxRunsInstalledDaemon}; elsewhere by presence. */
-function stillInstalledDaemon(pid: number): boolean {
-  if (process.platform === 'linux') return linuxRunsInstalledDaemon(pid);
-
-  return tolerate(() => process.kill(pid, 0), 'esrch') !== undefined;
-}
-
-/** `/proc/<pid>/<file>`, or undefined when the process is gone: no entry, or reaped mid-read (ESRCH). */
-function procRead(pid: number, file: string): string | undefined {
-  return tolerate(() => tolerate(() => readFileSync(`/proc/${pid}/${file}`, 'utf-8'), 'enoent'), 'esrch');
-}
-
-/**
- * Whether `pid` runs the installed daemon. A process just spawned has an empty command line until its exec lands
- * (empty right after `spawn` in 1,442 of 1,600 bun spawns on armada, 2026-10-08), so an empty one that is no zombie is
- * the daemon its starter just recorded. Reading it as another program let a second connect remove a fresh claim and
- * start a second daemon. A zombie, an exited daemon not yet reaped, has an empty command line too, and is gone.
- */
-function linuxRunsInstalledDaemon(pid: number): boolean {
-  const args = procRead(pid, 'cmdline');
-
-  if (args === undefined) return false;
-
-  if (args !== '') return args.split('\0').includes(SCRIPT_PATH);
-  const stat = procRead(pid, 'stat') ?? '';
-  const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
-
-  return state !== '' && state !== 'Z';
-}
-
-const PS_NO_SUCH_PROCESS = 1;
-
-function psCommand(pid: number): Promise<string> {
-  const { promise, resolve, reject } = Promise.withResolvers<string>();
-
-  execFile('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' }, (cause, stdout) => {
-    if (cause) reject(cause);
-    else resolve(stdout);
-  });
-
-  return promise;
-}
-
-function processIsInstalledDaemon(pid: number): Effect.Effect<boolean, KinuError> {
-  return Effect.tryPromise({
-    try: async () => {
-      if (process.platform === 'linux') return linuxRunsInstalledDaemon(pid);
-
-      if (process.platform === 'darwin') return (await psCommand(pid)).includes(SCRIPT_PATH);
-
-      return false;
-    },
-    catch: (cause) => cause,
-  }).pipe(Effect.catch((cause) => {
-    if (classify({ cause }) === 'enoent') return Effect.succeed(false);
-
-    if (cause instanceof Error && 'code' in cause && (cause.code === 'EACCES' || cause.code === 'EPERM')) {
-      return Effect.succeed(false);
-    }
-
-    if (process.platform === 'darwin' && cause instanceof Error && 'code' in cause && cause.code === PS_NO_SUCH_PROCESS) {
-      return Effect.succeed(false);
-    }
-
-    return Effect.fail(toKinuError({
-      doing: `checking whether pid ${pid} is the installed device daemon`,
-      cause,
-      otherwise: 'io',
-    }));
-  }));
 }
 
 export function killSessionDaemon(): void {
@@ -885,24 +733,6 @@ function installSessionCleanup(): void {
   process.on('exit', () => {
     killSessionDaemon();
   });
-}
-
-/** `kill(pid, 0)` reports presence under another user as EPERM, not only absence as ESRCH. */
-function processAlive(pid: number): Effect.Effect<boolean, KinuError> {
-  return Effect.try({
-    try: () => {
-      process.kill(pid, 0);
-
-      return true;
-    },
-    catch: (cause) => cause,
-  }).pipe(Effect.catch((cause) => {
-    if (classify({ cause }) === 'esrch') return Effect.succeed(false);
-
-    if (cause instanceof Error && 'code' in cause && cause.code === 'EPERM') return Effect.succeed(true);
-
-    return Effect.fail(toKinuError({ doing: `checking whether the device daemon pid ${pid} is running`, cause, otherwise: 'io' }));
-  }));
 }
 
 function assertDaemonPlatformSupported(): Effect.Effect<void, KinuError> {

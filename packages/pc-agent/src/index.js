@@ -193,6 +193,8 @@ const { elidedOutput } = require('../../core/src/execution/bounded-output.ts');
 
 const update = require('./update.js');
 
+const machinePidfile = require('../../cli-backend/src/machine-pidfile.ts');
+
 const { KINU_BUN_VERSION, approvedBun, bunResolutionShell } = require('../../core/src/cli/bun-runtime.ts');
 
 const { DAEMON_PREDECESSOR_ENV } = require('../../core/src/cli/command-env.ts');
@@ -2991,80 +2993,6 @@ function handleTokenRotation(
 // other's token. The pidfile is the lock, and this daemon takes it in its own
 // process: the CLI is one starter of this file, never the only one.
 
-/** The pid the pidfile names, or null when it holds nothing usable. */
-function readPidfile(pidPath = PID_PATH) {
-  let text;
-
-  try {
-    text = fs.readFileSync(pidPath, 'utf8');
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return null;
-    throw new Error(`read the device daemon pidfile at ${pidPath}`, { cause: err });
-  }
-
-  const pid = Number(text.trim());
-
-  return Number.isInteger(pid) && pid > 0 ? pid : null;
-}
-
-/** Whether `pid` is a live process. `kill(pid, 0)` reports absence as ESRCH
- *  and presence under another user as EPERM, so only ESRCH is death. */
-function processAlive(pid) {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (err) {
-    if (err && err.code === 'ESRCH') return false;
-
-    if (err && err.code === 'EPERM') return true;
-    throw new Error(`check whether pid ${pid} is running`, { cause: err });
-  }
-}
-
-/** The one-letter state `/proc/<pid>/stat` gives; `Z` is a zombie, an exited process not yet reaped. */
-function procState(pid) {
-  return procStat(pid, 'stat', true).state;
-}
-
-/**
- * Whether `pid` runs this daemon file. A pid the operating system recycled for
- * an unrelated program does not own this machine.
- *
- * The command line names this file by whatever spelling its starter used, so a
- * bare `pc-agent.js` argument counts. That treats another home's daemon, if it
- * ever inherited this pid, as the owner: refusing to start is recoverable with
- * one `kinu connect`, while a second daemon beside the first is the defect this
- * lock exists for.
- */
-async function processRunsThisDaemon(pid) {
-  const named = (args) => args.some((arg) => arg === daemonPath() || path.basename(arg) === path.basename(daemonPath()));
-
-  try {
-    if (process.platform === 'linux') {
-      const args = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
-
-      // A process just spawned has an empty command line until its exec lands (empty right after spawn in 1,442 of
-      // 1,600 bun spawns, 2026-10-08): one that is no zombie is the claimant its starter recorded, not a stale pid.
-      if (args === '') return procState(pid) !== 'Z';
-
-      return named(args.split('\0'));
-    }
-
-    if (process.platform === 'darwin') {
-      return named((await psOutput(['-p', String(pid), '-o', 'command='])).trim().split(/\s+/));
-    }
-
-    return false;
-  } catch (err) {
-    if (procEntryGone(err) || (err && (err.code === 'EACCES' || err.code === 'EPERM'))) return false;
-
-    // `ps -p` found no such process.
-    if (process.platform === 'darwin' && err && err.code === 1) return false;
-    throw new Error(`check whether pid ${pid} runs this daemon`, { cause: err });
-  }
-}
-
 /**
  * Whether `pid` is the daemon that started this process as its successor: the
  * one holder whose claim this process takes over. Named by the environment the
@@ -3078,100 +3006,12 @@ function isPredecessor(pid) {
 }
 
 /**
- * Take the machine for this process, or report the daemon that already holds
- * it. A pidfile naming this process is this process's own claim: the CLI
- * writes it for the daemon it just started, and that is the same claim. A
- * pidfile naming this process's predecessor is a claim handed over: the
- * predecessor keeps serving until the hub replaces its socket, and exits
- * without touching a pidfile that no longer names it.
+ * Take the machine for this process, or report the daemon that already holds it (`claimMachine`, the one protocol
+ * `kinu connect` uses too). A pidfile naming this process's predecessor is a claim handed over: the predecessor keeps
+ * serving until the hub replaces its socket, and exits without touching a pidfile that no longer names it.
  */
-/**
- * Publishes this process's pid as the machine's daemon unless a pidfile is already there: written to a file of its own
- * under `<pidfile>.claims` and linked into place, so the pidfile appears whole or not at all. An exclusive create
- * written afterwards left an empty pidfile for a moment, which the other claimant (`kinu connect`, which claims the
- * same way) read as stale and removed, and both claims held (2026-10-08).
- */
-function publishPidfile(pidPath) {
-  const claims = `${pidPath}.claims`;
-  const claim = path.join(claims, `${process.pid}-${crypto.randomBytes(8).toString('hex')}`);
-
-  fs.mkdirSync(claims, { recursive: true, mode: 0o700 });
-
-  try {
-    const descriptor = fs.openSync(claim, 'wx', 0o600);
-
-    try {
-      fs.writeFileSync(descriptor, `${process.pid}\n`);
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
-
-    try {
-      fs.linkSync(claim, pidPath);
-    } catch (err) {
-      if (err && err.code === 'EEXIST') return false;
-      throw err;
-    }
-
-    return true;
-  } finally {
-    fs.rmSync(claim, { force: true });
-  }
-}
-
-/**
- * Removes the pidfile only while it still names `pid` (null: one naming no pid). It is moved aside whole and read; one
- * naming another pid is a claim made since `pid` was read, and is linked back. A plain remove after the check removed
- * such a claim, and two daemons both held the machine (2026-10-08). `kinu connect` removes it the same way.
- */
-function removePidfileNaming(pidPath, pid) {
-  const claims = `${pidPath}.claims`;
-  const aside = path.join(claims, `aside-${process.pid}-${crypto.randomBytes(8).toString('hex')}`);
-
-  fs.mkdirSync(claims, { recursive: true, mode: 0o700 });
-
-  try {
-    fs.renameSync(pidPath, aside);
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return;
-    throw err;
-  }
-
-  if (readPidfile(aside) !== pid) {
-    try {
-      fs.linkSync(aside, pidPath);
-    } catch (err) {
-      if (!err || err.code !== 'EEXIST') throw err;
-    }
-  }
-
-  fs.rmSync(aside, { force: true });
-}
-
-async function claimMachine(pidPath = PID_PATH) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let published;
-
-    try {
-      published = publishPidfile(pidPath);
-    } catch (err) {
-      throw new Error(`claim the device daemon pidfile at ${pidPath}`, { cause: err });
-    }
-
-    if (published) return { held: true, holder: process.pid };
-    const holder = readPidfile(pidPath);
-
-    if (holder === process.pid) return { held: true, holder: process.pid };
-
-    if (holder !== null && processAlive(holder) && (await processRunsThisDaemon(holder)) && !isPredecessor(holder)) {
-      return { held: false, holder };
-    }
-
-    removePidfileNaming(pidPath, holder);
-  }
-
-  return { held: false, holder: readPidfile(pidPath) };
+function claimThisMachine(pidPath = PID_PATH) {
+  return machinePidfile.claimMachine(pidPath, process.pid, daemonPath(), isPredecessor);
 }
 
 /** Give the machine back, and only while this process still holds it. */
@@ -3179,7 +3019,7 @@ function releaseMachine(pidPath = PID_PATH) {
   let holder;
 
   try {
-    holder = readPidfile(pidPath);
+    holder = machinePidfile.readMachinePid(pidPath);
   } catch (err) {
     // Shutdown path: an unreadable pidfile is left for the next daemon's stale
     // check, which is what recovers it, rather than thrown out of an exit hook.
@@ -3191,14 +3031,14 @@ function releaseMachine(pidPath = PID_PATH) {
   if (holder !== process.pid) return;
 
   try {
-    removePidfileNaming(pidPath, process.pid);
+    machinePidfile.removeMachinePid(pidPath, process.pid);
   } catch (err) {
     log('Could not remove the device pidfile while exiting:', errorDetail(err));
   }
 }
 
 async function main() {
-  const claim = await claimMachine();
+  const claim = await claimThisMachine();
 
   if (!claim.held) {
     log(`Another Kinu device daemon is already running on this machine (pid ${claim.holder}); this one is exiting.`);
@@ -3248,9 +3088,9 @@ async function main() {
     origin: HTTP_ORIGIN,
     log,
     // A successor that died before connecting left the pidfile naming it;
-    // this daemon takes the machine back, which claimMachine grants because
+    // this daemon takes the machine back, which claimThisMachine grants because
     // the holder it finds is dead.
-    reclaim: () => claimMachine(),
+    reclaim: () => claimThisMachine(),
   });
 
   // The daemon's one WebSocket: the global of the approved Bun

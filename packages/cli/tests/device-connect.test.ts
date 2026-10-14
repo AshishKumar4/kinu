@@ -249,7 +249,7 @@ function daemonRuntimeProbe(origin: string): string {
     import { waitForDaemonPid } from './packages/cli/tests/helpers/device-process.ts';
     const result = await connectDevice({ origin: ${JSON.stringify(origin)}, token: 'ptc_test' }, { session: true });
     await waitForDaemonPid(process.env.KINU_HOME);
-    const pid = daemonStatus().daemonPid;
+    const pid = (await daemonStatus()).daemonPid;
     const listed = Bun.spawn([${JSON.stringify(ps)}, '-p', String(pid), '-o', 'command='], { stdout: 'pipe' });
     const command = (await new Response(listed.stdout).text()).trim();
     if (await listed.exited !== 0) throw new Error('ps found no process ' + String(pid));
@@ -341,7 +341,7 @@ describe('device-connect daemon lifecycle', () => {
       import { waitForDaemonPid } from './packages/cli/tests/helpers/device-process.ts';
       const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
       await waitForDaemonPid(process.env.KINU_HOME);
-      const status = daemonStatus();
+      const status = await daemonStatus();
       console.log(JSON.stringify({ result, status }));
       process.exit(0);
     `);
@@ -430,9 +430,11 @@ describe('device-connect daemon lifecycle', () => {
       const stub = startStubCloud({ devices: () => devices });
       const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-      const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
-      sleepers.push(sleeper);
-      writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
+      // A daemon of this machine's own file, holding its pidfile: the installed daemon as the pidfile protocol reads it.
+      writeFileSync(join(home, 'pc-agent.js'), 'process.stdin.resume();\n', { mode: 0o700 });
+      const daemon = Bun.spawn({ cmd: [process.execPath, join(home, 'pc-agent.js')], stdin: 'pipe', env: { ...process.env, KINU_HOME: home } });
+      sleepers.push(daemon);
+      writeFileSync(join(home, 'pc-agent.pid'), `${daemon.pid}\n`, { mode: 0o600 });
       writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }));
 
       const out = await runScript(home, `
@@ -448,8 +450,8 @@ describe('device-connect daemon lifecycle', () => {
       expect(result).toEqual({ kind: 'already-running', connected });
       expect(stub.registrationRequests.items.length).toBe(0);
       expect(stub.hits.daemonScript).toBe(0);
-      expect(sleeper.killed).toBe(false);
-      expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(sleeper.pid));
+      expect(daemon.killed).toBe(false);
+      expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(daemon.pid));
     });
   }
 });
@@ -851,6 +853,26 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(JSON.parse(out.trim()).result).toEqual({ kind: 'cancelled', deviceId: 'dev_1', replacedLocalConfig: false });
+  });
+
+  // The CLI read any live pid its pidfile named as the daemon, where the daemon checks it runs the daemon's file: a
+  // recycled pid kept session mode from starting one. One protocol now, the daemon's.
+  test('session mode starts the daemon when its pidfile names a live program that is not it', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
+    sleepers.push(sleeper);
+    writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
+
+    const out = await runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      console.log(JSON.stringify(result));
+      process.exit(0);
+    `);
+
+    expect(v.parse(v.looseObject({ kind: v.string() }), JSON.parse(out.trim())).kind).toBe('connected');
+    expect(sleeper.killed).toBe(false);
   });
 
   test('never signals an unrelated live process named by a stale pidfile', async () => {

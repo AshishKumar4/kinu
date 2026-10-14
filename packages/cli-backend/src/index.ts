@@ -25,6 +25,10 @@ export { localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFil
 export { tryLock, withConfigLock } from './config-lock';
 
 export {
+  claimMachine, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
+} from './machine-pidfile';
+
+export {
   KinuAgentConfigSchema, OpenAiCompatConfigSchema, readConfigFile, updateConfigFile,
   type KinuAgentConfig, type KinuConfig, type LocalApiKeyProvider, type LocalOAuthSession,
 } from './config-file';
