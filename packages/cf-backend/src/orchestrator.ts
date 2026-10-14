@@ -7143,12 +7143,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     turnIds?: string[]; scope?: RefinementScope;
   }): Promise<RefinementRequestView> {
     const view = await requestOwnerRefinement(this.refinementDeps, opts);
-    void refinementPass(this.refinementDeps)
-      .catch((...rejection: [unknown]) => diagnostics.failure('refinement.lane_failed', toKinuError({
-        doing: 'advancing the continual-refinement lane',
-        cause: rejection[0],
-        otherwise: 'unavailable',
-      }), { workspace: this.name }));
+    this.detachOwned(logged('refinement.lane_failed', { doing: 'advancing the continual-refinement lane', otherwise: 'unavailable' },
+      async () => { await refinementPass(this.refinementDeps); }, { workspace: this.name }));
 
     return view;
   }
@@ -7316,20 +7312,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
 
     if (!notification) return;
-    void (async () => {
-      await sendOwnerEmail({
-        email: this.env.EMAIL,
-        emailDomain: this.env.EMAIL_DOMAIN,
-        agentName: this.name,
-        agentDisplayName: this.safeDisplayName(),
-        ownerEmail: await this.getOwnerEmail(),
-        outbox: this.emailOutbox,
-      }, notification);
-    })().catch((...rejection: [unknown]) => diagnostics.failure('email.owner_notification_failed', toKinuError({
-      doing: 'sending the owner an away-channel notification',
-      cause: rejection[0],
-      otherwise: 'unavailable',
-    }), { subject }));
+    this.detachOwned(logged('email.owner_notification_failed', { doing: 'sending the owner an away-channel notification', otherwise: 'unavailable' },
+      async () => {
+        await sendOwnerEmail({
+          email: this.env.EMAIL,
+          emailDomain: this.env.EMAIL_DOMAIN,
+          agentName: this.name,
+          agentDisplayName: this.safeDisplayName(),
+          ownerEmail: await this.getOwnerEmail(),
+          outbox: this.emailOutbox,
+        }, notification);
+      }, { subject }));
   }
 
   /** Newest first; returns bare rows, not an envelope. Reachable via CLI RPC with no route in the
