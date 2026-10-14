@@ -30,6 +30,9 @@ import { Effect } from "effect";
 import type { TerminalSession } from "@kinu.run/devbox";
 import { useWorkspaceArea, type WorkspaceArea } from "@/components/layout";
 import { DesktopScreen } from "./DesktopScreen";
+import { useAccountMachines, type AccountMachine } from "./EnvironmentMachines";
+import { FilledButton } from "@/components/ui/FilledButton";
+import { detach, renderThrownChain, type KinuError } from "@kinu.run/core/obs";
 import {
   AgentMark, NewSessionRow, ONE_SHELL, SessionDetails, SessionTabs, openSession, sessionTone, since, useComputerSessions, type ComputerSessions,
   type SessionTone,
@@ -74,8 +77,51 @@ function environmentOf(name: string): { readonly Icon: Icon; readonly about: str
   return Object.entries(ENVIRONMENTS).find(([key]) => key === name)?.[1] ?? { Icon: PlugIcon, about: executorLabel(name) };
 }
 
-/** A PC that is not connected is an offer to connect one, not an environment. */
-const isOfferedPc = (mount: MountInfo): boolean => mount.name === "device" && !mount.live;
+/**
+ * One machine the column lists. A PC is listed per machine on the owner's account, connected or not and granted to
+ * this workspace or not: production f9c17ac7b listed the PC executor alone, and a PC connected but not yet granted
+ * read as no PC at all, an offer to connect one (the owner, 2026-10-14).
+ */
+interface Machine {
+  readonly key: string;
+  readonly mount: MountInfo;
+  /** The account's machine, for a PC; null for the workspace, the computer and the rest. */
+  readonly device: AccountMachine | null;
+}
+
+/**
+ * The workspace's mounts, with the PC executor's one row made one row per machine on the account. A PC is live when the
+ * account says it is connected and held here: the executor's own reading follows a grant only after the hub's next
+ * status push, and the terminal and every command check the grant themselves.
+ */
+function machinesOf(mounts: readonly MountInfo[], account: readonly AccountMachine[] | null): Machine[] {
+  const pc = mounts.find((mount) => mount.name === "device");
+
+  return [
+    ...mounts.filter((mount) => mount.name !== "device").map((mount) => ({ key: mount.name, mount, device: null })),
+    ...(account ?? []).map((device) => ({
+      key: `device:${device.id}`,
+      device,
+      mount: {
+        name: "device", prefix: "device.*", live: device.connected && device.granted,
+        policy: pc?.policy ?? { readOnly: false, consistency: "live-shared" }, reason: pc?.reason ?? null,
+      },
+    })),
+  ];
+}
+
+function machineLabel(machine: Machine, exec: ExecutorInfo | undefined): string {
+  return machine.device?.label ?? exec?.label ?? executorLabel(machine.mount.name);
+}
+
+/** A PC's state is the account's first: offline, or connected without this workspace's grant. */
+function machineStatus(machine: Machine, exec: ExecutorInfo | undefined): StatusReading {
+  if (machine.device !== null && !machine.device.connected) return { word: "Offline", tone: "off" };
+
+  if (machine.device !== null && !machine.device.granted) return { word: "No access", tone: "attention" };
+
+  return statusOf(machine.mount, exec);
+}
 
 /** One status language for every machine: a dot's tone and a word. */
 type Tone = "working" | "ready" | "attention" | "off" | "danger";
@@ -130,21 +176,21 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const mounts = loaded ?? [];
 
   const execByName = useMemo(() => new Map(executors.map((e) => [e.name, e])), [executors]);
-  const environments = useMemo(() => mounts.filter((m) => !isOfferedPc(m)), [mounts]);
-  const pcOffered = mounts.some(isOfferedPc);
+  const account = useAccountMachines(workspaceName);
+  const environments = useMemo(() => machinesOf(mounts, account.machines), [mounts, account.machines]);
 
   // Default selection: the environment the agent last worked in.
-  const defaultMount = useMemo(() => {
+  const defaultMachine = useMemo(() => {
     const preferred = pickDefaultExecutor(executors, lastActiveExecutor);
-    const match = environments.find((m) => m.name === preferred);
+    const match = environments.find((m) => m.mount.name === preferred && m.mount.live);
 
-    return match ?? environments.find((m) => m.live) ?? environments[0] ?? null;
+    return match ?? environments.find((m) => m.mount.live) ?? environments[0] ?? null;
   }, [executors, lastActiveExecutor, environments]);
 
-  const selectedMount = environments.find((m) => m.name === selected) ?? defaultMount;
-  const computerLive = environments.some((m) => m.name === "computer" && m.live);
+  const selectedMachine = environments.find((m) => m.key === selected) ?? defaultMachine;
+  const computerLive = environments.some((m) => m.key === "computer" && m.mount.live);
   // The computer's sessions are read while they are on screen: its tabs, or the wide column's list.
-  const sessions = useComputerSessions(rpc, computerLive && (wide || selectedMount?.name === "computer"));
+  const sessions = useComputerSessions(rpc, computerLive && (wide || selectedMachine?.key === "computer"));
   const waiting = new Set(sessions.sessions?.some((session) => session.needsInput) === true ? ["computer"] : []);
 
   const choose = (machine: string, tab?: string) => {
@@ -152,7 +198,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
     if (tab !== undefined) setTabs((was) => ({ ...was, [machine]: tab }));
 
-    if (machine !== selectedMount?.name) setSplit(null);
+    if (machine !== selectedMachine?.key) setSplit(null);
   };
 
   const shown: Shown = {
@@ -162,12 +208,13 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
     setSplit,
   };
 
-  const chosen = selectedMount === null ? <div className="min-h-0 flex-1" /> : (
+  const chosen = selectedMachine === null ? <div className="min-h-0 flex-1" /> : (
     <SelectedEnvironment
-      key={selectedMount.name}
+      key={selectedMachine.key}
       rpc={rpc}
-      mount={selectedMount}
-      exec={execByName.get(selectedMount.name)}
+      machine={selectedMachine}
+      grant={account.grant}
+      exec={execByName.get(selectedMachine.mount.name)}
       workspace={workspaceName}
       executorOutputs={executorOutputs}
       onExecute={onExecute}
@@ -182,20 +229,21 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
     <div ref={frame} className="flex h-full flex-col">
       {wide ? (
         <div className="grid min-h-0 flex-1 grid-cols-[236px_minmax(0,1fr)]">
-          <SessionRail environments={environments} execByName={execByName} sessions={sessions} selected={selectedMount?.name ?? null}
-            shown={shown} pcOffered={pcOffered} onConnectDevice={onConnectDevice} />
+          <SessionRail environments={environments} execByName={execByName} sessions={sessions} selected={selectedMachine?.key ?? null}
+            shown={shown} onConnectDevice={onConnectDevice} />
           <div className="flex min-h-0 min-w-0 flex-col">{chosen}</div>
         </div>
       ) : (
         <>
-          <MachineChips environments={environments} execByName={execByName} selected={selectedMount?.name ?? null} onSelect={(machine) => choose(machine)} waiting={waiting}
-            pcOffered={pcOffered} onConnectDevice={onConnectDevice} empty={mounts.length === 0 && loaded !== null} loading={mounts.length === 0 && resource.status === "loading"} />
+          <MachineChips environments={environments} execByName={execByName} selected={selectedMachine?.key ?? null} onSelect={(machine) => choose(machine)} waiting={waiting}
+            onConnectDevice={onConnectDevice} empty={mounts.length === 0 && loaded !== null} loading={mounts.length === 0 && resource.status === "loading"} />
           {chosen}
         </>
       )}
       {resource.status === "error" && (
         <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="mx-4 mb-3 p-card px-3 py-2" />
       )}
+      {account.failure !== null && <p className="mx-4 mb-3 p-meta p-danger">Could not read your machines: {account.failure}</p>}
     </div>
   );
 }
@@ -232,14 +280,13 @@ interface Shown {
   readonly setSplit: (session: string | null) => void;
 }
 
-function MachineChips({ environments, execByName, selected, onSelect, pcOffered, onConnectDevice, empty, loading, waiting }: {
+function MachineChips({ environments, execByName, selected, onSelect, onConnectDevice, empty, loading, waiting }: {
   /** Machines a session of which waits at a prompt (D95). */
   waiting: ReadonlySet<string>;
-  environments: readonly MountInfo[];
+  environments: readonly Machine[];
   execByName: ReadonlyMap<string, ExecutorInfo>;
   selected: string | null;
   onSelect: (machine: string) => void;
-  pcOffered: boolean;
   onConnectDevice: () => void;
   empty: boolean;
   loading: boolean;
@@ -247,26 +294,24 @@ function MachineChips({ environments, execByName, selected, onSelect, pcOffered,
   return (
     <div role="group" aria-label="Environments" className="flex shrink-0 flex-wrap gap-1.5 px-4 pt-4">
       {environments.map((m) => {
-        const exec = execByName.get(m.name);
-        const { Icon: KindIcon } = environmentOf(m.name);
-        const active = selected === m.name;
+        const exec = execByName.get(m.mount.name);
+        const { Icon: KindIcon } = environmentOf(m.mount.name);
+        const active = selected === m.key;
 
         return (
-          <div key={m.name} data-env-card={m.name} className="min-w-0">
-            <button type="button" data-env-select onClick={() => onSelect(m.name)} aria-pressed={active} className="p-env-chip">
+          <div key={m.key} data-env-card={m.mount.name} className="min-w-0">
+            <button type="button" data-env-select onClick={() => onSelect(m.key)} aria-pressed={active} className="p-env-chip">
               <KindIcon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden />
-              <span className="truncate">{exec?.label ?? executorLabel(m.name)}</span>
-              <Dot tone={waiting.has(m.name) ? "attention" : statusOf(m, exec).tone} />
+              <span className="truncate">{machineLabel(m, exec)}</span>
+              <Dot tone={waiting.has(m.key) ? "attention" : machineStatus(m, exec).tone} />
             </button>
           </div>
         );
       })}
-      {pcOffered && (
-        <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC"
-          className="p-env-chip border-dashed p-text-3">
-          <PlusIcon size={13} className="shrink-0" aria-hidden /><span className="hidden @[30rem]:inline">Connect a PC</span>
-        </button>
-      )}
+      <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC"
+        className="p-env-chip border-dashed p-text-3">
+        <PlusIcon size={13} className="shrink-0" aria-hidden /><span className="hidden @[30rem]:inline">Connect a PC</span>
+      </button>
       {empty && <span className="p-meta p-text-3">No environments available.</span>}
       {loading && <Loader size="sm" />}
     </div>
@@ -274,13 +319,12 @@ function MachineChips({ environments, execByName, selected, onSelect, pcOffered,
 }
 
 /** The wide column's list: every machine, its sessions under it, the computer's screen and a new session. */
-function SessionRail({ environments, execByName, sessions, selected, shown, pcOffered, onConnectDevice }: {
-  environments: readonly MountInfo[];
+function SessionRail({ environments, execByName, sessions, selected, shown, onConnectDevice }: {
+  environments: readonly Machine[];
   execByName: ReadonlyMap<string, ExecutorInfo>;
   sessions: ComputerSessions;
   selected: string | null;
   shown: Shown;
-  pcOffered: boolean;
   onConnectDevice: () => void;
 }) {
   const now = Date.now();
@@ -288,37 +332,35 @@ function SessionRail({ environments, execByName, sessions, selected, shown, pcOf
   return (
     <nav aria-label="Sessions" className="flex min-h-0 flex-col gap-5 overflow-y-auto border-r p-border px-2 pt-4 pb-4">
       {environments.map((m) => {
-        const exec = execByName.get(m.name);
-        const name = exec?.label ?? executorLabel(m.name);
-        const computer = m.name === "computer";
+        const exec = execByName.get(m.mount.name);
+        const name = machineLabel(m, exec);
+        const computer = m.key === "computer";
         const rows = computer ? sessions.sessions ?? [] : null;
-        const current = (tab: string) => selected === m.name && (shown.tab(m.name) === tab || shown.split === tab);
+        const current = (tab: string) => selected === m.key && (shown.tab(m.key) === tab || shown.split === tab);
 
         return (
-          <section key={m.name} data-env-card={m.name} aria-label={name} className="space-y-0.5">
-            <button type="button" data-env-select aria-pressed={selected === m.name} onClick={() => shown.choose(m.name)}
+          <section key={m.key} data-env-card={m.mount.name} aria-label={name} className="space-y-0.5">
+            <button type="button" data-env-select aria-pressed={selected === m.key} onClick={() => shown.choose(m.key)}
               className="flex w-full items-center gap-2 px-2.5 pb-1 text-left">
               <span className="p-eyebrow min-w-0 flex-1 truncate">{name}</span>
-              <Dot tone={statusOf(m, exec).tone} />
+              <Dot tone={machineStatus(m, exec).tone} />
             </button>
-            {rows === null && m.live && (
-              <RailRow tone="ready" name={ONE_SHELL} detail={null} ports={[]} current={current(ONE_SHELL)} onChoose={() => shown.choose(m.name, ONE_SHELL)} />
+            {rows === null && m.mount.live && (
+              <RailRow tone="ready" name={ONE_SHELL} detail={null} ports={[]} current={current(ONE_SHELL)} onChoose={() => shown.choose(m.key, ONE_SHELL)} />
             )}
             {rows?.map((session) => (
               <RailRow key={session.id} tone={sessionTone(session).tone} agent={session.job !== undefined} name={session.name} detail={railDetail(session, now)} ports={session.ports}
-                current={current(session.id)} onChoose={() => shown.choose(m.name, session.id)} />
+                current={current(session.id)} onChoose={() => shown.choose(m.key, session.id)} />
             ))}
-            {computer && m.live && <RailRow icon name="Desktop" detail={null} ports={[]} current={current("desktop")} onChoose={() => shown.choose(m.name, "desktop")} />}
-            {computer && m.live && <NewSessionRow onOpen={() => openSession(sessions, (id) => shown.choose("computer", id))} />}
+            {computer && m.mount.live && <RailRow icon name="Desktop" detail={null} ports={[]} current={current("desktop")} onChoose={() => shown.choose(m.key, "desktop")} />}
+            {computer && m.mount.live && <NewSessionRow onOpen={() => openSession(sessions, (id) => shown.choose("computer", id))} />}
           </section>
         );
       })}
-      {pcOffered && (
-        <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC"
-          className="mx-1 flex items-center gap-2 rounded-lg border border-dashed p-border px-2.5 py-2 p-meta p-text-3 hover:p-text">
-          <PlusIcon size={12} aria-hidden />Connect a PC
-        </button>
-      )}
+      <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC"
+        className="mx-1 flex items-center gap-2 rounded-lg border border-dashed p-border px-2.5 py-2 p-meta p-text-3 hover:p-text">
+        <PlusIcon size={12} aria-hidden />Connect a PC
+      </button>
     </nav>
   );
 }
@@ -352,9 +394,10 @@ function RailRow({ tone, icon = false, agent = false, name, detail, ports, curre
   );
 }
 
-function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onExecute, onOpenFiles, sessions, shown, wide }: {
+function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOutputs, onExecute, onOpenFiles, sessions, shown, wide }: {
   rpc: WorkspaceRpc;
-  mount: MountInfo;
+  machine: Machine;
+  grant: (device: string) => Effect.Effect<void, KinuError>;
   exec: ExecutorInfo | undefined;
   workspace: string;
   executorOutputs: Map<string, ExecutorOutput[]>;
@@ -364,14 +407,15 @@ function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onE
   shown: Shown;
   wide: boolean;
 }) {
+  const { mount, device } = machine;
   const computer = mount.name === "computer";
   // The computer's size, read here: its control sits in the head, its restart covers the view.
   const size = useComputerSize(rpc, computer && mount.live);
-  const name = exec?.label ?? executorLabel(mount.name);
+  const name = machineLabel(machine, exec);
   const restarting = computer && size.pending === "resize";
   const listed = sessions.sessions ?? [];
   const seen = { waiting: listed.some((session) => session.needsInput), awake: listed.some((session) => session.open) };
-  const status = computer ? computerStatus(mount, exec, size, seen) : statusOf(mount, exec);
+  const status = computer ? computerStatus(mount, exec, size, seen) : machineStatus(machine, exec);
 
   return (
     <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
@@ -379,8 +423,17 @@ function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onE
         size={computer ? <ComputerSize state={size} /> : null} />
       {computer && size.notice}
       {computer && sessions.failure !== null && <p className="px-4 pb-1 p-meta p-danger">{sessions.failure}</p>}
-      <EnvironmentView mount={mount} exec={exec} name={name} workspace={workspace} restartingTo={restarting ? size.restartingTo ?? "" : null}
-        executorOutputs={executorOutputs} onExecute={onExecute} sessions={computer ? sessions : null} shown={shown} wide={wide} />
+      {device !== null && !device.connected && (
+        <Absence icon={DesktopTowerIcon} title={`${name} is offline`}>
+          Its Kinu daemon is not running. Run <code className="p-annotation">kinu connect</code> on it to bring it back.
+        </Absence>
+      )}
+      {device !== null && device.connected && !device.granted && <GiveAccess name={name} onGive={() => grant(device.id)} />}
+      {(device === null || (device.connected && device.granted)) && (
+        <EnvironmentView mount={mount} machineKey={machine.key} device={device?.id ?? null} exec={exec} name={name} workspace={workspace}
+          restartingTo={restarting ? size.restartingTo ?? "" : null} executorOutputs={executorOutputs} onExecute={onExecute}
+          sessions={computer ? sessions : null} shown={shown} wide={wide} />
+      )}
     </section>
   );
 }
@@ -426,8 +479,12 @@ function Head({ mount, name, status, specs, size, onOpenFiles }: {
 }
 
 /** Under the head: the machine's absence, its restart, or its tabs and its terminal or screen. */
-function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorOutputs, onExecute, sessions, shown, wide }: {
+function EnvironmentView({ mount, machineKey, device, exec, name, workspace, restartingTo, executorOutputs, onExecute, sessions, shown, wide }: {
   mount: MountInfo;
+  /** The machine's key in the column: its tabs are kept under it. */
+  machineKey: string;
+  /** The PC's id, so its terminal opens on it when several are connected; null for any other machine. */
+  device: string | null;
   exec: ExecutorInfo | undefined;
   name: string;
   workspace: string;
@@ -440,20 +497,18 @@ function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorO
   shown: Shown;
   wide: boolean;
 }) {
-  if (exec?.granted === false) return <NeedsApprovalMount exec={exec} />;
-
   if (!mount.live) return <UnavailableMount mount={mount} exec={exec} />;
 
   if (exec === undefined) return <Absence icon={PlugIcon} title="No command lane">This environment runs no commands.</Absence>;
 
-  const tab = shown.tab(mount.name);
+  const tab = shown.tab(machineKey);
   // Only the computer has a screen.
   const desktop = exec.name === "computer" ? desktopClientUrl(location, workspace) : null;
 
   const tabs = wide ? null : (
     <SessionTabs label={`${name} sessions`} sessions={sessions?.sessions ?? null} current={tab} desktop={desktop !== null}
-      onChoose={(id) => shown.choose(mount.name, id)} onDesktop={() => shown.choose(mount.name, "desktop")}
-      onOpen={sessions === null ? null : () => openSession(sessions, (id) => shown.choose(mount.name, id))}
+      onChoose={(id) => shown.choose(machineKey, id)} onDesktop={() => shown.choose(machineKey, "desktop")}
+      onOpen={sessions === null ? null : () => openSession(sessions, (id) => shown.choose(machineKey, id))}
       onRename={(id, next) => sessions?.rename(id, next) ?? Effect.void}
       onClose={(id) => sessions?.close(id) ?? Effect.void} />
   );
@@ -467,7 +522,7 @@ function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorO
 
   const pane = (id: string, place: PanePlace) => (id === "desktop" && desktop !== null
     ? <DesktopView name={name} src={desktop} ruled={wide} />
-    : <SessionPane workspace={workspace} exec={exec} session={id} sessions={sessions}
+    : <SessionPane workspace={workspace} exec={exec} device={device} session={id} sessions={sessions}
       executorOutputs={executorOutputs} onExecute={onExecute} named={place !== "kept" && showing.length > 1} ruled={wide}
       trailing={wide && sessions !== null ? <SplitToggle sessions={sessions} shown={shown} showing={id} /> : null} />);
 
@@ -520,9 +575,10 @@ function MachinePanes({ showing, sessions, pane }: {
 }
 
 /** A session's terminal, its details in its bar. */
-function SessionPane({ workspace, exec, session, sessions, executorOutputs, onExecute, named, ruled, trailing }: {
+function SessionPane({ workspace, exec, device, session, sessions, executorOutputs, onExecute, named, ruled, trailing }: {
   workspace: string;
   exec: ExecutorInfo;
+  device: string | null;
   session: string;
   sessions: ComputerSessions | null;
   executorOutputs: Map<string, ExecutorOutput[]>;
@@ -539,7 +595,7 @@ function SessionPane({ workspace, exec, session, sessions, executorOutputs, onEx
     <div className={`@container flex min-h-0 min-w-0 flex-1 flex-col ${ruled ? "border-t p-border" : ""}`}>
       <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="sm" /></div>}>
         <TerminalPane workspace={workspace} executor={exec.name} outputs={executorOutputs.get(exec.name) ?? []}
-          onExecute={(cmd) => onExecute(exec.name, cmd)} session={sessions === null ? undefined : session} barOnGround
+          onExecute={(cmd) => onExecute(exec.name, cmd)} session={sessions === null ? undefined : session} device={device ?? undefined} barOnGround
           leading={<SessionDetails session={read} name={named ? read?.name ?? session : undefined} />} trailing={trailing} />
       </Suspense>
     </div>
@@ -643,6 +699,41 @@ function Restarting({ to }: { to: string | null }) {
   );
 }
 
+/**
+ * A machine on the owner's account that this workspace does not hold: one click gives it, the grant the agent's
+ * approval box records when the owner answers "always", decided here by the owner instead of asked by an agent.
+ */
+function GiveAccess({ name, onGive }: { name: string; onGive: () => Effect.Effect<void, KinuError> }) {
+  const [giving, setGiving] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const give = () => {
+    setGiving(true);
+    setFailure(null);
+    detach(onGive().pipe(
+      Effect.catch((cause) => Effect.sync(() => setFailure(renderThrownChain({ cause })))),
+      Effect.ensuring(Effect.sync(() => setGiving(false))),
+    ));
+  };
+
+  return (
+    <div data-env-give-access className="flex min-h-0 flex-1 items-center justify-center border-t p-border px-8">
+      <div className="max-w-sm space-y-3 text-center">
+        <LockSimpleIcon size={22} className="mx-auto p-text-3" aria-hidden />
+        <div className="space-y-1.5">
+          <p className="p-row-text font-semibold p-text">This workspace can&apos;t use {name} yet</p>
+          <p className="p-meta p-text-2">
+            {name} is connected to your account. Give this workspace access and its agent can run commands and open a
+            terminal there, inside the machine&apos;s sandbox. You can take it back on the Devices page.
+          </p>
+        </div>
+        <FilledButton onClick={give} disabled={giving}>{giving ? "Giving access…" : "Give this workspace access"}</FilledButton>
+        {failure !== null && <p className="p-meta p-danger">{failure}</p>}
+      </div>
+    </div>
+  );
+}
+
 /** The chosen environment's absence, said in its place: the reason, and where to read more. */
 function Absence({ icon: Mark, title, children }: { icon: Icon; title: string; children: ReactNode }) {
   return (
@@ -666,17 +757,6 @@ function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInf
   return (
     <Absence icon={PlugIcon} title={`${executorLabel(mount.name)} is not available here`}>
       {text}{" "}<a href={EXECUTION_DOCS} target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>
-    </Absence>
-  );
-}
-
-/** Online machine without workspace access; only the owner can approve it. */
-function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
-  const name = exec.label ?? executorLabel(exec.name);
-
-  return (
-    <Absence icon={LockSimpleIcon} title={`${name} needs approval`}>
-      It is connected. When this workspace runs its first command on it, you choose whether to grant access.
     </Absence>
   );
 }
