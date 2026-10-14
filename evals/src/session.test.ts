@@ -1164,8 +1164,6 @@ describe('the live arm is reachable only under KINU_EVAL_BACKEND=cloud', () => {
     // Collecting a task imports it, under Bun as `bun run evals` runs it. On 2026-09-25 every task failed there at
     // import: `import { z } from 'zod'` in core came back undefined. A task resolves its target and the commit its
     // definitions are compared under as it loads, so collection names a loopback origin and a commit; nothing runs.
-    // Awaited, never `spawnSync`: on 2026-10-08 (job 20261008180801-67f4e094) the runner spun in it, state R, until the
-    // row's silence bound killed it (oven-sh/bun#34069).
     const listed = await runToExit(['bun', '--bun', './node_modules/.bin/vitest', 'list', '--config', 'evals/vitest.config.ts', '--json'], {
       cwd: join(import.meta.dirname, '../..'),
       env: { ...process.env, KINU_EVAL_ORIGIN: 'http://127.0.0.1:9', KINU_EVAL_COMMIT: '0'.repeat(40) },

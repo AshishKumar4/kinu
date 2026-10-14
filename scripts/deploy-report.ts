@@ -144,6 +144,22 @@ export function recordRunner(dir: string, phase: string, exit: number): void {
   recordStep(dir, { phase, what: `the ${phase} runner`, finding: `it exited ${String(exit)} without reporting a red; its own output is ${phase}.log beside this report` });
 }
 
+/** The mark `name` at the instant `at` (ms), in whole seconds from the deploy's start, rounded up so it never precedes
+ *  what it marks. */
+export function recordMarkAt(dir: string, name: string, at: number): void {
+  const { startedAt } = v.parse(MetaSchema, JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')));
+
+  append(dir, { kind: 'mark', mark: name, seconds: Math.ceil((at - Date.parse(startedAt)) / 1000) });
+}
+
+/** The instant of the mark `name`, its seconds from the deploy's start; undefined while it has none. */
+export function markInstant(dir: string, name: string): Date | undefined {
+  const { startedAt } = v.parse(MetaSchema, JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')));
+  const seconds = entriesOf(dir).flatMap((entry) => (entry.kind === 'mark' && entry.mark === name ? [entry.seconds] : [])).at(-1);
+
+  return seconds === undefined ? undefined : new Date(Date.parse(startedAt) + seconds * 1000);
+}
+
 /** Something a fixer should act on that is not a red: the deploy's verdict does not read it. */
 export function recordNotice(dir: string, notice: { readonly phase: string; readonly what: string; readonly notice: string }): void {
   append(dir, { kind: 'notice', phase: notice.phase, what: notice.what, notice: notice.notice });
@@ -453,6 +469,14 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  // `when <mark>`: the mark's instant, for a command that takes one; nothing, and exit 1, while it has none.
+  if (command === 'when' && rest.length === 1) {
+    const at = markInstant(first, rest[0] ?? '');
+
+    if (at !== undefined) console.log(at.toISOString());
+    process.exit(at === undefined ? 1 : 0);
+  }
+
   if (command === 'budget' && rest.length === 1) {
     const input = readReport(first);
     const red = input.meta.mode === 'gates-only' ? undefined : budgetRed(Number(rest[0]));
@@ -485,6 +509,6 @@ if (import.meta.main) {
     process.exit(summary.reds.length === 0 ? 0 : 1);
   }
 
-  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|budget|render …');
+  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|budget|render …');
   process.exit(2);
 }

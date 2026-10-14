@@ -51,7 +51,7 @@ export function spawnTest<
   return Bun.spawn([...command], { ...options, env: options?.env ?? process.env });
 }
 
-/** Never `spawnSync`: bun 1.4.0-1.4.2 can spin a later one forever (oven-sh/bun#34069). */
+/** Runs `cmd` to its exit and hands back what it said. */
 export async function runToExit(cmd: readonly string[], options: RunOptions = {}): Promise<Exited> {
   const child = spawnTest(cmd, {
     cwd: options.cwd,

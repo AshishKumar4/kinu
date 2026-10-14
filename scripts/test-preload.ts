@@ -143,12 +143,9 @@ Bun.plugin({
 // module the Vite plugin serves in dev/build/vitest, built by the package's own
 // `buildSlateVendor` so bun tests measure the real bytes. The runner calls this
 // once per global, so under `--parallel` once per importing file, and a build
-// per call spawned esbuild about 270 times per cf run. Under bun 1.4.0 a
-// synchronous spawn (esbuild's `buildSync` with ESBUILD_WORKER_THREADS=0) can
-// miss its child's exit and spin forever: 2 of 6 hammer runs and a sweep row
-// stalled that way on 2026-09-24, each on one file, beside an esbuild zombie.
-// So the bytes are built once per set of inputs, by `build-slate-vendor.ts` in
-// a process of its own, and shared through a file the runs read.
+// per call spawned esbuild about 270 times per cf run. So the bytes are built
+// once per set of inputs, by `build-slate-vendor.ts` in a process of its own,
+// and shared through a file the runs read.
 Bun.plugin({
   name: 'kinu-slate-vendor-for-bun-test',
   setup(build) {

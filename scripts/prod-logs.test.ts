@@ -178,13 +178,20 @@ describe('what one deployed version did, as a deploy reports it', () => {
 describe('a read that issues a verdict', () => {
   /** Answers each count in turn, its last forever; `refused` is a read the API answered 500, `rejected` one it answered
    *  400, a query it will never take. */
-  const reader = (counts: readonly (number | 'refused' | 'rejected')[]) => {
-    let clock = 0;
+  /** Answers each count in turn, its last forever; `refused` is a read the API answered 500, `rejected` one it answered
+   *  400, a query it will never take. The window ends at `windowEnd`, the first read starts at `startAt`, and each read
+   *  takes `readMs`. */
+  const reader = (counts: readonly (number | 'refused' | 'rejected')[], { windowEnd = 0, startAt = 0, readMs = 0 } = {}) => {
+    let clock = startAt;
     let at = 0;
+    const startedAt: number[] = [];
 
     return {
+      startedAt,
       read: () => {
         const count = counts[Math.min(at++, counts.length - 1)] ?? 0;
+        startedAt.push(clock);
+        clock += readMs;
 
         if (count === 'refused') return Promise.reject(new KinuError('unavailable', 'telemetry query answered 500'));
 
@@ -197,23 +204,40 @@ describe('a read that issues a verdict', () => {
 
         return Promise.resolve();
       },
-      pollMs: 2, holdMs: 10, capMs: 60,
+      windowEnd, pollMs: 2, holdMs: 10, capMs: 60,
     };
   };
 
-  test('is settled once every read across the hold agrees, and names what landed after the first', async () => {
-    expect(await settledRead(reader([5, 7, 7, 7, 7, 7, 7]))).toEqual({ settled: true, value: 7, reads: 7, lateRows: 2 });
+  // Every row of the window's events has landed `holdMs` after its end, so that read decides, once another agrees.
+  test('settles at the first read a hold past the window\'s end that agrees with the one before, its reads on a grid', async () => {
+    const late = reader([5, 7, 7, 7, 7], { startAt: 3, readMs: 1 });
+
+    expect(await settledRead(late)).toEqual({ settled: true, value: 7, reads: 5, lateRows: 2 });
+    expect(late.startedAt).toEqual([3, 4, 6, 8, 10]);
   });
 
-  // The hold starts again whenever the counts move: two agreeing reads with a change between them are not still.
-  test('is not settled by two reads a hold apart that agree around a read that did not', async () => {
-    expect(await settledRead(reader([5, 5, 5, 6, 5, 5, 5, 5, 5, 5, 5]))).toEqual({ settled: true, value: 5, reads: 10, lateRows: 0 });
+  test('waits on a change that lands after the hold, and not on one before it', async () => {
+    const after = reader([5, 5, 5, 5, 5, 6, 6]);
+    const before = reader([5, 6, 5, 5, 5, 5]);
+
+    expect({ after: await settledRead(after), before: await settledRead(before) }).toEqual({
+      after: { settled: true, value: 6, reads: 7, lateRows: 1 },
+      before: { settled: true, value: 5, reads: 6, lateRows: 0 },
+    });
+    expect({ after: after.startedAt.at(-1), before: before.startedAt.at(-1) }).toEqual({ after: 12, before: 10 });
+  });
+
+  test('takes two agreeing reads even when the window ended a hold ago', async () => {
+    const old = reader([5, 5], { windowEnd: -100 });
+
+    expect(await settledRead(old)).toEqual({ settled: true, value: 5, reads: 2, lateRows: 0 });
+    expect(old.startedAt).toEqual([0, 2]);
   });
 
   // Staging 2026-10-14: the API answered 500 to 12 of 80 reads, which named nothing about the version.
-  test('reads again after a refused read, which neither moves nor holds the counts', async () => {
-    // Answered at 2, 4, 8, 10 and 12: held still from 2 to 12, the read refused at 6 between them.
-    expect(await settledRead(reader(['refused', 5, 5, 'refused', 5, 5, 5, 5]))).toEqual({ settled: true, value: 5, reads: 5, lateRows: 0 });
+  test('reads again after a refused read, which neither agrees nor disagrees', async () => {
+    // Answered at 2, 4, 8 and 10; refused at 0 and 6.
+    expect(await settledRead(reader(['refused', 5, 5, 'refused', 5, 5, 5, 5]))).toEqual({ settled: true, value: 5, reads: 4, lateRows: 0 });
   });
 
   test('fails with the refusal when no read is answered before the cap', async () => {

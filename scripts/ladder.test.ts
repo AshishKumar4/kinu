@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, GATE_DEADLINE_SECONDS, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, onArmada, secretGroup,
+  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, jobDrove, onArmada, secretGroup,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -722,26 +722,27 @@ describe('a deploy\'s armada rows', () => {
 
 describe('a deploy row with secrets of its own', () => {
   // gate:devbox-e2e holds the deploy's REST token and the store's R2 keys; armada gives secrets per job, so it runs in a
-  // job of its own and no other post-publish container holds them.
-  test('runs in an armada job of its own, given its secrets with the deployment\'s, and its plan names only it', () => {
-    const rows = armadaPhaseRows(['post-publish']);
+  // job of its own and no other container of the wave holds them.
+  // It drives no deployment, its own fixture Worker instead, so its job is given no origin and no deployment secret.
+  test('runs in an armada job of its own, given its own secrets, and its plan names only it', () => {
+    const rows = armadaPhaseRows(['post-publish', 'source']);
     const own = rows.filter((gate) => secretGroup(gate) !== '');
     const sha = 'a'.repeat(40);
-    const shared = armadaPhaseRun('post-publish', rows.filter((gate) => secretGroup(gate) === ''), sha, 'https://staging.kinu.run');
-    const devbox = armadaPhaseRun('post-publish', own, sha, 'https://staging.kinu.run');
+    const shared = armadaPhaseRun('post-publish,source', rows.filter((gate) => secretGroup(gate) === ''), sha, 'https://staging.kinu.run');
+    const devbox = armadaPhaseRun('post-publish,source', own, sha, 'https://staging.kinu.run');
     const secretsOf = (argv: readonly string[]) => argv.find((arg) => arg.startsWith('--secrets='))?.slice('--secrets='.length).split(',').sort((a, b) => a.localeCompare(b));
 
     expect({ own: own.map((gate) => gate.run), shared: secretsOf(shared), devbox: secretsOf(devbox), json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'), plan: devbox.slice(devbox.indexOf('--') + 1) }).toEqual({
       own: ['bun run gate:devbox-e2e'],
       shared: ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY'],
-      devbox: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
+      devbox: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'KINU_EVAL_STAGING_WEB_IDENTITY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
       json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'),
       plan: [
-        '--deploy-phase=post-publish', '--deploy-origin=https://staging.kinu.run',
+        '--deploy-phase=post-publish,source',
         '--deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY',
       ],
     });
-    expect(() => armadaPhaseRun('post-publish', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
+    expect(() => armadaPhaseRun('post-publish,source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
   });
 });
 
@@ -837,6 +838,23 @@ describe('a phase armada could not grade', () => {
     expect(armadaRowVerdicts(rows, { ...report, graded: 'fail' }).map(({ green }) => green)).toEqual([false, true]);
     expect(armadaRowVerdicts(rows, { ...report, graded: 'pass', problems: [], verdicts: { rows: [] } }).map(({ green }) => green)).toEqual([false, false]);
     expect(armadaRowVerdicts(rows, undefined).map(({ green }) => green)).toEqual([false, false]);
+  });
+});
+
+// The deploy's telemetry window ends when its last row that drove the deployment did (`prod-logs.ts version --until`).
+describe('when a phase\'s armada job stopped driving the deployment', () => {
+  test('is its report\'s end, or its return with none, and never for the devbox contracts on their own Worker', () => {
+    const wave = armadaPhaseRows(['post-publish', 'source']);
+    const driving = wave.filter((gate) => gate.run === 'bun run gate:first-run');
+    const contracts = wave.filter((gate) => gate.run === 'bun run gate:devbox-e2e');
+    const report: ArmadaReport = { job: 'wave', graded: 'pass', problems: [], artifacts: {}, status: { finishedAt: 1_000 } };
+
+    expect({
+      reported: jobDrove(driving, report, 2_000),
+      unreported: jobDrove(driving, undefined, 2_000),
+      contracts: jobDrove(contracts, report, 2_000),
+      contractsInWave: contracts.length,
+    }).toEqual({ reported: 1_000, unreported: 2_000, contracts: undefined, contractsInWave: 1 });
   });
 });
 

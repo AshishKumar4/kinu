@@ -28,7 +28,11 @@ export interface ComputerSizeState {
 
 const startPending = (pending: "resize" | "start" | null) => (pending === "start" ? "start" : null);
 
-/** The workspace's computer size: read once, chosen from the head, restarted at by the RPC that sets it. */
+/**
+ * The workspace's computer size: read when shown, chosen from the head, restarted at by the RPC that sets it. A resize
+ * reads it again first: a computer its terminal woke since the page read it restarts, and the view says so (staging
+ * f1f0b451b kept a terminal through the restart, then showed it closed).
+ */
 export function useComputerSize(rpc: Rpc, enabled: boolean): ComputerSizeState {
   const load = useCallback(() => (enabled ? rpc<SandboxSizeState | null>("getComputerSize") : Promise.resolve(null)), [rpc, enabled]);
   const { resource, set } = useAsyncResource(load);
@@ -41,8 +45,11 @@ export function useComputerSize(rpc: Rpc, enabled: boolean): ComputerSizeState {
     setPending(action);
     setFailure(null);
 
-    return attempt({ doing, otherwise: "io" }, () => rpc<SandboxSizeState | null>(method, args)).pipe(
+    const call = (name: string, values: unknown[]) => attempt({ doing, otherwise: "io" }, () => rpc<SandboxSizeState | null>(name, values)).pipe(
       Effect.map((next) => { if (next !== null) set(next); }),
+    );
+
+    return (action === "resize" ? call("getComputerSize", []).pipe(Effect.andThen(call(method, args))) : call(method, args)).pipe(
       Effect.catch(shownIn(setFailure)),
       Effect.ensuring(Effect.sync(() => { setPending(null); setChoosing(null); })),
     );

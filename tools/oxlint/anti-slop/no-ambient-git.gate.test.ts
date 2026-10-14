@@ -243,7 +243,7 @@ const BOUNDARY: ReadonlyArray<{
   // plain receiver still fire.
   { file: "b17.test.ts", code: "exec('git clone https://x');", caught: true },
   { file: "b18.test.ts", code: "child_process.execSync('git status');", caught: true },
-  // The test-utils spawners every suite moved to when `no-sync-spawn` took in tests.
+  // The test-utils spawners the suites run their children through.
   { file: "b19.test.ts", code: "await runToExit(['git', 'merge', 'side'], { cwd: repo });", caught: true },
   { file: "b20.test.ts", code: "await runOk(['git', 'status']);", caught: true },
   { file: "b21.test.ts", code: "spawnTest(['git', 'fetch'], { cwd: repo });", caught: true },

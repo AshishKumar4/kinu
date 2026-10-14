@@ -74,6 +74,8 @@ const WORKFLOWS = '.github/workflows';
 /** Where the Lean toolchain is installed now that no workflow runs the proofs: armada's environment. */
 const ARMADA_INSTALL = 'scripts/armada/install.sh';
 
+const ARMADA_SETUP = 'scripts/armada/setup.sh';
+
 const BLOCK_LOWER = 'packages/devbox/block-lower';
 
 /** The container hosts: every Worker config that uses the devbox tools. */
@@ -477,6 +479,16 @@ describe('the workflows that publish and measure this product', () => {
     // ordering that makes the checksum worth anything.
     expect(body.indexOf('sha256sum --check --strict')).toBeGreaterThan(0);
     expect(body.indexOf('sha256sum --check --strict')).toBeLessThan(body.indexOf('elan-init'));
+  });
+
+  // One Bun everywhere this repository runs one: an older one, or a moving `canary`, is how a synchronous spawn kept
+  // spinning over a zombie child after Bun 1.4.3 fixed it (oven-sh/bun#44581; #83).
+  test("armada installs the Bun package.json pins, and the Bun is a release", () => {
+    const pinned = /^bun@(\d+\.\d+\.\d+)$/u.exec(v.parse(v.object({ packageManager: v.string() }), JSON.parse(readRepositoryFile(REPO_ROOT, 'package.json'))).packageManager)?.[1];
+    const bootstrap = /bun\.sh\/install \| BUN_INSTALL=\/usr\/local bash -s bun-v(\S+)/u.exec(readRepositoryFile(REPO_ROOT, ARMADA_SETUP))?.[1];
+
+    expect(pinned, 'packageManager names one Bun release').toBeDefined();
+    expect(bootstrap).toBe(pinned);
   });
 
   test('no action is used from a moving ref', () => {

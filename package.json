@@ -1,7 +1,7 @@
 {
   "name": "kinu",
   "private": true,
-  "packageManager": "bun@canary",
+  "packageManager": "bun@1.4.3",
   "description": "Kinu gives AI agents a durable computer of their own. It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple approaches and letting executable checks choose the winner.",
   "license": "MIT",
   "keywords": [
@@ -33,7 +33,7 @@
     "coverage:check": "bun scripts/coverage-check.ts",
     "typecheck": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cf-backend/tsconfig.vitest.json && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/devbox && tsc --noEmit -p packages/devbox/tests/workerd && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p evals && tsc --noEmit -p scripts/tsconfig.scripts.json && tsc --noEmit -p scripts/worker-heap && node --check packages/pc-agent/src/index.js && node --check packages/pc-agent/src/sandbox.js && node --check packages/pc-agent/src/pty.js && node --check packages/pc-agent/src/chatgpt.js",
     "check": "bun run lint && bun test --timeout=0 --isolate packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts && bun run typecheck && bun run gate:typecheck-coverage",
-    "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-design-smells.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-wait-until.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-git.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-bun.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-copy-rpc-stub.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-untyped-console.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/import-extension.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/typescript-escapes.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-deep-import.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-elapsed-deadline.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/type-aware.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-vacuous-type-predicate.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-sync-spawn.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-module-scope-flight.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/effect.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/live-tree.gate.test.ts",
+    "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-design-smells.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-wait-until.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-git.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-bun.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-copy-rpc-stub.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-untyped-console.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/import-extension.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/typescript-escapes.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-deep-import.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-elapsed-deadline.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/type-aware.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-vacuous-type-predicate.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-module-scope-flight.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/effect.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/live-tree.gate.test.ts",
     "lint": "bun run test:anti-slop",
     "deploy": "bash scripts/deploy.sh",
     "dev": "bun run --cwd packages/cf-backend start",
@@ -153,7 +153,7 @@
     "valibot": "^1.4.1",
     "zod": "^4.3.6"
   },
-  "//devDependencies:bun": "Canary 9bd19c98e contains oven-sh/bun#44279 for retired-realm crashes, but not spawnSync fix #44581 (13a98b0dbd). Use the newest canary, then return to latest stable once both fixes ship.",
+  "//devDependencies:bun": "Bun 1.4.3 carries both oven-sh/bun#44279 (retired-realm crashes, which the canary pin was for) and #44581 (13a98b0dbd), whose absence left a synchronous spawn spinning over a zombie child: the production deploy contract row went silent in 12 of 48 runs on canary 9bd19c98e and 0 of 96 on 1.4.3 (2026-10-14, #83).",
   "//devDependencies:@nimbus-sh/runtime": "Nimbus numbers a runtime rebuild as a prerelease of its upstream version (3.13.14-1, the reproducible CPython core 0.16 requires), and semver ranks it below the plain 3.13.14, so a caret picks the older build. Both stay exact; move them with core.",
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.87.1",
@@ -171,7 +171,7 @@
     "agents": "^0.26.0",
     "armada": "github:AshishKumar4/armada#b2bf6df719e64c0992f51e52d877af91d63b49e6",
     "aws4fetch": "^1.0.20",
-    "bun": "canary",
+    "bun": "1.4.3",
     "chess.js": "^1.4.0",
     "effect": "4.0.0-rc.117",
     "esbuild": "^0.28.1",

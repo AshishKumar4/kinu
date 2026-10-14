@@ -92,13 +92,16 @@ function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReadi
   return { word: "Ready", tone: "ready" };
 }
 
-/** The computer's state: restarting under a resize, asleep while stopped (it wakes when used), else as any machine. */
-function computerStatus(mount: MountInfo, exec: ExecutorInfo | undefined, size: ComputerSizeState, waiting: boolean): StatusReading {
+/**
+ * The computer's state: restarting under a resize, waiting on a session's prompt, asleep while stopped (it wakes when
+ * used), else as any machine. A session open on it says it woke since its size was read.
+ */
+function computerStatus(mount: MountInfo, exec: ExecutorInfo | undefined, size: ComputerSizeState, seen: { waiting: boolean; awake: boolean }): StatusReading {
   if (size.pending === "resize") return { word: "Restarting", tone: "working" };
 
-  if (waiting) return { word: "Needs input", tone: "attention" };
+  if (seen.waiting) return { word: "Needs input", tone: "attention" };
 
-  if (mount.live && size.state !== null && size.state.running === null) return { word: "Asleep", tone: "off" };
+  if (mount.live && size.state !== null && size.state.running === null && !seen.awake) return { word: "Asleep", tone: "off" };
 
   return statusOf(mount, exec);
 }
@@ -369,11 +372,13 @@ function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onE
   wide: boolean;
 }) {
   const computer = mount.name === "computer";
-  // The computer's size, read once here: its control sits in the head, its restart covers the view.
+  // The computer's size, read here: its control sits in the head, its restart covers the view.
   const size = useComputerSize(rpc, computer && mount.live);
   const name = exec?.label ?? executorLabel(mount.name);
   const restarting = computer && size.pending === "resize";
-  const status = computer ? computerStatus(mount, exec, size, sessions.sessions?.some((session) => session.needsInput) === true) : statusOf(mount, exec);
+  const listed = sessions.sessions ?? [];
+  const seen = { waiting: listed.some((session) => session.needsInput), awake: listed.some((session) => session.open) };
+  const status = computer ? computerStatus(mount, exec, size, seen) : statusOf(mount, exec);
 
   return (
     <section aria-label={name} className="flex min-h-0 flex-1 flex-col">

@@ -13,6 +13,8 @@ const SocketMessageSchema = v.variant("type", [
     type: v.literal("cf_agent_use_chat_response"),
     error: v.optional(v.boolean()), done: v.optional(v.boolean()), body: v.optional(v.string()), reason: v.optional(v.string()),
   }),
+  // The server's answer to the SDK's resume probe, which it sends as each socket opens: a stream to rejoin, or none.
+  v.looseObject({ type: v.picklist(["cf_agent_stream_resuming", "cf_agent_stream_resume_none"]) }),
   WorkspaceBroadcastSchema,
 ]);
 

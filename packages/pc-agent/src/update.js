@@ -28,11 +28,6 @@ const { execFile, spawn } = require('node:child_process');
  * `{ error, stdout, stderr }`, where a numeric `error.code` is the exit status.
  * Stdin is closed at once, as a synchronous spawn's `'ignore'` had it. The
  * daemon's one way to wait for a child: sandbox.js and index.js import it.
- *
- * Never a synchronous spawn: while Bun's `spawnSync` waits it points the VM at
- * a private event loop, and a collection that frees a main-loop poll there (a
- * socket, a sink, a finished subprocess) makes a later `spawnSync` spin at 100%
- * CPU over a zombie child, forever (oven-sh/bun#34069). A daemon runs for days.
  */
 function runToExit(file, args, options) {
   const { promise, resolve } = Promise.withResolvers();
@@ -502,7 +497,7 @@ function createUpdater(opts) {
  * `unit-install-script.test.ts` holds this rendering equal to core's, whose version the repository's
  * `packageManager` pin holds.
  */
-const KINU_BUN_VERSION = '1.4.2';
+const KINU_BUN_VERSION = '1.4.3';
 
 /** Non-`major.minor.patch` input is not comparable; the shell half treats it as incompatible. */
 function bunVersionKey(version) {

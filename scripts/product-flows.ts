@@ -2784,11 +2784,16 @@ export interface SessionsVerdict {
   readonly folderAfter: string;
 }
 
-/** The open session's details line in the inspector: its folder and the ports under it. */
-const SESSION_LINE = `(() => ({
-  folder: (document.querySelector('#inspector [data-session-cwd]')?.textContent ?? '').trim(),
-  ports: [...document.querySelectorAll('#inspector [data-session-port]')].map((port) => (port.textContent ?? '').trim()),
+/**
+ * The open session's details line under `scope`: its folder and the ports under it. The folder is the one its element
+ * names: its text holds the whole path for a wide pane and the last part for a narrow one (staging f1f0b451b).
+ */
+export const sessionLine = (scope: string) => `(() => ({
+  folder: document.querySelector('${scope} [data-session-cwd]')?.getAttribute('data-session-cwd') ?? '',
+  ports: [...document.querySelectorAll('${scope} [data-session-port]')].map((port) => (port.textContent ?? '').trim()),
 }))()`;
+
+const SESSION_LINE = sessionLine('#inspector');
 
 const SESSION_TABS = `[...document.querySelectorAll('#inspector [role="tablist"] [role="tab"]')].map((tab) => (tab.textContent ?? '').trim()).filter((name) => name !== 'Desktop')`;
 

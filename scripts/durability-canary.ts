@@ -222,7 +222,7 @@ if (session !== null) {
     const settled = await settledRead({
       read, fingerprint: telemetryCounts, rows: (counted) => counted.active.rows.length + (counted.idle?.invocations ?? 0),
       now: () => Date.now(), sleep: (ms) => waitUntil(Date.now() + ms, 'telemetry settling'),
-      pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
+      windowEnd: Math.max(observedTo, activeTo), pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
     });
 
     telemetry = settled.settled ? settled.value : settled.last;

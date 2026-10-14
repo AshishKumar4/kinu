@@ -42,6 +42,12 @@ function armadaBuild(environment: string, ...options: string[]): string {
   return ["bun scripts/release-build.ts", environment, "testsha", ...options].join(" ");
 }
 
+/** The build starts beside the upload gates, so where its event falls among theirs is a race: the events without it,
+ *  and whether it started, after the preflight. */
+function besideTheBuild(events: readonly string[], build: string) {
+  return { events: events.filter((event) => event !== build), started: events.indexOf(build) > events.indexOf(phaseRun("preflight")) };
+}
+
 /** What a staging deploy runs after the fixture's build, which fails on purpose: the rows that read the deployment
  *  named as not run, then every local gate and the hammer, to their end. */
 const AFTER_A_FAILED_BUILD: readonly string[] = [
@@ -99,8 +105,9 @@ if [[ "$*" == *--ci-verdict=* ]] && [ "$KINU_CI_RED" = "1" ]; then
   echo 'CI RED bun run test:core'
   exit 1
 fi
-# The deploy's report directory, as scripts/deploy-report.ts opens and names it.
+# The deploy's report directory, as scripts/deploy-report.ts opens and names it, its logs directory made.
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
+  mkdir -p "$KINU_DEPLOY_ROOT/report/logs"
   printf '%s\\n' "$KINU_DEPLOY_ROOT/report"
 fi
 # WHAT THE INFRASTRUCTURE PHASE ACTUALLY SAW. The account gate reads its phase
@@ -488,20 +495,23 @@ describe("deploy gate", () => {
     const run = await runDeploy();
 
     expect(run.status).toBe(1);
-    expect(run.events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
+    expect(besideTheBuild(run.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true });
     expect(run.infraEnvironment).toBe("staging");
   });
 
-  test("a record that cannot be withdrawn builds nothing, and every local gate still runs", async () => {
+  test("a record that cannot be withdrawn publishes nothing, and every local gate still runs", async () => {
     const run = await runDeploy({ failingGate: WITHDRAW });
 
     expect(run.status).toBe(1);
-    expect(run.events.some((event) => event.startsWith("MUTATE ") || event.startsWith("bun scripts/release-build.ts"))).toBe(false);
-    expect(run.events).toEqual([
-      ...STOPS, WITHDRAW,
-      skipped("staging does not serve this build: testsha's record on staging could not be withdrawn, so this deploy will not replace what it verified"),
-      phaseRun("source"),
-    ]);
+    expect(run.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
+    expect(besideTheBuild(run.events, armadaBuild("staging"))).toEqual({
+      events: [
+        ...STOPS, WITHDRAW,
+        skipped("staging does not serve this build: testsha's record on staging could not be withdrawn, so this deploy will not replace what it verified"),
+        phaseRun("source"),
+      ],
+      started: true,
+    });
   });
 
   // ── Promotion ──────────────────────────────────────────────────
@@ -515,10 +525,10 @@ describe("deploy gate", () => {
     const run = await runDeploy({ option: "--promote" });
 
     expect(run.status).toBe(1);
-    expect(run.events).toEqual([
-      phaseRun("preflight"), PROMOTION_CHECK, phaseRun("upload"), armadaBuild("production", "--promote"),
-      skipped("production does not serve this build: the build on armada failed"),
-    ]);
+    expect(besideTheBuild(run.events, armadaBuild("production", "--promote"))).toEqual({
+      events: [phaseRun("preflight"), PROMOTION_CHECK, phaseRun("upload"), skipped("production does not serve this build: the build on armada failed")],
+      started: true,
+    });
     expect(run.infraEnvironment).toBe("production");
   });
 
@@ -572,7 +582,7 @@ describe("deploy gate", () => {
     const failedBuild = await runDeploy({ option: "--reset" });
 
     expect(failedBuild.events).toContain("bun scripts/reset.ts plan staging");
-    expect(failedBuild.events).toContain(armadaBuild("staging"));
+    expect(failedBuild.events).toContain(skipped("staging does not serve this build: the build on armada failed"));
     expect(wiped(failedBuild.events)).toEqual([]);
 
     const redGate = await runDeploy({ option: "--reset", failingGate: phaseRun("upload") });
@@ -667,7 +677,7 @@ describe("deploy gate", () => {
 
     expect(plain.infraStatuses, plain.stdout).toEqual([1]);
     expect(plain.uploads).toEqual([]);
-    expect(plain.events.some((event) => event.includes('release-build.ts') || event.startsWith('MUTATE '))).toBe(false);
+    expect(plain.events.some((event) => event === WITHDRAW || event.startsWith('MUTATE '))).toBe(false);
   });
 
   test("reset recovery defers inert bindings only while its recorded placeholder serves", async () => {
@@ -678,14 +688,15 @@ describe("deploy gate", () => {
     const placeholder = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account });
 
     expect(placeholder.infraStatuses, `${placeholder.stdout}\n${placeholder.stderr}`).toEqual([0]);
-    expect(placeholder.events).toContain(armadaBuild('staging'));
+    // The build starts beside the account gate, so the publish's first step is what says the gate passed.
+    expect(placeholder.events).toContain(WITHDRAW);
 
     const unrelated = await runDeploy({ option: '--reset', account: {
       ...account, live: { ...account.live, versionId: 'unrelated-placeholder' },
     } });
 
     expect(unrelated.infraStatuses, unrelated.stdout).toEqual([1]);
-    expect(unrelated.events).not.toContain(armadaBuild('staging'));
+    expect(unrelated.events).not.toContain(WITHDRAW);
   });
 
   test("reset recovery cannot defer a class outside its record or a binding missing from an uploaded version", async () => {
@@ -700,7 +711,7 @@ describe("deploy gate", () => {
       } });
 
       expect(refused.infraStatuses, refused.stdout).toEqual([1]);
-      expect(refused.events).not.toContain(armadaBuild('staging'));
+      expect(refused.events).not.toContain(WITHDRAW);
     }
   });
 
@@ -714,7 +725,7 @@ describe("deploy gate", () => {
       const refused = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account: incomplete });
 
       expect(refused.infraStatuses, refused.stdout).toEqual([1]);
-      expect(refused.events).not.toContain(armadaBuild('staging'));
+      expect(refused.events).not.toContain(WITHDRAW);
     }
   });
 
@@ -736,10 +747,10 @@ describe("deploy gate", () => {
     const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, phaseGates(phase)]));
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.upload).toEqual(["bun scripts/secret-scan.ts", "bun run gate:infra"]);
-    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun run gate:devbox-e2e", "bash scripts/product-flows-tier.sh"]);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh"]);
     expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
     expect(byPhase.soak).toEqual(["bash scripts/eval-pass-tier.sh"]);
-    expect(byPhase.source?.length).toBe(PLAN.length - 8);
+    expect(byPhase.source?.length).toBe(PLAN.length - 7);
 
     for (const gate of LADDER) {
       if (gate.phase === undefined) {
@@ -776,22 +787,24 @@ describe("deploy gate", () => {
     expect(run.status).toBe(1);
     // 128 + SIGKILL. The status is the child's fate, not a claim the runner made.
     expect(run.stdout).toContain("the source phase failed (exit 137)");
-    expect(run.events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
+    expect(besideTheBuild(run.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true });
     expect(run.report).toContain(
       "note source the source phase's runner it ended with exit 137 and no verdict of its own, so a row it had not reported on may be red and unnamed",
     );
   });
 
   // THE TWO STOPS. A red preflight or upload phase TRUNCATES the run: nothing
-  // later starts, nothing is built and nothing is published, with the former
-  // skip variable (SKIP_E2E, on every run here) set. The preflight is the
-  // precondition for any verdict; the upload gates hold what cannot be undone.
-  test("a red preflight or upload phase stops the deploy before anything later, the build or a publish", async () => {
+  // later starts and nothing is published, with the former skip variable
+  // (SKIP_E2E, on every run here) set; the build begun beside the upload gates is
+  // cancelled. The preflight is the precondition for any verdict; the upload
+  // gates hold what cannot be undone.
+  test("a red preflight or upload phase stops the deploy before anything later, and publishes nothing", async () => {
     for (const [index, phase] of STOPS.entries()) {
       const run = await runDeploy({ failingGate: phase });
 
       expect(run.status, `${phase} did not fail the deploy`).toBe(1);
-      expect(run.events, `${phase} failed and a later step ran\n${run.stdout}`).toEqual(STOPS.slice(0, index + 1));
+      expect(besideTheBuild(run.events, armadaBuild("staging")), `${phase} failed and a later step ran\n${run.stdout}`)
+        .toEqual({ events: STOPS.slice(0, index + 1), started: phase === phaseRun("upload") });
       expect(run.report.slice(-2)).toEqual(["mark end", "render"]);
     }
   });
@@ -805,7 +818,7 @@ describe("deploy gate", () => {
     expect(blocked.stdout).toContain("Another staging deploy is running on this machine");
 
     expect((await runDeploy({ lockHeld: true, option: "--promote" })).status).toBe(75);
-    expect((await runDeploy()).events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
+    expect(besideTheBuild((await runDeploy()).events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true });
   });
 
   // REPORT-ALL. After the upload gates nothing stops a deploy: every phase runs
@@ -815,11 +828,11 @@ describe("deploy gate", () => {
       const run = await runDeploy({ failingGate: phaseRun("source"), option });
 
       const expected = option === undefined
-        ? [...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]
-        : [...STOPS, phaseRun("source")];
+        ? { events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true }
+        : { events: [...STOPS, phaseRun("source")], started: false };
 
       expect(run.status, `a red source phase under ${option ?? "a deploy"} did not fail it`).toBe(1);
-      expect(run.events, `the ${option ?? "deploy"} stopped at the red source phase\n${run.stdout}`).toEqual(expected);
+      expect(besideTheBuild(run.events, armadaBuild("staging")), `the ${option ?? "deploy"} stopped at the red source phase\n${run.stdout}`).toEqual(expected);
       expect(run.report.slice(-2)).toEqual(["mark end", "render"]);
     }
   });
@@ -865,7 +878,7 @@ describe("deploy gate", () => {
     // Same phases, same order, same failure semantics as any other deploy. This
     // is the assertion that would catch a future `--bootstrap` that skipped a
     // check rather than re-scoping one.
-    expect(bootstrap.events).toEqual([...STOPS, WITHDRAW, armadaBuild("staging"), ...AFTER_A_FAILED_BUILD]);
+    expect(besideTheBuild(bootstrap.events, armadaBuild("staging"))).toEqual({ events: [...STOPS, WITHDRAW, ...AFTER_A_FAILED_BUILD], started: true });
     expect(bootstrap.infraPhase).toBe("bootstrap");
     // The operator is told what is deferred and what is not, before the gates run.
     expect(bootstrap.stdout).toContain("BOOTSTRAP");

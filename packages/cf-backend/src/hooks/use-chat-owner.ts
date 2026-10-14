@@ -220,6 +220,17 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
   const isSubordinate = subordinate !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+  /**
+   * Whether the server has answered the resume probe the SDK sends as this socket opens. Until it has, the chat is not
+   * settled: `useChat` keeps one status for a resume and a send, so a send before the answer has its turn's state ended
+   * by it (the Stop of a new chat's opening turn lasted 10 ms, 2026-10-14), and a stream the drop interrupted is still
+   * the SDK's to rejoin.
+   */
+  const [probeAnswered, setProbeAnswered] = useState(false);
+
+  useEffect(() => {
+    if (connectionStatus !== "connected") setProbeAnswered(false);
+  }, [connectionStatus]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   // Keyed by source so one recovery never erases another's error; none expire on a timer.
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
@@ -324,7 +335,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
   // Whoever a frame names: a rename, stream bookkeeping, a provider wait, a turn's error.
   const everyFrame = useCallback((data: SocketFrame) => {
-    if (data.type === "workspace_renamed") {
+    if (data.type === "cf_agent_stream_resuming" || data.type === "cf_agent_stream_resume_none") {
+      setProbeAnswered(true);
+    } else if (data.type === "workspace_renamed") {
       const displayName = data.displayName;
 
       if (displayName?.trim()) {
@@ -397,9 +410,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   );
 
   // Read live, never latched. A stream whose socket closes mid-answer ends in an error (agents 0.26,
-  // `interruptChatStream`) that the reconnect's resume replaces, clearing useChat's error as it starts: while the socket
-  // is down the turn is the SDK's to rejoin, not a failed one.
-  const standingStreamError = connectionStatus === "connected" ? streamError : undefined;
+  // `interruptChatStream`) that the reconnect's resume replaces, clearing useChat's error as it starts: until the
+  // reopened socket's probe is answered the turn is the SDK's to rejoin, not a failed one. On the reconnect row the
+  // error stood between the open and the resume as a Retry notice (2026-10-14).
+  const standingStreamError = connectionStatus === "connected" && probeAnswered ? streamError : undefined;
 
   const turnError = frameError ?? (standingStreamError === undefined
     ? null
@@ -868,6 +882,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       /** Until true, empty `messages` means "not delivered", not "there is nothing". */
       transcriptSeeded,
       connectionStatus,
+      /** The socket is open and the server answered its resume probe: a turn sent now is the chat's alone. */
+      settled: connectionStatus === "connected" && probeAnswered,
       /** Set when reconnecting cannot help (not this caller's workspace, or gone). The SDK owns the
        *  classification and clears it on open. */
       terminalClose: connectionError,

@@ -344,7 +344,7 @@ run_phase() {
 
 stop_phase() {
   run_phase "$1" && return 0
-  echo -e "${RED}❌ the $1 phase is red, so nothing was built or uploaded.${NC}"
+  echo -e "${RED}❌ the $1 phase is red, so nothing was uploaded.${NC}"
   finish
 }
 
@@ -376,7 +376,17 @@ step_red() {
   echo -e "${RED}❌ $3${NC}"
   report note "$1" "$2" "$3"
 }
+# The build started beside the upload gates (see THE BUILD below), cancelled when the deploy ends before it is awaited.
+KINU_BUILD_PID=""
+cancel_build() {
+  [ -n "$KINU_BUILD_PID" ] || return 0
+  kill -TERM -- "-$KINU_BUILD_PID" 2>/dev/null || kill -TERM "$KINU_BUILD_PID" 2>/dev/null
+  wait "$KINU_BUILD_PID" 2>/dev/null
+  KINU_BUILD_PID=""
+  echo "The build on armada was cancelled; its output is $KINU_BUILD_LOG."
+}
 finish() {
+  cancel_build
   mark end
   report render || KINU_REDS=1
   if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_REDS" != "0" ]; then
@@ -483,6 +493,18 @@ if [ "$KINU_PROMOTE" = "1" ]; then
     || { step_red promote "staging's record" "staging has not verified $KINU_SHA with every phase green; deploy it to staging first."; finish; }
 fi
 
+# THE BUILD, started beside the upload gates and awaited by `publish_build`: it runs on armada and writes only
+# packages/cf-backend/dist, which neither gate reads (the account gate reads wrangler.jsonc and the account, the secret
+# scan the refs), so their 31 s (staging, 2026-10-14) no longer come before it. A red there, or a deploy that ends
+# before the build is awaited, cancels it (`cancel_build`), its armada job with it; nothing it made is published.
+# Its own session, so the cancel reaches the armada run it started; its output is in the report's logs.
+KINU_BUILD_LOG="$KINU_DEPLOY_REPORT/logs/build.log"
+if [ "$KINU_GATES_ONLY" != "1" ]; then
+  KINU_BUILD_ARGS=("$KINU_ENV" "$KINU_SHA")
+  if [ "$KINU_PROMOTE" = "1" ]; then KINU_BUILD_ARGS+=(--promote); fi
+  setsid -w bun "$KINU_ROOT/scripts/release-build.ts" "${KINU_BUILD_ARGS[@]}" >"$KINU_BUILD_LOG" 2>&1 </dev/null &
+  KINU_BUILD_PID=$!
+fi
 # THE ONLY GATES THAT HOLD THE UPLOAD, and the only phase besides the preflight
 # whose red ends the deploy: the account gate, which proves the ACCOUNT is
 # deployable for the environment and in the phase KINU_INFRA_ENVIRONMENT and
@@ -493,7 +515,7 @@ fi
 # the upload and gates the promotion instead.
 if [ "$KINU_PROMOTE" != "1" ]; then
   if ! run_phase upload; then
-    echo -e "${RED}The upload checks are red, so nothing was built or uploaded.${NC}"
+    echo -e "${RED}The upload checks are red, so nothing was uploaded.${NC}"
     finish
   fi
 else
@@ -543,12 +565,14 @@ if [ "$KINU_ENV" = "staging" ]; then
     || { publish_red "$KINU_SHA's record on staging could not be withdrawn, so this deploy will not replace what it verified"; return 1; }
 fi
 
-# The build runs on armada at this exact commit (scripts/release-build.sh): the
+# The build, started beside the upload gates, on armada at this exact commit (scripts/release-build.sh): the
 # client bundle and Worker for this environment, and unless promoting, the worker
 # release artifact and the CLI distribution, which is signed here, where the key is.
-KINU_BUILD_ARGS=("$KINU_ENV" "$KINU_SHA")
-if [ "$KINU_PROMOTE" = "1" ]; then KINU_BUILD_ARGS+=(--promote); fi
-bun "$KINU_ROOT/scripts/release-build.ts" "${KINU_BUILD_ARGS[@]}" || { publish_red "the build on armada failed"; return 1; }
+wait "$KINU_BUILD_PID"
+KINU_BUILD_STATUS=$?
+KINU_BUILD_PID=""
+cat "$KINU_BUILD_LOG"
+[ "$KINU_BUILD_STATUS" -eq 0 ] || { publish_red "the build on armada failed"; return 1; }
 cd "$KINU_ROOT/packages/cf-backend" || { publish_red "cannot cd to cf-backend"; return 1; }
 
 # The Worker and origin this build is FOR, read from the config the Vite plugin
@@ -1104,13 +1128,20 @@ fi
 # ended, a terminal effect that failed or was left owed, an object started as
 # often as the product calls a wake loop, an alarm with nothing to watch. Each
 # is a red of this deploy whatever its tests said, in the report under
-# `telemetry` (L18); so is telemetry it cannot read, and telemetry whose counts
-# still move after an hour of re-reads (it re-reads every two minutes until
-# its findings have held still for ten, since rows land late: `SETTLE_HOLD_MS`).
+# `telemetry` (L18); so is telemetry it cannot read, and telemetry whose reads
+# still disagree after an hour. Its window ends when the wave's last row that
+# drove the deployment did (the ladder's `traffic` mark), not at its verdict: every
+# row of the window's events has landed ten minutes after its end
+# (`SETTLE_HOLD_MS`), so the first read then that agrees with the one before it
+# settles it, and the rows that drove nothing, the devbox contracts on their
+# own Worker and the source rows, run out inside that wait. With no such row,
+# the window ends now.
 if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
   echo ""
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
-  bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" || KINU_REDS=1
+  KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
+  bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
+    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} || KINU_REDS=1
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────

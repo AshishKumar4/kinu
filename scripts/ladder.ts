@@ -37,7 +37,7 @@ import { EVAL_TASK_TIMEOUT_SECONDS } from '../evals/src/config';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully } from './deadline';
-import { recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
+import { recordMarkAt, recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
   CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
@@ -2522,8 +2522,9 @@ export const LADDER: readonly Gate[] = [
     // the container's own Chrome. The staging identity whatever the deployment: production is never its authority.
     secrets: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'KINU_EVAL_STAGING_WEB_IDENTITY'],
     shared: 'browser',
-    phase: 'post-publish',
-    alone: 'uses the staging eval identity on its own throwaway Worker, application, bucket and boxes; the browser lane owns its desktop client.',
+    // A source row: it drives no deployment, the staging eval identity's own throwaway Worker, application, bucket and
+    // boxes instead, so the deploy's traffic, and the telemetry window that ends with it, does not wait for it, and a
+    // promotion does not run it again on the sha staging proved. The browser lane owns its desktop client.
     tier: 'deploy',
     // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
     seconds: 370,
@@ -3743,6 +3744,8 @@ export const ArmadaReportSchema = v.object({
   problems: v.optional(v.array(v.string()), []),
   /** Each task's artifacts, extracted on this machine, by task name. */
   artifacts: v.optional(v.record(v.string(), v.string()), {}),
+  /** When the job's last task ended, in ms. */
+  status: v.optional(v.object({ finishedAt: v.optional(v.number()) })),
 });
 
 /** What `armada run --json` prints as it ends; its report holds the rest. */
@@ -3835,29 +3838,46 @@ function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefi
  * deploy's report as one run here would put it. Answers the rows that are not green: red, or never graded because
  * the run could not grade them.
  */
-async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
+async function armadaPhase(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<PhaseJob> {
   const groups = new Map<string, Gate[]>();
 
   for (const gate of rows) groups.set(secretGroup(gate), [...groups.get(secretGroup(gate)) ?? [], gate]);
+  const jobs = await Promise.all([...groups.values()].map(async (group) => armadaPhaseJob(phases, group, report)));
+  const drove = jobs.flatMap((job) => (job.drove === undefined ? [] : [job.drove]));
 
-  return (await Promise.all([...groups.values()].map(async (group) => armadaPhaseJob(phases, group, report)))).flat();
+  return { failed: jobs.flatMap((job) => job.failed), drove: drove.length === 0 ? undefined : Math.max(...drove) };
+}
+
+/** A phase's armada rows that went red, and when the last of its jobs that drove the deployment ended (ms). */
+interface PhaseJob {
+  readonly failed: readonly string[];
+  readonly drove: number | undefined;
 }
 
 /** One armada job of a phase's rows that share their own secrets. */
-async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<string[]> {
+async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gate[], report: string): Promise<PhaseJob> {
   const sha = fullRevision();
   const phase = phases.join(',');
   const argv = armadaPhaseRun(phase, rows, sha);
 
   console.log(`\n── armada: ${String(rows.length)} row(s) of ${phase} at ${sha.slice(0, 12)}, as one job: ${argv.slice(1).join(' ')}`);
   const { answered, said } = await echoed(argv);
+  const returned = Date.now();
   const graded = armadaReport(answered);
   const reproduce = `node_modules/.bin/armada run ${sha} -- ${argv.slice(argv.indexOf('--') + 1).join(' ')}`;
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 
-  return armadaRowVerdicts(rows, graded).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
+  const failed = armadaRowVerdicts(rows, graded).filter(({ gate, verdict, green, found }) => !recordArmadaRow(report, gate, verdict, { green, found, reproduce, said, kept: graded?.artifacts[armadaTaskName(gate)] }))
     .map(({ gate }) => gate.run);
+
+  return { failed, drove: jobDrove(rows, graded, returned) };
+}
+
+/** When a job of `rows` stopped driving the deployment (ms): its report's end, or with none the instant its run
+ *  `returned`; undefined for a job none of whose rows drives it, such as the devbox contracts on their own Worker. */
+export function jobDrove(rows: readonly Gate[], graded: ArmadaReport | undefined, returned: number): number | undefined {
+  return rows.some(readsDeployment) ? graded?.status?.finishedAt ?? returned : undefined;
 }
 
 /** The runner grades the run and its rows; a row's problem belongs to that row, without parsing prose to find it. */
@@ -4563,7 +4583,15 @@ if (import.meta.main) {
     }
   }
 
-  if (armadaJob !== undefined) failed.push(...await armadaJob);
+  // The wave's traffic to the deployment ended when the last row that drove it did: its telemetry window ends there,
+  // and so does the clock its settling reads keep (`prod-logs.ts version --until`).
+  const droveHere = deployPhase?.includes('post-publish') === true && pending.some(({ gate }) => readsDeployment(gate)) ? Date.now() : undefined;
+  const phaseJob = armadaJob === undefined ? undefined : await armadaJob;
+
+  failed.push(...phaseJob?.failed ?? []);
+  const drove = [droveHere, deployPhase?.includes('post-publish') === true ? phaseJob?.drove : undefined].flatMap((at) => (at === undefined ? [] : [at]));
+
+  if (report !== '' && drove.length > 0) recordMarkAt(report, 'traffic', Math.max(...drove));
 
   finish();
 

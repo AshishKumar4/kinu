@@ -295,8 +295,7 @@ export function unmatchedTargets(
   });
 }
 
-/** Run the targets under `bun test` and hand back the report. Never `spawnSync`: bun 1.4.0-1.4.2 can spin one
- *  forever after its child exits (oven-sh/bun#34069), which is how this gate went silent in commit hooks. */
+/** Run the targets under `bun test` and hand back the report. */
 async function runTargets(): Promise<readonly string[]> {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-skip-ratchet-'));
 
