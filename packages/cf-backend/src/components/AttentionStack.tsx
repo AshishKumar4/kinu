@@ -271,8 +271,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
 
         return (
           <button key={ask.key} type="button" data-attention-behind={ask.key} onClick={() => { setError(null); setChosen(ask.key); }}
-            className="p-attention-behind" style={{ marginInline: `${String((shown.length - depth) * 10 + 14)}px` }}
-            title="Answer this one first">
+            className="p-attention-behind" title="Answer this one first">
             <BehindIcon size={11} className="shrink-0 p-text-3" aria-hidden />
             <span className="min-w-0 flex-1 truncate">{headline(ask)}</span>
             {depth === 0 && unshown > 0 && <span className="shrink-0 tabular-nums p-text-3">+{unshown}</span>}

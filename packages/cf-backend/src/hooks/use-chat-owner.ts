@@ -187,6 +187,15 @@ function keepRevisited(actorKey: string, messages: UIMessage[]): void {
   }
 }
 
+/** A turn's wait on its provider as the composer counts it down: `untilMs` is this browser's clock, and `retry` which
+ *  of the call's `retries` comes after it. */
+export interface ProviderWaitShown {
+  readonly provider: string;
+  readonly untilMs: number;
+  readonly retry?: number;
+  readonly retries?: number;
+}
+
 export function useChatOwner(target: string | KinuActorAddress | undefined, extension: RefObject<WorkspaceExtension | null> | null) {
   const targetString = v.safeParse(v.string(), target);
   const targetAddress = v.safeParse(KinuActorAddressSchema, target);
@@ -278,7 +287,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
   /** This chat's turn waiting on its provider, told only to the turn's own windows. Cleared by the next stream frame or
    *  socket close; the notice itself ends at `untilMs`, the wait's end on this browser's clock. */
-  const [providerWait, setProviderWait] = useState<{ provider: string; untilMs: number } | null>(null);
+  const [providerWait, setProviderWait] = useState<ProviderWaitShown | null>(null);
   const [activePlan, setActivePlan] = useState<PlanReview | null>(null);
   // What this chat showed when it was last open in this page, drawn until its connect frame lands.
   const [lastShown] = useState(() => revisited.get(actorKey));
@@ -327,7 +336,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       }));
     } else if (data.type === "provider_wait") {
       // Each wait in a chain replaces the one before.
-      setProviderWait({ provider: data.provider, untilMs: Date.now() + data.waitMs });
+      setProviderWait({
+        provider: data.provider, untilMs: Date.now() + data.waitMs,
+        ...(data.retry !== undefined && data.retries !== undefined && { retry: data.retry, retries: data.retries }),
+      });
     } else if (data.type === "cf_agent_use_chat_response") {
       // A stream frame ends the wait; the on-connect replay must not paint "waiting" either.
       clearProviderWait();

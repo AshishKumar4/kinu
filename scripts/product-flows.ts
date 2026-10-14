@@ -219,7 +219,7 @@ const DEAD_END = `(() => {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
-  const notice = [...document.querySelectorAll('.p-notice-danger, [data-failure]')]
+  const notice = [...document.querySelectorAll('.p-notice-danger, [data-notice="danger"], [data-failure]')]
     .filter((el) => el.getClientRects().length > 0)
     .map((el) => (el.textContent ?? '').trim())
     .find((text) => text !== '');
@@ -1673,7 +1673,7 @@ const ANSWERS = `[...document.querySelectorAll('#chat .prose-chat')]
   .map((block) => (block.textContent ?? '').trim())
   .filter((text) => text.length > 0)`;
 
-const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning')]
+const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning, [data-notice="warning"]')]
   .map((notice) => (notice.textContent ?? '').trim()).filter((text) => text !== '').join(' | ')`;
 
 /** The mission the first-answer row creates its workspace with: #21's own. */
@@ -1903,6 +1903,37 @@ export async function openInspector(page: Page): Promise<void> {
   if (outcome.reached) return;
 
   throw new Error(`the inspector column stayed at ${String(outcome.value)}px; tried ${JSON.stringify(outcome.attempts)}`);
+}
+
+/** A selector that finds the inspector's page whose title holds `title` among the bar's pages: its tab, or the bar's
+ *  opener of the pages without room, which names them. */
+export function inspectorPageListed(title: string): string {
+  const quoted = JSON.stringify(title);
+
+  return `nav[aria-label="Pages"] :is(li button[aria-label*=${quoted}], button[aria-haspopup="menu"][title*=${quoted}])`;
+}
+
+/** Open the inspector's page whose title holds `title` through its bar: its tab when it has room, else the bar's menu
+ *  of the rest. Settles once that page is the open one. */
+export async function openInspectorPage(page: Page, title: string, wait = { timeout: 10_000 }): Promise<void> {
+  const tab = `nav[aria-label="Pages"] li button[aria-label*=${JSON.stringify(title)}]`;
+
+  await page.waitForSelector(`${tab}, nav[aria-label="Pages"] button[aria-haspopup="menu"]`, wait);
+
+  if (await page.$(tab) === null) {
+    if (await page.$('nav[aria-label="Pages"] button[aria-haspopup="menu"][aria-expanded="true"]') === null) {
+      await page.click('nav[aria-label="Pages"] button[aria-haspopup="menu"]');
+    }
+
+    const item = await page.waitForFunction((wanted: string) => [...document.querySelectorAll('nav[aria-label="Pages"] [role="menuitem"]')]
+      .find((entry) => entry.textContent?.includes(wanted) === true) ?? null, wait, title);
+
+    await item.asElement()?.evaluate((entry) => { if (entry instanceof HTMLElement) entry.click(); });
+  } else {
+    await page.click(tab);
+  }
+
+  await page.waitForSelector(`nav[aria-label="Pages"] button[aria-current="true"][aria-label*=${JSON.stringify(title)}]`, wait);
 }
 
 /** Press the inspector strip's tab named `name`; an absent tab throws. */
@@ -2135,7 +2166,7 @@ export interface SlatePreviewVerdict {
 }
 
 /** The names the inspector's Pages strip shows, one per tab: its links, not the actions beside them ("Share Flow probe"). */
-export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] button.p-bar-link[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
+export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] li button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
 
 /**
  * Row: a slate the agent builds shows its running preview in its own tab.

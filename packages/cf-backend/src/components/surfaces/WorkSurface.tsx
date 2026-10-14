@@ -296,10 +296,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               inspectedWork={props.inspectedWork}
               onRefreshJobs={props.onRefreshJobs}
               onOpenSurface={focus.navigate}
-              onChangelogSeen={props.onChangelogSeen}
-              memory={props.memory}
               rpc={props.rpc}
-              readMoves={props.readMoves}
               agents={props.agents}
             />
           </ErrorBoundary>
@@ -325,7 +322,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 snapshot={props.snapshot}
                 memory={props.memory} memoryContent={props.memoryContent}
                 onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
-                rpc={props.rpc} readMoves={props.readMoves}
+                onChangelogSeen={props.onChangelogSeen} rpc={props.rpc} readMoves={props.readMoves} workspace={props.workspace}
               />
             )}
             {surface === "Environment" && (
@@ -339,7 +336,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onConnectDevice={openConnect}
               />
             )}
-            {openPort && <PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} />}
+            {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} /></div></div>}
             <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>

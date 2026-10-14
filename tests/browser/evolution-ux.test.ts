@@ -10,9 +10,7 @@ test('a self-tuning run shows its own candidates, though the run picked before i
     await page.setViewport({ width: 1280, height: 1400 });
     await page.goto(`${origin}/gallery.html?frame=agent&gepa=held`, { waitUntil: 'networkidle0' });
 
-    // The loaded panel; its Evolution section starts folded.
     const panel = '[data-gallery-panel^="Loaded — everything"]';
-    await page.click(`${panel} [data-section="evolution"] > button[aria-expanded="false"]`);
     await page.waitForSelector(`${panel} [data-gepa-run="gepa_2"]`);
 
     // gepa_2's candidates are held; gepa_1, picked after it, answers first.

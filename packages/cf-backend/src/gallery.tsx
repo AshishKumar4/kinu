@@ -35,7 +35,7 @@ import Sidebar from "@/components/Sidebar";
 import { KinuLogo, KinuMark } from "@/components/ui/KinuLogo";
 import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
-import { Composer, useProviderWaitNotice, type ComposerNotice } from "@/components/Composer";
+import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import type { WorkMode } from "@kinu.run/core";
 import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
 import { NodeTranscript } from "@/components/NodeTranscript";
@@ -64,7 +64,7 @@ import { useKinu } from "@/hooks/use-kinu";
 import type { SubordinateSnapshot } from "@/hooks/use-chat-owner";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
-import WorkspacePage, { ConversationSkeleton, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
+import WorkspacePage, { ConversationSkeleton, EmptyConversation, turnEndNotices } from "@/pages/WorkspacePage";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useTheme } from "@/hooks/use-theme";
@@ -2005,6 +2005,49 @@ const REFUSED_THREAD: UIMessage[] = [
   }),
 ];
 
+/* `?transcript=refused-provider`: a turn Workers AI refused for its per-minute limit, its work above the refusal. */
+const PROVIDER_REFUSED_THREAD: UIMessage[] = [
+  msg({ id: "rp-u1", role: "user", createdAt: NOW - 4 * 60e3, parts: [{ type: "text", text: "Open example.com in the computer's own browser and show me its desktop." }] }),
+  msg({
+    id: "rp-a1", role: "assistant", createdAt: NOW - 4 * 60e3,
+    parts: [
+      { type: "text", text: "Xvfb is installed. Starting the virtual display, then Chromium on the computer's own desktop." },
+      { type: "tool-shell", toolCallId: "rp-c1", state: "output-available", input: { command: "Xvfb :99 -screen 0 1280x800x24 &" }, output: "" },
+      { type: "tool-shell", toolCallId: "rp-c2", state: "output-available", input: { command: "DISPLAY=:99 chromium --no-sandbox https://example.com &" }, output: "" },
+    ],
+    metadata: {
+      [TURN_FAILURE_METADATA_KEY]: "calling the model: the provider refused the request (HTTP 429, workers-ai).: Workers AI API error (429 Too Many Requests): "
+        + '{"name":"AiError","internalCode":3021,"httpCode":429,"message":"AiError: AiError: rate limiting: inference request per min rate reached (c24bf08b-a085-461b-8097-4668897f4a8e)","description":"rate limiting: inference request per min rate reached","requestId":"c24bf08b-a085-461b-8097-4668897f4a8e"}',
+    },
+  }),
+];
+
+/* `?transcript=pictures`: answers that name pictures, on every machine, and the tool that took one. The gallery has
+ * no file route; a shot of this frame answers `/api/workspaces/<name>/files` itself. */
+const PICTURES_THREAD: UIMessage[] = [
+  msg({ id: "pc-u1", role: "user", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "What's on example.com? Show me." }] }),
+  msg({
+    id: "pc-a1", role: "assistant", createdAt: NOW - 6 * 60e3,
+    parts: [
+      { type: "text", text: "Let me take a screenshot to see it." },
+      {
+        type: "tool-web", toolCallId: "pc-c1", state: "output-available", input: { op: "screenshot", url: "https://example.com" },
+        output: { url: "https://example.com/", retrievedAt: "2026-10-13T20:35:56Z", path: "/home/main/screenshots/example.com-20261013T203556Z-ux25.png" },
+      },
+      { type: "text", text: "It is IANA's placeholder page: one heading, two sentences about using the domain in examples, and a link to more information." },
+    ],
+  }),
+  msg({ id: "pc-u2", role: "user", createdAt: NOW - 3 * 60e3, parts: [{ type: "text", text: "Compare latency before and after the fix, and show me the computer's desktop." }] }),
+  msg({
+    id: "pc-a2", role: "assistant", createdAt: NOW - 3 * 60e3,
+    parts: [
+      { type: "text", text: "p95 fell from 540 ms to 230 ms. The charts are `bench/latency-before.png` and `bench/latency-after.png`." },
+      { type: "text", text: "The computer's browser renders the fix at `/computer/home/desktop.png`. Yesterday's capture, `screenshots/checkout-old.png`, is gone." },
+      { type: "text", text: "The reference render is https://upload.wikimedia.org/example/example-domain.png." },
+    ],
+  }),
+];
+
 /** What the workspace's agent asked its owner: a single choice with previews, and a multiple choice. */
 const GALLERY_ASK = {
   questions: [
@@ -2097,6 +2140,10 @@ function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "asked") seedGalleryChat(ASKED_THREAD);
 
   if (transcript === "refused") seedGalleryChat(REFUSED_THREAD);
+
+  if (transcript === "refused-provider") seedGalleryChat(PROVIDER_REFUSED_THREAD);
+
+  if (transcript === "pictures") seedGalleryChat(PICTURES_THREAD);
 
   if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
 
@@ -3618,18 +3665,31 @@ const TRANSCRIPTS = {
 
 const TRANSCRIPT_BY_NODE = new Map<string, NodeTranscriptView>(Object.entries(TRANSCRIPTS));
 
-/** Satisfaction per day, as `getQuality` answers: two weeks rated, the newest day with no turns yet. */
-const QUALITY_DAYS = Array.from({ length: 14 }, (_, i) => {
-  const mean = 3.1 + i * 0.07;
-  const rated = 6 + (i % 4);
+/** Satisfaction per day, as `getQuality` answers: thirty UTC days, a few weekends nobody rated. */
+const QUALITY_DAYS = Array.from({ length: 30 }, (_, i) => {
+  const day = new Date(NOW - (29 - i) * 864e5).toISOString().slice(0, 10);
+
+  if ([2, 3, 9, 10, 16, 17, 23].includes(i)) {
+    return { day, satisfaction: { mean: 0, lo: 0, hi: 0, n: 0 }, corrected: { mean: 0, lo: 0, hi: 0, n: 0 }, rated: 0, thumbs: 0, turns: 0 };
+  }
+
+  const mean = 3.1 + i * 0.045;
+  const rated = 3 + (i % 4);
 
   return {
-    day: new Date(NOW - (13 - i) * 864e5).toISOString().slice(0, 10),
+    day,
     satisfaction: { mean, lo: mean - 0.45, hi: Math.min(5, mean + 0.4), n: rated },
-    corrected: { mean: 0.3 - i * 0.015, lo: 0.1, hi: 0.5, n: rated },
-    rated, thumbs: i % 3, turns: rated + 3,
+    corrected: { mean: Math.max(0, 0.3 - i * 0.01), lo: 0.05, hi: 0.5, n: rated },
+    rated, thumbs: i % 3, turns: rated + 2,
   };
 });
+
+/** The last seven of those days summed, as `getQualityWindow` answers. */
+const QUALITY_WINDOW = {
+  from: QUALITY_DAYS.at(-7)?.day ?? "", to: QUALITY_DAYS.at(-1)?.day ?? "",
+  satisfaction: { mean: 4.2, lo: 3.8, hi: 4.5, n: 26 }, corrected: { mean: 0.12, lo: 0.04, hi: 0.3, n: 26 },
+  rated: 26, thumbs: 6, turns: 35,
+};
 
 const GEPA_RUNS = [
   { runId: "gepa_2", target: "scaffold", startedAt: NOW - 3 * 864e5, status: "completed", winnerId: "cand_2b", iterations: 6, metricCalls: 48 },
@@ -3657,6 +3717,8 @@ const GEPA_OLDER_DETAIL = {
 
 const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
+
+  if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
 
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
 
@@ -4034,12 +4096,14 @@ function ChatMessages() {
         </div>
       ))}
       <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-device", lastSeenAt: NOW }]} />
-      <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
-      {/* The runtime refusing this tab, as `sunlit-stone-4a20` answers a resume ACK. */}
-      <ChatErrorCard message="Unauthorized" refused streaming={false} onRetry={() => {}} onDismiss={() => {}} />
     </div>
   );
 }
+
+/** A settled chat with nothing to say about how its last turn ended. */
+const NO_TURN_END = {
+  newest: undefined, live: false, retryOwed: false, dismissed: null, retry: () => {}, dismiss: () => {}, clearChatError: () => {},
+} as const;
 
 function Shell(
   {
@@ -4142,7 +4206,12 @@ function ChatFrame() {
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryWorkspaceHeader />
         <ChatMessages />
-        <GalleryComposer notices={REFRESH_NOTICE} />
+        <GalleryComposer notices={[
+          ...REFRESH_NOTICE,
+          ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "fetch failed: provider stream reset before completion (anthropic/claude-opus-4)", refused: false } }),
+          // The runtime refusing this tab, as `sunlit-stone-4a20` answers a resume ACK.
+          ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "Unauthorized", refused: true } }),
+        ]} />
       </div>
     </div>
   );
@@ -4681,6 +4750,8 @@ function QualityRetryFrame() {
 
       return rpcResult(QUALITY_DAYS).json<T>();
     }
+
+    if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
 
     return stubRpc<T>(method);
   }, []);
@@ -5360,7 +5431,8 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   return workRpc<T>(method, args);
 };
 
-/** Both reads refuse, so Now and the journal each owe a retry; the running job is a prop, so Now still shows it. */
+/** Both reads refuse: Now owes the plan read's retry, and the changelog's is the Agent tab's. The running job is a prop,
+ *  so Now still shows it. */
 const failedReadsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") throw new Error("plan fixture failed");
 
@@ -6386,15 +6458,10 @@ function AgentPanel(
   return (
     <section data-gallery-panel={label} className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
       <div className="p-eyebrow">{label}</div>
-      <GalleryComposer notices={banner
-        ? [{ id: "load", tone: banner.severity === "blocking" ? "danger" : "warning",
-             title: banner.title, text: banner.scope === "" ? undefined : banner.scope,
-             detail: banner.detail === "" ? undefined : banner.detail,
-             action: banner.retry === null ? undefined : { label: banner.retry, onClick: () => {} } }]
-        : []} />
+      <GalleryComposer notices={banner ? [workspaceLoadNotice(banner, () => {})] : []} />
       <AgentSurface
-        snapshot={snapshot} memory={[]} memoryContent={memoryContent}
-        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc}
+        snapshot={snapshot} memory={WORK_MEMORIES} memoryContent={memoryContent}
+        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc} workspace={WORKSPACE_PAGE_NAME}
       />
     </section>
   );
@@ -7203,6 +7270,10 @@ function QualityLiveFrame() {
   const state = useKinu(WORKSPACE_PAGE_NAME);
 
   const rpc = useMemo<Rpc>(() => async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method === "getQualityWindow") {
+      return rpcResult({ ...QUALITY_WINDOW, rated: QUALITY_WINDOW.rated + qualityLiveRatings, turns: QUALITY_WINDOW.turns + qualityLiveRatings }).json<T>();
+    }
+
     if (method !== "getQuality") return workspacePageRpc<T>(method, args);
     const today = QUALITY_DAYS.at(-1);
 

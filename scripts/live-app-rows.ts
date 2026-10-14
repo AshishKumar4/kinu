@@ -31,7 +31,7 @@ import {
   SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, LOGO_WAITED_MISSION, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
+  startScriptedModel, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
@@ -1681,7 +1681,15 @@ export interface ProviderWaitVerdict {
   readonly duringTurn: readonly string[];
   /** As that turn's answer ended. */
   readonly afterTurn: readonly string[];
+  /** A turn whose provider refused every call for a minute, stating no wait: whether it answered or stopped on the
+   *  refusal, and what the composer said while it waited. */
+  readonly minute: { readonly answered: boolean; readonly stopped: boolean; readonly notices: readonly string[] };
 }
+
+const MINUTE_ANSWERED = `(${ANSWER_BLOCKS}).at(-1) === ${JSON.stringify(`P:${MINUTE_WAITED_OUT}`)} && !(${STOP_OFFERED})`;
+
+/** The minute-limited turn ended, answered or stopped on a recorded failure: the row's turns before it failed none. */
+const MINUTE_SETTLED = `(${MINUTE_ANSWERED}) || (document.querySelector('#chat [data-turn-failure]') !== null && !(${STOP_OFFERED}))`;
 
 const COMPOSER_NOTICES = `[...document.querySelectorAll('#chat [data-composer-root] [role="status"]')].map((notice) => (notice.textContent ?? '').trim())`;
 
@@ -1736,8 +1744,21 @@ async function measureProviderWait(newPage: LiveApp['newPage'], origin: string, 
     await page.evaluate(RECORD_NOTICES);
     await sendInChat(page, WAITED_TURN_ASK);
     await until(page, 'the waited turn to answer', TURN_ANSWERED);
+    const duringTurn = await noticesRead(page, 'window.__notices');
+    const afterTurn = await noticesRead(page, COMPOSER_NOTICES);
 
-    return { whileLogoWaited, duringTurn: await noticesRead(page, 'window.__notices'), afterTurn: await noticesRead(page, COMPOSER_NOTICES) };
+    await page.evaluate(RECORD_NOTICES);
+    await sendInChat(page, MINUTE_LIMITED_ASK);
+    // A stopped turn is an outcome here, not a dead end: `until` would end the row on it.
+    await named('the minute-limited turn to settle', () => page.waitForFunction(MINUTE_SETTLED, { polling: 100 }));
+
+    const minute = {
+      answered: v.parse(v.boolean(), await page.evaluate(MINUTE_ANSWERED)),
+      stopped: v.parse(v.boolean(), await page.evaluate(`document.querySelector('#chat [data-turn-failure]') !== null`)),
+      notices: await noticesRead(page, 'window.__notices'),
+    };
+
+    return { whileLogoWaited, duringTurn, afterTurn, minute };
   } finally {
     await page.close();
   }

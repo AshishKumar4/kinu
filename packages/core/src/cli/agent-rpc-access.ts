@@ -27,6 +27,7 @@ export const AGENT_RPC_ACCESS = {
   getMctsTree: 'workspace.read',
   getMemoryContent: 'workspace.read',
   getQuality: 'workspace.read',
+  getQualityWindow: 'workspace.read',
   getRunTimeline: 'workspace.read',
   getSearchTree: 'workspace.read',
   getActivePlanReview: 'workspace.read',

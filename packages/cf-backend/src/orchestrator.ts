@@ -139,7 +139,7 @@ import {
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
-  qualitySeries, type QualityDay, ratingQuality, thumbsRating, listThumbs,
+  qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   listAlternateTakeSets, latestAlternateTakeSet,
@@ -5082,6 +5082,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async getQuality(days = 30): Promise<QualityDay[]> {
     return qualitySeries(this.boundSql, this.actorHandle(), { days });
+  }
+
+  /** The last `days` UTC days summed over every rating in them: the Agent tab's verdict. It moves with `getQuality`. */
+  @callable()
+  async getQualityWindow(days = 7): Promise<QualityWindow> {
+    return qualityWindow(this.boundSql, this.actorHandle(), { days });
   }
 
   /** One GEPA run with candidates and Pareto-front membership; Maps flattened to objects for RPC. */
