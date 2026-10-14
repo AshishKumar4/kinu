@@ -216,6 +216,21 @@ describe('a stop', () => {
     expect(atCommit.filter((step) => step.startsWith('save:'))).toEqual([`save:${FIRST_SESSION.id} ${opened.id}`]);
   });
 
+  test('then a session closed before the next start loses what was saved of it, before any attach can show it', async () => {
+    const { box, container } = harness(SessionBox);
+    await box.devboxStartup();
+    await container.stop();
+
+    await box.closeTerminalSession(FIRST_SESSION.id);
+    expect(container.sequence.filter((step) => step.startsWith('forget:'))).toEqual([]);
+    await box.devboxStartup();
+
+    expect(container.sequence.filter((step) => step.startsWith('forget:'))).toEqual([`forget:${FIRST_SESSION.id}`]);
+    await container.stop();
+    await box.devboxStartup();
+    expect(container.sequence.filter((step) => step.startsWith('forget:'))).toHaveLength(1);
+  });
+
   test('that cannot save the sessions still stops: they open fresh', async () => {
     const saved = harness(SessionBox);
     const unsaved = harness(SessionBox);

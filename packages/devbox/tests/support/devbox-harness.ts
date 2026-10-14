@@ -1063,6 +1063,12 @@ export class FakeSandbox {
       return processResult(Promise.resolve(this.sessionsSave), pid);
     }
 
+    if (args[3] === 'sessions-forget') {
+      this.sequence.push(`forget:${args.slice(4).join(' ')}`);
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
+
     if (args[3] === 'devbox-reset') {
       this.sequence.push(`reset:${args[4] ?? ''}`);
 
