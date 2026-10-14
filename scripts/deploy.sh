@@ -1153,18 +1153,20 @@ fi
 # is a red of this deploy whatever its tests said, in the report under
 # `telemetry` (L18); so is telemetry it cannot read, and telemetry whose reads
 # still disagree after an hour. Its window ends when the wave's last row that
-# drove the deployment did (the ladder's `traffic` mark), not at its verdict: every
-# row of the window's events has landed ten minutes after its end
+# drove the deployment did (the ladder's `traffic` mark), not at its verdict:
+# 99.96% of a window's rows have landed three minutes after its end
 # (`SETTLE_HOLD_MS`), so the first read then that agrees with the one before it
-# settles it, and the rows that drove nothing, the devbox contracts on their
-# own Worker and the source rows, run out inside that wait. With no such row,
-# the window ends now.
+# settles it. The rest are read by later deploys: this one keeps its window in
+# the releases bucket and reads again every window earlier deploys kept, so a
+# row that landed late is a red of this report, named for its version
+# (scripts/telemetry-windows.ts). With no row that drove the deployment, the
+# window ends now.
 if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
   echo ""
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
   KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
   bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
-    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} || KINU_REDS=1
+    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" || KINU_REDS=1
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────
