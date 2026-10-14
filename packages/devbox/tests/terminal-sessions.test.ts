@@ -2,8 +2,11 @@
 // prints them; the product flow `computer-sessions` reads a real computer's.
 import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 
-import { FIRST_SESSION, mergeSessions, newSessionId, newSessionName, parseSessionsRead } from '../src/sessions';
+import type { DiskChain, DiskChainPorts } from '../src/disk-chain';
+
+import { FIRST_SESSION, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName, parseSessionsRead } from '../src/sessions';
 import { harness } from './support/devbox-harness';
 
 class SessionBox extends TestDevbox<unknown> {
@@ -16,10 +19,13 @@ class SessionBox extends TestDevbox<unknown> {
 /** A record as tmux's `#{q:…}` writes it: a backslash before each space and backslash in a field, fields space-separated. */
 const row = (...fields: Array<string | number>) => fields.map((field) => String(field).replace(/[\\ ]/gu, '\\$&')).join(' ');
 
+/** A line as the session's rc stores it (D97). */
+const stored = (line: string) => Buffer.from(line).toString('base64');
+
 const READ = [
-  row('P', 'shell', '/workspace/storefront', 'bash', 0, 1_791_900_000, 'git status'),
+  row('P', 'shell', '/workspace/storefront', 'bash', 0, 1_791_900_000, stored('git status')),
   row('P', 's2', '/workspace/storefront', 'node', '', '', ''),
-  row('P', 's3', '/tmp', 'bash', 2, 1_791_900_060, 'npx vitest run'),
+  row('P', 's3', '/tmp', 'bash', 2, 1_791_900_060, stored('npx vitest run')),
   row('L', 's2', 5173),
   row('L', 's2', 5173),
   row('L', 'nobody', 8080),
@@ -44,14 +50,21 @@ describe('a read of the running sessions', () => {
     expect(read.get('s2')).toMatchObject({ running: 'node', last: null });
   });
 
+  test('a session whose foreground reads its terminal needs input; one at its own prompt does not', () => {
+    const waiting = parseSessionsRead([READ, row('W', 's2')].join('\n'));
+
+    expect(waiting.get('s2')?.needsInput).toBe(true);
+    expect(waiting.get('shell')?.needsInput).toBe(false);
+  });
+
   // tmux writes a field's special characters escaped (measured through real tmux 3.6): any folder or command reads
   // back whole, a marker or a separator in it included.
-  test('a folder and a command with spaces, quotes, backslashes and markers in them read back whole', () => {
+  test('a folder and a command with spaces, quotes, backslashes, markers and lines in them read back whole', () => {
     const folder = '/workspace/two words/<<kinu>>/a"b\'c $x \\t';
-    const command = `printf '%s' '<<kinu>>' | tr x y; echo "a b" \\ end`;
+    const command = `printf '%s' '<<kinu>>' | tr x y; echo "a b\n\u00e9" \\ end;`;
 
     const odd = parseSessionsRead([
-      String.raw`P shell /workspace/two\ words/\<\<kinu\>\>/a\"b\'c\ \$x\ \\t bash 1 1700000000 printf\ \'\%s\'\ \'\<\<kinu\>\>\'\ \|\ tr\ x\ y\;\ echo\ \"a\ b\"\ \\\ end`,
+      String.raw`P shell /workspace/two\ words/\<\<kinu\>\>/a\"b\'c\ \$x\ \\t bash 1 1700000000 ` + stored(command),
       String.raw`B /workspace/two\ words/<<kinu>>/a"b'c\ $x\ \\t feat/x`,
     ].join('\n'));
 
@@ -71,10 +84,13 @@ describe('the recorded sessions', () => {
     expect(left).toMatchObject({ id: 's4', name: 'deploy', cwd: '/srv', open: false, running: null, ports: [] });
   });
 
-  test('a new session takes an unused id and the next free name', () => {
+  test('a new session takes an id no session had, and the next free name', () => {
     const records = [FIRST_SESSION, { id: 's2', name: 'shell 2', cwd: '/' }];
+    const ids = new Set(Array.from({ length: 50 }, () => newSessionId(records)));
 
-    expect(newSessionId(records)).toBe('s3');
+    // A closed session's id stays free of its saved screen (D97) only if no later session takes it.
+    expect(ids.size).toBe(50);
+    expect([...ids].filter((id) => records.some((record) => record.id === id) || !/^[a-z0-9][a-z0-9-]{0,31}$/u.test(id))).toEqual([]);
     expect(newSessionName(records)).toBe('shell 3');
     expect(newSessionName([{ id: 's2', name: 'dev', cwd: '/' }])).toBe('shell');
   });
@@ -84,7 +100,7 @@ describe("the box's sessions", () => {
   test('a box that is not running is not woken to list them: the first session reads as left', async () => {
     const { box, container } = harness(SessionBox);
 
-    expect(await box.terminalSessions()).toEqual([{ ...FIRST_SESSION, open: false, running: null, last: null, ports: [], branch: null }]);
+    expect(await box.terminalSessions()).toEqual([{ ...FIRST_SESSION, open: false, running: null, last: null, ports: [], branch: null, needsInput: false }]);
     expect(container.sequence.includes('sessions')).toBe(false);
   });
 
@@ -124,5 +140,110 @@ describe("the box's sessions", () => {
     await expect(box.openTerminalSession('   ')).rejects.toMatchObject({ code: 'invalid-input' });
     await expect(box.renameTerminalSession(FIRST_SESSION.id, 'x'.repeat(41))).rejects.toMatchObject({ code: 'invalid-input' });
     await expect(box.closeTerminalSession('s9')).rejects.toMatchObject({ code: 'invalid-input' });
+  });
+});
+
+// D95: an agent's job runs in a session of its own, listed beside the person's and marked as the agent's.
+describe("an agent's job", () => {
+  test('is listed as a session named by what it runs, marked with its job, and the job names its session', async () => {
+    const { box } = harness(SessionBox);
+    await box.devboxStartup();
+
+    const { processId } = await box.startSupervised('npm run dev -- --port 5173', '/workspace');
+    const sessions = await box.terminalSessions();
+
+    expect(sessions.find((session) => session.job === processId)).toMatchObject({ id: jobSessionId(processId), name: 'npm run dev -- --port 5173' });
+    expect((await box.listSupervised()).find((listed) => listed.processId === processId)?.session).toBe(jobSessionId(processId));
+  });
+
+  test('its session goes when the job is stopped, and closing its session stops the job', async () => {
+    const { box } = harness(SessionBox);
+    await box.devboxStartup();
+
+    const first = await box.startSupervised('npm run dev', '/workspace');
+    const second = await box.startSupervised('npx vitest --watch', '/workspace');
+
+    await box.stopSupervised(first.processId);
+    await box.closeTerminalSession(jobSessionId(second.processId));
+
+    expect((await box.terminalSessions()).map((session) => session.id)).toEqual([FIRST_SESSION.id]);
+    // A stopped job keeps its record of how it ended, but no spec brings it back.
+    expect((await box.listSupervised()).filter((listed) => listed.restartable)).toEqual([]);
+  });
+
+  // devbox-e2e on c55bf8f34: the job's session, open on a real box, read back without its job.
+  test('its session stays marked with its job while it is open', () => {
+    const record = { id: jobSessionId('JOB-1'), name: 'npm run dev', cwd: '/workspace', job: 'JOB-1' };
+    const [open] = mergeSessions([record], parseSessionsRead(row('P', record.id, '/workspace/app', 'node', '', '', '')));
+
+    expect(open).toMatchObject({ id: record.id, name: 'npm run dev', job: 'JOB-1', open: true, cwd: '/workspace/app' });
+  });
+
+  test("a job's session id is one tmux takes unquoted, and a long command names it in 40 characters", () => {
+    expect(jobSessionId('4F0C9A2E-77D1-4F5B-9A63-0B2F6F0E1C55')).toMatch(/^[a-z0-9][a-z0-9-]{0,31}$/u);
+    expect(jobSessionName(`node ${'a'.repeat(60)}`)).toHaveLength(40);
+  });
+});
+
+// D97: a stopping box keeps what each session showed and was running; the next attach shows it, and offers the line.
+describe('a stop', () => {
+  test("keeps every recorded session's screen and line before its checkpoint commits the disk", async () => {
+    let sequence: readonly string[] = [];
+    let atCommit: readonly string[] = [];
+
+    class CommittingBox extends SessionBox {
+      protected override diskChain(ports: DiskChainPorts): DiskChain {
+        const chain = super.diskChain(ports);
+
+        return {
+          ...chain,
+          commit: (kind) => Effect.suspend(() => {
+            atCommit = [...sequence];
+
+            return chain.commit(kind);
+          }),
+        };
+      }
+    }
+
+    const { box, container } = harness(CommittingBox);
+    sequence = container.sequence;
+    await box.devboxStartup();
+    const opened = await box.openTerminalSession();
+
+    await box.quiesce();
+
+    expect(atCommit.filter((step) => step.startsWith('save:'))).toEqual([`save:${FIRST_SESSION.id} ${opened.id}`]);
+  });
+
+  test('then a session closed before the next start loses what was saved of it, before any attach can show it', async () => {
+    const { box, container } = harness(SessionBox);
+    await box.devboxStartup();
+    await container.stop();
+
+    await box.closeTerminalSession(FIRST_SESSION.id);
+    expect(container.sequence.filter((step) => step.startsWith('forget:'))).toEqual([]);
+    await box.devboxStartup();
+
+    expect(container.sequence.filter((step) => step.startsWith('forget:'))).toEqual([`forget:${FIRST_SESSION.id}`]);
+    await container.stop();
+    await box.devboxStartup();
+    expect(container.sequence.filter((step) => step.startsWith('forget:'))).toHaveLength(1);
+  });
+
+  test('that cannot save the sessions still stops: they open fresh', async () => {
+    const saved = harness(SessionBox);
+    const unsaved = harness(SessionBox);
+    await saved.box.devboxStartup();
+    await unsaved.box.devboxStartup();
+    unsaved.container.sessionsSave = { stdout: '', stderr: 'tmux: no server', exitCode: 1 };
+
+    expect((await unsaved.box.quiesce()).kind).toBe((await saved.box.quiesce()).kind);
+
+    const gone = harness(SessionBox);
+    await gone.box.devboxStartup();
+    gone.container.sessionsSave = 'gone';
+
+    expect((await gone.box.quiesce()).kind).toBe((await saved.box.quiesce()).kind);
   });
 });

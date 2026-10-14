@@ -4804,6 +4804,24 @@ answered "A startup is armed, so ask again", armed its startup 20 times and file
 every other contract and the cleanup passed. In the unit test on `7ce7f4a31`, a minute of alarms configured the box
 61 times and filed 61 incidents.
 
+D95. An agent's long-running job runs in a terminal session a person can open and answer (2026-10-14; the owner
+approved the Environments design's question 1). `computer.startProcess` keeps its tool and its answer; its job now
+starts in a recorded tmux session of its own (`j-` and its process id), named by what it runs and marked as the
+agent's. The launch keeps Processes' contract (the pid with its boot id, the exit marker, the kill tree, restore's
+replay into the same session) and changes where the job's terminal is: tmux opens a pane that waits until
+`pipe-pane` copies it to the job's one log (stdout and stderr together, as a terminal shows them), shows the
+command, runs it in the foreground of the pane's terminal, records how it ended, and leaves the session's shell under
+its output. Measured on a real platform box, in a tmux pane: a program at a prompt is in `read(0)` on the pane's pts
+(`/proc/<pid>/syscall` `0 0x0`, wchan `wait_woken`); the shell at its own prompt is in `pselect` (270) and `sleep` in
+`nanosleep` (230). So the sessions read marks a session needs input when a process in its pane's foreground group
+reads fd 0 from a pts, and the job's status reads `waiting for input` with the last line it wrote, colours stripped,
+when a process in its tree does the same. A typed answer reaches it: `tmux send-keys` was read by the waiting program,
+which ended 0. Its stdin stays open, as the owner chose: the agent sees the wait in `computer.listProcesses` and is
+told to ask the person, or to answer through the session with `exec` when the answer is its to give. Stopping the job
+ends its session; closing its session stops the job, so a restart does not bring it back. The container tier's
+`agent-job` step runs it on a real box: the prompt read, the session needing input, the answer typed through tmux, the
+job completed and its log holding what it wrote.
+
 D96. The box's kernel answers to its workspace's name again, and the box resolves that name itself (2026-10-14, P0;
 reverses D93's kernel half, which kept the platform's name). D93 measured a renamed kernel's own lookup at ~400 ms to
 fd00::119:1, which is not the box, and kept the platform's name. What D93 did not measure is that name itself: a
@@ -4839,6 +4857,41 @@ first and painted black: it finds the screen through Xinerama, which KasmVNC lac
 every image mode drew nothing while `-solid` worked; measured on a real box, `xwallpaper --zoom` (RandR) and
 `feh --no-xinerama` both put the ground (16, 14, 12) and the glow (42, 33, 24) on the root. The wallpaper's Chromium,
 and its unmeasured 60-second bound, are gone.
+
+D97. A terminal session comes back from its box's restart as it was left: its screen, a rule saying it restarted, and
+the line it was running offered at the prompt (2026-10-14; the design approved with two changes: the line goes into
+readline, never into the terminal as text, and the proof is the container tier's). No process survives a stop. CRIU
+4.1.1 installs on a box (Debian 13, 9.1 s from apt) and cannot run on its kernel, 6.18.54-cloudflare-microvm: `criu
+check` stops at "sys/kernel/ns_last_pid sysctl is inaccessible", and `criu dump` of a counting shell at "kcmp failed:
+... Function not implemented". The kernel has neither, so what comes back is what a person needs to carry on.
+
+As a box stops, before its checkpoint commits, it saves each recorded session tmux has live under
+`/var/lib/devbox/sessions/<id>`: the last 2000 lines of its screen with their colours (`capture-pane -e -J`), the time,
+and the line it was running. The rootfs carries them (D55). The line comes from the session's rc: bash expands `PS0`
+after it reads a line and before it runs it, and `PS0` stores the line on the pane; the next prompt clears it. Only a
+line the history numbered is stored: under `ignorespace`, `HISTIGNORE` or history off the last entry is another line,
+and a line kept out of the history is the person's to keep. Lines
+ride base64 in tmux options, as `@kinu_last` now does too: tmux 3.6 reads an argument that ends in `;` as a command
+separator, measured. Each session's save is written aside and put in place whole; one whose screen does not read keeps
+what it had, and the save fails. A save that fails is traced (`devbox.sessions.unsaved`) and the stop goes on; the
+sessions then open fresh in their folders, as before.
+
+The next attach of a session with a saved screen opens its pane with the screen, then the rule
+`-- restarted HH:MM · files kept --` (plain ASCII dashes: agents read the screen, and `gate:model-text` keeps model
+text to Latin-1), then `was running: <line>`. The pane sends the key chord C-x C-], which the rc
+binds (`bind -x`) to a function that sets `READLINE_LINE` from the saved line and deletes it. So the line is in the
+shell's edit buffer, whatever quotes, `$()`, `;` or newlines it holds, and runs only on the person's Enter, once. The
+chord waits in the terminal until readline reads it, and the terminal echoes what waits, so the pane turns `echoctl`
+off until the prefill turns it on again; no `^X` shows. An agent's job (D95) runs again from its spec in its session,
+whose pane shows the screen and the rule and offers no line. Environment variables, shell functions and anything a
+process held in memory do not come back. A session closed while its box is stopped keeps its saved screen until the
+box's next start removes it, before any attach: the first session comes back under its own id when the last is
+closed, and must not inherit it. New session ids are random, so no other session takes a closed one's.
+
+Measured on tmux 3.6 locally with the shipped scripts: a line with quotes, `$(touch marker)`, `;` and a quoted newline,
+typed and left running; the save; the server killed; the resumed pane showed the screen, the rule and the line at the
+prompt, with no marker and no `^X`; one Enter ran it once. The container tier's `resurrect` step does the same on a
+real box through the product's terminal route, across a real stop and start.
 
 ## Open
 

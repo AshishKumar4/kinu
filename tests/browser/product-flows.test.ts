@@ -19,10 +19,10 @@ import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   openWaitsNamed, slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
-  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, reopenedWorkspaceRunsTheDeployedBuild, computerSessionsComeBackByName,
+  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, reopenedWorkspaceRunsTheDeployedBuild, computerSessionsComeBackByName, agentJobIsAnsweredInItsSession,
   type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
-  type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type ReopenVerdict, type SessionsVerdict,
+  type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type ReopenVerdict, type SessionsVerdict, type AgentJobVerdict,
 } from '../../scripts/product-flows';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
@@ -665,5 +665,21 @@ describe(productFlowTestName('computer-sessions', "the computer's sessions come 
 
     expect(sessions.namesAfter).toContain('web');
     expect(sessions.folderAfter).toBe('/workspace/flow-web');
+  });
+});
+
+// An agent's job waits at a prompt in a session the person opens and answers.
+describe(productFlowTestName('agent-job', "an agent's job is answered in its session"), () => {
+  let observed: AgentJobVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('agent-job', agentJobIsAnsweredInItsSession);
+  });
+
+  test('its session was marked as waiting, and an answer typed there reached the job', () => {
+    const job = verdictOf(observed, 'agent-job');
+
+    expect(job.markedWaiting).toBe(true);
+    expect(job.answered).toBe(true);
   });
 });
