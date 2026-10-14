@@ -656,11 +656,17 @@ async function main(): Promise<void> {
         shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
       }
 
+      const read = shell$?.open === true && shell$.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT);
+
+      // On a miss, what the box holds: the pane's screen, its processes, and the read's own rows.
+      const seen = read ? '' : await shell(
+        `tmux capture-pane -p -t '=shell:' | grep -v '^$' | tail -5; tmux list-panes -a -F '#{pane_pid} #{pane_current_command}'; ps -eo pid,ppid,pgid,comm | tail -12; true`,
+        names[1],
+      );
+
       await shell("tmux kill-session -t '=shell' 2>/dev/null; true", names[1]);
 
-      if (shell$?.open !== true || shell$.cwd !== SESSION_FOLDER || !shell$.ports.includes(SESSION_PORT)) {
-        throw new Error(`a session running a server in ${SESSION_FOLDER} on :${String(SESSION_PORT)} read ${JSON.stringify(shell$)}`);
-      }
+      if (!read) throw new Error(`a session running a server in ${SESSION_FOLDER} on :${String(SESSION_PORT)} read ${JSON.stringify(shell$)}; the box: ${seen}`);
 
       return shell$;
     });
