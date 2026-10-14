@@ -121,13 +121,24 @@ const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 /** `&env=computer`: the workspace shell with its computer up, so Environment shows its terminal and its desktop. */
 const SHELL_COMPUTER = frame === "workspaceshell" && new URLSearchParams(location.search).get("env") === "computer";
 
-/** The shell's machines under `&env=computer`, as `listMounts` and the snapshot's executors answer them. */
+/** The owner's PC in the Environment frames: the account's device row that `ENVIRONMENT_EXECUTORS`' device names. */
+const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
+
+/** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
+const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
+
+/** The shell's machines under `&env=computer` or `&pc=`, as `listMounts` and the snapshot's executors answer them. */
 const SHELL_MACHINES = {
   mounts: [
     { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
     { name: "computer", prefix: "computer.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
+    ...(SHELL_PC === null ? [] : [{ name: "device", prefix: "device.*", live: SHELL_PC !== "offline", policy: { readOnly: false, consistency: "live-shared" }, reason: null }]),
   ],
   executors: [
+    ...(SHELL_PC === null ? [] : [{
+      name: "device", kind: "device", available: SHELL_PC !== "offline", configured: true, active: SHELL_PC !== "offline", status: "active", label: GALLERY_PC.label,
+      capabilities: ["shell", "npm", "git", "fs_owned", "process_spawn"],
+    }]),
     {
       name: "computer", kind: "computer", available: true, configured: true, active: true, status: "active",
       capabilities: ["shell", "npm", "git", "fs_owned", "net_inbound", "process_long"],
@@ -1128,7 +1139,40 @@ function galleryUploadFixture(path: string, method: string): Response | null {
   return new Response('{"ok":true,"revision":8}', { headers: { "content-type": "application/json" } });
 }
 
+/** The PC this workspace holds: `&pc=ungranted` starts without, and the Env tab's one click grants it. */
+let galleryPcGranted = (SHELL_PC ?? "granted") !== "ungranted";
+
+/**
+ * The owner's account in the Environment frames: one PC, connected unless `&offline=device` or `&pc=offline`, held by
+ * the frame's workspace unless `&pc=ungranted`. Null outside those frames and under the connect rig's own roster.
+ */
+function accountMachinesFixture(asked: string, method: string): Response | null {
+  // The path as asked, query and all: a grant names its workspace in `?agentName=`.
+  const path = asked.split("?")[0] ?? asked;
+
+  if ((frame !== "environment" && SHELL_PC === null) || connectFixtureActive || !path.startsWith("/api/user/devices")) return null;
+  const query = new URLSearchParams(location.search);
+  const connected = query.get("offline") !== "device" && SHELL_PC !== "offline";
+
+  if (path === "/api/user/devices" && method === "GET") return fixtureJson([galleryConnectDevice(GALLERY_PC.id, GALLERY_PC.label, connected)]);
+
+  if (path === "/api/user/devices/consents" && method === "GET") {
+    return fixtureJson(galleryPcGranted ? [{ agentName: WORKSPACE_PAGE_NAME, deviceId: GALLERY_PC.id, policy: "allow", lastMethod: null, lastSummary: null }] : []);
+  }
+
+  if (path === `/api/user/devices/${GALLERY_PC.id}/consent` && method === "POST") {
+    galleryPcGranted = true;
+
+    return fixtureJson({ agentName: WORKSPACE_PAGE_NAME, deviceId: GALLERY_PC.id, policy: "allow", lastMethod: null, lastSummary: null });
+  }
+
+  return null;
+}
+
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
+  const machines = accountMachinesFixture(path, method);
+
+  if (machines !== null) return Promise.resolve(machines);
   const upload = galleryUploadFixture(path, method);
 
   if (upload !== null) return Promise.resolve(upload);
@@ -1395,7 +1439,7 @@ window.WebSocket = new Proxy(window.WebSocket, {
 
     if (path === ROSTER_SOCKET_ROUTE) return new GalleryRosterSocket();
 
-    if ((frame === "environment" || SHELL_COMPUTER) && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
+    if ((frame === "environment" || SHELL_COMPUTER || SHELL_PC !== null) && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
 
     return protocols === undefined ? new target(url) : new target(url, protocols);
   },
@@ -1530,7 +1574,8 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     memoryContent: "",
     // The full-screen explorer reads its tree off the snapshot.
     mcts: MCTS_ROWS,
-    timeline: [], executors: SHELL_COMPUTER ? SHELL_MACHINES.executors : [], executorOutputs: [], lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
+    timeline: [], executors: SHELL_COMPUTER || SHELL_PC !== null ? SHELL_MACHINES.executors : [], executorOutputs: [],
+    lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
     // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
     chat: {
       name: "checkout-coupon-bug-9935d3", actorId: "agent_01j9x7q2m4checkoutfixes", displayName: "Storefront", role: "default",
@@ -3216,7 +3261,7 @@ const workspacePageRpc: SocketCall = async <T,>(method: string, args?: unknown[]
 
   if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
 
-  if (SHELL_COMPUTER && method === "listMounts") return rpcResult(v.parse(JsonValueSchema, SHELL_MACHINES.mounts)).json<T>();
+  if ((SHELL_COMPUTER || SHELL_PC !== null) && method === "listMounts") return rpcResult(v.parse(JsonValueSchema, SHELL_MACHINES.mounts)).json<T>();
 
   return agentPageFallback<T>(method, args);
 };

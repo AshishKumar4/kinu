@@ -153,6 +153,7 @@ const USER_DO_METHODS = [
   'acknowledgeUnstoppedDevice',
   'cancelDeviceRequestsForAgent',
   'cancelDeviceRequestsForBackgroundJob',
+  'grantDeviceConsent',
   'revokeDeviceConsent',
   'revokeEgressSecret',
   'searchExperience',

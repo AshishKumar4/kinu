@@ -50,6 +50,16 @@ const DESKTOP_FILL = `(() => {
   return Math.max(screen.width / area.width, screen.height / area.height);
 })()`;
 
+/** The owner's PC, by the label the gallery's account gives it. */
+const PC = "Ashish's MacBook";
+
+/** The control `required` names, once it has rendered: a chip or a button that arrives with a read. */
+async function waitForControl(page: Page, scope: string, role: string, name: string): Promise<ElementHandle> {
+  await page.waitForFunction((where, wanted) => [...document.querySelectorAll(`${where} button`)].some((button) => button.textContent?.trim() === wanted), SOON, scope, name);
+
+  return await required(page, scope, role, name);
+}
+
 /** The workspace shell's computer in its Environment panel, at its first session's terminal. */
 async function openTheComputer(page: Page, origin: string): Promise<void> {
   await page.setViewport({ width: 1440, height: 900 });
@@ -286,19 +296,38 @@ describe('the Environment panel', () => {
     });
   });
 
-  test('a PC that is not connected is offered, not listed, and the offer opens the connect panel in place', async () => {
+  // Every machine on the owner's account shows in every workspace (the owner, 2026-10-14): one that is offline says so
+  // in its place, and the panel still offers to connect another.
+  test('a PC on the account that is offline shows in its place, and Connect a PC opens the connect panel there', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
       try {
         await page.setViewport({ width: 1100, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=environment&offline=device`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="workspace"]', SOON);
-
-        expect(await page.$('[data-env-card="device"]')).toBeNull();
+        await (await waitForControl(page, '[data-env-card="device"]', 'button', PC)).click();
+        await page.waitForFunction((name) => document.querySelector('#inspector, body')?.textContent?.includes(`${name} is offline`) === true, SOON, PC);
         await (await required(page, 'body', 'button', 'Connect a PC')).click();
         await page.waitForSelector('[role="dialog"]', SOON);
         expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
+      } finally { await page.close(); }
+    });
+  });
+
+  // Production f9c17ac7b (the owner, 2026-10-14): a PC connected to the account but not yet held by this workspace was
+  // listed nowhere and offered nothing; the owner could reach it only through an agent's approval box.
+  test('a PC this workspace does not hold shows with one click to give it access, and then its terminal', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell&pc=ungranted`, { waitUntil: 'networkidle0' });
+        await page.click('#inspector button[aria-label="Environment"]');
+        await (await waitForControl(page, '#inspector', 'button', PC)).click();
+        await (await waitForControl(page, '#inspector', 'button', 'Give this workspace access')).click();
+        await page.waitForSelector('#inspector .xterm-rows', SOON);
+        expect(await page.$('#inspector [data-env-give-access]')).toBeNull();
       } finally { await page.close(); }
     });
   });

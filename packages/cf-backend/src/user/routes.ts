@@ -37,7 +37,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'setDisplayName' | 'getProfileCatalog' | 'putProfileCatalog'
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
-  | 'setDeviceTier' | 'revokeDeviceConsent'
+  | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
@@ -338,14 +338,31 @@ userRoutes.put('/api/user/devices/:id/sandbox', async (c) => {
   return json({ body: { ok: true } });
 });
 
-userRoutes.delete('/api/user/devices/:id/consent', async (c) => {
+/** One workspace's binding to one machine, named by the path's device and the query's `agentName`. */
+function bindingAsked(c: UserContext): { readonly agentName: string; readonly deviceId: string } | null {
   const agentName = new URL(c.req.url).searchParams.get('agentName')?.trim();
 
-  if (!agentName) return err(400, 'Query must carry ?agentName=');
+  return agentName ? { agentName, deviceId: decodeURIComponent(rawParam(c, 'id')) } : null;
+}
 
-  const result = await c.get('stub').revokeDeviceConsent(
-    c.get('owner'), agentName, decodeURIComponent(rawParam(c, 'id')),
-  );
+// The owner gives this workspace this machine from the workspace's Env tab; the answer is the binding recorded.
+userRoutes.post('/api/user/devices/:id/consent', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const asked = bindingAsked(c);
+
+    return asked === null
+      ? err(400, 'Query must carry ?agentName=')
+      : json({ body: await c.get('stub').grantDeviceConsent(c.get('owner'), asked.agentName, asked.deviceId) });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'giving this workspace the machine', cause }),
+})));
+
+userRoutes.delete('/api/user/devices/:id/consent', async (c) => {
+  const asked = bindingAsked(c);
+
+  if (asked === null) return err(400, 'Query must carry ?agentName=');
+
+  const result = await c.get('stub').revokeDeviceConsent(c.get('owner'), asked.agentName, asked.deviceId);
 
   if (!result.ok) return err(400, 'grant not revoked');
 

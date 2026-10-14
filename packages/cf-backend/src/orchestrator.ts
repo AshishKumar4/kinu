@@ -6761,6 +6761,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   openDeviceTerminal(
     window: { cols: number; rows: number },
+    /** The PC the pane names, when the account has several connected; the one connected without it. */
+    device?: string,
   ): Promise<{ session: string; user: string } | { error: string }> {
     return settle(Effect.suspend(() => {
       const user = this.getOwnerUserId();
@@ -6769,7 +6771,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
       return Effect.matchCause(Effect.promise(async () => this.requireOwnerUserDO().openDeviceTerminal(
-        await this.userCaller(), this.workspaceName(), window,
+        await this.userCaller(), this.workspaceName(), window, device,
       )), {
         onSuccess: (opened) => ({ session: opened.session, user }),
         onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),

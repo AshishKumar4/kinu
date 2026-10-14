@@ -351,7 +351,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           onCount={setChangeCount} />
       </div>
       <ListingStatus error={props.previewError} starting={props.previewStarting} onRetry={props.onRefreshPorts} />
-      {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
+      {connecting && <ConnectDeviceDialog workspace={props.workspace} onClose={closeConnect} />}
     </div>
   );
 }
