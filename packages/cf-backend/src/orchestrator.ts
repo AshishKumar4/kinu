@@ -222,6 +222,7 @@ import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
   EVOLUTION_LANE_FIBER,
+  HeldRead,
   readTurnContinuity,
   unownedWorkspace,
   type ActorDynamicContextExtras,
@@ -3684,11 +3685,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await this.propagateDisplayName(displayName, 'auto');
   }
 
-  /** Per-activation cache of the UserDO-owned title; no local mirror, since other writers commit
-   * to the root. Mutation paths hydrate before deciding. */
-  protected _titleCache: { displayName: string; nameOrigin: NameOrigin } | null = null;
-  /** A null row is an answer too; failures leave this false so the next read retries. */
-  protected _titleHydrated = false;
+  /** The UserDO-owned title as this activation last read or wrote it; no local mirror, since other writers commit to the
+   * root. Mutation paths read it again before deciding. A null row is an answer too; a failed read holds nothing. */
+  private readonly heldTitle = new HeldRead<{ displayName: string; nameOrigin: NameOrigin } | null>();
+
   private async hydrateTitle(): Promise<void> {
     if (!this.getOwnerUserId()) return;
 
@@ -3697,16 +3697,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private titleState(): { displayName: string; nameOrigin: NameOrigin } {
-    return this._titleCache ?? { displayName: this.name, nameOrigin: 'auto' as const };
+    return this.heldTitle.current ?? { displayName: this.name, nameOrigin: 'auto' as const };
   }
 
   /** Hydrates from the registry before the title policy decides, so a replayed auto-title does not
    * plan over the cold placeholder cache. */
   protected override async hydrateTitleInputs(): Promise<void> {
-    // Throws, unlike `hydrateTitle`, so the title effect stays owed until the read works.
-    const { stub, caller } = await this.userHub();
-    this._titleCache = await stub.getWorkspaceTitle(caller, this.name);
-    this._titleHydrated = true;
+    // Fails, unlike `hydrateTitle`, so the title effect stays owed until the read works.
+    await this.heldTitle.again(async () => {
+      const { stub, caller } = await this.userHub();
+
+      return await stub.getWorkspaceTitle(caller, this.name);
+    });
   }
 
   /** Without an owner or capability the registry is unreachable; the row stays owed rather than
@@ -3733,7 +3735,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Hydrated only when cold: `propagateDisplayName` refreshes the cache on every registry write.
    */
   async workspaceTitle(): Promise<string | null> {
-    if (!this._titleHydrated) await this.hydrateTitle();
+    if (this.heldTitle.current === undefined) await this.hydrateTitle();
 
     return this.titleInputs().displayName;
   }
@@ -3771,8 +3773,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (!applied) return false;
-    this._titleCache = { displayName, nameOrigin: origin };
-    this._titleHydrated = true;
+    this.heldTitle.hold({ displayName, nameOrigin: origin });
 
     return true;
   }
@@ -6054,9 +6055,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) {
     // Genesis only, after the create path registered the row in the root registry;
-    // the cache is seeded from that write, and the root remains the authority.
-    this._titleCache = { displayName, nameOrigin };
-    this._titleHydrated = true;
+    // the title is held from that write, and the root remains the authority.
+    this.heldTitle.hold({ displayName, nameOrigin });
 
     return { displayName, nameOrigin };
   }

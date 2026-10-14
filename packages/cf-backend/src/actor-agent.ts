@@ -436,7 +436,7 @@ export function unownedWorkspace(): KinuError {
 }
 
 /** One read held until dropped; a failed read is not held, so the next need asks again. */
-class HeldRead<A> {
+export class HeldRead<A> {
   #held: Promise<A> | null = null;
   #value: A | undefined = undefined;
 
@@ -451,7 +451,14 @@ class HeldRead<A> {
     ));
   }
 
-  /** What it holds once read; none while unread or still reading. */
+  /** Reads again, holding what it held until the new read answers; a failed read leaves that standing. */
+  again(read: () => Promise<A>): Promise<A> {
+    this.#held = null;
+
+    return this.get(read);
+  }
+
+  /** What it holds once read; none until a first read answers. */
   get current(): A | undefined {
     return this.#value;
   }
@@ -3562,7 +3569,10 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Every agent's turn surface (design v2 §2, §9), from the one factory. */
   protected abstract actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface>;
 
-  /** "Beta: swarms" as the workspace agent's tools last read it; null until read and after a catalog write. */
+  /**
+   * "Beta: swarms" as the workspace agent's tools last read it; null until read and after a catalog write. Not the held
+   * catalog's: a recovered turn's tools offer what its frozen catalog said, and a turn's stay as it opened them.
+   */
   private _accountSwarms: boolean | null = null;
 
   /** "Beta: swarms" as held, read once when nothing holds it. */
