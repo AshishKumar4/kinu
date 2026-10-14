@@ -5,7 +5,7 @@ import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { RECONNECT_STEPS } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-sleep', ['observed-reconnect', 'slept', 'watched-slept', 'mid-thought', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-sleep', ['observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'mid-thought', 'state']);
 
 beforeAll(boot);
 
@@ -50,6 +50,14 @@ describe('a page whose socket drops mid-turn keeps its answer in order', () => {
 
     expect(truth.at(-1)).toBe('P:Done.');
     expect({ after, stopAfter }).toEqual({ after: truth, stopAfter: false });
+  });
+});
+
+describe("a turn sent by hand before the reopened socket's resume probe is answered", () => {
+  test('keeps its Stop through the late answer, and is answered', () => {
+    const { sentWhileHeld, stop, answered } = verdictOf(observed.unansweredProbe, 'unanswered-probe');
+
+    expect({ sentWhileHeld, stop, answered }).toEqual({ sentWhileHeld: true, stop: [false, true], answered: true });
   });
 });
 

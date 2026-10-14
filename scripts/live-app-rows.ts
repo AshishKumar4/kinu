@@ -28,7 +28,7 @@ import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import {
   KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER,
   ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK,
-  SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
+  SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
   laterReconnectTurn, toldBackTurn, unsentFirstTurn,
   DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
   startScriptedModel, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
@@ -105,6 +105,16 @@ interface ReconnectVerdict {
   readonly after: readonly string[];
 }
 
+/** A turn sent by hand while the reopened socket's resume probe went unanswered, read once it was answered. */
+interface UnansweredProbeVerdict {
+  /** Whether the probe's answer was still held when the send was pressed. */
+  readonly sentWhileHeld: boolean;
+  /** Each change of whether Stop was shown, in order, from the press until well after the probe's answer. */
+  readonly stop: readonly boolean[];
+  /** Whether the held turn then answered. */
+  readonly answered: boolean;
+}
+
 /** A page asleep while its turn ended: the answer on a page that stayed awake, the sleeper's once it woke, and
  *  whether the sleeper still offered Stop. */
 interface SleptVerdict {
@@ -160,6 +170,7 @@ export interface TierVerdicts {
   openedMidTurn: OpenedMidTurnVerdict | null;
   reconnect: ReconnectVerdict | null;
   observedReconnect: ReconnectVerdict | null;
+  unansweredProbe: UnansweredProbeVerdict | null;
   slept: SleptVerdict | null;
   watchedSlept: SleptVerdict | null;
   answered: AnsweredVerdict | null;
@@ -939,6 +950,80 @@ async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: H
     held.release();
     await awake.close();
     await sleeper.close();
+  }
+}
+
+/** Holds the next socket's answer to the chat hook's resume probe, and every frame after it in order, until
+ *  `__releaseAnswer`: the answer comes late, as a slow server's does. The raw socket's message listeners are the
+ *  ones partysocket adds as it reconnects. */
+const HOLD_PROBE_ANSWER = `(() => {
+  const add = WebSocket.prototype.addEventListener;
+  const held = [];
+  let holding = true;
+  window.__answerHeld = false;
+  window.__releaseAnswer = () => {
+    holding = false;
+    WebSocket.prototype.addEventListener = add;
+    for (const deliver of held.splice(0)) deliver();
+  };
+  WebSocket.prototype.addEventListener = function (type, listener, options) {
+    if (type !== 'message' || typeof listener !== 'function') return add.call(this, type, listener, options);
+    return add.call(this, type, function (event) {
+      const answer = typeof event.data === 'string' && /"type":"cf_agent_stream_resum(ing|e_none)"/u.test(event.data);
+      if (!holding || (!answer && held.length === 0)) return listener.call(this, event);
+      window.__answerHeld = true;
+      held.push(() => listener.call(this, event));
+    }, options);
+  };
+})()`;
+
+/** Every change of whether Stop is shown, kept in `__stopShown`. */
+const WATCH_STOP = `(() => {
+  window.__stopShown = [];
+  const read = () => {
+    const shown = [...document.querySelectorAll('#chat button[aria-label="Stop this turn"]')].some((button) => button.getClientRects().length > 0);
+    if (window.__stopShown.at(-1) !== shown) window.__stopShown.push(shown);
+  };
+  new MutationObserver(read).observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+  read();
+})()`;
+
+/**
+ * Row (2026-10-14): a turn sent by hand before the reopened socket's resume probe is answered keeps its Stop once the
+ * answer comes. `useChat` keeps one status for a resume and a send: a "none" answered after the send ended the send's
+ * state, and a new chat's opening turn showed Stop for 10 ms. The answer is held ({@link HOLD_PROBE_ANSWER}) past the
+ * press, then let go.
+ */
+async function measureUnansweredProbe(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<UnansweredProbeVerdict> {
+  const workspace = await named('the probe-wait workspace to be created', () => createWorkspace(
+    origin, { name: `live-row-probe-wait-${RUN_ID}`, purpose: 'probe wait probe', model: SCRIPTED_MODEL_SPEC }));
+
+  const page = await openRecorded(newPage, origin, workspace);
+
+  try {
+    await page.evaluate(HOLD_PROBE_ANSWER);
+
+    if (v.parse(v.number(), await page.evaluate(DROP_SOCKETS)) === 0) throw new Error('the page held no open socket to drop');
+    await until(page, "the reopened socket's probe answer, held", 'window.__answerHeld === true');
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await page.evaluate(WATCH_STOP);
+    await sendInChat(page, UNANSWERED_PROBE_TURN_ASK);
+    await painted(page);
+    const sentWhileHeld = v.parse(v.boolean(), await page.evaluate('window.__answerHeld'));
+
+    await page.evaluate('window.__releaseAnswer()');
+    await named('the held call to arrive', () => held.arrived);
+    // Read across the answer and the turn's frames that follow it, while the turn still waits on its held call.
+    await settled(page, 'JSON.stringify(window.__stopShown)');
+    const stop = v.parse(v.array(v.boolean()), await page.evaluate('window.__stopShown'));
+
+    held.release();
+    await until(page, 'the held turn to answer', TURN_ANSWERED);
+
+    return { sentWhileHeld, stop, answered: true };
+  } finally {
+    held.release();
+    await page.close();
   }
 }
 
@@ -1783,7 +1868,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
-  'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
+  'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
   'slate-ui', 'provider-wait', 'state',
 ] as const;
@@ -1805,7 +1890,7 @@ export interface LiveRows extends Pick<RowVerdicts, 'verdictOf'> {
  */
 export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
-    liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
+    liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, unansweredProbe: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null,
     controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, providerWait: null, state: null,
   };
@@ -1826,6 +1911,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const watchedAnswerHeld = heldCall();
     const unsentHeld = heldCall();
     const clearedHeld = heldCall();
+    const probeWaitHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
     const waitProbe = new ProviderWaitProbe();
@@ -1835,6 +1921,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? laterReconnectTurn(request, WATCHED_ANSWER_TURN_ASK, watchedAnswerHeld)
       ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
+      ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
       ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
@@ -1848,6 +1935,9 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'live-indicator': async () => { observed.liveIndicator = await attempt('live-indicator', () => measureLiveIndicator(newPage, origin)); },
         'opened-mid-turn': async () => { observed.openedMidTurn = await attempt('opened-mid-turn', () => measureOpenedMidTurn(newPage, origin, firstTurn)); },
         'reconnect': async () => { observed.reconnect = await attempt('reconnect', () => measureReconnect(newPage, origin, reconnectHeld)); },
+        'unanswered-probe': async () => {
+          observed.unansweredProbe = await attempt('unanswered-probe', () => measureUnansweredProbe(newPage, origin, probeWaitHeld));
+        },
         'observed-reconnect': async () => {
           observed.observedReconnect = await attempt('observed-reconnect', () => measureObservedReconnect(newPage, origin, observedHeld));
         },

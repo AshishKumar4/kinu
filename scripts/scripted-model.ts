@@ -376,6 +376,8 @@ export const RECONNECT_TURN_ASK = 'Reconnect probe: take your steps, then wait.'
 
 export const OBSERVED_TURN_ASK = 'Observer probe: take your steps, then wait.';
 
+export const UNANSWERED_PROBE_TURN_ASK = 'Probe-wait probe: take your steps, then wait.';
+
 export const SLEPT_TURN_ASK = 'Sleep probe: take your steps, then wait.';
 
 export const WATCHED_SLEPT_TURN_ASK = 'Watched sleep probe: take your steps, then wait mid-answer.';
