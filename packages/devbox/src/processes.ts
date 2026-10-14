@@ -59,8 +59,19 @@ export function nameBox(container: Container, name: string): Promise<BoxNaming> 
 
       return { named: said.startsWith('named=yes'), detail: said === '' ? `exit ${String(ran.exitCode)}` : said };
     }),
-    Effect.catch((failure) => Effect.succeed<BoxNaming>({ named: false, detail: failure.message })),
+    Effect.catch((failure) => Effect.succeed<BoxNaming>({ named: false, detail: causeChain(failure) })),
   ));
+}
+
+/** A failure's messages down its cause chain, outermost first, each once. */
+function causeChain(failure: Error): string {
+  const said: string[] = [];
+
+  for (let at: unknown = failure; at instanceof Error && said.length < 8; at = at.cause) {
+    if (said.at(-1) !== at.message) said.push(at.message);
+  }
+
+  return said.join(': ');
 }
 
 export interface ProcessRecord {
