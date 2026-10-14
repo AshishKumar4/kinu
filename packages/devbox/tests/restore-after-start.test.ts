@@ -6,7 +6,7 @@ import type { DevboxPolicy, StartClock } from '../src/lifecycle';
 import { TestDevbox, TEST_DEVBOX_POLICY as TEST_POLICY } from './support/test-devbox';
 import { handClock } from '../../test-utils/src/hand-clock';
 import {
-  FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness, memoryBucket, seedGolden,
+  FakeSandbox, KERNEL_READ, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness, memoryBucket, seedGolden,
   type Harness,
 } from './support/devbox-harness';
 
@@ -27,7 +27,7 @@ function port(rows: Map<string, StoredValue>, value: number, token: string): voi
 }
 
 const stamps = (container: FakeSandbox): number =>
-  container.execs.filter((command) => command.includes(STAMP_COMMAND)).length;
+  container.stamps;
 
 /** Startup rows the box is actually holding: the live table, not the log of
  *  arm calls. */
@@ -82,6 +82,8 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
   });
 
   const container = new FakeSandbox(state);
+  storage.beforePut('devbox:boot-id', () => container.stamp());
+  storage.beforeGet('devbox:boot-id', () => container.readingStamp());
   state.container = container.handle();
   seedGolden(container);
   const box = new TestBox(state, { DEVBOX_STORE: memoryBucket(new Map()) });
@@ -111,7 +113,7 @@ describe('the start hook owns restoration', () => {
 
       const caller = (async () => {
         try {
-          return { output: await box.exec('cat /tmp/devbox-boot-id 2>/dev/null || true') };
+          return { output: await box.exec(KERNEL_READ) };
         } catch (error) {
           return { error };
         } finally {
@@ -131,7 +133,7 @@ describe('the start hook owns restoration', () => {
         await startup;
       }
 
-      expect(await caller).toMatchObject({ output: { stdout: container.bootId, stderr: '', exitCode: 0 } });
+      expect(await caller).toMatchObject({ output: { stdout: `${container.bootId ?? ''}\n`, stderr: '', exitCode: 0 } });
       expect(container.bootId).not.toBe(oldBoot);
       expect(stamps(container)).toBe(2);
       expect((await box.devboxState()).ready).toBe(true);
@@ -216,8 +218,7 @@ describe('the start hook owns restoration', () => {
     expect(container.starts).toHaveLength(1);
     expect(await box.getExposedPorts()).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
     expect((await deliver(container, () => box.exec('echo hi'))).exitCode).toBe(0);
-    expect(container.execs.findIndex(command => command.includes(STAMP_COMMAND)))
-      .toBeLessThan(container.execs.findIndex(command => command.includes('echo hi')));
+    expect(container.sequence.indexOf('stamp')).toBeLessThan(container.sequence.findIndex((step) => step === 'exec:echo'));
   });
 
   test('a failed settled-phase write never publishes readiness', async () => {

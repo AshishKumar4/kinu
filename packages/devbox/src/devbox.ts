@@ -244,9 +244,6 @@ const START_REFUSED_KEY = 'devbox:start-refused';
 
 const DISK_STATE_KEY = 'devbox:disk-chain';
 
-/** Where the box stamps the container's identity: on the disk a replacement does not keep (P1). */
-const BOOT_ID_PATH = '/tmp/devbox-boot-id';
-
 /** A loopback Durable Object namespace's tag in `ctx.exports`; an entrypoint's stub answers any property as an RPC (D85). */
 const NAMESPACE_TAG = '[object LoopbackDurableObjectNamespace]';
 
@@ -1049,54 +1046,41 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
 
-  /** A boot-id mismatch is the only replacement signal: fence every read, count and write. */
+  /**
+   * Records the container the box restores as the kernel's boot id: the container's own identity, new at every start,
+   * wake and replacement, and the one the process fences use. A boot-id mismatch is the only replacement signal, so
+   * every read, count and write is fenced. The box's own stop clears the row, so a start or wake after it is not
+   * counted as a replacement (D67).
+   */
   async #stampBootId(generation: number): Promise<void> {
-    // Count replacements here: every restoration passes through this method, whatever drove it.
-    // Counting only in the heartbeat misses replacements handled by startup or readiness paths.
     const previous = await this.ctx.storage.get<string>(BOOT_ID_KEY);
+    const actual = await this.#readBootId();
 
-    if (previous !== undefined && await this.#readBootId() === previous) {
-      if (this.#owns(generation)) this.#stampPhase('bootId');
+    if (!this.#owns(generation)) return;
+
+    if (actual === previous) {
+      this.#stampPhase('bootId');
 
       return;
     }
 
-    if (this.#owns(generation) && previous !== undefined && (await this.#readBootId()) !== previous) {
+    if (previous !== undefined) {
       const replaced = (await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0) + 1;
 
       if (!this.#owns(generation)) return;
       await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
-
-      if (this.#owns(generation)) {
-        console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
-      }
+      console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
     }
 
-    // Ownership is re-checked before writing: a stale boot-id write makes a healthy container
-    // read as replaced until repaired, so a heartbeat re-drives restoration and miscounts it.
+    // A stale attempt writes nothing: the row names the container of record.
     if (!this.#owns(generation)) return;
-    const bootId = crypto.randomUUID();
-    await this.#rawExec(`printf %s ${bootId} > ${BOOT_ID_PATH}`);
-
-    // A stale attempt can park inside the exec and overwrite a successor's stamp, so re-check
-    // ownership after it and rewrite the file to the durable row's id, the identity of record.
-    if (!this.#owns(generation)) {
-      const settled = await this.ctx.storage.get<string>(BOOT_ID_KEY);
-
-      if (settled !== undefined && settled !== bootId) {
-        await this.#rawExec(`printf %s ${settled} > ${BOOT_ID_PATH}`);
-      }
-
-      return;
-    }
-
-    await this.ctx.storage.put(BOOT_ID_KEY, bootId);
+    await this.ctx.storage.put(BOOT_ID_KEY, actual);
     this.#stampPhase('bootId');
   }
 
   /** The heartbeat re-drives a stale restoration; commit paths must not commit to a gone container.
    *  No stamp means no claim about any instance, so the answer is `false`, not replaced. */
-  async #containerWasReplaced(observed?: { readonly bootId: string | undefined }): Promise<boolean> {
+  async #containerWasReplaced(observed?: { readonly bootId: string }): Promise<boolean> {
     const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
 
     if (expected === undefined) return false;
@@ -1124,13 +1108,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     throw new DevboxError("io", 'this devbox is not ready: the restored container was replaced; a startup is armed');
   }
 
-  /** Undefined when the boot-id file is gone, which is what a replaced container instance
-   *  looks like. */
-  async #readBootId(): Promise<string | undefined> {
-    const read = await this.#rawExec(`cat ${BOOT_ID_PATH} 2>/dev/null || true`, DEVBOX_RUNTIME_DIR);
-    const value = read.stdout.trim();
-
-    return value.length > 0 ? value : undefined;
+  /** The kernel's boot id, through the reader the process fences use: one identity per container. */
+  async #readBootId(): Promise<string> {
+    return await this.#processes().incarnation();
   }
 
 
@@ -2690,7 +2670,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return beat;
         }
 
-        let observed: string | undefined;
+        let observed: string;
 
         try {
           // The boot-id read is the liveness ping too: one container call, not two (D28).
@@ -3316,6 +3296,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     try { await ending; }
     catch (cause) { if (container.running) throw cause; }
 
+    // The box ended this container itself: the next one is a start, not a replacement.
+    await this.ctx.storage.delete(BOOT_ID_KEY);
     await this.onStop();
   }
   override fetch(request: Request): Promise<Response> {

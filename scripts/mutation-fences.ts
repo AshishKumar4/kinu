@@ -146,24 +146,14 @@ export const FENCES: readonly Fence[] = [
   {
     name: 'devbox#stampBootId:generation-fence',
     file: 'packages/devbox/src/devbox.ts',
-    // The stamp's whole ownership fence: the lost-race early return that
-    // rewrites the container file to the durable row's id, and the row write
-    // that only a live owner may make. Stripping it — writing row and file
-    // unconditionally — is exactly the spurious-replacement loop the fix
-    // closed: a stale attempt parked in the exec overwrites the successor's
-    // identity and the next heartbeat re-drives a healthy box.
-    snippet: `    if (!this.#owns(generation)) {
-      const settled = await this.ctx.storage.get<string>(BOOT_ID_KEY);
-
-      if (settled !== undefined && settled !== bootId) {
-        await this.#rawExec(\`printf %s \${settled} > \${BOOT_ID_PATH}\`);
-      }
-
-      return;
-    }
-
-    await this.ctx.storage.put(BOOT_ID_KEY, bootId);`,
-    mutation: `    await this.ctx.storage.put(BOOT_ID_KEY, bootId);`,
+    // The stamp's ownership fence: only a live owner records the container of
+    // record. Stripping it is exactly the spurious-replacement loop the fix
+    // closed: a stale attempt parked before its write overwrites the
+    // successor's identity and the next heartbeat re-drives a healthy box.
+    snippet: `    // A stale attempt writes nothing: the row names the container of record.
+    if (!this.#owns(generation)) return;
+    await this.ctx.storage.put(BOOT_ID_KEY, actual);`,
+    mutation: `    await this.ctx.storage.put(BOOT_ID_KEY, actual);`,
     owner: {
       suite: 'packages/devbox/tests/stale-stamp-fence.test.ts',
       grep: 'a stamp parked on the stale attempt never regresses the newer boot id',

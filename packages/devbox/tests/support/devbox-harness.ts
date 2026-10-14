@@ -106,6 +106,10 @@ export interface FakeStorage {
   faultOn(key: string, error: Error): void;
   /** Every `list` under `prefix` rejects with `error` until cleared with `undefined`. */
   failListOn(prefix: string, error: Error | undefined): void;
+  /** Runs before each write of `key` lands, and may refuse it. */
+  beforePut(key: string, hook: () => Promise<void>): void;
+  /** Runs before each read of `key` answers, and may park it. */
+  beforeGet(key: string, hook: () => Promise<void>): void;
 }
 
 /** The object's one alarm and the schedule rows that armed it. */
@@ -123,6 +127,8 @@ export function fakeStorage(): FakeStorage {
   const alarm: AlarmModel = { at: null, scheduled: [] };
   const faults: Record<string, Error | undefined> = {};
   const listFaults = new Map<string, Error>();
+  const putHooks = new Map<string, () => Promise<void>>();
+  const getHooks = new Map<string, () => Promise<void>>();
   let kvCursor = 0;
   /** A transaction refuses to commit a key another writer moved meanwhile: the runtime
    *  isolates concurrent transactions, so the second committer fails instead of overwriting. */
@@ -151,6 +157,8 @@ export function fakeStorage(): FakeStorage {
         await held.promise;
       }
 
+      await getHooks.get(key)?.();
+
       return rows.get(key);
     },
     put: async (key: string | Record<string, StoredValue>, value?: StoredValue): Promise<void> => {
@@ -158,6 +166,7 @@ export function fakeStorage(): FakeStorage {
         const fault = takeWriteFault(name);
 
         if (fault !== undefined) throw fault;
+        await putHooks.get(name)?.();
         rows.set(name, stored);
         keyVersions.set(name, (keyVersions.get(name) ?? -1) + 1);
       }
@@ -319,12 +328,16 @@ export function fakeStorage(): FakeStorage {
     gateDeleteOn: (key, held) => { deleteGates[key] = held; },
     failListOn: (prefix, error) => { if (error === undefined) listFaults.delete(prefix); else listFaults.set(prefix, error); },
     faultOn: (key, error) => { faults[key] = error; },
+    beforePut: (key, hook) => { putHooks.set(key, hook); },
+    beforeGet: (key, hook) => { getHooks.set(key, hook); },
   };
 }
 
-/** The boot-id stamp's command, a restoration's last write; matched by path, not verb, since
- *  the listener proof also writes with `printf %s` and must not hit the stamp gate or fault. */
-export const STAMP_COMMAND = '> /tmp/devbox-boot-id';
+/** The row naming the container of record: the kernel boot id the box restored (D67). */
+const BOOT_ID_KEY = 'devbox:boot-id';
+
+/** The kernel's boot id, as a command reads it. */
+export const KERNEL_READ = 'cat /proc/sys/kernel/random/boot_id';
 
 const IMAGE_DIRECTORIES = ['/', '/workspace', '/tmp', '/var/tmp'] as const;
 
@@ -377,9 +390,12 @@ export class FakeSandbox {
   containerUnavailable: Error | undefined;
   readonly getFaults: Error[] = [];
   readonly killFaults: Error[] = [];
+  /** Thrown by the next writes of the container of record, a restoration's stamp. */
   readonly stampFaults: (Error | undefined)[] = [];
-  /** Thrown by the next reads of the boot-id file, as an exec the container drops. */
+  /** Thrown by the next reads of the kernel's boot id, as an exec the container drops. */
   readonly bootReadFaults: Error[] = [];
+  /** How many times the box recorded a container of record. */
+  stamps = 0;
   startGate: Gate | undefined;
   /** Parks the container's own admission probe, `start()`, awaited before a generation is captured.
    *  Distinct from `startGate` (the process start): two different calls and windows. */
@@ -400,8 +416,8 @@ export class FakeSandbox {
   destroyFault: Error | undefined;
   stopFault: Error | undefined;
   destroys = 0;
+  /** The kernel's boot id: new at each start, and minted at its first read after one; set it to model another. */
   bootId: string | undefined;
-  #kernelGeneration = 0;
   containerStarts = 0;
   readonly startWaitOptions: unknown[] = [];
   /** Each platform start's options (D50). */
@@ -551,36 +567,13 @@ export class FakeSandbox {
       return { stdout: this.listening.has(port) ? '200|0' : '000|7', stderr: '', exitCode: 0 };
     }
 
-    if (command.includes(STAMP_COMMAND)) {
-      const stamp = this.stampGate;
-
-      if (stamp !== undefined) {
-        this.stampGate = undefined;
-        stamp.enter();
-        await stamp.promise;
-      }
-
-      const fault = this.stampFaults.shift();
-
-      if (fault !== undefined) throw fault;
-      const bootId = /^printf %s ([^ ]+) > \/tmp\/devbox-boot-id$/.exec(command);
-
-      if (bootId !== null) this.bootId = bootId[1];
-    }
-
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
   /** The box's own programs and probes, answered from this container's state with the bytes bash
    *  writes; the session path hands them back as the container server does. Null for any other. */
   async #execBoxProgram(command: string): Promise<ExecResult | null> {
-    if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') {
-      const fault = this.bootReadFaults.shift();
-
-      if (fault !== undefined) throw fault;
-
-      return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
-    }
+    if (command === KERNEL_READ) return { stdout: `${this.kernel()}\n`, stderr: '', exitCode: 0 };
 
     if (command === 'cat /proc/mounts') return { stdout: this.#procMounts(), stderr: '', exitCode: 0 };
 
@@ -760,8 +753,31 @@ export class FakeSandbox {
     return Promise.resolve();
   }
 
+  /** The running kernel's boot id. */
+  kernel(): string {
+    return this.bootId ??= `fixture-kernel-${crypto.randomUUID()}`;
+  }
+
+  /** The stamp's read of the container of record, its last await before it writes: parked by `stampGate`. */
+  async readingStamp(): Promise<void> {
+    const held = this.stampGate;
+
+    if (held === undefined) return;
+    this.stampGate = undefined;
+    held.enter();
+    await held.promise;
+  }
+
+  /** The box recording its container of record: refused by `stampFaults`. */
+  async stamp(): Promise<void> {
+    const fault = this.stampFaults.shift();
+
+    if (fault !== undefined) throw fault;
+    this.stamps += 1;
+    this.sequence.push('stamp');
+  }
+
   #loseContainerLocalState(): void {
-    this.#kernelGeneration++;
     this.files.clear();
     this.binaryFiles.clear();
     this.directories.clear();
@@ -977,13 +993,17 @@ export class FakeSandbox {
 
   #nativeProtocol(args: string[], options: ContainerExecOptions): Promise<ExecProcess> | ExecProcess | undefined {
     if (args[3] === 'devbox-incarnation-read') {
-      return processResult(Promise.resolve({ stdout: `fixture-kernel-${String(this.#kernelGeneration)}\n`, stderr: '', exitCode: 0 }), this.#pid++);
+      const fault = this.bootReadFaults.shift();
+
+      this.execs.push(KERNEL_READ);
+
+      if (fault !== undefined) throw fault;
+
+      return processResult(Promise.resolve({ stdout: `${this.kernel()}\n`, stderr: '', exitCode: 0 }), this.#pid++);
     }
 
     if (args[3] === 'devbox-incarnation') {
-      const current = `fixture-kernel-${String(this.#kernelGeneration)}`;
-
-      if (args[4] !== current) return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 125 }), this.#pid++);
+      if (args[4] !== this.kernel()) return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 125 }), this.#pid++);
 
       return this.#native(args.slice(5), options);
     }
@@ -1417,6 +1437,8 @@ export function harness<Box extends PlatformServed>(
   });
 
   const container = new FakeSandbox(state);
+  storage.beforePut(BOOT_ID_KEY, () => container.stamp());
+  storage.beforeGet(BOOT_ID_KEY, () => container.readingStamp());
   container.running.running = false;
   state.container = container.handle();
   container.nativeExec = exec;

@@ -7,7 +7,7 @@ import { DiskChainStateSchema, type DiskChain, type DiskChainPorts } from '../..
 import { attempt } from '../../src/errors';
 import { TestDevbox } from './test-devbox';
 import type { StoredValue } from '../../src/storage';
-import { harness, type FakeSandbox, type TestEnv, type TestSiblings } from './devbox-harness';
+import { harness, type FakeSandbox, type FakeStorage, type TestEnv, type TestSiblings } from './devbox-harness';
 
 /** The disk chain record's revision, or null before the first commit. */
 export function chainHead(rows: Map<string, StoredValue>): number | null {
@@ -52,6 +52,7 @@ export interface ChainBox {
   readonly rows: Map<string, StoredValue>;
   readonly objects: Map<string, Uint8Array>;
   readonly env: TestEnv;
+  readonly storage: FakeStorage;
   /** The platform evicts the object while its container runs on: a new instance over the same
    *  storage, container and bucket, holding nothing in memory. */
   readonly evict: () => ChainTestBox;
@@ -70,7 +71,7 @@ export class ChainTestBox extends TestDevbox<TestEnv> {
 }
 
 export function chainBox(Box: typeof ChainTestBox = ChainTestBox, siblings?: TestSiblings): ChainBox {
-  const { box, container, rows, objects, env, state } = harness(Box, undefined, undefined, siblings);
+  const { box, container, rows, objects, env, state, storage } = harness(Box, undefined, undefined, siblings);
 
   const evict = (): ChainTestBox => {
     const successor = new Box(state, env);
@@ -79,5 +80,5 @@ export function chainBox(Box: typeof ChainTestBox = ChainTestBox, siblings?: Tes
     return successor;
   };
 
-  return { box, container, rows, objects, env, evict };
+  return { box, container, rows, objects, env, storage, evict };
 }
