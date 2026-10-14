@@ -86,7 +86,6 @@ import {
   type AgentsToolDeps,
   type AgentsSwarmDeps,
   BUILTIN_TOOLS,
-  type TurnReason,
   type PromptModelContext,
   type WorkMode, isWorkMode,
   nanoid,
@@ -158,7 +157,7 @@ import {
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
-  type ResolvedTurnProfile, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
+  type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   childContextResolver,
 } from "@kinu.run/core";
@@ -3195,10 +3194,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.heldRevision.get(() => this.askAccount((stub, caller) => stub.getCredentialsRevision(caller)));
   }
 
-  protected resolvedTurnProfile(): ResolvedTurnProfile | null {
-    return this.operationProfile()?.profile ?? null;
-  }
-
   /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
    * parent stub can reach them. */
   async readWorkspaceFile(path: string): Promise<Uint8Array> {
@@ -3704,12 +3699,6 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  /** Uses the resolved spec: the raw stored id is null on default-configured agents,
-   *  which would leave model-family guidance inert. */
-  protected promptModelContext(): PromptModelContext {
-    return this.promptModelContextFor(this.effectiveModelSpec());
-  }
-
   private promptModelContextFor(named: string): PromptModelContext {
     const spec = named === '' ? '' : this.providerRegistry().normalizeSpecSync(named);
 
@@ -3957,11 +3946,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.workModeForMetadata(await this.mainLastUserMetadata());
   }
 
-  /** Read from the event alone, never from the work mode stamped beside it. */
-  protected turnReason(): TurnReason {
-    return turnTags({ metadata: this.turnDrivingMetadata() }).reason;
-  }
-
   /** Author-stamped, so the plan hold tells the owner's turn from the harness's. */
   protected turnDrivingMetadata(): JsonObject | undefined {
     const metadata = this.turnUserMetadata();
@@ -4034,24 +4018,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return parent === null ? null : { parentActorId: parent.parentActorId, pins: createAgentConfigStore(this.boundSql, id, actor.assertCurrent) };
     });
-  }
-
-  /**
-   * Model, pricing spec and effort options are one decision, returned together so callers cannot
-   * re-derive a disagreeing one; `unit-turn-pipeline-correctness.test.ts` pins the invariant.
-   */
-  protected async modelForSource(source: SpendSource): Promise<{
-    model: LanguageModel;
-    spec: string;
-    providerOptions: ReturnType<OwnedModelServices['resolveModelWithEffort']>['providerOptions'];
-  }> {
-    const route = resolveModelRoute(source, await this.routingProfile());
-
-    if (!route) {
-      throw new KinuError('unsupported', `${source} is platform-routed: it has no model in the turn profile`);
-    }
-
-    return this.modelForResolution(route);
   }
 
   /** One model of a side route or of its chain, resolved the one way every side model is. */

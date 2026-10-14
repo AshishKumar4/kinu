@@ -172,14 +172,6 @@ export const FENCES: readonly Fence[] = [
     // life of the workspace, and the cold branch settle owes a report that is
     // never coming.
     //
-    // NOT FENCED ON `cf/orchestrator#explorationFacetLedgerStatus` in
-    // `packages/cf-backend/src/orchestrator.ts`: that method has NO CALLER
-    // anywhere in the tree, so its mutation cannot turn any test red however the
-    // owner is pointed — measured 2026-09-08, replacing the surviving sweep's
-    // whole classification with `settled = true` (retire every exploration actor
-    // unconditionally) left all 2,936 cf-backend tests reporting exactly as
-    // before.
-    //
     // This tuple pair is the one place the four statuses are named,
     // `HEAD_REPORT_STATUSES`'s own docstring records the sweep defect as the
     // reason it is a LIST rather than a union, and every reader asks here — the

@@ -145,7 +145,6 @@ import {
   listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, newBranchId, admitBranch, type BranchTurnResult,
-  headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
@@ -4429,20 +4428,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (retired > 0) diagnostics.event('actor.settled_retired', { retired });
     }, { workspace: this.name });
-  }
-
-  /**
-   * The lifecycle ledgers are the only status authority. `completed`, `aborted`, `errored`,
-   * `budget_exceeded` are terminal; `running`, `interrupted` resumable; anything else is unknown.
-   */
-  protected explorationFacetLedgerStatus(id: string): 'resumable' | 'terminal' | 'unknown' {
-    const head = this.headJournal.readHead(id);
-
-    if (!head) return 'unknown';
-
-    if (headStatusUnsettled(head.status)) return 'resumable';
-
-    return storedHeadReportStatus(head.status) === null ? 'unknown' : 'terminal';
   }
 
   private hasLiveExploration(): boolean {
