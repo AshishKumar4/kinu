@@ -497,7 +497,7 @@ function createUpdater(opts) {
  * `unit-install-script.test.ts` holds this rendering equal to core's, whose version the repository's
  * `packageManager` pin holds.
  */
-const KINU_BUN_VERSION = '1.4.2';
+const KINU_BUN_VERSION = '1.4.3';
 
 /** Non-`major.minor.patch` input is not comparable; the shell half treats it as incompatible. */
 function bunVersionKey(version) {
