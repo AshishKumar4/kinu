@@ -9,6 +9,7 @@ import { Cause, Effect, Exit } from 'effect';
 import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from '../tools/builtins';
 import type { AgentsToolDeps } from './agents-tool';
 import { createAgentsTool } from './agents-operations';
+import { agentsWired } from './agents-tool';
 import type { EffectClaimDeps } from '../tools/effect-claim';
 import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
 import { isBackgroundOutcomeText } from '../jobs/threshold';
@@ -38,13 +39,11 @@ export interface ActorToolsets {
   readonly raw: ToolSet;
 }
 
-/** Every builtin, plus `agents` when any delegation group is wired, each behind its replay policy (tools/effect-claim.ts). */
+/** Every builtin, plus `agents` when any delegation group is offered, each behind its replay policy (tools/effect-claim.ts). */
 export function buildActorTools(deps: ActorToolsetDeps): ActorToolsets {
   let extra: ToolSet | undefined;
 
-  if (deps.agents && (deps.agents.swarm || deps.agents.team || deps.agents.peers)) {
-    extra = { agents: createAgentsTool(deps.agents) };
-  }
+  if (deps.agents && agentsWired(deps.agents)) extra = { agents: createAgentsTool(deps.agents) };
 
   const { codemode } = deps;
   const clamp = { files: deps.rt.storage, producer: 'eval' as const, images: true as const };

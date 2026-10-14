@@ -253,7 +253,7 @@ const SharedSchema = v.object({ id: v.string(), url: v.nullable(v.string()) });
 
 /** The reach slate shared with anyone who has the link, from its tile in My stuff: the share and its link. */
 async function sharedPublicly(target: FlowTarget, workspace: string): Promise<v.InferOutput<typeof SharedSchema>> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
   const tile = `[data-drive-slate="${REACH_SLATE.id}"][data-drive-workspace="${workspace}"]`;
 
   await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });

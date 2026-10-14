@@ -211,7 +211,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
           workspace: async () => {
             const root = await host.acquire(actorReferenceOf(deps.directory.main()), { kind: 'actor' });
 
-            return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
+            return root.runtime.agentStateVfs;
           },
           parent: async (signal) => {
             if (deps.sayToParent !== undefined) return await deps.sayToParent(bound.reference, signal);

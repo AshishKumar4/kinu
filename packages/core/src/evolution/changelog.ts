@@ -32,7 +32,7 @@ const ScaffoldRunEventSchema = v.object({
   toVersion: v.number(),
 });
 
-export const CHANGELOG_ENTRY_KINDS = [
+const CHANGELOG_ENTRY_KINDS = [
   'scaffold', 'tool', 'fact', 'gepa', 'ratings', 'artifact', 'refinement',
 ] as const;
 
@@ -67,6 +67,28 @@ export interface ChangelogEntry {
   /** Child rows of an aggregate card. */
   items?: ChangelogEntry[];
 }
+
+/** A revert as a client reads it over the wire. */
+const ChangelogRevertActionSchema: v.GenericSchema<ChangelogRevertAction> = v.variant('type', [
+  v.object({ type: v.literal('scaffold_rollback'), target: v.string() }),
+  v.object({ type: v.literal('fact_forget'), target: v.string() }),
+  v.object({ type: v.literal('fact_forget_many'), targets: v.array(v.string()) }),
+  v.object({ type: v.literal('artifact_revert'), target: v.string() }),
+]);
+
+/** A changelog entry as a client reads it over the wire, its aggregate's rows within it. */
+export const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.object({
+  id: v.string(),
+  kind: v.picklist(CHANGELOG_ENTRY_KINDS),
+  at: v.number(),
+  summary: v.string(),
+  evidence: v.string(),
+  revert: v.optional(ChangelogRevertActionSchema),
+  scaffoldVersion: v.optional(v.number()),
+  decision: v.optional(v.object({ requestId: v.string(), routeIndex: v.number() })),
+  noChange: v.optional(v.boolean()),
+  items: v.optional(v.array(ChangelogEntrySchema)),
+}));
 
 export interface BuildChangelogOptions {
   since?: number;
@@ -517,6 +539,12 @@ export interface ChangelogRevertResult {
   detail?: string;
   error?: string;
 }
+
+export const ChangelogRevertResultSchema: v.GenericSchema<ChangelogRevertResult> = v.object({
+  ok: v.boolean(),
+  detail: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
 
 async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: ScaffoldDecisionEvents): Promise<ChangelogRevertResult> {
   const sql = rt.storage.sql;

@@ -3,10 +3,10 @@
  * stopping aborts an in-flight question and best-effort denies it so the blocked device RPC unblocks.
  */
 
+import type { PendingDeviceConsent } from '@kinu.run/core';
 import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
-  PendingDeviceConsent,
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';

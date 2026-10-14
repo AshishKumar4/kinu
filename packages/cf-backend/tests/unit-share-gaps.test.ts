@@ -521,6 +521,37 @@ async function shareWithPat(world: World, owner: AuthIdentity) {
   return await jsonBody(shared, LiveShareCreatedSchema);
 }
 
+test("a share is unseen until its person opens Shared, on any device, and one made after that is unseen again", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const viewer = identityOf(VIEWER_ID, 'pat@example.test');
+  const unseen = async () => (await heldBy(world, viewer)).map((row) => row.unseen === true);
+
+  await shareWithPat(world, owner);
+  await world.ownerUser.userDO.alarm();
+  expect(await unseen()).toEqual([true]);
+
+  expect(present(await sharedRequest(world.env, viewer, post('/api/shared/seen', {})), 'the seen answer').status).toBe(200);
+  expect(await unseen()).toEqual([false]);
+
+  // Reaching pat a minute after Shared was opened.
+  setSystemTime(new Date(Date.now() + 60_000));
+
+  try {
+    const again = present(await sharedRequest(world.env, owner, post('/api/shared/live', {
+      workspace: 'issues-owner', slate: 'issues', visibility: 'users', emails: ['pat@example.test'], fork: false,
+    })), 'the second share answer');
+
+    expect(again.status).toBe(201);
+    await world.ownerUser.userDO.alarm();
+    expect((await unseen()).filter(Boolean)).toHaveLength(1);
+    expect(await unseen()).toHaveLength(2);
+  } finally {
+    setSystemTime();
+  }
+});
+
 /** The account delete as its route runs it: the typed email, then the forget sweep, then the object's teardown. */
 async function deleteAccount(world: World, owner: AuthIdentity): Promise<number> {
   const request = new Request('https://app.test/api/user/account', {

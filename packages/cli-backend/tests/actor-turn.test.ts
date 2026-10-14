@@ -34,7 +34,7 @@ async function fixture() {
   // Claimed turns need the claim ledger, which `createTestRuntime` does not bootstrap; use the production DDL.
   initActorClaimTables(rt.storage.execRaw);
   rt.executor = createSandboxedExecutor();
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const files = rt.agentStateVfs;
   await files.mkdir('scaffold', { recursive: true });
   await writeText(files, rt.identity.scaffold.path + '.v1', OLD);
   await writeText(files, rt.identity.scaffold.path + '.v2', NEW);

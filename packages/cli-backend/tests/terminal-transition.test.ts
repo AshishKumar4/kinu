@@ -17,7 +17,8 @@ import {
 } from '@kinu.run/core';
 import { TestLanguageModelV2 } from './test-language-model';
 import { soulIn, type CLIRuntime } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import {
   installProgram, openTerminalWorkspace, scriptedModel,
 } from './terminal-workspace';

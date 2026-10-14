@@ -63,7 +63,7 @@ export function fixtureRunSources(
     taskPlan: () => null,
     conversationKey: () => conversationKey('fixture', actor.record.actorId),
     scaffoldSpend: { source: 'scaffold', report: () => {} },
-    attachmentBudget: actor.session.orchestrator.acc.context,
+    attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
     extensions: () => [],
     dynamic: () => (profile, tools) => collectDynamicContext({
       rt: actor.runtime,
@@ -114,7 +114,7 @@ export function localTestActorHost(
 
       return parent.filesForActor(bound.handle);
     },
-    scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs ?? parent.storage.vfs }),
+    scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs }),
     storage: {
       sql: parent.storage.sql,
       transactionSync: parent.storage.transactionSync,

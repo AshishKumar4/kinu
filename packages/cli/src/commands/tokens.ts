@@ -6,12 +6,9 @@ import {
   listCliAccessTokens,
   revokeCliAccessToken,
 } from '../cloud-api';
-import { projectJsonValue } from '@kinu.run/core';
+import { ACCESS_TOKEN_SCOPES, projectJsonValue } from '@kinu.run/core';
 import { requireAuthConfig } from '../config';
 import { ACCENT, DIM, formatWhen, OK, printJson, WARN } from '../display';
-
-/** The server's accepted scopes (`cf-backend/src/cli/access-token-store.ts`), restated since the CLI does not depend on the backend. */
-export const ACCESS_TOKEN_SCOPES = ['workspace.read', 'workspace.exec', 'ai.proxy'] as const;
 
 interface TokensOpts {
   name?: string;

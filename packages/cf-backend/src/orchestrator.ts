@@ -29,7 +29,7 @@ import {
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubordinateReportLedger, type ActorToolsets,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
-  createTeamToolDeps, delegationExhausted,
+  createTeamToolDeps,
   agentNamer,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
   type BoundActor, type HeadInput,
@@ -67,7 +67,8 @@ import { agentArtifactDirectory, agentHome, agentNameOfUid, MAIN_AGENT } from '@
 import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
-import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
+import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
+import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
@@ -120,11 +121,10 @@ import {
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type SlateSurfaceCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
-  type ScaffoldRunResult,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
-  type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
+  type RefinementListing, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
@@ -170,7 +170,7 @@ import {
   EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
   type EmailAdmission, type IncomingEmail,
   PeerHub, type PeerMessage, type ReceiveResult,
-  getAgentStatus, getToolList, readLatestSearchTree, readSearchTree,
+  getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
   readSearchNodeDetail, type SearchNodeDetail,
   listForkRuns, type ForkRunSummary,
   readNodeTranscript, type NodeTranscriptView,
@@ -189,7 +189,7 @@ import {
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
   initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, authoredTurnMetadata, type ActorReach, type ChatTurnInput,
-  type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
+  type ChangeNote, type ChangeNotesResult, type NotedChanges,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
   renameExecutorPathOp, deleteExecutorPathOp,
@@ -1481,7 +1481,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const ledgers = turnLedgers();
 
         return (surface, reach) => createCodemodeToolFactory({
-          launch: this.codemodeLaunch(runtime.actor.actorId), workspace: this.workspaceName(),
+          launch: this.codemodeLaunch(runtime.actor.actorId, 'owner'), workspace: this.workspaceName(),
         }).toolFor(surface, {
           reach, namespaces: (executor) => actorNamespaces(this.confinedActor(actor, runtime, webSearch, ledgers), SURFACE_POLICY.confined, { executor }),
         });
@@ -1517,12 +1517,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const parentId = actor.record.parentActorId;
 
     return new ActorAdvisor({
-      actor: actor.handle, vfs: () => actor.runtime.agentStateVfs ?? actor.runtime.storage.vfs,
+      actor: actor.handle, vfs: () => actor.runtime.agentStateVfs,
       notes: () => new EvolutionEngine(actor.runtime, historyTurnPairs(actor.stores.history), { transaction: (body) => { this.ctx.storage.transactionSync(body); } }),
       port: () => this.temporaryAgentPort(actor.reference), reviewed: actor.record.input,
       // A hire shares the workspace's priorities, and its notes reach its hirer.
       ...(parentId !== null && {
-        context: { config: this.config, workspace: async () => this.rt.agentStateVfs ?? this.rt.storage.vfs, parent: (signal) => this.agentDeliveries(parentId).signals.send(signal) },
+        context: { config: this.config, workspace: async () => this.rt.agentStateVfs, parent: (signal) => this.agentDeliveries(parentId).signals.send(signal) },
       }),
       send: (signal) => this.agentDeliveries(actor.handle.actorId).signals.send(signal),
       profile: () => null, scoped: (turn) => turn,
@@ -1674,7 +1674,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const codemode = (finished: CodemodeSurface) => {
       const operation = scope.profile();
-      const factory = reach.actor.lanes ? this.workspaceCodemode() : createCodemodeToolFactory({ launch: this.codemodeLaunch(actor.handle.actorId), workspace: this.workspaceName() });
+      const factory = reach.actor.lanes ? this.workspaceCodemode() : createCodemodeToolFactory({ launch: this.codemodeLaunch(actor.handle.actorId, 'owner'), workspace: this.workspaceName() });
       const confined = reach.actor.surface === 'confined' ? this.confinedActor(actor, runtime, webSearch, scope.ledgers) : null;
 
       return factory.toolFor(finished, {
@@ -1765,26 +1765,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       profile: () => agentsProfileContext(operation()?.profile ?? null, operation()?.inputs ?? null),
     };
 
-    const team = this.actorTeam(actor, reach);
-
-    if (team !== null) deps.team = team;
+    deps.team = this.actorTeam(actor, reach);
 
     if (reach.external) deps.peers = this.getPeersToolDeps();
 
     return deps;
   }
 
-  /** Its subtree's team: the workspace's own roster where its programs reach the workspace's, else its own. */
-  private actorTeam(actor: CFSeat, reach: ActorReach): TeamToolDeps | null {
-    return reach.surface === 'program' ? this.teamProfile().team ?? null : this.hostedTeamToolDeps(actor);
+  /** Its subtree's team: the workspace's own roster where its programs reach the workspace's, else its own. What a
+   *  capped agent is offered of it is core's (`offered`). */
+  private actorTeam(actor: CFSeat, reach: ActorReach): TeamToolDeps {
+    return reach.surface === 'program' ? this.getTeamToolDeps() : this.hostedTeamToolDeps(actor);
   }
 
-  /** Built from this actor's own roster. Null at the cap. */
-  private hostedTeamToolDeps(actor: BoundActor): TeamToolDeps | null {
+  /** Built from this actor's own roster. */
+  private hostedTeamToolDeps(actor: BoundActor): TeamToolDeps {
     const seams = this.hostedSeams();
     const delegation = hostedDelegationBudget(seams, actor);
-
-    if (delegationExhausted(delegation)) return null;
     const roster = seams.roster(actor);
     roster.ensureSchema();
 
@@ -1938,7 +1935,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       profileInputs: async () => inputs,
       choices,
       ancestors: () => this.ancestorProfiles(actor.handle) ?? [],
-      agentsActions: () => agentsActionsFor({ swarm: {}, swarms: betaSwarms(inputs.envelope.catalog), team: team ?? undefined, ...(reach.external && { peers: {} }) }),
+      agentsActions: () => agentsActionsFor({ swarm: {}, swarms: betaSwarms(inputs.envelope.catalog), team, ...(reach.external && { peers: {} }) }),
       temporaryAsk: () => team?.temporary !== undefined,
       soul: async () => (reach.lanes ? this.getSoulText() : await this.loadSoulText()),
       agentsMd: (window) => this.workspaceAgentsMd(window, trust),
@@ -1979,11 +1976,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await runHeadSplit(new HeadController(runtimeForSplit, journal, REAL_CLOCK), parent, request);
   }
 
-  /** Reached by RPC, or via `fetch` for a WebSocket upgrade, which cannot cross RPC as a 101. */
-  async routeWorkspacePreview(
-    port: number, handle: string, request: Request, pathname: string,
-  ): Promise<Response> {
-    return await this.hostedWorkspace().routePreview(port, handle, request, pathname);
+  /**
+   * Reached by RPC, or via `fetch` for a WebSocket upgrade, which cannot cross RPC as a 101. A preview opens only for
+   * the workspace's owner, its own browsers and fetches ({@link PREVIEW_SELF}) and a slate picture's capture, so a
+   * slate's calls, which run as the owner, run for no one else; this is decided before anything of the slate starts.
+   */
+  async routeWorkspacePreview({ port, handle, pathname, viewer }: PreviewVisit, request: Request): Promise<Response> {
+    const owner = this.getOwnerUserId();
+    const admitted = viewer === PREVIEW_SELF || (owner !== null && viewer === owner) || this.pictures.captures(port, handle, Date.now());
+
+    if (admitted) return await this.hostedWorkspace().routePreview(port, handle, request, pathname);
+    diagnostics.event('preview.route.refused', { port, handle, reason: viewer === null ? 'no-viewer' : 'not-owner', owner: '', detail: '' });
+    const entry = viewer === null && isNavigation(request) ? previewEntryUrl(this.env, request.url) : null;
+    const headers = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
+
+    // A page load is sent to the app, which signs its visitor in and sends the owner back; a script's request is refused.
+    if (entry !== null) return new Response(null, { status: 303, headers: { ...headers, location: entry } });
+
+    return new Response(previewRefusalText(await this.hostedWorkspace().servesSlate(port)), { status: 403, headers: { ...headers, 'content-type': 'text/plain; charset=utf-8' } });
+  }
+
+  /** What the app's preview entry tells `userId` (`nimbus-route.ts`): a read, which never claims the workspace. */
+  async previewAccess(userId: string, port: number): Promise<PreviewAccess> {
+    return { owned: this.getOwnerUserId() === userId, slate: await this.hostedWorkspace().servesSlate(port) };
   }
 
   /**
@@ -1992,14 +2007,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly _forwarded = new Hono({ getPath: rawPath })
     .all(`${WORKSPACE_PREVIEW_PATH}/*`, beneath(WORKSPACE_PREVIEW_PATH, async (c) => {
-      const [port, handle, ...rest] = c.req.path.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
+      // The viewer segment is the one the edge wrote: empty when the visitor carried no verified cookie.
+      const [port, handle, viewer, ...rest] = c.req.path.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
       const parsed = Number(port);
 
-      if (!Number.isInteger(parsed) || !handle) {
+      if (!Number.isInteger(parsed) || !handle || viewer === undefined) {
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
 
-      return await this.routeWorkspacePreview(parsed, handle, c.req.raw, `/${rest.join('/')}`);
+      const visit = { port: parsed, handle, pathname: `/${rest.join('/')}`, viewer: viewer === '' ? null : decodeURIComponent(viewer) };
+
+      return await this.routeWorkspacePreview(visit, c.req.raw);
     }))
     .all(`${SLATE_SHARE_PATH}/*`, beneath(SLATE_SHARE_PATH, async (c) => {
       const [handle, claimText, ...rest] = c.req.path.slice(SLATE_SHARE_PATH.length + 1).split('/');
@@ -3766,7 +3784,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!applied) return false;
     this._titleCache = { displayName, nameOrigin: origin };
     this._titleHydrated = true;
-    this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
 
     return true;
   }
@@ -4926,8 +4943,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async previewScaffoldLive(
     version: number,
     task: string,
-  ): Promise<ScaffoldRunResult> {
-    return previewScaffoldLive(this.scaffoldControl, version, task);
+  ): Promise<ScaffoldRunReport> {
+    // Its native chunks do not cross the socket; the report counts them.
+    return scaffoldRunReport(await previewScaffoldLive(this.scaffoldControl, version, task));
   }
 
   /**
@@ -5143,12 +5161,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async getChangeNotes(source: string): Promise<ReviewAnnotation[]> {
+  async getChangeNotes(source: string): Promise<ChangeNote[]> {
     return readChangeNotes(this.rt, source);
   }
 
   @callable()
-  async saveChangeNotes(source: string, notes: ReviewAnnotation[]): Promise<ChangeNotesResult> {
+  async saveChangeNotes(source: string, notes: readonly ChangeNote[]): Promise<ChangeNotesResult> {
     return saveChangeNotes(this.rt, source, { value: notes });
   }
 
@@ -5231,7 +5249,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Owner-scoped ('interactive'); workspace capability tiers do not gate it.
    */
   @callable()
-  exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
+  exportWorkspaceArchive(cursor: ArchiveCursor | null = null): Promise<ArchivePage> {
     return settle(Effect.gen({ self: this }, function* () {
       const ownerUserId = this.getOwnerUserId();
 
@@ -5393,9 +5411,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async getFacts(limit = 100): Promise<Array<{
-    key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
-  }>> {
+  async getFacts(limit = 100): Promise<Array<Pick<Fact, 'key' | 'value' | 'confidence' | 'source' | 'lastObservedAt'>>> {
     return this.facts.recentTopK(limit).map((f) => ({
       key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
     }));
@@ -5522,10 +5538,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
+  /** The pane's read of a chat, the workspace agent's or `actor`'s alike: one read for any pane. */
   @callable()
-  getActorSnapshot(name: string) {
+  getActorSnapshot(actor?: string): Promise<ActorSnapshot> {
     return settle(Effect.gen({ self: this }, function* () {
-      const { entry, child } = yield* this.hostedChild(name);
+      if (actor === undefined) return yield* Effect.promise(async () => this.mainSnapshot());
+      const { entry, child } = yield* this.hostedChild(actor);
+      const actorId = child.handle.actorId;
 
       // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
       const { profile } = yield* Effect.promise(async () => this.actorProfile({
@@ -5534,21 +5553,39 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return {
         name: entry.name,
-        // The id every frame broadcast for this actor is stamped with; the pane uses it to filter frames.
-        actorId: child.handle.actorId,
+        actorId,
         displayName: child.stores.config.getDisplayName() ?? entry.name,
         role: child.stores.config.getRoleSelection(),
         mission: entry.birth?.seed.mission ?? '',
         model: { model: profile.tier.model, source: profile.tier.source },
         reasoningEffort: profile.tier.reasoningEffort,
         // Its plans live in its own isolate (D9).
-        activePlan: yield* Effect.promise(async () => await (await this.agentCalls(child.handle.actorId)).activePlanReview(this.agentSnapshot(child.handle.actorId))),
-        // Counted in the store: the pane holds only a window.
-        messageCount: yield* Effect.promise(async () => this.agentStores(child.handle.actorId).messageCount()),
+        activePlan: yield* Effect.promise(async () => await (await this.agentCalls(actorId)).activePlanReview(this.agentSnapshot(actorId))),
+        messageCount: yield* Effect.promise(async () => this.agentStores(actorId).messageCount()),
         // Its own isolate's sends, as its conversation is.
-        pendingSteers: (yield* Effect.promise(async () => await (await this.agentCalls(child.handle.actorId)).standing(this.agentSnapshot(child.handle.actorId), null))).pendingSteers,
+        pendingSteers: (yield* Effect.promise(async () => await (await this.agentCalls(actorId)).standing(this.agentSnapshot(actorId), null))).pendingSteers,
       };
     }));
+  }
+
+  /** The workspace agent's chat, as {@link getActorSnapshot} reads a hosted one's: its profile the one its next turn runs. */
+  private async mainSnapshot(): Promise<ActorSnapshot> {
+    const [profile, activePlan, standing, displayName, mission] = await Promise.all([
+      this.currentProfile(), this.getActivePlanReview(), this.mainStanding({ fresh: true }), this.workspaceTitle(), this.ownMission(),
+    ]);
+
+    return {
+      name: this.name,
+      actorId: this.actorHandle().actorId,
+      displayName: displayName ?? '',
+      role: this.config.getRoleSelection(),
+      mission,
+      model: { model: this.effectiveModelSpec(), source: profile.tier.source },
+      reasoningEffort: profile.tier.reasoningEffort,
+      activePlan,
+      messageCount: standing.messageCount,
+      pendingSteers: standing.pendingSteers,
+    };
   }
 
   /**
@@ -6021,10 +6058,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await stub.setWorkspaceLogo(caller, this.name, svg)).drawn;
   }
 
+  /** The owner's title for the workspace, trimmed; the owner's object refuses one `workspaceTitleProblem` names. */
   @callable() async setDisplayName(displayName: string) {
-    await this.propagateDisplayName(displayName, 'user');
+    const title = displayName.trim();
 
-    return { displayName };
+    await this.propagateDisplayName(title, 'user');
+
+    return { displayName: title };
   }
 
   async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) {
@@ -6286,11 +6326,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async snapshotOf(memoryContent: string, presence: Parameters<typeof hasWorkspaceWork>[0]) {
-    const [status, tools, executors, activePlan, tabPresence, { slates }] = await Promise.all([
+    const [status, chat, tools, executors, tabPresence, { slates }] = await Promise.all([
       this.getAgentStatus(),
+      this.mainSnapshot(),
       this.getToolDescriptions(),
       this.getExecutors(),
-      this.getActivePlanReview(),
       this.tabPresenceOf(presence),
       this.listSlates(),
     ]);
@@ -6311,9 +6351,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       .map((run) => ({ type: 'branch_status' as const, status: 'running' as const, branchId: run.rootId, task: run.task }));
 
     return {
-      status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
-      tabPresence, slates, pendingSteers: (await this.mainStanding()).pendingSteers, branchRuns,
-      turnClaim: this.turnClaimState(),
+      status, chat, tools, memoryContent, executors, executorOutputs, lastActiveExecutor,
+      tabPresence, slates, branchRuns, turnClaim: this.turnClaimState(),
     };
   }
 
@@ -6813,11 +6852,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** A hosted actor's own model pin, over the workspace's for its turns. */
-  @callable() setActorModel(actor: string, spec: string) {
+  /** The workspace agent's model pin, or `actor`'s own over the workspace's for its turns. */
+  @callable() setModel(spec: string, actor?: string) {
     return settle(Effect.gen({ self: this }, function* () {
-      const set = setModel(this.modelSetting((yield* this.hostedChild(actor)).child.stores.config, () => {}), spec);
+      const set = setModel(this.modelSetting(yield* this.actorConfig(actor), () => {}), spec);
 
+      // That agent's isolate measures its next request on the new model, as every agent's does.
       yield* Effect.promise(async () => this.modelSettingsChanged());
 
       return set;
@@ -7133,9 +7173,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */
   @callable()
-  async listRefinements(limit = 20): Promise<{
-    requests: RefinementRequestView[]; debt: EvolutionDebt;
-  }> {
+  async listRefinements(limit = 20): Promise<RefinementListing> {
     return listRefinements(this.refinementDeps, limit);
   }
 
@@ -7328,7 +7366,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 reportSocketCallFailures(OrchestratorAgent, Agent);
 
 /** Cursor is client-supplied: anything malformed starts a fresh archive instead of reaching the query. */
-function parseArchiveCursor(value: ArchiveCursor | undefined): ArchiveCursor | null {
+function parseArchiveCursor(value: ArchiveCursor | null): ArchiveCursor | null {
   const parsed = v.safeParse(ArchiveCursorSchema, value);
 
   return parsed.success ? parsed.output : null;

@@ -45,7 +45,7 @@ END`]));
         if (setup.exitCode !== 0) throw new Error('Could not author boundary slate: ' + setup.stdout);
         // Unsupported is a failure, never an answer to this positive control.
         const preview = v.parse(Preview, await session.rpcAt(maxName, 'previewSlate', ['address']));
-        const response = await fetch(preview.value.url);
+        const response = await session.openPreview(preview.value.url);
         const body = await response.text();
         const label = new URL(preview.value.url).hostname.split('.')[0] ?? '';
 

@@ -17,13 +17,14 @@ import {
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
+import type { SessionEvent } from '@kinu.run/core';
 import {
   LocalAgentHost,
   makeWorkspaceSchemaSql,
   openWorkspaceCLI,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
-  type SessionEvent, workspaceHome,
+  workspaceHome,
 } from '@kinu.run/cli-backend';
 // The v2 fixture model is a test helper, not a package export: reuse it rather than keep a second copy.
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
@@ -149,14 +150,18 @@ function makeProject(): string {
   return scratchDir('naming-project');
 }
 
-/** The announcement is the auto-title's own write, so waiting on it waits on the fact, not a delay. */
-function titled(host: LocalAgentHost): Promise<string> {
-  const settled = Promise.withResolvers<string>();
+/** The title the first turn wrote: its terminal effect, read once the turn ended and its detached close settled. */
+function titled(host: LocalAgentHost): Promise<string | undefined> {
+  const settled = Promise.withResolvers<string | undefined>();
 
-  const unsubscribe = host.subscribe((_who, event: SessionEvent) => {
-    if (event.type !== 'broadcast' || event.event.type !== 'workspace_renamed') return;
+  const unsubscribe = host.subscribe((who, event: SessionEvent) => {
+    if (who !== SLUG || event.type !== 'turn-end') return;
     unsubscribe();
-    settled.resolve(event.event.displayName);
+    settled.resolve(host.acquire(SLUG).then(async (session) => {
+      await session.settleBackgroundWork();
+
+      return listKnownAgents().find((agent) => agent.name === SLUG)?.label;
+    }));
   });
 
   return settled.promise;

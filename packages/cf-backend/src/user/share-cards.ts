@@ -25,6 +25,9 @@ export const ReceivedShareSchema = v.object({ ownerUserId: v.string(), workspace
 
 export type ReceivedShare = v.InferOutput<typeof ReceivedShareSchema>;
 
+/** A card as its recipient holds it: when it first reached this account rides along. */
+export type HeldShare = ReceivedShare & { readonly receivedAt: number };
+
 const SentRowSchema = v.object({ share_id: v.string(), recipient_user_id: v.string(), card: v.string() });
 
 /** A share as its people's Drive shows it; `owner` is the sharing account's email. */

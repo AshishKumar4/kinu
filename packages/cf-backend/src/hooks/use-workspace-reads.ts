@@ -5,12 +5,12 @@ import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState, SubordinateActivityEventSchema,
   type MctsProgress, branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, LIVE_READS,
   READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, WORK_TAB_JOBS, type JobOutputTail, listedOn, type LiveRead,
-  type PendingAction, type SlateProblem, type SlateSummary,
+  type PendingAction, type SlateSummary,
 } from "@kinu.run/core";
 import * as v from "valibot";
-import { explorationForkTree, OwedOwnerIntentSchema, type OwedOwnerIntent } from "@kinu.run/core";
+import { explorationForkTree, type OwedOwnerIntent } from "@kinu.run/core";
 import type {
-  MemoryEntry, ForkNode, ExecutorCommandResult, PendingConsent, AskingAgent, SubordinateActivityEvent, TabPresence,
+  MemoryEntry, ForkNode, PendingConsent, AskingAgent, SubordinateActivityEvent, TabPresence,
 } from "@kinu.run/core";
 import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
@@ -19,7 +19,7 @@ import { appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas } fro
 import { parseMemoryNotes } from "@kinu.run/core";
 import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
 import {
-  reconcilePreviewPorts, type ExecutorPortRefresh, type ExposedPortList, type PinnedPreviewPort,
+  reconcilePreviewPorts, type ExecutorPortRefresh, type PinnedPreviewPort,
 } from "@kinu.run/core";
 import { jobPhase, type InspectedWork } from "@kinu.run/core";
 import type { SocketFrame } from "./socket-frames";
@@ -30,6 +30,8 @@ import {
 import { pruneSlateReloads } from "@kinu.run/core";
 import type { WorkspacePlanReference } from "@kinu.run/core";
 import type { ChatLink, ExecutorOutput, WorkspaceExtension, WorkspaceOpening } from "./use-chat-owner";
+import type { AsyncResource } from "./use-async-resource";
+import type { AgentStatus } from "@kinu.run/core";
 
 export interface BranchRun {
   branchId: string;
@@ -42,24 +44,6 @@ export interface BranchRun {
 
 export type ReadMoves = Readonly<Partial<Record<LiveRead, number>>>;
 
-const SubordinateRosterEntrySchema = v.object({
-  name: v.string(),
-  actorId: v.nullable(v.string()),
-  displayName: v.string(),
-  role: v.string(),
-  nameOrigin: v.picklist(["user", "auto"]),
-  origin: v.picklist(["user", "agent", "evolution"]),
-  lifetime: v.picklist(["durable", "task"]),
-  status: v.picklist(["idle", "working", "awaiting_input", "dismissed"]),
-  currentTask: v.nullable(v.string()),
-  createdAt: v.number(),
-  dismissedAt: v.nullable(v.number()),
-});
-
-const SubordinateMutationEnvelopeSchema = v.object({
-  subordinate: SubordinateRosterEntrySchema,
-});
-
 export interface UnavailableDevice { id: string; label: string; lastSeenAt: number | null }
 
 type ConsentDecision = "once" | "always" | "deny";
@@ -67,7 +51,7 @@ type ConsentDecision = "once" | "always" | "deny";
 interface PendingConsentResolution {
   readonly consentId: string;
   readonly decision: ConsentDecision;
-  readonly resolve: (id: string, choice: ConsentDecision) => Promise<void>;
+  readonly resolve: (id: string, choice: ConsentDecision) => Promise<{ readonly ok: boolean }>;
   readonly remove: (id: string) => void;
   readonly report: ConsentResolutionReporter;
   readonly isCurrent: () => boolean;
@@ -96,10 +80,21 @@ export interface WorkspacePlanArrival {
 }
 
 /** The reads only the workspace's pane draws. */
+/** The workspace's status as a read: failed with the last one kept, loading until the first, else ready. */
+function statusResource(status: AgentStatus | null, failed: string | undefined): AsyncResource<AgentStatus> {
+  if (failed !== undefined) return { status: "error", message: failed, last: status };
+
+  return status === null ? { status: "loading" } : { status: "ready", value: status };
+}
+
 export function useWorkspaceReads(link: ChatLink) {
   const {
     agent, rpc, actorKey, liveRefreshAdmission, refreshCurrentLiveResource, setSourceError, errors, loaded, streaming, rereadPlan,
   } = link;
+
+  // The workspace as a whole, set by each completed opening: a surface may only say "none" of a read that came back.
+  const [workspaceStatus, setWorkspaceStatus] = useState<AgentStatus | null>(null);
+  const snapshot = statusResource(workspaceStatus, errors.snapshot);
 
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
@@ -233,39 +228,39 @@ export function useWorkspaceReads(link: ChatLink) {
 
   const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
     "jobs",
-    () => rpc<BackgroundJob[]>("listBackgroundJobs", [WORK_TAB_JOBS]),
+    () => rpc("listBackgroundJobs", [WORK_TAB_JOBS]),
     setBackgroundJobs,
   ), [refreshCurrentLiveResource, rpc]);
 
-  const [inspectedWork, setInspectedWork] = useState<InspectedWork[]>([]);
+  const [inspectedWork, setInspectedWork] = useState<readonly InspectedWork[]>([]);
 
   const refreshInspectedWork = useCallback(() => refreshCurrentLiveResource(
     "work",
-    () => rpc<InspectedWork[]>("inspectWork", []),
+    () => rpc("inspectWork", []),
     setInspectedWork,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshPendingConsents = useCallback(() => refreshCurrentLiveResource(
-    "consents", () => rpc<PendingConsent[]>("listPendingConsents", []), setPendingConsents,
+    "consents", () => rpc("listPendingConsents", []), setPendingConsents,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
     "pendingActions",
-    () => rpc<PendingAction[]>("listPendingActions", []),
+    () => rpc("listPendingActions", []),
     setPendingActions,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshOwnerQuestions = useCallback(() => refreshCurrentLiveResource(
-    "questions", () => rpc<AskingAgent[]>("listOwnerQuestions", []), setOwnerQuestions,
+    "questions", () => rpc("listOwnerQuestions", []), setOwnerQuestions,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshOwedIntents = useCallback(() => refreshCurrentLiveResource(
-    "owedIntents", async () => v.parse(v.array(OwedOwnerIntentSchema), await rpc<unknown>("listOwedIntents", [])), setOwedIntents,
+    "owedIntents", () => rpc("listOwedIntents", []), setOwedIntents,
   ), [refreshCurrentLiveResource, rpc]);
 
   const refreshTabPresence = useCallback(() => refreshCurrentLiveResource(
     "presence",
-    () => rpc<TabPresence>("getWorkspaceTabPresence", []),
+    () => rpc("getWorkspaceTabPresence", []),
     setTabPresence,
   ), [refreshCurrentLiveResource, rpc]);
 
@@ -285,7 +280,7 @@ export function useWorkspaceReads(link: ChatLink) {
 
   const refreshSlates = useCallback(() => refreshCurrentLiveResource(
     "slates",
-    () => rpc<{ slates: SlateSummary[]; problems: SlateProblem[] }>("listSlates", []).then((listing) => listing.slates),
+    () => rpc("listSlates", []).then((listing) => listing.slates),
     (listing) => applySlates(listing, true),
   ), [applySlates, refreshCurrentLiveResource, rpc]);
 
@@ -294,13 +289,7 @@ export function useWorkspaceReads(link: ChatLink) {
     "roster", async () => next, setSubordinates,
   ), [refreshCurrentLiveResource]);
 
-  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", async () => {
-    const roster = parseSubordinateRoster({ value: await rpc<unknown>("listSubordinates", []) });
-
-    if (!roster) throw new Error("Subordinate roster returned an invalid response");
-
-    return roster;
-  }, setSubordinates), [refreshCurrentLiveResource, rpc]);
+  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", () => rpc("listSubordinates", []), setSubordinates), [refreshCurrentLiveResource, rpc]);
 
   // Stable, or the changelog hook's effect fires markChangelogSeen every render.
   const clearChangelogUnseen = useCallback(() => {
@@ -445,7 +434,7 @@ export function useWorkspaceReads(link: ChatLink) {
 
     const results = await Promise.all(["workspace", "computer"].map(async (executor) => {
       try {
-        const result = await rpc<ExposedPortList>("getExposedPorts", [executor]);
+        const result = await rpc("getExposedPorts", [executor]);
 
         return { executor, result } satisfies ExecutorPortRefresh;
       } catch (cause) {
@@ -477,9 +466,9 @@ export function useWorkspaceReads(link: ChatLink) {
 
   const liveReads = useMemo((): Partial<Record<LiveRead, () => Promise<void>>> => ({
     getExposedPorts: refreshExposedPorts,
-    getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
-    getExecutors: () => refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
-    listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc<PanelAgent[]>("listWorkspaceAgents", []), setWorkspaceAgents),
+    getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc("getMemoryContent", []), setMemoryContent),
+    getExecutors: () => refreshCurrentLiveResource("executors", () => rpc("getExecutors", []), setExecutors),
+    listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc("listWorkspaceAgents", []), setWorkspaceAgents),
     listSubordinates: refreshRoster,
     listBackgroundJobs: refreshBackgroundJobs,
     inspectWork: refreshInspectedWork,
@@ -533,6 +522,8 @@ export function useWorkspaceReads(link: ChatLink) {
   }, [streaming, refreshLiveData]);
 
   async function applySnapshot(snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean): Promise<void> {
+    setWorkspaceStatus(snap.status);
+
     if (isSourceCurrent("memoryContent")) {
       setMemoryContent(snap.memoryContent);
 
@@ -565,7 +556,7 @@ export function useWorkspaceReads(link: ChatLink) {
     try {
       await Promise.all([
         refreshExposedPorts(), refreshOwnerQuestions(), refreshOwedIntents(),
-        refreshCurrentLiveResource("roster", async () => v.parse(v.array(SubordinateRosterEntrySchema), await listedOn(snap.subordinates)), setSubordinates),
+        refreshCurrentLiveResource("roster", () => listedOn(snap.subordinates), setSubordinates),
         refreshCurrentLiveResource("consents", () => listedOn(snap.pendingConsents), setPendingConsents),
         refreshCurrentLiveResource("agents", () => listedOn(snap.workspaceAgents), setWorkspaceAgents),
       ]);
@@ -654,7 +645,7 @@ export function useWorkspaceReads(link: ChatLink) {
       let thrown: { cause: unknown } | null = null;
 
       try {
-        const results = await rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q]);
+        const results = await rpc("searchMemoryHybrid", [q]);
 
         if (seq !== searchSeq.current) return;
         setSourceError("memory", null);
@@ -677,7 +668,7 @@ export function useWorkspaceReads(link: ChatLink) {
 
   // Fires the RPC only; the broadcast renders the row. An optimistic append double-rendered output.
   const executeInExecutor = useCallback((executorId: string, command: string) => {
-    return rpc<ExecutorCommandResult>("executeInExecutor", [executorId, command]);
+    return rpc("executeInExecutor", [executorId, command]);
   }, [rpc]);
 
   const extension: WorkspaceExtension = { snapshot: applySnapshot, frame: paneFrame, refresh: refreshLiveData, jobs: refreshBackgroundJobs };
@@ -686,6 +677,8 @@ export function useWorkspaceReads(link: ChatLink) {
     extension,
     error,
     reads: {
+      status: workspaceStatus,
+      snapshot,
       memory,
       memoryContent,
       mctsTrees,
@@ -728,17 +721,13 @@ export function useWorkspaceReads(link: ChatLink) {
       headDeltas,
       /** Throws on error ('agent busy', 'fork point not found', 'agent name already exists'). */
       forkAgent: (untilMessageId: string, opts?: { name?: string }) =>
-        rpc<{ id: string; name: string; url: string; forkPointMs: number }>("forkAgent", [untilMessageId, opts ?? {}]),
+        rpc("forkAgent", [untilMessageId, opts ?? {}]),
       subordinates,
       subordinateEvents,
       signalCards,
       /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. `opening` names it. */
       createSubordinate: async (opening?: string) => {
-        const result = await rpc<{
-          name: string;
-          displayName: string;
-          subordinate: SubordinateRosterEntry;
-        }>("createSubordinateAgent", opening === undefined ? [] : [opening]);
+        const result = await rpc("createSubordinateAgent", opening === undefined ? [] : [opening]);
 
         await writeRoster((current) => [
           ...current.filter((entry) => entry.name !== result.subordinate.name),
@@ -749,10 +738,7 @@ export function useWorkspaceReads(link: ChatLink) {
       },
       /** A user-chosen name permanently blocks auto-retitling (server-side). */
       renameSubordinate: async (name: string, displayName: string) => {
-        const result = v.parse(
-          SubordinateMutationEnvelopeSchema,
-          await rpc<unknown>("renameSubordinateAgent", [name, displayName]),
-        );
+        const result = await rpc("renameSubordinateAgent", [name, displayName]);
 
         const entry = result.subordinate;
         await writeRoster((current) => current.map(
@@ -762,8 +748,7 @@ export function useWorkspaceReads(link: ChatLink) {
         return entry;
       },
       dismissSubordinate: async (name: string, keepHistory?: boolean) => {
-        const args = keepHistory === undefined ? [name] : [name, keepHistory];
-        const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", args);
+        const result = await rpc("dismissSubordinate", keepHistory === undefined ? [name] : [name, keepHistory]);
 
         await writeRoster((current) => current.filter((entry) => entry.name !== result.name));
 
@@ -771,12 +756,6 @@ export function useWorkspaceReads(link: ChatLink) {
       },
     },
   };
-}
-
-function parseSubordinateRoster({ value }: { value: unknown }): SubordinateRosterEntry[] | null {
-  const parsed = v.safeParse(v.array(SubordinateRosterEntrySchema), value);
-
-  return parsed.success ? parsed.output : null;
 }
 
 function parseSubordinateActivityEvent({ value }: { value: unknown }): SubordinateActivityEvent | null {

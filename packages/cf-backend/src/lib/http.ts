@@ -19,6 +19,34 @@ export interface HttpRequest {
   readonly body?: BodyInit;
   /** The caller's own end: a mutation is never ended on a timer, since it may already have landed. */
   readonly signal?: AbortSignal;
+  /** Told how many bytes of `body` have gone, as they go: an upload's progress. */
+  readonly sent?: (bytes: number) => void;
+}
+
+/** Answers with no body, which a `Response` refuses one for. */
+const BODILESS = new Set([101, 204, 205, 304]);
+
+/** A body sent through XMLHttpRequest, the one browser transport that says how much of a body has gone. */
+function watched(url: string, method: string, asked: HttpRequest, sent: (bytes: number) => void): Effect.Effect<Response> {
+  return Effect.callback<Response>((resume) => {
+    const xhr = new XMLHttpRequest();
+    const stop = (): void => { xhr.abort(); };
+
+    xhr.open(method, url);
+    xhr.responseType = 'blob';
+    xhr.upload.addEventListener('progress', (event) => { sent(event.loaded); });
+    xhr.addEventListener('load', () => {
+      const body: Blob | null = BODILESS.has(xhr.status) ? null : xhr.response;
+
+      resume(Effect.succeed(new Response(body, { status: xhr.status })));
+    });
+    xhr.addEventListener('error', () => { resume(Effect.die(new TypeError(`${method} ${url}: the connection dropped`))); });
+    xhr.addEventListener('abort', () => { resume(Effect.die(asked.signal?.reason ?? new DOMException('The upload was stopped.', 'AbortError'))); });
+    asked.signal?.addEventListener('abort', stop, { once: true });
+    xhr.send(asked.body instanceof Blob ? asked.body : null);
+
+    return Effect.sync(() => { asked.signal?.removeEventListener('abort', stop); });
+  });
 }
 
 const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
@@ -31,12 +59,12 @@ export function respond(url: string, asked: HttpRequest = {}): Effect.Effect<Res
   const method = asked.method ?? 'GET';
   const read = method === 'GET';
 
-  const ask = Effect.promise(() => fetch(url, {
+  const ask = asked.sent === undefined ? Effect.promise(() => fetch(url, {
     method,
     ...(asked.json !== undefined && { headers: { 'content-type': 'application/json' }, body: JSON.stringify(asked.json) }),
     ...(asked.body !== undefined && { body: asked.body }),
     signal: asked.signal ?? (read ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined),
-  }));
+  })) : watched(url, method, asked, asked.sent);
 
   return read ? Effect.catchDefect(ask, (dropped) => (dropped instanceof TypeError ? ask : Effect.die(dropped))) : ask;
 }

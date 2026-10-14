@@ -1,7 +1,7 @@
 /** `kinu export` / `kinu import`: one archive format (core `identity/archive.ts`) for local and cloud workspaces. */
 
 import {
-  appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync,
+  appendFileSync, closeSync, existsSync, mkdirSync, openSync,
   readSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -79,8 +79,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     process.exit(1);
   }
 
-  const bareDatabase = isSqliteDatabaseFile(file);
-  const name = opts.name ?? (bareDatabase ? nameFromFilename(file) : archiveWorkspaceName(file) ?? nameFromFilename(file));
+  const name = opts.name ?? archiveWorkspaceName(file) ?? nameFromFilename(file);
   ensureAgentHome();
   const dbPath = agentDbPath(name);
 
@@ -111,8 +110,6 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   let restored: RestoredArchiveCounts;
 
   try {
-    // A bare SQLite database, not an archive: copying the file is the restore.
-    if (bareDatabase) copyFileSync(file, stagedDb);
     const db = new Database(stagedDb, { create: true });
 
     try {
@@ -122,16 +119,12 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
       let store: ReturnType<typeof createInlineWorkspace> | null = null;
       const opened = () => (store ??= createInlineWorkspace(db));
 
-      if (bareDatabase) {
-        restored = countRestored(db, file);
-      } else {
-        const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), {
-          files: () => files, store: () => workspaceArchiveTarget(opened()),
-        });
+      const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), {
+        files: () => files, store: () => workspaceArchiveTarget(opened()),
+      });
 
-        restored = { rows: result.rows, tables: result.tables };
-        stampSchemaGenesis(db);
-      }
+      restored = { rows: result.rows, tables: result.tables };
+      stampSchemaGenesis(db);
 
       // Locally every file is a real one: a cloud archive's own-space files, agent state too, land with a local archive's.
       await publishStoreFiles(opened().vfs, files);
@@ -228,20 +221,6 @@ function* readLines(path: string): Generator<string> {
   }
 }
 
-/** SQLite's 16-byte magic; recognizes backups from the pre-archive `kinu export`. */
-function isSqliteDatabaseFile(path: string): boolean {
-  const fd = openSync(path, 'r');
-
-  try {
-    const header = Buffer.allocUnsafe(16);
-    const read = readSync(fd, header, 0, 16, 0);
-
-    return read === 16 && header.toString('latin1') === 'SQLite format 3\0';
-  } finally {
-    closeSync(fd);
-  }
-}
-
 /** Null when the first line is not an archive header: a domain answer, not a failure. */
 function archiveWorkspaceName(path: string): string | null {
   for (const line of readLines(path)) {
@@ -259,27 +238,6 @@ function archiveWorkspaceName(path: string): string | null {
 }
 
 function nameFromFilename(file: string): string {
-  return basename(file)
-    .replace(new RegExp(`${WORKSPACE_ARCHIVE_EXTENSION.replace(/\./g, '\\.')}$`), '')
-    .replace(/\.agent\.db$/, '')
-    .replace(/\.db$/, '');
+  return basename(file).replace(new RegExp(`${WORKSPACE_ARCHIVE_EXTENSION.replace(/\./g, '\\.')}$`), '');
 }
 
-function countRestored(db: Database, source: string): RestoredArchiveCounts {
-  requireSchemaGenesis(db, source);
-
-  const tables = db.query<{ name: string }, []>(
-    `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
-  ).all();
-
-  let rows = 0;
-
-  for (const table of tables) {
-    const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM "${table.name.replace(/"/g, '""')}"`).get();
-
-    if (!row) throw new Error(`Could not count restored table ${table.name}`);
-    rows += row.n;
-  }
-
-  return { rows, tables: tables.length };
-}

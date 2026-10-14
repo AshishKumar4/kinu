@@ -14,7 +14,8 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, MAX_CONCURRENT_DETACHED_JOBS, BackgroundJobStore, JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY, profileCatalogDigest, readActivityLog, type JsonObject, type ProfileCatalogEnvelope, createAgentSelfProvider, InstructionApprovalStore, instructionDigest, createProviderRegistry, createModelsDevCatalogSource,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession, type LocalAgentSessionOpts } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { staticModelPlane } from '../src/profile-authority';

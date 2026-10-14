@@ -794,27 +794,27 @@ describe('the rung is structural, and so is its absence', () => {
     const team = capped.deps.team;
 
     if (!team) throw new Error('the depth fixture has no team');
-    const expected = delegationDepthRefusal(team.delegation);
-    const taskRefusal = capped.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' });
-    await expect(taskRefusal).rejects.toMatchObject({ code: expected.reason, message: expected.error });
-    const hireRefusal = capped.call('hire', { role: 'auditor', mission: 'Audit the ledger.' });
-    await expect(hireRefusal).rejects.toMatchObject({ code: expected.reason, message: expected.error });
+
+    // At the cap the agent has no team at all: neither hire is an operation it has, and nothing is spawned.
+    const refusals = await Promise.allSettled([
+      capped.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }),
+      capped.call('hire', { role: 'auditor', mission: 'Audit the ledger.' }),
+    ]);
+
+    const codes = refusals.map((settled) => (settled.status === 'rejected' ? v.parse(v.object({ code: v.string() }), settled.reason).code : null));
+
+    expect({ refused: codes.every((code) => code !== null), alike: codes[0] === codes[1] }).toEqual({ refused: true, alike: true });
     expect(capped.calls).toEqual([]);
     expect(capped.roster.listAll()).toEqual([]);
-
-    // Handing work to an existing agent adds no depth, so it stays available at the cap.
-    await expect(capped.call('assign', { agent: 'nobody', message: 'x' }))
-      .rejects.toMatchObject({ code: 'bad_input' });
   });
 
   test('the depth refusal suggests only calls the surface accepts', () => {
-    // Both advertised remedies must survive the model-facing parse, or the refusal teaches an unwinnable retry.
+    // The refusal teaches only a retry the capped surface can take, or it teaches an unwinnable one.
     const remedy = delegationDepthRefusal({ depth: DELEGATION_MAX_DEPTH, maxDepth: 0 }).error;
     expect(remedy).toContain('config:{context:"inherit"}');
-    expect(remedy).toContain('agents({op:"assign", agent, message})');
+    // An agent at the cap has no team, so the refusal names no call to one.
+    expect(remedy).not.toContain('op:"assign"');
     expect(remedy).not.toContain('ask by');
-    const scene = makeScene();
-    expect(nativeRefusal(scene.deps, { op: 'assign', agent: 'a', message: 'm' })).toBeNull();
   });
 
   test('a task child is a real agent: it can hire a role of its own until the cap', () => {

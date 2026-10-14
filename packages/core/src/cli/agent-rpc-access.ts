@@ -167,7 +167,6 @@ export const AGENT_RPC_ACCESS = {
   setDisplayName: 'interactive',
   setEvolutionConfig: 'interactive',
   setModel: 'interactive',
-  setActorModel: 'interactive',
   setRole: 'interactive',
   setReasoningEffort: 'interactive',
   setProviderAccount: 'interactive',
@@ -212,7 +211,7 @@ type HostedWindowCheck = (args: readonly JsonValue[], actor: HostedWindowActor) 
 const HOSTED_WINDOW_RPC = {
   getChatHistoryPage: (args, actor) => v.is(v.object({ actor: v.literal(actor.id) }), args[0]),
   getActorSnapshot: (args, actor) => args[0] === actor.name,
-  setActorModel: (args, actor) => args[0] === actor.name,
+  setModel: (args, actor) => args[1] === actor.name,
   setReasoningEffort: (args, actor) => args[1] === actor.name,
   listBackgroundJobs: (args, actor) => args[1] === actor.name,
   cancelBackgroundJob: (args, actor) => args[1] === actor.name,

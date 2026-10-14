@@ -11,8 +11,7 @@ import {
   NotePencilIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, jobPhase, taskTreePhase, revealMisrepresenting, timeAgo, type InspectedWork } from "@kinu.run/core";
-import type { AgentTaskTree, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanPageRef, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
-import type { Rpc } from "@kinu.run/core";
+import type { AgentTaskTree, Omitted, OwnedPlan, PanelAgent, PendingAction, PendingActionKind, PlanPageRef, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -25,6 +24,7 @@ import { renderThrownChain, detach, settle } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
 import { FileBody } from "./changes/ChangesPanel";
 import type { WorkspaceWorkRead } from "./use-workspace-work";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** Kinds decided in this queue, which is their only home. */
 type DecidedHere = "deferred_action" | "workspace_proposal";
@@ -60,7 +60,7 @@ export interface WorkTabProps {
   onOpenSurface: (surface: SurfaceKind) => void;
   /** Re-read after a decision so decided rows leave on the click, not the next poll. */
   onRefreshQueue?: () => void;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   agents?: { readonly list: readonly PanelAgent[]; readonly open: (agent: PanelAgent) => void };
 }
 
@@ -110,7 +110,7 @@ export function WorkTab({
 
 function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenPlan }: {
   pendingActions: PendingAction[];
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   /** Re-read after a decision so decided rows leave on the click, not the next poll. */
   onDecided?: () => void;
   onOpenSurface: (surface: SurfaceKind) => void;
@@ -169,7 +169,7 @@ function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, o
   onRetry: () => void;
   onRefreshJobs: () => void;
   onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
 }) {
   const nowEmpty = work !== null && openTasks.length === 0 && inspected.length === 0 && runningJobs.length === 0 && helpers.length === 0;
   const now = Date.now();
@@ -219,7 +219,7 @@ function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, o
 /** What finished: jobs and tasks, newest first under the day they ended. A row opens what it was. */
 function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
   journal: JournalRow[];
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   onRefreshJobs: () => void;
   onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
 }) {
@@ -350,7 +350,7 @@ const DECIDED_LINE: Record<ParkedDecision, string> = {
   approved: "Approved. It runs when the agent picks the decision up.",
 };
 
-export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { actions: PendingAction[]; rpc: Rpc; onDecided?: () => void; flow?: ParkedDecisionFlow }) {
+export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { actions: PendingAction[]; rpc: WorkspaceRpc; onDecided?: () => void; flow?: ParkedDecisionFlow }) {
   const [fresh] = useState(() => new ParkedDecisionFlow({
     decide: (ids, decision) => rpc("decideDeferredApprovals", [ids, decision]),
     onDecided: () => onDecided?.(),
@@ -424,7 +424,7 @@ function byteCount(bytes: number): string {
 }
 
 /** The parked bytes against the file as it is now: approving writes exactly these. */
-export function ParkedWriteChange({ id, rpc }: { id: string; rpc: Rpc }) {
+export function ParkedWriteChange({ id, rpc }: { id: string; rpc: WorkspaceRpc }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -437,8 +437,8 @@ export function ParkedWriteChange({ id, rpc }: { id: string; rpc: Rpc }) {
   );
 }
 
-function ParkedWriteDiff({ id, rpc }: { id: string; rpc: Rpc }) {
-  const load = useCallback(() => rpc<ParkedWriteReview>("reviewParkedWrite", [id]), [rpc, id]);
+function ParkedWriteDiff({ id, rpc }: { id: string; rpc: WorkspaceRpc }) {
+  const load = useCallback(() => rpc("reviewParkedWrite", [id]), [rpc, id]);
   const { resource, reload } = useAsyncResource(load);
   const review = lastValue(resource);
 
@@ -468,7 +468,7 @@ type DecidedElsewhere = PendingAction & { kind: Exclude<PendingActionKind, Decid
 type ProposalDecision = "approve" | "decline";
 
 /** A workspace the agent proposed: the SOUL.md approving writes, and one decision. Nothing exists until approved. */
-function WorkspaceProposalCard({ action, rpc, onDecided }: { action: PendingAction; rpc: Rpc; onDecided?: () => void }) {
+function WorkspaceProposalCard({ action, rpc, onDecided }: { action: PendingAction; rpc: WorkspaceRpc; onDecided?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);

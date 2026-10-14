@@ -1,6 +1,6 @@
 /** The out-of-band "who is driving?" read production never makes; exclusion is observable only from outside the holder. */
 import type { Database } from 'bun:sqlite';
-import type { DriverKind, DriverLeaseHolder } from '../src/agent-host';
+import type { DriverKind, DriverLeaseHolder } from '@kinu.run/core';
 import { makeSql } from '../src/runtime';
 
 /** Who the row says is driving, or null. Throws when the table is missing: that is a test asserting before it arranged. */

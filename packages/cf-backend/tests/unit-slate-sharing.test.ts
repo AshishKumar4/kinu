@@ -1,5 +1,5 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { expect, test } from 'bun:test';
+import { expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   BlueprintBundleSchema, BlueprintForkSchema, BlueprintInspectionSchema, PublishedBlueprintSchema, SlateShareRecordSchema, type AgentRuntime, type SlateAnswer,
@@ -175,11 +175,21 @@ test('naming users on a blueprint records them with the owner and projects the r
     expect(shared.users).toEqual(['pat@example.test']);
     const caller = await testOwner();
     const card = { kind: 'blueprint' as const, title: 'Issue triage', description: '', createdAt: 1, owner: 'owner@example.test' };
-    // The owner's account sends a card again whenever its tile changes; the recipient holds one.
+    // The owner's account sends a card again whenever its tile changes; the recipient holds one, arrived when it first did.
     await recipient.userDO.shareCards_put(caller, { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card });
-    await recipient.userDO.shareCards_put(caller, { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' } });
+    const [arrived] = await recipient.userDO.sharesReceived_list(caller);
+
+    // Sent again a minute later.
+    setSystemTime(new Date(Date.now() + 60_000));
+
+    try {
+      await recipient.userDO.shareCards_put(caller, { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' } });
+    } finally {
+      setSystemTime();
+    }
+
     expect(await recipient.userDO.sharesReceived_list(caller)).toEqual([
-      { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' } },
+      { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' }, receivedAt: arrived?.receivedAt },
     ]);
     await expect(recipient.userDO.sharesReceived_list({ workspaceToken: 'not-an-owner' })).rejects.toThrow();
     answered(await owner.agent.slate({ op: 'unshare', share: published.share.id }), SlateShareRecordSchema);

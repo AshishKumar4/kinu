@@ -387,7 +387,8 @@ export class SlateHost {
   /** A process for `launch`: the slate's bindings as its caller, and its outbound mediated as that caller's eval is. */
   private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
     const { id, caller, source, image, app } = launch;
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor: await this.deps.browserActor(caller) });
+    const actor = await this.deps.browserActor(caller);
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: caller.share === undefined });
 
     if (caller.workMode === 'build' && globalOutbound === null) {
       throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');

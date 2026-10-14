@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry,
+  autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry, workspaceTitleProblem,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -550,26 +550,31 @@ export class UserWorkspaces {
     const resolved = await this.host.requireTier(caller, 'workspaces.rename_self');
     validateWorkspaceName(name);
 
-    // An agent renames only itself; this is what makes rename safe at the `shared` tier.
-    if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`);
-    }
+    return settle(Effect.gen({ self: this }, function* () {
+      // An agent renames only itself; this is what makes rename safe at the `shared` tier.
+      if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+        return yield* Effect.fail(new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`));
+      }
 
-    const current = this.host.sqlx<{ name_origin: string }>(
-      `SELECT name_origin FROM user_workspaces
-       WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
-    )[0];
+      const current = this.host.sqlx<{ name_origin: string }>(
+        `SELECT name_origin FROM user_workspaces
+         WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
+      )[0];
 
-    if (!current) return { applied: false };
+      if (!current) return { applied: false };
 
-    if (origin !== 'user' && !autoTitleMayReplace(nameOriginOf(current.name_origin))) return { applied: false };
-    this.host.sqlx(
-      `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
-      displayName, origin, name,
-    );
-    this.rosterChanged(name);
+      if (origin !== 'user' && !autoTitleMayReplace(nameOriginOf(current.name_origin))) return { applied: false };
+      const problem = workspaceTitleProblem(displayName);
 
-    return { applied: true };
+      if (problem !== null) return yield* Effect.fail(new KinuError('bad_input', problem));
+      this.host.sqlx(
+        `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
+        displayName.trim(), origin, name,
+      );
+      this.rosterChanged(name);
+
+      return { applied: true };
+    }));
   }
 
   // Sanitized again at this boundary.

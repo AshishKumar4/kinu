@@ -239,7 +239,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
       await host.defaultInference();
     }`;
 
-    const files = this.rt.agentStateVfs ?? this.rt.storage.vfs;
+    const files = this.rt.agentStateVfs;
     await writeText(files, `${this.rt.identity.scaffold.path}.v7`, source);
     void this.boundSql`UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ${this.actorHandle().actorId}`;
     void this.boundSql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)

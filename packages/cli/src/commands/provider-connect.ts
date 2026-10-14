@@ -3,6 +3,9 @@ import { Cause, Effect } from 'effect';
 import { checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
 import {
   ANTHROPIC_DEFAULT_MODEL,
+  OPENAI_DEFAULT_MODEL,
+  OPENROUTER_DEFAULT_MODEL,
+  refusedHostname,
   CHATGPT_CRED_KEY,
   CHATGPT_DEFAULT_MODEL,
   CHATGPT_USAGE_URL,
@@ -298,10 +301,11 @@ function currentModel(model: string | undefined, prefix: string): string | undef
 
 type ApiKeyProviderId = keyof typeof API_KEY_PROVIDERS;
 
+/** Each provider's default model is its own, as the registry offers it. */
 const API_KEY_CONNECTORS: Readonly<Record<ApiKeyProviderId, { readonly label: string; readonly defaultModel: string }>> = {
-  openai: { label: 'OpenAI', defaultModel: 'gpt-4o-mini' },
-  openrouter: { label: 'OpenRouter', defaultModel: 'openai/gpt-4o-mini' },
-  anthropic: { label: 'Anthropic', defaultModel: 'claude-sonnet-4-5' },
+  openai: { label: 'OpenAI', defaultModel: OPENAI_DEFAULT_MODEL },
+  openrouter: { label: 'OpenRouter', defaultModel: OPENROUTER_DEFAULT_MODEL },
+  anthropic: { label: 'Anthropic', defaultModel: ANTHROPIC_DEFAULT_MODEL },
 };
 
 export function holdsAccounts(id: string): id is ApiKeyProviderId | 'chatgpt' | 'claude' {
@@ -706,40 +710,11 @@ function storeProviderSecret(opts: {
   });
 }
 
-/** https, and not a loopback, private, link-local, IPv6 ULA or CGNAT host. */
+/** https, to a host the Worker's own egress would let a request reach (`refusedHostname`). */
 function reachableFromTheInternet(baseURL: string): boolean {
   const url = tolerate(() => new URL(baseURL), 'malformed-input');
 
-  if (!url) return false;
-
-  if (url.protocol !== 'https:') return false;
-  const hostname = url.hostname;
-  const host = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
-
-  if (isIPv6Ula(host) || isCgnat(host)) return false;
-
-  return !/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname);
-}
-
-/** fc00::/7 */
-function isIPv6Ula(host: string): boolean {
-  if (!host.includes(':')) return false;
-  const first = Number.parseInt(host.split(':')[0] ?? '', 16);
-
-  if (!Number.isFinite(first)) return false;
-  const top = first >>> 8;
-
-  return top === 0xfc || top === 0xfd;
-}
-
-/** 100.64.0.0/10 */
-function isCgnat(host: string): boolean {
-  const octets = host.split('.');
-
-  if (octets.length !== 4 || octets.some((o) => !/^\d+$/.test(o))) return false;
-  const [first, second] = octets.map(Number);
-
-  return first === 100 && (second ?? 0) >= 64 && (second ?? 0) <= 127;
+  return url !== undefined && url.protocol === 'https:' && refusedHostname(url.hostname) === null;
 }
 
 /** Every local provider write goes through here, so the provider revision bump cannot be skipped. */

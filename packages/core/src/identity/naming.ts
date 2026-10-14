@@ -162,11 +162,14 @@ const FALLBACK_NOUNS = [
   'yard',
 ] as const;
 
+/** The longest workspace title: what an editor accepts, what the owner's object stores, what a derived title is cut to. */
+export const WORKSPACE_TITLE_MAX = 60;
+
 /** Deterministic provisional display title: first non-empty line, collapsed. */
 function deriveWorkspaceTitle(text: string): string {
   const firstLine = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? '';
 
-  return firstLine.replace(/\s+/g, ' ').slice(0, 60);
+  return firstLine.replace(/\s+/g, ' ').slice(0, WORKSPACE_TITLE_MAX);
 }
 
 export function resolveWorkspaceTitle(opts: {
@@ -454,7 +457,7 @@ function cleanTitle(value: string): string {
     .replace(/^["'#\s]+|["'\s.]+$/g, '')
     .replace(/\b(agent|assistant|ai|bot|helper)\b$/i, '')
     .replace(/\s+/g, ' ')
-    .slice(0, 60)
+    .slice(0, WORKSPACE_TITLE_MAX)
     .trim();
 }
 

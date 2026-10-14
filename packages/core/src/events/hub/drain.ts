@@ -5,6 +5,7 @@ import type { KinuEvent } from './types';
 import type { WorkMode } from '../../types/turn';
 import { renderForLLM } from './visibility';
 import { JsonObjectSchema } from '../../utils/json';
+import { MID_TURN_DELIVERY_OPENING } from '../../utils/prompt-sections';
 
 export interface DrainBatch {
   readonly ids: string[];
@@ -92,8 +93,6 @@ export function buildDrainBatch(events: KinuEvent[], internal?: InternalEventTes
     missions,
     mode,
     text: `${count} arrived while you were idle. Act on each as appropriate, then stop:\n${listing}`,
-    midTurnText:
-      `${count} arrived while you were working. Before finishing this response, ` +
-      `also act on each as appropriate:\n${listing}`,
+    midTurnText: `${count} ${MID_TURN_DELIVERY_OPENING}\n${listing}`,
   };
 }

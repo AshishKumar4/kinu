@@ -3,10 +3,11 @@ import { afterAll, beforeAll, describe, test, expect, spyOn } from 'bun:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { jsonSchema, tool, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { isMcpToolKey, narrowToolSurface, WORKSPACE_ROOT, type JsonObject, type LLMProviderConfig } from '@kinu.run/core';
+import { isMcpToolKey, narrowToolSurface, WORKSPACE_ROOT, type JsonObject, type JsonValue, type LLMProviderConfig } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
@@ -134,7 +135,7 @@ describe('connectMcpServers', () => {
     });
 
     const stop = new AbortController();
-    const calls: Promise<string>[] = [];
+    const calls: Promise<JsonValue>[] = [];
     const object = jsonSchema<JsonObject>({ type: 'object' });
 
     // Bound as the session binds a server's tool, with the call's own signal.
@@ -177,7 +178,7 @@ describe('connectMcpServers', () => {
       expect(conn.descriptors.map((d) => d.toolKey))
         .toEqual(['mcp_echo_echo', 'mcp_echo_held', 'mcp_echo_huge']);
       expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 3 }]);
-      await expect(conn.call('echo', 'echo', { text: 'hello' })).resolves.toBe('echo: hello');
+      await expect(conn.call('echo', 'echo', { text: 'hello' })).resolves.toMatchObject({ content: [{ type: 'text', text: 'echo: hello' }] });
       await conn.close();
       await expect(conn.call('echo', 'echo', { text: 'after disconnect' })).rejects.toBeInstanceOf(Error);
     } finally {
@@ -194,7 +195,7 @@ describe('connectMcpServers', () => {
       expect(conn.refused.map((r) => [r.server, r.reason.includes('scalar_root')])).toEqual([['bad', true]]);
       expect(conn.diagnostics.map((d) => d.status)).toEqual(['connected']);
       expect(logs.some((message) => message.includes('scalar_root'))).toBe(true);
-      await expect(conn.call('bad', 'good', { q: 'x' })).resolves.toBe('ran good');
+      await expect(conn.call('bad', 'good', { q: 'x' })).resolves.toMatchObject({ content: [{ type: 'text', text: 'ran good' }] });
     } finally {
       await conn.close();
     }
@@ -215,7 +216,8 @@ describe('LocalAgentSession MCP surface', () => {
   beforeAll(async () => { await shared.session.connectMcp(mcpServers()); });
   afterAll(async () => { await shared.session.end(); });
 
-  test.each([false, true])('MCP isError=%s decides the eval call outcome, not content fields', async (fail) => {
+  // The CLI handed a program the result's text alone, where the cloud handed the whole response; both hand the whole.
+  test.each([false, true])('MCP isError=%s decides the eval call outcome, and a program gets the whole response', async (fail) => {
     const text = '{"reason":"denied","error":"historical incident"}';
     const code = `return await tools["mcp_echo_echo"](${JSON.stringify({ text, fail })});`;
     const toolCallId = `mcp-outcome-${String(fail)}`;
@@ -231,7 +233,7 @@ describe('LocalAgentSession MCP surface', () => {
     if (fail) {
       expect(result).toMatchObject({ success: false, result: expect.stringContaining('remote failure') });
     } else {
-      expect(result).toMatchObject({ success: true, output: { result: 'echo: ' + text } });
+      expect(result).toMatchObject({ success: true, output: { result: { content: [{ type: 'text', text: 'echo: ' + text }], structuredContent: { echoed: text } } } });
     }
   });
 

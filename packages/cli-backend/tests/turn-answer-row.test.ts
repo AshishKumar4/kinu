@@ -5,7 +5,8 @@ import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase } from '
 import { CHAT_SESSION_ID, initWorkspaceSchema, readSessionTranscript, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
 const DUMMY_LLM: LLMProviderConfig = {

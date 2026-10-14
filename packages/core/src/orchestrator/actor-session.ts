@@ -43,7 +43,7 @@ import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
-import { readVersionedScaffoldSource } from '../scaffold/versions';
+import { scaffoldSource } from '../scaffold/versions';
 import type { ReportedTurn } from '../subordinates/turn-reports';
 import { lostRemoteCall, lostToolCall } from '../tools/effect-claim';
 import { unpairedToolCalls } from '../prompting/interrupted-tool-calls';
@@ -246,7 +246,7 @@ export class ActorSession {
     });
 
     this.advisor = new ActorAdvisor({
-      actor: options.runtime.actor, vfs: () => options.runtime.agentStateVfs ?? options.runtime.storage.vfs,
+      actor: options.runtime.actor, vfs: () => options.runtime.agentStateVfs,
       notes: () => options.orchestration.engine, send: (signal) => this.orchestrator.signals.send(signal),
       profile: () => this.profile, scoped: (turn) => this.orchestrator.scopedTurn(turn),
       ...(options.advisorPort !== undefined && { port: options.advisorPort }),
@@ -592,7 +592,7 @@ export class ActorSession {
     const active = this.requireTurn(lease);
 
     return settle(Effect.map(decideInterruptedTurn({
-      source: (version) => readVersionedScaffoldSource({ path: this.runtime.identity.scaffold.path, vfs: this.runtime.agentStateVfs ?? this.runtime.storage.vfs }, version),
+      source: (version) => scaffoldSource(this.runtime, version),
       stores: { claims: this.options.claims, history: this.options.history }, runs: this.options.recording ?? null,
       installedBuild: this.options.installedBuild, workspace: this.options.workspace ?? '', actor: this.runtime.identity.name,
       runId: lease.runId, claim: this.options.claims.read(lease.turnId),

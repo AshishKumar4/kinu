@@ -11,6 +11,7 @@ import type { AuthResolution, AuthResolver } from '../providers/types';
 import { TAVILY_CRED_KEY } from '../credentials/validate';
 import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle, tolerate } from '../obs/index';
 import { Data, Effect } from 'effect';
+import type { JsonObject } from '../utils/json';
 
 
 
@@ -66,6 +67,17 @@ export interface DefaultWebSearchProviderDeps {
   /** Absent on a Worker, whose platform refuses a name resolving inward (`url-safety.ts`). */
   resolve?: HostResolver;
   browser: BrowserRunAccess;
+  /**
+   * The cookie Browser Run carries to `url` when it is one of this workspace's own previews, which open only for their
+   * owner; null for any other page. Absent outside a workspace.
+   */
+  previewPass?: (url: URL) => Promise<BrowserCookie | null>;
+}
+
+/** A cookie Browser Run sets on one page's host before it loads the page. */
+export interface BrowserCookie {
+  readonly name: string;
+  readonly value: string;
 }
 
 const DEFAULT_SEARCH_LIMIT = 5;
@@ -230,24 +242,29 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     return parsed;
   });
 
-  const browserRun = (url: string): Effect.Effect<{ readonly transport: QuickActionTransport; readonly target: URL }, KinuError> => {
+  const browserRun = (url: string): Effect.Effect<{ readonly transport: QuickActionTransport; readonly target: URL; readonly cookies: JsonObject }, KinuError> => {
     const access = deps.browser;
 
     if ('missing' in access) return Effect.fail(new KinuError('unavailable', access.missing));
+    const previewPass = deps.previewPass;
 
-    return Effect.map(
-      inItsWords('denied', judged(url)),
-      (target) => ({ transport: access.quickActions, target }),
-    );
+    return Effect.gen(function* () {
+      const target = yield* inItsWords('denied', judged(url));
+      const pass = previewPass === undefined ? null : yield* Effect.promise(() => previewPass(target));
+      // A host-only, secure cookie, as the preview's own exchange sets it.
+      const cookies: JsonObject = pass === null ? {} : { cookies: [{ name: pass.name, value: pass.value, url: `${target.origin}/`, secure: true, httpOnly: true, sameSite: 'Lax' }] };
+
+      return { transport: access.quickActions, target, cookies };
+    });
   };
 
   const renderPage = (url: string, engine: QuickActionEngine, signal: AbortSignal | undefined): Effect.Effect<WebFetchResult, KinuError> => Effect.gen(function* () {
-    const { transport, target } = yield* browserRun(url);
+    const { transport, target, cookies } = yield* browserRun(url);
     const doing = `rendering ${target.href}`;
 
     const response = yield* attemptInItsWords('unavailable', () => quickAction({
       transport, action: 'content', engine, signal,
-      options: { url: target.href, gotoOptions: { waitUntil: RENDERED } },
+      options: { url: target.href, gotoOptions: { waitUntil: RENDERED }, ...cookies },
     }));
 
     const answer = v.safeParse(RenderedPageSchema, yield* attemptInItsWords('io', () => response.json()));
@@ -274,11 +291,11 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   });
 
   const shootPage = (url: string, engine: QuickActionEngine, fullPage: boolean, signal: AbortSignal | undefined): Effect.Effect<WebScreenshot, KinuError> => Effect.gen(function* () {
-    const { transport, target } = yield* browserRun(url);
+    const { transport, target, cookies } = yield* browserRun(url);
 
     const response = yield* attemptInItsWords('unavailable', () => quickAction({
       transport, action: 'screenshot', engine, signal,
-      options: { url: target.href, viewport: SCREENSHOT_VIEWPORT, gotoOptions: { waitUntil: RENDERED }, screenshotOptions: { fullPage } },
+      options: { url: target.href, viewport: SCREENSHOT_VIEWPORT, gotoOptions: { waitUntil: RENDERED }, screenshotOptions: { fullPage }, ...cookies },
     }));
 
     const bytes = new Uint8Array(yield* attemptInItsWords('io', () => response.arrayBuffer()));

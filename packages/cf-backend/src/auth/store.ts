@@ -44,7 +44,8 @@ export interface OAuthHandoff {
 }
 
 export interface OAuthProfile {
-  provider: OAuthProviderId | 'password' | 'passkey';
+  /** `dev`: the dev identity's exchange (`POST /api/auth/dev-session`), whose possession check verified the email. */
+  provider: OAuthProviderId | 'password' | 'passkey' | 'dev';
   providerSub: string;
   email: string;
   emailVerified: boolean;

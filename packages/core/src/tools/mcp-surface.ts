@@ -7,6 +7,7 @@ import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import { estimateTokens } from '../token-estimate';
 import { stepContextLimit } from '../context-window';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { mcpCallResult } from './mcp-error';
 import { KinuError, settle } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -410,7 +411,7 @@ export function buildMcpToolSet(
     const entry = tool({
       description: d.description ?? `${d.serverName}/${d.name}`,
       inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
-      execute: async (args, options) => build.call(d, args, options),
+      execute: async (args, options) => mcpCallResult(await build.call(d, args, options)),
     });
 
     if (d.readOnly === true) readOnly.add(d.toolKey);

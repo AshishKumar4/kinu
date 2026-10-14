@@ -24,26 +24,6 @@ export const SignedReleaseSchema = v.object({
 
 export type SignedRelease = v.InferOutput<typeof SignedReleaseSchema>;
 
-function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
-  const clean = hex.trim().toLowerCase();
-
-  if (!/^[0-9a-f]{64}$/.test(clean)) throw new Error('an Ed25519 public key is 32 bytes of hex');
-
-  return Uint8Array.from(clean.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
-}
-
-/** A malformed signature is false, never a throw. */
-export function verifyRelease(release: SignedRelease, publicKeyHex: string): Promise<boolean> {
-  return settle(Effect.gen(function* () {
-    const key = yield* Effect.promise(async () => crypto.subtle.importKey('raw', hexToBytes(publicKeyHex), { name: 'Ed25519' }, false, ['verify']));
-    const signature = base64ToBytes(release.signature);
-
-    if (signature.byteLength !== 64) return false;
-
-    return yield* Effect.promise(async () => crypto.subtle.verify('Ed25519', key, signature, releaseMessage(release.version, release.checksums)));
-  }));
-}
-
 /** Private key is PKCS#8 base64. */
 export async function signRelease(version: string, checksums: ReleaseChecksums, privateKeyPkcs8Base64: string): Promise<SignedRelease> {
   const key = await crypto.subtle.importKey('pkcs8', base64ToBytes(privateKeyPkcs8Base64), { name: 'Ed25519' }, false, ['sign']);

@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { sanitizePreviewRequestHeaders } from '../src/lib/preview-request';
 import {
   CLI_APPROVAL_CSRF_COOKIE_NAME, KINU_COOKIE_NAMES, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME,
-} from '../src/auth/session';
+} from '../src/auth/cookies';
 import { parseCliBearer } from '../src/cli/auth-store';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';

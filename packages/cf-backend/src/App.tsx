@@ -108,6 +108,7 @@ export default function App() {
             <Route path={APP_ROUTES.userMcp} element={<Page label="user-mcp"><UserMcpPage /></Page>} />
             <Route path={APP_ROUTES.drive} element={<Page label="drive"><DrivePage tab="mine" /></Page>} />
             <Route path={APP_ROUTES.driveFolder} element={<Page label="drive-folder"><DrivePage tab="mine" /></Page>} />
+            <Route path={APP_ROUTES.slates} element={<Page label="slates"><DrivePage tab="slates" /></Page>} />
             <Route path={APP_ROUTES.shared} element={<Page label="shared"><DrivePage tab="shared" /></Page>} />
             <Route path={APP_ROUTES.workspaces} element={<Page label="workspaces"><WorkspacesPage /></Page>} />
             <Route path={APP_ROUTES.plugins} element={<Page label="plugins"><PluginsPage /></Page>} />

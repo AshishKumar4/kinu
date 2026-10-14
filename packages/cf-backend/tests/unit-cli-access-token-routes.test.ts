@@ -5,7 +5,7 @@ import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
-import { AGENT_RPC_ACCESS, PRIVATE_NO_STORE } from '@kinu.run/core';
+import { AGENT_RPC_ACCESS, CLI_PREVIEW_ENTRY_PATH, PRIVATE_NO_STORE } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -236,6 +236,18 @@ describe('access token scope enforcement', () => {
     const exec = await cli(req(EXEC_TOKEN, RPC, rpcInit('executeInExecutor', ['workspace', 'pwd'])), env);
     expect(exec?.status).toBe(200);
     expect(calls).toContain('executors:exec:workspace:pwd');
+  });
+
+  // A preview runs its slate as the owner (`nimbus-route.ts`), so the CLI's way into one asks what running a command asks.
+  test("the CLI's preview entry needs workspace.exec, and past it answers only for a preview this deployment signed", async () => {
+    const { env } = setupEnv();
+    const to = `?to=${encodeURIComponent('https://unsigned.example/')}`;
+    const read = await cli(req(READ_TOKEN, `${CLI_PREVIEW_ENTRY_PATH}${to}`), env);
+    const exec = await cli(req(EXEC_TOKEN, `${CLI_PREVIEW_ENTRY_PATH}${to}`), env);
+
+    expect(read?.status).toBe(403);
+    expect((await errorBody(read)).error).toContain('workspace.exec');
+    expect(exec?.status).toBe(404);
   });
 
   test('workspace.exec token cannot read agent state without workspace.read', async () => {

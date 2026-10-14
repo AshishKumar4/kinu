@@ -8,7 +8,8 @@ import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ForkNode, Rpc, TabPresence } from '@kinu.run/core';
+import type { ForkNode, TabPresence } from '@kinu.run/core';
+import { workspaceRpc } from '../src/lib/workspace-rpc';
 import { WorkSurface } from '../src/components/surfaces/WorkSurface';
 import {
   landedSurface,
@@ -32,7 +33,7 @@ const FRESH: TabPresence = { explorations: false, work: false };
 
 const FULL: TabPresence = { explorations: true, work: true };
 
-const SILENT_RPC: Rpc = () => Promise.withResolvers<never>().promise;
+const SILENT_RPC = workspaceRpc(() => Promise.withResolvers<never>().promise);
 
 const renderStrip = (tabPresence: TabPresence | undefined, presencePending = false): string =>
   renderToStaticMarkup(createElement(WorkSurface, {

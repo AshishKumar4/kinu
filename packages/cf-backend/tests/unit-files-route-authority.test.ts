@@ -20,7 +20,7 @@ import type { JsonValue } from '@kinu.run/core';
 // `cloudflare:*` modules that crash bun's loader.
 const { accountIdFor, createSession } = await import('../src/auth/store');
 
-const { SESSION_COOKIE_NAME } = await import('../src/auth/session');
+const { SESSION_COOKIE_NAME } = await import('../src/auth/cookies');
 
 /** A deployment that signs in through OAuth: an address is the account its OAuth sign-in mints. */
 const OAUTH_DEPLOYMENT = { SIGN_IN_PROVIDERS: 'google' };
