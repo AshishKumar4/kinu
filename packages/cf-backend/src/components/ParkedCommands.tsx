@@ -25,7 +25,7 @@ export type ParkedDecision = "approved" | "denied" | "always";
 export interface ParkedDecisionDeps {
   decide: (ids: string[], decision: ParkedDecision) => Promise<{ decided: string[] }>;
   /** Told which commands were decided, so their cards leave and the queue is read again. */
-  onDecided: (decided: readonly string[]) => void;
+  onDecided: (decided: readonly string[]) => void | Promise<void>;
 }
 
 export interface ParkedQueueSnapshot {
@@ -76,7 +76,7 @@ export class ParkedDecisionFlow {
 
       // The empty set, never null: null selects everything.
       this.#set({ busy: false, selected: new Set(), error: null, decided: decision });
-      this.#deps.onDecided(decided);
+      yield* Effect.promise(async () => { await this.#deps.onDecided(decided); });
     }), (failed) => Effect.sync(() => {
       // The answer never landed, so the selection stands.
       this.#set({ busy: false, error: `Could not record the decision: ${renderThrownChain({ cause: Cause.squash(failed) })}` });

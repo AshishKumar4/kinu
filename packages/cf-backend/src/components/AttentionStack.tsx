@@ -230,15 +230,15 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
   const chosen = props.focus?.chosen ?? ownChoice;
   const setChosen = props.focus?.choose ?? setOwnChoice;
   // The parked commands' choice is the stack's, so it stands while another card is answered first.
-  const parkedCalls = useRef({ rpc, decided: (_ids: readonly string[]): void => {} });
+  const parkedCalls = useRef({ rpc, decided: async (_ids: readonly string[]): Promise<void> => {} });
 
   useEffect(() => {
     parkedCalls.current = {
       rpc,
-      decided: (ids) => {
+      decided: async (ids) => {
         for (const id of ids) mark(`action:${id}`);
         setChosen(null);
-        detach(Effect.promise(onDecided));
+        await onDecided();
       },
     };
   });
