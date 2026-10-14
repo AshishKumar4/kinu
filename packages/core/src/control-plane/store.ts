@@ -8,6 +8,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/index';
 import { settleSync } from '../obs/effect';
+import { boundedInt } from '../utils/bounds';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
 import {
   FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
@@ -208,9 +209,7 @@ const AuditSqlRowSchema = v.object({
 type AuditSqlRow = v.InferOutput<typeof AuditSqlRowSchema>;
 
 function clampPage(limit: number | undefined): number {
-  if (limit === undefined || !Number.isFinite(limit)) return CONTROL_PAGE_DEFAULT;
-
-  return Math.min(CONTROL_PAGE_MAX, Math.max(1, Math.trunc(limit)));
+  return boundedInt(limit, CONTROL_PAGE_DEFAULT, 1, CONTROL_PAGE_MAX);
 }
 
 /** The tiebreak is mandatory: rows can share a millisecond, and a page boundary
