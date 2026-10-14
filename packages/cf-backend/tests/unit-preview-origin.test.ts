@@ -16,7 +16,7 @@ import {
   previewHostSuffix,
   previewSuffixMetaName,
   buildWorkspacePreviewHost,
-  APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH,
+  APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH } from '@kinu.run/core';
@@ -1165,10 +1165,18 @@ describe('worker wiring', () => {
     // Every write route outside the listed public prefixes refuses an anonymous request, and a
     // cross-site one carrying the session cookie, before it runs.
     const { env, ctx, cookie } = await appProbe();
-    const signedIn = api.routes.filter(({ method, path }) => method !== 'GET' && !PUBLIC_API.some((prefix) => path.startsWith(prefix)));
-    expect(signedIn.length).toBeGreaterThan(20);
+    const signedIn = api.routes.filter(({ path }) => !PUBLIC_API.some((prefix) => path.startsWith(prefix)));
+    const writes = signedIn.filter(({ method }) => method !== 'GET');
+    expect(writes.length).toBeGreaterThan(20);
 
-    for (const route of signedIn) {
+    // A read refuses no one signed out, uncached; the cross-site rule is a write's.
+    for (const route of signedIn.filter(({ method }) => method === 'GET')) {
+      const anonymous = await api.fetch(new Request(`${PROBE_ORIGIN}${concretePath(route.path)}`), env, ctx);
+
+      expect([anonymous.status, anonymous.headers.get('cache-control')?.includes('no-store')], `GET ${route.path}`).toEqual([401, true]);
+    }
+
+    for (const route of writes) {
       const method = route.method === 'ALL' ? 'POST' : route.method;
       const url = `${PROBE_ORIGIN}${concretePath(route.path)}`;
       const anonymous = await api.fetch(new Request(url, { method }), env, ctx);
@@ -1181,6 +1189,36 @@ describe('worker wiring', () => {
       // A refusal is never cached: a shared cache must not answer the next person with it.
       for (const refusal of [anonymous, forged]) expect(refusal.headers.get('cache-control'), `${method} ${route.path}`).toContain('no-store');
     }
+  });
+
+  // The preview entry is behind the one session gate; the CLI's entry behind its bearer, and the dev exchange behind
+  // possession of the dev identity. A session cookie is neither of the last two.
+  test('each preview and sign-in entry is behind its own rule, and every refusal is uncached', async () => {
+    const preview = `${PREVIEW_ENTRY_PATH}?to=${encodeURIComponent('https://not-signed.previews.example/board')}`;
+    const page = await served(`${APP}${preview}`, ZONE, { accept: 'text/html' });
+    const asked = await served(`${APP}${preview}`, ZONE, { accept: 'application/json' });
+    const browser = await signedInBrowser();
+
+    const reached = await browser.fetch(preview, { headers: { accept: 'text/html' } });
+    const cliEntry = await browser.fetch(`${CLI_PREVIEW_ENTRY_PATH}?to=${encodeURIComponent(NIMBUS_URL)}`);
+    const devExchange = await browser.fetch('/api/auth/dev-session', { method: 'POST', headers: { origin: APP } });
+
+    expect({
+      page: [page.status, page.headers.get('location')],
+      asked: asked.status,
+      reached: reached.status,
+      cliEntry: cliEntry.status,
+      devExchange: devExchange.status,
+    }).toEqual({
+      page: [302, `${APP}/login?return_to=${encodeURIComponent(preview)}`],
+      asked: 401,
+      // Signed in, the entry itself answers: this destination is no preview the deployment signed.
+      reached: 404,
+      cliEntry: 401,
+      devExchange: 401,
+    });
+
+    for (const refusal of [page, asked, reached, cliEntry, devExchange]) expect(refusal.headers.get('cache-control')).toContain('no-store');
   });
 
   test('an /api path no route answers is the app document, under its policy', async () => {
