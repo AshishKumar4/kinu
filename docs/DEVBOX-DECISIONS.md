@@ -4717,8 +4717,8 @@ A park is lifted by a change that can make the start succeed. D52 already lifted
 setting or bound store, or on the owner's `start()`/`attachNow()` (Kinu's `startComputer`). Now another deploy of
 the Worker lifts it too, so a fix's deploy ends parks without each owner asking. The host names its version through
 `workerVersion` (Kinu: `CF_VERSION_METADATA.id`). The start refusal carries it as one more start input. A park over a
-running container keeps it in its settled row, and the next construction under another version drops that row, so
-the box's next caller asks again. Nothing is armed for either, so a parked box wakes only for a caller.
+running container keeps it in its settled row, whether `#settle` wrote that row or `#recover`'s ladder did, and the
+next construction under another version drops it, so the box's next caller asks again. Nothing is armed for either, so a parked box wakes only for a caller.
 
 Red then green, in `packages/devbox/tests/start-park.test.ts` (FakeSandbox), and on the platform's containers
 (`gate:devbox-e2e`'s `parked-start`). In the unit test, a box whose `configureContainer` throws the staging failure
