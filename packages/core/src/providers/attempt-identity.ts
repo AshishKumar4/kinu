@@ -12,7 +12,8 @@ export interface ModelAttemptIdentity {
   readonly ref: string | null;
 }
 
-export function attemptKey(identity: ModelAttemptIdentity): string {
+/** One model on one billed lane: where fallback parks a refused model, and where a model's own limit waits. */
+export function attemptKey(identity: Pick<ModelAttemptIdentity, 'lane' | 'modelId'>): string {
   return `${identity.lane}|${JSON.stringify(identity.modelId)}`;
 }
 
