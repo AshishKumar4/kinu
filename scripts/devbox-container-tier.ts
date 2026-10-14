@@ -9,6 +9,7 @@ import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { SHELL_RC, SHELL_RC_FILE, SHOWN_NAME_FILE } from '../packages/devbox/src/shown-name';
+import { SESSIONS_READ } from '../packages/devbox/src/sessions';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
@@ -678,7 +679,8 @@ async function main(): Promise<void> {
       const listed = (await call('/sessions', v.array(Session), {}, names[1])).find((candidate) => candidate.id === session);
 
       if (listed?.needsInput !== true || listed.job !== processId) {
-        const seen = await shell('id -u; echo "tmux=$(command -v tmux) TMUX_TMPDIR=${TMUX_TMPDIR:-} TMPDIR=${TMPDIR:-}"; ls -la /tmp/tmux-* 2>&1; tmux ls 2>&1; tmux list-panes -a 2>&1; true', names[1]);
+        const quoted = `'${SESSIONS_READ.replaceAll("'", "'\\''")}'`;
+        const seen = await shell(`id -u; tmux ls 2>&1; bash -c ${quoted} terminal-sessions true 2>&1 | cat -A | head -20; true`, names[1]);
 
         throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input; the box: ${seen}`);
       }
