@@ -124,7 +124,7 @@ import {
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
-  type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
+  type RefinementListing, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
@@ -7143,9 +7143,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */
   @callable()
-  async listRefinements(limit = 20): Promise<{
-    requests: RefinementRequestView[]; debt: EvolutionDebt;
-  }> {
+  async listRefinements(limit = 20): Promise<RefinementListing> {
     return listRefinements(this.refinementDeps, limit);
   }
 

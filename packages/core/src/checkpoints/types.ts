@@ -49,6 +49,11 @@ export type FileRestoreResult = v.InferOutput<typeof FileRestoreResultSchema>;
 
 export const CheckpointAvailabilitySchema = v.object({ available: v.boolean(), reason: v.optional(v.string()) });
 
+export const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.object({
+  availability: CheckpointAvailabilitySchema,
+  entries: v.array(FileCheckpointEntrySchema),
+});
+
 export type CheckpointAvailability = v.InferOutput<typeof CheckpointAvailabilitySchema>;
 
 /** Checkpoint store reads, over the owner's device (cloud) or the local git engine. */

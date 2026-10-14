@@ -11,7 +11,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } fro
 
 import {
   nextReasoningEffort, offeredReasoningEfforts, type AlternateTakeCandidate, type AlternateTakeSet,
-  type ChangelogEntry, type ReasoningEffort, type TierId,
+  type ChangelogEntry, type PendingDeviceConsent, type ReasoningEffort, type TierId,
 } from '@kinu.run/core';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
 import {
@@ -25,7 +25,6 @@ import {
   type AgentTranscriptMessage,
   type DeviceConsentDecision,
   type ForkPoint,
-  type PendingDeviceConsent,
 } from '../agent-client';
 import {
   commandsForClient,

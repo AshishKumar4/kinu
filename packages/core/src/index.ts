@@ -232,8 +232,8 @@ export {
 } from './evolution/session-window';
 
 export {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog, CHANGELOG_ENTRY_KINDS,
-  revertChangelogEntryById,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog,
+  revertChangelogEntryById, ChangelogEntrySchema, ChangelogRevertResultSchema,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
   type ChangelogRevertContext, type ChangelogRevertResult,
@@ -911,7 +911,8 @@ export type { EvaluationGrounding } from './types/evaluation';
 export {
   initAlternateTakesTable,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
-  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeCandidateSchema,
+  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeSetSchema,
+  TakePickOutcomeSchema,
   type AlternateTakeCandidate, type AlternateTakeSet,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
@@ -922,7 +923,7 @@ export {
   newBranchId, isSteerBranchRunId, branchHeadId, admitBranch,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch,
   branchOutcomeFromJournal,
-  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle, type BranchTurnResult,
+  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle, type BranchTurnResult, BranchTurnResultSchema,
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
 
@@ -1187,7 +1188,7 @@ export {
 export {
   CHECKPOINTS_NO_DEVICE, summarizeRestorePlan,
   checkpointAvailability, deviceHistoryNote, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
-  CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema, FileRestoreResultSchema,
+  CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileCheckpointListingSchema, FileRestorePlanSchema, FileRestoreResultSchema,
   type FileCheckpoints, type FileCheckpointReads, type CheckpointTurnMeta, type CheckpointAvailability,
   type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult, type DeviceCheckpointHint,
@@ -1526,7 +1527,7 @@ export {
   DeviceConsentRegistry, DeviceConsentStore, initDeviceConsentRequestsTable, DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest,
-  type PendingDeviceConsent, type PendingConsentRow, type DeviceConsentNotice,
+  type PendingDeviceConsent, type PendingConsentRow, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
 } from './safety/device-consent';
 
 export {
@@ -1832,10 +1833,9 @@ export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 
 // Continual refinement: each proposed edit routes to the authority that owns the artifact.
 export {
-  REFINEMENT_DISPOSITIONS, REFINEMENT_EDIT_KINDS, REFINEMENT_SCOPES,
-  REFINEMENT_STAGES, REFINEMENT_TRIGGERS, RefinementProposalSchema,
+  REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
   createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementRequestView,
-  refinementStagingPath,
+  refinementStagingPath, RefinementRequestViewSchema,
   type EvolutionDebt, type OpenRefinementInput, type RefinementDeps,
   type RefinementDisposition, type RefinementEdit, type RefinementEditKind,
   type RefinementProposal, type RefinementRequest,
@@ -1846,10 +1846,12 @@ export {
 
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
-export { listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement } from './evolution/refinement-host';
+export {
+  listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
+} from './evolution/refinement-host';
 
 export {
-  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute,
+  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute, RefinementDecisionResultSchema, StagedSkillResultSchema,
   type RefinementDecision, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult, type StagedSkillView,
 } from './evolution/refinement-skill';
@@ -2090,6 +2092,8 @@ export {
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
+  EvolutionConfigViewSchema, ProviderAccountsSchema, ReasoningEffortViewSchema, ReasoningEffortWriteSchema, SetModelResultSchema,
+  StoredModelSpecSchema,
 } from './read-models/config-plane';
 
 export type {
@@ -2133,7 +2137,7 @@ export {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
 
-export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views';
+export { EvolutionChangelogViewSchema, type EvolutionChangelogView, type TakePickDeps } from './read-models/evolution-views';
 
 // Profile catalogs
 export {

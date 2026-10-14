@@ -3,9 +3,10 @@ import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonObject, hostedActorSocketPath, hostedWindowMay,
-  ChatHistoryEntrySchema, restoredRows, SendMetadataSchema, STEP_CUT_CHUNK,
-  type JsonObject, type JsonValue, type ReasoningEffort,
+  ChatHistoryEntrySchema, decodeJsonValue, restoredRows, SendMetadataSchema, STEP_CUT_CHUNK,
+  type AlternateTakeSet, type EvolutionChangelogView, type JsonObject, type JsonValue, type ReasoningEffort, type TakePickOutcome,
 } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import { createAgentClient } from '../src/client-factory';
 import { watchDeviceConsents } from '../src/consent-watch';
@@ -209,9 +210,9 @@ function startMockAgentServer(options: ({
 }
 
 async function waitFor<T>(probe: () => T | undefined, label: string): Promise<T> {
-  const present = probe();
+  const found = probe();
 
-  if (present !== undefined) return present;
+  if (found !== undefined) return found;
 
   return new Promise<T>((resolve, reject) => {
     const changed = (): void => {
@@ -493,7 +494,7 @@ describe('CloudAgentClient protocol', () => {
   test('an additional agent\'s session sends only what its window may call, and answers its own device consent', async () => {
     const window = { name: 'researcher-a1b2c3', id: 'actor-1' };
     const tools = { builtIn: [{ name: 'file', description: 'Read and write files' }], crafted: [] };
-    const consent = { consentId: 'consent-1', deviceLabel: 'laptop', method: 'exec', command: 'npm test' };
+    const consent = { consentId: 'consent-1', deviceId: 'laptop', deviceLabel: 'laptop', method: 'exec', command: 'npm test', createdAt: 1 };
 
     const answers = new Map<string, JsonValue>([
       ['listPendingConsents', [consent]], ['resolveDeviceConsent', { ok: true }], ['getToolDescriptions', { ...tools, executors: [] }], ['listBackgroundJobs', []],
@@ -878,7 +879,7 @@ describe('CloudAgentClient protocol', () => {
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hi' }, true));
     await warmup;
 
-    const set = {
+    const set: AlternateTakeSet = {
       id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan',
       winnerNodeId: 'win', chosenNodeId: null, createdAt: 1,
       candidates: [
@@ -890,20 +891,51 @@ describe('CloudAgentClient protocol', () => {
     const latest = client.latestTakes();
     const latestRpc = await waitFor(() => mock.frames.find((f) => f.type === 'rpc' && f.method === 'latestAlternateTakes'), 'latest rpc');
     expect(latestRpc.args).toEqual([]);
-    mock.reply({ type: 'rpc', id: latestRpc.id, success: true, done: true, result: set });
+    mock.reply({ type: 'rpc', id: latestRpc.id, success: true, done: true, result: decodeJsonValue({ value: set }) });
     await expect(latest).resolves.toMatchObject({ id: 'take-1', turnId: 'm2' });
 
     const pick = client.pickTake('take-1', 'alt');
     const pickRpc = await waitFor(() => mock.frames.find((f) => f.type === 'rpc' && f.method === 'pickAlternateTake'), 'pick rpc');
     expect(pickRpc.args).toEqual(['take-1', 'alt']);
-    mock.reply({
-      type: 'rpc', id: pickRpc.id, success: true, done: true,
-      result: {
-        outcome: 'corrected', changedAnswer: true, continuationQueued: true,
-        chosen: set.candidates[1], set: { ...set, chosenNodeId: 'alt', winnerNodeId: 'alt' },
-      },
-    });
-    await expect(pick).resolves.toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
+
+    // The pick as the workspace answers it (core's `TakePickOutcome`), nothing beside.
+    const picked: TakePickOutcome = {
+      changedAnswer: true, continuationQueued: true,
+      chosen: present(set.candidates[1], 'the alternate'), set: { ...set, chosenNodeId: 'alt', winnerNodeId: 'alt' },
+    };
+
+    mock.reply({ type: 'rpc', id: pickRpc.id, success: true, done: true, result: decodeJsonValue({ value: picked }) });
+    await expect(pick).resolves.toEqual(picked);
+    await client.close();
+  });
+
+  // The CLI read the changelog by its own copy of the shape, which lacked an artifact's revert and a skill's pending
+  // decision: the first refused the whole page, the second dropped the decision.
+  test('the changelog keeps every entry the workspace records: an artifact revert and a pending decision', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const warmup = client.send('hello');
+    const request = await firstChatRequest(mock);
+
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hi' }, true));
+    await warmup;
+
+    const recorded: EvolutionChangelogView = {
+      entries: [
+        { id: 'artifact:report@2', kind: 'artifact', at: 2, summary: 'The report, second version', evidence: '', revert: { type: 'artifact_revert', target: 'report@1' } },
+        { id: 'refinement:r1:0', kind: 'refinement', at: 1, summary: 'A skill waits for you', evidence: '', decision: { requestId: 'r1', routeIndex: 0 } },
+      ],
+      unseenCount: 2, seenAt: 0,
+    };
+
+    const read = client.changelog();
+    const listed = await waitFor(() => mock.frames.find((f) => f.type === 'rpc' && f.method === 'getEvolutionChangelog'), 'changelog rpc');
+
+    mock.reply({ type: 'rpc', id: listed.id, success: true, done: true, result: decodeJsonValue({ value: recorded }) });
+    const seen = await waitFor(() => mock.frames.find((f) => f.type === 'rpc' && f.method === 'markChangelogSeen'), 'seen rpc');
+
+    mock.reply({ type: 'rpc', id: seen.id, success: true, done: true, result: null });
+    await expect(read).resolves.toEqual({ entries: recorded.entries, unseenCount: recorded.unseenCount });
     await client.close();
   });
 

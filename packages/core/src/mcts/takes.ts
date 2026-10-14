@@ -18,7 +18,7 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 /** One branch settlement's take set; set ids are fresh, so replays are caught by settlement key. */
 const BRANCH_SCOPE = 'branch_take';
 
-export const AlternateTakeCandidateSchema = v.object({
+const AlternateTakeCandidateSchema = v.object({
   nodeId: v.string(),
   text: v.string(),
   /** The live turn's answer or the branched redirect's. */
@@ -48,6 +48,26 @@ export interface TakePickRecord {
 export interface TakePickOutcome extends TakePickRecord {
   continuationQueued: boolean;
 }
+
+/** A take set as a client reads it over the wire. */
+export const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
+  id: v.string(),
+  turnId: v.nullable(v.string()),
+  sessionId: v.nullable(v.string()),
+  task: v.string(),
+  winnerNodeId: v.string(),
+  chosenNodeId: v.nullable(v.string()),
+  candidates: v.array(AlternateTakeCandidateSchema),
+  createdAt: v.number(),
+});
+
+/** A pick's outcome as a client reads it over the wire. */
+export const TakePickOutcomeSchema: v.GenericSchema<TakePickOutcome> = v.object({
+  changedAnswer: v.boolean(),
+  chosen: AlternateTakeCandidateSchema,
+  set: AlternateTakeSetSchema,
+  continuationQueued: v.boolean(),
+});
 
 export function initAlternateTakesTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS alternate_takes (

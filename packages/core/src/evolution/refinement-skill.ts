@@ -15,8 +15,9 @@ import { parseSkillFile, skillNameProblem } from '../skills/parse';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { Effect, Result } from 'effect';
 import { renderThrownChain, settle } from '../obs/index';
+import * as v from 'valibot';
 import {
-  createRefinementStore, refinementRequestView, refinementStagingPath, releaseRefinementLane,
+  createRefinementStore, refinementRequestView, RefinementRequestViewSchema, refinementStagingPath, releaseRefinementLane,
   type RefinementDeps, type RefinementEdit, type RefinementRequest,
   type RefinementRequestView, type RefinementRoute, type RefinementStage,
 } from './refinement';
@@ -143,6 +144,16 @@ export type StagedSkillResult =
   | { readonly ok: true; readonly view: StagedSkillView }
   | { readonly ok: false; readonly error: string };
 
+export const StagedSkillResultSchema: v.GenericSchema<StagedSkillResult> = v.variant('ok', [
+  v.object({
+    ok: v.literal(true),
+    view: v.object({
+      requestId: v.string(), routeIndex: v.number(), target: v.string(), digest: v.string(), source: v.string(), intact: v.boolean(),
+    }),
+  }),
+  v.object({ ok: v.literal(false), error: v.string() }),
+]);
+
 export async function showRefinementRoute(
   deps: RefinementDeps,
   input: { requestId: string; routeIndex: number },
@@ -216,6 +227,11 @@ export type RefinementDecision = (typeof REFINEMENT_DECISIONS)[number];
 export type RefinementDecisionResult =
   | { readonly ok: true; readonly request: RefinementRequestView; readonly detail: string }
   | { readonly ok: false; readonly error: string };
+
+export const RefinementDecisionResultSchema: v.GenericSchema<RefinementDecisionResult> = v.variant('ok', [
+  v.object({ ok: v.literal(true), request: RefinementRequestViewSchema, detail: v.string() }),
+  v.object({ ok: v.literal(false), error: v.string() }),
+]);
 
 export interface RefinementDecisionInput {
   readonly requestId: string;
