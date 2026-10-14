@@ -24,9 +24,10 @@
 // stop failing quietly. The config options are also asserted structurally, so weakening fails twice
 // — once on the declaration and once on the behaviour.
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readLintConfig } from "./shared/lint-config.ts";
 import { lintJson, type LintDiagnostic, type LintReport } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
@@ -119,7 +120,7 @@ export const harness: string = rawText;
 
 const RULES = ["no-explicit-any", "ban-ts-comment"] as const;
 
-const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
+const config = readLintConfig(repoRoot);
 
 assert.ok(
   config.plugins.includes("typescript"),
@@ -152,15 +153,7 @@ assert.deepEqual(
 assert.equal(config.options?.denyWarnings, true);
 assert.equal(config.options?.reportUnusedDisableDirectives, "error");
 
-const lint = (args: readonly string[], expectedFiles: number): LintReport => {
-  const report = lintJson(["-c", ".oxlintrc.json", ...args]);
-  assert.equal(
-    report.number_of_files,
-    expectedFiles,
-    `oxlint linted ${report.number_of_files} of ${expectedFiles} fixtures in ${args.join(" ")}; a run that skipped a fixture proves nothing about it`,
-  );
-  return report;
-};
+const lint = (args: readonly string[], expectedFiles: number): LintReport => lintJson(["-c", ".oxlintrc.json", ...args], { expectedFiles });
 
 // The live denominator is not measured here. These two rules key on constructs that appear in
 // ordinary TypeScript, so they cannot run out of corpus by refactor, but they CAN be starved by

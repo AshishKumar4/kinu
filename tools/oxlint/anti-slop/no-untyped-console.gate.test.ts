@@ -23,22 +23,16 @@
 // that measured one set while governing another is the defect `scripts/sources.ts` documents fifteen
 // instances of.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDiagnosticSource } from "./rules/no-untyped-console.ts";
 import { readSources } from "../../../scripts/sources.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
+import { lintJson, type LintDiagnostic, type LintReport } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
 
-/** `oxlint -f json`. `code` is spelled `anti-slop(no-untyped-console)`. */
-type Diagnostic = { readonly code?: string; readonly filename?: string };
-type LintReport = {
-	readonly diagnostics: ReadonlyArray<Diagnostic>;
-	readonly number_of_files: number;
-	readonly number_of_rules: number;
-};
 
 /**
  * The exact shape the census found, 650 times: a `[kinu]` prose prefix, the outcome in English,
@@ -72,7 +66,7 @@ const cases: ReadonlyArray<{
 	{ rule: "no-untyped-console", bad: UNTYPED_SHAPE, good: TYPED_SHAPE },
 ];
 
-const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
+const config = readLintConfig(repoRoot);
 const manifest = JSON.parse(
 	readFileSync(join(repoRoot, "tools/oxlint/anti-slop/upstream.json"), "utf8"),
 );
@@ -220,14 +214,7 @@ function preservedUiCalls(): number {
 		`${JSON.stringify({ rules: { "no-console": "error" }, ignorePatterns: ["node_modules", "dist"] }, null, 2)}\n`,
 	);
 	try {
-		const run = spawnSync(
-			"./node_modules/.bin/oxlint",
-			["-c", configPath, "-f", "json", "packages/cli/src"],
-			{ cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-		);
-		assert.ok(run.stdout.length > 0, `oxlint produced no JSON for packages/cli/src:\n${run.stderr}`);
-		const report: LintReport = JSON.parse(run.stdout);
-		return report.diagnostics.length;
+		return lintJson(["-c", configPath, "packages/cli/src"], { cwd: repoRoot }).diagnostics.length;
 	} finally {
 		rmSync(join(configPath, ".."), { recursive: true, force: true });
 	}
@@ -329,37 +316,19 @@ try {
 		writeFileSync(join(goodDirectory, `${rule}.ts`), good);
 	}
 
-	const lint = (directory: string): LintReport => {
-		const run = spawnSync(
-			"./node_modules/.bin/oxlint",
-			["-c", ".oxlintrc.json", "-f", "json", directory],
-			{ cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-		);
-		assert.ok(run.stdout.length > 0, `oxlint produced no JSON for ${directory}:\n${run.stderr}`);
-		const report: LintReport = JSON.parse(run.stdout);
-		assert.equal(
-			report.number_of_files,
-			cases.length,
-			`oxlint linted ${String(report.number_of_files)} of ${String(cases.length)} fixtures in ${directory}; a run that skipped a fixture proves nothing about it`,
-		);
-		assert.ok(
-			report.number_of_rules > 0,
-			`oxlint ran ${String(report.number_of_rules)} rules; a lint with no rules loaded reports no findings`,
-		);
-		return report;
-	};
+	const lint = (directory: string): LintReport => lintJson(["-c", ".oxlintrc.json", directory], { cwd: repoRoot, expectedFiles: cases.length });
 
 	// The other anti-slop rules also run over these fixtures; their findings are not this gate's
 	// subject.
-	const ruleOf = (diagnostic: Diagnostic): string | null => {
+	const ruleOf = (diagnostic: LintDiagnostic): string | null => {
 		const match = /^anti-slop\(([a-z-]+)\)$/u.exec(diagnostic.code ?? "");
 		const rule = match?.[1];
 		return rule !== undefined && cases.some((entry) => entry.rule === rule) ? rule : null;
 	};
 	const firedIn = (
-		diagnostics: ReadonlyArray<Diagnostic>,
+		diagnostics: ReadonlyArray<LintDiagnostic>,
 		rule: string,
-	): ReadonlyArray<Diagnostic> =>
+	): ReadonlyArray<LintDiagnostic> =>
 		diagnostics.filter((d) => ruleOf(d) === rule && (d.filename ?? "").endsWith(`${rule}.ts`));
 
 	const red = lint(badDirectory).diagnostics;

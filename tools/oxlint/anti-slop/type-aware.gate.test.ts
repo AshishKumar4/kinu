@@ -46,15 +46,16 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { TEST_FILE } from "./rules/no-ambient-git-in-tests.ts";
 import * as v from "valibot";
 import { describeDiagnostic, lintJson } from "./shared/oxlint-json.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
 
-const config = JSON.parse(readFileSync(".oxlintrc.json", "utf8"));
+const config = readLintConfig();
 
 // One switch for the type-aware layer, read from config so the CLI flag and
 // the config file cannot disagree. `typeCheck` is deliberately absent: it

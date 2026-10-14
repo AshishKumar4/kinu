@@ -18,13 +18,14 @@ import * as v from "valibot";
 
 import { isLintSource, isShippedSource, trackedFiles } from "../../../scripts/sources.ts";
 import { describeDiagnostic, lintJson } from "./shared/oxlint-json.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
 
 const repoRoot = process.cwd();
 const rule = "no-module-scope-flight";
 const diagnosticCode = `flight-stage(${rule})`;
 
 const ActiveConfig = v.object({ rules: v.object({ "anti-slop/no-module-scope-flight": v.optional(v.literal("error")) }) });
-const active = v.parse(ActiveConfig, JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8")));
+const active = v.parse(ActiveConfig, readLintConfig(repoRoot));
 assert.equal(active.rules["anti-slop/no-module-scope-flight"], "error", "the proven rule must stay on at error");
 
 const manifest = v.parse(
@@ -77,14 +78,14 @@ export default eslintCompatPlugin({ meta: { name: "flight-stage" }, rules: { "no
   };
 
   for (const { file, code } of bad) {
-    const report = lintJson(["-c", configPath, plant("bad", file, code)], join(workspace, "bad"));
+    const report = lintJson(["-c", configPath, plant("bad", file, code)], { cwd: join(workspace, "bad") });
     assert.equal(report.number_of_files, 1);
     assert.deepEqual(report.diagnostics.filter((item) => item.code === undefined).map(describeDiagnostic), []);
     assert.equal(report.diagnostics.filter((item) => item.code === diagnosticCode).length, 1, `planted ${file} must be red`);
   }
 
   for (const { file, code } of good) {
-    const report = lintJson(["-c", configPath, plant("good", file, code)], join(workspace, "good"));
+    const report = lintJson(["-c", configPath, plant("good", file, code)], { cwd: join(workspace, "good") });
     assert.equal(report.number_of_files, 1);
     assert.deepEqual(report.diagnostics.filter((item) => item.code === diagnosticCode || item.code === undefined).map(describeDiagnostic), []);
   }

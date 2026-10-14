@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { isParseable, isTestFile, trackedFiles } from "../../../scripts/sources.ts";
 import { parse, publishedNames } from "../../../scripts/syntax.ts";
 import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
 
 const repoRoot = process.cwd();
 
@@ -109,7 +110,7 @@ const cases: ReadonlyArray<{
   },
 ];
 
-const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
+const config = readLintConfig(repoRoot);
 for (const { rule } of cases) {
   assert.equal(
     config.rules[`anti-slop/${rule}`],

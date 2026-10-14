@@ -32,15 +32,25 @@ export type LintReport = v.InferOutput<typeof LintReportSchema>;
  *  only beside a zero exit status. */
 export type LintRun = LintReport & { readonly status: number | null; readonly stderr: string };
 
+/** The repository's oxlint binary, absolute, so a run from a planted `cwd` still finds it. */
+export const OXLINT = resolve("node_modules/.bin/oxlint");
+
+export interface LintOptions {
+  /** Where oxlint runs: the repository root by default, or a directory when a rule judges a planted file by its path
+   *  from there. */
+  readonly cwd?: string;
+  /** How many files the run must lint: a run that skipped a fixture proves nothing about it. */
+  readonly expectedFiles?: number;
+}
+
 /**
- * Run `oxlint -f json <args>` and parse the report: from the repository root, or from `cwd` when a rule judges a
- * planted file by its path from where oxlint runs.
- * Fails when oxlint printed nothing (the message carries stderr) or loaded no
- * rules, because a lint that ran no rule finds nothing and proves nothing.
+ * Run `oxlint -f json <args>` and parse the report. Fails when oxlint printed nothing (the message carries stderr),
+ * loaded no rules, because a lint that ran no rule finds nothing and proves nothing, or linted other than
+ * `expectedFiles` files.
  */
-export function lintJson(args: readonly string[], cwd?: string): LintRun {
-  const run = spawnSync(resolve("node_modules/.bin/oxlint"), ["-f", "json", ...args], {
-    cwd,
+export function lintJson(args: readonly string[], options: LintOptions = {}): LintRun {
+  const run = spawnSync(OXLINT, ["-f", "json", ...args], {
+    cwd: options.cwd,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
   });
@@ -50,6 +60,13 @@ export function lintJson(args: readonly string[], cwd?: string): LintRun {
     report.number_of_rules > 0,
     `oxlint ran ${report.number_of_rules} rules for \`${args.join(" ")}\`; a lint with no rules loaded reports no findings`,
   );
+  if (options.expectedFiles !== undefined) {
+    assert.equal(
+      report.number_of_files,
+      options.expectedFiles,
+      `oxlint linted ${report.number_of_files} of ${options.expectedFiles} files in \`${args.join(" ")}\`; a run that skipped a fixture proves nothing about it`,
+    );
+  }
   return { ...report, status: run.status, stderr: run.stderr };
 }
 
