@@ -76,28 +76,6 @@ export const SEVERAL_DEVICES_CONNECTED = 'several devices are connected and the 
 
 const DEVICE_UNRESPONSIVE = 'device stopped responding';
 
-export const DEVICE_TOKEN_ROTATION = DEVICE_FRAMES.rotate;
-
-export const DEVICE_TOKEN_ROTATION_ACK = DEVICE_FRAMES.rotated;
-
-export const SANDBOX_UNAVAILABLE = DEVICE_ERRORS.sandboxUnavailable;
-
-export const DEVICE_UNKNOWN_METHOD = DEVICE_ERRORS.unknownMethod;
-
-export const DEVICE_CANCEL_METHOD = DEVICE_METHOD.cancel;
-
-export const DEVICE_EXEC_ACK_METHOD = DEVICE_METHOD.execAck;
-
-export const DEVICE_PTY_OPEN_METHOD = DEVICE_METHOD.ptyOpen;
-
-export const DEVICE_PTY_INPUT = DEVICE_FRAMES.ptyInput;
-
-export const DEVICE_PTY_RESIZE = DEVICE_FRAMES.ptyResize;
-
-export const DEVICE_PTY_OUTPUT = DEVICE_FRAMES.ptyOutput;
-
-export const DEVICE_PTY_EXIT = DEVICE_FRAMES.ptyExit;
-
 export const DEVICE_CANCEL_MISPAIRED = 'device answered a cancellation for another command';
 
 export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';

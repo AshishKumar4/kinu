@@ -12,6 +12,7 @@ import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { readSubordinateInspection } from '../src/subordinates/inspection';
 import { makeSqlExec } from './helpers';
 import { decodeModelMessageValues } from '../src/session/message-codec';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test' };
 
@@ -97,7 +98,8 @@ test.each([
     await stream.settle();
 
     const reopened = new SessionHistory({ sql: s.rt.storage.sql, actor: s.rt.actor,
-      transactionSync: write => s.rt.storage.transactionSync(write), files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) });
+      transactionSync: write => s.rt.storage.transactionSync(write), files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }),
+      claims: claimFences(s.rt.storage.sql, s.rt.actor), });
 
     const messages = (await reopened.materialize()).messages.filter(message => message.role === 'tool');
 
@@ -108,7 +110,7 @@ test.each([
 function setup() {
   const { rt, testSql } = createTestRuntime();
   initActorClaimTables(rt.storage.execRaw);
-  const history = new SessionHistory({ sql: rt.storage.sql, actor: rt.actor, transactionSync: write => rt.storage.transactionSync(write), files: async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor' }) });
+  const history = new SessionHistory({ sql: rt.storage.sql, actor: rt.actor, transactionSync: write => rt.storage.transactionSync(write), files: async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor' }), claims: claimFences(rt.storage.sql, rt.actor) });
   const claims = new ActorClaimStore(rt.storage.sql, rt.actor, write => rt.storage.transactionSync(write), history);
   const selected = () => history.context.selected() ?? history.context.initialize();
   const open = () => testSql.db.query<{ message_id: string }, []>('SELECT message_id FROM session_messages WHERE sealed_at IS NULL').all().map(row => row.message_id);
@@ -137,7 +139,8 @@ test('an interrupted authored loop retains its producer-owned command failure me
     await stream.settle();
 
     const reopened = new SessionHistory({ sql: s.rt.storage.sql, actor: s.rt.actor,
-      transactionSync: write => s.rt.storage.transactionSync(write), files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) });
+      transactionSync: write => s.rt.storage.transactionSync(write), files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }),
+      claims: claimFences(s.rt.storage.sql, s.rt.actor), });
 
     expect((await reopened.materialize()).messages.filter(message => message.role === 'tool')).toEqual([
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'command', toolName: 'shell',
@@ -427,7 +430,7 @@ test('a stream whose claim moved on writes nothing at its next flush', async () 
     s.testSql.db.run('UPDATE actor_turn_claims SET epoch = epoch + 1');
 
     for (let i = 0; i < 9; i++) await stream.nativePart({ type: 'text-delta', id: '0', text: 'late' });
-    await expect(stream.nativePart({ type: 'text-delta', id: '0', text: 'late' })).rejects.toThrow('no longer current');
+    await expect(stream.nativePart({ type: 'text-delta', id: '0', text: 'late' })).rejects.toThrow('owned by another execution epoch');
     expect(s.rows()).toEqual(['kept']);
   } finally { s.testSql.close(); }
 });

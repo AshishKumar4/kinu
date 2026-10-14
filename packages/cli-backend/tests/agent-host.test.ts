@@ -54,7 +54,7 @@ import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
-import { hireDeathModel } from './hire-death-model';
+import { ANSWERING_HIRE_ANSWER, answeringHireModel, hireDeathModel } from './hire-death-model';
 import { swarmsOn, toolCallStream, toolSequenceModel } from './helpers/local-session';
 import { staticModelPlane } from '../src/profile-authority';
 
@@ -1390,6 +1390,40 @@ describe('LocalAgentHost', () => {
     await next.host.close();
   });
 
+  // What a hire's turn end owes its hirer is reported after its answer commits (#75), by a row the commit owes: a
+  // process killed past the commit leaves the row, and the next process reports it once, asking the hire nothing.
+  test('a hire killed after its answer committed is reported to its hirer exactly once by the next process', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+
+    const child = spawnTest(['bun', new URL('./hire-end-death-probe.ts', import.meta.url).pathname, state, project],
+      { cwd: new URL('../../..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' });
+
+    const marker = (await new Response(child.stdout).text()).trim().split('\n').at(-1);
+
+    await child.exited;
+    expect(marker).toMatch(/^KILLED after-commit (heard|unheard)$/u);
+
+    const { model, childCalls } = answeringHireModel();
+    const next = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    // The report opens the hirer's next turn, or the turn it opened before the kill runs again.
+    const hirerTurn = awaitTurns(next.host, 'root', 1);
+
+    await next.host.team('root');
+    await hirerTurn;
+    await next.host.close();
+
+    const view = new Database(dbPath, { readonly: true });
+
+    const reports = view.query<{ payload: string }, []>(
+      "SELECT payload FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+    ).all();
+
+    view.close();
+    expect(childCalls()).toBe(0);
+    expect(reports.map(({ payload }) => payload.includes(ANSWERING_HIRE_ANSWER))).toEqual([true]);
+  });
+
   /** Temporary rung end to end: a role-targeted `ask` births a real local actor, admits its task, and archives it in the same roster. */
   test('a role-targeted ask runs a real local child, answers from the call, and archives it in the one roster', async () => {
     const { state, project } = makeRoots();
@@ -2636,7 +2670,7 @@ describe('LocalAgentHost — the driver lease', () => {
 
     const claim = await admitTestClaim(rt.stores.claims, {
       runId: 'live-run', turnId: 'live-turn', workMode: 'build',
-      context: rt.stores.history.context.selected() ?? rt.stores.history.context.initialize(),
+      context: rt.stores.history.context.current(),
       program: { kind: 'builtin', version: 0, digest: null, build: null },
     });
 

@@ -59,23 +59,23 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
-  assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
-  type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
+  type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
   terminalEffect,
   type TerminalEffectTable, type TerminalEffectFault,
   type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
   turnArtifactBodies, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
-  turnReasonForMetadata, type TurnReason,
+  turnTags, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
   agentRoleSwitch,
-  REPORT_TOOL, turnAuthorship, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
+  REPORT_TOOL, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
   type MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
@@ -210,9 +210,7 @@ export interface LocalParentRelay {
    * Which report this ending owes, or null. A `task` child owes one on every ending; a `durable`
    * child only for a completed, parent-driven turn with something to say and no `report` call.
    */
-  readonly owed: (
-    ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>,
-  ) => Promise<OwedReport | null>;
+  readonly owed: (turn: TurnReportFacts) => Promise<OwedReport | null>;
   /** Dedupe key on the parent's rail, so a replay cannot wake it twice. */
   readonly sequenceId: (messageId: string) => string;
   readonly send: (report: {
@@ -547,8 +545,6 @@ export class LocalAgentSession {
         // The owner's decision as an intent delivers it, as their own decision here decides it.
         decidePlan: (verdict) => this.planActions.decideAndHandOff(verdict, (turn) => this.enqueueTurn(turn)),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
-        // Only the host knows the child's lifetime and whether the parent drove the turn.
-        owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
         // A running job's settle wakes the session; a reminder would race it.
         openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
@@ -1617,7 +1613,7 @@ export class LocalAgentSession {
 
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
-    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnAuthorship(item));
+    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnTags(item).authorship);
     this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
@@ -1659,7 +1655,7 @@ export class LocalAgentSession {
   }
 
   private turnRequest(item: TurnAsked): TurnAssemblyRequest {
-    return { userText: item.text, workMode: this.turnWorkMode(item), explicitTier: metadataTier(item.metadata) };
+    return { userText: item.text, workMode: this.turnWorkMode(item), explicitTier: turnTags(item).tier };
   }
 
   private turnModels(): TurnModelSources {
@@ -1677,7 +1673,7 @@ export class LocalAgentSession {
 
   /** Where this session's turns are assembled from (core orchestrator/turn-assembly.ts). */
   private turnSources(item: TurnAsked, lease: Pick<ActorTurnLease, 'runId' | 'turnId'> | null): TurnAssemblySources {
-    const turn = turnReasonForMetadata(item.metadata);
+    const turn = turnTags(item).reason;
 
     return {
       rt: this.rt,
@@ -1778,15 +1774,9 @@ export class LocalAgentSession {
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
-    // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
-    if (input.owedReport !== null && relay !== null) {
-      parts.parentReport = {
-        text: input.owedReport.content,
-        status: input.owedReport.status,
-        sequenceId: relay.sequenceId(input.messageId),
-        ...(input.owedReport.quiet === true && { quiet: true as const }),
-      };
-    }
+    // Decided once its answer committed, by its relay; the sequence id is the parent's dedupe key, so a replay is
+    // recognised.
+    if (input.turnEnd !== null && relay !== null) parts.turnReport = { ...input.turnEnd, sequenceId: relay.sequenceId(input.messageId) };
 
     const role: TerminalActor['role'] = root
       ? { kind: 'workspace', mission: missionOf(soulIn(this.rt.space)), event: input.event ?? null }
@@ -1871,7 +1861,16 @@ export class LocalAgentSession {
         },
         // As the workspace object runs main's.
         startEvolution: () => { this.actorSession.orchestrator.startEvolution(); },
-        ...(relay !== null && { sendReport: (report) => relay.send(report) }),
+        ...(relay !== null && {
+          report: async (turn) => {
+            const owed = await relay.owed(turn);
+
+            return owed === null ? 'none' : await relay.send({
+              text: owed.content, status: owed.status, mode: turn.mode, sequenceId: turn.sequenceId, ...(owed.quiet === true && { quiet: true as const }),
+            });
+          },
+          sendReport: (report) => relay.send(report),
+        }),
       }),
     };
   }

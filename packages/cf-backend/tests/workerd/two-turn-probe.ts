@@ -92,7 +92,7 @@ import {
   type WakeDriveResult,
   type WakeRows,
 } from './two-turn-shapes';
-import { changeNotesCard, ownerCaller, turnAuthor, type NotedChanges, type PeerMessage, type ReviewAnnotation, type WorkMode } from '@kinu.run/core';
+import { changeNotesCard, ownerCaller, turnTags, type NotedChanges, type PeerMessage, type ReviewAnnotation, type WorkMode } from '@kinu.run/core';
 import type { ChatWire, ChatWireTransport } from '../../src/chat-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import type { ToolSet } from 'ai';
@@ -1599,7 +1599,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       cards: messages.flatMap((message) => {
         const card = changeNotesCard({ metadata: message.metadata });
 
-        return card === null ? [] : [{ role: message.role, notes: card.notes.map((note) => note.id), author: turnAuthor({ metadata: message.metadata }) ?? null }];
+        return card === null ? [] : [{ role: message.role, notes: card.notes.map((note) => note.id), author: turnTags({ metadata: message.metadata }).author ?? null }];
       }),
       kept: (await target.getChangeNotes('workspace')).length,
       owed: await target.owedSends(),

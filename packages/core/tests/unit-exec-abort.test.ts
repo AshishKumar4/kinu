@@ -6,11 +6,11 @@ import { buildBuiltinTools } from '../src/tools/builtins';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_MISPAIRED,
+  DEVICE_CANCEL_MISPAIRED,
   DeviceTunnel, TUNNEL_DISCONNECTED, type TunnelSocket,
 } from '../src/execution/device-tunnel';
 import type { JsonValue } from '../src/utils/json';
-import { DEVICE_ERRORS, deviceFailure } from '../src/execution/device-protocol';
+import { DEVICE_ERRORS, DEVICE_METHOD, deviceFailure } from '../src/execution/device-protocol';
 import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
   nimbusSessionFiles,
@@ -187,7 +187,7 @@ describe('remote executor exec abort', () => {
         if (opts?.requestId !== undefined) call.requestId = opts.requestId;
         calls.push(call);
 
-        if (method !== DEVICE_CANCEL_METHOD) return hangingPromise();
+        if (method !== DEVICE_METHOD.cancel) return hangingPromise();
 
         return cancelAnswer(v.parse(v.string(), params[0]));
       },
@@ -213,7 +213,7 @@ describe('remote executor exec abort', () => {
       message: 'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
 
-    expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
+    expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_METHOD.cancel]);
     const execRequestId = calls[0].requestId;
 
     if (execRequestId === undefined) throw new Error('the exec call carried no request identity');
@@ -288,7 +288,7 @@ describe('remote executor exec abort', () => {
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     await expect(pending).rejects.toThrow(/could not stop the command, which may still be running/);
     await expect(pending).rejects.toThrow(/device RPC timeout/);
-    expect(frames.map((frame) => frame.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
+    expect(frames.map((frame) => frame.method)).toEqual(['exec', DEVICE_METHOD.cancel]);
 
     // A late answer cannot upgrade an unconfirmed stop.
     tunnel.handleMessage(JSON.stringify({
@@ -324,7 +324,7 @@ describe('remote executor exec abort', () => {
       rpc: (method, params) => {
         calls.push({ method, params });
 
-        if (method !== DEVICE_CANCEL_METHOD) return held.promise;
+        if (method !== DEVICE_METHOD.cancel) return held.promise;
 
         return Promise.resolve({ requestId: v.parse(v.string(), params[0]), cancelled: 'unknown' });
       },
@@ -346,7 +346,7 @@ describe('remote executor exec abort', () => {
     await held.promise;
 
     await expect(pending).rejects.toThrow(/no active command control entry/);
-    expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
+    expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_METHOD.cancel]);
   });
 
   test('the hosted workspace shell stops waiting and throws AbortError on abort', async () => {

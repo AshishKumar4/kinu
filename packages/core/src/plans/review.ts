@@ -8,7 +8,7 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { JsonArraySchema, type JsonObject } from '../utils/json';
-import { turnAuthor } from '../utils/ui-message';
+import { turnTags } from '../types/turn-metadata';
 import { renderThrownChain } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
@@ -96,7 +96,9 @@ export function workModeUnderReview(
   metadata: JsonObject | undefined,
   active: () => Pick<PlanReview, 'status' | 'handoffAccepted'> | null,
 ): WorkMode {
-  if (requested !== 'build' || metadata?.kinuMode === 'build' || turnAuthor({ metadata }) !== 'operator') return requested;
+  const tags = turnTags({ metadata });
+
+  if (requested !== 'build' || tags.chosenMode === 'build' || tags.author !== 'operator') return requested;
 
   return planReviewAwaitingDecision(active()) ? 'plan' : requested;
 }
@@ -304,7 +306,9 @@ export function planSubmissionReach(mode: WorkMode, driving: JsonObject | undefi
 
 /** The owner's own turn, the feedback turn of their review, or the turn their answer resumes: the owner's conversation. */
 function planSubmissionAllowed(driving: JsonObject | undefined): boolean {
-  return turnAuthor({ metadata: driving }) === 'operator' || driving?.kinuEvent === 'plan_feedback' || driving?.kinuEvent === OWNER_ANSWER_SIGNAL;
+  const { author, event } = turnTags({ metadata: driving });
+
+  return author === 'operator' || event === 'plan_feedback' || event === OWNER_ANSWER_SIGNAL;
 }
 
 /**

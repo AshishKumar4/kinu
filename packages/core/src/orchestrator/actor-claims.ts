@@ -13,6 +13,7 @@ import { AgentSequence, initAgentSequenceTable } from '../subordinates/report-se
 import { sqlCheckList } from '../identity/schema';
 import type { ActorTurnProgram } from './actor-program';
 import type { SessionHistory } from '../session/history';
+import type { ClaimFences } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import type { PromptCacheRoute } from '../prompting/cache-breakpoints';
 
@@ -449,7 +450,45 @@ function claimOfRow(actorId: string, row: ClaimRow): StoredActorClaim {
   return Object.freeze({ actorId, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, workMode: row.work_mode, program, status, outcome: row.outcome, claimedAt: row.claimed_at, withdrawnThrough: row.withdrawn_through, answered: row.answered === 1 });
 }
 
-function assertLiveIn(guard: ClaimGuard, claim: Pick<ActorTurnClaim, 'epoch'>): void {
+/** The session's one fence on a turn's claim ({@link ClaimFences}), read here, where the claim table is declared. */
+export function claimFences(sql: SqlExecutor, actor: ActorHandle): ClaimFences {
+  const claimOf = (turnId: string) => {
+    actor.assertCurrent();
+
+    return sql<{ epoch: number; open: number; run_id: string }>`SELECT epoch, outcome IS NULL AS open, run_id FROM actor_turn_claims
+      WHERE actor_id=${actor.actorId} AND turn_id=${turnId}`[0];
+  };
+
+  return {
+    live: (turnId, epoch) => {
+      const claim = claimOf(turnId);
+
+      return claim?.epoch === epoch && claim.open === 1;
+    },
+    assertLive: (turnId, epoch) => {
+      const claim = claimOf(turnId);
+
+      assertLiveIn({ epoch: claim?.epoch ?? null, open: claim?.open === 1 }, { epoch });
+    },
+    // Settled or not: only the epoch is asked.
+    assertOwned: (turnId, epoch) => {
+      assertLiveIn({ epoch: claimOf(turnId)?.epoch ?? null, open: true }, { epoch });
+    },
+    openClaims: () => {
+      actor.assertCurrent();
+
+      return new Map(sql<{ turn_id: string; epoch: number }>`SELECT turn_id, epoch FROM actor_turn_claims
+        WHERE actor_id=${actor.actorId} AND outcome IS NULL`.map((claim) => [claim.turn_id, claim.epoch]));
+    },
+    openRun: (turnId) => {
+      const claim = claimOf(turnId);
+
+      return claim?.open === 1 ? claim.run_id : null;
+    },
+  };
+}
+
+function assertLiveIn(guard: Pick<ClaimGuard, 'epoch' | 'open'>, claim: Pick<ActorTurnClaim, 'epoch'>): void {
   if (guard.epoch !== claim.epoch) throw new KinuError('denied', 'actor turn is owned by another execution epoch');
 
   if (!guard.open) throw new KinuError('denied', 'actor turn is settled and takes no further work');

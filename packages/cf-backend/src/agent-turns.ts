@@ -5,7 +5,7 @@ import {
   AgentOpenTurns, TurnFences, type FencedRow, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, scaffoldProviders, runWorkModeInvocation,
   announcementOf, improvementLanesOpen, type ActorAdvisor, type SeatedActor, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
-  type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, readMissionLabels,
+  type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, turnTags,
   openingCacheCold, type OpenWork,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
@@ -661,7 +661,7 @@ export class AgentTurns {
 
     return {
       continuity: surface.continuity, evolutionEnabled: surface.evolutionEnabled,
-      missionLabels: [...turn.request.run?.inference.mission?.labels ?? readMissionLabels(turn.request.driving)],
+      missionLabels: [...turn.request.run?.inference.mission?.labels ?? turnTags({ metadata: turn.request.driving }).missionLabels],
     };
   }
 
@@ -675,7 +675,7 @@ export class AgentTurns {
 
   /** Main's chat turn names its missions when it is prepared under any. */
   private chatMission(actorId: string, turn: OpenTurn): readonly string[] {
-    return turn.request.run === undefined && this.deps.missions(actorId) !== null ? readMissionLabels(turn.request.driving) : [];
+    return turn.request.run === undefined && this.deps.missions(actorId) !== null ? [...turnTags({ metadata: turn.request.driving }).missionLabels] : [];
   }
 
   async program(actorId: string, turnId: string, ...[code, providers, opts]: Parameters<Executor['execute']>) {

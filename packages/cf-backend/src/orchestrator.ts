@@ -151,7 +151,7 @@ import {
   readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
   readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
-  type EnqueueTurnResult, type ProgrammaticTurn, turnAuthorship,
+  type EnqueueTurnResult, type ProgrammaticTurn, turnTags,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
   missionOf, summarizeSoul, workspaceGenesisSignal, isPlaceholderMission, drawWorkspaceLogo,
   // Recovery has no live turn, so the owed answer is read from the transcript.
@@ -189,7 +189,7 @@ import {
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
-  initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, turnAuthor, authoredTurnMetadata, workModeForTurnMetadata, type ActorReach, type ChatTurnInput,
+  initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, authoredTurnMetadata, type ActorReach, type ChatTurnInput,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -1420,7 +1420,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ...(input.metadata !== undefined && { metadata: { ...input.metadata } }),
         ...(input.yieldsToUserMessage === true && { yieldsToUserMessage: true }),
       },
-      authorship: input.authorship ?? turnAuthorship({ kind: 'programmatic', metadata: input.metadata }),
+      authorship: input.authorship ?? turnTags({ kind: 'programmatic', metadata: input.metadata }).authorship,
     });
 
     if ('admitted' in crossed) return { status: crossed.admitted === 'yielded' ? 'yielded' : 'queued' };
@@ -1548,13 +1548,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const { key, lane, run } = turn;
     const reach = surfaceReach(actorPolicy(actor.record), lane, true);
     const driving = lane.driving ?? {};
-    const item: ChatTurnInput = { kind: turnAuthor({ metadata: driving }) === 'operator' ? 'user' : 'programmatic', text: turn.text, metadata: driving };
+    const item: ChatTurnInput = { kind: turnTags({ metadata: driving }).author === 'operator' ? 'user' : 'programmatic', text: turn.text, metadata: driving };
 
     const surface = new TurnSurface({
       key, actor: actor.reference, item, continuity: readTurnContinuity(driving),
       // Read where the turn opens: the recorded turn carries it, so a recovering host's engine cannot re-judge a turn it
       // did not run. `engine.enabled` is a live read that a mid-turn toggle could answer differently.
-      evolutionEnabled: reach.actor.lanes && this.turnRecordsEvolution(workModeForTurnMetadata(authoredTurnMetadata({ kind: item.kind, metadata: driving }))),
+      evolutionEnabled: reach.actor.lanes && this.turnRecordsEvolution(turnTags({ metadata: authoredTurnMetadata({ kind: item.kind, metadata: driving }) }).mode),
     });
 
     // Its tools are built under the turn they serve, before its chat holds it.

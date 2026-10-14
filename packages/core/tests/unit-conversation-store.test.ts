@@ -11,6 +11,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 import { createTestActor, createTestWorkspace, type TestWorkspace } from './helpers';
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 interface Fixture extends TestWorkspace {
   readonly actor: ActorHandle;
@@ -25,6 +26,7 @@ function setup(): Fixture {
   const history = new SessionHistory({
     sql: ws.sql, actor, transactionSync: write => ws.db.transaction(write)(),
     files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(ws.sql, actor),
   });
 
   return { ...ws, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };
