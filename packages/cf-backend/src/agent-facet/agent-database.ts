@@ -331,7 +331,7 @@ export class AgentDatabase {
         }),
         eventLog: new EventLog(this.exec, bound.handle),
       }),
-      contextEvents: () => null,
+      contextEvents: (bound) => bound.stores.eventRecorder,
       sayToParent: (_child, signal) => this.workspace.sayToParent(signal),
       // Its workspace tools' receipts are the workspace's, where their effects commit (design v2 §4).
       receipts: (execution, callIds) => this.workspace.receipts(execution.turnId, execution.runId, callIds),
@@ -591,7 +591,11 @@ export class AgentDatabase {
   }
 
   contextTree(editor: ContextEditor): ContextTree {
-    return localContextTree(() => ({ claims: this.actorHost().bindStores(this.reference()).stores.claims, events: null }), editor);
+    return localContextTree(() => {
+      const { stores } = this.actorHost().bindStores(this.reference());
+
+      return { claims: stores.claims, events: stores.eventRecorder };
+    }, editor);
   }
 
   figures(): AgentFigures {
