@@ -157,7 +157,8 @@ export async function openPreviewAsOwner(owner: PreviewOwner, url: string | URL)
   let at = owner.entry === undefined ? new URL(url) : new URL(`${owner.entry}?to=${encodeURIComponent(String(url))}`, app);
 
   for (let hop = 0; ; hop++) {
-    const headers = new Headers({ accept: 'text/html' });
+    // A page load from the address bar, as a browser says it: the preview admits its owner's cookie on a page load.
+    const headers = new Headers({ accept: 'text/html', 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'none', 'sec-fetch-dest': 'document' });
     const cookie = jar.get(at.origin);
 
     if (at.origin === app) for (const [name, value] of Object.entries(owner.headers)) headers.set(name, value);

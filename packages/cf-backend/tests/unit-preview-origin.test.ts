@@ -731,7 +731,9 @@ describe("signing a preview's owner in on its own host", () => {
     const cookie = present(exchange.headers.get('set-cookie'), 'the viewer cookie');
     const next = new URL(present(exchange.headers.get('location'), 'the page'), preview);
 
-    return { exchange, cookie, next, page: await handleNimbusPreviewHostRequest(new Request(next, { headers: { cookie: cookie.split(';')[0] ?? '' } }), env) };
+    const load = { cookie: cookie.split(';')[0] ?? '', 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'same-site' };
+
+    return { exchange, cookie, next, page: await handleNimbusPreviewHostRequest(new Request(next, { headers: load }), env) };
   }
 
   test('its owner is sent to the page they asked for with a host-only cookie, which the edge reads as them', async () => {
@@ -818,11 +820,13 @@ describe("signing a preview's owner in on its own host", () => {
     await asked({ headers: { cookie: owned, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' } });
     await asked({ headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors' } });
     await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin } });
+    // An old browser's script or image request, then its page load.
     await asked({ headers: { cookie: owned } });
+    await asked({ headers: { cookie: owned, 'upgrade-insecure-requests': '1' } });
 
-    // A sibling's socket, script and form name no one, nor does a form post that names no origin of this one; a page
-    // load, the preview's own requests and a bare GET (no more than a page load) name the owner.
-    expect(visits).toEqual([null, null, null, null, null, null, null, OWNER_ID, OWNER_ID, OWNER_ID, OWNER_ID]);
+    // A sibling's socket, script and form name no one, nor does a form post that names no origin of this one, nor an
+    // old browser's script; a page load and the preview's own requests name the owner.
+    expect(visits).toEqual([null, null, null, null, null, null, null, OWNER_ID, OWNER_ID, OWNER_ID, null, OWNER_ID]);
   });
 
   test("a cookie the host did not set, or a live share's, names no one to the workspace", async () => {

@@ -132,17 +132,19 @@ function sameHostTarget(next: string | null, origin: string): string {
  * A request the preview's own page or its owner's address bar makes, never one another site's page sends with the
  * owner's cookie. Every preview and share host is a sibling under one site, and a same-site request carries the cookie,
  * so the cookie alone cannot tell them apart; the browser's fetch metadata can. A page load opens the page, as any link
- * opens any site's, and a GET a browser too old to say what it is sends with no other origin named opens no more than
- * a page load; a socket, a script's request or a form post must come from the preview itself, by its metadata or else
- * its exact `Origin`. Only the workspace's own server-side fetch (`self`) may send neither.
+ * opens any site's. A browser too old to send fetch metadata marks its page loads alone with
+ * `Upgrade-Insecure-Requests` (a script cannot add it without a preflight that names its origin), so its script and
+ * image requests are not page loads. A socket, a script's request or a form post must come from the preview itself, by
+ * its metadata or else its exact `Origin`. Only the workspace's own server-side fetch (`self`) may send neither.
  */
 function ownRequest(request: Request, origin: string, self: boolean): boolean {
   const mode = request.headers.get('sec-fetch-mode');
   const site = request.headers.get('sec-fetch-site');
   const stated = request.headers.get('origin');
   const read = request.method === 'GET' || request.method === 'HEAD';
+  const legacyPageLoad = site === null && stated === null && request.headers.get('upgrade-insecure-requests') === '1';
 
-  if (read && (mode === 'navigate' || (site === null && (stated === null || stated === origin)))) return true;
+  if (read && (mode === 'navigate' || legacyPageLoad)) return true;
 
   if (site !== null) return site === 'same-origin' || site === 'none';
 
