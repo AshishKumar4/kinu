@@ -5,7 +5,7 @@
  * seen. A state names the one window it shows in (`data-design-width`), else it shows at desktop and phone width; the
  * widest Changes panes need the 1920-pixel `wide` window to leave the chat its share.
  *
- *   bun scripts/design-shots.ts drive-design                   # through the gallery harness (a frozen build)
+ *   bun scripts/design-shots.ts diff-design                    # through the gallery harness (a frozen build)
  *   bun scripts/design-shots.ts diff-design --dev http://127.0.0.1:5272 --only changes,file --vp desktop --theme dark
  */
 import { mkdirSync } from 'node:fs';
@@ -14,7 +14,7 @@ import type { Page } from 'puppeteer';
 import { withGallery } from './gallery-harness';
 import { withTestChrome } from './test-chrome';
 
-const FRAMES = ['drive-design', 'diff-design'] as const;
+const FRAMES = ['diff-design'] as const;
 
 const VIEWPORTS = [
   { name: 'desktop', width: 1280, height: 860 },

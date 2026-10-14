@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3293,
-  "functions": 86308,
+  "files": 3286,
+  "functions": 86120,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -112,10 +112,6 @@
     {
       "key": "tests/first-run/deploy-door.first-run.ts#authorizeHandoff",
       "complexity": 32
-    },
-    {
-      "key": "packages/cf-backend/src/drive-design/DriveDesignPage.tsx#DriveDesignPage",
-      "complexity": 31
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
