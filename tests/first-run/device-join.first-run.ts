@@ -146,6 +146,62 @@ function runIssued(command: string, home: string, ranIn: string): IssuedRun {
   };
 }
 
+/** The command, asked whether to link, says yes; it links and says so, or asks for a sign-in, or does neither. */
+async function joinedWithoutSignIn(run: IssuedRun, budget: AbortSignal): Promise<EvalSubgoal> {
+  const asked = await run.saying([CONFIRM, SIGN_IN], budget);
+
+  if (asked === CONFIRM) await run.answer('y');
+  const linked = asked === CONFIRM ? await run.saying([LINKED, SIGN_IN], budget) : asked;
+
+  return {
+    what: 'command-joins-without-sign-in',
+    reached: linked === LINKED && !run.output().includes(SIGN_IN),
+    detail: linked === LINKED
+      ? `the command linked ${MACHINE} with no sign-in`
+      : `the command ${linked === SIGN_IN ? 'asked for a sign-in' : 'neither linked nor asked'}; it printed: ${run.output().slice(-600)}`,
+  };
+}
+
+/** The device row as the account's Devices page reads it. */
+async function readsConnected(account: DeviceAccount, deviceId: string, home: string): Promise<EvalSubgoal> {
+  const devices = await userRoute(account, '/devices');
+  const rows = devices.status === 200 ? v.safeParse(DeviceRowsSchema, JSON.parse(devices.body)) : null;
+  const row = rows?.success === true ? rows.output.find((device) => device.id === deviceId) : undefined;
+
+  return {
+    what: 'device-reads-connected',
+    reached: row?.connected === true,
+    detail: row === undefined
+      ? `the devices route answered ${String(devices.status)} without ${deviceId}; the daemon said: ${readDaemonLogTail(join(home, '.kinu', 'pc-agent.log'))}`
+      : `${deviceId} reads connected ${String(row.connected)}`,
+  };
+}
+
+/** The issuing workspace's grant of the device, as the account's consent listing holds it. */
+async function grantedTo(account: DeviceAccount, deviceId: string, workspace: string): Promise<EvalSubgoal> {
+  const consents = await userRoute(account, '/devices/consents');
+  const bound = consents.status === 200 ? v.safeParse(ConsentRowsSchema, JSON.parse(consents.body)) : null;
+  const grant = bound?.success === true ? bound.output.find((consent) => consent.deviceId === deviceId) : undefined;
+
+  return {
+    what: 'issuing-workspace-granted',
+    reached: grant?.agentName === workspace && grant.policy === 'allow',
+    detail: grant === undefined ? `no grant for ${deviceId} (consents answered ${String(consents.status)})` : `${grant.agentName} holds ${deviceId} as ${grant.policy}`,
+  };
+}
+
+/** The directory device.json links: the machine's home, not where the command ran. */
+function rootedAtHome(deviceId: string, home: string, ranIn: string): EvalSubgoal {
+  const configPath = join(home, '.kinu', 'device.json');
+  const config = existsSync(configPath) ? v.safeParse(DeviceConfigSchema, JSON.parse(readFileSync(configPath, 'utf8'))) : null;
+
+  return {
+    what: 'rooted-at-home',
+    reached: config?.success === true && config.output.root === home && config.output.device === deviceId,
+    detail: config?.success === true ? `device.json roots ${config.output.device ?? '?'} at ${config.output.root}; it ran in ${ranIn}` : `no readable ${configPath}`,
+  };
+}
+
 /** Put the joined machine away: the daemon `kinu connect` started detached, stopped first, then its row revoked. */
 async function detachJoined(account: DeviceAccount, deviceId: string, home: string): Promise<string | null> {
   const daemon = recordedIn(join(home, '.kinu', 'pc-agent.pid'));
@@ -193,55 +249,13 @@ describe(SUITE, () => {
           mkdirSync(ranIn, { recursive: true });
           const run = runIssued(installCommand, home, ranIn);
           held.run = run;
+          const joined = await joinedWithoutSignIn(run, budget);
 
-          const asked = await run.saying([CONFIRM, SIGN_IN], budget);
+          subgoals.push(joined);
 
-          if (asked === CONFIRM) await run.answer('y');
-          const linked = asked === CONFIRM ? await run.saying([LINKED, SIGN_IN], budget) : asked;
-
-          subgoals.push({
-            what: 'command-joins-without-sign-in',
-            reached: linked === LINKED && !run.output().includes(SIGN_IN),
-            detail: linked === LINKED
-              ? `the command linked ${MACHINE} with no sign-in`
-              : `the command ${linked === SIGN_IN ? 'asked for a sign-in' : 'neither linked nor asked'}; it printed: ${run.output().slice(-600)}`,
-          });
-
-          if (linked !== LINKED) return subgoals;
+          if (!joined.reached) return subgoals;
           await run.exited;
-
-          const devices = await userRoute(account, '/devices');
-          const rows = devices.status === 200 ? v.safeParse(DeviceRowsSchema, JSON.parse(devices.body)) : null;
-          const row = rows?.success === true ? rows.output.find((device) => device.id === deviceId) : undefined;
-
-          subgoals.push({
-            what: 'device-reads-connected',
-            reached: row?.connected === true,
-            detail: row === undefined
-              ? `the devices route answered ${String(devices.status)} without ${deviceId}; the daemon said: ${readDaemonLogTail(join(home, '.kinu', 'pc-agent.log'))}`
-              : `${deviceId} reads connected ${String(row.connected)}`,
-          });
-
-          const consents = await userRoute(account, '/devices/consents');
-          const bound = consents.status === 200 ? v.safeParse(ConsentRowsSchema, JSON.parse(consents.body)) : null;
-          const grant = bound?.success === true ? bound.output.find((consent) => consent.deviceId === deviceId) : undefined;
-
-          subgoals.push({
-            what: 'issuing-workspace-granted',
-            reached: grant?.agentName === session.workspace && grant.policy === 'allow',
-            detail: grant === undefined
-              ? `no grant for ${deviceId} (consents answered ${String(consents.status)})`
-              : `${grant.agentName} holds ${deviceId} as ${grant.policy}`,
-          });
-
-          const configPath = join(home, '.kinu', 'device.json');
-          const config = existsSync(configPath) ? v.safeParse(DeviceConfigSchema, JSON.parse(readFileSync(configPath, 'utf8'))) : null;
-
-          subgoals.push({
-            what: 'rooted-at-home',
-            reached: config?.success === true && config.output.root === home && config.output.device === deviceId,
-            detail: config?.success === true ? `device.json roots ${config.output.device ?? '?'} at ${config.output.root}; it ran in ${ranIn}` : `no readable ${configPath}`,
-          });
+          subgoals.push(await readsConnected(account, deviceId, home), await grantedTo(account, deviceId, session.workspace), rootedAtHome(deviceId, home, ranIn));
 
           return subgoals;
         },
