@@ -5,8 +5,8 @@
 
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { hostname } from 'node:os';
-import { dirname, join } from 'node:path';
+import { homedir, hostname } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { Effect } from 'effect';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { isolatedBunArgs } from '@kinu.run/core';
@@ -16,7 +16,7 @@ import {
   claimMachine, enforceOwnerOnly, ensureSecretDir, machineProcessAlive, readMachinePid, removeMachinePid, runningMachineDaemon, runsMachineDaemon,
 } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
-import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
+import { joinCloudDevice, listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import { buildDaemonFiles, type DaemonFiles } from './daemon-build';
 import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
 import { issuedDeviceConnected, waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
@@ -78,6 +78,8 @@ export interface ConnectDeviceOptions {
   label?: string;
   /** The device a browser issued for this machine; it registers as that id, so the page that asked sees it arrive. */
   device?: string;
+  /** The directory the agents' base-tier file calls are scoped to: this user's home unless the command names one. */
+  root?: string;
   session?: boolean;
   onWaiting?: () => void;
   /** The daemon keeps running and trying to connect. */
@@ -110,12 +112,12 @@ export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {})
     yield* assertDaemonPlatformSupported();
     const runtime = yield* daemonRuntime();
     const device = yield* registerDeviceForConnect(auth, opts.label, previous?.token, opts.device);
-    yield* installDaemonFiles(device);
+    yield* installDaemonFiles(device, deviceRoot(opts.root));
 
     if (replacedLocalConfig && opts.session) yield* stopRunningDaemon();
     const launch = yield* startInstalledDaemon(opts.session === true, runtime);
     // The daemon must show as connected on the server before success is claimed.
-    const connected = yield* waitForDeviceConnected(auth, device.deviceId, launch, opts);
+    const connected = yield* waitForDaemon(launch, opts, () => listedConnected(auth, device.deviceId));
 
     if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId, replacedLocalConfig } satisfies ConnectDeviceResult;
     thisDeviceConnected = true;
@@ -125,6 +127,53 @@ export function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {})
       kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox, wholeMachine: connected.wholeMachine, replacedLocalConfig,
     } satisfies ConnectDeviceResult;
   }));
+}
+
+export type JoinDeviceResult =
+  | { kind: 'connected'; deviceId: string; label: string; wholeMachine: boolean; replacedLocalConfig: boolean }
+  | { kind: 'cancelled'; deviceId: string; replacedLocalConfig: boolean };
+
+/**
+ * A machine with no session joins the account a browser's connect command names, by the ticket it carries. One this
+ * account did not link is never relinked to it silently. With no session to read the account's devices by, the hub's
+ * accepting the daemon is read here: it hands an accepted socket a new token, which the daemon writes over the one
+ * this wrote.
+ */
+export function joinDevice(origin: string, ticket: string, account: string, opts: ConnectDeviceOptions = {}): Promise<JoinDeviceResult> {
+  return settle(Effect.gen(function* () {
+    const local = yield* readLocalDevice();
+    const replacedLocalConfig = local.kind === 'malformed';
+    const previous = local.kind === 'current' ? deviceOnOrigin(local.config, origin) : undefined;
+
+    if (previous !== undefined && previous.user !== account) return yield* new KinuError('bad_input', LINKED_ELSEWHERE);
+    yield* assertDaemonPlatformSupported();
+    const runtime = yield* daemonRuntime();
+
+    const device = yield* Effect.tryPromise({
+      try: () => joinCloudDevice(origin, { ticket, label: opts.label, replaces: previous?.token }),
+      catch: (cause) => new KinuError(classifyErrorCode({ cause }) ?? 'unavailable', 'joining this machine to your Kinu account', {
+        cause: new Error(redactSecrets(renderThrownChain({ cause }), [ticket, ...(previous === undefined ? [] : [previous.token])])),
+      }),
+    });
+
+    const root = deviceRoot(opts.root);
+    yield* installDaemonFiles(device, root);
+    const launch = yield* startInstalledDaemon(false, runtime);
+    const accepted = yield* waitForDaemon(launch, opts, async () => (tokenRotatedFrom(device.token) ? true : undefined));
+
+    if (accepted === undefined) return { kind: 'cancelled', deviceId: device.deviceId, replacedLocalConfig } satisfies JoinDeviceResult;
+    thisDeviceConnected = true;
+
+    return { kind: 'connected', deviceId: device.deviceId, label: device.label, wholeMachine: root === '/', replacedLocalConfig } satisfies JoinDeviceResult;
+  }));
+}
+
+const LINKED_ELSEWHERE = 'This machine is linked to another Kinu account, and this command connects it to a different one. '
+  + 'Nothing was changed. To move it, run `kinu connect` signed in as the account it should belong to.';
+
+/** The scope a device's file calls get: the directory named, made absolute, or this user's home. */
+function deviceRoot(named: string | undefined): string {
+  return named === undefined || named.trim() === '' ? homedir() : resolve(named);
 }
 
 export interface DaemonStatus {
@@ -266,10 +315,11 @@ export function waitingDots(indent: string): WaitingDots {
 }
 
 /** The fix sentence comes from `@kinu.run/core`; the daemon's reason code is not printed. */
+/** What linking from `/` gives the agent, said whatever the sandbox reads. */
+export const WHOLE_MACHINE_LINKED = 'Linked from /, so the agent has this whole machine: every file you can open, and its commands run as you.';
+
 export function describeDeviceSandbox(sandbox: CloudDeviceSandbox, wholeMachine = false): string[] {
-  if (wholeMachine) {
-    return ['Linked from /, so the agent has this whole machine: every file you can open, and its commands run as you.'];
-  }
+  if (wholeMachine) return [WHOLE_MACHINE_LINKED];
 
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed':
@@ -405,7 +455,7 @@ const removeAfter = (doing: string, { cause }: { readonly cause: unknown }, path
   catch: (cleanup) => toKinuError({ doing, cause: new AggregateError([cause, cleanup], 'device install and cleanup both failed'), otherwise: 'io' }),
 });
 
-function installDaemonFiles(device: { origin: string; userId: string; deviceId: string; token: string }): Effect.Effect<void, KinuError> {
+function installDaemonFiles(device: { origin: string; userId: string; deviceId: string; token: string }, root: string): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     yield* io(`preparing the device install directory ${AGENT_HOME}`, () => {
       ensureAgentHome();
@@ -417,8 +467,8 @@ function installDaemonFiles(device: { origin: string; userId: string; deviceId: 
       device: device.deviceId,
       token: device.token,
       origin: device.origin.replace(/\/+$/, ''),
-      // The directory `kinu connect` ran in is the consented root.
-      root: process.cwd(),
+      // The consented root: this user's home, or the directory the command named; never where the shell happened to be.
+      root,
     }, null, 2)}\n`;
 
     const files = yield* daemonFiles();
@@ -515,13 +565,45 @@ function syncAgentDirectory(): void {
   }
 }
 
-/** Ends only when the roster row reads connected, the daemon exits, or the user interrupts. No deadline. */
-function waitForDeviceConnected(
-  auth: DeviceAuth,
-  deviceId: string,
+/** Whether the hub accepted this machine's daemon since it was handed `token`: an accepted socket is handed a new one,
+ *  which the daemon writes into device.json before it answers. */
+function tokenRotatedFrom(token: string): boolean {
+  // The daemon writes it whole, by rename, so a file that does not parse was written by something else.
+  const text = tolerate(() => readFileSync(DEVICE_CONFIG_PATH, 'utf-8'), 'enoent');
+
+  return text !== undefined && parseDeviceConfig(text, DEVICE_CONFIG_PATH).token !== token;
+}
+
+/** The device's roster row once it reads connected; a transient listing error while the daemon lives is not-yet. */
+async function listedConnected(auth: DeviceAuth, deviceId: string): Promise<CloudDevice | undefined> {
+  // Recorded as a shape, never a sentinel a healthy answer could return.
+  let miss: { readonly transient: string } | undefined;
+  let rows: CloudDevice[] | undefined;
+
+  try {
+    rows = await listCloudDevices(auth.origin, auth.token);
+  } catch (thrown) {
+    const cause = listingFailure(auth, 'checking whether the device daemon connected', { cause: thrown });
+    const failure = toKinuError({ doing: 'checking whether the device daemon connected', cause, otherwise: 'unavailable' });
+    diagnostics.failure('device.connect.list_transient', failure);
+    miss = { transient: renderThrownChain({ cause: failure }) };
+  }
+
+  if (miss !== undefined) {
+    diagnostics.event('device.connect.list_transient_not_yet', { detail: miss.transient });
+
+    return undefined;
+  }
+
+  return rows === undefined ? undefined : issuedDeviceConnected(rows, deviceId);
+}
+
+/** Ends only when `connected` answers, the daemon exits, or the user interrupts. No deadline. */
+function waitForDaemon<A>(
   launch: DaemonLaunch,
   opts: Pick<ConnectDeviceOptions, 'onWaiting' | 'signal'>,
-): Effect.Effect<CloudDevice | undefined, KinuError> {
+  connected: () => Promise<A | undefined>,
+): Effect.Effect<A | undefined, KinuError> {
   return Effect.suspend(() => {
     const stop = new AbortController();
     const stopOnCaller = () => stop.abort();
@@ -547,30 +629,9 @@ function waitForDeviceConnected(
     if (opts.onWaiting) wait.onWaiting = opts.onWaiting;
 
     const connecting = Effect.gen(function* () {
-      const connected = yield* Effect.promise(() => waitForAnswer(async () => {
-        // A transient GET error while the daemon lives is not-yet; recorded as a shape, never a sentinel a healthy answer could return.
-        let miss: { readonly transient: string } | undefined;
-        let rows: CloudDevice[] | undefined;
+      const answered = yield* Effect.promise(() => waitForAnswer(connected, wait));
 
-        try {
-          rows = await listCloudDevices(auth.origin, auth.token);
-        } catch (thrown) {
-          const cause = listingFailure(auth, 'checking whether the device daemon connected', { cause: thrown });
-          const failure = toKinuError({ doing: 'checking whether the device daemon connected', cause, otherwise: 'unavailable' });
-          diagnostics.failure('device.connect.list_transient', failure);
-          miss = { transient: renderThrownChain({ cause: failure }) };
-        }
-
-        if (miss !== undefined) {
-          diagnostics.event('device.connect.list_transient_not_yet', { detail: miss.transient });
-
-          return undefined;
-        }
-
-        return rows === undefined ? undefined : issuedDeviceConnected(rows, deviceId);
-      }, wait));
-
-      if (connected !== undefined) return connected;
+      if (answered !== undefined) return answered;
 
       if (launch.failure !== null) return yield* launch.failure;
 

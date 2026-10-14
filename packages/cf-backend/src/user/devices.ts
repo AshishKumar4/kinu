@@ -7,6 +7,7 @@ import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, t
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
 import { SingleUseTickets } from './single-use-tickets';
+import { DEVICE_JOIN_TICKET_PREFIX } from '@kinu.run/core';
 
 interface DeviceConsentCheck {
   agentName: string;
@@ -25,6 +26,8 @@ const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 /** How long a browser's connect command stays claimable: long enough to install the CLI and sign in. */
 const DEVICE_JOIN_TTL_MS = 30 * 60 * 1000;
+
+const DEVICE_JOIN_SPENT = 'This connect command has expired or was already used. Open Connect a machine again for a new one.';
 
 const DEVICE_NAME_MAX_LENGTH = 80;
 
@@ -143,7 +146,16 @@ const AbsolutePathSchema = v.pipe(v.string(), v.regex(/^\//), v.maxLength(4096))
 
 export interface UserDevicesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
   chatgptSignIns(): Promise<ReadonlyArray<{ readonly id: string; readonly label: string; readonly status: DeviceChatGptStatus | null }>>;
+  /** The account's user id, which this object is named by: a join ticket names it, so its claim finds this object. */
+  accountName(): string;
+  workspaceRegistered(name: string): boolean;
 }
+
+/** A device a browser issued: the id the machine registers as, and the workspace whose Environment asked for it. */
+type DeviceJoin = {
+  readonly device_id: string;
+  readonly workspace: string | null;
+};
 
 /** The served build as the connect that opened a device's socket read it. */
 const SERVED_STAMP_KEY = 'devices.served_stamp';
@@ -160,8 +172,12 @@ export class UserDevices {
   /** Single-use socket tickets a daemon trades its long-lived token for, so the token stays out of URLs and edge logs. */
   private readonly connectTickets: SingleUseTickets<{ device_id: string; token_was_current: number | null }>;
 
+  /** The ticket a browser's connect command carries, which registers its machine with no session there. */
+  private readonly joinTickets: SingleUseTickets<DeviceJoin>;
+
   constructor(private readonly host: UserDevicesHost) {
     this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_connect_tickets', ['device_id', 'token_was_current']);
+    this.joinTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_joins', ['device_id', 'workspace'], DEVICE_JOIN_TTL_MS);
     this._devices = new DeviceSocketHub(host.ctx);
     this._inflight = new DeviceRequestLedger(host.ctx.storage.sql);
   }
@@ -362,16 +378,23 @@ export class UserDevices {
     };
   }
 
-  /** The device a browser's connect command names, issued now: the machine that runs it registers as this id. Joins
-   *  past their time are dropped here, as the next is issued. */
-  async issueDeviceJoin(caller: UserCaller): Promise<{ deviceId: string }> {
-    await this.host.requireTier(caller, 'device.manage');
-    const deviceId = `dev-${nanoid(10)}`;
-    const now = Date.now();
-    this.host.sqlx(`DELETE FROM device_joins WHERE expires_at <= ?`, now);
-    this.host.sqlx(`INSERT INTO device_joins (device_id, expires_at) VALUES (?, ?)`, deviceId, now + DEVICE_JOIN_TTL_MS);
+  /**
+   * The device a browser's connect command names, issued now, and the ticket the command carries: the machine that
+   * runs it registers as this id, with a session there or with the ticket alone. `workspace` is the one whose
+   * Environment asked; the device is granted it on registering.
+   */
+  issueDeviceJoin(caller: UserCaller, workspace: string | null): Promise<{ deviceId: string; ticket: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
 
-    return { deviceId };
+      if (workspace !== null && !this.host.workspaceRegistered(workspace)) return yield* new KinuError('missing', `No workspace named ${workspace}.`);
+      const deviceId = `dev-${nanoid(10)}`;
+      const ticket = `${DEVICE_JOIN_TICKET_PREFIX}${this.host.accountName()}_${randomToken(32)}`;
+
+      this.joinTickets.mint(ticket, { device_id: deviceId, workspace }, Date.now());
+
+      return { deviceId, ticket };
+    }));
   }
 
   /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
@@ -380,8 +403,33 @@ export class UserDevices {
   registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): Promise<{ deviceId: string; token: string }> {
     return settle(Effect.gen({ self: this }, function* () {
       yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
+      const claimed = join === undefined ? null : yield* this.claimDeviceJoin(join);
+
+      return yield* this.registered(caller, claimed, label, replaces);
+    }));
+  }
+
+  /**
+   * The machine a connect command's ticket was minted for, registered with no session: spent here, whatever comes of
+   * it, so a ticket a copied command still carries claims nothing once its machine joined.
+   */
+  joinDevice(caller: UserCaller, ticket: string, label?: string, replaces?: string): Promise<{ deviceId: string; token: string; label: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
+      const claimed = this.joinTickets.spend(ticket, Date.now());
+
+      if (claimed === null) return yield* new KinuError('bad_input', DEVICE_JOIN_SPENT);
+      const registered = yield* this.registered(caller, claimed, label, replaces);
+
+      return { ...registered, label: this.deviceLabel(registered.deviceId) };
+    }));
+  }
+
+  /** A device registered under `claimed`'s id and granted its workspace in the same turn, or a new id with no grant. */
+  private registered(caller: UserCaller, claimed: DeviceJoin | null, label?: string, replaces?: string): Effect.Effect<{ deviceId: string; token: string }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
       const replaced = replaces === undefined ? null : yield* Effect.promise(() => this.deviceHoldingToken(caller, replaces));
-      const deviceId = join === undefined ? `dev-${nanoid(10)}` : yield* this.claimDeviceJoin(join);
+      const deviceId = claimed?.device_id ?? `dev-${nanoid(10)}`;
       const token = `pdt_${randomToken(32)}`;
       const tokenHash = sha256Hex(token);
       const now = Date.now();
@@ -391,22 +439,24 @@ export class UserDevices {
         deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
       );
 
+      // Connected from a workspace's Environment, it is that workspace's without asking: the grant an approval's
+      // "always" records. One deleted since the command was issued is granted nothing.
+      if (claimed?.workspace != null && this.host.workspaceRegistered(claimed.workspace)) this.setDeviceBinding(claimed.workspace, deviceId, 'allow');
+
       if (replaced !== null) yield* Effect.promise(() => this.revokeDevice(caller, replaced));
       else yield* Effect.promise(() => this.devicesMoved());
 
       return { deviceId, token };
-    }));
+    });
   }
 
-  private claimDeviceJoin(deviceId: string): Effect.Effect<string, KinuError> {
+  private claimDeviceJoin(deviceId: string): Effect.Effect<DeviceJoin, KinuError> {
     return Effect.suspend(() => {
-      const [claimed] = this.host.sqlx<{ device_id: string }>(
-        `DELETE FROM device_joins WHERE device_id = ? AND expires_at > ? RETURNING device_id`, deviceId, Date.now(),
+      const [claimed] = this.host.sqlx<{ device_id: string; workspace: string | null }>(
+        `DELETE FROM device_joins WHERE device_id = ? AND expires_at > ? RETURNING device_id, workspace`, deviceId, Date.now(),
       );
 
-      return claimed === undefined
-        ? Effect.fail(new KinuError('bad_input', 'This connect command has expired or was already used. Open Connect a machine again for a new one.'))
-        : Effect.succeed(claimed.device_id);
+      return claimed === undefined ? Effect.fail(new KinuError('bad_input', DEVICE_JOIN_SPENT)) : Effect.succeed(claimed);
     });
   }
 

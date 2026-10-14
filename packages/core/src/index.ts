@@ -2605,6 +2605,9 @@ export {
   type PcIngressEnv,
   handlePcConnect,
   handlePcConnectTicket,
+  handlePcJoin,
+  deviceJoinTicketUser,
+  DEVICE_JOIN_TICKET_PREFIX,
   handlePcUpdateRefused,
 } from './http/pc-ingress';
 

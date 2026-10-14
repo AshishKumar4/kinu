@@ -27,7 +27,7 @@ import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admi
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
 
-const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
+const DeviceJoinRequestSchema = v.object({ label: v.optional(v.string()), workspace: v.optional(v.string()) });
 
 const CheckpointSchema = v.array(v.object({ key: v.string(), sealed: v.string() }));
 
@@ -268,22 +268,27 @@ userRoutes.delete('/api/user/workspaces/:name', (c) => settle(Effect.tryPromise(
 
 userRoutes.get('/api/user/devices', async (c) => json({ body: await c.get('stub').listDevices(c.get('owner')) }));
 
-// The device is issued here, so the page that asked watches the one row the machine registers as.
-userRoutes.post('/api/user/devices', async (c) => {
-  const body = await safeJson(c.req.raw, OptionalLabelSchema);
-  const cliOrigin = cliOriginFor(c);
-  const { deviceId } = await c.get('stub').issueDeviceJoin(c.get('owner'));
+// The device is issued here, so the page that asked watches the one row the machine registers as. The command carries
+// the ticket that registers it, so the machine needs no sign-in; asked from a workspace, the device is granted it.
+userRoutes.post('/api/user/devices', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await safeJson(c.req.raw, DeviceJoinRequestSchema);
+    const cliOrigin = cliOriginFor(c);
+    const { deviceId, ticket } = await c.get('stub').issueDeviceJoin(c.get('owner'), body?.workspace ?? null);
 
-  const installCommand = buildCliInstallCommand({
-    origin: cliOrigin,
-    setup: false,
-    connect: true,
-    label: body?.label,
-    device: deviceId,
-  });
+    const installCommand = buildCliInstallCommand({
+      origin: cliOrigin,
+      setup: false,
+      connect: true,
+      label: body?.label,
+      device: deviceId,
+      join: ticket,
+    });
 
-  return json({ body: { origin: cliOrigin, installCommand, deviceId } }, { status: 201 });
-});
+    return json({ body: { origin: cliOrigin, installCommand, deviceId } }, { status: 201 });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'issuing a connect command', cause }),
+})));
 
 userRoutes.delete('/api/user/devices/:id/unstopped', (c) => settle(Effect.tryPromise({
   try: async () => {
