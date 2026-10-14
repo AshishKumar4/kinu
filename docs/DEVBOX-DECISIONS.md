@@ -4702,7 +4702,12 @@ container's restart (a resize, D50; a rest) ends the tmux server and every sessi
 command (D87); nothing reopens them from an alarm: the next attach to a session opens a fresh shell in its kept folder
 under its name. Closing a session ends its tmux session and forgets it; the box always keeps one, so closing the last
 leaves a fresh `shell`. Not measured: bash's `HISTCONTROL=ignoredups` numbers a repeated command once, so its second
-run leaves the earlier mark. The product flow `computer-sessions` reads it all on a deployment.
+run leaves the earlier mark. The product flow `computer-sessions` reads it all on a deployment. Amended 2026-10-14 (P0): staging `7591e6fec` read every session closed, so the
+computer-sessions flow waited forever for its folder and port. On a platform box, tmux prints a tab in a format's output
+as `_` (`P_shell_/workspace_bash___`, read with `cat -A`), where the tmux the unit harness stood in for kept it; every
+`P` row was one field and no row was a session. The read now joins tmux's fields with a printable marker and turns it
+into a tab after tmux. The harness answers the read from fixtures, so it could not see this; the container tier's
+`terminal-sessions` step runs a server in a session's own folder on a real box and reads the session back.
 
 D91. The computer answers to its workspace's name, not to "computer" (2026-10-13; reverses D83's fixed name). The
 owner, on `root@computer`: "something nice and sensible, workspace related (maybe workspace name?)". `KinuDevbox`

@@ -42,11 +42,19 @@ type SessionState = Omit<TerminalSession, 'name' | 'open'>;
 export type SessionsRead = ReadonlyMap<string, Omit<TerminalSession, 'name' | 'open'>>;
 
 /**
+ * Between a tmux format's fields: tmux prints a tab in a format's output as `_` (measured on a platform box, D90), so
+ * the read joins its fields with this and turns it into a tab after tmux. Printable, and in no path a person makes.
+ */
+const FIELD = '<<kinu>>';
+
+/**
  * The read, one exec: each session's pane (`P`), each listening port under a session's shell (`L`), and the branch of
  * each folder a pane is in (`B`), tab-separated. `$1` is the box's listener probe (`port pid stamp command` rows).
  */
-export const SESSIONS_READ = `panes=$(tmux list-panes -a -F '#{pane_pid}	#{session_name}' 2>/dev/null) || exit 0
-tmux list-panes -a -F 'P	#{session_name}	#{pane_current_path}	#{pane_current_command}	#{@kinu_exit}	#{@kinu_at}	#{@kinu_last}'
+export const SESSIONS_READ = `panes=$(tmux list-panes -a -F '#{pane_pid}${FIELD}#{session_name}' 2>/dev/null) || exit 0
+panes=$(printf '%s\\n' "$panes" | sed 's/${FIELD}/\\t/g')
+tmux list-panes -a -F 'P${FIELD}#{session_name}${FIELD}#{pane_current_path}${FIELD}#{pane_current_command}${FIELD}#{@kinu_exit}${FIELD}#{@kinu_at}${FIELD}#{@kinu_last}' |
+  sed 's/${FIELD}/\\t/g'
 sh -c "$1" port-listeners '' | while IFS='	' read -r port pid _; do
   p=$pid
   while [ -n "$p" ] && [ "$p" -gt 1 ]; do
