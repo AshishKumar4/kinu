@@ -89,12 +89,16 @@ export function applyPromotionDecision(
   pending: PendingScaffold,
   decision: 'promote' | 'rollback',
   events: ScaffoldDecisionEvents,
-): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
+): Promise<{ fromVersion: number; newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
   return settle(Effect.gen(function* () {
     rt.actor.assertCurrent();
 
     if (events.actorId !== rt.actor.actorId) return yield* new KinuError('denied', 'a scaffold decision requires its actor event recorder');
     const sql = rt.storage.sql;
+    // The pointer as it stands, never a number derived from the pending one: rollbacks leave gaps in the numbering.
+    const currentVersion = getCurrentScaffoldVersion(sql, rt.actor);
+
+    if (currentVersion === null) return yield* new KinuError('missing', 'this agent has no current scaffold version to decide against');
 
     if (decision === 'promote') {
       // Re-check misevolution against the version file bytes that will actually run.
@@ -124,15 +128,14 @@ export function applyPromotionDecision(
                  OR (status = 'current' AND version != ${pending.version}))`;
       markStoreChanged(sql);
       yield* Effect.promise(() => rt.identity.scaffold.write(pendingCode));
-      yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
+      yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: currentVersion, toVersion: pending.version });
 
-      return { newCurrentVersion: pending.version, action: 'promote' };
+      return { fromVersion: currentVersion, newCurrentVersion: pending.version, action: 'promote' };
     }
 
     void sql`UPDATE scaffold_versions SET status = 'rolled_back'
         WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`;
     markStoreChanged(sql);
-    const currentVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? (pending.version - 1);
     const currentCode = yield* Effect.promise(() => readScaffoldVersion(rt, currentVersion));
 
     if (currentCode != null) {
@@ -141,7 +144,7 @@ export function applyPromotionDecision(
 
     yield* recordScaffoldDecision(events, { type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion });
 
-    return { newCurrentVersion: currentVersion, action: 'rollback' };
+    return { fromVersion: pending.version, newCurrentVersion: currentVersion, action: 'rollback' };
   }));
 }
 

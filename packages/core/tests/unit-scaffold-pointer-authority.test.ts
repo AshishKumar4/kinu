@@ -20,6 +20,7 @@ import {
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { RunEventRecorder } from '../src/events/recorder';
+import { WORKSPACE_RUN_ID } from '../src/events/model-call';
 import { createMemoryVfs, present } from '@kinu.run/test-utils';
 
 const V0 = 'async function* run(rt, task) { yield "v0"; }';
@@ -275,5 +276,28 @@ describe('promotion boundary — one current pointer, executed source follows it
     }
 
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(3);
+  });
+
+  // core-rest review P1-3: a promotion named `pending - 1` as its predecessor, so after a rollback the journal said v2.
+  test('a promotion after a rolled-back proposal names the version it replaced', async () => {
+    const { rt } = createTestRuntime();
+    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
+    await bootstrapScaffold(rt);
+    const events = new RunEventRecorder(rt.storage.sql, rt.actor);
+
+    const decide = async (index: number, decision: 'promote' | 'rollback') => {
+      const code = `async function* run(rt, task) { yield "v${String(index)}"; }`;
+      expect((await modifyScaffold(rt, `Proposal ${String(index)} carrying a rationale well past the gate.`, code)).ok).toBe(true);
+
+      return await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold'), decision, events);
+    };
+
+    await decide(1, 'promote');
+    await decide(2, 'rollback');
+    const third = await decide(3, 'promote');
+
+    expect(third).toMatchObject({ action: 'promote', fromVersion: 1, newCurrentVersion: 3 });
+    expect(events.read(WORKSPACE_RUN_ID).flatMap((event) => (event.type === 'scaffold_promotion' ? [[event.fromVersion, event.toVersion]] : [])))
+      .toEqual([[0, 1], [1, 3]]);
   });
 });
