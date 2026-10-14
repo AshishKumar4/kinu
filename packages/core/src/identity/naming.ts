@@ -275,6 +275,21 @@ export function codenameFor(slug: string): string {
   return `${capitalize(adjective)} ${capitalize(noun)}`;
 }
 
+/** A host name's one label at most (RFC 1035). */
+const HOST_LABEL_MAX = 63;
+
+/**
+ * The workspace's name as a host label (DEVBOX-DECISIONS D91): lowercase, each run of anything outside [a-z0-9] one
+ * hyphen, no hyphen at either end, at most 63 characters; the slug's own, where the name is a placeholder or leaves
+ * nothing. "Coupon fixes" is `coupon-fixes`.
+ */
+export function workspaceHostLabel(displayName: string | null | undefined, slug: string): string {
+  const label = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, HOST_LABEL_MAX).replace(/-+$/u, '');
+  const named = isPlaceholderWorkspaceTitle(displayName, slug) ? '' : label(displayName ?? '');
+
+  return named === '' ? label(slug) : named;
+}
+
 /** Absent, the raw slug, or the slug's codename. */
 export function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
   const shown = displayName?.trim() ?? '';
