@@ -400,6 +400,30 @@ describe("the agent-job row's job", () => {
     expect(await answered(JSON.stringify({ result: JSON.stringify({ processId: 'job-1', restartable: true }) }))).toBe(JOB_STARTED);
     expect(await answered(JSON.stringify({ success: false, reason: 'bad_input', error: 'refused' }))).not.toBe(JOB_STARTED);
   });
+
+  // Staging b11719d71: a fresh workspace's computer took longer to wake than the eval tool waits, so the program was
+  // backgrounded; the row read that as a refusal. The job is started when its wake says the program's value carried one.
+  test('started in the background, it is called started when the wake brings the started job, and not before', async () => {
+    const call = { id: 'call_job', type: 'function', function: { name: 'eval', arguments: JSON.stringify({ code: 'return 1;' }) } };
+    const handle = { background: true, jobId: 'bgjob-start01', kind: 'eval', message: 'Outran the 30s foreground window; backgrounded.' };
+
+    // The ask's turn, its eval backgrounded, then whatever came after it.
+    const conversation = (...after: JsonObject[]): JsonObject[] => [
+      { role: 'user', content: JOB_ASK },
+      { role: 'assistant', content: 'Calling eval.', tool_calls: [call] },
+      { role: 'tool', tool_call_id: 'call_job', content: JSON.stringify(handle) },
+      ...after,
+    ];
+
+    const woken = async (result: string) => (await reply(conversation(
+      { role: 'assistant', content: 'The job is starting in the background as bgjob-start01.' },
+      { role: 'user', content: `Background eval job bgjob-start01 completed.\n\nResult:\n${result}` },
+    ), ['eval'])).content;
+
+    expect(await reply(conversation(), ['eval']).then((said) => said.content)).not.toBe(JOB_STARTED);
+    expect(await woken(JSON.stringify({ processId: 'job-1', restartable: true }))).toBe(JOB_STARTED);
+    expect(await woken(JSON.stringify({ success: false, reason: 'unavailable', error: 'the computer did not start' }))).not.toBe(JOB_STARTED);
+  });
 });
 
 // A hire returns at once (cafab2bfc): each answer opens its hirer's next turn, and the cases' scripts answer that turn.
