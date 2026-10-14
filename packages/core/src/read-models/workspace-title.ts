@@ -3,18 +3,13 @@
  * surfaces render through {@link workspaceDisplayTitle} and read `name` directly where a slug is meant.
  */
 import { isPlaceholderWorkspaceTitle, WORKSPACE_TITLE_MAX } from '../identity/naming';
+import { nameProblem } from './account';
 
 export { WORKSPACE_TITLE_MAX };
 
 /** Why `input` cannot be a workspace's title, or null: run by the owner's object and by every editor, so they agree. */
 export function workspaceTitleProblem(input: string): string | null {
-  const title = input.trim();
-
-  if (title === '') return 'Enter a name.';
-
-  if (title.length > WORKSPACE_TITLE_MAX) return `Keep the name to ${WORKSPACE_TITLE_MAX} characters.`;
-
-  return null;
+  return nameProblem(input, WORKSPACE_TITLE_MAX);
 }
 
 /** Not exported: surfaces ask {@link workspaceDisplayTitle} rather than naming the rule themselves. */

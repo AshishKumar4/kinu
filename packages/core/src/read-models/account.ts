@@ -25,15 +25,20 @@ export type OnboardingStepId = (typeof ONBOARDING_STEPS)[number]['id'];
 /** Shared by the route's 400, the UserDO's refusal, and the field's maxLength. */
 export const DISPLAY_NAME_MAX = 80;
 
-/** Run by both the route and the UserDO so client and object constraints cannot disagree. */
-export function displayNameProblem(input: string): string | null {
+/** Why `input`, trimmed, cannot be a name of at most `max` characters, or null. */
+export function nameProblem(input: string, max: number): string | null {
   const name = input.trim();
 
   if (name === '') return 'Enter a name.';
 
-  if (name.length > DISPLAY_NAME_MAX) return `Keep the name under ${DISPLAY_NAME_MAX} characters.`;
+  if (name.length > max) return `Keep the name under ${max} characters.`;
 
   return null;
+}
+
+/** Run by both the route and the UserDO so client and object constraints cannot disagree. */
+export function displayNameProblem(input: string): string | null {
+  return nameProblem(input, DISPLAY_NAME_MAX);
 }
 
 /** The typed phrase is the account's email, case-insensitive and trimmed; shared by form and route. */
