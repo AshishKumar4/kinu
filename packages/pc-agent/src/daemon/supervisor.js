@@ -35,6 +35,10 @@ const EXEC_STREAM_MAX_BYTES = 512 * 1024;
 
 const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
 
+/** The descriptor a supervised command's sandbox reports its status on (bwrap's `--json-status-fd`): the supervisor
+ *  holds it open as a pipe. No other process the daemon starts has it, so no other plan may name it. */
+const STATUS_FD = 3;
+
 /** Whether `value` is an exec request's id, the only names a record directory takes. */
 function isRequestId(value) {
   return typeof value === 'string' && REQUEST_ID.test(value);
@@ -512,11 +516,11 @@ try {
     // sandbox's pid 1. Killing THAT is deterministic — the kernel reaps every
     // process in the namespace before pid 1's exit completes — where a group
     // kill returns before the namespace has finished dying.
-    stdio: plan.statusFd === 3 ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
+    stdio: plan.statusFd === ${STATUS_FD} ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
   });
-  if (plan.statusFd === 3 && child.stdio[3]) {
+  if (plan.statusFd === ${STATUS_FD} && child.stdio[${STATUS_FD}]) {
     let statusText = '';
-    child.stdio[3].on('data', (chunk) => {
+    child.stdio[${STATUS_FD}].on('data', (chunk) => {
       // Scanned whole rather than split by line: this script is a template in
       // the daemon's own source, so a newline escape here lands as a REAL
       // newline inside a string literal and the supervisor stops parsing —
@@ -1171,6 +1175,7 @@ function createSupervision({ root, isStarting = () => false, log = () => {} }) {
 }
 
 module.exports = {
+  STATUS_FD,
   createSupervision,
   readOutputRecords,
   supervisionSupported,
