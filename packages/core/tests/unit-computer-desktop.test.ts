@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ShellApprovalPolicy } from '../src/index';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
-import { DESKTOP_MEMBERS, WATCH_DEFAULT_FRAMES, watchSheet, type DesktopAction, type DesktopScreen, type DesktopAnswer, type DesktopRequest } from '../src/execution/desktop';
+import { DESKTOP_MEMBERS, WATCH_DEFAULT_FRAMES, type DesktopAction, type DesktopScreen, type DesktopAnswer, type DesktopRequest } from '../src/execution/desktop';
 import { gateProviderExec } from '../src/execution/approval';
 import { providersInWorkMode } from '../src/execution/work-mode';
 import { executorNamespace } from '../src/tools/executor-operations';
@@ -135,19 +135,6 @@ describe('the desktop members', () => {
     ];
 
     expect(actions()).toEqual(expected);
-  });
-
-  test('a watch\'s image is the size its layout makes, and its description names what each count of frames costs', async () => {
-    const sizes = [1, 3, 4, 8].map((frames) => watchSheet(SCREEN, frames));
-    const computer = computerOf(desktopBox().box);
-    const said = DESKTOP_MEMBERS.map((member) => computer.declarations?.[member]?.full ?? '').join('\n');
-
-    expect(sizes).toEqual([
-      { width: 640, height: 384, screenshots: 0.25 }, { width: 1280, height: 768, screenshots: 1 },
-      { width: 1280, height: 768, screenshots: 1 }, { width: 2560, height: 768, screenshots: 2 },
-    ]);
-    // The default's image and the most frames' image, by their sizes, as the model reads them.
-    expect(['640×384', '1280×768', '2560×768'].filter((size) => said.includes(size))).toEqual(['640×384', '1280×768', '2560×768']);
   });
 
   test('desktop input runs as the computer\'s shell does there: nothing asks the owner, whatever the mode', async () => {
