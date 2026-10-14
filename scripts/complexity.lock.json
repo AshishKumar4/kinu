@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3290,
-  "functions": 86044,
+  "files": 3288,
+  "functions": 86079,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -411,10 +411,6 @@
     },
     {
       "key": "packages/core/tests/unit-fork-transfer.test.ts#framesFor",
-      "complexity": 26
-    },
-    {
-      "key": "scripts/infra-verify.ts#audit",
       "complexity": 26
     },
     {

@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { LanguageModel } from 'ai';
 import {
-  CODEX_CRED_KEY, DEVICE_CANCEL_METHOD, DEVICE_RELAY, NO_DEVICE_CONNECTED,
+  CODEX_CRED_KEY, NO_DEVICE_CONNECTED,
   asFetchFunction, captureOperationProfile, operationProfileStream, requestUrl, runChat,
-  type ChatEvent, type JsonValue, type OperationProfile,
+  type ChatEvent, type JsonValue, type OperationProfile, DEVICE_FRAMES, DEVICE_METHOD,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { mergePolicyProfile } from '@kinu.run/test-utils';
@@ -64,22 +64,22 @@ async function rig(upstream: Upstream, beforeRelay?: (request: v.InferOutput<typ
 
   const harness: TestUserDO = createTestUserDO({
     deviceResponder: async (frame: DeviceFrame): Promise<JsonValue> => {
-      if (frame.method === DEVICE_CANCEL_METHOD) {
+      if (frame.method === DEVICE_METHOD.cancel) {
         cancelAsked.resolve();
         await cancelAnswered.promise;
 
         return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'terminated' };
       }
 
-      if (frame.method !== DEVICE_RELAY.method || frame.device === undefined) return { present: [] };
+      if (frame.method !== DEVICE_METHOD.codexRelay || frame.device === undefined) return { present: [] };
 
-      if (machines.get(frame.device) === 'too-old') throw new Error(`unknown method: ${DEVICE_RELAY.method}`);
+      if (machines.get(frame.device) === 'too-old') throw new Error(`unknown method: ${DEVICE_METHOD.codexRelay}`);
       const request = v.parse(RelayRequestSchema, frame.params[0]);
       relayed.push(request);
       await beforeRelay?.(request);
       const answer = upstream(new Headers(request.headers).get('authorization'));
-      await harness.sendDeviceHello({ type: DEVICE_RELAY.head, relay: frame.id, status: answer.status, headers: [['content-type', 'text/event-stream']] }, frame.device);
-      await harness.sendDeviceHello({ type: DEVICE_RELAY.body, relay: frame.id, data: Buffer.from(answer.body).toString('base64') }, frame.device);
+      await harness.sendDeviceHello({ type: DEVICE_FRAMES.relayHead, relay: frame.id, status: answer.status, headers: [['content-type', 'text/event-stream']] }, frame.device);
+      await harness.sendDeviceHello({ type: DEVICE_FRAMES.relayBody, relay: frame.id, data: Buffer.from(answer.body).toString('base64') }, frame.device);
 
       return { bytes: answer.body.length };
     },

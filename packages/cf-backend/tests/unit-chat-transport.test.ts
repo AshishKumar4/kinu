@@ -7,7 +7,7 @@ import { Chat } from '@ai-sdk/react';
 import { DefaultChatTransport, readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList, createTestSql } from '@kinu.run/test-utils';
-import { INTERRUPTED_TURN, type JsonObject, type SendLanding, type SessionEvent } from '@kinu.run/core';
+import { INTERRUPTED_TURN, type JsonObject, type SendLanding, type SentWords, type SessionEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
 import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
@@ -35,7 +35,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   const history: UIMessage[] = [];
   /** The ids the loop holds a reservation for: every send accepted mid-turn. */
   const reserved = new Set<string>();
-  const sent = new AwaitedList<{ text: string; files: readonly { url: string }[]; id: string; mode: string }>();
+  const sent = new AwaitedList<SentWords & { readonly id: string }>();
   let interrupts = 0;
   /** Whether the ledger holds a turn no activation has opened here yet: one an eviction left open. */
   let owed = false;

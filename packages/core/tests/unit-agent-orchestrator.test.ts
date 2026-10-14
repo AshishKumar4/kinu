@@ -5,8 +5,9 @@ import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveri
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { recordedTurn } from '../src/orchestrator/evolution-lanes';
+import { WORKSPACE_CREATED_EVENT } from '../src/identity/soul';
 import { RUN_END_REASONS, creditedTurnId } from '../src/orchestrator/turn-lifecycle';
-import { declareTerminalRoster } from '../src/orchestrator/terminal-roster';
+import { declareTerminalRoster, type TerminalActor, type TerminalTurnFacts } from '../src/orchestrator/terminal-roster';
 import { MissionGovernor } from '../src/mission-budget';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
@@ -122,6 +123,14 @@ const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTu
   userMessage: `t${i}`, assistantResponse: 'r', toolCalls: [], durationMs: 1, steps: 1,
   hadError: false, feedback: null, turnId: `m${i}`, origin,
 });
+
+/** An actor that reviews no turns. */
+const NO_REVIEW: TerminalActor['advisor'] = { reviewsTurns: false, snapshot: () => { throw new Error('an actor that reviews no turns is asked for no review'); } };
+
+const SETTLED = aTurn(1);
+
+/** An agent whose conversation this turn did not open. */
+const AGENT: TerminalActor = { role: { kind: 'agent', opensConversation: () => false }, advisor: NO_REVIEW, turn: SETTLED, reachableTools: [] };
 
 describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('session reflection fires every five turns — the shipped cadence', async () => {
@@ -351,11 +360,61 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       messageId: 'answer-1', status: 'completed', workMode: 'build', continuity: 'conversation',
       completed: true, userText: 'rotate the staging keys', assistantText: 'a',
       scopedTurn: {}, recordedAt: 1, evolutionEnabled,
-    }, { autoTitle: { mission } }).find((effect) => effect.name === 'auto_title')?.input;
+    }, { role: { kind: 'workspace', mission, event: null }, advisor: NO_REVIEW, turn: SETTLED, reachableTools: [] }).find((effect) => effect.name === 'auto_title')?.input;
 
     // An unset mission leaves the owner's own words to title the workspace.
     expect(titleInput(true, null)).toEqual({ subject: 'rotate the staging keys' });
     expect(titleInput(true, 'Keep the staging keys rotated')).toEqual({ subject: 'Keep the staging keys rotated' });
+  });
+
+  describe('what a settled turn owes by its actor\'s role, decided once for every backend', () => {
+    const facts = (over: Partial<TerminalTurnFacts> = {}): TerminalTurnFacts => ({
+      messageId: 'answer-1', status: 'completed', workMode: 'build', continuity: 'conversation', completed: true,
+      userText: 'Audit the billing exports', assistantText: 'Audited.', scopedTurn: {}, recordedAt: 1, evolutionEnabled: false, ...over,
+    });
+
+    const owed = (actor: TerminalActor, over: Partial<TerminalTurnFacts> = {}) => declareTerminalRoster(facts(over), actor);
+    const named = (effects: ReturnType<typeof owed>, name: string) => effects.filter((effect) => effect.name === name).map((effect) => effect.input);
+    const workspace = (event: string | null): TerminalActor => ({ ...AGENT, role: { kind: 'workspace', mission: 'Keep billing honest', event } });
+    const agent = (opens: boolean): TerminalActor => ({ ...AGENT, role: { kind: 'agent', opensConversation: () => opens } });
+
+    test("the workspace's agent is named from its mission and owes sleep-time; any other agent owes neither", () => {
+      expect(named(owed(workspace(null)), 'auto_title')).toEqual([{ subject: 'Keep billing honest' }]);
+      expect(named(owed(workspace(null)), 'sleep_time')).toEqual([{}]);
+      expect(named(owed(agent(false)), 'auto_title')).toEqual([]);
+      expect(named(owed(agent(true)), 'sleep_time')).toEqual([]);
+    });
+
+    test('an agent is named once, from the brief its conversation opened on, however that turn ended', () => {
+      for (const status of ['completed', 'error'] as const) {
+        expect(named(owed(agent(true), { status, completed: status === 'completed' }), 'auto_title'))
+          .toEqual([{ subject: 'Audit the billing exports', standIn: true }]);
+      }
+    });
+
+    test("the turn that answered a workspace's creation names and draws it however it ended; no other turn draws it", () => {
+      for (const status of ['completed', 'error'] as const) {
+        const effects = owed(workspace(WORKSPACE_CREATED_EVENT), { status, completed: status === 'completed' });
+
+        expect(named(effects, 'auto_title')).toEqual([{ subject: 'Keep billing honest', standIn: true }]);
+        expect(named(effects, 'workspace_logo')).toEqual([{ subject: 'Keep billing honest' }]);
+      }
+
+      expect(named(owed(workspace(null)), 'workspace_logo')).toEqual([]);
+    });
+
+    test("an actor that reviews turns owes its advisor's own snapshot of the turn on the tools it could reach", () => {
+      const reviewing: TerminalActor = {
+        ...AGENT, reachableTools: ['eval'],
+        advisor: { reviewsTurns: true, snapshot: (turn, reachable) => ({ turn, reachable: [...reachable], model: 'advisor-model' }) },
+      };
+
+      expect(named(owed(reviewing), 'advisor_review')).toEqual([{
+        status: 'completed', workMode: 'build',
+        advisor: { turn: JSON.parse(JSON.stringify(SETTLED)), reachable: ['eval'], model: 'advisor-model' },
+      }]);
+      expect(named(owed(AGENT), 'advisor_review')).toEqual([]);
+    });
   });
 
   test('the roster owes the extension end, then the recording, then the drain', () => {
@@ -364,7 +423,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       messageId: 'answer-1', status: 'completed', workMode: 'build',
       continuity: 'conversation', completed: true, userText: 'q', assistantText: 'a',
       scopedTurn: {}, recordedAt: 1, evolutionEnabled: true,
-    }, { turnEndExtensions: true });
+    }, AGENT, { turnEndExtensions: true });
 
     const at = (name: string): number => owed.findIndex((effect) => effect.name === name);
 
@@ -379,7 +438,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       messageId: '', status: 'aborted', workMode: 'build',
       continuity: 'conversation', completed: false, userText: 'q', assistantText: '',
       scopedTurn: {}, recordedAt: 1, evolutionEnabled: true,
-    }, { turnEndExtensions: true, eventReplies: { answered: new Set(['d1']), requestId: 'req-1' } });
+    }, AGENT, { turnEndExtensions: true, eventReplies: { answered: new Set(['d1']), requestId: 'req-1' } });
 
     expect(owed.map((effect) => effect.name)).not.toContain('turn_end_extensions');
     expect(owed.map((effect) => effect.name)).not.toContain('event_reply');

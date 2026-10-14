@@ -31,6 +31,7 @@ import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import { workspaceArchiveStore, workspaceArchiveTarget } from '../src/vfs/workspace-planes';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 /** One in-memory database with every handle this suite drives it through. */
 interface Workspace {
@@ -74,6 +75,7 @@ function historyOver(ws: Workspace, actor: ActorHandle): SessionHistory {
   return new SessionHistory({
     sql: ws.sql, actor, transactionSync: (write) => ws.db.transaction(write)(),
     files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(ws.sql, actor),
   });
 }
 

@@ -304,6 +304,14 @@ const settledTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   hadError: false, feedback: null, turnId: 'm1', origin: 'programmatic', ...over,
 });
 
+/** An agent that reviews no turns, whose conversation this turn did not open. */
+const QUIET_AGENT: Parameters<typeof declareTerminalRoster>[1] = {
+  role: { kind: 'agent', opensConversation: () => false },
+  advisor: { reviewsTurns: false, snapshot: () => { throw new Error('no review'); } },
+  turn: { userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1, hadError: false, feedback: null, turnId: 't', origin: 'user' },
+  reachableTools: [],
+};
+
 describe('the settled turn’s recording — every settled turn is recorded', () => {
   /** The rows a settled turn owes for the status under test (`turn_record`, `turn_end_extensions`). */
   const roster = (status: RunEndReason, over: Partial<Parameters<typeof declareTerminalRoster>[0]> = {}) =>
@@ -311,7 +319,7 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
       messageId: 'm1', status, workMode: 'build', continuity: 'independent_task',
       completed: status === 'completed', userText: 'q', assistantText: 'a',
       scopedTurn: {}, recordedAt: 1, evolutionEnabled: true, ...over,
-    }, { turnEndExtensions: true });
+    }, QUIET_AGENT, { turnEndExtensions: true });
 
   // Failed turns are evidence: every status must reach the outcome-review buffer and the session
   // cadence, or evolution grades successes against successes.

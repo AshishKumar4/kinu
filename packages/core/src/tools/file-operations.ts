@@ -5,9 +5,8 @@
 import { type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
-import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import * as v from 'valibot';
-import { formatPath, resolvePath, type PathPlanes } from '../vfs/resolve';
+import { addressingHint, formatPath, resolvePath, type PathPlanes } from '../vfs/resolve';
 import { writeConditionally, type ObservedFile, type WriteGuarantee } from '../vfs/conditional-write';
 import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
@@ -90,10 +89,13 @@ function editOutcomeReason(code: VfsErrorCode): FileEditOutcomeReason {
   return 'io';
 }
 
-async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, path: string): Promise<{
-  reason: FileEditOutcomeReason;
-  error: string;
-}> {
+/** Why a file operation failed: its refusal, and the words the model reads. */
+interface VfsFailure {
+  readonly reason: FileEditOutcomeReason;
+  readonly error: string;
+}
+
+function vfsFailure(planes: PathPlanes, input: { error: unknown }, action: string, path: string): VfsFailure {
   const err = input.error;
 
   if (err instanceof FileRefusalError) return { reason: err.verdict, error: err.message };
@@ -113,10 +115,8 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
 
   const reason = editOutcomeReason(err.code);
 
-  // Only addressing mistakes get the roots hint; other errors carry their own reason.
-  const hint = err.code === 'ENOENT' || err.code === 'EISDIR'
-    ? `: ${await vfsAddressingHint(vfs, 'the `file` tool\'s path')}`
-    : '';
+  // Only addressing mistakes get where the path landed; other errors carry their own reason.
+  const hint = err.code === 'ENOENT' || err.code === 'EISDIR' ? `: ${addressingHint(planes, path)}` : '';
 
   return { reason, error: `${err.message}${hint}` };
 }
@@ -218,7 +218,7 @@ function fileOps(deps: FileDeps) {
 
     try { output = await read(); }
     catch (cause) {
-      const refused = await vfsFailure(vfs, { error: cause }, action, path);
+      const refused = vfsFailure(deps.planes, { error: cause }, action, path);
 
       return failure(refused.reason, refused.error);
     }
@@ -336,7 +336,7 @@ function fileOps(deps: FileDeps) {
       if (shown !== null) return shown;
       scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit ?? FILE_READ_LINES, maxChars });
     } catch (err) {
-      const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
+      const vfsFail = vfsFailure(deps.planes, { error: err }, 'read', path);
 
       return failure(vfsFail.reason, vfsFail.error);
     }
@@ -379,7 +379,7 @@ function fileOps(deps: FileDeps) {
         target = await landing(path, true);
         ({ text: existing, observed } = await readObserved(target.path));
       } catch (err) {
-        const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
+        const vfsFail = vfsFailure(deps.planes, { error: err }, 'write', path);
 
         return failure(vfsFail.reason, vfsFail.error);
       }
@@ -395,7 +395,7 @@ function fileOps(deps: FileDeps) {
       try {
         landed = await persist(target, content, (revision) => ledger.observeWhole(path, content, revision), observed);
       } catch (err) {
-        const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
+        const vfsFail = vfsFailure(deps.planes, { error: err }, 'write', path);
 
         return failure(vfsFail.reason, vfsFail.error);
       }
@@ -429,7 +429,7 @@ function fileOps(deps: FileDeps) {
         if (held.text === null) throw new VfsError('ENOENT', 'no such file, open', path);
         ({ text: current, observed } = { text: held.text, observed: held.observed });
       } catch (err) {
-        const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
+        const vfsFail = vfsFailure(deps.planes, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
 
         return failure(vfsFail.reason, vfsFail.error);
@@ -456,7 +456,7 @@ function fileOps(deps: FileDeps) {
       try {
         landed = await persist(target, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
       } catch (err) {
-        const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
+        const vfsFail = vfsFailure(deps.planes, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
 
         return failure(vfsFail.reason, vfsFail.error);

@@ -16,7 +16,6 @@ import {
   SubordinateRosterStore,
   admitSubordinateTask,
   AgentDeliveries,
-  announcementOf,
   assignmentDelivery,
   type InProcessDeliveries,
   MAIN_AGENT,
@@ -790,8 +789,6 @@ export class LocalAgentHost {
 
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
 
-      if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
-
       // A child resolves role and tier against its root's (account) catalog.
       if (parent.ws.profileAuthority) ws.profileAuthority = parent.ws.profileAuthority;
 
@@ -973,18 +970,19 @@ export class LocalAgentHost {
    */
   private parentRelayFor(child: HostEntry): LocalParentRelay {
     return {
-      owed: async (ending, assistantText, narration) => {
+      owed: async (turn) => {
         const parent = this.requireActorEntry(child.actor.record.parentActorId ?? '');
 
-        parent.roster.finishTurn(child.name, ending, Date.now());
+        parent.roster.finishTurn(child.name, turn.ending, Date.now());
 
         const state = child.relay;
 
         if (state === null) return null;
 
         return await owedSubordinateTurnReport({
-          lifetime: child.actor.record.lifetime, ending, assistantText, narration, reports: state, ownerDriven: state.ownerDriven,
-          delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog, ...(state.turnId !== null && { turnTaskId: announcementOf(state.turnId) }) }),
+          lifetime: child.actor.record.lifetime, ending: turn.ending, assistantText: turn.assistantText, narration: async () => turn.narration,
+          reports: state, ownerDriven: turn.ownerDriven,
+          delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog, ...(turn.taskId !== null && { turnTaskId: turn.taskId }) }),
         });
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
@@ -1284,8 +1282,6 @@ export class LocalAgentHost {
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
 
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
-
-      if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
 
       if (parent.ws.profileAuthority) ws.profileAuthority = parent.ws.profileAuthority;
 

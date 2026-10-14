@@ -90,12 +90,12 @@ function stagedEntries(history: SessionHistory, selection: ContextSelection | nu
   let staged = pending !== undefined;
 
   if (pending !== undefined) {
-    try { entries = [...history.proposals.preview(pending.proposal_id)]; }
-    catch (cause) {
-      if (!(cause instanceof KinuError) || cause.code !== 'denied') throw cause;
-      blocked = 'history_rewritten';
+    const preview = history.proposals.preview(pending.proposal_id);
+
+    if ('blocked' in preview) {
+      blocked = preview.blocked;
       staged = false;
-    }
+    } else entries = [...preview.entries];
   }
 
   return { entries: selection === null ? entries : history.context.conversationOf(entries), blocked, staged };

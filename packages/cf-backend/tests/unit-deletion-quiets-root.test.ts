@@ -118,3 +118,12 @@ test('words sent while a deletion waits for the root to close are refused, and s
   expect(refused).toEqual([expect.objectContaining({ code: 'missing' })]);
   expect(asked.some((messages) => messages.includes('Also archive the old ledger.'))).toBe(false);
 });
+
+// The destroyed object's own rows of its destroy can be missing from telemetry (staging f9c17ac7b, 2026-10-14), so the
+// owner's object names what it destroyed, and a deploy's report reads that workspace's owed work as ended by it.
+test('a deletion logs the destroy it landed, naming the workspace and its object', async () => {
+  const { log } = await deletedDuringNaming(async () => {});
+
+  expect(log.emitted.filter((line) => line.event === 'workspace.destroyed').map((line) => line.fields))
+    .toEqual([{ workspace: 'ledger', object: expect.stringMatching(/^\S+$/u) }]);
+});

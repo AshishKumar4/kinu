@@ -517,12 +517,20 @@ export const JOB_COMMAND = 'printf "Release to production? (y/N) "; read answer;
 
 export const JOB_STARTED = 'JOB STARTED';
 
-/** The agent-job row (D95): the job its turn starts on the computer, then the reply once it has. */
+/**
+ * The agent-job row (D95): the job its turn starts on the computer, called as the computer's members take their required
+ * fields (positionally), then the reply once it has. A refusal is said in its own words, so the row fails at the reply
+ * with the cause rather than at a tab that never comes (staging f9c17ac7b).
+ */
 function jobAnswer(request: ScriptedRequest): ScriptedAnswer | undefined {
   if (!(request.userTexts.at(-1) ?? '').includes(JOB_ASK)) return undefined;
+  const ran = request.turn.at(-1);
 
-  return request.turn.length > 0 ? { text: JOB_STARTED }
-    : { toolCall: { name: 'eval', arguments: { code: `return await computer.startProcess({ command: ${JSON.stringify(JOB_COMMAND)} });` } } };
+  if (ran === undefined) {
+    return { toolCall: { name: 'eval', arguments: { code: `return await computer.startProcess(${JSON.stringify(JOB_COMMAND)});` } } };
+  }
+
+  return { text: ran.result.includes('processId') ? JOB_STARTED : `The job did not start: ${ran.result.slice(0, 300)}` };
 }
 
 /** The write-file row: the file written, then a shell writing beside it where the turn has one. */

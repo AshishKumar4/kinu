@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import { SLATE_UI_ATTRIBUTE } from '@kinu.run/core';
 
 import { declaredSettings } from '../../scripts/browser-declarations';
-import { withBrowser } from '../../scripts/live-app-harness';
+import { DESKTOP, withBrowser } from '../../scripts/live-app-harness';
 import { DOCUMENT_FAULTS, recordScriptFailures } from '../../scripts/script-failures';
 import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
 import { webHeaders, type PublicWebIdentity, type WorkspaceWeb } from './workspace-roster';
@@ -26,18 +26,51 @@ export async function openBrowser(): Promise<TestChrome> {
   return launchTestChrome({ args: [declaredSettings({ mouse: true })] });
 }
 
-/** A page signed in as `identity`, the same authority the row's sockets use, so
- *  the two halves cannot be two users looking at two workspaces. No default
- *  timeout: each wait on it states its own bound, or the case budget ends it. */
+/** A page signed in as `identity`, the same authority the row's sockets use, so the two halves cannot be two users
+ *  looking at two workspaces: at the desktop viewport, recording its dead ends from its first document
+ *  ({@link recordDeadEnds}). No default timeout: each wait on it states its own bound, or the case budget ends it. */
 export async function signedInPage(browser: Browser, identity: PublicWebIdentity): Promise<Page> {
   const page = await browser.newPage();
   const headers = webHeaders(identity);
 
-  if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
-  await page.setViewport({ width: 1440, height: 900 });
   page.setDefaultTimeout(0);
+  await page.setViewport(DESKTOP);
+
+  if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
+
+  await recordDeadEnds(page);
 
   return page;
+}
+
+/** Records, on `window`, every turn the workspace's socket reports ended in
+ *  error (the frame the chat renders its error from), which ends a page's
+ *  chances for good. Installed before each document's scripts run, so the
+ *  socket the app opens is the recorded one. Each socket is a plain WebSocket:
+ *  the desktop's client refuses one whose prototype is not WebSocket's
+ *  ("Raw channel missing property: send", staging 2026-10-13). */
+const RECORD_TURN_ERRORS = `(() => {
+  window.__turnErrors = [];
+  window.WebSocket = new Proxy(window.WebSocket, {
+    construct(Socket, args) {
+      const socket = Reflect.construct(Socket, args);
+      socket.addEventListener('message', (event) => {
+        if (typeof event.data !== 'string' || !event.data.includes('"error":true')) return;
+        try {
+          const frame = JSON.parse(event.data);
+          if (frame.type === 'cf_agent_use_chat_response' && frame.error === true) window.__turnErrors.push(String(frame.body).slice(0, 300));
+        } catch {}
+      });
+      return socket;
+    },
+  });
+})()`;
+
+/** Records what ends `page`'s chances for good on every document it loads: each app script that failed to load
+ *  (script-failures.ts), and each turn its socket reports ended in error. */
+export async function recordDeadEnds(page: Page): Promise<void> {
+  await recordScriptFailures(page);
+  await page.evaluateOnNewDocument(RECORD_TURN_ERRORS);
 }
 
 /**
@@ -186,7 +219,6 @@ export class WorkspaceBrowser {
     const page = await signedInPage(this.browser, this.web.identity);
 
     if (mode !== undefined) await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
-    await recordScriptFailures(page);
     await bounded('the workspace page', page.goto(`${this.web.origin}/workspace/${encodeURIComponent(this.web.workspace)}${query}`, { waitUntil: 'domcontentloaded' }));
 
     return page;
@@ -204,7 +236,6 @@ export class WorkspaceBrowser {
     const page = await signedInPage(this.browser, this.web.identity);
 
     await page.setViewport({ ...size, isMobile: true, hasTouch: true });
-    await recordScriptFailures(page);
     await bounded('the slate page, opened alone', page.goto(view.frame.url(), { waitUntil: 'domcontentloaded' }));
 
     return new SlateView(page.mainFrame());

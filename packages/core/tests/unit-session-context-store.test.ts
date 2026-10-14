@@ -18,6 +18,7 @@ import { answersForDrainTurns } from '../src/identity/conversation-store';
 import { inheritedContextFromTranscript } from '../src/orchestrator/heads-support';
 import type { JsonObject } from '../src/utils/json';
 import { KinuError } from '../src/obs/error';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 function setup() {
   const { rt, testSql } = createTestRuntime();
@@ -208,6 +209,7 @@ test('a past revision reads back as it was after a transform and a clear, by a r
     const history = () => new SessionHistory({
       sql: s.rt.storage.sql, actor: s.rt.actor, transactionSync: write => s.rt.storage.transactionSync(write),
       files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }),
+      claims: claimFences(s.rt.storage.sql, s.rt.actor),
     });
 
     const writer = history();
@@ -235,7 +237,7 @@ test('a held turn context follows sealed output, an authored edit and a selected
   const s = setup();
 
   const dependencies = { actor: s.rt.actor, sql: s.rt.storage.sql, transactionSync: <T>(write: () => T) => s.rt.storage.transactionSync(write),
-    files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) };
+    files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }), claims: claimFences(s.rt.storage.sql, s.rt.actor) };
 
   const history = new SessionHistory(dependencies);
   const other = new SessionHistory(dependencies);
@@ -430,7 +432,7 @@ test('reverting to an entry deletes it and continues on the context recorded bef
   try {
     initSessionContextTables(rt.storage.execRaw);
     initSessionTranscriptTables(rt.storage.execRaw);
-    const history = new SessionHistory({ sql: rt.storage.sql, actor: rt.actor, transactionSync: write => rt.storage.transactionSync(write), files: async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor' }) });
+    const history = new SessionHistory({ sql: rt.storage.sql, actor: rt.actor, transactionSync: write => rt.storage.transactionSync(write), files: async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor' }), claims: claimFences(rt.storage.sql, rt.actor) });
     const assertOwner = () => rt.actor.assertCurrent();
     const chat = history.transcript('default');
     const turns: Array<[string, string, string]> = [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two'], ['ask-3', 'answer-3', 'three']];

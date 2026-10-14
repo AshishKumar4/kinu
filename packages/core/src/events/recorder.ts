@@ -26,7 +26,7 @@ import { Effect } from 'effect';
 import { diagnostics, KinuError, settleSync, toKinuError } from '../obs/index';
 import { ToolOutcomeSchema } from '../types/tool-outcome';
 import { FileEditFailuresSchema } from '../types/file-edits';
-import { TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
+import { TURN_AUTHOR_METADATA_KEY } from '../types/turn-metadata';
 import { CallAccountSchema, QuotaSnapshotSchema } from '../providers/quota';
 
 /** Admission identity reopens the turn; all model output lives in canonical session payloads. */

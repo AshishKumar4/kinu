@@ -15,9 +15,7 @@ import { withOperationProfile, type OperationProfile } from '../profiles/operati
 import { effectiveRoleCatalog } from '../profiles/catalog';
 import { ownProfileChoices, resolveAgentTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
 import type { FrozenAuthority } from './turn-facts';
-import { TierIdSchema, type TierId } from '../types/profile';
-import type { JsonObject } from '../utils/json';
-import * as v from 'valibot';
+import type { TierId } from '../types/profile';
 import { reasoningEffortOptions } from '../providers/effort';
 import { KinuError, settleSync } from '../obs/index';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
@@ -125,15 +123,6 @@ export interface AssembledTurn {
   readonly externalTools: ToolSet;
   readonly activeSkills: ActiveSkillSet | null;
   readonly window: ModelWindow;
-}
-
-const TurnTierMetadataSchema = v.object({ profile_tier: v.optional(TierIdSchema) });
-
-export function metadataTier(metadata: JsonObject | undefined): TierId | undefined {
-  if (metadata === undefined) return undefined;
-  const parsed = v.safeParse(TurnTierMetadataSchema, metadata);
-
-  return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
 /** The key a conversation's extension state (compaction's plans and archives) is kept under. */

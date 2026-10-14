@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
 
 import type { DiskChain, DiskChainPorts } from '../src/disk-chain';
+import type { ExecResult } from '../src/contracts';
 
 import { FIRST_SESSION, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName, parseSessionsRead } from '../src/sessions';
 import { harness } from './support/devbox-harness';
@@ -134,6 +135,28 @@ describe("the box's sessions", () => {
     expect((await box.terminalSessions()).map((session) => session.id)).toEqual([FIRST_SESSION.id]);
   });
 
+  // Review finding 1: a read wrote back the records it began with, over what changed while its exec ran.
+  test('a read keeps every open, rename and close made while its exec ran, and the folder it found', async () => {
+    const { box, container } = harness(SessionBox);
+    await box.devboxStartup();
+    const kept = await box.openTerminalSession();
+    const closing = await box.openTerminalSession();
+    const answer = Promise.withResolvers<ExecResult>();
+    container.sessionsRead = answer.promise;
+    const reading = box.terminalSessions();
+
+    await box.renameTerminalSession(kept.id, 'renamed');
+    const opened = await box.openTerminalSession('opened');
+    await box.closeTerminalSession(closing.id);
+    answer.resolve({ stdout: row('P', FIRST_SESSION.id, '/workspace/moved', 'bash', '', '', ''), stderr: '', exitCode: 0 });
+    await reading;
+    container.sessionsRead = { stdout: '', stderr: '', exitCode: 0 };
+
+    expect((await box.terminalSessions()).map((session) => [session.id, session.name, session.cwd])).toEqual([
+      [FIRST_SESSION.id, FIRST_SESSION.name, '/workspace/moved'], [kept.id, 'renamed', FIRST_SESSION.cwd], [opened.id, 'opened', FIRST_SESSION.cwd],
+    ]);
+  });
+
   test('a name that is empty or past 40 characters, and a session the box does not keep, are refused', async () => {
     const { box } = harness(SessionBox);
 
@@ -177,6 +200,22 @@ describe("an agent's job", () => {
     const [open] = mergeSessions([record], parseSessionsRead(row('P', record.id, '/workspace/app', 'node', '', '', '')));
 
     expect(open).toMatchObject({ id: record.id, name: 'npm run dev', job: 'JOB-1', open: true, cwd: '/workspace/app' });
+  });
+
+  // Review finding 9: closing a stopped computer's job tab started the computer and ran the job again.
+  test("closing its session on a stopped computer ends it there: nothing starts, and no later start runs it", async () => {
+    const { box, container } = harness(SessionBox);
+    await box.devboxStartup();
+    const { processId } = await box.startSupervised('npm run dev', '/workspace');
+    await container.stop();
+    const starts = container.startOptions.length;
+
+    await box.closeTerminalSession(jobSessionId(processId));
+    expect(container.startOptions.length).toBe(starts);
+    expect((await box.terminalSessions()).map((session) => session.id)).toEqual([FIRST_SESSION.id]);
+
+    await box.devboxStartup();
+    expect((await box.listSupervised()).filter((listed) => listed.restartable)).toEqual([]);
   });
 
   test("a job's session id is one tmux takes unquoted, and a long command names it in 40 characters", () => {

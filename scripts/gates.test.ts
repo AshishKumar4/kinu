@@ -8,10 +8,9 @@ import { findMovable, withoutComments } from './capability-parity';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
 import {
   auditInterception, declaredSandboxClasses, nativeRoutingReasons, readInterceptionSources,
-  WranglerContainers, wranglerContainerClasses,
 } from './egress-interception';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
-import { parseJsonc } from './jsonc';
+import { boundContainerClasses } from './infra-manifest';
 import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
 import {
   advisoriesFor, queryAdvisories, type Exposure, type ReviewedPackage,
@@ -428,18 +427,21 @@ describe('dependency advisory gate', () => {
  * (2026-08-19 census).
  */
 describe('egress interception denominator', () => {
-  test('a container entry after an array-valued field is still counted', () => {
+  test('a container entry after an array-valued field is still counted, in every environment', () => {
     const config = join(scratchDir('egress'), 'wrangler.jsonc');
     writeFileSync(config, `{
       // a commented-out block must not count:
-      // "containers": [ { "class_name": "Retired" } ],
+      // "containers": [ { "class_name": "Retired", "scheduling_policy": "durable_object" } ],
       "containers": [
-        { "class_name": "A", "instances": [1, 2] },
-        { "class_name": "B" }
+        { "class_name": "A", "scheduling_policy": "durable_object", "images": { "a": { "image": "a" } } },
+        { "class_name": "B", "image": "b" }
       ],
-      "env": { "preview": { "containers": [ { "class_name": "C" } ] } }
+      "env": { "staging": {
+        "routes": [ { "pattern": "staging.example.com", "custom_domain": true } ],
+        "containers": [ { "class_name": "C", "scheduling_policy": "durable_object" } ]
+      } }
     }`);
-    expect(wranglerContainerClasses(parseJsonc(readFileSync(config, 'utf8'), WranglerContainers, 'wrangler.jsonc'))).toEqual(['A', 'B', 'C']);
+    expect(boundContainerClasses(config)).toEqual(['A', 'B', 'C']);
   });
 
   test('a generic container class is in the denominator', () => {

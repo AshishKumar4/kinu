@@ -95,8 +95,8 @@
  */
 import * as v from 'valibot';
 import {
-  deleteWorkspace, readJson, resolveWebIdentity, sweptAway, webHeaders, WORKSPACE_BEAT_MS,
-  type PublicWebIdentity, type WorkspaceWeb,
+  createWorkspace, deleteWorkspace, readJson, resolveWebIdentity, settleCatalog, sweptAway, webHeaders, WORKSPACE_BEAT_MS,
+  type CatalogNeed, type CreateWorkspaceBody, type PublicWebIdentity, type WorkspaceWeb,
 } from './workspace-roster';
 import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
@@ -110,7 +110,7 @@ import {
   RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, renderSoulMarkdown, rowText, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
   type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
-  QualityDaySchema, type QualityDay, ProfileCatalogEnvelopeSchema, betaSwarms, type ProfileCatalog,
+  QualityDaySchema, type QualityDay, betaSwarms,
 } from '../../packages/core/src/index';
 import { renderThrownChain, detach } from '../../packages/core/src/obs/index';
 import {
@@ -287,20 +287,6 @@ interface PublicSessionInput {
   /** What the workspace needs of its account's catalog besides Beta: swarms, such as its role's definition. */
   readonly catalog?: readonly CatalogNeed[];
 }
-
-/** The POST /api/user/workspaces body, exactly the optional fields
- *  `handleCreateWorkspaceRequest` parses (user/workspace-access.ts): `purpose`
- *  may legitimately be absent, which is what a `genesis: false` open sends. */
-interface CreateWorkspaceBody {
-  name: string;
-  displayName: string;
-  purpose?: string;
-}
-
-const WorkspaceEntrySchema = v.object({
-  name: v.string(),
-  displayName: v.optional(v.string()),
-});
 
 const ActivationSchema = v.object({ ordinal: v.number(), startedAt: v.number(), version: v.nullable(v.string()) });
 
@@ -640,71 +626,26 @@ export function beatWorkspace(origin: string, identity: PublicWebIdentity, name:
   return everyBeat(() => markLive(origin, identity, name));
 }
 
-/** Writers per account racing for its catalog, and a spare: each lost race means another writer landed. */
-const CATALOG_WRITE_ATTEMPTS = 4;
-
-/** What a workspace needs of its account's catalog: the catalog with it, or null when the catalog already holds it. */
-export type CatalogNeed = (catalog: ProfileCatalog) => ProfileCatalog | null;
-
 /** "Beta: swarms" on for the account the evals run as, whose swarms are part of what they measure. */
 const SWARMS_ON: CatalogNeed = (catalog) => betaSwarms(catalog) ? null : { ...catalog, betaSwarms: true };
 
-/** Bring the account's catalog to what `needs` ask of it. The cases of one run race to write it, so a lost version race
- *  reads again, until nothing is left to write. */
-async function settleCatalog(origin: string, headers: Record<string, string>, needs: readonly CatalogNeed[]): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
-    const read = await fetch(`${origin}/api/user/profile-catalog`, { headers });
-    const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await readJson(read, 'read the profile catalog'));
-    const wanted = needs.reduce<ProfileCatalog | null>((sofar, need) => need(sofar ?? catalog) ?? sofar, null);
-
-    if (wanted === null) return;
-
-    const answer = await fetch(`${origin}/api/user/profile-catalog`, {
-      method: 'PUT',
-      headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify({ catalog: wanted, expectedVersion: version }),
-    });
-
-    if (answer.ok || (answer.status === 409 && attempt < CATALOG_WRITE_ATTEMPTS)) continue;
-    await readJson(answer, 'write the profile catalog');
-  }
-}
-
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
-  const headers = webHeaders(input.identity);
+  // A mission on the create queues the workspace's own genesis turn — creation fires it on any non-placeholder
+  // mission (orchestrator.ts's beginGenesisTurn over soul.ts:77). A case that asked for `genesis: false` sends NO
+  // purpose, so the workspace is born on the placeholder mission `workspaceGenesisSignal` returns null for, and the
+  // real mission is written over the socket below.
+  const body: CreateWorkspaceBody = input.genesis === false
+    ? { name: input.workspace, displayName: SESSION_DISPLAY_NAME }
+    : { name: input.workspace, displayName: SESSION_DISPLAY_NAME, purpose: input.purpose };
 
-  const created = await infraBoundary(
-    `POST ${input.origin}/api/user/workspaces`,
-    async () => {
-      const body: CreateWorkspaceBody = {
-        name: input.workspace,
-        displayName: SESSION_DISPLAY_NAME,
-      };
+  const created = await createWorkspace(input.origin, input.identity, body);
 
-      // A mission on the create queues the workspace's own genesis turn —
-      // creation fires it on any non-placeholder mission (orchestrator.ts's
-      // beginGenesisTurn over soul.ts:77). A case that asked for
-      // `genesis: false` sends NO purpose, so the workspace is born on the
-      // placeholder mission `workspaceGenesisSignal` returns null for, and
-      // the real mission is written over the socket below.
-      if (input.genesis !== false) body.purpose = input.purpose;
-
-      const response = await fetch(`${input.origin}/api/user/workspaces`, {
-        method: 'POST',
-        headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      return v.parse(WorkspaceEntrySchema, await readJson(response, 'create a workspace'));
-    },
-  );
-
-  const session = new KinuPublicSession(input, created.name);
+  const session = new KinuPublicSession(input, created);
 
   try {
-    await input.claim?.(created.name);
+    await input.claim?.(created);
     session.beat();
-    await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => settleCatalog(input.origin, headers, [SWARMS_ON, ...input.catalog ?? []]));
+    await infraBoundary(`PUT ${input.origin}/api/user/profile-catalog`, () => settleCatalog(input.origin, webHeaders(input.identity), [SWARMS_ON, ...input.catalog ?? []]));
     await session.connect();
 
     if (input.role !== undefined) await session.pinRole(input.role);

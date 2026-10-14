@@ -9,8 +9,8 @@ import { killAndAwaitExit, oneMachine, present, recordedIn, runOk, scratchDir } 
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  bunResolutionShell, deviceFiles, DEVICE_EXEC_ACK_METHOD, DEVICE_FRAMES, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
-  parseJsonObject, type DeviceStatus, type DeviceTransport, type JsonObject,
+  bunResolutionShell, deviceFiles, DEVICE_FRAMES, JsonValueSchema,
+  parseJsonObject, type DeviceStatus, type DeviceTransport, type JsonObject, DEVICE_METHOD,
 } from '@kinu.run/core';
 import {
   DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, ROTATED_TOKEN, startUpdateHub,
@@ -474,7 +474,7 @@ describe('the daemon answers the hub in core\'s frames', () => {
 
     await served.sockets.until((hellos) => hellos[0] !== undefined);
     const socket = present(served.sockets.items[0], 'the HELLO');
-    await socket.frames.until((frames) => frames.some((frame) => frame.type === DEVICE_TOKEN_ROTATION_ACK));;
+    await socket.frames.until((frames) => frames.some((frame) => frame.type === DEVICE_FRAMES.rotated));;
 
     expect(parseJsonObject(installed(home, 'device.json')).token).toBe(ROTATED_TOKEN);
   });
@@ -509,7 +509,7 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout).toContain(`the full stdout is at ${shown}]`);
     expect(await readText(files, shown)).toBe(`${'x'.repeat(600_000)}END`);
-    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]);
+    await tunnel.rpc(DEVICE_METHOD.execAck, [requestId]);
   });
 });
 

@@ -4902,6 +4902,19 @@ typed and left running; the save; the server killed; the resumed pane showed the
 prompt, with no marker and no `^X`; one Enter ran it once. The container tier's `resurrect` step does the same on a
 real box through the product's terminal route, across a real stop and start.
 
+D98. The container of record is the kernel's boot id; the box writes no identity into the container (2026-10-14; the
+devbox review's P1-1). The box kept two identities of one container: a UUID it wrote to `/tmp/devbox-boot-id` and held
+in `devbox:boot-id`, and the kernel's `/proc/sys/kernel/random/boot_id`, which the process fences already used. D67
+measured why the first is wrong: `/tmp` is on the rootfs, so a snapshot carries the file, and the stamp names a
+snapshot's lineage, not a container. A replacement started from the same snapshot without the box's start would read as
+the container the box restored. The kernel's id is new at every start, wake and replacement, and nothing the box
+writes can carry it. So `#stampBootId` records the kernel's id, read through the processes' own reader, and adoption,
+the heartbeat's ping and replacement check, repair and commit refusals compare against it. The stamp exec, the stale
+attempt's rewrite of the file and the fake's exec-string model are gone; a stale attempt writes no row, fenced by its
+generation, as `scripts/mutation-fences.ts` pins. Because the kernel id changes at every wake, the box's own stop
+clears the row: a start or wake after the box ended its container is not counted as a replacement, and one the
+platform made while a container of record stood still is.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

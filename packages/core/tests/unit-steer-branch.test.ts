@@ -19,6 +19,7 @@ import {
 import { branchesTerminalEffect } from '../src/orchestrator/terminal-effects';
 import { present } from '@kinu.run/test-utils';
 import { conversationTurnPair } from '../src/identity/conversation-store';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 function setup() {
   const ws = createTestWorkspace();
@@ -31,6 +32,7 @@ function setup() {
   const history = new SessionHistory({
     sql: ws.sql, actor, transactionSync: write => ws.db.transaction(write)(),
     files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(ws.sql, actor),
   });
 
   return { ...ws, actor, transcript: history.transcript(CHAT_SESSION_ID) };

@@ -17,8 +17,8 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  isWorkMode, INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, PROVIDER_WAIT_PART, ProviderWaitSchema, TRANSCRIPT_WINDOW, UIMessageSchema,
-  type ChatTransport, type JsonObject, type OwedIntent, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies, type WorkMode,
+  INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
+  TRANSCRIPT_WINDOW, UIMessageSchema, type SentWords, type ChatTransport, type JsonObject, type OwedIntent, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -52,10 +52,7 @@ export interface ChatWire {
   firstText?(): void;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. `admitted` is told once the words
    *  are owed to the agent, where a Stop reaches them, ahead of where they land. */
-  send(
-    input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode },
-    admitted: () => void,
-  ): Promise<SendLanding>;
+  send(input: SentWords & { readonly id: string }, admitted: () => void): Promise<SendLanding>;
   /** The owner's Retry of the newest turn, whose newest message they saw is `messageId`, as an intent (D6): the turn its
    *  agent reopened, which tells its end; owed when the crossing did not reach the agent, whose wake delivers it. */
   retry(messageId: string): Promise<{ readonly turnId: string } | OwedIntent>;
@@ -82,7 +79,7 @@ const ChatInputSchema = v.object({
     type: v.string(), text: v.optional(v.string()), url: v.optional(v.string()),
     mediaType: v.optional(v.string()), filename: v.optional(v.string()),
   })),
-  metadata: v.optional(v.looseObject({ kinuMode: v.optional(v.string()) })),
+  metadata: v.optional(v.unknown()),
 });
 
 interface RelayedChunk {
@@ -637,7 +634,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         const live = this.live;
 
         if (live === null) return;
-        const chunk: UIMessageChunk = { type: 'data-kinu-step-cut', data: { stepIndex: event.stepIndex }, transient: true };
+        const chunk: UIMessageChunk = { type: STEP_CUT_CHUNK, data: { stepIndex: event.stepIndex }, transient: true };
         const body = JSON.stringify(chunk);
 
         live.relayed.push({ step: live.finished, type: chunk.type, body });
@@ -771,7 +768,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 }
 
-function chatInput(message: UIMessage) {
+/** A client's message as the words it sends, in Build unless it names a mode; metadata no client writes names nothing. */
+function chatInput(message: UIMessage): SentWords {
   const { parts, metadata } = v.parse(ChatInputSchema, message);
   const text = parts.flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('');
 
@@ -779,11 +777,10 @@ function chatInput(message: UIMessage) {
     ? [{ filename: part.filename ?? 'attachment', mediaType: part.mediaType ?? 'application/octet-stream', url: part.url }]
     : []);
 
-  const mode = metadata?.kinuMode;
+  const send = v.safeParse(SendMetadataSchema, metadata);
+  const words = sentWords(text, files, send.success ? send.output : undefined);
 
-  const chosen: WorkMode = mode !== undefined && isWorkMode(mode) ? mode : 'build';
-
-  return { text, files, mode: chosen };
+  return { ...words, mode: words.mode ?? 'build' };
 }
 
 /**
