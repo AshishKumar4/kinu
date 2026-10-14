@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, nameBox, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, showName, CONTAINER_TRUST_ENV, END_TREE } from "./processes";
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
@@ -2963,9 +2963,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
-  /** The name the box answers to in its prompt, its desktop and its processes, read at each start; unset, the
-   *  platform's container id. */
-  protected async hostname(): Promise<string | undefined> { return undefined; }
+  /** The name a person sees for the box in its prompts, its terminal titles and its desktop, read at each start (D93);
+   *  unset, the platform's host name. */
+  protected async shownName(): Promise<string | undefined> { return undefined; }
   /** The Worker version this object runs, read at construction and at each start: a start refused under another is asked
    *  again (D94). Unset, only a changed input or a caller's explicit ask lifts a refusal. */
   protected get workerVersion(): string | undefined { return undefined; }
@@ -2975,13 +2975,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
-    const name = await this.hostname();
+    const name = await this.shownName();
 
-    // The kernel keeps a name for the boot alone, so each start names the box again (D83, D91, D92).
+    // Kept where the box's rc reads it, at each start; the kernel keeps the platform's name (D93).
     if (name === undefined) return;
-    const naming = await nameBox(this.#container(), name);
+    const shown = await showName(this.#container(), name);
 
-    if (!naming.named) this.#trace('name.kept', { name, detail: naming.detail });
+    if (!shown.shown) this.#trace('name.unshown', { name, detail: shown.detail });
   }
 
   getExposedPorts() {

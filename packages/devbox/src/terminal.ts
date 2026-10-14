@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { CONTAINER_TRUST_ENV } from './processes';
+import { SHELL_RC, SHELL_RC_FILE } from './shown-name';
 
 const ENV = { ...CONTAINER_TRUST_ENV, TERM: 'xterm-256color' };
 
@@ -19,9 +20,11 @@ const TMUX_CONF = [
   "set -ga terminal-overrides ',xterm*:smcup@:rmcup@'",
 ].join('\n');
 
+/** `$1` the tmux config, `$2` the shell rc: the session's shell starts from the box's rc (D93). */
 const ATTACH = `printf '%s\\n' "$1" > /etc/devbox-tmux.conf
+printf '%s\\n' "$2" > ${SHELL_RC_FILE}
 if tmux has-session -t devbox 2>/dev/null; then tmux source-file /etc/devbox-tmux.conf; fi
-exec tmux -f /etc/devbox-tmux.conf new-session -A -s devbox -c /workspace /bin/bash`;
+exec tmux -f /etc/devbox-tmux.conf new-session -A -s devbox -c /workspace "/bin/bash --rcfile ${SHELL_RC_FILE} -i"`;
 
 const Size = v.object({ cols: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(1000)), rows: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(1000)) });
 
@@ -101,7 +104,7 @@ export function terminalSocket(container: Container, params: URLSearchParams): P
     const size = yield* attemptSync('invalid-input', () => v.parse(Size, { cols: Number(params.get('cols') ?? 80), rows: Number(params.get('rows') ?? 24) }));
     const abort = new AbortController();
 
-    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', ATTACH, 'devbox-terminal', TMUX_CONF], {
+    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', ATTACH, 'devbox-terminal', TMUX_CONF, SHELL_RC], {
       pty: size, stdin: 'pipe', env: ENV, signal: abort.signal,
     }));
 
