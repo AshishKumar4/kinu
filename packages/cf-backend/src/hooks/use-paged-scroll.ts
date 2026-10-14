@@ -3,9 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatHistoryEntry, Page, PositionCursor, PositionPageRequest, SeekCursor } from "@kinu.run/core";
 import { Cause, Effect, type Exit } from "effect";
 import { hold } from "@kinu.run/core/obs";
-import { describeError } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 
-export interface PagedScroll<Item> {
+interface PagedScroll<Item> {
   fetched: readonly Item[];
   loading: boolean;
   error: string | null;
@@ -14,7 +14,7 @@ export interface PagedScroll<Item> {
   loadMore: (urgent?: boolean) => void;
 }
 
-export interface PagedScrollOptions<Item> {
+interface PagedScrollOptions<Item> {
   fetchPage: (cursor: SeekCursor, limit: number) => Promise<Page<Item>>;
   pageSize?: number;
   /** `null`: not ready, ask again. */
@@ -73,7 +73,7 @@ function usePageLoads(pageSize: number) {
         }
       }));
 
-      if (thrown !== null && generation === walk.current) setError(describeError(thrown));
+      if (thrown !== null && generation === walk.current) setError(readFailureText(thrown));
     }));
   }, []);
 
@@ -130,7 +130,7 @@ export interface HistorySegment {
   readonly entries: readonly ChatHistoryEntry[];
 }
 
-export interface HistoryPages {
+interface HistoryPages {
   readonly segments: readonly HistorySegment[];
   readonly loading: boolean;
   readonly error: string | null;

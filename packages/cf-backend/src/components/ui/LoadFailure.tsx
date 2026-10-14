@@ -1,7 +1,7 @@
 /** Rendered instead of an empty state: never report "none" for data that failed to load. */
 import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
 
-export interface LoadFailureProps {
+interface LoadFailureProps {
   /** Lower-case: "automations", "the changelog". */
   what: string;
   message?: string;

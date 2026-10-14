@@ -28,7 +28,7 @@ export interface ParkedDecisionDeps {
   onDecided: (decided: readonly string[]) => void | Promise<void>;
 }
 
-export interface ParkedQueueSnapshot {
+interface ParkedQueueSnapshot {
   /** Null means everything, so an action parked mid-review joins "approve all"; after a decision it is the empty set. */
   readonly selected: ReadonlySet<string> | null;
   readonly busy: boolean;

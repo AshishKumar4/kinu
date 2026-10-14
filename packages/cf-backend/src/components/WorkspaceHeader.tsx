@@ -34,7 +34,7 @@ export interface ChatTab extends ChatActions {
   readonly to: string;
 }
 
-export interface WorkspaceHeaderProps {
+interface WorkspaceHeaderProps {
   readonly workspace: { readonly name: string; readonly title: string; readonly logo?: string | null; readonly to: string; readonly rename: Rename; readonly editValue: string; readonly remove: () => void };
   readonly chats: readonly ChatTab[];
   /** `overview` for the workspace's own page; null when the shown chat has no tab. */

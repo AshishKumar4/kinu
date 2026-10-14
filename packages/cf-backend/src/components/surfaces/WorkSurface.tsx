@@ -75,7 +75,7 @@ const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
 const slateId = (surface: SurfaceKind | null): string | null =>
   surface?.startsWith(SLATE_PREFIX) === true ? surface.slice(SLATE_PREFIX.length) : null;
 
-export interface WorkSurfaceProps {
+interface WorkSurfaceProps {
   surface: SurfaceKind;
   previewFocus?: string | null;
   planFocus?: string | null;

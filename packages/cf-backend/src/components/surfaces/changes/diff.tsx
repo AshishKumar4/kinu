@@ -1,5 +1,5 @@
 /** Draws a file's diff: rows, folds, word marks, syntax colours and notes. */
-import { sideBySide, type ChangeBlock, type ChangeRow, type DiffSide, type FileStatus } from "@kinu.run/core";
+import { clockTime, sideBySide, type ChangeBlock, type ChangeRow, type DiffSide, type FileStatus } from "@kinu.run/core";
 import { Fragment, useCallback, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { CaretDownIcon, CaretUpDownIcon } from "@phosphor-icons/react";
 import { useTheme } from "@/hooks/use-theme";
@@ -14,7 +14,6 @@ export function count(value: number): string {
   return COUNT.format(value);
 }
 
-const CLOCK = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 
 const DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
 
@@ -23,11 +22,11 @@ const FULL = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short"
 export function sinceLabel(at: number, now: number): string {
   const then = new Date(at).toDateString();
 
-  if (then === new Date(now).toDateString()) return CLOCK.format(at);
+  if (then === new Date(now).toDateString()) return clockTime(at);
 
-  if (then === new Date(now - 864e5).toDateString()) return `yesterday, ${CLOCK.format(at)}`;
+  if (then === new Date(now - 864e5).toDateString()) return `yesterday, ${clockTime(at)}`;
 
-  return `${DAY.format(at)}, ${CLOCK.format(at)}`;
+  return `${DAY.format(at)}, ${clockTime(at)}`;
 }
 
 export function fullTime(at: number): string {

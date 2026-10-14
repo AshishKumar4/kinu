@@ -30,7 +30,7 @@ function forkLandingOf(search: URLSearchParams): ForkLanding | null {
   return { slate, reaches: reaches.split(",").filter((namespace) => namespace !== "") };
 }
 
-export interface WorkbenchSurfaces {
+interface WorkbenchSurfaces {
   readonly workbench: RefObject<WorkbenchHandle | null>;
   readonly surface: SurfaceKind;
   /** Picks a surface where the inspector already shows. */

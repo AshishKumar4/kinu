@@ -101,7 +101,7 @@ function saveLabel(saving: boolean, saved: boolean): string {
 }
 
 /** The workspace socket's pieces settings read; the page shares the chat's socket rather than opening its own. */
-export interface SettingsSource {
+interface SettingsSource {
   readonly rpc: WorkspaceRpc;
   readonly connectionStatus: ConnectionStatus;
   /** The workspace as a whole, from its opening. */

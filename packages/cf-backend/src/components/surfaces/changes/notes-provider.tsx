@@ -7,7 +7,7 @@ import { AnnotationType } from "@plannotator/ui/types";
 import {
   anchoredText, createPlanAnnotationSaveQueue, type ChangeNote, type ChangeNotesResult, type DiffAnchor, type FileDiff,
 } from "@kinu.run/core";
-import { describeError } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 import { storedType } from "../annotation-type";
 import { NotesContext, type Draft, type Notes } from "./notes";
 
@@ -104,7 +104,7 @@ export function NotesProvider({ baseline, files, store, initial = [], writing, n
   const [failure, setFailure] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const touched = useRef(false);
-  const failed = (...rejection: [unknown]): void => { setFailure(describeError({ cause: rejection[0] })); };
+  const failed = (...rejection: [unknown]): void => { setFailure(readFailureText({ cause: rejection[0] })); };
 
   const saves = useMemo(() => (store === null ? null : createPlanAnnotationSaveQueue<ChangeNote>((next) => settle(Effect.map(store.save(next), (saved) => {
     setFailure(saved.ok ? null : saved.error);

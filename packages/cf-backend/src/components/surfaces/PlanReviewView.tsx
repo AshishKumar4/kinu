@@ -162,7 +162,7 @@ function footerNote(
     : "The agent is preparing the next revision.";
 }
 
-export interface PlanReviewViewProps {
+interface PlanReviewViewProps {
   plan: PlanReview | null;
   rpc: WorkspaceRpc;
   readOnly?: boolean;

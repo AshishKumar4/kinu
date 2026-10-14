@@ -7,7 +7,7 @@ import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, CheckIcon, WarningIc
 import type { McpTransport } from "@kinu.run/core";
 import { addMcpServer, removeMcpServer } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
-import { PluginStatePill } from "@/components/plugins/PluginRow";
+import { Status } from "@/components/ui/Status";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -103,7 +103,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
               <div key={s.id} className="px-4 py-3" data-mcp-server={s.id}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                   <span className="p-row-text font-medium p-text">{s.name}</span>
-                  <PluginStatePill status={mcpServerStatus(s.status)} />
+                  <Status tone={mcpServerStatus(s.status).tone}>{mcpServerStatus(s.status).label}</Status>
                   <div className="ml-auto flex items-center gap-2">
                     {s.authUrl && (
                       <a

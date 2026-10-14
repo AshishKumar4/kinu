@@ -75,7 +75,7 @@ export function InspectedRow({ work, now }: { work: InspectedWork; now: number }
   );
 }
 
-export interface JobCardProps {
+interface JobCardProps {
   job: BackgroundJob;
   grouped?: boolean;
   /** Re-fetch after a mutation; the hook also polls on its own cadence. */

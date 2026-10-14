@@ -81,14 +81,14 @@ const UserDetailSchema = v.object({
   viewer: v.string(),
 });
 
-export type UserDetail = v.InferOutput<typeof UserDetailSchema>;
+type UserDetail = v.InferOutput<typeof UserDetailSchema>;
 
 const ActionAnswerSchema = v.object({
   outcome: v.picklist(['ok', 'denied', 'failed']),
   detail: v.string(),
 });
 
-export type ActionAnswer = v.InferOutput<typeof ActionAnswerSchema>;
+type ActionAnswer = v.InferOutput<typeof ActionAnswerSchema>;
 
 export type { ControlAction, JsonValue };
 
@@ -166,7 +166,7 @@ export function fetchUserDetail(
 }
 
 /** Mirrors the store's filter so both agree on what an absent `userId` means. */
-export interface WorkspaceListQuery {
+interface WorkspaceListQuery {
   cursor?: string | null;
   limit?: number;
   userId?: string;

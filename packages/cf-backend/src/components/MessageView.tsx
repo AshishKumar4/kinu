@@ -19,7 +19,7 @@ import {
   describeToolCall, executorLabel, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
-import { ASK_OWNER_TOOL, changeNotesCard, slatesChanged } from "@kinu.run/core";
+import { ASK_OWNER_TOOL, changeNotesCard, clockTime, slatesChanged } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
@@ -75,10 +75,6 @@ export function eventTurnKey(message: UIMessage): string | null {
   return JSON.stringify([kind, rowText(message)]);
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
 function FilePartView({ part }: { part: FileUIPart }) {
   return part.mediaType.startsWith("image/")
     ? <img src={part.url} alt={part.filename ?? "image"} className="max-h-48 max-w-full rounded-lg border p-border" />
@@ -91,7 +87,7 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 
   if (isNaN(d.getTime())) return null;
 
-  return <span className="p-annotation p-text-3 mt-1 block">{formatTime(d)}</span>;
+  return <span className="p-annotation p-text-3 mt-1 block">{clockTime(d)}</span>;
 }
 
 // A settled call takes a line's gap, prose and grouped cards a section's. The block carries

@@ -34,7 +34,7 @@ export interface RosterFilter {
   readonly q?: string;
 }
 
-export interface RosterPages {
+interface RosterPages {
   readonly entries: readonly RosterEntry[];
   readonly total: number;
   readonly counts: RosterCounts;
@@ -207,7 +207,7 @@ interface RosterSocket extends EventTarget {
 }
 
 /** Null: reads only. */
-export type RosterLive = (() => RosterSocket) | null;
+type RosterLive = (() => RosterSocket) | null;
 
 function openRosterSocket(): RosterSocket {
   return new WebSocket(`${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${ROSTER_SOCKET_ROUTE}`);

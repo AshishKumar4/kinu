@@ -47,7 +47,7 @@ const PENDING_ICON = {
   plan_review: NotePencilIcon,
 } satisfies Record<PendingActionKind, typeof ClockIcon>;
 
-export interface WorkTabProps {
+interface WorkTabProps {
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   /** The column's one read of plans and tasks. */
   work: WorkspaceWorkRead;
@@ -141,7 +141,7 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
   );
 }
 
-export interface WorkTaskRow {
+interface WorkTaskRow {
   task: AgentTaskTree;
   owner: WorkspaceWorkOwner;
 }

@@ -25,7 +25,8 @@ import { useFileDrop } from "@/hooks/use-file-drop";
 import { useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
 import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
 import { touchWorkspace } from "@/lib/user-api";
-import { describeError, useAsyncResource } from "@/hooks/use-async-resource";
+import { useAsyncResource } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { TurnRevert } from "@/components/RevertTurnDialog";
@@ -648,7 +649,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   }, []);
 
   const sideFailed = useCallback((source: SideSource) => (failed: Cause.Cause<unknown>) => Effect.sync(() => {
-    reportSide(source, describeError({ cause: Cause.squash(failed) }));
+    reportSide(source, readFailureText({ cause: Cause.squash(failed) }));
   }), [reportSide]);
 
   const reviewed = useReviewedPlan(subName, { plan: state.activePlan, rpc: state.rpc });

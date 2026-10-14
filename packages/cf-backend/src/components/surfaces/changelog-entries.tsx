@@ -21,7 +21,7 @@ import {
 import { timeAgo, type StagedSkillView } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
-export interface ChangelogView { entries: ChangelogEntryView[]; unseenCount: number; seenAt: number }
+interface ChangelogView { entries: ChangelogEntryView[]; unseenCount: number; seenAt: number }
 
 const KIND_ICON = {
   scaffold: GitBranchIcon,
@@ -190,7 +190,7 @@ function EntryScaffoldDiff({ rpc, version, shown }: { rpc: WorkspaceRpc; version
   return <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={version} readAgain={0} /></div>;
 }
 
-export interface ChangelogEntryCardProps {
+interface ChangelogEntryCardProps {
   entry: ChangelogEntryView;
   grouped?: boolean;
   seenAt: number;

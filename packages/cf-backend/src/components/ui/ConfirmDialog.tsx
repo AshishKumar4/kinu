@@ -62,7 +62,7 @@ export function ConfirmDialog({ title, icon, children, action, failed, onConfirm
 }
 
 /** What a confirmation asks, and the step it runs once confirmed. */
-export interface Confirmation {
+interface Confirmation {
   readonly title: string;
   readonly body: string;
   readonly action: string;
