@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { GitBranchIcon, GitMergeIcon, GitPullRequestIcon, CircleDashedIcon, CheckCircleIcon, XCircleIcon, RecordIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { shortAge, type PanelAgent, type WorkspaceGitHubView } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -31,14 +31,8 @@ export function GitHubSection({ rpc, readMoves, agents }: { rpc: WorkspaceRpc; r
 
   const { resource, reload } = useAsyncResource(load);
   const github = lastValue(resource);
-  const moves = readMoves.getWorkspaceGitHub ?? 0;
-  const seen = useRef(moves);
 
-  useEffect(() => {
-    if (seen.current === moves) return;
-    seen.current = moves;
-    reload();
-  }, [moves, reload]);
+  useReloadWhenMoved(readMoves.getWorkspaceGitHub ?? 0, reload);
 
   if (resource.status === "error" && github === null) return <LoadFailure what="this workspace's GitHub work" message={resource.message} onRetry={reload} />;
 

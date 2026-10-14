@@ -1,9 +1,9 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon } from "@phosphor-icons/react";
 import { scoreInterval, type QualityDay } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
 import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -111,13 +111,8 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
 
   const { resource, reload } = useAsyncResource(load);
   const read = lastValue(resource);
-  const readMoved = useRef(moved);
 
-  useEffect(() => {
-    if (readMoved.current === moved) return;
-    readMoved.current = moved;
-    reload();
-  }, [moved, reload]);
+  useReloadWhenMoved(moved, reload);
 
   if (read === null) {
     if (resource.status === "error") return <LoadFailure what="how it's doing" message={resource.message} onRetry={reload} />;

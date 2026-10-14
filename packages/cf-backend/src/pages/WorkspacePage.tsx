@@ -584,6 +584,7 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
   }
 
   return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
+    plan={state.activePlan} arrival={state.workspacePlanArrival}
     lineage={state.status?.forkLineage ?? null} agents={agents} open={open} />;
 }
 

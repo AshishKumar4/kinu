@@ -11,7 +11,7 @@ import {
 import type { ChangelogEntryKind } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { diagnostics, showing, toKinuError, detach, settle } from "@kinu.run/core/obs";
-import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
+import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import { ScaffoldVersionDiff } from "./ScaffoldLineage";
 import {
   CodeBlock,
@@ -58,13 +58,8 @@ export function useChangelog(rpc: WorkspaceRpc, onSeen?: () => void, moved = 0) 
 
   const { resource, reload } = useAsyncResource(load);
   const view = lastValue(resource);
-  const readMoved = useRef(moved);
 
-  useEffect(() => {
-    if (readMoved.current === moved) return;
-    readMoved.current = moved;
-    reload();
-  }, [moved, reload]);
+  useReloadWhenMoved(moved, reload);
 
   // Freshness is judged against the marker pinned on first read; later reads return a marker newer than every entry.
   const openedSeenAt = useRef<number | null>(null);
