@@ -13,7 +13,8 @@ import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
-import { DOT_BY_TONE, PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
+import { PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
+import { StatusDot } from "@/components/ui/Status";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 
@@ -31,11 +32,6 @@ export function presetBrand(presetId: string | null): BrandName | undefined {
 }
 
 /** A preset card's own words for a server's state; the tone is every view's (`mcpServerStatus`). */
-const PRESET_WORDS = {
-  ready: 'Connected', connected: 'Connected', authenticating: 'Needs sign-in', failed: 'Failed',
-  connecting: 'Connecting', discovering: 'Connecting', unknown: 'Unknown',
-} satisfies Record<McpServerSummary['status'], string>;
-
 function PresetMenu({ preset, status, onRemove }: {
   preset: McpPreset;
   status: McpServerSummary['status'];
@@ -53,8 +49,8 @@ function PresetMenu({ preset, status, onRemove }: {
       <button type="button" data-plugin-menu aria-haspopup="menu" aria-expanded={open}
         aria-label={`${preset.title} options`} onClick={() => setOpen((value) => !value)}
         className={`${PLUGIN_PILL} transition-colors hover:bg-[var(--c-elevated)] hover:p-text`}>
-        <span className={`size-1.5 shrink-0 rounded-full ${DOT_BY_TONE[mcpServerStatus(status).tone]}`} />
-        {PRESET_WORDS[status]}
+        <StatusDot tone={mcpServerStatus(status).tone} />
+        {mcpServerStatus(status).label}
         <CaretDownIcon size={9} />
       </button>
       {open && (
@@ -160,7 +156,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   return (
     <>
     {dialog}
-    <PluginRow source={preset.id} state={server === undefined ? 'Not added' : PRESET_WORDS[server.status]}
+    <PluginRow source={preset.id} state={server === undefined ? 'Not added' : mcpServerStatus(server.status).label}
       name={preset.title} description={preset.description}
       tile={<BrandMark brand={brand} size={22} />}
       trailing={trailing}

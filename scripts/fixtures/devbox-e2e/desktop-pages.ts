@@ -1,5 +1,3 @@
-import { inflateSync } from 'node:zlib';
-
 /**
  * Pages an agent drives on a real box's desktop (D89), each naming what it saw in its title, which the window manager
  * shows and `xdotool getwindowname` reads back. Each fills the screen, so a point lands on its target whatever bar the
@@ -32,43 +30,50 @@ export const RANGE = PAGE('ready range', '<input id=r type=range min=0 max=100 v
 
 /** How long a key was held: from its first press to its release, as the page saw them. */
 export const HOLD = PAGE('ready hold', '<p>hold</p>', `let down=0;
-addEventListener('keydown',(e)=>{if(!e.repeat)down=performance.now();});
+addEventListener('keydown',(e)=>{if(!e.repeat){down=performance.now();say('down '+e.key);}});
 addEventListener('keyup',(e)=>say('held '+e.key+' '+Math.round(performance.now()-down)));`);
+
+/** The keys held down, by where they are on the keyboard, as the page sees them; `released` once all are up. */
+export const CHORD = PAGE('ready chord', '<p>chord</p>', `const held=new Set();
+addEventListener('keydown',(e)=>{e.preventDefault();held.add(e.code);say('held '+[...held].sort().join(' '));});
+addEventListener('keyup',(e)=>{e.preventDefault();held.delete(e.code);if(held.size===0)say('released');});`);
 
 /** A large count and a bar that change every 100 ms, so each frame of a watch shows something new. */
 export const TICKER = PAGE('ready ticker', '<div id=n style="font:bold 200px sans-serif;padding:120px 300px"></div><div id=b style="position:absolute;top:600px;height:60px;background:#36c"></div>', `
 let k=0;const n=document.getElementById('n'),b=document.getElementById('b');
 setInterval(()=>{k+=1;n.textContent=String(k);b.style.width=(k*13%1280)+'px';},100);`);
 
-/** A PNG an agent was answered, read: its size, and how many of its `cols`×`rows` tiles differ from every other. */
-export interface Sheet {
-  readonly size: [number, number];
-  distinct(cols: number, rows: number): number;
-}
-
-export function sheet(url: string): Sheet {
+/** A PNG data URL's size, from its header. */
+export function sizeOf(url: string): [number, number] {
   const png = Buffer.from(url.slice(url.indexOf(',') + 1), 'base64');
-  const width = png.readUInt32BE(16);
-  const height = png.readUInt32BE(20);
 
-  return {
-    size: [width, height],
-    distinct(cols, rows) {
-      // The box's own sheet: 8-bit RGB, no filter, one IDAT chunk; a screenshot (scrot's) is not read this way.
-      const raw = inflateSync(png.subarray(41, 41 + png.readUInt32BE(33)));
-      const stride = 1 + width * 3;
-      const [tileW, tileH] = [width / cols, height / rows];
-
-      const tiles = Array.from({ length: cols * rows }, (_, at) => {
-        const [x, y] = [(at % cols) * tileW, Math.floor(at / cols) * tileH];
-
-        return Array.from({ length: tileH }, (__, line) => raw.subarray((y + line) * stride + 1 + x * 3, (y + line) * stride + 1 + (x + tileW) * 3).toString('base64')).join('');
-      });
-
-      return new Set(tiles).size;
-    },
-  };
+  return [png.readUInt32BE(16), png.readUInt32BE(20)];
 }
+
+/** On the box, with the image's own Pillow: how many of a PNG's `cols`×`rows` tiles differ from every other. */
+export const DISTINCT_PY = `import sys
+from PIL import Image
+image, cols, rows = Image.open(sys.argv[1]).convert('RGB'), int(sys.argv[2]), int(sys.argv[3])
+w, h = image.width // cols, image.height // rows
+print(len({image.crop((c * w, r * h, (c + 1) * w, (r + 1) * h)).tobytes() for r in range(rows) for c in range(cols)}))
+`;
+
+/** On the box, the X server's own answer to what is down: its keys' keycodes (XQueryKeymap) and its pointer's buttons
+ *  (XQueryPointer's mask), as `keys … buttons …`; read only. */
+export const DOWN_PY = `import ctypes
+x = ctypes.cdll.LoadLibrary('libX11.so.6')
+x.XOpenDisplay.restype = ctypes.c_void_p
+x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+x.XDefaultRootWindow.restype = ctypes.c_ulong
+display = ctypes.c_void_p(x.XOpenDisplay(b':0'))
+keymap = ctypes.create_string_buffer(32)
+x.XQueryKeymap(display, keymap)
+keys = [at * 8 + bit for at, byte in enumerate(keymap.raw) for bit in range(8) if byte >> bit & 1]
+root, child, mask = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_uint()
+where = [ctypes.c_int() for _ in range(4)]
+x.XQueryPointer(display, ctypes.c_ulong(x.XDefaultRootWindow(display)), ctypes.byref(root), ctypes.byref(child), *[ctypes.byref(c) for c in where], ctypes.byref(mask))
+print('keys', *keys, 'buttons', *[button for button in range(1, 6) if mask.value >> (7 + button) & 1])
+`;
 
 /** The grid's cells' centres on a 1280-wide screen, as points safe under a bar of up to 100 px above the page. */
 export const GRID_POINTS: ReadonlyArray<readonly [number, number]> = [150, 395, 645].flatMap((y) => [213, 640, 1067].map((x) => [x, y] as const));

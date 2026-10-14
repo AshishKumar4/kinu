@@ -21,7 +21,7 @@ import {
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
-import { initSlateBuildTable } from '@kinu.run/core/slates';
+import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -191,7 +191,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs, filesystem: this.filesystem });
 
     this.host = new SlateHost({
-      ctx, workspace: ctx.id.name ?? ctx.id.toString(),
+      ctx, workspace: ctx.id.name ?? ctx.id.toString(), builds: new SlateBuilds(ctx.storage.sql),
       session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
       facetManager: async () => facets,
       bundler: (vfs) => supervisorEsbuildService(ctx, env, vfs),

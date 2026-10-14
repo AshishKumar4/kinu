@@ -1,10 +1,9 @@
-import { markStoreChanged } from '@kinu.run/core';
 import { exports } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateController, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateCallerKey, slateStorageCall,
-  type SlateAppCall, type SlateApps, type SlateCaller, type SlateLaunch,
+  type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
 } from '@kinu.run/core/slates';
 import {
   ingressAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
@@ -40,6 +39,8 @@ export interface SlateDispatchContext {
 export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   readonly ctx: DurableObjectState;
   readonly workspace: string;
+  /** The object's slate build records, which its owner reads and moves on a file change before any host is loaded. */
+  readonly builds: SlateBuilds;
   /** Runs as the caller: its own providers, role reach, read models and gates. */
   dispatch(caller: SlateCaller, route: SlateCapabilityRoute, context: SlateDispatchContext): Promise<SlateSurfaceValue>;
   /** The actor whose browser sessions the caller's slate drives, as that actor's eval programs do; null for a share's
@@ -112,7 +113,7 @@ export class SlateHost {
     initEphemeralSlateTable((ddl) => { sql.exec(ddl); });
     initSlateUsageTable((ddl) => { sql.exec(ddl); });
     this.controller = new SlateController({
-      workspace: deps.workspace, sql, transaction: (body) => deps.ctx.storage.transactionSync(body),
+      workspace: deps.workspace, sql, builds: deps.builds, transaction: (body) => deps.ctx.storage.transactionSync(body),
       session: deps.session, apps: deps.apps,
       resolve: (cred, id) => this.slateSources.resolve(cred, id),
       digest: (cred, id, source) => this.slateSources.digest(cred, id, source),
@@ -400,13 +401,5 @@ export class SlateHost {
     }
 
     return await this.resident.launch({ owner: id, root: source.root, bindings, globalOutbound, app: app === null ? null : { port: app.port } }, image);
-  }
-
-  filesChanged(paths: readonly string[]): string[] {
-    const ids = this.controller.filesChanged(paths);
-
-    if (ids.length > 0) markStoreChanged(this.deps.ctx.storage.sql);
-
-    return ids;
   }
 }

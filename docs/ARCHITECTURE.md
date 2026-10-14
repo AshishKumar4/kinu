@@ -626,8 +626,12 @@ Two policies apply to every provider:
   turn's model fallback decides what follows. It treats 429
   and 529 as rate limits always, and a 503 only when the status text,
   `x-error-code`, or body reads as overload, capacity, or too many requests. An
-  unreadable 503 propagates. Without `Retry-After` it draws full-jitter waits
-  under a ceiling doubling from 2 s to a 60 s cap (both unmeasured). Bodies that
+  unreadable 503 propagates. Workers AI's `3021` per-minute refusal states its wait
+  in words, not a header (623 of 623 recorded 429s, 2026-09-30): it is a stated
+  minute that parks the refused model, not the lane, as Workers AI limits the
+  models Kinu runs per account, per model; the next model of a chain on the same
+  account answers at once. Otherwise it draws full-jitter
+  waits under a ceiling doubling from 2 s to a 60 s cap (both unmeasured). Bodies that
   cannot be replayed pass untouched. Beside the retry, `ProviderPacer`
   (`pacing.ts`) holds each request to a host behind the cooldown a sibling
   declared. Waits are declared before they are taken, so siblings join one

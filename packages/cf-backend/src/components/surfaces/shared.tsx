@@ -43,7 +43,8 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
 }
 
 
-export function CodeBlock({ children, className }: { children: string; className?: string }) {
+/** `wrap`: long lines wrap instead of scrolling, for data read rather than code copied (a tool's arguments). */
+export function CodeBlock({ children, className, wrap = false }: { children: string; className?: string; wrap?: boolean }) {
   const { status, copy } = useCopy();
   const code = children.replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
@@ -59,7 +60,7 @@ export function CodeBlock({ children, className }: { children: string; className
     ? resource.value.html : null;
 
   return (
-    <div className="p-code my-2 rounded-lg overflow-hidden">
+    <div className={`p-code my-2 rounded-lg overflow-hidden${wrap ? " p-code-wrap" : ""}`}>
       <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 p-annotation">
         <span className="truncate font-mono">{lang || "code"}</span>
         <button onClick={() => copy(code)} type="button"

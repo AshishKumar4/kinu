@@ -8,7 +8,6 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
-import { SLATES_ROOT } from '../vfs/workspace-path';
 import { ephemeralSlateAddress } from './ui-blocks';
 import { slateImage, type SlateBuildFailure, type SlateBuilds, type SlateImage } from './builds';
 import { slateAuthority } from './authority';
@@ -61,8 +60,6 @@ export interface RunningSlate<Source, Process> {
 
 /** Answers' pages that keep a process and a reservation at once; drawing another retires the least recently drawn. */
 const EPHEMERAL_SLATES_KEPT = 16;
-
-const SLATE_FILE = new RegExp(`^${SLATES_ROOT}/([^/]+)(?:/|$)`);
 
 /**
  * The key a slate's process is held under: one per caller for a directory slate, and one per answer's page, whose
@@ -130,16 +127,13 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
    */
   filesChanged(paths: readonly string[]): string[] {
     const absolute = paths.map((path) => (path.startsWith('/') ? path : `/${path}`));
-    const own = absolute.flatMap((path) => SLATE_FILE.exec(path)?.[1] ?? []);
-    const ids = new Set([...own, ...this.ports.builds.moved(absolute)]);
+    const ids = this.ports.builds.filesChanged(absolute);
 
     for (const changed of this.building) for (const path of absolute) changed.add(path);
 
     for (const id of ids) this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
 
-    this.ports.builds.changed([...new Set(own)]);
-
-    return [...ids];
+    return ids;
   }
 
   private async boot(caller: SlateCaller, id: string, held: string, resolved: Source): Promise<RunningSlate<Source, Process>> {

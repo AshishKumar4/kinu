@@ -53,10 +53,10 @@ export class KinuDevbox extends Devbox<Env> {
   protected override get store(): string { return 'BACKUP_BUCKET'; }
 
   /**
-   * The workspace's own name, as a host label (D91, D93): read from the workspace at each start and each configure, so a
-   * rename shows at its next one and nothing here keeps a copy. The slug's label where the name is unread.
+   * The workspace's own name, as a host label (D91, D96): read from the workspace at each start and each configure, so a
+   * rename names the box at its next one and nothing here keeps a copy. The slug's label where the name is unread.
    */
-  protected override async shownName(): Promise<string | undefined> {
+  protected override async hostname(): Promise<string | undefined> {
     const workspaceName = (await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY))?.workspaceName;
 
     if (workspaceName === undefined) return undefined;

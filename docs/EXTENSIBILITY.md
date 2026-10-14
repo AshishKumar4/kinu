@@ -327,8 +327,9 @@ truncates useful "when to use" guidance.
   Workers AI, AI Gateway, codex and opencode. On 429, 529 or overload-shaped
   503 it honors a `Retry-After` of 60 s or less; a longer one ends the call as a
   spent allowance naming the reset time (`maxRetryDelayMs`, after oh-my-pi).
-  Otherwise it waits a full-jitter draw under a ceiling that doubles from 2 s to
-  60 s. It retries at most the owner's count (`ProfileCatalog.retries`,
+  Workers AI's per-minute refusal (`3021`) states a minute in its words, waited by
+  the refused model alone. Otherwise it waits a full-jitter draw under a ceiling that doubles
+  from 2 s to 60 s. It retries at most the owner's count (`ProfileCatalog.retries`,
   default 3), and not at all while the turn's fallback chain has an entry left:
   that model hands over at once and cools down (`fallback-cooldown.ts`).
   Non-replayable bodies pass through untouched. The SDK's own transport retry

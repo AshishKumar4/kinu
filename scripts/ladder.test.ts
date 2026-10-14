@@ -24,10 +24,10 @@ import { basename, join, relative, resolve } from 'node:path';
 import { childEnv, git, initRepo, runToExit, scratchDir, spawnTest } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
+  CI_EXEMPT, GATE_DEADLINE_SECONDS, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, onArmada, secretGroup,
+  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, onArmada, secretGroup,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -39,9 +39,11 @@ import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
 import { armadaVerdict, ciVerdictRow, readFileTimings, readHostedCosts, withRunnerCosts } from './ci-verdicts';
+import { KILL_AFTER_SECONDS } from './deadline';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
+import { cliStages } from './test-cli';
 
 const root = resolve(import.meta.dir, '..');
 
@@ -109,6 +111,7 @@ const AFTER_CI_SUITES = {
   'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
   'tests/browser/live-app-own-server.test.ts': 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
   'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
+  'tests/browser/live-app-provider-wait.test.ts': 'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts',
   'tests/browser/live-app-sleep.test.ts': 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
   'tests/browser/live-app-turns.test.ts': 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
   'tests/browser/product-flows.test.ts': 'bash scripts/product-flows-tier.sh',
@@ -430,6 +433,7 @@ describe('the ladder measures something', () => {
       'Live app in a browser: a page that loses the turn',
       'Live app in a browser: a running turn',
       'Live app in a browser: a slate that serves its own page, in its answer',
+      'Live app in a browser: a wait on the provider',
       'Live app in a browser: the inspector column\'s layout',
       'Live app in a browser: the root answers under the dev stack',
       'Product flows in a browser, on the deployment',
@@ -564,9 +568,9 @@ describe('the ladder measures something', () => {
     // monotonicity- and reachability-checked like every bun suite.
     expect(claims('bun run test:workerd', tracked).length).toBeGreaterThan(0);
 
-    // The four rows partition the script's set: no workerd file is in two
+    // The five rows partition the script's set: no workerd file is in two
     // rows or in none.
-    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
+    const rows = ['bun run test:workerd:cf-main', 'bun run test:workerd:cf-wide', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
       .map((run) => claims(run, tracked));
 
     expect(rows.every((files) => files.length > 0)).toBe(true);
@@ -703,6 +707,16 @@ describe('a deploy\'s armada rows', () => {
       ],
       reasons: true, atDeploy: true, local: here.length,
     });
+  });
+
+  // 2026-10-08 to 2026-10-14: the first-run row's 1800 s bound equalled armada's, which killed 10 of its 21 runs first,
+  // so the tier's own report of the hung case never ran.
+  test('end a silent run themselves, before armada ends its task', () => {
+    const config = v.parse(v.object({ task: v.object({ timeout: v.number() }) }), JSON.parse(readFileSync(resolve(root, '.armada.json'), 'utf8')));
+    const rows = LADDER.filter(onArmada);
+
+    expect(rows.filter((gate) => (gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS) + KILL_AFTER_SECONDS >= config.task.timeout).map((gate) => gate.label))
+      .toEqual([]);
   });
 });
 
@@ -1352,16 +1366,28 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(reportCIVerdicts({ sha, part: 'all', rows }, 'armada verdict', '')).toBe(false);
   });
 
-  test('CI runs the hammer six times, each a unit of its own, and leaves no CI source work in the deploy', () => {
-    const hammer = ciUnits().filter((unit) => unit.gate.phase === 'hammer').map((unit) => unit.gate.run);
+  test('CI runs the hammer six times, each run in parts that cover the suite once, and leaves no CI source work in the deploy', () => {
+    const hammer = ciUnits().filter((unit) => unit.gate.phase === 'hammer').map((unit) => unit.gate.run.split(' '));
+    const suite = claims(LADDER.find((gate) => gate.label === HAMMER_ROW_LABEL)?.run ?? '', tracked);
+    const runs = Array.from({ length: HAMMER_REPEATS }, (_, index) => hammer.filter((argv) => argv[2] === '--run=' + String(index + 1)));
 
-    expect(hammer).toEqual(Array.from({ length: HAMMER_REPEATS }, (_, index) => 'bun scripts/hammer.ts --run=' + String(index + 1)));
+    expect(runs.map((parts) => ({ parts: parts.length, files: parts.flatMap((argv) => argv.slice(3)).sort() })))
+      .toEqual(Array.from({ length: HAMMER_REPEATS }, () => ({ parts: HAMMER_PARTS, files: [...suite].sort() })));
     const local = localDeployGates(deployOrder());
     const canonical = new Set(tierRun('ci').map((gate) => gate.run));
 
     expect(local.filter((gate) => gate.phase !== 'preflight').some((gate) => canonical.has(gate.run))).toBe(false);
     expect(local.some((gate) => gate.run === 'bun run gate:first-run')).toBe(true);
     expect(local.some((gate) => gate.run === 'bash scripts/eval-pass-tier.sh')).toBe(true);
+  });
+
+  test('CI runs the CLI suite as its two parts, which between them hold every file it claims once', () => {
+    const { isolated, subprocessHeavy, parallel } = cliStages(tracked);
+    const units = ciUnits().filter((unit) => unit.gate.label.startsWith('Full production CLI suite')).map((unit) => unit.gate.run);
+    const files = [...isolated, ...subprocessHeavy, ...parallel];
+
+    expect({ units, files: [...files].sort(), once: new Set(files).size === files.length })
+      .toEqual({ units: ['bun scripts/test-cli.ts --part=serial', 'bun scripts/test-cli.ts --part=parallel'], files: claims('bun run test:cli', tracked).sort(), once: true });
   });
 
   test('a red live run provides resource admission but remains a red correctness verdict', () => {

@@ -70,8 +70,8 @@ async function run(): Promise<Scenarios> {
       await page.evaluateOnNewDocument(() => { localStorage.clear(); });
       await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
       // The signal that React has mounted the surface, not a guessed duration:
-      // `.p-card` is the class every scenario below asserts against.
-      await page.waitForSelector('.p-card');
+      // `.p-group`, the shell's cards of rows, is the class every scenario below asserts against.
+      await page.waitForSelector('.p-group');
 
       return page;
     };
@@ -137,9 +137,9 @@ async function run(): Promise<Scenarios> {
       // Verbatim shape of the shipped bug: Tailwind's radius scale mapped onto
       // `calc(var(--radius) …)` with `--radius` declared nowhere at this scope.
       // Valid CSS; the page renders; only the cascade knows.
-      seededRadius: await on('.p-card { border-radius: calc(var(--radius) - 2px); }'),
+      seededRadius: await on('.p-group { border-radius: calc(var(--radius) - 2px); }'),
       cutRoleToken: await on(null, '--r-card'),
-      withFallback: await on('.p-card { outline-width: var(--never-declared-anywhere, 1px); }'),
+      withFallback: await on('.p-group { outline-width: var(--never-declared-anywhere, 1px); }'),
       lightMode: await throughTheControls('light'),
     };
   });
@@ -166,7 +166,7 @@ describe('computed-style gate', () => {
     );
 
     expect(hit.property).toBe('border-radius');
-    expect(hit.selector).toBe('.p-card');
+    expect(hit.selector).toBe('.p-group');
   });
 
   test('a role token withdrawn at :root is reported at the class that reads it', () => {

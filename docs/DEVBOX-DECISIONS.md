@@ -4654,30 +4654,39 @@ frames. The container tier's desktop check reads the glow above the panel as wel
 D89. An agent drives the desktop the owner watches, one action at a time (2026-10-14, issue #100). The owner asked an
 agent to use the computer while its desktop was open in the Env panel; the agent found no `DISPLAY`, installed Xvfb,
 started a second screen nobody could see, and could not read the PNG it took of it. Now the box answers
-`desktop({ driver, action })`, which `computer.screenshot()`, `click`, `type`, `key`, `scroll`, `move` and `drag`
-send one action at a time. Each call first runs the desktop check, the start script that the owner's socket route
+`desktop({ driver, action, execId })`, which `computer.screenshot()`, `watch`, `click`, `type`, `key`, `scroll`,
+`move` and `drag` send one action at a time. Each call first runs the desktop check, the start script that the owner's socket route
 also runs, single-flight, so a look and a pane opened at once share one session; the check brings back any part of
 the session that died and ends by printing X's own geometry. The session's files and its background are written only
-by a run that starts X, so a check on a running desktop costs a few `pgrep`s. It is bounded at 60 s, a few times a fresh X's start:
-an X that stays alive and never opens its port would otherwise hold every later desktop call, and the box's rest,
-behind it. A point off that screen is refused before any input.
-One agent drives at a time: an agent takes the screen by looking once no other agent has called in 30 s, input is
-taken only from the agent holding it, and a screen X started afresh is nobody's, so every action lands on a screen
-its agent saw. The owner is not a driver. Each action is one xdotool invocation bounded at 5 s, with no
-`mousemove --sync`, which waits about 15 s when the pointer is already at the point; what a click holds and a drag
-presses is released whether or not the run ends cleanly. It runs under a UTF-8 locale: on a real box, under the C
+by a run that starts X, so a check on a running desktop costs a few `pgrep`s. No clock bounds it or any action: a
+call whose program is stopped waits no longer, for the check or for its turn, and a check nobody waits on any more is
+ended by `killExec`, so an X that stays alive and never opens its port holds no call for good. The call that runs the
+check is not interrupted from taking it to letting it go: on a real box a look stopped as it began left the check
+owned by nobody, and the next look waited on it for 270 s, until the edge cancelled it. A point off that screen
+is refused before any input.
+One agent drives at a time: an agent takes the screen by looking when nobody holds it, and holds it until its turns
+end, it is stopped, or X starts afresh, however long it thinks between looks. The workspace lets it go as the agent's
+last open turn closes, or as it is stopped; it asks the box only for an agent that drove there since the box last let
+it go, so a turn that never touched the desktop calls no box (D56). Input is taken only from the agent holding the
+screen, so every action lands on a screen its agent saw. The owner is not a driver. Each action is one run on D69's
+canonical exec path, in its own group under the caller's `execId`: the program's stop is the caller's `killExec`, which
+ends that group, and the call settles only once its process has gone. A run that did not end cleanly, killed or
+failed, may be cut between any press and its release: a chord's keys, one click of three, a character of a long text, a
+drag's button. So after it, whatever X holds down is let up, read from X itself (XQueryKeymap, and XQueryPointer's
+button mask) and released through XTEST; no action keeps a list of its own to miss one. A key or button the owner holds
+at that moment is let up too. A run that exits cleanly let up all it pressed itself, and asks for nothing. No `mousemove --sync`, which waits about 15 s
+when the pointer is already at the point. It runs under a UTF-8 locale: on a real box, under the C
 locale the box starts in, `xdotool type -- "aüb"` typed "a" and stopped at an invalid multi-byte sequence. Under
 UTF-8 it typed "ab": Chromium dropped the ü, whose key xdotool binds for the moment of the press, at 12 ms a
 character, and took it at 150 ms. So a character past ASCII is never typed: core sends it as its own key,
 `key U00FC`, which reached Chromium every time. The capture is `scrot -p`, read back as bytes in the same
 run. A watch takes `scrot -p -t 50` at even times over its window, at most 10 s, and tiles the half-size
-thumbnails into one PNG, two to a row up to four frames and four to a row up to eight; a small Python program does
-it, as the image carries Python and no image tool. Measured on two vision models, four half-size frames in one sheet
+thumbnails into one PNG, two to a row up to four frames and four to a row up to eight; Pillow (python3-pil, which the
+tools tarball carries for the wallpaper too) does the tiling. Measured on two vision models, four half-size frames in one sheet
 cost what one screenshot does and read motion, a large word and 11 px text as well as four separate screenshots; eight
-at a third of the size lost 11 px text on both. A held key is `keydown`, a wait, `keyup` in one run, at most 10 s,
-with `keyup` again however the run ends; an action's bound is its own wait plus 5 s. Both run on the container runtime's exec directly rather than D87's `exec`: they are the box's own fixed
-commands, not a caller's; the capture is binary, which `exec` decodes as text; and xdotool's argv carries typed text
-without a shell to quote it. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
+at a third of the size lost 11 px text on both. A held key is `keydown`, a wait, `keyup` in one run, at most 10 s;
+stopped mid-hold, its group is ended and what is down is let up at once. The canonical path takes an argv as well as a command string, so xdotool's argv carries
+typed text without a shell to quote it, and it reads a capture's output as bytes. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
 screenshot 800 high to 1228×768 at their default detail, and none Kinu serves resizes one 768 high, so an agent's
 points are the screen's own pixels. Every process the box starts gets `DISPLAY=:0`, so a window a program opens
 lands on that screen; the environment is `CONTAINER_ENV`, renamed from `CONTAINER_TRUST_ENV` because it no longer
@@ -4702,7 +4711,15 @@ container's restart (a resize, D50; a rest) ends the tmux server and every sessi
 command (D87); nothing reopens them from an alarm: the next attach to a session opens a fresh shell in its kept folder
 under its name. Closing a session ends its tmux session and forgets it; the box always keeps one, so closing the last
 leaves a fresh `shell`. Not measured: bash's `HISTCONTROL=ignoredups` numbers a repeated command once, so its second
-run leaves the earlier mark. The product flow `computer-sessions` reads it all on a deployment.
+run leaves the earlier mark. The product flow `computer-sessions` reads it all on a deployment. Amended 2026-10-14 (P0): staging `7591e6fec` read every session closed, so the
+computer-sessions flow waited forever for its folder and port. On a platform box, tmux prints a tab in a format's output
+as `_` (`P_shell_/workspace_bash___`, read with `cat -A`), where the tmux the unit harness stood in for kept it; every
+`P` row was one field and no row was a session. The read's fields are now space-separated and tmux writes each value
+with `#{q:…}`, which puts a backslash before every space, backslash and other special character, so any folder or
+command reads back whole (a reserved marker was tried first and dropped: a folder holding it lost its row). The
+harness answers the read from fixtures, so it could not see this; the container tier's `terminal-sessions` step runs
+a server in a session's own folder, named with a space, quotes, a backslash and a dollar, on a real box and reads the
+session back. A second cause hid behind the first: the server never started (D96).
 
 D91. The computer answers to its workspace's name, not to "computer" (2026-10-13; reverses D83's fixed name). The
 owner, on `root@computer`: "something nice and sensible, workspace related (maybe workspace name?)". `KinuDevbox`
@@ -4804,6 +4821,42 @@ told to ask the person, or to answer through the session with `exec` when the an
 ends its session; closing its session stops the job, so a restart does not bring it back. The container tier's
 `agent-job` step runs it on a real box: the prompt read, the session needing input, the answer typed through tmux, the
 job completed and its log holding what it wrote.
+
+D96. The box's kernel answers to its workspace's name again, and the box resolves that name itself (2026-10-14, P0;
+reverses D93's kernel half, which kept the platform's name). D93 measured a renamed kernel's own lookup at ~400 ms to
+fd00::119:1, which is not the box, and kept the platform's name. What D93 did not measure is that name itself: a
+64-character container id, one character over a DNS label's 63. Python's `socket.getfqdn()` raises on it ("encoding
+with 'idna' codec failed"), so `python3 -m http.server`, which calls it as it binds, died at once on every computer,
+production included; staging `7591e6fec`'s computer-sessions flow waited forever for its server's port. D93's
+measurement rerun under both shapes, then the candidates, on one platform box (Debian 13, addresses 10.0.0.1 and
+fd00::11), with `getent hosts`, Python's `getaddrinfo(gethostname())` and `getfqdn()`, `python3 -m http.server`, and
+node's `dns.lookup(os.hostname())`:
+
+| shape | self-lookup | getfqdn | http.server | node |
+|---|---|---|---|---|
+| D93: the platform's name | 4 ms, nothing / UnicodeEncodeError | UnicodeEncodeError | dies | ENOTFOUND |
+| renamed, nothing else (D91/D92) | 79 ms, nothing / gaierror | the name | serves | ENOTFOUND |
+| renamed, a hosts file bind-mounted over the read-only /etc/hosts | 4 ms, 127.0.1.1 | the name | serves | 127.0.1.1 |
+| renamed, `options no-tld-query` | fails at once | the name | serves | ENOTFOUND |
+| renamed, libnss-myhostname (`hosts: files myhostname dns`) | 3 ms, 10.0.0.1, 127.0.0.1, fd00::11, fe80 | the name | serves | the same four |
+
+External names (example.com) answered in 5-9 ms in every shape; the renamed lookup with nothing else answered 79 ms
+here against D93's ~400, as the platform's DNS varies. The last shape is the one: the name resolves on the box, at
+once, to the box's own addresses, with nothing written over a platform mount. The image carries libnss-myhostname,
+whose package adds `myhostname` to nsswitch.conf; `KinuDevbox` names the kernel with the workspace's label at each
+start, as D91 had it, and the box checks the name resolves (`getent ahosts`), adding `myhostname` to nsswitch.conf
+itself if an older image left it out. A name that does not resolve is traced (`devbox.name.unresolved`) and the start
+goes on, as D92 required. D93's shown-name file and its prompt rewrite are gone: the kernel is the one source of the
+name, and bash's own `\h` prints it. The container tier's `box-name` step reads, on a real box, the kernel's name, the
+prompt, how long a lookup of the name takes and what it answers, getfqdn, and whether `python3 -m http.server` serves.
+
+The same image adds python3-pil, librsvg2-bin and xwallpaper (D88's wallpaper and the desktop's watch sheet): D88 wrote
+an X11 client and a PNG codec into the wallpaper to avoid a new tools tarball. Pillow now composes the picture,
+rsvg-convert draws the mark from its SVG, and xwallpaper sets the root, which the server keeps. hsetroot was tried
+first and painted black: it finds the screen through Xinerama, which KasmVNC lacks (and `+xinerama` is refused), so
+every image mode drew nothing while `-solid` worked; measured on a real box, `xwallpaper --zoom` (RandR) and
+`feh --no-xinerama` both put the ground (16, 14, 12) and the glow (42, 33, 24) on the root. The wallpaper's Chromium,
+and its unmeasured 60-second bound, are gone.
 
 ## Open
 

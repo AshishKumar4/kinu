@@ -10,7 +10,7 @@ import {
   PLAN_COMMENT_ASK, REACH_REPLY, REACH_SLATE, REACH_SLATE_ASK, REACH_STREAM, THREAD_REPLY,
 } from './flows-script';
 import {
-  CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle,
+  CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle,
   settled, settledAfter, signedInPage, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget,
 } from './product-flows';
 import { webHeaders } from '../evals/src/workspace-roster';
@@ -214,8 +214,8 @@ export async function slateStreamsAndHires(target: FlowTarget): Promise<SlateRea
     await settledAfter(page, ledger);
     await ledger.stop();
     await openInspector(page);
-    await until(page, "the slate's tab", `${PAGE_TABS}.includes(${JSON.stringify(REACH_SLATE.title)})`);
-    await page.click(`#inspector nav[aria-label="Pages"] button[aria-label="${REACH_SLATE.title}"]`);
+    await until(page, "the slate's page in the bar", `${PAGE_TABS}.includes(${JSON.stringify(REACH_SLATE.title)})`);
+    await openInspectorPage(page, REACH_SLATE.title);
 
     const frameSelector = `#inspector iframe[title="${REACH_SLATE.id}"]`;
 

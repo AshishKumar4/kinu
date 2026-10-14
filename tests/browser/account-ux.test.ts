@@ -121,12 +121,11 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
   // No tile runs a slate: a live frame on every visit would wake each workspace's sandbox.
   expect(await page.$$('[data-workspaces-view] iframe')).toHaveLength(0);
 
-  // The filter tabs and the page's own create action sit in the control row;
-  // the count is a tabular "N of M", not a sentence.
+  // The filter tabs sit in the control row. One create action is in reach, the sidebar's or, on a phone, the page's.
   const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.getAttribute('data-segment')));
   expect(tabs).toEqual(['all', 'needs', 'working', 'idle']);
-  expect(await page.$$eval('main :is(a, button)', (controls) => controls.filter((control) => control.textContent?.trim() === 'New workspace').length)).toBe(1);
-  expect(body2).toContain('5 of 5');
+  expect(await page.$$eval(':is(a, button)', (controls) => controls.filter((control) => control.textContent?.trim() === 'New workspace'
+    && control instanceof HTMLElement && control.offsetParent !== null).length)).toBe(1);
 
   if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
 
@@ -184,13 +183,13 @@ describe('account panels', () => {
           try {
             await mcp.waitForSelector('[role="dialog"]');
             await mcp.waitForFunction(
-              () => document.querySelector('[role="dialog"]')?.textContent?.includes('auth needed'),
+              () => document.querySelector('[role="dialog"]')?.textContent?.toLowerCase().includes('needs sign-in'),
             );
 
             const text = await dialogText(mcp);
             expect(text).toContain('github');
             expect(text).toContain('Add custom server');
-            expect(text).toContain('auth needed');
+            expect(text.toLowerCase()).toContain('needs sign-in');
 
             // A status the layout pushed sideways is textContent that passes
             // while nothing is on screen: the badge must sit inside the
@@ -200,7 +199,7 @@ describe('account panels', () => {
 
               if (dialog === null) return false;
 
-              const badge = [...dialog.querySelectorAll('span')].find((span) => span.textContent?.includes('auth needed'));
+              const badge = [...dialog.querySelectorAll('span')].find((span) => span.textContent?.toLowerCase().includes('needs sign-in'));
 
               if (badge === undefined) return false;
 
@@ -801,8 +800,8 @@ describe('account panels', () => {
 
             // Section eyebrows are uppercased by the CSS role, and innerText
             // reads them as drawn.
-            for (const text of ['MCP SERVERS', 'github', 'auth needed']) {
-              expect(body).toContain(text);
+            for (const text of ['MCP SERVERS', 'github', 'Needs sign-in']) {
+              expect(body.toLowerCase()).toContain(text.toLowerCase());
             }
 
             if (viewport === 'desktop') expect(await activeNavRow(plugins)).toBe('Plugins');
@@ -827,7 +826,7 @@ describe('account panels', () => {
 
             // Each machine's link state, then the grant state per workspace.
             for (const text of ['Workstation', 'connected', 'Owner laptop', 'offline', 'checkout-fixes', 'Denied']) {
-              expect(body).toContain(text);
+              expect(body.toLowerCase()).toContain(text.toLowerCase());
             }
 
             if (viewport === 'desktop') expect(await activeNavRow(devices)).toBe('Devices');

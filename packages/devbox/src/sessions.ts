@@ -5,7 +5,6 @@
  */
 import * as v from 'valibot';
 
-import { SHELL_RC } from './shown-name';
 
 /**
  * tmux keeps the shell and its screen across reattaches (DEVBOX-DECISIONS, the PTY proof); none of its own chrome shows.
@@ -22,12 +21,13 @@ export const TMUX_CONF = [
 ].join('\n');
 
 /**
- * A session's shell starts from the box's rc, the person's own first and the box's shown name in their prompt (D93),
- * then records how its last command ended on its own pane, where the sessions read finds it (D90): the exit status,
- * the time, and the command line, once per command the history numbers.
+ * A session's shell starts from the person's own rc, then records how its last command ended on its own pane, where
+ * the sessions read finds it (D90): the exit status, the time, and the command line, once per command the history
+ * numbers.
  */
 export const SESSION_RC = [
-  SHELL_RC,
+  '[ -f /etc/bash.bashrc ] && . /etc/bash.bashrc',
+  '[ -f ~/.bashrc ] && . ~/.bashrc',
   '__kinu_entry() { HISTTIMEFORMAT= fc -l -1 2>/dev/null; }',
   '__kinu_seen=$(__kinu_entry); __kinu_seen=${__kinu_seen%%[[:space:]]*}',
   '__kinu_mark() {',
@@ -101,31 +101,57 @@ type SessionState = Omit<TerminalSession, 'name' | 'open'>;
 export type SessionsRead = ReadonlyMap<string, Omit<TerminalSession, 'name' | 'open'>>;
 
 /**
- * The read, one exec: each session's pane (`P`), each listening port under a session's shell (`L`), the branch of
- * each folder a pane is in (`B`), and each session whose foreground reads its terminal (`W`), tab-separated. A program
- * waiting at a prompt is in `read(0)` on the pane's pts; a shell at its own prompt is in `pselect` (D95, measured). `$1` is the box's listener probe (`port pid stamp command` rows).
+ * The read, one exec, one record a line, its fields split at each unescaped space (D90): each session's pane (`P`),
+ * each listening port under a session's shell (`L`), and the branch of each folder a pane is in (`B`). tmux writes the
+ * pane's fields itself with `#{q:…}`, which puts a backslash before every space, backslash and other special character
+ * in a value, so any folder or command reads back whole. A tab printed raw by a format comes out as `_` on the
+ * platform's tmux, which is why no field is tab-separated. Each session whose foreground reads its terminal (`W`): a
+ * program waiting at a prompt is in `read(0)` on the pane's pts; a shell at its own prompt is in `pselect` (D95,
+ * measured). `$1` is the box's listener probe (`port pid stamp command`).
  */
-export const SESSIONS_READ = `panes=$(tmux list-panes -a -F '#{pane_pid}	#{session_name}' 2>/dev/null) || exit 0
-tmux list-panes -a -F 'P	#{session_name}	#{pane_current_path}	#{pane_current_command}	#{@kinu_exit}	#{@kinu_at}	#{@kinu_last}'
+export const SESSIONS_READ = `panes=$(tmux list-panes -a -F '#{pane_pid} #{session_name}' 2>/dev/null) || exit 0
+tmux list-panes -a -F 'P #{q:session_name} #{q:pane_current_path} #{q:pane_current_command} #{q:@kinu_exit} #{q:@kinu_at} #{q:@kinu_last}'
 sh -c "$1" port-listeners '' | while IFS='	' read -r port pid _; do
   p=$pid
   while [ -n "$p" ] && [ "$p" -gt 1 ]; do
-    name=$(printf '%s\\n' "$panes" | awk -F '	' -v p="$p" '$1 == p { print $2; exit }')
-    if [ -n "$name" ]; then printf 'L\\t%s\\t%s\\n' "$name" "$port"; break; fi
+    name=$(printf '%s\\n' "$panes" | awk -v p="$p" '$1 == p { print $2; exit }')
+    if [ -n "$name" ]; then printf 'L %s %s\\n' "$name" "$port"; break; fi
     p=$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
   done
 done
-tmux list-panes -a -F '#{pane_current_path}' | sort -u | while read -r dir; do
-  branch=$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null) && printf 'B\\t%s\\t%s\\n' "$dir" "$branch"
+tmux list-panes -a -F '#{pane_current_path}' | sort -u | while IFS= read -r dir; do
+  branch=$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null) &&
+    printf 'B %s %s\\n' "$(printf '%s' "$dir" | sed 's/[\\\\ ]/\\\\&/g')" "$branch"
 done
-printf '%s\\n' "$panes" | while IFS='	' read -r pane name; do
+printf '%s\\n' "$panes" | while IFS=' ' read -r pane name; do
   group=$(sed 's/.*) //' "/proc/$pane/stat" 2>/dev/null | awk '{ print $6 }')
   [ -n "$group" ] || continue
   for p in $(ps -eo pid=,pgid= | awk -v g="$group" '$2 == g { print $1 }'); do
     [ "$(cut -d' ' -f1-2 "/proc/$p/syscall" 2>/dev/null)" = '0 0x0' ] || continue
-    case "$(readlink "/proc/$p/fd/0")" in /dev/pts/*) printf 'W\\t%s\\n' "$name"; break ;; esac
+    case "$(readlink "/proc/$p/fd/0")" in /dev/pts/*) printf 'W %s\\n' "$name"; break ;; esac
   done
 done`;
+
+/** One record of the read: its fields split at each unescaped space, each `\x` read as `x` (tmux's `q:`, D90). */
+function recordFields(line: string): string[] {
+  const fields = [''];
+  let escaped = false;
+
+  for (const char of line) {
+    if (escaped) {
+      fields[fields.length - 1] += char;
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === ' ') {
+      fields.push('');
+    } else {
+      fields[fields.length - 1] += char;
+    }
+  }
+
+  return fields;
+}
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'fish', 'dash']);
 
@@ -157,7 +183,7 @@ function paneState([, id, cwd, command, exit, at, last]: v.InferOutput<typeof Pa
 
 /** The read's rows, one record a line, each validated by its kind's schema; a row no schema takes is no row. */
 export function parseSessionsRead(text: string): SessionsRead {
-  const rows = text.split('\n').map((line) => line.split('\t'));
+  const rows = text.split('\n').filter((line) => line !== '').map(recordFields);
   const sessions = new Map<string, SessionState & { ports: number[] }>();
   const branches = new Map<string, string>();
   const waiting = new Set<string>();

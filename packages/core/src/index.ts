@@ -201,13 +201,13 @@ export {
   type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features';
 
-export { QualityDaySchema, type QualityDay } from './types/quality';
+export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/quality';
 
 // Turn ratings: the one signal evolution decides by.
 export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
   listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
-  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, renderQualitySeries, isTrivialTurn,
+  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, qualityWindow, renderQualitySeries, isTrivialTurn,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating, type RatingQuery,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
@@ -2301,6 +2301,12 @@ export {
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
 } from './read-models/background-event';
 
+export { turnFailureFacts, type TurnFailureFacts } from './read-models/turn-failure-facts';
+
+export { providerName } from './providers/model-test';
+
+export { namedImages, type ImageMachine, type NamedImage } from './read-models/chat-images';
+
 export { linkProse, promoteSlateLinks, type MarkdownNode } from './read-models/markdown-links';
 
 export {
@@ -2628,6 +2634,11 @@ export {
 } from './utils/spawned-output';
 
 export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
+
+export {
+  CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState,
+  type McpCredentialTransport, type McpFailureKind, type McpObservedConnection, type McpObservedState, type McpToolListing,
+} from './mcp/client';
 
 export {
   validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,

@@ -1753,6 +1753,43 @@ again; `wrangler deploy` of the same build served them. The `startupMs` every de
 open container-startup flight, never the Worker's; the report now carries the validator's reading of each upload
 (`summary.workerStartupMs` for the deployed one).
 
+L27. A startup the validator refuses is the build's verdict, and the startup is cut rather than the refusal asked
+again (2026-10-14; amends L26). L26 measured that the validator takes and refuses the same bytes at random, and
+answered with two stand-ins: the upload made again on a refusal, three times in all, and a 6,750 KiB bound on what
+the build links. A refusal asked again only rolls the same startup near the same 1 s limit, and the byte bound does
+not read startup work. Both are gone. What stays is L26's validation before a reset deletes anything.
+
+Where the startup went at 7591e6fec: `wrangler check startup` ran about 470 ms on an armada container. About half of
+that is the harness parsing the 6.6 MB the Worker links, and the rest is module evaluation. A build with
+`strictExecutionOrder` gives each module's evaluation a frame of its own. Stubbing candidates out one at a time,
+interleaved, 11 profiles each, measured: the MCP SDK (agents' MCP client chunk and Kinu's `user/mcp.ts`, imported
+statically, its schemas and the client's `preloadSchemas` evaluated at load) 471 to 419 ms. agent-core, which only the
+slates code reaches, through the orchestrator's `SlateHost`, 648 to 534 ms with `SlateHost` off the startup path. The
+MCP SDK now loads at a UserDO's first MCP call (the agents patch's `loadMcpSdk`, and `user/mcp-wire.ts`).
+
+The validator's readings, 32 uploads each of two scratch Workers built from the same tree, interleaved
+(`wrangler versions upload`, 06:05 to 06:22Z):
+
+| Tree | Refused | Median | p90 | Max of those taken |
+|---|---|---|---|---|
+| 6198decac | 3 | 444 ms | 686 ms | 815 ms |
+| 6198decac + the MCP cut and this change | 0 | 397 ms | 480 ms | 849 ms |
+
+Its slow readings came in episodes that met both Workers in the same minute: the slowest of each tree and two of the
+refusals fell in rounds 10, 11, 23 and 24. So the median moved and the tail did not.
+
+The orchestrator's `SlateHost` now loads at the object's first slate call, and agent-core with it. A turn's failing
+slates and a file change read the object's one `SlateBuilds`, which the orchestrator owns. The startup closure fell
+from 6,385 to 5,533 KiB, and `wrangler check startup` ran 299 ms, median of 15. The validator, 32 uploads each,
+interleaved, 06:56 to 07:13Z:
+
+| Tree | Refused | Median | p90 | Max of those taken |
+|---|---|---|---|---|
+| 4f8392898 (the MCP cut) | 1 | 393 ms | 560 ms | 790 ms |
+| 4f8392898 + the slate host at first use | 0 | 284 ms | 444 ms | 578 ms |
+
+The MCP cut's refusal came in round 11, where the slate-host build read 303 ms.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

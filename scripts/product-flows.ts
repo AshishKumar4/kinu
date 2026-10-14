@@ -220,7 +220,7 @@ const DEAD_END = `(() => {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
-  const notice = [...document.querySelectorAll('.p-notice-danger, [data-failure]')]
+  const notice = [...document.querySelectorAll('.p-notice-danger, [data-notice="danger"], [data-failure]')]
     .filter((el) => el.getClientRects().length > 0)
     .map((el) => (el.textContent ?? '').trim())
     .find((text) => text !== '');
@@ -1674,7 +1674,7 @@ const ANSWERS = `[...document.querySelectorAll('#chat .prose-chat')]
   .map((block) => (block.textContent ?? '').trim())
   .filter((text) => text.length > 0)`;
 
-const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning')]
+const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning, [data-notice="warning"]')]
   .map((notice) => (notice.textContent ?? '').trim()).filter((text) => text !== '').join(' | ')`;
 
 /** The mission the first-answer row creates its workspace with: #21's own. */
@@ -1769,11 +1769,13 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
   }
 }
 
-/** The inspector column, `#inspector` — the id `use-inspector-layout` hands the
- *  panel and which `react-resizable-panels` renders on its element — as a
- *  rounded width; -1 when no such box is in the document at all. */
+/** The inspector column, `#inspector`: the id `use-inspector-layout` hands the panel and which
+ *  `react-resizable-panels` renders on its element. */
+export const INSPECTOR_PANEL = `document.querySelector('#inspector')`;
+
+/** The inspector column as a rounded width; -1 when no such box is in the document at all. */
 export const INSPECTOR_WIDTH = `(() => {
-  const panel = document.querySelector('#inspector');
+  const panel = ${INSPECTOR_PANEL};
   return panel === null ? -1 : Math.round(panel.getBoundingClientRect().width);
 })()`;
 
@@ -1783,23 +1785,59 @@ export const INSPECTOR_SHUT_PX = 40;
 
 export const OPEN_NAMES = 'show|expand|open';
 
-/** The clockless settle after a press: no finite animation running or waiting
- *  to start, and the measured number equal on two consecutive animation frames
- *  with none. `getAnimations()` flushes pending style, so a transition the
- *  press has just set off is counted before it has moved a pixel: equal frames
- *  alone read the rail as settled at its open 240 px while its collapse waited
- *  pending (2026-09-24, 10 of 40 collapses short of the end state at 6x CPU
- *  throttling). An infinite animation, a pulsing dot, never finishes and is not
- *  waited on. A control that does nothing settles at the number it started
- *  with, so no deadline is needed to tell an inert control from a slow one. */
-export async function settled(page: Page, read: string): Promise<void> {
+/**
+ * The element a measured number is read from, as a page expression: `box`, an element whose geometry is read, or
+ * `scroller`, an element whose scroll metrics are read. Absent, the number is a count or a text, which only its own
+ * stability can say is settled.
+ */
+export type Measured = { readonly box: string } | { readonly scroller: string };
+
+/**
+ * Whether `target`'s motion can move what is measured. A box moves with itself and its ancestors, and with an in-flow
+ * child of any of them: the rail is `main`'s sibling, and its collapse moves `main`. A scroller's metrics move with its
+ * box and with anything inside it. Nothing else on the page can move either.
+ */
+function inScope(measured: Measured): string {
+  const element = 'box' in measured ? measured.box : measured.scroller;
+  const inside = 'scroller' in measured ? 'el.contains(target) ||' : '';
+
+  return `((target) => {
+    const el = ${element};
+    if (!(el instanceof Element) || !(target instanceof Element)) return false;
+    if (${inside} target.contains(el)) return true;
+    const parent = target.parentElement;
+    return parent !== null && parent.contains(el) && !['absolute', 'fixed'].includes(getComputedStyle(target).position);
+  })`;
+}
+
+/**
+ * The clockless settle after a press: the measured number equal on two consecutive animation frames, with nothing that
+ * could move it in motion. Motion is a finite animation or transition, running or waiting to start, of a property that
+ * lays out (not a paint-only one: opacity, colour, shadow, filter), on an element `measured` names as able to move the
+ * number. `getAnimations()` flushes pending style, so a transition the press has just set off is counted before it has
+ * moved a pixel: equal frames alone read the rail as settled at its open 240 px while its collapse waited pending
+ * (2026-09-24, 10 of 40 collapses short of the end state at 6x CPU throttling). Motion anywhere else is not this
+ * number's: a decoration restarted elsewhere on the page held this wait forever with the inspector already open at
+ * 340 px (real Chrome, 2026-10-14; staging's live-memory row went silent here). A control that does nothing settles at
+ * the number it started with, so no deadline is needed to tell an inert control from a slow one.
+ */
+export async function settled(page: Page, read: string, measured?: Measured): Promise<void> {
   await page.evaluate('window.__liveSettle = undefined');
   await page.waitForFunction(
     `(() => {
       const value = ${read};
-      const moving = document.getAnimations().some((animation) =>
+      const scoped = ${measured === undefined ? 'null' : inScope(measured)};
+      const paintOnly = /^(opacity|visibility|filter|backdrop-filter|clip-path|mask.*|fill|stroke.*|.*color|background.*|box-shadow|text-shadow|outline.*)$/;
+      const properties = (animation) => animation instanceof CSSTransition
+        ? [animation.transitionProperty]
+        : (animation.effect?.getKeyframes() ?? []).flatMap((frame) => Object.keys(frame))
+          .filter((key) => !['offset', 'computedOffset', 'easing', 'composite'].includes(key))
+          .map((key) => key.replace(/[A-Z]/g, (upper) => '-' + upper.toLowerCase()));
+      const moving = scoped !== null && document.getAnimations().some((animation) =>
         (animation.pending || animation.playState === 'running')
-        && animation.effect?.getComputedTiming().endTime !== Infinity);
+        && animation.effect?.getComputedTiming().endTime !== Infinity
+        && properties(animation).some((property) => !paintOnly.test(property))
+        && scoped(animation.effect?.target));
       const previous = window.__liveSettle;
       window.__liveSettle = moving ? undefined : value;
       return !moving && previous === value;
@@ -1860,6 +1898,8 @@ interface PressOutcome {
 export async function pressUntil(page: Page, input: {
   readonly names: string;
   readonly read: string;
+  /** The element whose box `read` measures. */
+  readonly box: string;
   readonly reached: (value: number) => boolean;
   readonly within?: string;
   readonly outside?: string;
@@ -1881,9 +1921,9 @@ export async function pressUntil(page: Page, input: {
 
     if (name === '') break;
 
-    await settled(page, input.read);
+    await named(`the page settled after ${name}`, () => settled(page, input.read, { box: input.box }));
     await page.keyboard.press('Escape');
-    await settled(page, input.read);
+    await named('the page settled after Escape', () => settled(page, input.read, { box: input.box }));
 
     value = v.parse(v.number(), await page.evaluate(input.read));
     attempts.push({ name, left: value });
@@ -1898,12 +1938,43 @@ export async function pressUntil(page: Page, input: {
  *  nothing behind it can be measured. */
 export async function openInspector(page: Page): Promise<void> {
   const outcome = await pressUntil(page, {
-    names: OPEN_NAMES, read: INSPECTOR_WIDTH, reached: (width) => width > INSPECTOR_SHUT_PX,
+    names: OPEN_NAMES, read: INSPECTOR_WIDTH, box: INSPECTOR_PANEL, reached: (width) => width > INSPECTOR_SHUT_PX,
   });
 
   if (outcome.reached) return;
 
   throw new Error(`the inspector column stayed at ${String(outcome.value)}px; tried ${JSON.stringify(outcome.attempts)}`);
+}
+
+/** A selector that finds the inspector's page whose title holds `title` among the bar's pages: its tab, or the bar's
+ *  opener of the pages without room, which names them. */
+export function inspectorPageListed(title: string): string {
+  const quoted = JSON.stringify(title);
+
+  return `nav[aria-label="Pages"] :is(li button[aria-label*=${quoted}], button[aria-haspopup="menu"][title*=${quoted}])`;
+}
+
+/** Open the inspector's page whose title holds `title` through its bar: its tab when it has room, else the bar's menu
+ *  of the rest. Settles once that page is the open one. */
+export async function openInspectorPage(page: Page, title: string, wait = { timeout: 10_000 }): Promise<void> {
+  const tab = `nav[aria-label="Pages"] li button[aria-label*=${JSON.stringify(title)}]`;
+
+  await page.waitForSelector(`${tab}, nav[aria-label="Pages"] button[aria-haspopup="menu"]`, wait);
+
+  if (await page.$(tab) === null) {
+    if (await page.$('nav[aria-label="Pages"] button[aria-haspopup="menu"][aria-expanded="true"]') === null) {
+      await page.click('nav[aria-label="Pages"] button[aria-haspopup="menu"]');
+    }
+
+    const item = await page.waitForFunction((wanted: string) => [...document.querySelectorAll('nav[aria-label="Pages"] [role="menuitem"]')]
+      .find((entry) => entry.textContent?.includes(wanted) === true) ?? null, wait, title);
+
+    await item.asElement()?.evaluate((entry) => { if (entry instanceof HTMLElement) entry.click(); });
+  } else {
+    await page.click(tab);
+  }
+
+  await page.waitForSelector(`nav[aria-label="Pages"] button[aria-current="true"][aria-label*=${JSON.stringify(title)}]`, wait);
 }
 
 /** Press the inspector strip's tab named `name`; an absent tab throws. */
@@ -2122,7 +2193,7 @@ export async function openMemoryFollowsItsWriter(target: FlowTarget): Promise<Li
 
 export interface SlatePreviewVerdict {
   readonly workspace: string;
-  /** Whether the strip drew a tab under the slate's title once the turn ended. */
+  /** Whether the bar held a page under the slate's title once the turn ended. */
   readonly slateTab: boolean;
   /** The slate's preview frame's page text once its React page drew; null when no frame drew. */
   readonly frameText: string | null;
@@ -2130,13 +2201,20 @@ export interface SlatePreviewVerdict {
   readonly bumped: string | null;
   /** Whether the page heard its host's context. */
   readonly hosted: boolean;
-  /** Every tab of the inspector's Pages strip, by the name it shows: a slate's is its title, never its preview's port
+  /** Every page of the inspector's bar, by the name it shows: a slate's is its title, never its preview's port
    *  ("workspace :20000", 1008-f). */
   readonly pageTabs: readonly string[];
 }
 
-/** The names the inspector's Pages strip shows, one per tab: its links, not the actions beside them ("Share Flow probe"). */
-export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] button.p-bar-link[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
+/**
+ * Every page the inspector's bar holds, by the name it shows: its chips' links (not the actions beside them, "Share Flow
+ * probe"), then the pages behind its opener, as its tooltip names them, comma-separated. A page without room is still
+ * the bar's. The flows' slate titles hold no comma.
+ */
+export const PAGE_TABS = `[
+  ...[...document.querySelectorAll('#inspector nav[aria-label="Pages"] li button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? ''),
+  ...(document.querySelector('#inspector nav[aria-label="Pages"] button[aria-haspopup="menu"]')?.getAttribute('title') ?? '').split(', '),
+].filter((name, index, names) => name !== '' && names.indexOf(name) === index)`;
 
 /**
  * Row: a slate the agent builds shows its running preview in its own tab.
@@ -2158,13 +2236,13 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
     await settledAfter(page, ledger);
     await openInspector(page);
 
-    const slateTab = v.parse(v.boolean(), await page.evaluate(stripHas(FLOW_SLATE.title)));
+    const slateTab = v.parse(v.boolean(), await page.evaluate(`${PAGE_TABS}.includes(${JSON.stringify(FLOW_SLATE.title)})`));
     let frameText: string | null = null;
     let bumped: string | null = null;
     let hosted = false;
 
     if (slateTab) {
-      await page.evaluate(stripTab(FLOW_SLATE.title));
+      await openInspectorPage(page, FLOW_SLATE.title);
 
       const frameSelector = `#inspector iframe[title="${FLOW_SLATE.id}"]`;
 

@@ -32,6 +32,216 @@ index 535743d..7f6c14c 100644
  		}
  		function onAgentOpen() {
  			socketIsOpen = true;
+diff --git a/dist/client-fyQrLGkD.js b/dist/client-fyQrLGkD.js
+index 56a8647..bc1e0de 100644
+--- a/dist/client-fyQrLGkD.js
++++ b/dist/client-fyQrLGkD.js
+@@ -5,9 +5,40 @@ import { n as callV2Tool } from "./invoker-CHMnoxIA.js";
+ import { DurableObjectOAuthClientProvider } from "./mcp/client/do-oauth-client-provider.js";
+ import { nanoid } from "nanoid";
+ import { z } from "zod";
+-import { Client, SSEClientTransport, SdkHttpError, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+-import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/client/validators/cf-worker";
+-import { JSONRPCMessageSchema, isJSONRPCErrorResponse, isJSONRPCResultResponse } from "@modelcontextprotocol/sdk/types.js";
++//#region mcp sdk loading
++/**
++* The MCP SDK, loaded at an isolate's first MCP connection or RPC message rather than at its startup: its schemas are
++* built when its modules are evaluated, and every isolate of the Worker paid for them whether it spoke MCP or not.
++*/
++let mcpSdk;
++let mcpSdkLoad;
++function loadMcpSdk() {
++	mcpSdkLoad ??= (async () => {
++		const [client, cfWorker, types] = await Promise.all([
++			import("@modelcontextprotocol/client"),
++			import("@modelcontextprotocol/client/validators/cf-worker"),
++			import("@modelcontextprotocol/sdk/types.js")
++		]);
++		mcpSdk = {
++			Client: client.Client,
++			SSEClientTransport: client.SSEClientTransport,
++			SdkHttpError: client.SdkHttpError,
++			StreamableHTTPClientTransport: client.StreamableHTTPClientTransport,
++			CfWorkerJsonSchemaValidator: cfWorker.CfWorkerJsonSchemaValidator,
++			JSONRPCMessageSchema: types.JSONRPCMessageSchema,
++			isJSONRPCErrorResponse: types.isJSONRPCErrorResponse,
++			isJSONRPCResultResponse: types.isJSONRPCResultResponse
++		};
++		return mcpSdk;
++	})();
++	return mcpSdkLoad;
++}
++/** The SDK an MCP connection was made with: a connection exists only once `loadMcpSdk` has resolved. */
++function loadedMcpSdk() {
++	if (mcpSdk === void 0) throw new Error("The MCP SDK is not loaded: an MCP connection is made only after loadMcpSdk() resolves");
++	return mcpSdk;
++}
++//#endregion
+ //#region src/core/events.ts
+ function toDisposable(fn) {
+ 	return { dispose: fn };
+@@ -121,22 +152,31 @@ async function fetchMcpResourceTemplates(client, options) {
+ }
+ //#endregion
+ //#region src/mcp/client/runtime.ts
+-var CompatibleWorkerJsonSchemaValidator = class extends CfWorkerJsonSchemaValidator {
+-	constructor(..._args) {
+-		super(..._args);
+-		this.legacy = new CfWorkerJsonSchemaValidator({ draft: "7" });
+-	}
+-	getValidator(schema) {
+-		const dialect = schema.$schema;
+-		return typeof dialect === "string" && /draft-0?7/i.test(dialect) ? this.legacy.getValidator(schema) : super.getValidator(schema);
++let defaultClientOptions;
++/** Built with the SDK's validator, so at the first connection's client. */
++function defaultMcpClientOptions() {
++	if (defaultClientOptions === void 0) {
++		const { CfWorkerJsonSchemaValidator } = loadedMcpSdk();
++		const CompatibleWorkerJsonSchemaValidator = class extends CfWorkerJsonSchemaValidator {
++			constructor(..._args) {
++				super(..._args);
++				this.legacy = new CfWorkerJsonSchemaValidator({ draft: "7" });
++			}
++			getValidator(schema) {
++				const dialect = schema.$schema;
++				return typeof dialect === "string" && /draft-0?7/i.test(dialect) ? this.legacy.getValidator(schema) : super.getValidator(schema);
++			}
++		};
++		defaultClientOptions = {
++			jsonSchemaValidator: new CompatibleWorkerJsonSchemaValidator(),
++			versionNegotiation: { mode: "auto" },
++			inputRequired: { autoFulfill: true }
++		};
+ 	}
+-};
+-const DEFAULT_CLIENT_OPTIONS = {
+-	jsonSchemaValidator: new CompatibleWorkerJsonSchemaValidator(),
+-	versionNegotiation: { mode: "auto" },
+-	inputRequired: { autoFulfill: true }
+-};
++	return defaultClientOptions;
++}
+ function normalizeMcpClientOptions(options) {
++	const DEFAULT_CLIENT_OPTIONS = defaultMcpClientOptions();
+ 	return {
+ 		...DEFAULT_CLIENT_OPTIONS,
+ 		...options,
+@@ -185,7 +225,7 @@ function listChangedHandlers(configured, callbacks) {
+ function createMcpSdkClient(info, options, capabilitySeed, handlerModes, callbacks) {
+ 	const elicitation = options.capabilities?.elicitation ?? elicitationCapabilitiesFromHandlers(handlerModes) ?? capabilitySeed?.elicitation;
+ 	return {
+-		client: new Client(info, {
++		client: new (loadedMcpSdk().Client)(info, {
+ 			...options,
+ 			capabilities: {
+ 				...capabilitySeed,
+@@ -359,6 +399,7 @@ var RPCServerTransport = class {
+ 	}
+ 	async send(message, options) {
+ 		if (!this._started) throw new Error("Transport not started");
++		const { isJSONRPCResultResponse, isJSONRPCErrorResponse } = await loadMcpSdk();
+ 		if (isJSONRPCResultResponse(message) || isJSONRPCErrorResponse(message)) {
+ 			const id = message.id;
+ 			if (id === void 0) {
+@@ -420,6 +461,7 @@ var RPCServerTransport = class {
+ 			});
+ 			return flattened.length === 0 ? void 0 : flattened;
+ 		}
++		const { JSONRPCMessageSchema } = await loadMcpSdk();
+ 		try {
+ 			JSONRPCMessageSchema.parse(message);
+ 		} catch {
+@@ -769,7 +811,7 @@ var MCPClientConnection = class {
+ 			const error = e instanceof Error ? e.message : String(e);
+ 			return {
+ 				success: false,
+-				reason: this._probingCapabilities && e instanceof SdkHttpError && e.status === 404 ? "stale-session" : "error",
++				reason: this._probingCapabilities && e instanceof loadedMcpSdk().SdkHttpError && e.status === 404 ? "stale-session" : "error",
+ 				error
+ 			};
+ 		} finally {
+@@ -856,17 +898,17 @@ var MCPClientConnection = class {
+ 		throw new Error("Elicitation handler must be implemented for your platform. Provide the MCPClientConnection elicitationHandlers option, or register handlers through the MCP client manager before connecting.");
+ 	}
+ 	isResumedStreamableHttpSession() {
+-		return this._transport instanceof StreamableHTTPClientTransport && typeof this._transport.sessionId === "string";
++		return this._transport instanceof loadedMcpSdk().StreamableHTTPClientTransport && typeof this._transport.sessionId === "string";
+ 	}
+ 	get sessionId() {
+-		if (this._transport instanceof StreamableHTTPClientTransport) return this._transport.sessionId;
++		if (this._transport instanceof loadedMcpSdk().StreamableHTTPClientTransport) return this._transport.sessionId;
+ 	}
+ 	/** @internal Clear a restored session before reconnecting. */
+ 	clearResumedSession() {
+ 		if ("sessionId" in this.options.transport) delete this.options.transport.sessionId;
+ 	}
+ 	get protocolVersion() {
+-		if (this._transport instanceof StreamableHTTPClientTransport) return this._transport.protocolVersion;
++		if (this._transport instanceof loadedMcpSdk().StreamableHTTPClientTransport) return this._transport.protocolVersion;
+ 	}
+ 	get discoverResult() {
+ 		return this.client.getDiscoverResult();
+@@ -886,6 +928,7 @@ var MCPClientConnection = class {
+ 		}
+ 	}
+ 	getTransportName(transport) {
++		const { SSEClientTransport, StreamableHTTPClientTransport } = loadedMcpSdk();
+ 		if (transport instanceof StreamableHTTPClientTransport) return "streamable-http";
+ 		if (transport instanceof SSEClientTransport) return "sse";
+ 		if (transport instanceof RPCClientTransport) return "rpc";
+@@ -898,7 +941,7 @@ var MCPClientConnection = class {
+ 		this._restoredListSubscription = void 0;
+ 		const url = this.url.toString();
+ 		const transportName = this.getTransportName(transport);
+-		if (transport instanceof StreamableHTTPClientTransport && transport.sessionId) try {
++		if (transport instanceof loadedMcpSdk().StreamableHTTPClientTransport && transport.sessionId) try {
+ 			await transport.terminateSession();
+ 		} catch (error) {
+ 			this._onObservabilityEvent.fire({
+@@ -946,8 +989,8 @@ var MCPClientConnection = class {
+ 	*/
+ 	getTransport(transportType) {
+ 		switch (transportType) {
+-			case "streamable-http": return new StreamableHTTPClientTransport(this.url, this.options.transport);
+-			case "sse": return new SSEClientTransport(this.url, this.options.transport);
++			case "streamable-http": return new (loadedMcpSdk().StreamableHTTPClientTransport)(this.url, this.options.transport);
++			case "sse": return new (loadedMcpSdk().SSEClientTransport)(this.url, this.options.transport);
+ 			case "rpc": return new RPCClientTransport(this.options.transport);
+ 			default: throw new Error(`Unsupported transport type: ${transportType}`);
+ 		}
+@@ -959,7 +1002,7 @@ var MCPClientConnection = class {
+ 			const hasFallback = transportType === "auto" && currentTransportType === "streamable-http" && !isLastTransport;
+ 			const transport = this.getTransport(currentTransportType);
+ 			try {
+-				const prior = transport instanceof StreamableHTTPClientTransport && transport.sessionId && this.options.discoverResult ? {
++				const prior = transport instanceof loadedMcpSdk().StreamableHTTPClientTransport && transport.sessionId && this.options.discoverResult ? {
+ 					kind: "modern",
+ 					discover: this.options.discoverResult
+ 				} : void 0;
+@@ -1623,6 +1666,7 @@ var MCPClientManager = class extends LifecycleCapability {
+ 			this._isRestored = true;
+ 			return;
+ 		}
++		if (mcpSdk === void 0) await loadMcpSdk();
+ 		for (const server of servers) {
+ 			if (server.server_url.startsWith("rpc:")) continue;
+ 			const existingConn = this.mcpConnections[server.id];
+@@ -1740,6 +1784,7 @@ var MCPClientManager = class extends LifecycleCapability {
+ 	* @returns Object with server ID, auth URL (if OAuth), and client ID (if OAuth)
+ 	*/
+ 	async connect(url, options = {}) {
++		if (mcpSdk === void 0) await loadMcpSdk();
+ 		const id = options.reconnect?.id ?? nanoid(8);
+ 		if (options.transport?.authProvider) {
+ 			options.transport.authProvider.serverId = id;
+@@ -1851,6 +1896,7 @@ var MCPClientManager = class extends LifecycleCapability {
+ 	* @returns Server ID
+ 	*/
+ 	async registerServer(id, options) {
++		if (mcpSdk === void 0) await loadMcpSdk();
+ 		if (isBlockedUrl(options.url)) throw new Error(`Blocked URL: ${options.url} — MCP client connections to private/internal addresses are not allowed`);
+ 		const authProvider = options.transport?.authProvider ?? (options.callbackUrl ? this._createAuthProviderFn?.(options.callbackUrl) ?? this.createAuthProvider(id, options.callbackUrl, this._name, options.clientId) : void 0);
+ 		if (authProvider) {
 diff --git a/dist/src-BZeu-SCD.js b/dist/src-BZeu-SCD.js
 index 84c6dbf..96d5a4d 100644
 --- a/dist/src-BZeu-SCD.js

@@ -16,7 +16,7 @@
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",
     "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
-    "tools-setup.sh": "b2aef4912079c5185329d4571e6e017245b476778377940e555fe72ec8246c31",
+    "tools-setup.sh": "f031ce8dbe80ccb0d690a3c993d199f01b42ee973d204df7013956fc4455eab5",
     "tools-build.sh": "3c301a53661845a20b5f8492b177c99b0ec8616855163bb676db55eb2794448f",
     "src/index.rs": "e26e54ebcc3893d7ba84470512bde960e239aec9ea7c89b05dd66992417961d7",
     "src/main.rs": "3b436f50857187a45ff68f9c5e72366c18c5504a8902b2e2f0dfd81383a0ead6",
@@ -25,8 +25,8 @@
     "src/storage.rs": "39e73d186faabde0724715283eba6c0f2bf2e7132b64e22307351da51ec4d60d"
   },
   "tools": {
-    "sha256": "5046244c6927505e119679f0b897bd8b201bcca3420f24c31479629bb7ea4917",
-    "bytes": 349830567
+    "sha256": "e7ab03c80ee2148376d64b9cb7b26b3b2d26a2e53eb8ae8a470a5ee304b67c85",
+    "bytes": 352784489
   },
   "rust": {
     "version": "1.93.1",

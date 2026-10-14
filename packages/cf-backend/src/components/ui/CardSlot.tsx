@@ -12,7 +12,7 @@ export function CardSlot<T>({ resource, what, onRetry, children }: {
 }) {
   if (resource.status === "error") {
     return (
-      <div className="contents" data-settings-resource={what} data-resource-state="error">
+      <div data-settings-resource={what} data-resource-state="error">
         <LoadFailure what={what} message={resource.message} onRetry={onRetry} />
       </div>
     );
@@ -20,8 +20,8 @@ export function CardSlot<T>({ resource, what, onRetry, children }: {
 
   if (resource.status === "loading") {
     return (
-      <div className="flex justify-center py-4" data-settings-resource={what} data-resource-state="loading">
-        <Loader size="sm" />
+      <div className="flex items-center justify-center gap-2 py-4 p-meta p-text-3" data-settings-resource={what} data-resource-state="loading">
+        <Loader size="sm" /> Loading {what}…
       </div>
     );
   }

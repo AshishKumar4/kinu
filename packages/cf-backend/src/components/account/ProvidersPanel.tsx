@@ -25,6 +25,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/account/ChatGptConnect";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { Status } from '@/components/ui/Status';
 import { showing, detach } from '@kinu.run/core/obs';
 import {
   CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, revokingProviderOf, storedAccounts, type CredentialSummary, type ProviderCatalogEntry,
@@ -33,7 +34,7 @@ import {
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="p-badge-success inline-flex items-center gap-1 px-2 py-0.5"><CheckIcon size={11} /> Connected</span>
+      <Status tone="success">Connected</Status>
       {detail && <span className="p-meta p-text-3">{detail}</span>}
     </div>
   );
@@ -41,7 +42,12 @@ function ConnectedBadge({ detail }: { detail?: ReactNode }) {
 
 const dangerQuietCls = "p-btn-quiet inline-flex h-6.5 shrink-0 items-center gap-1 px-2 text-xs p-danger";
 
-export function ProvidersPanel({ returnTo }: { returnTo: string }) {
+/** The panel in its own titled card; `framed` false where its host already says "Connect a provider". */
+function Framed({ framed, children }: { framed: boolean; children: ReactNode }) {
+  return framed ? <Card title="Connect a provider" icon={PlugIcon}>{children}</Card> : <>{children}</>;
+}
+
+export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; framed?: boolean }) {
   const creds = useAsyncResource(listCredentials);
   const codex = useAsyncResource(codexStatus);
   const chatgpt = useAsyncResource(chatgptPlan);
@@ -67,7 +73,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
           {unrevoked.name} is disconnected from Kinu but not revoked. {unrevoked.words}
         </p>
       )}
-      <Card title="Connect a provider" icon={PlugIcon}>
+      <Framed framed={framed}>
         <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
           {(credentials) => {
             const held = new Set(credentials.map((c) => c.key));
@@ -150,7 +156,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
             );
           }}
         </CardSlot>
-      </Card>
+      </Framed>
     </>
   );
 }

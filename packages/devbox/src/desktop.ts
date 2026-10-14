@@ -1,9 +1,11 @@
 import { WALLPAPER_PY } from './desktop-wallpaper';
-import { SHELL_RC, SHELL_RC_FILE } from './shown-name';
 
 export const DESKTOP_PORT = 6080;
 
-const LOG = '/tmp/devbox-desktop.log';
+/** Where the desktop's parts write what went wrong; the container tier reads it when the desktop does not paint. */
+export const DESKTOP_LOG = '/tmp/devbox-desktop.log';
+
+const LOG = DESKTOP_LOG;
 
 /** The session's own files: its two launchers and its panel's configuration. */
 const SESSION = '/usr/local/share/devbox/desktop';
@@ -11,6 +13,13 @@ const SESSION = '/usr/local/share/devbox/desktop';
 /** The screen, which the client scales to its frame. 768 high: no vision model Kinu serves resizes a screenshot this size,
  *  so an agent's points are the screen's own pixels (D89). */
 export const DESKTOP_SIZE = { width: 1280, height: 768 } as const;
+
+/**
+ * How `computer.watch` tiles its frames (D89): each at `percent` of the screen's width and height, scrot's own thumbnail,
+ * `columns[n - 1]` to a row for `n` frames, in reading order; as many frames as `columns` has at most. Measured: four
+ * half-size frames read as well as four screenshots and cost what one does; eight at a third lost small text.
+ */
+export const WATCH_SHEET = { percent: 50, columns: [1, 2, 2, 2, 4, 4, 4, 4] } as const;
 
 /**
  * The desktop's look (D88): its ground falls from `background` at the top to `foot` and glows in `glow` from below the
@@ -170,10 +179,7 @@ if ! pgrep -x Xkasmvnc >/dev/null; then
   printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-component-update --no-first-run --no-default-browser-check"' > /etc/chromium.d/devbox
   mkdir -p /etc/chromium/policies/managed ${SESSION} /usr/local/share/themes/Kinu/openbox-3
   printf '%s\\n' '{"CommandLineFlagSecurityWarningsEnabled": false}' > /etc/chromium/policies/managed/devbox.json
-  printf '%s\\n' ${launcher('Terminal', `sh -c "cd /workspace 2>/dev/null; exec xterm -e bash --rcfile ${SHELL_RC_FILE} -i"`, '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
-  cat > ${SHELL_RC_FILE} <<'SHELLRC'
-${SHELL_RC}
-SHELLRC
+  printf '%s\\n' ${launcher('Terminal', 'sh -c "cd /workspace 2>/dev/null; exec xterm"', '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
   printf '%s\\n' ${launcher('Browser', 'chromium', '/usr/share/icons/hicolor/48x48/apps/chromium.png')} > ${SESSION}/browser.desktop
   cat > ${SESSION}/tint2rc <<'PANEL'
 ${PANEL}

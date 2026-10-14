@@ -13,7 +13,8 @@ class SessionBox extends TestDevbox<unknown> {
   }
 }
 
-const row = (...fields: Array<string | number>) => fields.join('\t');
+/** A record as tmux's `#{q:…}` writes it: a backslash before each space and backslash in a field, fields space-separated. */
+const row = (...fields: Array<string | number>) => fields.map((field) => String(field).replace(/[\\ ]/gu, '\\$&')).join(' ');
 
 const READ = [
   row('P', 'shell', '/workspace/storefront', 'bash', 0, 1_791_900_000, 'git status'),
@@ -48,6 +49,20 @@ describe('a read of the running sessions', () => {
 
     expect(waiting.get('s2')?.needsInput).toBe(true);
     expect(waiting.get('shell')?.needsInput).toBe(false);
+  });
+
+  // tmux writes a field's special characters escaped (measured through real tmux 3.6): any folder or command reads
+  // back whole, a marker or a separator in it included.
+  test('a folder and a command with spaces, quotes, backslashes and markers in them read back whole', () => {
+    const folder = '/workspace/two words/<<kinu>>/a"b\'c $x \\t';
+    const command = `printf '%s' '<<kinu>>' | tr x y; echo "a b" \\ end`;
+
+    const odd = parseSessionsRead([
+      String.raw`P shell /workspace/two\ words/\<\<kinu\>\>/a\"b\'c\ \$x\ \\t bash 1 1700000000 printf\ \'\%s\'\ \'\<\<kinu\>\>\'\ \|\ tr\ x\ y\;\ echo\ \"a\ b\"\ \\\ end`,
+      String.raw`B /workspace/two\ words/<<kinu>>/a"b'c\ $x\ \\t feat/x`,
+    ].join('\n'));
+
+    expect(odd.get('shell')).toMatchObject({ cwd: folder, last: { command }, branch: 'feat/x' });
   });
 
   test('a row naming no session the box keeps, or no session at all, is no session', () => {

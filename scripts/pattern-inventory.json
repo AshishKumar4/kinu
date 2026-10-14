@@ -557,7 +557,7 @@
       "file": "packages/devbox/src/sessions.ts",
       "kind": "hand-parser",
       "owner": "parseSessionsRead",
-      "sourceSha256": "575c964ff2e3334c334f5e00e9d4128cc3290a000e8408cea90149dc95a01566",
+      "sourceSha256": "37693d059dee7a5cb73d2b41ef7c805984c5e293fb81b2b1ba032705b6b420fe",
       "decision": "framing"
     },
     {

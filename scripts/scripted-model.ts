@@ -93,7 +93,7 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
         answers.push(answer);
 
         if (answer.rateLimited !== undefined) {
-          const limited = rateLimitedAnswer(answer.rateLimited.retryAfterSeconds);
+          const limited = rateLimitedAnswer(answer.rateLimited);
 
           response.writeHead(limited.status, limited.headers);
           response.end(limited.body);
@@ -271,10 +271,22 @@ export const TURN_WAIT_SECONDS = 4;
 /** Short, so the logo asks again soon after each refusal. */
 const LOGO_WAIT_SECONDS = 3;
 
+/** The ask whose calls Workers AI's per-minute limit refuses, stating no wait header, for a minute from the first. */
+export const MINUTE_LIMITED_ASK = 'Minute limit probe: answer once the minute is up.';
+
+export const MINUTE_WAITED_OUT = 'Waited out the minute.';
+
+/** Workers AI's text-generation limits are per minute (developers.cloudflare.com/workers-ai/platform/limits, read
+ *  2026-10-13); its recorded 429s answered again 63 s after the first (prod-glm-1 evals, 2026-09-30). */
+const MINUTE_MS = 60_000;
+
 /** The row's side of the provider-wait script: the waited turn refused once, and the logo's refusals counted, so the
  *  row waits on the server having refused, never on a clock. */
 export class ProviderWaitProbe {
   turnRefused = false;
+
+  /** When the minute-limited turn's first call was refused. */
+  minuteFrom: number | null = null;
 
   private logos = 0;
 
@@ -301,6 +313,12 @@ export class ProviderWaitProbe {
 export function providerWaitTurn(request: ScriptedRequest, probe: ProviderWaitProbe): ScriptedAnswer | null {
   if (request.system.includes(WORKSPACE_LOGO_SYSTEM_PROMPT) && request.userTexts.some((text) => text.includes(LOGO_WAITED_MISSION))) {
     return probe.refuseLogo();
+  }
+
+  if (request.streamed && (request.userTexts.at(-1) ?? '').includes(MINUTE_LIMITED_ASK)) {
+    probe.minuteFrom ??= Date.now();
+
+    return Date.now() - probe.minuteFrom < MINUTE_MS ? { rateLimited: { perMinute: true } } : { text: MINUTE_WAITED_OUT };
   }
 
   if (!request.streamed || !(request.userTexts.at(-1) ?? '').includes(WAITED_TURN_ASK)) return null;

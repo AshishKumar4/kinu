@@ -1,7 +1,7 @@
 /**
  * The MCP server a workspace answers on: its tools and resources over the agent, built for one request. Its SDK and the
  * zod its schemas are written in load with this module, at a worker's first MCP request (`mcp-server.ts`), so neither is
- * linked into every isolate's startup (scripts/worker-startup.ts).
+ * linked into every isolate's startup (L27).
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";

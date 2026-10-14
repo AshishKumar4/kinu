@@ -3,6 +3,7 @@ import type { Page, Viewport } from 'puppeteer';
 import * as v from 'valibot';
 
 import { unruledClasses, withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { openInspectorPage } from '../../scripts/product-flows';
 
 type Mode = 'dark' | 'light';
 
@@ -237,14 +238,10 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
  * review, and the tab is the current page.
  */
 async function openPlanPage(page: Page, title: string): Promise<void> {
-  const tab = `nav[aria-label="Pages"] button[aria-label*=${JSON.stringify(title)}]`;
-
-  // Work, mounted behind every page, draws its plans from the read the tabs come from; a review in their place is the
+  // Work, mounted behind every page, draws its plans from the read the pages come from; a review in their place is the
   // product before plans had pages.
   await page.waitForSelector('[data-work-plans], [data-back-to-work]');
-  expect(await page.$(tab), `no page tab for the plan "${title}"`).not.toBeNull();
-  await page.click(tab);
-  await page.waitForSelector(`${tab}[aria-current="true"]`);
+  await openInspectorPage(page, title);
   await page.waitForSelector('[data-plan-review-root]');
 }
 

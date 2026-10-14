@@ -15,7 +15,7 @@ import type { SandboxPreviewExposures } from "@kinu.run/core";
 type ContainerOperations = Pick<KinuDevbox,
   "exec" | "execStream" | "killExec" | "releaseExec" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest" | "desktop">;
+  | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest" | "desktop" | "releaseDesktop">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -120,10 +120,23 @@ async function execWithoutDeadline(
 ) {
   const options = { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId, ...(env !== undefined && { env }) };
 
-  const ran = output === undefined
+  return await stoppable(handle, { execId, signal, doing: 'computer.exec' }, () => (output === undefined
     ? handle.exec(command, options)
-    : handle.execStream(command, options).then((stream) => readExec(stream, (name, data) => { output.write(name, data); }));
+    : handle.execStream(command, options).then((stream) => readExec(stream, (name, data) => { output.write(name, data); }))));
+}
 
+/**
+ * The canonical cancellable path for a call that runs on the box under `execId` (D69): an abort of `signal` ends it there
+ * (`killExec`), and this settles once the box answers, which it does only after its process has gone. A refused kill
+ * is reported as itself, since the process is still running; a call that finished first is returned as finished; one
+ * the box answers as stopped is that answer.
+ */
+async function stoppable<T>(
+  handle: Pick<KinuDevbox, "killExec">,
+  { execId, signal, doing }: { readonly execId: string; readonly signal: AbortSignal | undefined; readonly doing: string },
+  run: () => Promise<T>,
+): Promise<T> {
+  const ran = run();
   // Set only on abort: true means this call ended the process tree, false that the command had already exited.
   let verdict: Promise<boolean> | undefined;
   const { promise: killRefused, reject } = Promise.withResolvers<never>();
@@ -140,7 +153,7 @@ async function execWithoutDeadline(
     const result = await Promise.race([ran, killRefused]);
 
     if (verdict !== undefined && await verdict) {
-      throw new DOMException(`computer.exec cancelled: its container process tree was ended (exec ${execId})`, "AbortError");
+      throw new DOMException(`${doing} cancelled: its container process tree was ended (exec ${execId})`, "AbortError");
     }
 
     return result;
@@ -173,10 +186,16 @@ export function adaptCloudflareSandbox(
   handle: ContainerOperations,
   configure: () => Promise<void>,
   previews: LanePreviews | null,
-  { portsMoved, clock = REAL_CLOCK }: {
+  { portsMoved, clock = REAL_CLOCK, drivers = new Set() }: {
     readonly portsMoved?: () => Promise<void>;
     /** Times a hold for the box's base snapshot (D79). */
     readonly clock?: Clock;
+    /**
+     * The agents that drove the desktop since the box last let them go, shared by every agent's adapter in the
+     * workspace. Only theirs is asked of the box as their turns end: a turn that never touched the computer calls no box
+     * (D56). One that drove before this activation holds it until it drives and ends again, or the box's X starts afresh.
+     */
+    readonly drivers?: Set<string>;
   } = {},
 ): SandboxHandle {
   // Memoized on the promise so concurrent first calls share it; failures are not cached.
@@ -242,8 +261,22 @@ export function adaptCloudflareSandbox(
     listFiles: (path, opts) => settle(onContainer(() => handle.listFiles(path, opts))),
     statFile: (path, opts) => settle(onContainer(() => handle.statFile(path, opts))),
     deleteFile: (path) => settle(onContainer(() => jsonResultOrVoid(handle.deleteFile(path)))),
-    // Never retried: a repeated click is a second click.
-    desktop: (request) => settle(onContainer(() => handle.desktop(request))),
+    // Never retried: a repeated click is a second click. Its own id, by which a stop ends its run on the box.
+    desktop: (request, opts) => {
+      const execId = crypto.randomUUID();
+      const signal = opts?.signal;
+
+      drivers.add(request.driver);
+
+      return settle(Effect.andThen(onContainer(() => Promise.resolve(), signal), callDevbox(() => stoppable(
+        handle, { execId, signal, doing: `computer.${request.action.kind}` }, () => handle.desktop({ ...request, execId }),
+      ))));
+    },
+    releaseDesktop: (driver) => {
+      if (!drivers.has(driver)) return Promise.resolve();
+
+      return settle(callDevbox(() => handle.releaseDesktop(driver)).pipe(Effect.tap(() => Effect.sync(() => { drivers.delete(driver); }))));
+    },
     // Published first: the edge verifies preview hostnames against the record (`preview-proxy.ts`).
     // Then `servePreviewRequest`'s gates run here, without forwarding.
     exposePort: (port, opts) => settle(Effect.gen(function* () {

@@ -8,8 +8,6 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
-import { SHELL_RC, SHELL_RC_FILE, SHOWN_NAME_FILE } from '../packages/devbox/src/shown-name';
-import { SESSIONS_READ } from '../packages/devbox/src/sessions';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
@@ -23,8 +21,8 @@ import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
 import { shellQuote } from '../packages/core/src/utils/shell';
 import { withTestChrome } from './test-chrome';
-import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
-import { GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sheet } from './fixtures/devbox-e2e/desktop-pages';
+import { DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
+import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -38,22 +36,43 @@ const ASK_AGAIN_TIMES = 12;
 
 const ASK_AGAIN_MS = 5_000;
 
-/** The name the fixture's boxes show (its `shownName`, set through the Worker's vars). */
+/** The name the fixture's boxes answer to (its `hostname`, set through the Worker's vars). */
 const BOX_NAME = 'contract-box';
 
+/** The port the name step's server binds; no other step listens on it. */
+const NAME_HTTP_PORT = 8799;
+
 /**
- * The box's names, read in the box (D93): the kernel's, the shown name the box keeps, and the prompt a person's shell
- * shows when it starts from the box's rc over the image's own rc files. The rc is written here as the terminal and the
- * desktop write it.
+ * The box's name, read in the box (D96): the kernel's, the prompt a person's shell shows, how a lookup of the name
+ * answers (its time and addresses), what getfqdn makes of it, and whether `python3 -m http.server`, which calls it as it
+ * binds, serves. The platform's own 64-character name is no DNS label, and Python died on it.
  */
 const BOX_NAME_READ = [
   'printf "kernel=%s\\n" "$(hostname)"',
-  `printf "shownName=%s\\n" "$(cat ${SHOWN_NAME_FILE} 2>/dev/null)"`,
-  `cat > ${SHELL_RC_FILE} <<'SHELLRC'`,
-  SHELL_RC,
-  'SHELLRC',
-  `printf "prompt=%s\\n" "$(cd /workspace 2>/dev/null; TERM=dumb bash --rcfile ${SHELL_RC_FILE} -i -c 'printf "%s" "\${PS1@P}"' 2>/dev/null)"`,
+  `printf "prompt=%s\\n" "$(cd /workspace 2>/dev/null; TERM=dumb bash -i -c 'printf "%s" "\${PS1@P}"' 2>/dev/null)"`,
+  `printf "lookup=%s\\n" "$(python3 -c 'import socket,time
+t=time.time()
+try: a=sorted({r[4][0] for r in socket.getaddrinfo(socket.gethostname(), None)})
+except Exception as e: a=[type(e).__name__]
+print("%d %s" % ((time.time()-t)*1000, " ".join(a)))' 2>&1 | tail -1)"`,
+  `printf "fqdn=%s\\n" "$(python3 -c 'import socket; print(socket.getfqdn())' 2>&1 | tail -1)"`,
+  // The lookup's answers that are the box's own: an address a socket on the box can bind, and not loopback's.
+  `printf "own=%s\\n" "$(python3 -c 'import ipaddress,socket
+own=[]
+for info in socket.getaddrinfo(socket.gethostname(), None, type=socket.SOCK_DGRAM):
+    address=info[4][0]
+    if ipaddress.ip_address(address.split("%")[0]).is_loopback: continue
+    try: socket.socket(info[0], socket.SOCK_DGRAM).bind(info[4])
+    except OSError: continue
+    own.append(address)
+print(" ".join(sorted(set(own))))' 2>&1 | tail -1)"`,
+  `( cd /var/tmp && timeout 8 python3 -m http.server ${String(NAME_HTTP_PORT)} >/var/tmp/name-http.log 2>&1 & )`,
+  `for _ in $(seq 40); do python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${String(NAME_HTTP_PORT)}/', timeout=1)" 2>/dev/null && break; sleep 0.1; done`,
+  `printf "http=%s\\n" "$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:${String(NAME_HTTP_PORT)}/', timeout=2).status)" 2>&1 | tail -1) $(tail -1 /var/tmp/name-http.log | cut -c1-80)"`,
 ].join('\n');
+
+/** A lookup of the box's own name answers locally: measured 3 ms with libnss-myhostname, against 79-430 ms at DNS. */
+const NAME_LOOKUP_MS = 50;
 
 /** How long the tier watches a refused box for another start: the box this contract caught re-armed every second. */
 const PARKED_WATCH_MS = 20_000;
@@ -65,6 +84,25 @@ const JOB_PROMPT = 'printf "Your name? "; read name; echo "hi $name"';
 const JOB_READS = 40;
 
 const JOB_READ_MS = 500;
+
+/**
+ * A server a session runs in a folder of its own, as the computer-sessions flow does on a deployment. The folder's name
+ * holds a space, quotes, a dollar and the marker f588b0bed reserved: any folder reads back whole. A tab and a
+ * backslash are the unit test's, from real tmux: typed into a pane, a tab completes instead of arriving.
+ */
+const SESSION_FOLDER = `/workspace/flow web/<<kinu>>/a"b'c $x`;
+
+const SESSION_PORT = 8765;
+
+/** The folder as one shell word: single-quoted, each single quote closed, escaped and reopened. */
+const SESSION_FOLDER_WORD = `'${SESSION_FOLDER.replaceAll("'", String.raw`'\''`)}'`;
+
+const SESSION_SERVER = `mkdir -p ${SESSION_FOLDER_WORD} && cd ${SESSION_FOLDER_WORD} && python3 -m http.server ${String(SESSION_PORT)}`;
+
+/** How many times, and how far apart, the sessions are read while the server starts: a person waits seconds. */
+const SESSION_READS = 20;
+
+const SESSION_READ_MS = 500;
 
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
@@ -490,9 +528,12 @@ async function main(): Promise<void> {
         }
 
         if (seen === null || !drawn(seen)) {
+          // The desktop's own log says why a part did not paint: the wallpaper's and the panel's errors land there.
+          const log = await shell(`grep -v 'INFO\\|\\[mi\\]\\|^$' ${DESKTOP_LOG} | tail -n 30 2>&1; true`, fresh);
+
           throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, glow: seen?.glow, panel: seen?.panel })} `
             + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its ground ${DESKTOP_COLOURS.background}, the wallpaper's glow `
-            + `and the panel ${DESKTOP_COLOURS.panel}`);
+            + `and the panel ${DESKTOP_COLOURS.panel}; its log:\n${log}`);
         }
 
         const rect = seen.rect;
@@ -526,8 +567,21 @@ async function main(): Promise<void> {
   const desktopAgent = async () => {
     await step('desktop-agent', async () => {
       const fresh = names[5] ?? '';
-      const desk = (member: string, args: readonly unknown[] = [], driver = 'agent') => call('/agent-desktop', AgentAnswer, { driver, member, args: JSON.stringify(args) }, fresh);
+      const desk = (member: string, args: readonly unknown[] = [], driver = 'agent', stop?: string) => call('/agent-desktop', AgentAnswer, { driver, member, args: JSON.stringify(args), ...(stop !== undefined && { stop }) }, fresh);
       const sh = (command: string) => shell(command, fresh);
+
+      /** How many of a PNG's `cols`×`rows` tiles differ from every other, read on the box by its own Pillow. */
+      const distinct = async (url: string, cols: number, rows: number): Promise<number> => {
+        const data = url.slice(url.indexOf(',') + 1);
+
+        await sh('mkdir -p /tmp/kinu-desk && rm -f /tmp/kinu-desk/sheet.b64');
+
+        // Base64 needs no quoting; in pieces, as one argument is held under the kernel's limit.
+        for (let at = 0; at < data.length; at += 60_000) await sh(`printf %s ${data.slice(at, at + 60_000)} >>/tmp/kinu-desk/sheet.b64`);
+
+        return Number(await sh(`base64 -d /tmp/kinu-desk/sheet.b64 >/tmp/kinu-desk/sheet.png && python3 -c ${shellQuote(DISTINCT_PY)} /tmp/kinu-desk/sheet.png ${String(cols)} ${String(rows)}`));
+      };
+
       const title = async () => (await sh('xdotool getactivewindow getwindowname 2>/dev/null || true')).replace(/ - Chromium$/u, '');
 
       const until = async (what: string, seen: (now: string) => boolean): Promise<string> => {
@@ -545,7 +599,7 @@ async function main(): Promise<void> {
       const one = 'Xkasmvnc=1 openbox=1 tint2=1 Xvfb=0';
 
       // A box whose desktop never opened: the first look starts it, at the screen's size; looks at once share it.
-      requireEqual(sheet(v.parse(Screen, await desk('screenshot'))).size, [1280, 768]);
+      requireEqual(sizeOf(v.parse(Screen, await desk('screenshot'))), [1280, 768]);
       await Promise.all([desk('screenshot'), desk('screenshot', [], 'other'), desk('screenshot')]);
       requireEqual(await sessions(), one);
       await sh('pkill -x tint2; pkill -x openbox; true');
@@ -554,7 +608,7 @@ async function main(): Promise<void> {
 
       // The agent's shell runs on that screen.
       requireEqual(await sh('echo "$DISPLAY"'), ':0');
-      const pages = Object.entries({ grid: GRID, text: TEXT, scroll: SCROLL, range: RANGE, hold: HOLD, ticker: TICKER });
+      const pages = Object.entries({ grid: GRID, text: TEXT, scroll: SCROLL, range: RANGE, hold: HOLD, chord: CHORD, ticker: TICKER });
       await sh(`mkdir -p /tmp/kinu-desk && ${pages.map(([name, html]) => `printf %s ${shellQuote(html)} >/tmp/kinu-desk/${name}.html`).join(' && ')}`);
       await sh('setsid -f python3 -m http.server 8765 --bind 127.0.0.1 --directory /tmp/kinu-desk >/dev/null 2>&1');
 
@@ -622,37 +676,58 @@ async function main(): Promise<void> {
 
       if (!(held >= 700 && held <= 1_500)) throw new Error(`a key held for 800 ms was down ${String(held)} ms`);
 
+      // Stopped mid-chord, with a button a run cut short left down: the run is ended there, and whatever X holds is let up
+      // at once, read from X itself; the X server then has no key and no button down.
+      await open('chord');
+      await sh('DISPLAY=:0 xdotool mousedown 1');
+      const chording = desk('key', ['alt+shift+k', { hold: 10_000 }], 'agent', 'chord-stop');
+      await until('the chord held', (now) => now === 'held AltLeft KeyK ShiftLeft');
+      requireEqual(await call('/agent-desktop-stop', v.object({ stopped: v.boolean() }), { stop: 'chord-stop' }, fresh), { stopped: true });
+      requireEqual(v.parse(Refused, await chording).reason, 'cancelled');
+      await until('the stopped chord let up', (now) => now === 'released');
+      requireEqual(await sh(`python3 -c ${shellQuote(DOWN_PY)}`), 'keys buttons');
+
       // A watch is one image of frames over its window: four by default, two to a row; eight, four to a row. Each frame
       // shows the page as it changed, so no two tiles are alike.
       await open('ticker');
-      const four = sheet(v.parse(Screen, await desk('watch', [2])));
-      const eight = sheet(v.parse(Screen, await desk('watch', [2, { fps: 4 }])));
-      requireEqual([four.size, four.distinct(2, 2), eight.size, eight.distinct(4, 2)], [[1280, 768], 4, [2560, 768], 8]);
+      const four = v.parse(Screen, await desk('watch', [2]));
+      const eight = v.parse(Screen, await desk('watch', [2, { fps: 4 }]));
+      requireEqual([sizeOf(four), await distinct(four, 2, 2), sizeOf(eight), await distinct(eight, 4, 2)], [[1280, 768], 4, [2560, 768], 8]);
 
       return 'a fresh box\'s desktop came up for an agent\'s look at 1280×768, once, and came back after its parts died; '
         + 'clicks of every kind, keys, text with breaks, both wheels and a drag landed where its screenshot put them; '
         + 'nothing stayed held; a point off the screen and a second agent\'s input were refused before reaching it; a key '
-        + 'was held as long as asked; a watch answered one sheet of frames that each showed the page changing';
+        + 'was held as long as asked; a chord stopped mid-hold was let up at once, a button left down with it, and X held '
+        + 'nothing down after; a watch '
+        + 'answered one sheet of frames that each showed the page changing';
     });
   };
 
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
     /**
-     * A person sees the box by the name its class gives it, and the kernel keeps the platform's (D93): staging
-     * 7e411119d's renaming wrote /etc/hostname, which the platform mounts read-only, and refused every start (D92), and a
-     * renamed kernel's own name took ~400 ms to resolve to an address that is not the box.
+     * The box answers to the name its class gives it, as one DNS label, and that name resolves at once to the box's own
+     * addresses (D96). The platform's 64-character name broke `python3 -m http.server` on every computer (staging
+     * 7591e6fec), and a renamed kernel with nothing to answer for it waited on DNS for an address that is not the box.
      */
     await step('box-name', async () => {
       const named = new Map((await shell(BOX_NAME_READ)).split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+      const [lookupMs, ...looked] = (named.get('lookup') ?? '').split(' ');
+      const own = (named.get('own') ?? '').split(' ').filter((address) => address !== '');
 
       process.stdout.write(`[${run}] box name ${JSON.stringify(Object.fromEntries(named))}\n`);
 
-      if (named.get('kernel') === BOX_NAME) throw new Error(`the kernel was renamed ${BOX_NAME}; it keeps the platform's name`);
-
-      if (named.get('shownName') !== BOX_NAME) throw new Error(`the box keeps ${named.get('shownName') ?? 'no name'} to show, not ${BOX_NAME}`);
+      if (named.get('kernel') !== BOX_NAME) throw new Error(`the box answers to ${named.get('kernel') ?? 'nothing'}, not ${BOX_NAME}`);
 
       if (named.get('prompt')?.includes(`@${BOX_NAME}`) !== true) throw new Error(`a shell's prompt reads ${named.get('prompt') ?? 'nothing'}, not ${BOX_NAME}`);
+
+      if (Number(lookupMs) > NAME_LOOKUP_MS || own.length === 0) {
+        throw new Error(`its own name resolved in ${lookupMs ?? '?'} ms to ${looked.join(' ')}, not at once to an address of the box itself`);
+      }
+
+      if (named.get('fqdn') !== BOX_NAME) throw new Error(`getfqdn answered ${named.get('fqdn') ?? 'nothing'}`);
+
+      if (named.get('http')?.startsWith('200') !== true) throw new Error(`python3 -m http.server answered ${named.get('http') ?? 'nothing'}`);
 
       return Object.fromEntries(named);
     });
@@ -678,12 +753,7 @@ async function main(): Promise<void> {
       const session = row.session;
       const listed = (await call('/sessions', v.array(Session), {}, names[1])).find((candidate) => candidate.id === session);
 
-      if (listed?.needsInput !== true || listed.job !== processId) {
-        const quoted = `'${SESSIONS_READ.replaceAll("'", "'\\''")}'`;
-        const seen = await shell(`id -u; tmux ls 2>&1; bash -c ${quoted} terminal-sessions true 2>&1 | cat -A | head -20; true`, names[1]);
-
-        throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input; the box: ${seen}`);
-      }
+      if (listed?.needsInput !== true || listed.job !== processId) throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input`);
 
       await shell(`tmux send-keys -t '=${session}:' Ada Enter`, names[1]);
 
@@ -699,6 +769,36 @@ async function main(): Promise<void> {
       if (after.some((candidate) => candidate.id === session)) throw new Error('a stopped job left its session listed');
 
       return { processId, session, waiting: listed.needsInput, log: log.slice(-120) };
+    });
+
+    /**
+     * A person's terminal session reads as it is on a real box (D90): open, its folder, the port its server listens
+     * on. Staging 7591e6fec read every session closed: tmux printed the read's tab separators as `_`.
+     */
+    await step('terminal-sessions', async () => {
+      const Session = v.looseObject({ id: v.string(), open: v.boolean(), cwd: v.string(), ports: v.array(v.number()) });
+
+      await shell(`tmux new-session -d -s shell -c /workspace && tmux send-keys -t '=shell:' -l ${`'${SESSION_SERVER.replaceAll("'", String.raw`'\''`)}'`} && tmux send-keys -t '=shell:' Enter`, names[1]);
+      let shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
+
+      for (let asked = 0; !(shell$?.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT)) && asked < SESSION_READS; asked++) {
+        await delay(SESSION_READ_MS);
+        shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
+      }
+
+      const read = shell$?.open === true && shell$.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT);
+
+      // On a miss, what the box holds: the pane's screen, its processes, and the read's own rows.
+      const seen = read ? '' : await shell(
+        `tmux capture-pane -p -t '=shell:' | grep -v '^$' | tail -5; tmux list-panes -a -F '#{pane_pid} #{pane_current_command}'; ps -eo pid,ppid,pgid,comm | tail -12; true`,
+        names[1],
+      );
+
+      await shell("tmux kill-session -t '=shell' 2>/dev/null; true", names[1]);
+
+      if (!read) throw new Error(`a session running a server in ${SESSION_FOLDER} on :${String(SESSION_PORT)} read ${JSON.stringify(shell$)}; the box: ${seen}`);
+
+      return shell$;
     });
 
     await step('file-metadata', async () => {
@@ -840,10 +940,18 @@ async function main(): Promise<void> {
       });
 
     } else {
-    // `--disk`: only the disk chain's contracts, with no desktop and so no browser on this host.
-    if (!process.argv.includes('--disk')) await productContracts();
+      const diskContracts = async () => {
+        for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
+      };
 
-    for (const kind of DISK_CONTRACTS) await step(`disk-${kind}`, () => call(`/disk-contract?kind=${kind}`, Json, {}, `${box}-disk`));
+      // At once, on boxes of their own, each store prefix its box's: on armada 2026-10-13 the product's took about
+      // 110 s and the disk chain's 131 s, one after the other. Both end before a failure is reported, so the
+      // teardown never meets a contract still calling the fixture. `--disk`: the disk chain's alone, with no desktop
+      // and so no browser on this host.
+      const ended = await Promise.allSettled([process.argv.includes('--disk') ? Promise.resolve() : productContracts(), diskContracts()]);
+      const failed = ended.find((outcome) => outcome.status === 'rejected');
+
+      if (failed !== undefined) throw failed.reason;
     }
   } catch (cause) {
     steps.push({ contract: 'failure', ms: 0, detail: String(cause) });

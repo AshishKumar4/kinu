@@ -495,15 +495,15 @@
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
-    "bun run test:workerd:cf": {
-      "wallSeconds": 437.78,
-      "cpuSeconds": 306.23,
-      "peakRssMb": 10388.96,
-      "peakRunnable": 12,
-      "peakCpuThreads": 5.35,
-      "meanThreads": 0.7,
-      "samples": 1315,
-      "loadAtStart": 0.44,
+    "bun run test:workerd:cf-main": {
+      "wallSeconds": 256.02,
+      "cpuSeconds": 323.9,
+      "peakRssMb": 8569.16,
+      "peakRunnable": 9,
+      "peakCpuThreads": 4.64,
+      "meanThreads": 1.27,
+      "samples": 802,
+      "loadAtStart": 0.55,
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
@@ -520,14 +520,14 @@
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
     "bun run test:workerd:cf-long": {
-      "wallSeconds": 106.99,
-      "cpuSeconds": 72.94,
-      "peakRssMb": 2620.84,
-      "peakRunnable": 10,
-      "peakCpuThreads": 4.89,
-      "meanThreads": 0.68,
-      "samples": 407,
-      "loadAtStart": 0.5,
+      "wallSeconds": 261.07,
+      "cpuSeconds": 93.88,
+      "peakRssMb": 3120.17,
+      "peakRunnable": 9,
+      "peakCpuThreads": 4.15,
+      "meanThreads": 0.36,
+      "samples": 932,
+      "loadAtStart": 1.06,
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
@@ -1094,7 +1094,7 @@
       "loadAtStart": 0.38,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts scripts/worker-startup.test.ts": {
+    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
       "wallSeconds": 68.19,
       "cpuSeconds": 57.41,
       "peakRssMb": 559.43,
@@ -1102,6 +1102,30 @@
       "peakCpuThreads": 3.78,
       "meanThreads": 0.84,
       "samples": 308,
+      "loadAtStart": 0.51,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
+    },
+    "bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts": {
+      "wallSeconds": 218.77,
+      "cpuSeconds": 343.98,
+      "peakRssMb": 4735.29,
+      "peakRunnable": 19,
+      "peakCpuThreads": 4.61,
+      "meanThreads": 1.57,
+      "samples": 725,
+      "loadAtStart": 0.23,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
+    },
+    "bun run test:workerd:cf-wide": {
+      "wallSeconds": 249.51,
+      "cpuSeconds": 248.38,
+      "peakRssMb": 7795.48,
+      "peakRunnable": 11,
+      "peakCpuThreads": 4.51,
+      "meanThreads": 1,
+      "samples": 819,
       "loadAtStart": 0.51,
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"

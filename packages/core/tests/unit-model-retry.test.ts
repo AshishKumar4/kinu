@@ -4,6 +4,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { callRetries, retryMiddleware, type RetryPolicy } from '../src/providers/middleware/retry';
 import { DEFAULT_PROVIDER_RETRIES } from '../src/types/profile';
 import { ProviderPacer } from '../src/providers/pacing';
+import { attemptKey } from '../src/providers/attempt-identity';
 import { statedRetryAfterMs } from '../src/providers/fallback-cooldown';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { createWorkersAIProvider } from '../src/providers/workers-ai-provider';
@@ -82,6 +83,76 @@ describe('the model stack retries every call once, in one place', () => {
 
     expect(await harness.call()).toBe('ok');
     expect(harness.waits).toEqual([30_000]);
+  });
+
+  // Workers AI states its per-minute window in words, not a header (623 of 623 recorded 429s): the lane parks for the
+  // minute, the way a Retry-After parks it, so the first retry after it is answered and the default three suffice.
+  test.each([
+    ['the REST body', { name: 'AiError', internalCode: 3021, httpCode: 429, message: 'AiError: AiError: rate limiting: inference request per min rate reached (c24b)' }],
+    ['the binding\'s envelope', { errors: [{ code: 3021, message: 'rate limiting: inference request per min rate reached' }] }],
+  ])('Workers AI\'s per-minute refusal, in %s, is waited out as a stated minute, once', async (_carrier, body) => {
+    const waited: string[] = [];
+
+    const harness = retryHarness([
+      new Response(JSON.stringify(body), { status: 429, headers: { 'content-type': 'application/json' } }),
+      answer(),
+    ], { onWait: (info) => waited.push(`${info.source} ${String(info.waitMs)} ${String(info.retry)} of ${String(info.retries)}`) });
+
+    expect(await harness.call()).toBe('ok');
+    expect({ waits: harness.waits, waited }).toEqual({ waits: [60_000], waited: ['stated 60000 1 of 3'] });
+  });
+
+  // Workers AI's limit for the models Kinu runs is "per account, per model" (developers.cloudflare.com/workers-ai/
+  // platform/limits, read 2026-10-14): the minute parks the refused model, where the fallback route parks it, and leaves
+  // the lane to the others, a fallback on the same account among them.
+  test('the minute parks the refused model in the pacer, where fallback parks it, not the lane', async () => {
+    let nowMs = 1_000_000;
+    const pacer = new ProviderPacer({ now: () => nowMs, sleep: async (ms) => { nowMs += ms; } });
+    const held: { lane: number | null; model: number | null }[] = [];
+    const minute = JSON.stringify({ errors: [{ code: 3021, message: 'rate limiting: inference request per min rate reached' }] });
+
+    const harness = retryHarness([new Response(minute, { status: 429 }), answer()], {
+      now: () => nowMs,
+      pacer,
+      modelId: 'm',
+      sleep: async (ms) => {
+        held.push({ lane: pacer.cooling(LANE)?.waitMs ?? null, model: pacer.cooling(attemptKey({ lane: LANE, modelId: 'm' }))?.waitMs ?? null });
+        nowMs += ms;
+      },
+    });
+
+    expect(await harness.call()).toBe('ok');
+    expect(held).toEqual([{ lane: null, model: 60_000 }]);
+  });
+
+  test('during the minute, another model on the lane answers at once and the same model waits it out', async () => {
+    let nowMs = 1_000_000;
+    const pacer = new ProviderPacer({ now: () => nowMs, sleep: async (ms) => { nowMs += ms; } });
+
+    pacer.declareWait(attemptKey({ lane: LANE, modelId: 'm' }), 60_000);
+    const sent: number[] = [];
+
+    const answering = asFetchFunction(async () => {
+      sent.push(nowMs);
+
+      return answer();
+    });
+
+    const model = (modelId: string) => stacked(answering, { now: () => nowMs, pacer, modelId, random: () => 0.5 });
+
+    expect(await called(model('other'))).toBe('ok');
+    expect(await called(model('m'))).toBe('ok');
+    expect(sent).toEqual([1_000_000, 1_060_000]);
+  });
+
+  test('another provider\'s 429 stating no wait keeps the backoff', async () => {
+    const harness = retryHarness([
+      new Response(JSON.stringify({ error: { message: 'Rate limit reached for requests', type: 'rate_limit_error' } }), { status: 429 }),
+      answer(),
+    ]);
+
+    expect(await harness.call()).toBe('ok');
+    expect(harness.waits).toEqual([1_000]);
   });
 
   test('honors retry-after-ms, as the fallback cooldown reads the same answer', async () => {

@@ -144,11 +144,14 @@ export interface ProviderWaitInfo {
   readonly waitMs: number;
   /** 1-based refused attempt; 0 for a `cooldown` join. */
   readonly attempt: number;
+  /** Which of the call's `retries` this wait comes before; absent for a `cooldown` join. */
+  readonly retry?: number;
+  readonly retries?: number;
   readonly status?: number;
   readonly source: (typeof PROVIDER_WAIT_SOURCES)[number];
 }
 
-export const PROVIDER_WAIT_SOURCES = ['header', 'backoff', 'cooldown', 'stall'] as const;
+export const PROVIDER_WAIT_SOURCES = ['header', 'stated', 'backoff', 'cooldown', 'stall'] as const;
 
 export interface ProviderDeps {
 

@@ -5,11 +5,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
-  cloudPlanes, filesFocusOf, referencePrefixes, SLATE_PREFIX, WORKSPACE_ROOT,
+  cloudPlanes, filesFocusOf, PLANE, referencePrefixes, SLATE_PREFIX, WORKSPACE_ROOT,
   type DiffAnchor, type ExecutorInfo, type FilesFocus, type SlateSummary, type SurfaceKind,
 } from "@kinu.run/core";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import type { WorkbenchHandle } from "@/components/WorkbenchPanels";
+import type { ChatImageSource } from "@/components/ChatImages";
 
 /** A chat's file links: the prefixes it links, and what opens one. */
 interface FileLinks {
@@ -38,6 +39,8 @@ export interface WorkbenchSurfaces {
   readonly show: (surface: SurfaceKind) => void;
   readonly filesFocus: FilesFocus | null;
   readonly fileLinks: FileLinks;
+  /** Where the chat reads the pictures it shows, and opens one in Files. */
+  readonly chatImages: ChatImageSource;
   readonly changesFocus: ChangesFocus | null;
   readonly openChangeNote: (source: string, anchor: DiffAnchor | undefined) => void;
   readonly forkLanding: ForkLanding | null;
@@ -45,7 +48,8 @@ export interface WorkbenchSurfaces {
 }
 
 /** `search`: the URL the page opened on, read once for its landings. */
-export function useWorkbenchSurfaces({ executors, slates, search }: {
+export function useWorkbenchSurfaces({ workspace, executors, slates, search }: {
+  workspace: string;
   executors: readonly ExecutorInfo[];
   slates: readonly SlateSummary[];
   search: string;
@@ -77,6 +81,14 @@ export function useWorkbenchSurfaces({ executors, slates, search }: {
   const machines = useMemo(() => executors.flatMap((executor) => executor.mounts ?? []), [executors]);
   const fileLinks = useMemo(() => ({ roots: referencePrefixes(cloudPlanes(WORKSPACE_ROOT), machines), open: openFile }), [machines, openFile]);
 
+  const chatImages = useMemo((): ChatImageSource => ({
+    src: (path, download = false) => `/api/workspaces/${encodeURIComponent(workspace)}/files`
+      + `?executor=${encodeURIComponent(PLANE)}&path=${encodeURIComponent(path)}${download ? "&download=1" : ""}`,
+    home: WORKSPACE_ROOT,
+    roots: fileLinks.roots,
+    reveal: (path) => openFile(`vfs://${path.replace(/^\//u, "")}`),
+  }), [workspace, fileLinks.roots, openFile]);
+
   useEffect(() => {
     if (landingFile === null) return;
     openFile(landingFile);
@@ -96,5 +108,5 @@ export function useWorkbenchSurfaces({ executors, slates, search }: {
 
   const forkLandingOpened = useCallback(() => setForkLanding(null), []);
 
-  return { workbench, surface, setSurface, show, filesFocus, fileLinks, changesFocus, openChangeNote, forkLanding, forkLandingOpened };
+  return { workbench, surface, setSurface, show, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened };
 }

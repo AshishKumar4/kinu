@@ -358,8 +358,8 @@ export class FakeSandbox {
   desktopStart: ExecResult = { stdout: '1280 768\n', stderr: '', exitCode: 0 };
   /** What the box's terminal sessions read answers (D90): tab-separated `P`, `L` and `B` rows. */
   sessionsRead: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
-  /** What keeping the box's shown name answers (D93), or `gone` for an exec the container refuses. */
-  showName: ExecResult | 'gone' = { stdout: '', stderr: '', exitCode: 0 };
+  /** What naming the box answers (D96): its script's report, or `gone` for an exec the container refuses. */
+  nameBox: ExecResult | 'gone' = { stdout: 'named=yes 10.0.0.1 fd00::11\n', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
@@ -971,7 +971,7 @@ export class FakeSandbox {
     // in argv (`file-digest-write.ts`).
     const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
       || args[3] === 'devbox-desktop' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true)
-      || args[0] === 'xdotool' || args[3] === 'devbox-screenshot' || args[3] === 'devbox-watch';
+      || args[0] === 'xdotool' || args[3] === 'devbox-screenshot' || args[3] === 'devbox-watch' || args[3] === 'devbox-let-up';
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 
@@ -1018,7 +1018,10 @@ export class FakeSandbox {
     return undefined;
   }
 
-  async #nativeCommand(args: string[], options: ContainerExecOptions, pid: number): Promise<ExecProcess> {
+  async #nativeCommand(launched: string[], options: ContainerExecOptions, pid: number): Promise<ExecProcess> {
+    // A caller's run is in its own group, `setsid -w` (D69): what it runs follows.
+    const args = launched[0] === 'setsid' && launched[1] === '-w' ? launched.slice(2) : launched;
+
     // The restore deadline's process ends only when it is killed: a test that needs the deadline to
     // fall hands the box a hand clock rather than waiting out a duration.
     if (args[0] === '/bin/sleep') {
@@ -1062,15 +1065,15 @@ export class FakeSandbox {
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
 
-    if (args[3] === 'show-name') {
+    if (args[3] === 'name-box') {
       this.sequence.push(`name:${args[4] ?? ''}`);
 
-      if (this.showName === 'gone') throw new Error('Container is not running');
+      if (this.nameBox === 'gone') throw new Error('Container is not running');
 
-      return processResult(Promise.resolve(this.showName), pid);
+      return processResult(Promise.resolve(this.nameBox), pid);
     }
 
-    // `[setsid -w] /bin/bash -c <command>` (D69): the command follows `-c`.
+    // `/bin/bash -c <command>`: the command follows `-c`.
     const command = args[args.indexOf('-c') + 1] ?? '';
 
     return processResult(this.#execIn(command, { cwd: options.cwd }), pid);

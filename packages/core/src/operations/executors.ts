@@ -6,8 +6,8 @@
 import * as v from 'valibot';
 import { ExecutorPortSchema } from '../execution/types';
 import {
-  ButtonSchema, ClickCountSchema, DesktopPointSchema, KeyHoldSchema, KeysSchema, TypedTextSchema, WATCH_DEFAULT_FRAMES, WATCH_FRAMES, WatchFpsSchema,
-  WatchSecondsSchema, WheelClicksSchema,
+  ButtonSchema, ClickCountSchema, DesktopPointSchema, KeyHoldSchema, KeysSchema, TypedTextSchema, WATCH_DEFAULT_FRAMES, WatchFpsSchema,
+  WatchSecondsSchema, WheelClicksSchema, watchSheet, type DesktopScreen,
 } from '../execution/desktop';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { defineOperation, type Impact, type Operation } from './operation';
@@ -145,8 +145,26 @@ const KEYS_ARE = '"Return", "Tab", "Escape", "BackSpace", "Delete", "Home", "End
   + '"Left", "Right", "space", "F1"-"F12", or a letter, digit or punctuation mark; modifiers before it with "+": "ctrl+l", '
   + '"ctrl+shift+t", "alt+Tab". Enter, Esc, cmd and win are understood.';
 
+/** What a watch's frames cost, from the box's layout: each frame's size, then the image the default and the most make,
+ *  as screenshots' worth of pixels, which is what an image costs. */
+function watchPays(screen: DesktopScreen): string {
+  const most = screen.sheet.columns.length;
+  const size = (sheet: { readonly width: number; readonly height: number }): string => `${String(sheet.width)}×${String(sheet.height)}`;
+
+  const made = (frames: number): string => {
+    const sheet = watchSheet(screen, frames);
+    const shots = Number(sheet.screenshots.toFixed(1));
+
+    return `${String(frames)} make a ${size(sheet)} image, as much as ${String(shots)} screenshot${shots === 1 ? '' : 's'}`;
+  };
+
+  return `Frames a second, at most ${String(most)} in all; without it, ${String(WATCH_DEFAULT_FRAMES)}. Each frame is `
+    + `${size(watchSheet(screen, 1))}, ${String(screen.sheet.percent)}% of the screen's width and height, and an image costs by its size: `
+    + `${made(WATCH_DEFAULT_FRAMES)}; ${made(most)}.`;
+}
+
 /** The desktop's members over the screen the box runs, its size declared once, where the model reads it (D89). */
-export function computerDesktop(screen: { readonly width: number; readonly height: number }) {
+export function computerDesktop(screen: DesktopScreen) {
   const size = `${String(screen.width)}×${String(screen.height)}`;
   const Point = described(DesktopPointSchema, `A point on the screen, [x, y]: pixels from its top left, x below ${String(screen.width)} and y below ${String(screen.height)}.`);
   const Image = described(v.string(), 'A PNG data URL. Returned from the program, it is shown to you.');
@@ -162,8 +180,7 @@ export function computerDesktop(screen: { readonly width: number; readonly heigh
       help: 'The desktop over a few seconds, to see what moves or changes: its frames, taken evenly, in one image.',
       input: v.strictObject({
         seconds: described(WatchSecondsSchema, 'How long to watch, at most 10.'),
-        fps: v.optional(described(WatchFpsSchema, `Frames a second, at most ${String(WATCH_FRAMES)} in all; without it, ${String(WATCH_DEFAULT_FRAMES)}, `
-          + 'which cost what one screenshot does. More than four are tiled smaller, and small text is lost first.')),
+        fps: v.optional(described(WatchFpsSchema, watchPays(screen))),
       }),
     }),
     click: desk({

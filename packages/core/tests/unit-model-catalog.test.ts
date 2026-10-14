@@ -9,6 +9,7 @@ import {
   createCodexProvider,
   createOpenAIProvider,
   createProviderRegistry,
+  createWorkersAIProvider,
   toProviderError,
   type AuthResolution,
   type ModelCallDeps,
@@ -86,6 +87,32 @@ describe('provider model catalogs', () => {
       inputModalities: ['text', 'image'],
       reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'],
     }]);
+  });
+
+  // #93: models.dev's Workers AI rows title-case their slugs ("Glm 5.3"); the menu said "Glm 5.3" beside a notice
+  // saying "GLM-5.3". The name is the lab's own row's, through the reseller row's canonical id.
+  test("a reseller's model is named as its lab names it", async () => {
+    const provider = createWorkersAIProvider();
+
+    const fetchFn = fetchStub(async () => Response.json({
+      'cloudflare-workers-ai': {
+        models: {
+          '@cf/zai-org/glm-5.3': { id: '@cf/zai-org/glm-5.3', name: 'Glm 5.3', canonical_model_id: 'zhipuai/glm-5.3', tool_call: true },
+          '@cf/qwen/qwq-32b': { id: '@cf/qwen/qwq-32b', name: 'Qwq 32B', canonical_model_id: 'qwen/no-such-row', tool_call: true },
+          '@cf/meta/llama-3.3-70b-instruct-fp8-fast': {
+            id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 70B Instruct fp8 Fast', canonical_model_id: 'meta/llama-3.3-70b-instruct', tool_call: true,
+          },
+        },
+      },
+      zhipuai: { models: { 'glm-5.3': { id: 'glm-5.3', name: 'GLM-5.3', tool_call: true } } },
+      meta: { models: { 'llama-3.3-70b-instruct': { id: 'llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct', tool_call: true } } },
+    }));
+
+    const models = await provider.listModels({ ...deps({}, fetchFn), getAuth: async () => ({ baseURL: 'https://gateway.invalid', headers: {} }) });
+
+    expect(models.map((model) => model.label ?? '').sort((left, right) => left.localeCompare(right))).toEqual([
+      'GLM-5.3', 'Llama 3.3 70B Instruct fp8 Fast', 'Qwq 32B',
+    ]);
   });
 
   test('the levels are the effort row models.dev records; a toggle, a budget or nothing offers none', async () => {

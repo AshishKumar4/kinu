@@ -19,7 +19,7 @@ import type { WorkspaceSession } from '../vfs/nimbus-workspace';
 import { SLATES_ROOT } from '../vfs/workspace-path';
 import { slateAuthority } from './authority';
 import { WorkspaceBlueprints, type BlueprintReading } from './blueprints';
-import { SlateBuilds, type FailingSlateBuild } from './builds';
+import type { SlateBuilds } from './builds';
 import { ROOT_SLATE_CALLER, type SlateCaller } from './caller';
 import { slateCapabilityGraph, type SlateSurfaceCatalog } from './capability-graph';
 import { WorkspaceSlateContentStore } from './content';
@@ -79,6 +79,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   extends Pick<SlateProcessPorts<Source, Process>, 'resolve' | 'digest' | 'build' | 'launch' | 'ended'> {
   readonly workspace: string;
   readonly sql: SqlExec;
+  /** The object's one build record: its owner reads it before any controller exists. */
+  readonly builds: SlateBuilds;
   transaction<Result>(body: () => Result): Result;
   session(): Promise<Pick<WorkspaceSession, 'vfs'>>;
   readonly apps: SlateApps;
@@ -129,7 +131,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     this.state = new SqliteSlateStateStore(ports.sql);
     this.live = new SlateLiveShareStore(ports.sql);
     this.usage = new SlateUsageStore(ports.sql);
-    this.builds = new SlateBuilds(ports.sql);
+    this.builds = ports.builds;
     this.viewers = new SlateShareViewers({
       live: this.live, shareEntry: (share) => ports.shareEntry(share),
       ...(ports.admitted !== undefined && { admitted: ports.admitted.bind(ports) }),
@@ -539,11 +541,6 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
       return yield* read(yield* Effect.promise(async () => this.processes.served(ROOT_SLATE_CALLER, id)));
     }));
-  }
-
-  /** Every slate whose latest source does not build for the workspace's own agent, in the compiler's words. */
-  failingBuilds(): FailingSlateBuild[] {
-    return this.builds.failing(ROOT_SLATE_CALLER.cred);
   }
 
   /** Answers the refusal instead of failing, so the route can tell `missing` from `bad_input`. */

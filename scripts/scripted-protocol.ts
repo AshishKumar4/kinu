@@ -39,21 +39,34 @@ export interface ScriptedAnswer {
   readonly text?: string;
   readonly toolCall?: { readonly name: string; readonly arguments: unknown };
   readonly pace?: ScriptedPace;
-  readonly rateLimited?: { readonly retryAfterSeconds: number };
+  /** `perMinute`: Workers AI's own refusal of a model's per-minute allowance, which states no header. */
+  readonly rateLimited?: { readonly retryAfterSeconds?: number; readonly perMinute?: boolean };
 }
 
-/** A 429 the way an OpenAI-compatible provider sends one: its error body, and the seconds to wait in `retry-after`. */
+/** A 429 the way an OpenAI-compatible provider sends one: its error body, and the seconds to wait in `retry-after` when
+ *  it states any. */
 export interface RateLimitedResponse {
   readonly status: 429;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
 }
 
-export function rateLimitedAnswer(retryAfterSeconds: number): RateLimitedResponse {
+/** Workers AI's REST body for its per-minute limit, as recorded (prod-glm-1 evals, 2026-09-30), with no wait header. */
+const WORKERS_AI_PER_MINUTE = {
+  name: 'AiError', internalCode: 3021, httpCode: 429,
+  message: 'AiError: AiError: rate limiting: inference request per min rate reached (scripted)',
+  description: 'rate limiting: inference request per min rate reached',
+};
+
+export function rateLimitedAnswer(limited: NonNullable<ScriptedAnswer['rateLimited']>): RateLimitedResponse {
+  const { retryAfterSeconds, perMinute = false } = limited;
+
   return {
     status: 429,
-    headers: { 'content-type': 'application/json', 'retry-after': String(retryAfterSeconds) },
-    body: JSON.stringify({ error: { message: 'Rate limit reached for requests', type: 'rate_limit_error', code: 'rate_limit_exceeded' } }),
+    headers: { 'content-type': 'application/json', ...(retryAfterSeconds !== undefined && { 'retry-after': String(retryAfterSeconds) }) },
+    body: JSON.stringify(perMinute
+      ? WORKERS_AI_PER_MINUTE
+      : { error: { message: 'Rate limit reached for requests', type: 'rate_limit_error', code: 'rate_limit_exceeded' } }),
   };
 }
 

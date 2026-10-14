@@ -206,36 +206,37 @@ class Catalog<TSchema extends v.GenericSchema> {
   ) {}
 
   load(): { readonly rows: v.InferOutput<TSchema> } | { readonly failure: string } {
-    if (this.cached !== undefined) return this.cached;
+    this.cached ??= this.read();
+
+    return this.cached;
+  }
+
+  /** Reads the account again; every later `load` sees this newer answer. */
+  refresh(): { readonly rows: v.InferOutput<TSchema> } | { readonly failure: string } {
+    this.cached = this.read();
+
+    return this.cached;
+  }
+
+  private read(): { readonly rows: v.InferOutput<TSchema> } | { readonly failure: string } {
     const run = wrangler(this.argv);
 
-    if (!run.ok) {
-      this.cached = { failure: `\`wrangler ${this.argv.join(' ')}\` failed: ${why(run)}` };
-
-      return this.cached;
-    }
-
+    if (!run.ok) return { failure: `\`wrangler ${this.argv.join(' ')}\` failed: ${why(run)}` };
     const body = jsonBody(run.stdout, '[');
 
-    if (body === undefined) {
-      this.cached = { failure: `\`wrangler ${this.argv.join(' ')}\` printed no JSON array` };
-
-      return this.cached;
-    }
+    if (body === undefined) return { failure: `\`wrangler ${this.argv.join(' ')}\` printed no JSON array` };
 
     try {
-      this.cached = { rows: v.parse(this.schema, JSON.parse(body)) };
+      return { rows: v.parse(this.schema, JSON.parse(body)) };
     } catch (error) {
       // Not a sentinel: the reason travels with the verdict, because "this
       // program could not read the answer" and "the answer was no" have to stay
       // apart all the way to the report.
-      this.cached = {
+      return {
         failure: `${this.label}: could not read \`wrangler ${this.argv.join(' ')}\` — `
           + (error instanceof Error ? error.message : String(error)),
       };
     }
-
-    return this.cached;
   }
 }
 
@@ -399,26 +400,22 @@ export function containerApplications(): readonly ContainerApplication[] | { rea
     const info = containerInfo(row.id);
 
     if ('failure' in info) {
-      // The account is shared: a fixture deleted between the list and its info read is gone, not unreadable
-      // (2026-10-13, staging's reset refused on a throwaway devbox application torn down mid-read).
-      if (listedNow(row.id) === false) continue;
+      // The account is shared: an application deleted between the list and its info read is gone, not unreadable
+      // (2026-10-13, staging's reset refused on a throwaway devbox application torn down mid-read). The catalog is read
+      // again, so every later reader sees the account as it is now.
+      const now = containerCatalog.refresh();
 
-      return info;
+      if ('failure' in now) return now;
+
+      if (now.rows.some((listed) => listed.id === row.id)) return info;
+
+      continue;
     }
 
     applications.push({ id: info.id, name: info.name, namespace: info.durable_objects?.namespace_id });
   }
 
   return applications;
-}
-
-/** Whether a fresh `containers list` still holds `id`; null when it cannot be read. */
-function listedNow(id: string): boolean | null {
-  const run = wrangler(['containers', 'list', '--json']);
-  const body = run.ok ? jsonBody(run.stdout, '[') : undefined;
-  const parsed = body === undefined ? undefined : v.safeParse(ContainerRows, tolerate(() => JSON.parse(body), 'malformed-input'));
-
-  return parsed?.success === true ? parsed.output.some((row) => row.id === id) : null;
 }
 
 /**
