@@ -56,7 +56,11 @@ function account(failing?: keyof ResetTarget) {
 
       return state.serving;
     },
-    servedVersion: () => state.serving.versionId,
+    servedVersion: () => {
+      step('servedVersion');
+
+      return state.serving.versionId;
+    },
     applications: () => state.applications,
     latest: () => state.records.get(LATEST_RESET_KEY),
     deployPlaceholder: (classes, tag) => {
@@ -136,6 +140,23 @@ describe('a reset stopped anywhere can be finished', () => {
     expect(state.placeholders).toHaveLength(1);
     // Taken before the placeholder deleted them; each resumed run checks what its restore is owed instead.
     expect(state.checkpoints).toEqual(['capture with 0 placeholder(s)', 'owed with 1 placeholder(s)', 'owed with 1 placeholder(s)']);
+  });
+
+  // Staging, 2026-10-14: the reset of 56377b387 stopped between its placeholder and the record naming it, the
+  // application bound to the namespace the placeholder deleted; the `--reset` deploy after it finishes the reset.
+  test('stopped after its placeholder and before its record names it, a rerun deletes the applications the record names', async () => {
+    const { state, target } = account('servedVersion');
+    const input = { environment: 'staging' as const, config, recordFile, restToken: 'a-rest-token', target };
+
+    await expect(wipe(input)).rejects.toThrow('servedVersion failed');
+    const started = state.records.get(LATEST_RESET_KEY);
+
+    expect([started?.state, started?.placeholderVersion, state.applications.length]).toEqual(['started', '', 3]);
+
+    const done = await wipe(input);
+
+    expect([done.state, done.placeholderVersion, state.applications.map((application) => application.name)])
+      .toEqual(['done', 'placeholder-1', ['another-worker-box']]);
   });
 
   // Staging, 2026-10-14: the placeholder deployed at 13:43:32; the deployment named it at 13:43:38 and its own view

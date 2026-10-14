@@ -595,22 +595,26 @@ export function audit(request: AuditRequest): Audit {
     if (
       entry.verdict === 'absent'
       && entry.required
-      && deployOwned(entry.origin)
       // THE ONE TOLERANCE, and the whole behavioural difference between the three
       // phases. `post-deploy` has none: the upload has run. `bootstrap` defers
       // every deploy-owned absence, because a class new to `exports` cannot
       // exist before the deploy that declares it. `full` defers one only while
       // the Worker itself is absent — the pre-first-deploy state, in which
       // nothing bound to a Worker could exist either — and the rows a reset
-      // deleted, by its record, which only a `--reset` deploy carries
-      // (`resetIds`): a reset deletes what the deploy owns by design, and the
-      // upload that recreates it has not run. No record, no deferral.
+      // deleted or is to delete, by its record, which only a `--reset` deploy
+      // carries (`resetIds`): a reset deletes what the deploy owns by design,
+      // and the application still holding a namespace its placeholder deleted
+      // is the reset's to delete before the upload recreates both. No record,
+      // no deferral.
       && phase !== 'post-deploy'
-      && (phase === 'bootstrap' || !workerDeployed || resetIds.includes(entry.id))
+      && ((deployOwned(entry.origin) && (phase === 'bootstrap' || !workerDeployed)) || resetIds.includes(entry.id))
     ) {
       // Deferred, never skipped: nothing reachable from here can create it, and
       // the run that collects it tolerates nothing.
-      notes.push(`${entry.id} is absent and is created by the deploy itself — ${DEFERRAL_NOTE[phase]}`);
+      notes.push(deployOwned(entry.origin)
+        ? `${entry.id} is absent and is created by the deploy itself — ${DEFERRAL_NOTE[phase]}`
+        : `${entry.id} is held by an application the reset record names, which the reset this deploy finishes deletes — `
+          + 'the post-deploy run rejects it if the upload does not bind the namespace it creates');
       continue;
     }
 

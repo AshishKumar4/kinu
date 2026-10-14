@@ -805,6 +805,40 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
    * says what the reset deleted, and its placeholder version says when the Worker still serves the placeholder, which
    * carries no binding but its version metadata. Nothing else answers for any row.
    */
+  // Staging, 2026-10-14: the reset of 56377b387 stopped after its placeholder, its record `started`, and the gate refused
+  // the `--reset` deploy that would have finished it, on the application bound to the namespace the placeholder deleted.
+  test('a reset stopped after its placeholder defers its application\'s hold on the deleted namespace until the upload', () => {
+    const staging = deriveInfrastructure('staging');
+    const hold = staging.resources.find((resource) => resource.kind === 'container-namespace' && resource.name === 'kinu-kinudevbox-staging')?.id ?? '';
+    const application = { name: 'kinu-kinudevbox-staging', id: 'fb4d43b4'.repeat(4) };
+
+    const stopped: Reset = {
+      environment: 'staging', worker: 'kinu-staging', tag: 'reset-20261014T134328Z', at: '2026-10-14T13:43:28.000Z',
+      placeholderVersion: '', state: 'started', classes: [{ className: 'KinuDevbox', namespace: 'fb4d43b4' }], applications: [application],
+    };
+
+    // The placeholder binds no class, so the gate asks for a namespace the deploy creates and finds the application held.
+    const observed = namespaceBinding(undefined, application.name, [{ ...application, namespace: 'fb4d43b4' }]);
+
+    const rows: readonly Row[] = [
+      ...blindRows(),
+      row(authStore().id, 'present', true),
+      row('worker.kinu-staging', 'present', true, 'wrangler-deploy'),
+      row(hold, observed.state === 'absent' ? 'absent' : 'present', true),
+    ];
+
+    const findsHold = (phase: Phase, resetIds: readonly string[]) =>
+      audit({ infrastructure: staging, rows, supplied: [], unreadFields: [], phase, resetIds }).findings.some((entry) => entry.includes(hold));
+
+    const deferred = resetResourceIds(stopped, servingOf('95c055c5', []), staging.resources);
+
+    expect({
+      observed: observed.state, full: findsHold('full', deferred), unrecorded: findsHold('full', []), afterUpload: findsHold('post-deploy', deferred),
+      // The placeholder it never named still serves, so the bindings it does not carry are the reset's too.
+      bindings: deferred.includes(staging.resources.find((resource) => resource.kind === 'binding' && resource.binding === 'ASSETS')?.id ?? 'none'),
+    }).toEqual({ observed: 'absent', full: false, unrecorded: true, afterUpload: true, bindings: true });
+  });
+
   test('a reset record defers what its reset deleted before the upload, and nothing after it', () => {
     const staging = deriveInfrastructure('staging');
 
@@ -857,8 +891,10 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     expect(found(auditAt('full', stoppedShort))).toEqual([assets, userDo]);
     expect(found(auditAt('full', resetResourceIds(reset, servingOf('unrelated-placeholder', []), staging.resources))))
       .toEqual([assets, userDo]);
+    // A record that never named its placeholder, while a version binding no class serves: the placeholder it stopped
+    // after, which `pendingReset` resumes (2026-10-14), so what that placeholder lacks waits for the upload too.
     expect(found(auditAt('full', resetResourceIds({ ...reset, placeholderVersion: '' }, servingOf('9c840710', []), staging.resources))))
-      .toEqual([assets, userDo]);
+      .toEqual([userDo]);
 
     // After the upload, and in a deploy that carries no record, every absence is a finding.
     expect(found(auditAt('post-deploy', placeholder))).toEqual([devbox, container, assets, userDo]);
