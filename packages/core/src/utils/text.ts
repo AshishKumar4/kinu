@@ -40,3 +40,24 @@ export function lineCount(text: string): number {
 
   return text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 }
+
+/** XML's five named references. */
+export const XML_ENTITIES: ReadonlyMap<string, string> = new Map([['amp', '&'], ['lt', '<'], ['gt', '>'], ['quot', '"'], ['apos', "'"]]);
+
+/** XML's, and the non-breaking space a page writes between words, read as a space. */
+export const HTML_ENTITIES: ReadonlyMap<string, string> = new Map([...XML_ENTITIES, ['nbsp', ' ']]);
+
+/**
+ * Character references decoded in one pass, so each is decoded once (`&amp;lt;` reads `&lt;`): a name in `named`, or a
+ * decimal or hex code point. A code point outside Unicode, or zero, decodes to nothing; a name outside `named` stays.
+ */
+export function decodeEntities(value: string, named: ReadonlyMap<string, string>): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (reference: string, code: string) => {
+    const lowered = code.toLowerCase();
+
+    if (!lowered.startsWith('#')) return named.get(lowered) ?? reference;
+    const point = lowered.startsWith('#x') ? Number.parseInt(lowered.slice(2), 16) : Number.parseInt(lowered.slice(1), 10);
+
+    return Number.isFinite(point) && point > 0 && point < 0x110000 ? String.fromCodePoint(point) : '';
+  });
+}
