@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { measurePromptUsage, type Assertion } from '../evals/src/results';
-import { previousSummary, recordRunner, renderReport, type ReportEntry, type ReportSummary } from './deploy-report';
+import { markInstant, previousSummary, recordMarkAt, recordRunner, renderReport, type ReportEntry, type ReportSummary } from './deploy-report';
 
 const META = { environment: 'staging', mode: 'deploy', sha: 'bbbbbbbbbbbbbbbb', startedAt: '2026-09-30T20:00:00.000Z' };
 
@@ -123,6 +123,18 @@ finish
     expect(text).toContain('### NEW: build, upload and smoke');
     expect(text).toContain('Merges since then (1):\n- 1234567 Merge lane/x');
     expect(rendered.reds).toEqual(['source: bun run test:core', 'post-publish: bun run gate:first-run', 'publish: build, upload and smoke']);
+  });
+
+  // The ladder marks when the wave stopped driving the deployment, and Step 5b ends its telemetry window there.
+  test('a mark taken at an instant is in whole seconds from the start, never before it, and answers that instant', () => {
+    const dir = scratchDir('deploy-report-mark');
+
+    writeFileSync(join(dir, 'meta.json'), `${JSON.stringify({ environment: 'staging', mode: 'plain', sha: 'abc', startedAt: '2026-10-14T08:39:09.002Z' })}\n`);
+    expect(markInstant(dir, 'traffic')).toBeUndefined();
+    recordMarkAt(dir, 'traffic', Date.parse('2026-10-14T08:48:44.100Z'));
+
+    expect({ entry: readFileSync(join(dir, 'entries.jsonl'), 'utf8'), at: markInstant(dir, 'traffic')?.toISOString() })
+      .toEqual({ entry: `${JSON.stringify({ kind: 'mark', mark: 'traffic', seconds: 576 })}\n`, at: '2026-10-14T08:48:45.002Z' });
   });
 
   // What the deploy did not run, and what a fixer should act on that is no red, are in the file and are not reds.
