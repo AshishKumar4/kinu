@@ -3122,11 +3122,24 @@ export function ciUnits(costs: HostedCosts = readHostedCosts()): { readonly gate
     }
 
     const split = splitCIGate(gate, tracked, costs.files);
-    const weights = split.map((part) => claims(part.run, tracked).reduce((sum, file) => sum + (costs.files[file] ?? 1), 0));
+    const files = split.map((part) => claims(part.run, tracked));
+    const weights = files.map((each) => each.reduce((sum, file) => sum + (costs.files[file] ?? 1), 0));
     const total = weights.reduce((sum, weight) => sum + weight, 0);
 
-    return split.map((part, index) => ({ gate: part, seconds: costs.seconds[part.label] ?? seconds * (split.length === 1 ? 1 : (weights[index] ?? 0) / total) }));
+    // A shard whose command no run has measured yet, as after a file moves between bins, is weighed by its files'
+    // own times (Bun's timings, in ms), which outlast the reshuffle; the row's share of its seconds is the last resort.
+    return split.map((part, index) => ({
+      gate: part,
+      seconds: costs.seconds[part.label]
+        ?? (split.length > 1 ? timedSeconds(files[index] ?? [], costs.files) : undefined)
+        ?? seconds * (split.length === 1 ? 1 : (weights[index] ?? 0) / total),
+    }));
   });
+}
+
+/** The seconds a sequential run of `files` takes by their measured timings, or undefined while any is unmeasured. */
+function timedSeconds(files: readonly string[], timings: Readonly<Record<string, number>>): number | undefined {
+  return files.every((file) => timings[file] !== undefined) ? files.reduce((sum, file) => sum + (timings[file] ?? 0), 0) / 1000 : undefined;
 }
 
 /** A row a task must report, with the files a split suite must time, which armada holds each task to. */
