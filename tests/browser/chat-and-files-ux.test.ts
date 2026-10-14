@@ -2863,12 +2863,7 @@ async function waitForWorkSection(page: Page, title: string): Promise<void> {
 /** Rows the journal is rendering right now: the feed is one group of row
  *  children, so its length is the chip's answer. */
 function journalRows(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const journal = [...document.querySelectorAll('section')]
-      .find((node) => node.querySelector('.p-label')?.textContent === 'Journal');
-
-    return journal?.querySelector('div.p-group')?.children.length ?? 0;
-  });
+  return page.evaluate(() => document.querySelectorAll('[data-journal-row]').length);
 }
 
 /**
@@ -2955,11 +2950,7 @@ describe('WorkTab draws a section only when it has something to show', () => {
 
       const journal = (await workSections(page)).find((section) => section.title === 'Journal');
 
-      const rows = await page.evaluate(() => [...document.querySelectorAll('section')]
-        .find((node) => node.querySelector('.p-label')?.textContent === 'Journal')
-        ?.querySelectorAll('div.p-group > *').length ?? -1);
-
-      expect(journal?.badge).toBe(String(rows));
+      expect(journal?.badge).toBe(String(await journalRows(page)));
       await page.close();
     });
   });
@@ -3083,19 +3074,17 @@ describe('Work keeps up with what is happening and what happened', () => {
     });
   });
 
-  test('the journal interleaves settled jobs, closed tasks and self-changes, newest first', async () => {
+  test('the journal interleaves settled jobs and closed tasks, newest first; the agent\'s self-changes are the Agent tab\'s', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 2400 });
       await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
       await waitForWorkSection(page, 'Journal');
 
-      const rows = await page.evaluate(() => [...[...document.querySelectorAll('section')]
-        .find((node) => node.querySelector('.p-label')?.textContent === 'Journal')?.querySelector('div.p-group')?.children ?? []]
-        .map((row) => row.textContent ?? ''));
+      const rows = await page.evaluate(() => [...document.querySelectorAll('[data-journal-row]')].map((row) => row.textContent ?? ''));
 
       // Each fixture row by something only it says, in the order the fixture's times put them; a closed task names whose it was.
-      const order = ['changed nothing', 'tool preamble', 'bisect_migration', '2f8b1d04', 'coupon docs page · main', 'SAVE20 coupon 500 · main', 'percentage coupons', 'Stage the rollout · courier', '9d3c6e11'];
+      const order = ['2f8b1d04', 'coupon docs page · main', 'SAVE20 coupon 500 · main', 'Stage the rollout · courier', '9d3c6e11'];
 
       expect(rows.map((row) => order.findIndex((marker) => row.includes(marker)))).toEqual(order.map((_, at) => at));
       // The running job is Now's, not the journal's.

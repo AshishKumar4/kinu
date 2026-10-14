@@ -236,7 +236,7 @@ function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
             <p className="p-eyebrow">{label}</p>
             <div className="p-group">
               {rows.map((row) => (
-                <div key={row.key}>
+                <div key={row.key} data-journal-row={row.kind}>
                   {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
                   {row.kind === "task" && <TaskTree grouped task={row.task} owner={row.owner} onOpenOwner={onOpenOwner} />}
                 </div>

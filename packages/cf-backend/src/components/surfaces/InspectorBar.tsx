@@ -39,15 +39,21 @@ const MORE = 40;
 /** The open page keeps at least this much of its name beside the count, or the row becomes one picker. */
 const MIN_OPEN = 96;
 
-/** The pages shown: in order, as many as fit, the open one always among them, the count's room kept once any is out. */
+/**
+ * The pages shown: in order, as many as fit, led by the open one (or the first, while a tool is open), which gives up
+ * its name's end before its place; the count's room kept once any is out. Too narrow for a lead's cut name, none show
+ * and the count holds them all.
+ */
 function fitting(widths: readonly number[], open: number, room: number): ReadonlySet<number> {
   if (widths.reduce((sum, width) => sum + width + GAP, 0) <= room) return new Set(widths.keys());
 
-  let left = room - MORE - GAP - (open < 0 ? 0 : (widths[open] ?? 0) + GAP);
-  const shown = new Set<number>(open < 0 ? [] : [open]);
+  if (room - MORE - GAP < MIN_OPEN) return new Set();
+  const lead = open < 0 ? 0 : open;
+  let left = room - MORE - GAP - (widths[lead] ?? 0) - GAP;
+  const shown = new Set<number>([lead]);
 
   for (const [index, width] of widths.entries()) {
-    if (index === open) continue;
+    if (index === lead) continue;
 
     if (width + GAP > left) break;
     shown.add(index);
@@ -90,7 +96,7 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
       const fits = fitting(widths, opened, room);
 
       setShown(fits);
-      setPicker(fits.size < widths.length && room - MORE - GAP < Math.min(MIN_OPEN, widths[opened] ?? MIN_OPEN));
+      setPicker(opened >= 0 && fits.size === 0);
     };
 
     place();
