@@ -26,6 +26,12 @@ export interface TerminalPaneProps {
   onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
   /** What the pane's bar shows at its left, before the terminal's own state: the view's switch, or its name. */
   leading?: ReactNode;
+  /** The computer's terminal session this pane attaches to (D90); the box's first without one. */
+  session?: string;
+  /** The pane's bar on the terminal's own ground, under a rule its caller draws, where tabs sit above it. */
+  barOnGround?: boolean;
+  /** What the bar's right edge offers besides the terminal's own action: a split, say. */
+  trailing?: ReactNode;
 }
 
 type PtyState = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -41,8 +47,10 @@ const STATE_SAYS: Record<PtyState, { readonly word: string; readonly tone: strin
  * A terminal's one bar and its ground: the leading content, then the connection's state, the copy key and the
  * pane's one action on the right; under a hairline, the terminal itself, edge to edge to the column's foot.
  */
-function TerminalFrame({ leading, state, failure, copies, action, hostRef }: {
+function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOnGround = false, trailing }: {
   leading: ReactNode;
+  barOnGround?: boolean;
+  trailing?: ReactNode;
   state: PtyState | null;
   failure: string | null;
   /** The copy key's note, and what ⌃C reaches here; null where the lane has no copy chord. */
@@ -52,21 +60,22 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef }: {
 }) {
   return (
     <div className="flex h-full w-full flex-col">
-      <div className="flex h-11 shrink-0 items-center gap-3 pr-3 pl-4">
+      <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 ${barOnGround ? "p-terminal-ground h-9" : "h-11"}`}>
         {leading}
-        <span className="ml-auto flex min-w-0 items-center gap-3 p-meta p-text-3">
-          {failure !== null && <span className="min-w-0 truncate p-danger" title={failure}>{failure}</span>}
+        <span className="ml-auto flex shrink-0 items-center gap-3 p-meta p-text-3">
+          {failure !== null && <span className="max-w-[16rem] truncate p-danger" title={failure}>{failure}</span>}
           {state !== null && (
             <span data-terminal-state className="inline-flex shrink-0 items-center gap-1.5">
               <span aria-hidden className="p-env-dot" data-tone={STATE_SAYS[state].tone} />{STATE_SAYS[state].word}
             </span>
           )}
-          {copies !== null && <span className="hidden shrink-0 @[28rem]:inline" title={copies.title}>{copies.note}</span>}
+          {copies !== null && <span className="hidden shrink-0 @[36rem]:inline" title={copies.title}>{copies.note}</span>}
+          {trailing}
           {action}
         </span>
       </div>
       {/* FitAddon measures the host less its padding, so the text starts on the column's left edge. */}
-      <div ref={hostRef} className="p-terminal-ground min-h-0 flex-1 overflow-hidden border-t p-border pt-2 pl-4" />
+      <div ref={hostRef} className={`p-terminal-ground min-h-0 flex-1 overflow-hidden pl-4 ${barOnGround ? "pt-1" : "border-t p-border pt-2"}`} />
     </div>
   );
 }
@@ -78,15 +87,19 @@ const KEEPALIVE_MS = 60_000;
 /** xterm's default is 1000 lines, which a build log overruns in seconds. */
 const SCROLLBACK_LINES = 5_000;
 
-export function TerminalPane({ workspace, executor, outputs, onExecute, leading }: TerminalPaneProps) {
+export function TerminalPane({ workspace, executor, outputs, onExecute, leading, session, barOnGround, trailing }: TerminalPaneProps) {
   const lane = terminalLane(executor);
+  const frame = { leading, barOnGround, trailing };
 
-  if (lane.mode === "line") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} leading={leading} />;
+  if (lane.mode === "line") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} frame={frame} />;
 
-  if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} leading={leading} />;
+  if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} frame={frame} />;
 
-  return <PtyTerminal workspace={workspace} executor={executor} leading={leading} />;
+  return <PtyTerminal workspace={workspace} executor={executor} session={session} frame={frame} />;
 }
+
+/** What a pane's caller puts in its bar, and where the bar sits. */
+interface FrameParts { readonly leading: ReactNode; readonly barOnGround?: boolean; readonly trailing?: ReactNode }
 
 
 
@@ -166,7 +179,9 @@ function useTerminalPalette(termRef: RefObject<Terminal | null>, theme: Theme): 
  * frames out. The device speaks `ready`/`exit`/`error` frames and is connected at `ready`; the native PTY sends bytes
  * only, is connected at open, and needs the keepalive and a restart the device does not.
  */
-function PtyTerminal({ workspace, executor, leading }: { workspace: string; executor: string; leading: ReactNode }) {
+function PtyTerminal({ workspace, executor, session, frame }: { workspace: string; executor: string; session?: string; frame: FrameParts }) {
+  // The computer's session rides every route's query; the device and its first session name none.
+  const sessionQuery = session === undefined ? "" : `&session=${encodeURIComponent(session)}`;
   const device = executor === "device";
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -191,7 +206,7 @@ function PtyTerminal({ workspace, executor, leading }: { workspace: string; exec
     const origin = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 
     const socket = new WebSocket(`${origin}/api/workspaces/${encodeURIComponent(workspace)}/terminal`
-      + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`);
+      + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}${sessionQuery}`);
 
     socket.binaryType = "arraybuffer";
 
@@ -248,7 +263,7 @@ function PtyTerminal({ workspace, executor, leading }: { workspace: string; exec
       keepaliveOperations.current.clear();
       release();
     };
-  }, [workspace, executor, device, connection]);
+  }, [workspace, executor, device, connection, sessionQuery]);
 
   useTerminalPalette(termRef, theme);
 
@@ -294,7 +309,7 @@ function PtyTerminal({ workspace, executor, leading }: { workspace: string; exec
 
     const response = await fetch(
       `/api/workspaces/${encodeURIComponent(workspace)}/terminal/reset`
-      + `?executor=${encodeURIComponent(executor)}`,
+      + `?executor=${encodeURIComponent(executor)}${sessionQuery}`,
       { method: "POST", credentials: "same-origin" },
     );
 
@@ -324,7 +339,7 @@ function PtyTerminal({ workspace, executor, leading }: { workspace: string; exec
     </button>
   );
 
-  return <TerminalFrame leading={leading} state={state} failure={failure} copies={copies} action={restartShell} hostRef={hostRef} />;
+  return <TerminalFrame {...frame} state={state} failure={failure} copies={copies} action={restartShell} hostRef={hostRef} />;
 }
 
 /** Keystrokes out as bytes: the frame both PTY routes read. */
@@ -384,7 +399,7 @@ const DeviceTerminalMessageSchema = v.variant("type", [
 ]);
 
 /** `ready` arrives after the runtime replayed scrollback, so a reload lands on the same screen. */
-function WorkspaceTerminal({ workspace, executor, leading }: { workspace: string; executor: string; leading: ReactNode }) {
+function WorkspaceTerminal({ workspace, executor, frame }: { workspace: string; executor: string; frame: FrameParts }) {
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -455,18 +470,18 @@ function WorkspaceTerminal({ workspace, executor, leading }: { workspace: string
   useTerminalPalette(termRef, theme);
 
   return (
-    <TerminalFrame leading={leading} state={state} failure={failure} hostRef={hostRef} action={null}
+    <TerminalFrame {...frame} state={state} failure={failure} hostRef={hostRef} action={null}
       copies={{ note: "⇧⌃C copies", title: "⌃C interrupts the running command." }} />
   );
 }
 
 
 function LineTerminal(
-  { executor, outputs, onExecute, leading }: {
+  { executor, outputs, onExecute, frame }: {
     executor: string;
     outputs: readonly TerminalPaneOutput[];
     onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
-    leading: ReactNode;
+    frame: FrameParts;
   },
 ) {
   const theme = useTheme();
@@ -570,7 +585,7 @@ function LineTerminal(
   }, [outputs]);
 
   return (
-    <TerminalFrame leading={leading} state={null} failure={failure} hostRef={hostRef} action={null}
+    <TerminalFrame {...frame} state={null} failure={failure} hostRef={hostRef} action={null}
       copies={{ note: LINE_MODE_LABEL, title: LINE_MODE_LABEL }} />
   );
 }

@@ -294,7 +294,7 @@ html, body, #root {
        raise    #E8E0CE  row hover, menus
        line     #D2C6AE  structural rules — 1.5:1 on paper, plainly visible
 
-     Gold splits in two on paper: the fill stays bright (#D89A44) while
+     Gold splits in two on paper: the fill stays bright (#D90A44) while
      text-grade gold deepens to #8F5C10, exactly as the mock does. ── */
   --c-overlay:  #F7F3E9;   /* dialogs — paper, lifted by shadow */
   --c-input-bg: #F7F3E9;   /* mock --input */
@@ -2273,6 +2273,89 @@ body > .annotation-toolbar {
 }
 .p-env-action:hover { color: var(--c-text); border-color: var(--c-border-strong); }
 .p-env-action:disabled { opacity: 0.6; }
+/* A machine's sessions as tabs (D90): a name and its dot; the open one carries the accent's underline down onto the
+   rule its terminal starts under. Tabs that do not fit fade at the edge and scroll. */
+.p-session-tabs {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 2px;
+  margin-bottom: -1px;
+  padding-right: 24px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+.p-session-tab-slot { position: relative; display: inline-flex; flex-shrink: 0; }
+.p-session-tab {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 10px;
+  color: var(--c-text-3);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.p-session-tabs > :first-child .p-session-tab, .p-session-tabs > .p-session-tab:first-child { padding-left: 0; }
+.p-session-tab:hover { color: var(--c-text); }
+.p-session-tab[aria-selected="true"] { color: var(--c-text); }
+.p-session-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  bottom: 0;
+  left: 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--c-accent);
+}
+.p-session-tabs > :first-child .p-session-tab[aria-selected="true"]::after,
+.p-session-tabs > .p-session-tab:first-child[aria-selected="true"]::after { left: 0; }
+/* A tab's close shows with the pointer on its tab, or on the open one. */
+.p-session-close {
+  display: none;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  margin: 0 2px 0 -6px;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--c-text-3);
+}
+.p-session-close:hover { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-session-tab-slot:hover .p-session-close, .p-session-tab-slot:focus-within .p-session-close { display: grid; }
+.p-session-rename {
+  align-self: center;
+  width: 9rem;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--c-accent);
+  border-radius: 6px;
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-size: 13px;
+}
+/* The wide column's list of every machine's sessions, cmux's shape. */
+.p-session-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  color: var(--c-text-2);
+  text-align: left;
+}
+.p-session-row:hover { background: var(--c-neutral-tint); }
+/* The open session, both panes' in a split, as the Work list marks its open row: the accent's wash and ink. */
+.p-session-row[aria-current="true"] { background: var(--c-accent-subtle); color: var(--c-accent-fg); }
+.p-session-row[aria-current="true"] .p-text-3 { color: color-mix(in srgb, var(--c-accent-fg) 70%, transparent); }
+.p-term-port { display: inline-flex; align-items: center; gap: 3px; color: var(--c-accent-fg); font-family: var(--font-mono); font-size: 11.5px; }
 /* The terminal's own ground, under its padding as under its text. */
 .p-terminal-ground { background: var(--c-bg); }
 

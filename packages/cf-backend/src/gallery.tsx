@@ -2,6 +2,7 @@
  * Design-system gallery: the real components over mock data, so signed-in surfaces can be screenshotted without auth.
  * Served by gallery.vite.config.ts; `?frame=` selects a frame (full list: the dispatch in `mount()`). /api/user/* GETs are stubbed in-page.
  */
+import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -1183,6 +1184,68 @@ installDriveFixture(frame);
 
 const PROMPT = "$ ";
 
+/** A prompt as the computer's shell draws it: the box shown by its workspace's name (D93), the folder in blue. */
+const COMPUTER_PROMPT = "\x1b[01;32mroot@storefront\x1b[00m:\x1b[01;34m/workspace/storefront\x1b[00m# ";
+
+/**
+ * What each of the computer's sessions shows when it is opened (`GALLERY_SESSIONS`), and a PC's shell: the screens a
+ * person meets, so a frame shows its terminal as it is used rather than empty.
+ */
+const PTY_SCREENS = {
+  shell: [
+    `${COMPUTER_PROMPT}git status`,
+    "On branch main",
+    "Your branch is up to date with 'origin/main'.",
+    "",
+    "Changes not staged for commit:",
+    "  \x1b[31mmodified:   src/checkout/coupon.ts\x1b[0m",
+    "",
+    `${COMPUTER_PROMPT}`,
+  ].join("\r\n"),
+  s2: [
+    `${COMPUTER_PROMPT}npm run dev`,
+    "",
+    "> storefront@0.4.0 dev",
+    "> vite",
+    "",
+    "  \x1b[32m\x1b[1mVITE\x1b[22m v5.4.8\x1b[39m  \x1b[2mready in \x1b[0m\x1b[1m412\x1b[22m\x1b[2m ms\x1b[22m",
+    "",
+    "  \x1b[32m➜\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m",
+    "  \x1b[32m➜\x1b[39m  \x1b[1mNetwork\x1b[22m: \x1b[2muse \x1b[22m\x1b[1m--host\x1b[22m\x1b[2m to expose\x1b[22m",
+    "\x1b[2m10:41:07\x1b[22m \x1b[36m\x1b[1m[vite]\x1b[22m\x1b[39m \x1b[32mhmr update \x1b[39m\x1b[2m/src/checkout/Coupon.tsx\x1b[22m",
+    "\x1b[2m10:42:31\x1b[22m \x1b[36m\x1b[1m[vite]\x1b[22m\x1b[39m \x1b[32mpage reload \x1b[39m\x1b[2msrc/checkout/coupon.ts\x1b[22m",
+    "",
+  ].join("\r\n"),
+  s3: [
+    `${COMPUTER_PROMPT}npx vitest run src/checkout`,
+    "",
+    " \x1b[7m\x1b[1m\x1b[36m RUN \x1b[39m\x1b[22m\x1b[27m \x1b[36mv2.1.2 \x1b[39m\x1b[90m/workspace/storefront\x1b[39m",
+    "",
+    " \x1b[32m✓\x1b[39m src/checkout/cart.test.ts \x1b[2m(6 tests)\x1b[22m \x1b[90m41\x1b[2mms\x1b[22m\x1b[39m",
+    " \x1b[31m❯\x1b[39m src/checkout/coupon.test.ts \x1b[2m(4 tests | \x1b[22m\x1b[31m1 failed\x1b[39m\x1b[2m)\x1b[22m \x1b[90m38\x1b[2mms\x1b[22m\x1b[39m",
+    "   \x1b[31m×\x1b[39m applies a percentage coupon to the subtotal",
+    "     \x1b[31m→ expected 90 to be 81 // Object.is equality\x1b[39m",
+    "",
+    " \x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (2)\x1b[39m",
+    " \x1b[2m      Tests \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[1m\x1b[32m9 passed\x1b[39m\x1b[22m\x1b[90m (10)\x1b[39m",
+    " \x1b[2m   Duration \x1b[22m 1.12s",
+    "",
+    `${COMPUTER_PROMPT}`,
+  ].join("\r\n"),
+  device: "\x1b[1mashish@Ashishs-MacBook\x1b[0m storefront % git pull\r\nAlready up to date.\r\n\x1b[1mashish@Ashishs-MacBook\x1b[0m storefront % ",
+} satisfies Record<string, string>;
+
+/** The screen a PTY lane replays as it opens: the computer's session's, or a PC's shell; none for the workspace's lane. */
+function ptyScreen(query: URLSearchParams): string | undefined {
+  const executor = query.get("executor");
+
+  if (executor === "device") return PTY_SCREENS.device;
+
+  if (executor !== "computer") return undefined;
+
+  return Object.entries(PTY_SCREENS).find(([session]) => session === (query.get("session") ?? "shell"))?.[1];
+}
+
 declare global {
   interface Window {
     __kinuTerminalInput?: string[];
@@ -1209,7 +1272,7 @@ class GalleryShellSocket extends EventTarget {
   readonly url: string;
   readyState = 0;
   onopen: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent<string>) => void) | null = null;
+  onmessage: ((event: MessageEvent<string | ArrayBuffer>) => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   private line = "";
@@ -1221,13 +1284,18 @@ class GalleryShellSocket extends EventTarget {
     const query = new URL(this.url, location.href).searchParams;
     window.__kinuTerminalWindow = { cols: Number(query.get("cols")), rows: Number(query.get("rows")) };
 
-    // The runtime replays its screen before ready; here the screen is empty.
+    // A PTY's lanes (the computer's sessions, a PC) carry the screen as bytes; the workspace's, as frames.
+    const screen = ptyScreen(query);
+
+    // The runtime replays its screen before ready.
     const open = () => {
       this.readyState = 1;
       const opened = new Event("open");
       this.onopen?.(opened);
       this.dispatchEvent(opened);
-      this.emit({ type: "output", data: PROMPT });
+
+      if (screen !== undefined) this.onmessage?.(new MessageEvent("message", { data: new TextEncoder().encode(screen).buffer }));
+      else this.emit({ type: "output", data: PROMPT });
       this.emit({ type: "ready" });
     };
 
@@ -1714,6 +1782,8 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // A `SandboxSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
   if (method === "getComputerSize") return rpcResult(v.parse(JsonValueSchema, AGENT_RPC.get(method))).json<T>();
 
+  if (method.endsWith("ComputerSession") || method === "listComputerSessions") return rpcResult(v.parse(JsonValueSchema, gallerySessions(method, args ?? []))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
@@ -1721,6 +1791,32 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 
   return rpcResult({}).json<T>();
 };
+
+/** The computer's sessions (D90) as its box keeps them: a shell, a dev server listening, a test run that failed. */
+const GALLERY_SESSIONS: TerminalSession[] = [
+  { id: "shell", name: "shell", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 0, at: Date.now() - 20_000, command: "git status" }, ports: [], branch: "main" },
+  { id: "s2", name: "dev server", cwd: "/workspace/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main" },
+  { id: "s3", name: "tests", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 1, at: Date.now() - 70_000, command: "npx vitest run src/checkout" }, ports: [], branch: "main" },
+];
+
+function gallerySessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
+  if (method === "openComputerSession") {
+    const record = { id: `s${String(GALLERY_SESSIONS.length + 2)}`, name: `shell ${String(GALLERY_SESSIONS.length + 1)}`, cwd: "/workspace" };
+
+    GALLERY_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null });
+
+    return record;
+  }
+
+  const at = GALLERY_SESSIONS.findIndex((session) => session.id === args[0]);
+  const found = GALLERY_SESSIONS[at];
+
+  if (method === "renameComputerSession" && typeof args[1] === "string" && found !== undefined) GALLERY_SESSIONS[at] = { ...found, name: args[1] };
+
+  if (method === "closeComputerSession" && found !== undefined) GALLERY_SESSIONS.splice(at, 1);
+
+  return method === "listComputerSessions" ? GALLERY_SESSIONS : null;
+}
 
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
 const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";

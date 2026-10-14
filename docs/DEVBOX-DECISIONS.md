@@ -4686,6 +4686,24 @@ holds only the trust bundles. While no X runs, a program that needs a display fa
 browser ignores it. A tool that picks a dialog over a prompt because `DISPLAY` is set (a GUI pinentry, an askpass) now
 asks on the owner's screen, which is where the owner watches.
 
+D90. The computer's terminal sessions are named tmux sessions the box keeps by id, name and folder (2026-10-13, the
+owner: a cmux-like experience across the machines). One `devbox` session became any number: the page attaches with
+`session=<id>` (`terminalSocket`), and the box keeps `devbox:sessions`, each session's id, name and last folder,
+valibot-parsed on read like the other rows. A session's shell is bash with an rc that runs the person's own rc first
+and then records, at each prompt after a command the history numbers, the exit status, the time and the command line
+as the pane's tmux options. `terminalSessions()` reads every session in one exec of the box's own fixed program through
+the raw launch, as `portListeners` does: `tmux list-panes -a` for folder, foreground command and those marks, the
+listener probe with each listener's ancestry walked to a pane's shell for its ports, and `git symbolic-ref` for each
+folder's branch. Measured on staging `22883ccda`'s box with eight sessions: `tmux list-panes -a` took 10.5 ms in the
+box, and the exec's round trip from the workspace 150 ms, the same as a bare `true`; so the Environment tab reads every
+3 s while it is open and its page visible, and nothing reads otherwise. A box that is not running is not woken to be
+read: its sessions are listed as they were left. A read that finds a session in a new folder keeps that folder. A
+container's restart (a resize, D50; a rest) ends the tmux server and every session with it, as it ends a running
+command (D87); nothing reopens them from an alarm: the next attach to a session opens a fresh shell in its kept folder
+under its name. Closing a session ends its tmux session and forgets it; the box always keeps one, so closing the last
+leaves a fresh `shell`. Not measured: bash's `HISTCONTROL=ignoredups` numbers a repeated command once, so its second
+run leaves the earlier mark. The product flow `computer-sessions` reads it all on a deployment.
+
 D91. The computer answers to its workspace's name, not to "computer" (2026-10-13; reverses D83's fixed name). The
 owner, on `root@computer`: "something nice and sensible, workspace related (maybe workspace name?)". `KinuDevbox`
 reads the workspace's display name from the workspace itself at each `configureContainer`, through the same root agent
