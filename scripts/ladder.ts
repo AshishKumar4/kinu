@@ -2114,7 +2114,7 @@ export const LADDER: readonly Gate[] = [
       + 'typechecked project that imports `effect`, and the gate is red unless it also reports '
       + 'the one planted in scripts/fixtures/effect-diagnostics, so a bump or a lost `plugins` '
       + 'entry cannot turn the check off in silence.',
-    blind: 'warning- and suggestion-severity diagnostics; a project outside `bun run typecheck`; '
+    blind: 'warning- and suggestion-severity diagnostics; a project `bun run check` does not compile; '
       + 'a project that imports no `effect`. All are printed on the gate\'s green path.',
     inputs: { kind: 'derived' },
   },
