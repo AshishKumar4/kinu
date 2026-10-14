@@ -11,13 +11,11 @@ import {
   CAPABLE_HELLO, OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
 } from './helpers/device-harness';
 import type { UserCaller } from '@kinu.run/core';
-import { connectedDevices, DeviceSocketHub, soleLiveDevice } from '@kinu.run/core';
+import { connectedDevices, DeviceSocketHub, soleLiveDevice, DEVICE_FRAMES, DEVICE_METHOD } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED,
-  DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
-  DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, JsonValueSchema, nextDeviceRequestId,
+  DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, JsonValueSchema, nextDeviceRequestId,
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
@@ -186,12 +184,12 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     expect(harness.deviceFrames).toEqual([]);
 
     await harness.userDO.deviceRpc(
-      harness.workspace, DEVICE_CANCEL_METHOD, [requestId],
+      harness.workspace, DEVICE_METHOD.cancel, [requestId],
       { agentName: WORKSPACE },
     );
 
     expect(harness.deviceFrames.map((frame) => ({ method: frame.method, params: frame.params })))
-      .toEqual([{ method: DEVICE_CANCEL_METHOD, params: [requestId] }]);
+      .toEqual([{ method: DEVICE_METHOD.cancel, params: [requestId] }]);
     expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['exec']);
     await harness.closeDeviceHarness();
   });
@@ -273,7 +271,7 @@ describe('durable device request ownership', () => {
       .toEqual([{ requestId: sibling, outcome: 'terminated' }]);
     expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1'))
       .toEqual([{ requestId: detaching, outcome: 'terminated' }]);
-    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.cancel)
       .map((frame) => frame.params[0])).toEqual([sibling, detaching]);
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests`,
@@ -318,7 +316,7 @@ describe('durable device request ownership', () => {
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, detached, 'job-1'))
       .toEqual({ transferred: true });
     expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1')).toEqual([]);
-    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)).toEqual([]);
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.cancel)).toEqual([]);
     await harness.closeDeviceHarness();
   });
 
@@ -365,7 +363,7 @@ describe('durable device request ownership', () => {
     let ackWorks = false;
 
     const harness = await deviceHarness('ashish@studio', (frame) => {
-      if (frame.method === DEVICE_EXEC_ACK_METHOD && !ackWorks) {
+      if (frame.method === DEVICE_METHOD.execAck && !ackWorks) {
         throw new Error('acknowledgement channel down');
       }
 
@@ -387,7 +385,7 @@ describe('durable device request ownership', () => {
     ackWorks = true;
     expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
-    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.cancel)
       .map((frame) => frame.params[0])).toEqual([requestId]);
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
@@ -397,7 +395,7 @@ describe('durable device request ownership', () => {
 
   test('a request killed before a restart is still untransferable and cleaned up after it', async () => {
     const harness = await deviceHarness('ashish@studio', (frame) => {
-      if (frame.method === DEVICE_EXEC_ACK_METHOD) throw new Error('acknowledgement channel down');
+      if (frame.method === DEVICE_METHOD.execAck) throw new Error('acknowledgement channel down');
 
       return daemon(frame);
     });
@@ -417,7 +415,7 @@ describe('durable device request ownership', () => {
       .toEqual({ transferred: false });
     expect(await revived.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
-    expect(revived.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)).toEqual([]);
+    expect(revived.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.cancel)).toEqual([]);
     expect(revived.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([]);
@@ -430,11 +428,11 @@ describe('durable device request ownership', () => {
     let ackWorks = false;
 
     const harness = await deviceHarness('ashish@studio', (frame) => {
-      if (frame.method === DEVICE_CANCEL_METHOD) {
+      if (frame.method === DEVICE_METHOD.cancel) {
         return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'unknown' };
       }
 
-      if (frame.method === DEVICE_EXEC_ACK_METHOD && !ackWorks) {
+      if (frame.method === DEVICE_METHOD.execAck && !ackWorks) {
         throw new Error('acknowledgement channel down');
       }
 
@@ -486,7 +484,7 @@ describe('durable device request ownership', () => {
     let dropRow: (() => void) | null = null;
 
     const harness = await deviceHarness('ashish@studio', (frame) => {
-      if (frame.method === DEVICE_CANCEL_METHOD) {
+      if (frame.method === DEVICE_METHOD.cancel) {
         dropRow?.();
         throw new Error('tunnel closed under the kill');
       }
@@ -605,7 +603,7 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'agent-1');
 
-    await harness.userDO.deviceRpc(harness.workspace, DEVICE_CANCEL_METHOD, [requestId], {
+    await harness.userDO.deviceRpc(harness.workspace, DEVICE_METHOD.cancel, [requestId], {
       agentName: WORKSPACE,
     });
 
@@ -613,7 +611,7 @@ describe('durable device request ownership', () => {
     // disagree.
     expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
-    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.cancel)
       .map((frame) => frame.params[0])).toEqual([requestId]);
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
@@ -625,7 +623,7 @@ describe('durable device request ownership', () => {
     let revokeNow: (() => void) | null = null;
 
     const harness = await deviceHarness('ashish@studio', (frame) => {
-      if (frame.method === DEVICE_EXEC_ACK_METHOD) revokeNow?.();
+      if (frame.method === DEVICE_METHOD.execAck) revokeNow?.();
 
       return daemon(frame);
     });
@@ -674,7 +672,7 @@ describe('durable device request ownership', () => {
     let stealClaim: (() => void) | null = null;
 
     const harness = await deviceHarness('ashish@studio', (frame) => {
-      if (frame.method === DEVICE_CANCEL_METHOD) stealClaim?.();
+      if (frame.method === DEVICE_METHOD.cancel) stealClaim?.();
 
       return daemon(frame);
     });
@@ -697,7 +695,7 @@ describe('durable device request ownership', () => {
     expect(await harness.userDO.cancelDeviceRequestsForAgent(harness.workspace, 'agent-1'))
       .toEqual([{ requestId: first, outcome: 'terminated' }]);
     // Exactly one authority cancels and reports a request.
-    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.cancel)
       .map((frame) => frame.params[0])).toEqual([first]);
     await harness.closeDeviceHarness();
   });
@@ -706,7 +704,7 @@ describe('durable device request ownership', () => {
     const seenAtFrame: Array<number | null> = [];
 
     const harness = await deviceHarness('ashish@studio', (frame) => {
-      if (frame.method === DEVICE_CANCEL_METHOD) {
+      if (frame.method === DEVICE_METHOD.cancel) {
         seenAtFrame.push(harness.db.prepare(
           `SELECT unstopped_at FROM user_devices WHERE id = ?`,
         ).all(harness.deviceId).map((row) => v.parse(UnstoppedRowSchema, row).unstopped_at)[0]);
@@ -754,9 +752,9 @@ describe('device revocation admission', () => {
       send: (raw: string) => {
         const frame = v.parse(DeviceRpcFrameSchema, JSON.parse(raw));
 
-        if (frame.method === DEVICE_CANCEL_METHOD) cancellationSent.resolve(frame);
+        if (frame.method === DEVICE_METHOD.cancel) cancellationSent.resolve(frame);
 
-        if (frame.method === DEVICE_EXEC_ACK_METHOD && hub) {
+        if (frame.method === DEVICE_METHOD.execAck && hub) {
           hub.handleMessage(harness.deviceId, JSON.stringify({
             id: frame.id, result: { requestId, acknowledged: true },
           }));
@@ -1106,7 +1104,7 @@ describe('a copied device.json goes stale', () => {
 
     const rotation = (socket?.sent ?? [])
       .map((raw) => v.safeParse(v.object({ type: v.string(), token: v.string() }), JSON.parse(raw)))
-      .find((parsed) => parsed.success && parsed.output.type === DEVICE_TOKEN_ROTATION);
+      .find((parsed) => parsed.success && parsed.output.type === DEVICE_FRAMES.rotate);
 
     return rotation?.success ? rotation.output.token : null;
   }
@@ -1130,7 +1128,7 @@ describe('a copied device.json goes stale', () => {
     const socket = harness.acceptedSockets.at(-1);
 
     if (!socket) throw new Error('no accepted device socket to acknowledge on');
-    await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_TOKEN_ROTATION_ACK }));
+    await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_FRAMES.rotated }));
   }
 
   function graceHash(harness: TestUserDO, deviceId: string): string | null {
@@ -1352,7 +1350,7 @@ describe('a copied device.json goes stale', () => {
     expect(row.replacedAt).not.toBeNull();
     expect(row.connected).toBe(true);
     expect(harness.acceptedSockets.at(-1)).not.toBe(incumbent);
-    expect((incumbent?.sent ?? []).filter((raw) => raw.includes(DEVICE_TOKEN_ROTATION))).toHaveLength(1);
+    expect((incumbent?.sent ?? []).filter((raw) => raw.includes(DEVICE_FRAMES.rotate))).toHaveLength(1);
     await harness.joinFibers();
     harness.close();
   });

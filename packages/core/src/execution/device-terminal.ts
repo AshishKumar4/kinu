@@ -13,8 +13,7 @@ import { connections, type Connections } from '@nimbus-sh/fabric/connections.js'
 import { z } from 'zod/v4';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-hub';
-import { DEVICE_PTY_MAX_AXIS } from './device-protocol';
-import { DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE } from './device-tunnel';
+import { DEVICE_PTY_MAX_AXIS, DEVICE_FRAMES } from './device-protocol';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
 
@@ -132,14 +131,14 @@ export class DeviceTerminalHub {
     }
 
     if (message instanceof ArrayBuffer) {
-      tunnel.notify({ type: DEVICE_PTY_INPUT, session, data: bytesToBase64(new Uint8Array(message)) });
+      tunnel.notify({ type: DEVICE_FRAMES.ptyInput, session, data: bytesToBase64(new Uint8Array(message)) });
 
       return;
     }
 
     if (ArrayBuffer.isView(message)) {
       const bytes = new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
-      tunnel.notify({ type: DEVICE_PTY_INPUT, session, data: bytesToBase64(bytes) });
+      tunnel.notify({ type: DEVICE_FRAMES.ptyInput, session, data: bytesToBase64(bytes) });
 
       return;
     }
@@ -154,7 +153,7 @@ export class DeviceTerminalHub {
     }
 
     tunnel.notify({
-      type: DEVICE_PTY_RESIZE, session, cols: control.output.cols, rows: control.output.rows,
+      type: DEVICE_FRAMES.ptyResize, session, cols: control.output.cols, rows: control.output.rows,
     });
   }
 

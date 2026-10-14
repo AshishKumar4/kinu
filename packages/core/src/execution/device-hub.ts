@@ -9,8 +9,8 @@ import { attempt, settle } from '../obs/effect';
 import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
 import { DeviceTunnel, NO_DEVICE_CONNECTED, type TunnelSocket } from './device-tunnel';
-import { DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure } from './device-protocol';
-import { DEVICE_CHATGPT, DEVICE_RELAY, DeviceRelays, parseDeviceRelayFrame, type DeviceChatGptMethod, type DeviceRelayRequest } from './device-relay';
+import { DEVICE_ERRORS, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure } from './device-protocol';
+import { DeviceRelays, parseDeviceRelayFrame, type DeviceRelayRequest } from './device-relay';
 import { REAL_CLOCK } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
@@ -21,11 +21,6 @@ import * as v from 'valibot';
 
 /** WebSocket.OPEN; also used by the roster's multi-subscriber lane. */
 export const WS_OPEN = 1;
-
-/** Not a platform auto-response: that would also consume a terminal's pasted text. */
-export const DEVICE_KEEPALIVE_PING = DEVICE_FRAMES.ping;
-
-export const DEVICE_KEEPALIVE_PONG = DEVICE_FRAMES.pong;
 
 const DEVICE_WS_TAG_PREFIX = 'device:';
 
@@ -239,7 +234,7 @@ export class DeviceSocketHub {
       id, deviceId,
       cancel: () => tunnel.cancel(id),
       answered: async () => {
-        const [outcome] = await Promise.allSettled([tunnel.rpc(DEVICE_RELAY.method, [params], { requestId: id, timeoutMs: 0, extra: { deviceId } })]);
+        const [outcome] = await Promise.allSettled([tunnel.rpc(DEVICE_METHOD.codexRelay, [params], { requestId: id, timeoutMs: 0, extra: { deviceId } })]);
 
         const live = this.liveSocket(deviceId);
         const remaining = live === null ? null : this.sockets.read(live);
@@ -250,11 +245,12 @@ export class DeviceSocketHub {
     });
   }
 
-  chatgpt(deviceId: string, method: DeviceChatGptMethod, params: JsonValue[] = []): Promise<JsonValue | null> {
+  /** `method` one of the protocol's ChatGPT sign-in calls (`DEVICE_METHOD.chatgptStatus`, `chatgptSignIn`, `chatgptSignOut`). */
+  chatgpt(deviceId: string, method: string, params: JsonValue[] = []): Promise<JsonValue | null> {
     const tunnel = this.tunnel(deviceId);
 
     if (!tunnel) return settle(Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED)));
-    const status = method === DEVICE_CHATGPT.status;
+    const status = method === DEVICE_METHOD.chatgptStatus;
     const asked = attempt({ doing: 'asking the machine about its ChatGPT sign-in', otherwise: 'unavailable' }, () => tunnel.rpc(method, params, { timeoutMs: 0 }));
 
     return settle(asked.pipe(

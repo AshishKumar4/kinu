@@ -6,7 +6,7 @@ import {
   buildDrainBatch, DeferredApprovalQueue, DeferredApprovalStore, EventLog, initDeferredApprovalsTable, initEventsHubTables,
   reviewCommand, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
 } from '@kinu.run/core';
-import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestActorsOver, createTestSql, present } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
 import {
@@ -17,9 +17,13 @@ import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
 import { tierModel } from '../../scripts/tier-model';
-import { APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_EXECUTED, HIRE_PARKED_COMMAND, HIRE_RAN, HOME_ASK, HOME_BRIEF, HOME_REPORTED, PARKED_COMMANDS } from '../../scripts/flows-script';
+import {
+  APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_EXECUTED, HIRE_PARKED_COMMAND, HIRE_RAN, HOME_ASK, HOME_BRIEF, HOME_REPORTED, JOB_ASK, JOB_COMMAND,
+  JOB_STARTED, PARKED_COMMANDS,
+} from '../../scripts/flows-script';
+import { COMPUTER } from '../../packages/core/src/operations/executors';
 import { generateText, streamText } from 'ai';
-import { createOpenAICompatProvider, runSleepTimeCompute, type LLM } from '@kinu.run/core';
+import { codemodeNamespace, createOpenAICompatProvider, runSleepTimeCompute, type JsonValue, type LLM } from '@kinu.run/core';
 import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
 
 /** An OpenAI-shaped refusal of a request, with the failure's class as its code. */
@@ -322,8 +326,8 @@ test('the approved hire recognizes its explicit stdout witness, not Git diagnost
 });
 
 /** One request to the deployed tiers' Worker, as a hosted turn makes it: the conversation so far and the agent's tools. */
-async function reply(messages: readonly JsonObject[]): Promise<v.InferOutput<typeof ReplySchema>['choices'][0]['message']> {
-  const tools = ['agents'].map((name) => ({ type: 'function', function: { name } }));
+async function reply(messages: readonly JsonObject[], offered: readonly string[] = ['agents']): Promise<v.InferOutput<typeof ReplySchema>['choices'][0]['message']> {
+  const tools = offered.map((name) => ({ type: 'function', function: { name } }));
   const response = await worker.fetch(asked(COMPLETIONS, JSON.stringify({ messages, tools })), ENV);
 
   return v.parse(ReplySchema, await response.json()).choices[0].message;
@@ -360,6 +364,36 @@ describe('the device job the first-run tier runs on a machine', () => {
     ]);
 
     expect(answered.content).toBe('JOB bgjob-devjob01');
+  });
+});
+
+// Staging f9c17ac7b: the agent-job row's program called `computer.startProcess({ command })`, which the computer's
+// surface refuses (its members take their required fields positionally), and the row waited 369 s for a job never started.
+describe("the agent-job row's job", () => {
+  test("is started by a program the computer's own surface takes, and is called started only once it is", async () => {
+    const started: JsonValue[] = [];
+
+    const computer = codemodeNamespace('computer', 'the computer', [{ op: COMPUTER.startProcess, run: async (input) => {
+      started.push(input);
+
+      return { value: JSON.stringify({ processId: 'job-1', restartable: true }) };
+    } }]);
+
+    const call = present((await reply([{ role: 'user', content: JOB_ASK }], ['eval'])).tool_calls?.[0], 'the job call');
+    const code = v.parse(v.object({ code: v.string() }), JSON.parse(call.function.arguments)).code;
+    const members = Object.fromEntries(Object.entries(computer.tools).map(([name, tool]) => [name, tool.execute]));
+    const ran: unknown = await new Function('computer', `return (async () => { ${code} })();`)(members);
+
+    const answered = async (result: string) => (await reply([
+      { role: 'user', content: JOB_ASK },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'call_job', type: 'function', function: { name: 'eval', arguments: call.function.arguments } }] },
+      { role: 'tool', tool_call_id: 'call_job', content: result },
+    ], ['eval'])).content;
+
+    expect({ started, ran }).toEqual({ started: [{ command: JOB_COMMAND }], ran: JSON.stringify({ processId: 'job-1', restartable: true }) });
+    // As the eval tool answers it: the program's value, a JSON string, inside the tool's own JSON.
+    expect(await answered(JSON.stringify({ result: JSON.stringify({ processId: 'job-1', restartable: true }) }))).toBe(JOB_STARTED);
+    expect(await answered(JSON.stringify({ success: false, reason: 'bad_input', error: 'refused' }))).not.toBe(JOB_STARTED);
   });
 });
 

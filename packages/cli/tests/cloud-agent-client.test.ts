@@ -3,10 +3,11 @@ import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonObject, hostedActorSocketPath, hostedWindowMay,
-  ChatHistoryEntrySchema, restoredRows,
+  ChatHistoryEntrySchema, restoredRows, SendMetadataSchema, STEP_CUT_CHUNK,
   type JsonObject, type JsonValue, type ReasoningEffort,
 } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
+import { createAgentClient } from '../src/client-factory';
 import { watchDeviceConsents } from '../src/consent-watch';
 import type { AgentClientEvent } from '../src/agent-client';
 import * as v from 'valibot';
@@ -258,7 +259,7 @@ const ChatRequestEnvelopeSchema = v.object({
   init: v.object({ body: v.string() }),
 });
 
-const ChatMessagesSchema = v.array(v.object({ role: v.string(), parts: v.array(JsonObjectSchema) }));
+const ChatMessagesSchema = v.array(v.object({ role: v.string(), parts: v.array(JsonObjectSchema), metadata: v.optional(SendMetadataSchema) }));
 
 function chatRequestFrame(mock: MockAgentServer): ChatRequestFrame {
   const frame = mock.frames.find((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
@@ -562,7 +563,6 @@ describe('CloudAgentClient protocol', () => {
     const request = await firstChatRequest(mock);
 
     expect(request.body.trigger).toBe('submit-message');
-    expect(request.body.cwd).toBe('/work/dir');
     const messages = v.parse(ChatMessagesSchema, request.body.messages);
     expect(messages).toHaveLength(1);
     expect(messages[0].role).toBe('user');
@@ -589,6 +589,57 @@ describe('CloudAgentClient protocol', () => {
       'turn-start', 'text-delta', 'tool-call', 'tool-result', 'step-finish', 'text-delta', 'turn-end',
     ]);
     await client.close();
+  });
+
+  test('a step the resumed turn cut is retracted from the answer, and the cut reaches the subscriber', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('hello agent');
+    const request = await firstChatRequest(mock);
+
+    // As the workspace streams a turn its agent resumes: the step it had not finished is cut, then written again.
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'Kept. ' }));
+    mock.reply(responseChunk(request.id, { type: 'finish-step' }));
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'Unfinished' }));
+    mock.reply(responseChunk(request.id, { type: STEP_CUT_CHUNK, data: { stepIndex: 2 }, transient: true }));
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'Redone.' }));
+    mock.reply(responseChunk(request.id, {}, true));
+
+    const result = await turn;
+
+    expect({ text: result.landed === 'turn' ? result.text : undefined, cut: events.find((event) => event.type === 'step-cut') })
+      .toEqual({ text: 'Kept. Redone.', cut: { type: 'step-cut', stepIndex: 2 } });
+    await client.close();
+  });
+
+  test('a one-shot run against the cloud sends its task as a turn of its own, on the tier and in the folder it names', async () => {
+    const mock = startMockAgentServer();
+    const saved = { token: process.env.KINU_TOKEN, origin: process.env.KINU_ORIGIN };
+
+    process.env.KINU_TOKEN = 'ptc_token';
+    process.env.KINU_ORIGIN = mock.origin;
+
+    try {
+      const target = { requestedName: 'helios', name: 'helios', mode: 'cloud' as const, cloudName: 'helios', localName: 'helios' };
+      const client = await createAgentClient(target, { noTranscript: true }, 'one-shot');
+      const turn = client.send('count the files', { tier: 'deep', cwd: '/work/dir' });
+      const request = await firstChatRequest(mock);
+
+      mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'three' }, true));
+      await turn;
+
+      expect(v.parse(ChatMessagesSchema, request.body.messages)[0]?.metadata)
+        .toEqual({ kinuTier: 'deep', kinuTurn: { oneShot: true, cwd: '/work/dir' } });
+      await client.close();
+    } finally {
+      for (const [key, value] of Object.entries({ KINU_TOKEN: saved.token, KINU_ORIGIN: saved.origin })) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = value;
+      }
+    }
   });
 
   test('send with files transmits [file…, text] parts on the user message', async () => {

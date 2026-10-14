@@ -4,7 +4,7 @@
  */
 import type { JsonObject } from '../utils/json';
 import type { WorkMode } from '../types/turn';
-import type { TurnAuthorship } from '../orchestrator/turn-authorship';
+import type { TurnAuthorship } from '../types/turn';
 import { planSubmissionReach } from '../plans/review';
 import type { ActorPolicy } from './actor-policy';
 import type { ExecutionLane } from '../orchestrator/execution';

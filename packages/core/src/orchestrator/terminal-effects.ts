@@ -32,6 +32,7 @@ import {
 import { diagnostics, toKinuError, type ErrorCode } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
+import { TASK_TURN_ENDINGS } from '../subordinates/temporary';
 
 /** The picklist is {@link RUN_END_REASONS}, so a stored row cannot carry an unknown word. */
 export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
@@ -234,6 +235,21 @@ export function chatTerminalEffects(deps: {
   };
 }
 
+/** A settled turn's end as its hirer is told it, recorded with the turn's commit: what the report is, and whether one
+ *  is owed at all, is decided where the hirer's roster is, once the answer committed (#75). */
+const TurnReportSchema = v.object({
+  turnId: v.string(), ending: v.picklist(TASK_TURN_ENDINGS), assistantText: v.string(), narration: v.array(v.string()),
+  ownerDriven: v.boolean(),
+  /** The assignment this turn answers, if one opened it. */
+  taskId: v.nullable(v.string()),
+  /** The hirer's ingress dedupes on it. */
+  sequenceId: v.string(),
+  /** A replay must not turn a Plan report into a Build one. */
+  mode: WorkModeSchema,
+});
+
+export type TurnReportFacts = v.InferOutput<typeof TurnReportSchema>;
+
 export interface ActorEffectPorts {
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** Null once named, or why the name cannot be applied yet: the row stays owed and retries. A row without `standIn`
@@ -242,7 +258,10 @@ export interface ActorEffectPorts {
   applyTitle(subject: string, standIn: boolean): Promise<string | null>;
   /** The turn's evolution pass; absent where the actor's lanes are another object's (a cloud agent's, the workspace's). */
   readonly startEvolution?: () => void;
-  /** Absent with no hirer. */
+  /** The report a settled turn's end owes its hirer, decided and relayed; answers the relay's disposition, `none` where
+   *  none was owed. Absent with no hirer. */
+  readonly report?: (turn: TurnReportFacts) => Promise<string>;
+  /** A report already composed ({@link unansweredReport}). Absent with no hirer. */
   readonly sendReport?: (report: {
     readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
   }) => Promise<string>;
@@ -251,7 +270,7 @@ export interface ActorEffectPorts {
 /** The effects every actor's settled turn owes its own lanes ({@link declareTerminalRoster}), one body each, alike on
  *  every backend; an actor supplies the ports. */
 export function actorTerminalEffects(ports: ActorEffectPorts): TerminalEffectTable {
-  const { sendReport, startEvolution } = ports;
+  const { report, sendReport, startEvolution } = ports;
 
   return {
     // The verdict uses the recorded mode and switch, so a fresh activation's defaults cannot open an unearned pass. Not
@@ -274,6 +293,10 @@ export function actorTerminalEffects(ports: ActorEffectPorts): TerminalEffectTab
 
         return { status: 'completed' };
       },
+    }),
+    turn_report: terminalEffect({
+      input: TurnReportSchema,
+      run: async (turn) => ({ status: 'completed', detail: report === undefined ? 'none' : await report(turn) }),
     }),
     auto_title: terminalEffect({
       input: v.object({ subject: v.string(), standIn: v.optional(v.boolean()) }),

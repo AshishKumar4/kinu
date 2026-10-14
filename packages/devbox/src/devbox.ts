@@ -759,6 +759,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return true;
   }
 
+  /**
+   * Where the guest keeps digest writes' answers (`file-digest-write.ts`): the container's own `/tmp`, so they go with
+   * it. A test that runs the guest program on its host gives a folder of its own.
+   */
+  protected get digestJournal(): string {
+    return '/tmp/kinu-digest-writes';
+  }
+
   protected get startClock(): StartClock {
     return nativeStartClock(this.#container());
   }
@@ -2475,7 +2483,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  caller's operations whose answers it holds. */
   async writeFileIfDigest({ path, contentBase64, ...write }: DigestWriteRequest) {
     return await settle(this.#claimed(pathScopes({ path, membership: true }),
-      writeFileIfDigestInGuest(this.#container(), { path, data: Buffer.from(contentBase64, 'base64'), ...write })).pipe(Effect.mapError(fileFault)));
+      writeFileIfDigestInGuest(this.#container(), { journal: this.digestJournal, path, data: Buffer.from(contentBase64, 'base64'), ...write })).pipe(Effect.mapError(fileFault)));
   }
 
   /** `deleteFile` claims the subtree: a path can't reveal it is a directory, and a

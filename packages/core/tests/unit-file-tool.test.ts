@@ -27,7 +27,7 @@ import type { RunEvent, RunEventBase } from '../src/events/types';
 import { KinuError } from '../src/obs/index';
 import { failedToolOutcome } from '../src/tools/outcome';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
-import { cloudPlanes } from '../src/vfs/resolve';
+import { cloudPlanes, resolvePath } from '../src/vfs/resolve';
 
 
 describe('applyFileEdits', () => {
@@ -805,12 +805,11 @@ describe('file tool', () => {
       .toMatchObject({ path: 'a.txt', applied: [expect.objectContaining({ line: expect.any(Number) })] });
   });
 
-  test('a missing file reports the VFS error with the addressing correction', async () => {
+  test('a missing file reports the VFS error and where its path landed on this backend\'s planes', async () => {
     const { call } = toolFor(memoryVfs());
-    const result = call({ op: 'read', path: '/app/main.py' });
+    const result = call({ op: 'read', path: 'app/main.py' });
     await expect(result).rejects.toThrow('ENOENT');
-    await expect(result).rejects.toThrow('NOT the machine or container');
-    await expect(result).rejects.toThrow('roots are: local');
+    await expect(result).rejects.toThrow(resolvePath('app/main.py', cloudPlanes(WORKSPACE_ROOT)).absolute);
   });
 
   test('a read counts against the turn budget like any other bulk result', async () => {

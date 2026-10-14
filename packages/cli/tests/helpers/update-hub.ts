@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 import { AwaitedList, present, scratchDir, runToExit } from '@kinu.run/test-utils';
-import { DEVICE_TOKEN_ROTATION, generateReleaseSigningKey, signRelease, type SignedRelease } from '@kinu.run/core';
+import { generateReleaseSigningKey, signRelease, type SignedRelease, DEVICE_FRAMES } from '@kinu.run/core';
 import { DAEMON_SIBLINGS, DAEMON_SOURCE } from './daemon-files';
 
 export const DAEMON_FILES = { 'pc-agent.js': DAEMON_SOURCE, ...DAEMON_SIBLINGS } as const;
@@ -55,7 +55,7 @@ export type HubHello = v.InferOutput<typeof HelloSchema>;
 export type HubFrame = v.InferOutput<typeof FrameSchema>;
 
 export type HubPush =
-  | { type: typeof DEVICE_TOKEN_ROTATION; token: string }
+  | { type: typeof DEVICE_FRAMES.rotate; token: string }
   | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string; checksums?: Record<string, string>; signature?: string }
   /** A call, with the owner's Sandbox switch composed the way the hub composes it. */
   | {
@@ -199,7 +199,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
         sockets.push(socket);
         openSockets.add(ws);
-        ws.send(JSON.stringify({ type: DEVICE_TOKEN_ROTATION, token: ROTATED_TOKEN }));
+        ws.send(JSON.stringify({ type: DEVICE_FRAMES.rotate, token: ROTATED_TOKEN }));
 
         const behind = hello.version !== undefined && hello.version !== opts.served;
         const allowed = hello.updateCheck !== false;

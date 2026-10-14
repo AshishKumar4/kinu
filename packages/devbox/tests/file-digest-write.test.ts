@@ -13,6 +13,9 @@ import { settle } from '../src/errors';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}digest-`));
 
+/** The guest's journal, under this run's own folder: the host's `/tmp` is not the container's. */
+const journal = join(root, 'journal');
+
 afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
@@ -24,6 +27,10 @@ const base64 = (text: string): string => Buffer.from(text).toString('base64');
 class TestBox extends TestDevbox<unknown> {
   protected override get ambientCheckpoints(): boolean {
     return false;
+  }
+
+  protected override get digestJournal(): string {
+    return journal;
   }
 }
 
@@ -43,11 +50,11 @@ test('a write lands only over the bytes it names, keeping the mode', async () =>
 
   // Saved over after the agent read it.
   writeFileSync(path, 'saved by the owner');
-  const stale = await settle(writeFileIfDigest(container, { path, data: bytes('the rewrite'), expected: sha256('read by the agent'), operation: randomUUID(), settled: [] }));
+  const stale = await settle(writeFileIfDigest(container, { journal, path, data: bytes('the rewrite'), expected: sha256('read by the agent'), operation: randomUUID(), settled: [] }));
 
   expect({ stale, now: readFileSync(path, 'utf8') }).toEqual({ stale: { ok: false, sha256: sha256('saved by the owner') }, now: 'saved by the owner' });
 
-  const fresh = await settle(writeFileIfDigest(container, { path, data: bytes('the rewrite'), expected: sha256('saved by the owner'), operation: randomUUID(), settled: [] }));
+  const fresh = await settle(writeFileIfDigest(container, { journal, path, data: bytes('the rewrite'), expected: sha256('saved by the owner'), operation: randomUUID(), settled: [] }));
 
   expect({ fresh, now: readFileSync(path, 'utf8'), mode: statSync(path).mode & 0o777 })
     .toEqual({ fresh: { ok: true, sha256: sha256('the rewrite') }, now: 'the rewrite', mode: 0o640 });
@@ -56,14 +63,14 @@ test('a write lands only over the bytes it names, keeping the mode', async () =>
 test('with no digest it creates the file, parents too, only where none is', async () => {
   const path = join(root, 'deep', 'er', 'new.md');
 
-  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('first'), expected: null, operation: randomUUID(), settled: [] }))).toEqual({ ok: true, sha256: sha256('first') });
-  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('second'), expected: null, operation: randomUUID(), settled: [] }))).toEqual({ ok: false, sha256: sha256('first') });
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { journal, path, data: bytes('first'), expected: null, operation: randomUUID(), settled: [] }))).toEqual({ ok: true, sha256: sha256('first') });
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { journal, path, data: bytes('second'), expected: null, operation: randomUUID(), settled: [] }))).toEqual({ ok: false, sha256: sha256('first') });
   expect(readFileSync(path, 'utf8')).toBe('first');
 });
 
 test('a repeated operation is answered what its first send did: a landed write stays landed though the file moved since', async () => {
   const path = join(root, 'landed.md');
-  const write = { path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID(), settled: [] };
+  const write = { journal, path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID(), settled: [] };
   writeFileSync(path, 'read');
 
   const first = await settle(writeFileIfDigest({ exec: pipeExec }, write));
@@ -79,7 +86,7 @@ test('a repeated operation is answered what its first send did: a refused write 
   const path = join(root, 'refused.md');
   // Already the bytes the write carries, but not the ones it was read as.
   writeFileSync(path, 'the rewrite');
-  const write = { path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID(), settled: [] };
+  const write = { journal, path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID(), settled: [] };
 
   const first = await settle(writeFileIfDigest({ exec: pipeExec }, write));
 
@@ -120,7 +127,7 @@ function cutOnceLanded(path: string, published: string): Container['exec'] {
 // 2026-10-13 review: the replay of a send cut between its write and its answer had lost its coverage.
 test('a send cut after its write landed and before its answer is answered that it landed, and a later save stays', async () => {
   const path = join(root, 'cut.md');
-  const write = { path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID(), settled: [] };
+  const write = { journal, path, data: bytes('the rewrite'), expected: sha256('read'), operation: randomUUID(), settled: [] };
   writeFileSync(path, 'read');
 
   await expect(settle(writeFileIfDigest({ exec: cutOnceLanded(path, 'the rewrite') }, write))).rejects.toMatchObject({ message: expect.stringContaining('exited 9') });
@@ -140,11 +147,11 @@ test('the guest keeps a write\'s answer only until its caller says it holds it',
   for (const [at, operation] of operations.entries()) {
     const settled = operations.slice(at - 1, at);
 
-    expect(await settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes(`v${String(at + 1)}`), expected: sha256(`v${String(at)}`), operation, settled })))
+    expect(await settle(writeFileIfDigest({ exec: pipeExec }, { journal, path, data: bytes(`v${String(at + 1)}`), expected: sha256(`v${String(at)}`), operation, settled })))
       .toMatchObject({ ok: true });
   }
 
-  const kept = readdirSync('/tmp/kinu-digest-writes');
+  const kept = readdirSync(journal);
 
   expect(operations.map((operation) => kept.some((entry) => entry.startsWith(operation)))).toEqual([false, false, false, true]);
 });
@@ -248,7 +255,7 @@ test('a write keeps the file\'s owner, group and extended attributes, and a read
   const tagged = (await xattr("import os, sys; os.setxattr(sys.argv[1], 'user.kinu', b'kept')")).exitCode === 0;
   const operation = (): string => randomUUID();
 
-  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('v2'), expected: sha256('v1'), operation: operation(), settled: [] })))
+  expect(await settle(writeFileIfDigest({ exec: pipeExec }, { journal, path, data: bytes('v2'), expected: sha256('v1'), operation: operation(), settled: [] })))
     .toEqual({ ok: true, sha256: sha256('v2') });
   expect(statSync(path)).toMatchObject({ uid: before.uid, gid: before.gid, mode: before.mode });
 
@@ -257,7 +264,7 @@ test('a write keeps the file\'s owner, group and extended attributes, and a read
   chmodSync(path, 0o444);
 
   try {
-    const readOnly = settle(writeFileIfDigest({ exec: pipeExec }, { path, data: bytes('v3'), expected: sha256('v2'), operation: operation(), settled: [] }));
+    const readOnly = settle(writeFileIfDigest({ exec: pipeExec }, { journal, path, data: bytes('v3'), expected: sha256('v2'), operation: operation(), settled: [] }));
 
     // Root writes any file, as a plain write does; anyone else is refused.
     if (process.getuid?.() === 0) expect(await readOnly).toMatchObject({ ok: true });

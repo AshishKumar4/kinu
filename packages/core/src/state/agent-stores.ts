@@ -10,7 +10,7 @@ import { HeadJournal } from '../heads/journal';
 import { RunEventRecorder } from '../events/recorder';
 import { BackgroundJobStore } from '../jobs/store';
 import { MctsSearchStore } from '../mcts/search-store';
-import { ActorClaimStore } from '../orchestrator/actor-claims';
+import { ActorClaimStore, claimFences } from '../orchestrator/actor-claims';
 import { PlanReviewStore } from '../plans/review';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { createAppDataStore, type AppDataStore } from '../tools/db-codemode';
@@ -70,7 +70,7 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
       return (claims ??= new ActorClaimStore(sql(), actor(), transactionSync, bundle.history));
     },
     get history(): SessionHistory {
-      return history ??= new SessionHistory({ sql: sql(), actor: actor(), transactionSync, files });
+      return history ??= new SessionHistory({ sql: sql(), actor: actor(), transactionSync, files, claims: claimFences(sql(), actor()) });
     },
     get conversationSearch(): ConversationSearchStore {
       return conversationSearch ??= new ConversationSearchStore(sql(), actor(), (sessionId) => bundle.history.transcript(sessionId), transactionSync);

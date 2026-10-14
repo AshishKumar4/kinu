@@ -4,7 +4,7 @@ import {
   agentStatusFacts, initWorkspaceSchema, initActorStateSchema, memoryBytes,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, soulIn, waitOnSharedWrites, type CLIRuntime } from './runtime';
-import type { LocalCloudSession, LocalProviderCredentials } from './model-resolver';
+import type { LocalCloudSession, ProviderCredentialSource } from './model-resolver';
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
 import type { LocalActorConfig } from '@kinu.run/core';
@@ -25,7 +25,7 @@ export interface WorkspaceInfo {
 interface CLIOpenOptions {
   /** Default endpoint for bare ids; null when nothing derives one. */
   llm: LLMProviderConfig | null;
-  providerCredentials?: LocalProviderCredentials;
+  providerCredentials?: ProviderCredentialSource;
   oauthStore?: LocalOAuthStore;
   /** The signed-in session, whose worker rates turns. */
   cloud?: LocalCloudSession;

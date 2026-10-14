@@ -9,7 +9,7 @@ import type { DecisionPort } from './providers/decision-model';
 import type { ActorHandle } from './identity/actor-handle';
 import { estimateTokens, estimateUsdCost } from './token-estimate';
 import type { ModelPricing } from './providers/types';
-import type { JsonObject, JsonValue } from './utils/json';
+import type { JsonValue } from './utils/json';
 import { usageReported, usageTotal, type Usage } from './usage';
 import { Effect } from 'effect';
 import { KinuError } from './obs/error';
@@ -517,20 +517,6 @@ export function missionMeter(mission: MissionScope | undefined): MissionMeter {
       });
     },
   };
-}
-
-/** Carries a woken turn's mission scope from the schedule that fired it. */
-export const MISSION_LABELS_METADATA_KEY = 'missionLabels';
-
-const MissionLabelsMetadataSchema = v.object({
-  [MISSION_LABELS_METADATA_KEY]: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
-});
-
-/** Malformed metadata reads as unscoped. */
-export function readMissionLabels(metadata: JsonObject | undefined): string[] {
-  const parsed = v.safeParse(MissionLabelsMetadataSchema, metadata);
-
-  return parsed.success ? parsed.output[MISSION_LABELS_METADATA_KEY] ?? [] : [];
 }
 
 /** Null when neither is a usable positive number. */

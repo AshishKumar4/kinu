@@ -8,18 +8,19 @@ import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { PromptFileSchema, signalCardId, turnMetadata } from '../orchestrator/inbox';
+import type { PromptFile } from '../types/backend-host';
 import { buildDrainBatch } from '../events/hub/drain';
 import type { EventLog } from '../events/hub/log';
 import { delegatedTaskMetadata, metadataBroadcastEvent } from '../read-models/background-event';
 import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY, type AgentInbox, type AgentSignal, type SendOutcome } from '../types/signals';
-import { MISSION_LABELS_METADATA_KEY } from '../mission-budget';
+import { MISSION_LABELS_METADATA_KEY } from '../types/turn-metadata';
 import { nanoid } from '../utils/nanoid';
 import { Effect } from 'effect';
 import { KinuError, settleSync, type ErrorCode } from '../obs/index';
 import { TierIdSchema } from '../types/profile';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
-import type { TurnAuthorship } from '../orchestrator/turn-authorship';
+import type { TurnAuthorship } from '../types/turn';
 import { OwnerAnswersSchema } from '../plans/owner-questions';
 import type { PlanDecisionOutcome } from '../types/plans';
 import { PlanDecisionOutcomeSchema } from '../plans/review';
@@ -55,6 +56,30 @@ const DeliveryInputSchema = v.variant('kind', [
 ]);
 
 export type DeliveryInput = v.InferOutput<typeof DeliveryInputSchema>;
+
+/** A person's words as their send carries them, before a delivery is made of them. */
+export type SentWords = Omit<Extract<DeliveryInput, { readonly kind: 'words' }>, 'kind'>;
+
+/**
+ * What a send carries beside its text and files, on its chat message's `metadata`, as every client writes it: the work
+ * mode, the tier for its turn, and the metadata of a turn it opens (a one-shot run's mark, the folder a CLI sends from).
+ * Each is the words' own field; a send that names none steers a turn already running.
+ */
+export const SendMetadataSchema = v.looseObject({
+  kinuMode: v.optional(WorkModeSchema), kinuTier: v.optional(TierIdSchema), kinuTurn: v.optional(JsonObjectSchema),
+});
+
+export type SendMetadata = v.InferOutput<typeof SendMetadataSchema>;
+
+/** A send's words, from its text, files and metadata. */
+export function sentWords(text: string, files: readonly PromptFile[], metadata: SendMetadata | undefined): SentWords {
+  return {
+    text, files: [...files],
+    ...(metadata?.kinuMode !== undefined && { mode: metadata.kinuMode }),
+    ...(metadata?.kinuTier !== undefined && { tier: metadata.kinuTier }),
+    ...(metadata?.kinuTurn !== undefined && { metadata: metadata.kinuTurn }),
+  };
+}
 
 export type TurnDeliveryInput = Extract<DeliveryInput, { readonly kind: 'turn' }>;
 

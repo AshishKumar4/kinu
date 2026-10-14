@@ -49,8 +49,7 @@ import { lostRemoteCall, lostToolCall } from '../tools/effect-claim';
 import { unpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import type { ReceiptExecution, RemoteReceipt } from '../tools/effect-claim';
 import { OwnerQuestionStore } from '../plans/owner-questions';
-import { turnReasonForMetadata } from '../prompting/surface';
-import { metadataTier } from './turn-assembly';
+import { turnTags } from '../types/turn-metadata';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { ASK_OWNER_TOOL } from '../tools/registry';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
@@ -343,8 +342,7 @@ export class ActorSession {
       const receipt = await this.canonical.replaceHistory(messages, { author: this.actorId, via: 'session', turnId: active?.lease.turnId ?? null, stage: active !== null, assertOwner: () => this.runtime.actor.assertCurrent(), events: this.options.events });
 
       if (receipt.proposalId === null) {
-        const current = await this.canonical.materialize();
-        this.messages.splice(0, this.messages.length, ...current.messages);
+        this.adopt(await this.canonical.materialize());
       }
 
       return receipt.proposalId;
@@ -377,9 +375,10 @@ export class ActorSession {
   restoreWorkingHistory(): Promise<boolean> {
     return this.restoreAfterPending(async () => {
       const current = await this.canonical.materialize();
-      this.messages.splice(0, this.messages.length, ...current.messages);
 
-      return current.selection.revision !== 0 || current.entries.length !== 0 || this.canonical.proposals.pending(current.selection.contextId).length !== 0;
+      this.adopt(current);
+
+      return !this.canonical.isUntouched(current.selection, current.entries);
     });
   }
 
@@ -408,31 +407,28 @@ export class ActorSession {
 
     const assertOwner = this.preparingTurnFence(lease, 'input must belong to a preparing turn');
 
-    const selected = this.canonical.context.selected() ?? this.canonical.context.initialize();
-    const drainTurn = v.safeParse(v.string(), input.item.metadata?.drainTurnId);
+    const selected = this.canonical.context.current();
+    const tags = turnTags(input.item);
+    const { drainTurnId } = tags;
 
-    if (selected.revision === 0 && drainTurn.success && this.canonical.context.conversationOf(this.canonical.context.entries(selected)).length === 0 && this.canonical.proposals.pending(selected.contextId).length === 0) {
-      for (const [index, message] of (await input.birthContext(drainTurn.output)).entries()) await this.canonical.append({ id: `${lease.turnId}:birth:${index}`, message, origin: 'input', turnId: lease.turnId, assertOwner });
+    if (drainTurnId !== undefined && this.canonical.isUntouched(selected)) {
+      for (const [index, message] of (await input.birthContext(drainTurnId)).entries()) await this.canonical.append({ id: `${lease.turnId}:birth:${index}`, message, origin: 'input', turnId: lease.turnId, assertOwner });
     }
 
     // An answer's turn continues from the answered call: its row is the transcript's, never the model's.
-    if (input.item.metadata?.kinuEvent !== OWNER_ANSWER_SIGNAL) {
+    if (tags.event !== OWNER_ANSWER_SIGNAL) {
       const acceptedInput = await this.canonical.admitInput({ id: lease.turnId, message: input.message, turnId: lease.turnId, assertOwner });
       this.canonical.activateInput(acceptedInput, lease.turnId, assertOwner);
     }
 
-    const opened = await this.canonical.materialize();
-    this.requireTurn(lease).context = opened;
-    this.messages.splice(0, this.messages.length, ...opened.messages);
+    this.adopt(await this.canonical.materialize(), this.requireTurn(lease));
   }
 
 
 
   async retractCutStep(lease: ActorTurnLease, outputs: readonly string[]): Promise<void> {
     await this.canonical.retract(outputs, this.preparingTurnFence(lease, 'a cut step is retracted by the turn preparing it'));
-    const opened = await this.canonical.materialize();
-    this.requireTurn(lease).context = opened;
-    this.messages.splice(0, this.messages.length, ...opened.messages);
+    this.adopt(await this.canonical.materialize(), this.requireTurn(lease));
   }
 
   /** A recovered activation re-admitting the same turn writes its own run id under a new epoch. */
@@ -804,8 +800,8 @@ export class ActorSession {
   }> {
     const program = await prepareActorProgram({ signal: active.abort.signal, runtime: this.runtime, mode: this.mode, version });
     const admitted = active.context ?? await this.canonical.materialize();
-    active.context = admitted;
-    this.messages.splice(0, this.messages.length, ...admitted.messages);
+
+    this.adopt(admitted, active);
 
     return { program, selection: admitted.selection, messages: admitted.messages };
   }
@@ -915,9 +911,9 @@ export class ActorSession {
           return stream.dispatched(call.toolCallId) ? lostRemoteCall({ status: 'indeterminate' }, call) : null;
         },
         onAsk: (calls) => {
-          const metadata = this.turnMetadata;
+          const { tier, reason } = turnTags({ metadata: this.turnMetadata });
 
-          this.questions.ask(calls, { turnId: lease.turnId, mode: this.mode, tier: metadataTier(metadata) ?? null, reason: turnReasonForMetadata(metadata) });
+          this.questions.ask(calls, { turnId: lease.turnId, mode: this.mode, tier: tier ?? null, reason });
           this.orchestrator.acc.askedOwner = true;
         },
         waitsOn: (call) => this.questions.waitsOn(call),
@@ -941,8 +937,8 @@ export class ActorSession {
         stepContext: {
           base: async () => {
             const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null, active.context);
-            active.context = base;
-            this.messages.splice(0, this.messages.length, ...base.messages);
+
+            this.adopt(base, active);
             stepEntries = base.entries;
             // Its unpaired calls are paired from this history: one this store holds no receipt of is asked after first.
             await this.askRemote(lease, remote);
@@ -1030,9 +1026,7 @@ export class ActorSession {
   private async settleOutput(active: ActiveTurn, stream: SessionStream | null): Promise<void> {
     if (active.claim === null) return;
     await stream?.settle();
-    const settled = await this.canonical.materialize(active.context);
-    active.context = settled;
-    this.messages.splice(0, this.messages.length, ...settled.messages);
+    this.adopt(await this.canonical.materialize(active.context), active);
   }
 
   private async turnResult(
@@ -1088,7 +1082,7 @@ export class ActorSession {
     const prepared = await this.canonical.messages.prepare({ role: 'assistant', content: text }, id);
 
     return this.runtime.storage.transactionSync(() => {
-      this.canonical.assertClaimEpoch(claim.turnId, claim.epoch);
+      this.canonical.assertClaimOwned(claim.turnId, claim.epoch);
       this.canonical.messages.insert(prepared, 'render');
 
       return { messageId: id, partNo: 0 };
@@ -1117,6 +1111,12 @@ export class ActorSession {
     if (collected === undefined) return write();
 
     return () => { collected.value(); collected.publish(); };
+  }
+
+  /** `history` becomes the working messages, and `turn`'s context where one is given. */
+  private adopt(history: MaterializedHistory, turn: ActiveTurn | null = null): void {
+    if (turn !== null) turn.context = history;
+    this.messages.splice(0, this.messages.length, ...history.messages);
   }
 
   private requireTurn(lease: ActorTurnLease): ActiveTurn {

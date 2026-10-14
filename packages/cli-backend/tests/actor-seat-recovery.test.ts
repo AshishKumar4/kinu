@@ -53,7 +53,7 @@ function head(id: string): HeadInput {
 }
 
 async function interrupted(actor: HostedActor): Promise<void> {
-  const context = actor.stores.history.context.selected() ?? actor.stores.history.context.initialize();
+  const context = actor.stores.history.context.current();
   const version = await actor.runtime.identity.scaffold.version();
   const source = await actor.runtime.identity.scaffold.read();
 

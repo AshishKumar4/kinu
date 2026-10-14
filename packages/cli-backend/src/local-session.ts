@@ -59,23 +59,23 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
-  assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
-  type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
+  type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
   terminalEffect,
   type TerminalEffectTable, type TerminalEffectFault,
   type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
   turnArtifactBodies, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
-  turnReasonForMetadata, type TurnReason,
+  turnTags, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
-  actorNamespaces, SURFACE_POLICY, type SurfaceActor,
+  actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
   agentRoleSwitch,
-  REPORT_TOOL, turnAuthorship, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
+  REPORT_TOOL, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
   type MissionGovernor,
   observeSystemPromptHash,
   type DynamicContext,
@@ -177,6 +177,14 @@ function drivenJobs(hosted: LocalHostedSession | undefined): Set<string> {
   return hosted?.jobsDriven ?? new Set();
 }
 
+/** The session's agent seated over its runtime: as its host seated it, or, outside a host, the workspace's own. */
+function seatOf(hosted: LocalHostedSession | undefined, rt: CLIRuntime, stores: AgentStores): SeatedActor {
+  if (hosted !== undefined) return hosted.actor;
+  const record = localActorDirectory(rt.actor).directory.describe(rt.actor);
+
+  return { reference: actorReferenceOf(record), record, handle: rt.actor, stores, runtime: rt };
+}
+
 type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
 
 const NEXT_OWNER_TURN: TurnAsked = { kind: 'user', text: '' };
@@ -202,9 +210,7 @@ export interface LocalParentRelay {
    * Which report this ending owes, or null. A `task` child owes one on every ending; a `durable`
    * child only for a completed, parent-driven turn with something to say and no `report` call.
    */
-  readonly owed: (
-    ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>,
-  ) => Promise<OwedReport | null>;
+  readonly owed: (turn: TurnReportFacts) => Promise<OwedReport | null>;
   /** Dedupe key on the parent's rail, so a replay cannot wake it twice. */
   readonly sequenceId: (messageId: string) => string;
   readonly send: (report: {
@@ -292,6 +298,11 @@ export class LocalAgentSession {
   }
 
   private readonly stores: AgentStores;
+  /** What this agent reaches by what it is (`actorReach`), as on the cloud: the workspace's own agent its programs'
+   *  whole surface and what lies outside, a hire only its own planes. */
+  private readonly actorReach: ActorReach;
+  /** This agent seated over its runtime, as a confined program's namespaces are built over it. */
+  private readonly seat: SeatedActor;
   private readonly jobs: BackgroundJobStore;
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
@@ -450,6 +461,8 @@ export class LocalAgentSession {
     // Hosted, these are the stores the root's host bound; a second set would be a second memo.
     this.stores = opts.hosted?.actor.stores ?? this.rt.stores;
     const stores = this.stores;
+    this.seat = seatOf(opts.hosted, this.rt, stores);
+    this.actorReach = actorReach(actorPolicy(this.seat.record));
     this.jobs = stores.jobs;
     this.taskList = stores.taskList;
     this.headJournal = new LiveHeadJournal(this.rt.storage.sql, this.rt.actor, this.headActivity);
@@ -532,8 +545,6 @@ export class LocalAgentSession {
         // The owner's decision as an intent delivers it, as their own decision here decides it.
         decidePlan: (verdict) => this.planActions.decideAndHandOff(verdict, (turn) => this.enqueueTurn(turn)),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
-        // Only the host knows the child's lifetime and whether the parent drove the turn.
-        owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
         // A running job's settle wakes the session; a reminder would race it.
         openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
@@ -1602,7 +1613,7 @@ export class LocalAgentSession {
 
     this.turnArtifacts = artifactOverrides(artifacts.bodies);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
-    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnAuthorship(item));
+    this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnTags(item).authorship);
     this.turnLearns = this.engine.recordsTurns;
     this.turnDriving = authoredTurnMetadata(item);
 
@@ -1644,7 +1655,7 @@ export class LocalAgentSession {
   }
 
   private turnRequest(item: TurnAsked): TurnAssemblyRequest {
-    return { userText: item.text, workMode: this.turnWorkMode(item), explicitTier: metadataTier(item.metadata) };
+    return { userText: item.text, workMode: this.turnWorkMode(item), explicitTier: turnTags(item).tier };
   }
 
   private turnModels(): TurnModelSources {
@@ -1662,7 +1673,7 @@ export class LocalAgentSession {
 
   /** Where this session's turns are assembled from (core orchestrator/turn-assembly.ts). */
   private turnSources(item: TurnAsked, lease: Pick<ActorTurnLease, 'runId' | 'turnId'> | null): TurnAssemblySources {
-    const turn = turnReasonForMetadata(item.metadata);
+    const turn = turnTags(item).reason;
 
     return {
       rt: this.rt,
@@ -1679,7 +1690,9 @@ export class LocalAgentSession {
       },
       ...(this.ancestors && { ancestors: this.ancestors }),
       toolset: (mode) => this.turnToolSet(mode),
+      // What lies outside the workspace is its own agent's alone.
       externalTools: async (window) => {
+        if (!this.actorReach.external) return {};
         await this.admitMcp(window);
 
         return this.extraTools;
@@ -1761,15 +1774,9 @@ export class LocalAgentSession {
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
-    // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
-    if (input.owedReport !== null && relay !== null) {
-      parts.parentReport = {
-        text: input.owedReport.content,
-        status: input.owedReport.status,
-        sequenceId: relay.sequenceId(input.messageId),
-        ...(input.owedReport.quiet === true && { quiet: true as const }),
-      };
-    }
+    // Decided once its answer committed, by its relay; the sequence id is the parent's dedupe key, so a replay is
+    // recognised.
+    if (input.turnEnd !== null && relay !== null) parts.turnReport = { ...input.turnEnd, sequenceId: relay.sequenceId(input.messageId) };
 
     const role: TerminalActor['role'] = root
       ? { kind: 'workspace', mission: missionOf(soulIn(this.rt.space)), event: input.event ?? null }
@@ -1854,7 +1861,16 @@ export class LocalAgentSession {
         },
         // As the workspace object runs main's.
         startEvolution: () => { this.actorSession.orchestrator.startEvolution(); },
-        ...(relay !== null && { sendReport: (report) => relay.send(report) }),
+        ...(relay !== null && {
+          report: async (turn) => {
+            const owed = await relay.owed(turn);
+
+            return owed === null ? 'none' : await relay.send({
+              text: owed.content, status: owed.status, mode: turn.mode, sequenceId: turn.sequenceId, ...(owed.quiet === true && { quiet: true as const }),
+            });
+          },
+          sendReport: (report) => relay.send(report),
+        }),
       }),
     };
   }
@@ -2449,11 +2465,20 @@ export class LocalAgentSession {
     this.cachedModelSpec = null;
   }
 
-  /** One list for both the turn resolver and the tool builder, so they cannot disagree. */
+  /** One list for both the turn resolver and the tool builder, so they cannot disagree. A hire's programs reach its own
+   *  planes only (`SURFACE_POLICY.confined`): no delegation, lifecycle or role switch of the workspace's. */
   private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
     const report = this.reportGateOpen() ? this.reportDeps : null;
+    const reported = report === null ? {} : { report: () => report };
 
-    return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, report === null ? {} : { report: () => report });
+    if (this.actorReach.surface === 'program') return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, reported);
+    const acc = this.actorSession.orchestrator.acc;
+
+    // A program here runs in this process, which holds no Browser Run socket client, so no browser sessions.
+    return actorNamespaces(hostedSurfaceActor(this.seat, {
+      web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
+      conversations: this.ownConversations(), vectorStore: null, ledgers: () => ({ files: acc.files, context: acc.context }),
+    }), SURFACE_POLICY.confined, reported);
   }
 
   /** This session's actor as its namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */
@@ -2737,7 +2762,7 @@ export class LocalAgentSession {
       escalations: this.actorSession.orchestrator.acc.escalations,
       craft: this.actorSession.orchestrator.acc.craft,
       vectorStore: null,
-      external: () => this.turnExternalTools,
+      ...(this.actorReach.external && { external: () => this.turnExternalTools }),
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
         const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
@@ -2750,7 +2775,7 @@ export class LocalAgentSession {
         return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
-      roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
+      ...(this.actorReach.lanes && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
       jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },

@@ -238,7 +238,7 @@ const ALREADY_RUNNING_EXIT = 3;
 const TOKEN_ROTATION = FRAMES.rotate;
 
 /** This daemon's answer once the rotated token is on disk, core's
- *  DEVICE_TOKEN_ROTATION_ACK. The hub keeps the superseded token valid until
+ *  DEVICE_FRAMES.rotated. The hub keeps the superseded token valid until
  *  this frame arrives and drops it then, so the grace covers exactly the
  *  failure it exists for — a rotation lost with its socket — and not the
  *  indefinite window a copy of device.json could spend. */
