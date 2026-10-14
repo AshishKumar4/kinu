@@ -721,12 +721,9 @@ function GiveAccess({ name, onGive }: { name: string; onGive: () => Effect.Effec
     <div data-env-give-access className="flex min-h-0 flex-1 items-center justify-center border-t p-border px-8">
       <div className="max-w-sm space-y-3 text-center">
         <LockSimpleIcon size={22} className="mx-auto p-text-3" aria-hidden />
-        <div className="space-y-1.5">
-          <p className="p-row-text font-semibold p-text">This workspace can&apos;t use {name} yet</p>
-          <p className="p-meta p-text-2">
-            {name} is connected to your account. Give this workspace access and its agent can run commands and open a
-            terminal there, inside the machine&apos;s sandbox. You can take it back on the Devices page.
-          </p>
+        <div className="space-y-1">
+          <p className="p-row-text font-semibold p-text">{name} is connected</p>
+          <p className="p-meta p-text-2">This workspace can&apos;t use it yet.</p>
         </div>
         <FilledButton onClick={() => detach(give)} disabled={giving}>{giving ? "Giving access…" : "Give this workspace access"}</FilledButton>
         {failure !== null && <p className="p-meta p-danger">{failure}</p>}
