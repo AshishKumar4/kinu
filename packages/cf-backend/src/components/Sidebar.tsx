@@ -22,7 +22,7 @@ import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/h
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 import { composing } from "@/components/ui/form";
 import { StatusDot } from "@/components/ui/Status";
-import { workspaceStatusTone } from "@/components/workspaces/WorkspaceOverviewCard";
+import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
   const { to, label, Icon } = item;
