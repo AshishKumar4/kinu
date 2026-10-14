@@ -53,18 +53,19 @@ const {
   createCheckpoints,
   getConnectTicket,
   handleTokenRotation,
-  inFlight,
   persistRotatedToken,
   readDeviceConfig,
   startConnectLoop,
-  supervisionSupported,
+  supervision,
 } = require('../src/index.js');
+
+const { supervisionSupported } = require('../src/daemon/supervisor.js');
 
 /** The hub ACKs every result it records, and the ACK is what ends a command's supervisor (about 30 MB).
  *  A test that read an answer and stopped there left 22 supervisors running until the run ended. */
 afterEach(async () => {
   for (const requestId of fs.readdirSync(INFLIGHT_ROOT)) {
-    if (fs.existsSync(path.join(INFLIGHT_ROOT, requestId, 'result'))) await inFlight.acknowledge(requestId);
+    if (fs.existsSync(path.join(INFLIGHT_ROOT, requestId, 'result'))) await supervision.acknowledge(requestId);
   }
 });
 
