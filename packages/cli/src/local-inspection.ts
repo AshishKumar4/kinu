@@ -479,7 +479,7 @@ export function localJobRunning(name: string, id: string): boolean {
 /** The addressed workspace's own registered executor runs the command, as the cloud's executeInExecutor does. */
 export async function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
   return withLocalDbAsync(name, async (db) => {
-    const { rt } = await openWorkspaceCLI(db, agentDbPath(name), { llm: null, cwd: resolveLocalAgent(name).cwd });
+    const { rt } = await openWorkspaceCLI(db, name, { llm: null, cwd: resolveLocalAgent(name).cwd });
 
     const run = rt.executionRouter
       ? await runOnExecutor(rt.executionRouter, executorId, command)
