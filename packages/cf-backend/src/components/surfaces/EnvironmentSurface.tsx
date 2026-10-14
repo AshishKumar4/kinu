@@ -4,7 +4,7 @@
  * screen, from one hairline to the column's foot. Capability doctrine stays model-facing
  * (core/src/prompting/volatile-context.ts); file browsing lives in Files.
  */
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useParams } from "react-router-dom";
 import {
   ArrowSquareOutIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, PlusIcon,
@@ -22,7 +22,8 @@ import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { lazyRoute } from "@/lazy-route";
 import type { TerminalPaneProps } from "@/components/TerminalPane";
 import { Loader } from "@cloudflare/kumo";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue } from "@/hooks/use-async-resource";
+import { useMounts } from "@/hooks/use-mounts";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ComputerSize, useComputerSize, type ComputerSizeState } from "@/components/SandboxSize";
 import { Effect } from "effect";
@@ -122,20 +123,10 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const frame = useRef<HTMLDivElement>(null);
   const wide = useWideColumn(frame);
 
-  const load = useCallback(() => rpc("listMounts", []), [rpc]);
-  const { resource, reload } = useAsyncResource(load);
+  const { resource, reload } = useMounts(rpc, executors);
   // Empty and unread must stay distinct.
   const loaded = lastValue(resource);
   const mounts = loaded ?? [];
-
-  // When executor availability flips, the rows' live flags are stale; refetch.
-  const availabilitySignature = executors.map((e) => `${e.name}:${e.available}:${e.status ?? ""}`).join("|");
-  const lastSignature = useRef(availabilitySignature);
-  useEffect(() => {
-    if (lastSignature.current === availabilitySignature) return;
-    lastSignature.current = availabilitySignature;
-    reload();
-  }, [availabilitySignature, reload]);
 
   const execByName = useMemo(() => new Map(executors.map((e) => [e.name, e])), [executors]);
   const environments = useMemo(() => mounts.filter((m) => !isOfferedPc(m)), [mounts]);

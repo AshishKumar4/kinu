@@ -19,6 +19,7 @@ import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useMounts } from "@/hooks/use-mounts";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { useUploads } from "@/hooks/use-uploads";
@@ -100,8 +101,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const loadMounts = useCallback(() => rpc("listMounts", []), [rpc]);
-  const { resource: mountsResource, reload: reloadMounts } = useAsyncResource(loadMounts);
+  const { resource: mountsResource, reload: reloadMounts } = useMounts(rpc, executors);
   const mounts = lastValue(mountsResource) ?? [];
 
   const listDir = useCallback((dir: string): Promise<{ path: string; entries: DirEntry[] }> => settle(Effect.gen(function* () {
