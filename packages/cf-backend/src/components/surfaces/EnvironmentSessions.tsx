@@ -193,12 +193,24 @@ export function SessionDetails({ session, name }: { session: TerminalSession | n
   return (
     <span className="flex min-w-0 items-center gap-3 p-meta p-text-3">
       {name !== undefined && <span className="inline-flex shrink-0 items-center gap-2 p-row-text font-medium p-text"><Dot tone={sessionTone(session).tone} />{name}</span>}
-      <span data-session-cwd className="inline-flex min-w-0 items-center gap-1.5"><FolderOpenIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.cwd}</span></span>
-      {session.branch !== null && <span className="hidden min-w-0 items-center gap-1.5 @[30rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
+      {/* A narrow pane keeps its ports and state: the branch goes first, then the folder shows its last part. */}
+      <span data-session-cwd title={session.cwd} className="inline-flex min-w-0 items-center gap-1.5">
+        <FolderOpenIcon size={12} className="shrink-0" aria-hidden />
+        <span className="hidden truncate @[34rem]:inline">{session.cwd}</span>
+        <span className="truncate @[34rem]:hidden">{folderTail(session.cwd)}</span>
+      </span>
+      {session.branch !== null && <span className="hidden min-w-0 items-center gap-1.5 @[38rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
       {session.ports.map((port) => <span key={port} data-session-port className="p-term-port shrink-0">:{port}</span>)}
-      {detail !== null && <span className={`hidden min-w-0 truncate @[34rem]:inline ${failed ? "p-danger" : ""}`}>{detail}</span>}
+      {detail !== null && <span className={`hidden min-w-0 truncate @[42rem]:inline ${failed ? "p-danger" : ""}`}>{detail}</span>}
     </span>
   );
+}
+
+/** A folder's last part, `…/storefront`; the root and a top-level folder as they are. */
+function folderTail(cwd: string): string {
+  const parts = cwd.split("/").filter((part) => part !== "");
+
+  return parts.length <= 1 ? cwd : `…/${parts.at(-1) ?? ""}`;
 }
 
 /** Opens a session, then shows it; a refusal stays with the hook's failure. */

@@ -65,9 +65,8 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
         <span className="ml-auto flex shrink-0 items-center gap-3 p-meta p-text-3">
           {failure !== null && <span className="max-w-[16rem] truncate p-danger" title={failure}>{failure}</span>}
           {state !== null && (
-            <span data-terminal-state className="inline-flex shrink-0 items-center gap-1.5" title={STATE_SAYS[state].word}>
-              <span aria-hidden className="p-env-dot" data-tone={STATE_SAYS[state].tone} />
-              <span className="hidden @[26rem]:inline">{STATE_SAYS[state].word}</span>
+            <span data-terminal-state className="inline-flex shrink-0 items-center gap-1.5">
+              <span aria-hidden className="p-env-dot" data-tone={STATE_SAYS[state].tone} />{STATE_SAYS[state].word}
             </span>
           )}
           {copies !== null && <span className="hidden shrink-0 @[36rem]:inline" title={copies.title}>{copies.note}</span>}
