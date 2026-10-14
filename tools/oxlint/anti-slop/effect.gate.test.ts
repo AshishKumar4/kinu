@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 import { readSources } from "../../../scripts/sources.ts";
 import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
 
 const repoRoot = process.cwd();
 
@@ -39,7 +40,7 @@ const cases: ReadonlyArray<{ readonly rule: string; readonly bad: string; readon
   },
 ];
 
-const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
+const config = readLintConfig(repoRoot);
 const manifest = JSON.parse(readFileSync(join(repoRoot, "tools/oxlint/anti-slop/upstream.json"), "utf8"));
 assert.deepEqual(
   cases.map((entry) => entry.rule).sort(),

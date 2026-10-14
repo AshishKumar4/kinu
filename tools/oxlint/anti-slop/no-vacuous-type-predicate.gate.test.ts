@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as v from "valibot";
 import { isLintSource, trackedFiles } from "../../../scripts/sources.ts";
 import { lintJson, describeDiagnostic } from "./shared/oxlint-json.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
 
 const repoRoot = process.cwd();
 const rule = "no-vacuous-type-predicate";
@@ -15,7 +16,7 @@ const staged = process.argv.includes("--staged");
 const ActiveConfig = v.object({ rules: v.object({
   "anti-slop/no-vacuous-type-predicate": v.optional(v.literal("error")),
 }) });
-const active = v.parse(ActiveConfig, JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8")));
+const active = v.parse(ActiveConfig, readLintConfig(repoRoot));
 if (!staged) assert.equal(active.rules["anti-slop/no-vacuous-type-predicate"], "error", "the proven rule must remain active");
 
 const governed = trackedFiles().filter(isLintSource).sort();

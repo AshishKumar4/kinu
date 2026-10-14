@@ -16,8 +16,8 @@ const ORIGIN = 'https://kinu.run';
 
 function health(sha: string | null): DeployedHealth {
   return sha === null
-    ? { ok: false, build: null }
-    : { ok: true, build: { version: `0.2.0+${sha}`, sha, builtAt: '2026-08-24T00:00:00.000Z' } };
+    ? { build: null }
+    : { build: { version: `0.2.0+${sha}`, sha, builtAt: '2026-08-24T00:00:00.000Z' } };
 }
 
 describe('the deployment preflight', () => {

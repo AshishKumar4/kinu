@@ -1,11 +1,6 @@
-/** SIGKILL skips exit handlers; only builds whose owner has gone may be reclaimed. */
+import { expect, test } from 'bun:test';
 
-import { describe, expect, test } from 'bun:test';
-import { existsSync } from 'node:fs';
-import { scratchDir } from '../packages/test-utils/src/scratch';
-
-import { contrast, reclaimLeakedBuilds, rgba, withGallery } from './gallery-harness';
-import { spawnTest } from '../packages/test-utils/src/spawn';
+import { contrast, rgba, withGallery } from './gallery-harness';
 
 test('a contrast just below WCAG AA does not pass by rounding', () => {
   // WCAG 2.2 SC 1.4.3 forbids rounding its threshold; this pair's ratio is 4.499795462746351:1.
@@ -38,17 +33,3 @@ test('teardown rejects a gallery selector when the native browser cannot answer'
   expect(await pending.waiting).toBe(true);
 });
 
-describe('gallery builds under the temp directory', () => {
-  test('a dead owner\'s build is removed and a live owner\'s build stays', async () => {
-    // A pid that was a process and is not one now: a child that has exited.
-    const exited = spawnTest(['true']);
-    expect(await exited.exited).toBe(0);
-    const directory = scratchDir('gallery-reclaim');
-    const deadBuild = scratchDir(`gallery-dist-${String(exited.pid)}`, directory);
-    const liveBuild = scratchDir(`gallery-dist-${String(process.pid)}`, directory);
-
-    expect(reclaimLeakedBuilds(directory)).toBeGreaterThanOrEqual(1);
-    expect(existsSync(deadBuild)).toBe(false);
-    expect(existsSync(liveBuild)).toBe(true);
-  });
-});

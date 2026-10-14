@@ -17,8 +17,9 @@ import type { Page } from 'puppeteer';
 import type { JsonValue } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { evidenceDir } from '@kinu.run/test-utils';
 
-const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'app-background', 'ux');
+const SHOTS = evidenceDir('app-background/ux');
 
 mkdirSync(SHOTS, { recursive: true });
 

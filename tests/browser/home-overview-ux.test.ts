@@ -12,7 +12,7 @@
  * The fixture is the gallery's own: `?frame=home` mounts the real HomePage
  * inside the real WorkspaceRosterProvider, the roster read carries each
  * workspace's tile, and `gallery:overview` events send the frames the owner's
- * object would. Screenshots land in ~/kinu-logs/home-status/ (outside the worktree).
+ * object would. Screenshots land in `evidenceDir('home-status')`, beside the checkout.
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
@@ -21,6 +21,7 @@ import type { Page, Viewport } from 'puppeteer';
 import type { JsonValue } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { evidenceDir } from '@kinu.run/test-utils';
 
 declare global {
   interface Window {
@@ -31,7 +32,7 @@ declare global {
   }
 }
 
-const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'home-status');
+const SHOTS = evidenceDir('home-status');
 
 mkdirSync(SHOTS, { recursive: true });
 

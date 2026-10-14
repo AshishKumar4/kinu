@@ -9,20 +9,16 @@ import { dirname, join } from 'node:path';
 import { WRANGLER_FAILED, runWrangler } from './ephemeral-deployment';
 import { snapshotRegistry, type ApplicationSweep } from '../packages/devbox/src/snapshot-registry';
 import { registryToken } from './cloudflare-token';
-import { containerApplicationsNamed, deleteContainerApplication } from './infra-cloudflare';
+import { containerApplicationsNamed, deleteContainerApplication, requireCloudflareAccountId } from './infra-cloudflare';
 import { AwsClient } from 'aws4fetch';
 import {
   writeManifest,
   type CleanupProbes, type DeleteOutcome, type TeardownEntry,
   type TeardownManifest, type TeardownStep,
-} from './fixtures/storage-matrix/cleanup';
+} from './bench-teardown';
 import { trackedFiles } from './sources';
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
-
-/** The account every devbox fixture is raised on; exported so the deployed lifecycle suite
- *  names this one rather than a second copy. */
-export const BENCH_ACCOUNT_ID = 'f44999d1ddda7012e9a87729eba250f1';
 
 const FIXTURE_BASE = 'kinu-devbox-bench';
 
@@ -353,7 +349,7 @@ export async function containerAppTeardown(entry: TeardownEntry, persist: () => 
 /** The account's own ports: wrangler's listing, the application deletion, and the registry client the boxes use. */
 function accountContainerAppPorts(): ContainerAppPorts {
   const token = registryToken();
-  const registry = snapshotRegistry({ account: BENCH_ACCOUNT_ID, token, fetch: (input, init) => fetch(input, init) });
+  const registry = snapshotRegistry({ account: requireCloudflareAccountId(), token, fetch: (input, init) => fetch(input, init) });
 
   return {
     listed: (name) => containerApplicationsNamed([name]).map((found) => found.id),

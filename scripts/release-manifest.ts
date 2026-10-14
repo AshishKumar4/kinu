@@ -23,7 +23,9 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ENV_TYPES, WRANGLER_CONFIG, deployedConfig, envFields, vectorizeGeometry, SUPPLY, type DeployedConfig, type Supply } from './infra-manifest';
+import {
+  ENV_TYPES, WRANGLER_CONFIG, deployedConfig, deploymentOf, envFields, vectorizeGeometry, SUPPLY, type DeployedConfig, type Supply,
+} from './infra-manifest';
 import type {
   BindingKind, ReleaseBinding, ReleaseFile, ReleaseManifest, ReleaseMigration,
   ReleaseSecret, ReleaseSeed, ReleaseVar, ReleaseVectorIndex, VarPolicy,
@@ -32,8 +34,15 @@ import type {
 const REPO = new URL('..', import.meta.url).pathname;
 
 /** Where a deployment pulls its next version from, and where the CLI artifacts
- *  a self-hosted instance does not carry are served from. */
-export const CHANNEL_ORIGIN = 'https://kinu.run';
+ *  a self-hosted instance does not carry are served from: production. */
+export const CHANNEL_ORIGIN = deploymentOf('production').origin;
+
+/** The Worker a release's config names. */
+function workerOf(config: DeployedConfig): string {
+  if (config.name === undefined) throw new Error('the release config names no Worker');
+
+  return config.name;
+}
 
 /**
  * Every var in `wrangler.jsonc`, classified.
@@ -90,7 +99,7 @@ function policyFor(name: string): VarPolicy | undefined {
  * the worker and the binding so two deployments in one account cannot collide.
  */
 export function releaseBindings(config: DeployedConfig, optional: ReadonlySet<string>): readonly ReleaseBinding[] {
-  const worker = config.name ?? 'kinu';
+  const worker = workerOf(config);
   const rows: ReleaseBinding[] = [];
 
   const add = (binding: string, kind: BindingKind, resource: string): void => {
@@ -217,7 +226,7 @@ export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_
     builtAt: build.builtAt,
     channelOrigin: CHANNEL_ORIGIN,
     worker: {
-      name: config.name ?? 'kinu',
+      name: workerOf(config),
       mainModule: build.modules[0] ?? 'index.js',
       compatibilityDate: config.compatibility_date ?? '',
       compatibilityFlags: config.compatibility_flags ?? [],

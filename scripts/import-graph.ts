@@ -118,6 +118,11 @@ export function readAliases(tsconfigs: ReadonlyMap<string, string>): readonly Al
   return aliases.sort((a, b) => b.prefix.length - a.prefix.length);
 }
 
+/** The alias governing `specifier` written in `from`, if any: the longest prefix declared by a tsconfig above it. */
+export function aliasFor(specifier: string, from: string, aliases: readonly Alias[]): Alias | undefined {
+  return aliases.find((entry) => specifier.startsWith(entry.prefix) && from.startsWith(entry.under));
+}
+
 /** Extensions that are data, never a module to walk, when the universe does
  *  not hold them. Markdown is deliberately absent: without `with { type:
  *  'text' }` a `.md` import is a module import of prose, and reporting it as
@@ -186,7 +191,7 @@ export function resolveSpecifier(request: ResolutionRequest): Resolution {
 
   // An alias BEFORE the workspace branch: `@/` also starts with `@`, and
   // treating it as a package name drops the whole aliased subgraph as leaves.
-  const alias = aliases.find((entry) => specifier.startsWith(entry.prefix) && from.startsWith(entry.under));
+  const alias = aliasFor(specifier, from, aliases);
 
   if (alias !== undefined) return probe(`${alias.target}/${specifier.slice(alias.prefix.length)}`, request);
 

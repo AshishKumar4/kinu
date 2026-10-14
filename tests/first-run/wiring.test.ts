@@ -28,7 +28,7 @@ function tierFixture(name: string, project: string, cases: readonly string[] = [
   copyFileSync(join(import.meta.dirname, '../../scripts/repo-runtime.sh'), join(scripts, 'repo-runtime.sh'));
   writeFileSync(join(bin, 'bun'), `#!/bin/bash
 case "$1" in
-  -e) printf '%s\\n' KINU_EVAL_WEB_IDENTITY ;;
+  scripts/eval-target.ts) printf '%s\\n' 'https://kinu.run' KINU_EVAL_WEB_IDENTITY ;;
   scripts/bench-retention.ts) mkdir -p "$REPORT_FIXTURE"; printf '%s\\n' "$REPORT_FIXTURE" ;;
   scripts/eval-session-mint.ts) ;;
   scripts/eval-credentials.ts) printf '%s\\n' 'https://kinu.run' 'fixture-token' ;;

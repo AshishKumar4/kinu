@@ -27,15 +27,15 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { copyPinnedTools } from './devbox-tools';
 import {
-  BENCH_ACCOUNT_ID, cleanupObservationProbes, orphanTeardownExecutor, r2CleanupKeyRefusal, r2ResiduePlane,
+  cleanupObservationProbes, orphanTeardownExecutor, r2CleanupKeyRefusal, r2ResiduePlane,
   recordApplicationIds, sourceRevision,
 } from './bench-devbox-fixture';
 import { WRANGLER_FAILED, delay, describeThrown, publishTeardown, runTeardownOnce, runWrangler } from './ephemeral-deployment';
-import { containerApplicationsNamed } from './infra-cloudflare';
+import { containerApplicationsNamed, requireCloudflareAccountId } from './infra-cloudflare';
 import { R2_OPERATION_NAMES as R2_OP_VOCABULARY } from '../packages/devbox/bench/r2-operations';
 import {
   checkCleanup, createManifest, recoverAbandonedRuns, replayTeardown, writeManifest, type CleanupReport,
-} from './fixtures/storage-matrix/cleanup';
+} from './bench-teardown';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -230,14 +230,17 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  process.env.CLOUDFLARE_ACCOUNT_ID = BENCH_ACCOUNT_ID;
+  // The example's wrangler config names no account, so wrangler takes the one wrangler.jsonc declares from here.
+  const account = requireCloudflareAccountId();
+
+  process.env.CLOUDFLARE_ACCOUNT_ID = account;
   // Read before deploying: a later read could name edits made after the deploy.
   const revision = sourceRevision();
   const runId = `s${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
   const worker = `kinu-devbox-example-${runId}`;
   const application = `${worker}-examplebox`;
   const configDir = join(tmpdir(), `kinu-devbox-bench-${runId}`);
-  const residue = r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId, secretAccessKey });
+  const residue = r2ResiduePlane({ accountId: account, accessKeyId, secretAccessKey });
   await recoverAbandonedRuns(REPO, runId, orphanTeardownExecutor(residue), log);
 
   const manifest = createManifest(runId, [

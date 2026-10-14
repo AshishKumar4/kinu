@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { parseResults, trials } from '../evals/src/results';
 import { redact } from '../evals/src/redact';
 import { joinTrialReports, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
+import { deploymentOf } from './infra-manifest';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -88,7 +89,7 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
     verdictExit = assertions.length === items.length && assertions.every((assertion) => assertion.status === 'passed') ? 0 : 1;
     writeFileSync(join(dir, 'results.json'), readFileSync(join(dir, 'candidate', 'results.json')));
   } else {
-    for (const [leg, worker] of [['candidate', 'kinu-staging'], ['baseline', 'kinu']] as const) {
+    for (const [leg, worker] of [['candidate', deploymentOf('staging').worker], ['baseline', deploymentOf('production').worker]] as const) {
       await step(`${leg}-platform`, ['evals/scripts/platform-bugs.ts', join(dir, leg, 'results.json'),
         '--worker', worker, '--out', join(dir, leg, 'platform.json')]);
       await step(`${leg}-validate`, ['evals/scripts/validate.ts', join(dir, leg, 'results.json'), '--trials', String(run.trials)]);
@@ -116,10 +117,10 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
 
     const diagnosis = await step('diagnose', ['evals/scripts/diagnose.ts', '--results', join(dir, 'candidate', 'results.json'),
       '--baseline', join(dir, 'baseline', 'results.json'), '--comparison', join(dir, 'comparison', 'comparison.json'),
-      '--evidence', join(dir, 'candidate', 'evidence'), '--out', join(dir, 'why', 'why.md')], 'https://staging.kinu.run');
+      '--evidence', join(dir, 'candidate', 'evidence'), '--out', join(dir, 'why', 'why.md')], deploymentOf('staging').origin);
 
     const review = await step('review', ['evals/scripts/review.ts', '--results', join(dir, 'candidate', 'results.json'),
-      '--comparison', join(dir, 'comparison', 'comparison.json'), '--out', join(dir, 'why')], 'https://staging.kinu.run');
+      '--comparison', join(dir, 'comparison', 'comparison.json'), '--out', join(dir, 'why')], deploymentOf('staging').origin);
 
     const pages = ['why.md', 'review.md'].filter((name) => existsSync(join(dir, 'why', name)))
       .map((name) => readFileSync(join(dir, 'why', name), 'utf8'));

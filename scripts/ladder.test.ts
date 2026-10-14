@@ -24,7 +24,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { childEnv, git, initRepo, runToExit, scratchDir, spawnTest } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  CI_EXEMPT, GATE_DEADLINE_SECONDS, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
+  GATE_DEADLINE_SECONDS, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
   HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, jobDrove, onArmada, secretGroup,
@@ -96,7 +96,7 @@ const NON_BUN_RUNNERS: readonly {
  * deployed product, which a pull request has not changed, and a `bun test` gate
  * cannot select a `.eval.ts` at all — so `bun run evals` is their only runner.
  * The live-app suite is here because its own deploy rows are its only
- * runners: CI_EXEMPT carries why a pull request cannot boot the product's dev
+ * runners: their `ciExempt` says why a pull request cannot boot the product's dev
  * server. The product flows run only against the deployment a deploy publishes,
  * in its post-publish wave, which a pull request has none of.
  */
@@ -689,7 +689,7 @@ describe('a deploy\'s armada rows', () => {
 
     expect({
       every: rows.length === LADDER.filter((gate) => gate.tier === 'deploy' && gate.here === undefined).length,
-      atCi: rows.filter((gate) => atCi.has(gate.run)).map((gate) => gate.run), exempt: rows.filter((gate) => !Object.hasOwn(CI_EXEMPT, gate.run)).map((gate) => gate.run),
+      atCi: rows.filter((gate) => atCi.has(gate.run)).map((gate) => gate.run), exempt: rows.filter((gate) => gate.ciExempt === undefined).map((gate) => gate.run),
     }).toEqual({ every: true, atCi: [], exempt: [] });
   });
 
@@ -913,14 +913,16 @@ describe('CI is not a silent subset of deploy', () => {
     const filesAtCi = new Set(ci.flatMap((gate) => claims(gate.run, tracked)));
     const undeclared: string[] = [];
 
+    const exempt = new Set(LADDER.filter((gate) => gate.ciExempt !== undefined).map((gate) => gate.run));
+
     for (const { run } of deployPlan(planCosts())) {
-      if (atCi.has(run) || Object.hasOwn(CI_EXEMPT, run)) continue;
+      if (atCi.has(run) || exempt.has(run)) continue;
       const files = claims(run, tracked);
       const missing = files.filter((file) => !filesAtCi.has(file));
 
       if (files.length === 0 || missing.length > 0) {
         undeclared.push(
-          `${run} — runs at deploy only, with no reason recorded in CI_EXEMPT`
+          `${run} — runs at deploy only, with no ciExempt reason`
           + (missing.length > 0 ? ` (${String(missing.length)} unclaimed file(s), e.g. ${missing[0] ?? ''})` : ''),
         );
       }
@@ -929,13 +931,12 @@ describe('CI is not a silent subset of deploy', () => {
     expect(undeclared).toEqual([]);
   });
 
-  test('every exemption names a gate the deploy plan runs', () => {
-    // A stale exemption is worse than a missing one: it reads as a considered
-    // decision about a gate that no longer exists, and it silently excuses the
-    // next gate that happens to be spelled the same way.
+  test('only a row the deploy plan runs carries a CI exemption', () => {
+    // An exemption drops its row from every tier below the deploy, so one on a
+    // row the deploy does not run removes that row from CI with nothing in its place.
     const runs = new Set(deployPlan(planCosts()).map((row) => row.run));
-    const stale = Object.keys(CI_EXEMPT).filter((run) => !runs.has(run));
-    expect(stale).toEqual([]);
+    const misplaced = LADDER.filter((gate) => gate.ciExempt !== undefined && !runs.has(gate.run)).map((gate) => gate.run);
+    expect(misplaced).toEqual([]);
   });
 
   test('CI on armada delegates to the ladder instead of keeping its own list', () => {
