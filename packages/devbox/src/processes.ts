@@ -32,16 +32,47 @@ const IdSchema = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-]+$/));
 
 const RecordSchema = v.object({ id: IdSchema, command: v.string(), cwd: v.string() });
 
-/** `$1` as the kernel's, `/etc/hostname`'s and `/etc/hosts`' name for the box, which held a container id and a UUID. */
-const NAME_BOX = `hostname "$1" && printf '%s\\n' "$1" > /etc/hostname && { grep -qw "$1" /etc/hosts || printf '127.0.1.1 %s\\n' "$1" >> /etc/hosts; }`;
+/**
+ * `$1` as the kernel's name for this boot, and as /etc/hosts' where the platform lets it be written (D92). The platform
+ * mounts /etc/hostname read-only, so nothing writes it. A name that does not resolve at once would make sudo and every
+ * lookup of the box's own name wait or warn, so the platform's name comes back. Prints `named=yes` or `named=no` and
+ * what it found; exits 0 whatever stuck.
+ */
+const NAME_BOX = String.raw`was=$(hostname)
+hosts=written
+hostname "$1" 2>/dev/null || { echo "named=no kernel refused"; exit 0; }
+grep -qw "$1" /etc/hosts 2>/dev/null || printf '127.0.1.1 %s\n' "$1" >> /etc/hosts 2>/dev/null || hosts=read-only
+if timeout 1 getent hosts "$1" >/dev/null 2>&1; then echo "named=yes hosts=$hosts"; exit 0; fi
+hostname "$was" 2>/dev/null
+echo "named=no unresolved hosts=$hosts"`;
 
-/** Names the box for this boot (D83): its prompt, its desktop and its processes answer to `name`. */
-export function nameBox(container: Container, name: string): Promise<void> {
-  return settle(Effect.gen(function* () {
-    const named = yield* attempt('process', async () => await (await container.exec(['sh', '-c', NAME_BOX, 'name-box', name])).output());
+/** How naming the box went: named, or the platform's name kept and why. */
+export interface BoxNaming { readonly named: boolean; readonly detail: string }
 
-    if (named.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', `naming the box ${name}: ${new TextDecoder().decode(named.stderr).trim()}`));
-  }));
+/**
+ * Names the box for this boot (D83, D91, D92): its prompt, its desktop and its processes answer to `name`. A name the
+ * box cannot take is a handled outcome, never a refusal: the box keeps the platform's name and starts.
+ */
+export function nameBox(container: Container, name: string): Promise<BoxNaming> {
+  return settle(attempt('process', async () => await (await container.exec(['sh', '-c', NAME_BOX, 'name-box', name])).output()).pipe(
+    Effect.map((ran): BoxNaming => {
+      const said = new TextDecoder().decode(ran.stdout).trim();
+
+      return { named: said.startsWith('named=yes'), detail: said === '' ? `exit ${String(ran.exitCode)}` : said };
+    }),
+    Effect.catch((failure) => Effect.succeed<BoxNaming>({ named: false, detail: causeChain(failure) })),
+  ));
+}
+
+/** A failure's messages down its cause chain, outermost first, each once. */
+function causeChain(failure: Error): string {
+  const said: string[] = [];
+
+  for (let at: unknown = failure; at instanceof Error && said.length < 8; at = at.cause) {
+    if (said.at(-1) !== at.message) said.push(at.message);
+  }
+
+  return said.join(': ');
 }
 
 export interface ProcessRecord {
