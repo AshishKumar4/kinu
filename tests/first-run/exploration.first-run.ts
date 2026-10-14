@@ -55,33 +55,25 @@ interface OpenedWorker {
   readonly stop: boolean;
 }
 
-/** Where the worker lives: its deployment, workspace and row, and the case budget that ends every wait. */
-interface WorkerAddress {
-  readonly plan: { origin: string; identity: Parameters<typeof signedInPage>[1] };
-  readonly workspace: string;
-  readonly key: string;
-  readonly budget: AbortSignal;
-}
-
-async function openWorkerFromPanel(browser: TestChrome, { plan, workspace, key, budget }: WorkerAddress): Promise<OpenedWorker> {
+async function openWorkerFromPanel(browser: TestChrome, plan: { origin: string; identity: Parameters<typeof signedInPage>[1] }, workspace: string, key: string): Promise<OpenedWorker> {
   const page = await signedInPage(browser.browser, plan.identity);
   await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
   // Each click is a locator's: it waits until its target stands still. The Agents pane slides in over 280 ms, and a
   // Swarms click 61 ms after the counter's landed on the page behind it, so the group stayed folded and the wait for it
   // to open never ended (staging 7e411119d, 2026-10-14, 4 of 16 runs). Swarm workers sit in their own group, folded
-  // until asked for, and unfold over a transition the row's click waits out the same way. Every wait ends with the
-  // case's budget.
-  await page.locator('[data-agents-counter]').click({ signal: budget });
-  await page.locator('section[aria-label="Swarms"] [aria-expanded="false"]').click({ signal: budget });
+  // until asked for, and unfold over a transition the row's click waits out the same way. No wait here has a clock:
+  // a wait that never ends is ended by the runner, whose stop names the case.
+  await page.locator('[data-agents-counter]').click();
+  await page.locator('section[aria-label="Swarms"] [aria-expanded="false"]').click();
   // A folded group keeps its rows in the page, inert: the row is clicked once the group is open and still.
   await page.waitForFunction(() => {
     const fold = document.querySelector('section[aria-label="Swarms"] .p-fold');
 
     return fold !== null && !fold.hasAttribute('data-folded') && fold.getAnimations({ subtree: true }).length === 0;
-  }, { signal: budget });
-  await page.locator(`section[aria-label="Swarms"] [data-agent-row="${key}"]`).click({ signal: budget });
+  });
+  await page.locator(`section[aria-label="Swarms"] [data-agent-row="${key}"]`).click();
   const pane = `[data-agent-pane="node/${key}"]`;
-  await page.waitForFunction((selector: string) => (document.querySelector(selector)?.textContent ?? '').includes('Task'), { signal: budget }, pane);
+  await page.waitForFunction((selector: string) => (document.querySelector(selector)?.textContent ?? '').includes('Task'), {}, pane);
 
   const drawn = await page.$eval(pane, (node) => ({
     stream: node.textContent ?? '',
@@ -132,9 +124,7 @@ async function swarmWakeClosed(session: FirstRunSession, socket: PublicSocket, j
 }
 
 /** The Agents panel lists every node, and one opens in the chat column read-only. */
-async function panelSubgoal(
-  { socket, opened }: { socket: PublicSocket; opened: boolean }, { plan, workspace, budget }: Omit<WorkerAddress, 'key'>, nodes: number,
-): Promise<EvalSubgoal> {
+async function panelSubgoal({ socket, opened }: { socket: PublicSocket; opened: boolean }, plan: Parameters<typeof openWorkerFromPanel>[1], workspace: string, nodes: number): Promise<EvalSubgoal> {
   if (!opened) return { what: 'panel-opens-a-worker-read-only', reached: false, detail: 'the workspace socket never opened' };
   const listed = await ask(socket, 'listWorkspaceAgents', []);
   const agents = listed.ok ? v.safeParse(v.array(PanelAgentSchema), listed.value) : null;
@@ -145,7 +135,7 @@ async function panelSubgoal(
 
   try {
     browser = await openBrowser();
-    const drawn = worker === undefined ? null : await openWorkerFromPanel(browser, { plan, workspace, key: worker.key, budget });
+    const drawn = worker === undefined ? null : await openWorkerFromPanel(browser, plan, workspace, worker.key);
 
     if (drawn === null) {
       return { what: 'panel-opens-a-worker-read-only', reached: false, detail: `the panel listed ${String(workers.length)} swarm worker(s) for ${String(nodes)} node(s)` };
@@ -169,8 +159,6 @@ describe(SUITE, () => {
     await runFirstRunCase(PLAN, {
       id: CASE,
       modelCalls: 'expected',
-      // A swarm of five finishes in seconds (2.7 s on staging 7e411119d); the budget is for a wait that never ends.
-      budgetMs: 10 * 60_000,
       genesis: false,
       purpose: 'An assistant that uses the search it is asked to use and reports what it found in one line.',
       async run({ session, plan, budget }) {
@@ -225,7 +213,7 @@ describe(SUITE, () => {
               : `${String(unsettled.length)} of ${String(heads.length)} node(s) unsettled: ${unsettled.map((head) => `${head.id.slice(0, 8)} ${head.status}`).join(', ')}`,
           });
 
-          subgoals.push(await panelSubgoal({ socket, opened }, { plan, workspace: session.workspace, budget }, heads.length));
+          subgoals.push(await panelSubgoal({ socket, opened }, plan, session.workspace, heads.length));
 
           const reply = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text.toLowerCase() ?? '';
           const named = [...new Set(heads.flatMap((head) => wordsOf(head.summary ?? '')))].filter((word) => !ASKED.has(word));
