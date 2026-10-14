@@ -350,6 +350,13 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]')), body.stop));
     case '/agent-desktop-stop': return Response.json({ stopped: await box.stopAgentDesktop(body.stop ?? '') });
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
+    default: return await lifecycleRoute(url, box) ?? new Response('no route', { status: 404 });
+  }
+}
+
+/** The box's state, its saves and its stop; null for any other path. */
+async function lifecycleRoute(url: URL, box: DurableObjectStub<ContractBox>): Promise<Response | null> {
+  switch (url.pathname) {
     case '/state': return Response.json(await box.devboxState());
     case '/armed': return Response.json(await box.armed());
     case '/checkpoint': return Response.json(await box.checkpointNow(url.searchParams.get('kind') === 'tick' ? 'tick' : 'quiesce'));
@@ -359,7 +366,7 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/cleanup': await box.clear();
 
       return Response.json({ ok: true });
-    default: return new Response('no route', { status: 404 });
+    default: return null;
   }
 }
 
