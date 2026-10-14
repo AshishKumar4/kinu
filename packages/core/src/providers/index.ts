@@ -6,7 +6,6 @@ export {
   armedWarms,
   CacheWarmingLane,
   initCacheWarmTable,
-  warmUsage,
   type CacheWarmArm,
   type CacheWarmSeams,
   type CacheWarming,

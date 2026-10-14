@@ -452,6 +452,7 @@ export {
   USAGE_FIELDS,
   UsageSchema,
   addUsage,
+  normalizeAnthropicUsage,
   normalizeUsage,
   usageReported,
   usageTotal,
