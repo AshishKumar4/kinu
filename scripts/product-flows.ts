@@ -34,6 +34,7 @@ import { DESKTOP } from './live-app-harness';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
+  JOB_ASK, JOB_STARTED,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_BEFORE, SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_WORK_ASK,
@@ -2642,6 +2643,54 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
     await page.close();
 
     return { workspace, from, to, backAfterS };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface AgentJobVerdict {
+  readonly workspace: string;
+  /** What the job's tab and its details said while it waited, and what its terminal showed once answered. */
+  readonly markedWaiting: boolean;
+  readonly answered: boolean;
+}
+
+const JOB_TAB = `[...document.querySelectorAll('#inspector [role="tablist"] [role="tab"]')].find((tab) => (tab.textContent ?? '').includes('Release to production'))`;
+
+/**
+ * Row: an agent's job runs in a session the person can open and answer (D95).
+ *
+ * The reader asks the agent to start a job that stops at a prompt, opens the computer's sessions, finds the job's tab
+ * marked as waiting, opens it, types the answer into its terminal, and reads the job's answer on the screen.
+ */
+export async function agentJobIsAnsweredInItsSession(target: FlowTarget): Promise<AgentJobVerdict> {
+  const workspace = await createFlowWorkspace(target, 'agent-job');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${workspace}`);
+
+    await sendAndSettle(page, JOB_ASK);
+    await until(page, "the agent's reply that its job started", `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(JOB_STARTED)})`);
+    await openInspector(page);
+    await page.evaluate(stripTab('Environment'));
+    const computer = executorLabel('computer');
+
+    await until(page, 'the computer in the Environment panel', `[...document.querySelectorAll('#inspector button')].some((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)})`);
+    await page.evaluate(`[...document.querySelectorAll('#inspector button')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)}).click()`);
+    await until(page, "the job's tab", `${JOB_TAB} !== undefined`);
+    await page.evaluate(`${JOB_TAB}.click()`);
+    await until(page, 'the job marked as waiting for input', `document.querySelector('#inspector [data-session-waiting]') !== null`);
+    const markedWaiting = true;
+
+    await until(page, "the job's prompt on its screen", `(document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('Release to production?')`);
+    await page.click('#inspector .xterm-screen');
+    await page.keyboard.type('y');
+    await page.keyboard.press('Enter');
+    await until(page, "the job's answer on its screen", `(document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('release answered y')`);
+    await until(page, 'the wait mark gone', `document.querySelector('#inspector [data-session-waiting]') === null`);
+    await page.close();
+
+    return { workspace, markedWaiting, answered: true };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

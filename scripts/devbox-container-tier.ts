@@ -677,7 +677,12 @@ async function main(): Promise<void> {
       const session = row.session;
       const listed = (await call('/sessions', v.array(Session), {}, names[1])).find((candidate) => candidate.id === session);
 
-      if (listed?.needsInput !== true || listed.job !== processId) throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input`);
+      if (listed?.needsInput !== true || listed.job !== processId) {
+        const seen = await shell('id -u; echo "tmux=$(command -v tmux) TMUX_TMPDIR=${TMUX_TMPDIR:-} TMPDIR=${TMPDIR:-}"; ls -la /tmp/tmux-* 2>&1; tmux ls 2>&1; tmux list-panes -a 2>&1; true', names[1]);
+
+        throw new Error(`its session read ${JSON.stringify(listed)}, not the job's, needing input; the box: ${seen}`);
+      }
+
       await shell(`tmux send-keys -t '=${session}:' Ada Enter`, names[1]);
 
       for (let asked = 0; row?.status !== 'completed' && asked < JOB_READS; asked++) { await delay(JOB_READ_MS); row = await rowOf(); }

@@ -72,7 +72,7 @@ export function jobSessionId(processId: string): string {
 export function jobSessionName(command: string): string {
   const line = command.replace(/\s+/gu, ' ').trim();
 
-  return line.length <= 40 ? line : `${line.slice(0, 39)}…`;
+  return line.length <= 40 ? line : `${line.slice(0, 37)}...`;
 }
 
 /** The session a box has before anyone opens another, and again when every other is closed. */

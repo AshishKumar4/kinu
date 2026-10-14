@@ -143,7 +143,8 @@ describe("an agent's job", () => {
     await box.closeTerminalSession(jobSessionId(second.processId));
 
     expect((await box.terminalSessions()).map((session) => session.id)).toEqual([FIRST_SESSION.id]);
-    expect((await box.listSupervised()).map((listed) => listed.processId)).toEqual([]);
+    // A stopped job keeps its record of how it ended, but no spec brings it back.
+    expect((await box.listSupervised()).filter((listed) => listed.restartable)).toEqual([]);
   });
 
   test("a job's session id is one tmux takes unquoted, and a long command names it in 40 characters", () => {
