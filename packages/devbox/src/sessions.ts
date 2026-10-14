@@ -29,7 +29,9 @@ const PREFILL_KEYS = ['C-x', 'C-]'] as const;
 /**
  * A session's shell starts from the person's own rc, then records on its own pane, where the sessions read and a
  * stopping box find them: how its last command ended (D90), and while one runs, the line the person typed for it, from
- * PS0, which bash expands after it reads a line and before it runs it (D97). Lines ride base64: tmux reads an argument
+ * PS0, which bash expands after it reads a line and before it runs it (D97). A line the history did not number (a
+ * leading space under ignorespace, HISTIGNORE, history off) is not recorded: the last entry would be another line,
+ * and a line kept out of the history is the person's to keep. Lines ride base64: tmux reads an argument
  * ending in `;` as a command separator (measured, tmux 3.6). At its first prompt after a restart the shell offers the
  * line it was running in its edit buffer, through readline (`bind -x`), so nothing runs before the person's Enter.
  */
@@ -49,7 +51,11 @@ export const SESSION_RC = [
   '  fi',
   '  return $status',
   '}',
-  '__kinu_start() { tmux set -p -t "$TMUX_PANE" @kinu_running "$(__kinu_line | base64 -w0)" 2>/dev/null; }',
+  '__kinu_start() {',
+  '  local entry',
+  '  entry=$(__kinu_entry) && [ -n "$entry" ] && [ "${entry%%[[:space:]]*}" != "$__kinu_seen" ] || return 0',
+  '  tmux set -p -t "$TMUX_PANE" @kinu_running "$(__kinu_line | base64 -w0)" 2>/dev/null',
+  '}',
   '__kinu_prefill() {',
   `  local saved=${SAVED_SESSIONS}/$(tmux display -p -t "$TMUX_PANE" '#{session_name}')/running`,
   '  [ -f "$saved" ] || return',
@@ -63,23 +69,37 @@ export const SESSION_RC = [
 /**
  * Run as a box stops (D97), `$@` the recorded session ids: each live session's screen (its last 2000 lines, colours
  * kept) and the line it was running, beside the time; a recorded session not live keeps what it had; an unrecorded one
- * goes.
+ * goes. A session's save is written aside and put in place whole: one whose screen did not read keeps what it had, and
+ * the script says so and fails, so the box traces it.
  */
 export const SESSIONS_SAVE = `d=${SAVED_SESSIONS}
 mkdir -p "$d"
-for kept in "$d"/*; do
+for kept in "$d"/* "$d"/.[!.]*; do
   [ -d "$kept" ] || continue
   case " $* " in *" \${kept##*/} "*) ;; *) rm -rf "$kept" ;; esac
 done
-tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r id; do
+failed=0
+for id in $(tmux list-sessions -F '#{session_name}' 2>/dev/null); do
   case " $* " in *" $id "*) ;; *) continue ;; esac
-  rm -rf "\${d:?}/$id"; mkdir -p "$d/$id"
-  tmux capture-pane -p -e -J -S -2000 -t "=$id:" |
-    awk '{ line[NR] = $0 } END { n = NR; while (n > 0 && line[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print line[i] }' > "$d/$id/screen"
+  aside="$d/.$id"
+  rm -rf "$aside"; mkdir -p "$aside"
+  if ! tmux capture-pane -p -e -J -S -2000 -t "=$id:" > "$aside/raw"; then
+    echo "session $id: its screen did not read" >&2; rm -rf "$aside"; failed=1; continue
+  fi
+  awk '{ line[NR] = $0 } END { n = NR; while (n > 0 && line[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print line[i] }' "$aside/raw" > "$aside/screen"
+  rm -f "$aside/raw"
   running=$(tmux show -pv -t "=$id:" @kinu_running 2>/dev/null)
-  [ -n "$running" ] && printf %s "$running" | base64 -d > "$d/$id/running" 2>/dev/null
-  date +%s > "$d/$id/at"
-done`;
+  [ -z "$running" ] || printf %s "$running" | base64 -d > "$aside/running"
+  date +%s > "$aside/at"
+  rm -rf "\${d:?}/$id"; mv "$aside" "$d/$id"
+done
+exit $failed`;
+
+/** The ids of sessions closed while their box was stopped (D97): what it saved of them goes at its next start. */
+export const SESSIONS_CLOSED_KEY = 'devbox:sessions:closed';
+
+/** `$@` those ids: their saved screens and lines removed, before any attach can show them. */
+export const SESSIONS_FORGET = `for id; do rm -rf "${SAVED_SESSIONS}/$id"; done`;
 
 /** Where the attach and a job's pane keep the resume script. */
 export const SESSION_RESUME_FILE = '/etc/devbox-session-resume.sh';
@@ -93,7 +113,7 @@ export const SESSION_RESUME_FILE = '/etc/devbox-session-resume.sh';
 export const SESSION_RESUME = `d=${SAVED_SESSIONS}/$1
 stty -echoctl 2>/dev/null
 cat "$d/screen" 2>/dev/null
-printf '\\033[2m── restarted %s · files kept ──\\033[0m\\n' "$(date -d "@$(cat "$d/at" 2>/dev/null || date +%s)" '+%H:%M')"
+printf '\\033[2m-- restarted %s · files kept --\\033[0m\\n' "$(date -d "@$(cat "$d/at" 2>/dev/null || date +%s)" '+%H:%M')"
 if [ -f "$d/running" ]; then
   printf '\\033[2mwas running:\\033[0m %s\\n' "$(tr -d '\\000-\\010\\013-\\037\\177' < "$d/running")"
   tmux send-keys -t "=$1:" ${PREFILL_KEYS.join(' ')}

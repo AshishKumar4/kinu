@@ -19,7 +19,7 @@ import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
 import {
-  FIRST_SESSION, SESSIONS_KEY, SESSIONS_READ, SESSIONS_SAVE, SessionNameSchema, SessionRecordsSchema, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName,
+  FIRST_SESSION, SESSIONS_CLOSED_KEY, SESSIONS_FORGET, SESSIONS_KEY, SESSIONS_READ, SESSIONS_SAVE, SessionNameSchema, SessionRecordsSchema, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName,
   parseSessionsRead, type SessionRecord, type TerminalSession,
 } from './sessions';
 import { bridgeSockets } from './socket-bridge';
@@ -3036,6 +3036,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
+    await this.#forgetClosedSessions();
     const name = await this.hostname();
 
     // The kernel keeps a name for the boot alone, so each start names the box again (D83, D96).
@@ -3384,6 +3385,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     else if (saved.value.exitCode !== 0) this.#trace('sessions.unsaved', { reason: new TextDecoder().decode(saved.value.stderr).trim() });
   }
 
+  /** The sessions closed while the box was stopped, whose saves its next start removes (D97). */
+  #closedSessions(): string[] {
+    return parsedOrNull(v.array(v.string()), this.ctx.storage.kv.get<StoredValue>(SESSIONS_CLOSED_KEY)) ?? [];
+  }
+
+  /**
+   * Removes what the box saved of sessions closed while it was stopped, before any attach could show one: the first
+   * session comes back under its own id when the last is closed. A removal that fails is traced and asked again at the
+   * next start.
+   */
+  async #forgetClosedSessions(): Promise<void> {
+    const ids = this.#closedSessions();
+
+    if (ids.length === 0) return;
+    const [forgot] = await Promise.allSettled([(async () => (await this.#container().exec(['sh', '-c', SESSIONS_FORGET, 'sessions-forget', ...ids])).output())()]);
+
+    if (forgot.status === 'fulfilled' && forgot.value.exitCode === 0) this.ctx.storage.kv.delete(SESSIONS_CLOSED_KEY);
+    else this.#trace('sessions.unforgotten', { ids: ids.join(' '), reason: forgot.status === 'rejected' ? describe({ cause: forgot.reason }) : new TextDecoder().decode(forgot.value.stderr).trim() });
+  }
+
   /** The recorded sessions, the first one when there is none. */
   #sessionRecords(): SessionRecord[] {
     const records = parsedOrNull(SessionRecordsSchema, this.ctx.storage.kv.get<StoredValue>(SESSIONS_KEY));
@@ -3458,6 +3479,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const container = this.ctx.container;
 
       if (container?.running === true) yield* attempt('io', () => resetTerminal(container, id));
+      // A stopped box cannot remove what it saved of the session; its next start does, before any attach (D97).
+      else this.ctx.storage.kv.put(SESSIONS_CLOSED_KEY, [...this.#closedSessions(), id]);
       this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
     }));
   }

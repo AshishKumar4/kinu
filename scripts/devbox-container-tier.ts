@@ -778,33 +778,46 @@ async function main(): Promise<void> {
      */
     await step('resurrect', async () => {
       const name = names[7] ?? '';
+      // What the line's whole run leaves: the marker its `$()` touched, then one count.
       const files = () => shell(`test -e ${RESURRECT_MARKER} && echo marker; cat ${RESURRECT_COUNT} 2>/dev/null | wc -l`, name);
+      const ranOnce = async () => (await files()) === 'marker\n1';
+      // Only the screen saved before the stop can show this on the new socket.
+      const seen = `kinu-screen-${crypto.randomUUID().slice(0, 8)}`;
       const before = await openSession(name);
 
       await waitFor(() => /[#$]\s*$/u.test(before.screen()), "the shell's prompt");
+      before.type(`echo ${seen}\r`);
+      await waitFor(() => before.screen().includes(seen), 'the screen to show what the stop must keep');
       before.type(`${RESURRECT_LINE}\r`);
-      await waitFor(async () => (await files()).startsWith('marker'), 'the typed line to run once');
+      await waitFor(ranOnce, 'the typed line to run once');
       await shell(`rm -f ${RESURRECT_MARKER} ${RESURRECT_COUNT}`, name);
       before.close();
       requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
 
       const after = await openSession(name);
-      // Below the restart's rule the line shows twice: once as what was running, once at the prompt.
-      const offered = () => (after.screen().split('restarted').at(-1) ?? '').split(`echo "it's`).length > 2;
-      await waitFor(offered, 'the saved screen and the line at the prompt');
+
+      // The saved screen, then the restart's rule, and under it the line twice: as what was running, and at the prompt.
+      const offered = () => {
+        const shown = after.screen();
+        const rule = shown.indexOf('restarted');
+
+        return rule > shown.indexOf(seen) && shown.includes(seen) && shown.slice(rule).split(`echo "it's`).length > 2;
+      };
+
+      await waitFor(offered, 'the saved screen, the rule, and the line at the prompt');
       await delay(RESURRECT_SETTLE_MS);
       const waiting = await files();
 
-      if (waiting.trim() !== '0') throw new Error(`before Enter the box held ${JSON.stringify(waiting)}: the offered line ran on its own`);
+      if (waiting !== '0') throw new Error(`before Enter the box held ${JSON.stringify(waiting)}: the offered line ran on its own`);
       after.type('\r');
-      await waitFor(async () => (await files()).startsWith('marker'), 'the line to run on Enter');
+      await waitFor(ranOnce, 'the line to run on Enter');
       await delay(RESURRECT_SETTLE_MS);
-      const ran = (await files()).split('\n');
+      const ran = await files();
       after.close();
 
-      if (ran[1]?.trim() !== '1') throw new Error(`after one Enter the line ran ${ran[1] ?? '?'} times`);
+      if (ran !== 'marker\n1') throw new Error(`after one Enter the box held ${JSON.stringify(ran)}, not the line's one run`);
 
-      return { beforeEnter: waiting.trim(), afterEnter: ran.join(' '), screen: after.screen().slice(-400) };
+      return { beforeEnter: waiting, afterEnter: ran, screen: after.screen().slice(-400) };
     });
 
     /**
