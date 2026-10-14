@@ -4708,8 +4708,12 @@ armed. On `d343df16e` it armed a startup and configured again at each alarm. A r
 startup. A successor under the same version answers the park, and one under another version configures or starts the
 box again, with its container running or gone. In the real-container contract, the fixture's `-parked` box writes
 /etc/hostname in its configure step and the platform refuses the write. The tier asks it once, watches 20 s, and
-requires one refusal that names no retry, at most one startup arming and one incident. The runs are in the commit
-that lands this.
+requires one refusal that names no retry, at most one startup arming and one incident. Armada job
+20261014015704-930e3ec5 ran the whole tier on both. On `7ce7f4a31` (the contract, before this change) the box
+answered "A startup is armed, so ask again", armed its startup 20 times and filed 19 incidents in the 20 s. On
+`83313af6a` it answered "[unclassified -> refuse] ... nothing retries it", armed nothing and filed one incident, and
+every other contract and the cleanup passed. In the unit test on `7ce7f4a31`, a minute of alarms configured the box
+61 times and filed 61 incidents.
 
 ## Open
 
