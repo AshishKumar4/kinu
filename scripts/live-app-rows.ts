@@ -21,7 +21,7 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, recordDeadEnds,
-  countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
+  countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
   until, waitOn, type ControlAttempt, type RpcCounter,
 } from './product-flows';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
@@ -954,19 +954,21 @@ async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: H
 }
 
 /** Holds the next socket's answer to the chat hook's resume probe, and every frame after it in order, until
- *  `__releaseAnswer`: the answer comes late, as a slow server's does. The raw socket's message listeners are the
- *  ones partysocket adds as it reconnects. */
+ *  `__releaseAnswer`: the answer comes late, as a slow server's does. The listeners held are the ones a reopened
+ *  socket is given; its prototype is read off a recorded socket, since each is a plain WebSocket built through the
+ *  dead-end recorder's proxy, never the subclass `window.WebSocket` names. */
 const HOLD_PROBE_ANSWER = `(() => {
-  const add = WebSocket.prototype.addEventListener;
+  const prototype = Object.getPrototypeOf(window.__sockets[0]);
+  const add = prototype.addEventListener;
   const held = [];
   let holding = true;
   window.__answerHeld = false;
   window.__releaseAnswer = () => {
     holding = false;
-    WebSocket.prototype.addEventListener = add;
+    delete prototype.addEventListener;
     for (const deliver of held.splice(0)) deliver();
   };
-  WebSocket.prototype.addEventListener = function (type, listener, options) {
+  prototype.addEventListener = function (type, listener, options) {
     if (type !== 'message' || typeof listener !== 'function') return add.call(this, type, listener, options);
     return add.call(this, type, function (event) {
       const answer = typeof event.data === 'string' && /"type":"cf_agent_stream_resum(ing|e_none)"/u.test(event.data);
@@ -1007,7 +1009,7 @@ async function measureUnansweredProbe(newPage: LiveApp['newPage'], origin: strin
     await until(page, "the reopened socket's probe answer, held", 'window.__answerHeld === true');
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
     await page.evaluate(WATCH_STOP);
-    await sendInChat(page, UNANSWERED_PROBE_TURN_ASK);
+    await pressSend(page, UNANSWERED_PROBE_TURN_ASK);
     await painted(page);
     const sentWhileHeld = v.parse(v.boolean(), await page.evaluate('window.__answerHeld'));
 
