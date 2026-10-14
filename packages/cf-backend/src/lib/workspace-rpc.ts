@@ -9,7 +9,7 @@ import type { OrchestratorAgent } from "@/orchestrator";
 
 type WorkspaceStub = ReturnType<typeof useAgent<OrchestratorAgent, unknown>>["stub"];
 
-export type WorkspaceMethod = keyof WorkspaceStub;
+type WorkspaceMethod = keyof WorkspaceStub;
 
 export type WorkspaceAnswer<K extends WorkspaceMethod> = Awaited<ReturnType<WorkspaceStub[K]>>;
 
