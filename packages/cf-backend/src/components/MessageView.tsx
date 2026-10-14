@@ -273,6 +273,20 @@ function HelperChatLink({ output }: { output?: JsonValue }) {
   );
 }
 
+/** What a tool printed, as it printed it; a tool that printed nothing says so instead of drawing an empty box. */
+function ToolOutput({ output }: { output: JsonValue }) {
+  const printed = displayToolValue(redactPayload(output));
+
+  return (
+    <div>
+      <div className="p-eyebrow mb-1">Output</div>
+      {printed.trim() === ""
+        ? <p className="p-meta p-text-3">Nothing printed.</p>
+        : <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap break-words m-0">{printed}</pre>}
+    </div>
+  );
+}
+
 function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, errorText, expanded, onToggleExpand }: {
   toolName: string; input?: JsonObject; output?: JsonValue; isRunning: boolean; isError: boolean;
   effect: ToolCallEffect;
@@ -388,14 +402,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
               <div className="max-h-40 overflow-auto"><CodeBlock wrap className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
             </div>
           )}
-          {output != null && (
-            <div>
-              <div className="p-eyebrow mb-1">Output</div>
-              {displayToolValue(redactPayload(output)).trim() === ""
-                ? <p className="p-meta p-text-3">Nothing printed.</p>
-                : <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap break-words m-0">{displayToolValue(redactPayload(output))}</pre>}
-            </div>
-          )}
+          {output != null && <ToolOutput output={output} />}
         </div>
       )}
     </div>
