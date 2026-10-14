@@ -30,10 +30,13 @@ export interface AgentWorkspaceProps {
   readonly actorId: string;
 }
 
-/** Whose isolate a tail hears: the workspace by name and the agent, as its relayed lines name them. */
+/** Whose isolate a tail hears: the workspace by name and the agent, as its relayed lines name them, and the workspace's
+ *  object by id, which a tail's own rows lack: a reader matches a relayed line to its workspace's rows by it (a deletion,
+ *  for one). */
 export interface AgentIsolateTailProps {
   readonly workspace: string;
   readonly actor: string;
+  readonly object: string;
 }
 
 /** A console call's arguments as its tail delivers them, each as text: a string itself, anything else its JSON. */
@@ -399,7 +402,7 @@ export function agentFacet<Facet extends AgentFacet = AgentFacet>(
           mainModule: 'agent.js',
           modules,
           env: facetEnv,
-          tails: [exports.AgentIsolateTail({ props: { workspace: placement.workspaceName, actor: placement.actorId } })],
+          tails: [exports.AgentIsolateTail({ props: { workspace: placement.workspaceName, actor: placement.actorId, object: workspace } })],
         })),
       )),
     )));

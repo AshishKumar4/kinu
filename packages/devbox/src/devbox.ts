@@ -1909,10 +1909,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (execId !== undefined && !this.#claimLaunch(execId)) return settle(Effect.fail(launchUnknown(execId)));
     const id = execId ?? crypto.randomUUID();
     const running: RunningExec = { cancelled: false };
-    const answer = Deferred.makeUnsafe<ExecResult, DevboxError>();
+    const answer = execId === undefined ? undefined : Deferred.makeUnsafe<ExecResult, DevboxError>();
     this.#running.set(id, running);
 
-    if (execId !== undefined) this.#answers.set(execId, answer);
+    if (answer !== undefined) this.#answers.set(id, answer);
 
     return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const process = yield* this.#spawn(command, options, running);
@@ -1920,7 +1920,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return decoded(yield* attempt('process', () => process.output()));
     })).pipe(
       Effect.exit,
-      Effect.tap((exit) => Deferred.done(answer, exit)),
+      Effect.tap((exit) => (answer === undefined ? Effect.void : Deferred.done(answer, exit))),
       Effect.flatten,
       Effect.ensuring(Effect.sync(() => { this.#running.delete(id); })),
     ));
@@ -2956,17 +2956,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
-  /** The name the box answers to in its prompt, its desktop and its processes; unset, the platform's container id. */
-  protected get hostname(): string | undefined { return undefined; }
+  /** The name the box answers to in its prompt, its desktop and its processes, read at each start; unset, the
+   *  platform's container id. */
+  protected async hostname(): Promise<string | undefined> { return undefined; }
   /** The mark at the centre of the desktop's wallpaper, an SVG document drawn in its own colour (D88); unset, none. */
   protected get desktopMark(): string | undefined { return undefined; }
 
   protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
-    const name = this.hostname;
+    const name = await this.hostname();
 
-    // The kernel keeps a name for the boot alone, so each start names the box again (D83).
+    // The kernel keeps a name for the boot alone, so each start names the box again (D83, D91).
     if (name !== undefined) await nameBox(this.#container(), name);
   }
 

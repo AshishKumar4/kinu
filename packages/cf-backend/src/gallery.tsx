@@ -20,11 +20,11 @@ import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  TrashIcon, BrainIcon, GearIcon, UsersThreeIcon,
+  TrashIcon, BrainIcon, GearIcon, ListIcon, UsersThreeIcon,
 } from "@phosphor-icons/react";
 import "virtual:kinu-theme.css";
 import "./index.css";
-import { KINU_MARK, MARK_IDS, mark, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
+import { mark, markDocument, wordmark, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, AskingAgent, OwedOwnerIntent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
@@ -33,6 +33,7 @@ import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
 import Sidebar from "@/components/Sidebar";
+import { KinuLogo, KinuMark } from "@/components/ui/KinuLogo";
 import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
 import { Composer, useProviderWaitNotice, type ComposerNotice } from "@/components/Composer";
@@ -4966,67 +4967,73 @@ function writeDocument(html: string): void {
   document.close();
 }
 
-/** The four candidate marks at 16px and hero size, in both faces; `KINU_MARK` in `public-shell.ts` names the one that ships. */
+/** The favicon file as a browser rasterises it at `size`, blown up so its pixels stay square. */
+function FaviconRaster({ size }: { size: number }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const image = new Image(size, size);
+    image.onload = () => canvas.current?.getContext("2d")?.drawImage(image, 0, 0, size, size);
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markDocument())}`;
+  }, [size]);
+
+  return <canvas ref={canvas} width={size} height={size} style={{ width: 96, height: 96, imageRendering: "pixelated" }} />;
+}
+
+const BROWSER_TABS = [
+  { strip: "#DEE1E6", tab: "#FFFFFF", text: "#1F1F1F" },
+  { strip: "#202124", tab: "#35363A", text: "#E8EAED" },
+] as const;
+
+/** The mark where it appears: the favicon in both browsers' tabs and pixel for pixel, the rail, the sidebar, the phone bar and the hero. */
 function MarksFrame() {
-  const sizes = [16, 24, 48, 96] as const;
+  const favicon = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markDocument())}`;
 
   return (
-    <div className="p-bg p-text min-h-screen p-10 space-y-10">
-      <div className="space-y-2">
-        <div className="p-eyebrow">Candidate marks — hiragana く, one stroke</div>
-        <div className="p-body p-text-2 max-w-xl">
-          Shipping: <span className="p-text font-semibold">{KINU_MARK}</span>. Each mark is
-          hand-authored paths on a 24-unit grid, inheriting <code>currentColor</code>, so it is
-          the accent of whichever face is on screen.
+    <div className="p-bg p-text min-h-screen p-10 space-y-8">
+      <section className="flex flex-wrap items-end gap-10">
+        <div className="space-y-2">
+          <div className="p-eyebrow">Favicon, 16px</div>
+          {BROWSER_TABS.map((browser) => (
+            <div key={browser.strip} className="w-[300px] rounded-[10px] px-2 pt-2" style={{ background: browser.strip }}>
+              <div className="flex h-[34px] w-[200px] items-center gap-2 rounded-t-[8px] px-3 text-[12px]" style={{ background: browser.tab, color: browser.text, fontFamily: "Arial, sans-serif" }}>
+                <img src={favicon} width={16} height={16} alt="" />Storefront · Kinu
+              </div>
+            </div>
+          ))}
         </div>
-      </div>
-      {MARK_IDS.map((id) => (
-        <div key={id} className="space-y-3 border-t p-border pt-6">
-          <div className="flex items-baseline gap-3">
-            <span className="p-title p-text">{id}</span>
-            {id === KINU_MARK && <span className="p-eyebrow" style={{ color: "var(--c-accent-fg)" }}>shipping</span>}
-          </div>
-          <div className="flex items-end gap-10">
-            {sizes.map((size) => (
-              <div key={size} className="flex flex-col items-center gap-2">
-                <span
-                  style={{ color: "var(--c-accent)", lineHeight: 0 }}
-                  dangerouslySetInnerHTML={{ __html: mark(size, id) }}
-                />
-                <span className="p-meta p-text-3">{size}px</span>
-              </div>
-            ))}
-            <div className="flex items-center gap-2.5 border p-border rounded-md px-3 py-2">
-              <span
-                style={{ color: "var(--c-accent)", lineHeight: 0 }}
-                dangerouslySetInnerHTML={{ __html: mark(21, id) }}
-              />
-              <span style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 500, letterSpacing: "-0.015em" }}>
-                Kinu.run
-              </span>
-            </div>
-            <div className="flex items-center gap-2.5 px-3 py-2 rounded-md" style={{ background: "var(--c-accent)" }}>
-              <span
-                style={{ color: "var(--c-accent-on)", lineHeight: 0 }}
-                dangerouslySetInnerHTML={{ __html: mark(21, id) }}
-              />
-              <span style={{ color: "var(--c-accent-on)", fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 500 }}>
-                Kinu.run
-              </span>
-            </div>
-            {/* The sidebar lockup as Sidebar.tsx ships it (mark 20px + display face). */}
-            <div className="w-60 rounded-lg border p-border p-sidebar px-2 py-2.5 space-y-1.5">
-              <div className="flex items-center gap-2.5 px-2 py-1">
-                <span style={{ color: "var(--c-accent)", lineHeight: 0 }} dangerouslySetInnerHTML={{ __html: mark(20, id) }} />
-                <span className="p-heading text-[17px] p-text">Kinu</span>
-              </div>
-              <div className="p-eyebrow px-2">Workspaces</div>
-              <div className="px-2 py-1.5 rounded-lg bg-[var(--c-elevated)] p-row-text font-medium">Storefront</div>
-              <div className="px-2 py-1.5 p-row-text p-text-2">Dew</div>
-            </div>
+        <div className="space-y-2">
+          <div className="p-eyebrow">16 and 32, pixel for pixel</div>
+          <div className="flex gap-3"><FaviconRaster size={16} /><FaviconRaster size={32} /></div>
+        </div>
+        <div className="space-y-2">
+          <div className="p-eyebrow">Mark</div>
+          <div className="flex items-end gap-6 p-accent-mark">
+            {[16, 20, 32, 64].map((size) => <span key={size} style={{ lineHeight: 0 }} dangerouslySetInnerHTML={{ __html: mark(size) }} />)}
           </div>
         </div>
-      ))}
+      </section>
+      <section className="flex flex-wrap items-start gap-10 border-t p-border pt-8">
+        <div className="space-y-2">
+          <div className="p-eyebrow">Rail</div>
+          <div className="flex w-14 flex-col items-center gap-1 rounded-[10px] border p-border p-sidebar py-3"><span className="flex size-9 items-center justify-center"><KinuMark size={20} /></span></div>
+        </div>
+        <div className="space-y-2">
+          <div className="p-eyebrow">Sidebar</div>
+          <div className="h-[220px] w-60 overflow-hidden rounded-[10px] border p-border p-sidebar"><Sidebar onCollapse={() => {}} /></div>
+        </div>
+        <div className="space-y-2">
+          <div className="p-eyebrow">Phone bar</div>
+          <div className="flex h-14 w-[390px] items-center gap-1 rounded-[10px] border p-border p-sidebar px-3">
+            <span className="flex size-9 items-center justify-center p-text-2"><ListIcon size={18} /></span>
+            <span className="flex items-center rounded-md px-2 py-1.5"><KinuLogo compact /></span>
+          </div>
+        </div>
+      </section>
+      <section className="space-y-2 border-t p-border pt-8">
+        <div className="p-eyebrow">Hero</div>
+        <div className="p-text" style={{ lineHeight: 0 }} dangerouslySetInnerHTML={{ __html: wordmark(120) }} />
+      </section>
     </div>
   );
 }

@@ -4669,6 +4669,17 @@ under its name. Closing a session ends its tmux session and forgets it; the box 
 leaves a fresh `shell`. Not measured: bash's `HISTCONTROL=ignoredups` numbers a repeated command once, so its second
 run leaves the earlier mark. The product flow `computer-sessions` reads it all on a deployment.
 
+D91. The computer answers to its workspace's name, not to "computer" (2026-10-13; reverses D83's fixed name). The
+owner, on `root@computer`: "something nice and sensible, workspace related (maybe workspace name?)". `KinuDevbox`
+reads the workspace's display name from the workspace itself at each `configureContainer`, through the same root agent
+its notices reach, and names the box with it as one DNS label (`workspaceHostLabel`): lowercase, each run of anything
+outside `[a-z0-9]` one hyphen, none at either end, at most 63 characters; the slug's label where the name is a
+placeholder, unread, or leaves nothing. "Storefront" is `root@storefront`, "Coupon fixes" `root@coupon-fixes`. The box
+keeps no copy of the name: a rename names it at its next start, or at the next `configureEgress`, which configures a
+running box again. A name that cannot be read is logged (`computer.name_unread`) and the slug names the box. D83's
+mechanism stands: the kernel's name, `/etc/hostname` and `/etc/hosts`, set at every start. The executor's label in the
+product and the prompt stays "computer".
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
