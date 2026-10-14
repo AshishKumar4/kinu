@@ -1691,7 +1691,7 @@ export class LocalAgentSession {
       toolset: (mode) => this.turnToolSet(mode),
       // What lies outside the workspace is its own agent's alone.
       externalTools: async (window) => {
-        if (!this.actorReach.external) return {};
+        if (this.actorReach.kind !== 'workspace') return {};
         await this.admitMcp(window);
 
         return this.extraTools;
@@ -2465,7 +2465,7 @@ export class LocalAgentSession {
     const report = this.reportGateOpen() ? this.reportDeps : null;
     const reported = report === null ? {} : { report: () => report };
 
-    if (this.actorReach.surface === 'program') return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, reported);
+    if (this.actorReach.kind === 'workspace') return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, reported);
     const acc = this.actorSession.orchestrator.acc;
 
     // A program here runs in this process, which holds no Browser Run socket client, so no browser sessions.
@@ -2755,7 +2755,7 @@ export class LocalAgentSession {
       escalations: this.actorSession.orchestrator.acc.ledgers.escalations,
       craft: this.actorSession.orchestrator.acc.ledgers.craft,
       vectorStore: null,
-      ...(this.actorReach.external && { external: () => this.turnExternalTools }),
+      ...(this.actorReach.kind === 'workspace' && { external: () => this.turnExternalTools }),
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
         const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
@@ -2768,7 +2768,7 @@ export class LocalAgentSession {
         return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
-      ...(this.actorReach.lanes && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
+      ...(this.actorReach.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
       jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },
