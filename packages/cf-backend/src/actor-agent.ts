@@ -14,7 +14,7 @@ import {
   type WSMessage,
 } from "agents";
 import {
-  metadataTier, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
+  inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
@@ -3820,7 +3820,7 @@ export abstract class ActorAgent extends Agent<Env> {
       text: '',
     });
 
-    const explicitTier = metadataTier(this.turnDrivingMetadata());
+    const explicitTier = turnTags({ metadata: this.turnDrivingMetadata() }).tier;
 
     const assembled = await assembleActorTurn(
       { ...surface.sources, toolset: () => surface.tools, externalTools: async () => surface.surface.external },

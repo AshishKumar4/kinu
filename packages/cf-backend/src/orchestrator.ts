@@ -59,7 +59,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, metadataTier, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -1899,7 +1899,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     const inputs = turn?.resolved.inputs ?? await this.profileInputs();
-    const choices = ownProfileChoices(actor.stores.config, inputs, this.ancestorProfiles(actor.handle), { explicitTier: metadataTier(driving) });
+    const choices = ownProfileChoices(actor.stores.config, inputs, this.ancestorProfiles(actor.handle), { explicitTier: turnTags({ metadata: driving }).tier });
 
     // The remote catalog is admitted against the context budget left after the turn's own tools; a failed read answers
     // no tools and the turn runs on its own. The hub's device check refreshes the workspace's executors.
