@@ -10,7 +10,7 @@ import {
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
 } from './helpers/agents-sdk';
-import { classifyMcpFailure } from '../src/user/mcp';
+import { classifyMcpFailure } from '../src/user/mcp-wire';
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
 import { KinuError, setDiagnosticsSink, type LogFields } from '@kinu.run/core/obs';
 import { ProtocolError, SdkError, SdkErrorCode } from '@modelcontextprotocol/client';

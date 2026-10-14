@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import * as v from 'valibot';
 import type { JsonObject } from '@kinu.run/core';
-import { callRenewingExpiredSession, type McpSessionHost } from '../src/user/mcp';
+import { callRenewingExpiredSession, type McpSessionHost } from '../src/user/mcp-wire';
 
 const RpcSchema = v.object({
   id: v.optional(v.number(), 0),

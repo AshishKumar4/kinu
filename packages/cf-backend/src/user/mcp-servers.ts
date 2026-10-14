@@ -8,7 +8,7 @@ import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-pro
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  mapConnectionStatus, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList, mcpListingRefusals, classifyMcpFailure, observedMcpState, CALLABLE_MCP_STATES, McpTransitionLog, type McpObservedState, type McpToolListing,
+  mapConnectionStatus, mcpCredentialTransport, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, mcpListingRefusals, observedMcpState, CALLABLE_MCP_STATES, McpTransitionLog, type McpObservedState, type McpToolListing,
 } from './mcp';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import type { UserCredentials } from './credentials';
@@ -508,7 +508,7 @@ export class UserMcpServers {
     }
 
     const name = this.host.sqlx<{ name: string }>(`SELECT name FROM user_mcp_servers WHERE id = ?`, id)[0]?.name ?? id;
-    const listing = await readUndiscoveredToolList({ name }, conn.client);
+    const listing = await (await import('./mcp-wire')).readUndiscoveredToolList({ name }, conn.client);
     this._mcpToolLists.set(id, listing);
 
     for (const refusal of 'listed' in listing ? mcpListingRefusals({ id, name }, listing.listed) : []) {
@@ -656,10 +656,10 @@ export class UserMcpServers {
     });
 
     return Effect.promise(() => this.dispatchUserMcpTool(call, signal)).pipe(
-      Effect.onError((failed) => Effect.sync(() => {
+      Effect.onError((failed) => Effect.promise(async () => {
         const facts = observed();
         const cause = Cause.squash(failed);
-        const kind = Cause.hasInterruptsOnly(failed) ? 'cancelled' : classifyMcpFailure({ cause, state: facts.state });
+        const kind = Cause.hasInterruptsOnly(failed) ? 'cancelled' : (await import('./mcp-wire')).classifyMcpFailure({ cause, state: facts.state });
 
         diagnostics.failure('mcp.call_failed', toKinuError({ doing: `calling ${name} on MCP server ${serverId}`, cause, otherwise: 'unavailable' }), { ...facts, kind });
       })),
@@ -711,7 +711,7 @@ export class UserMcpServers {
     );
 
     try {
-      return await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
+      return await (await import('./mcp-wire')).callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
     } catch (err) {
       await this.convergeMcpAuthState({ serverId, cause: err });
       throw err;
@@ -756,7 +756,7 @@ export class UserMcpServers {
    * moves to authenticating with a reconnect URL. Which failures qualify is `isMcpTransportUnauthorized`'s.
    */
   private async convergeMcpAuthState(input: { serverId: string; cause: unknown }): Promise<void> {
-    if (!isMcpTransportUnauthorized(input)) return;
+    if (!(await import('./mcp-wire')).isMcpTransportUnauthorized(input)) return;
     const { serverId } = input;
 
     try { await this.host.mcp.discoverIfConnected(serverId); }
