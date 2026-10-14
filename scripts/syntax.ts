@@ -852,6 +852,16 @@ export function moduleSpecifiers(tree: SyntaxNode): readonly string[] {
   return out;
 }
 
+/** The literal argument of each `require(…)` call in `tree`: CommonJS's static imports (the device daemon's). */
+export function requiredSpecifiers(tree: SyntaxNode): readonly string[] {
+  const out: string[] = [];
+  walk(tree, (node) => {
+    if (node.raw.type === 'CallExpression' && identifierCalleeName(node) === 'require') out.push(...stringArguments(node));
+  });
+
+  return out;
+}
+
 export interface ImportUse {
   readonly specifier: string;
   readonly imported: string;

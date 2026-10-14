@@ -105,8 +105,8 @@ import {
   isTestScaffold, isTextSource, trackedFiles,
 } from './sources';
 import {
-  declarationOf, declaredBindings, declaredName, exportedLocalNames, identifierCalleeName,
-  importedNames, isReExport, moduleSpecifiers, parse, stringArguments, walk, type SyntaxNode,
+  declarationOf, declaredBindings, declaredName, exportedLocalNames,
+  importedNames, isReExport, moduleSpecifiers, parse, requiredSpecifiers, walk, type SyntaxNode,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -442,10 +442,7 @@ function namedModules(file: string, text: string): readonly string[] {
 
   if (known?.text === text) return known.modules;
   const tree = parse(file, text).root;
-  const out = [...moduleSpecifiers(tree)];
-  walk(tree, (node) => {
-    if (node.raw.type === 'CallExpression' && identifierCalleeName(node) === 'require') out.push(...stringArguments(node));
-  });
+  const out = [...moduleSpecifiers(tree), ...requiredSpecifiers(tree)];
   modulesOf.set(file, { text, modules: out });
 
   return out;

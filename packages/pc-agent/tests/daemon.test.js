@@ -53,18 +53,19 @@ const {
   createCheckpoints,
   getConnectTicket,
   handleTokenRotation,
-  inFlight,
   persistRotatedToken,
   readDeviceConfig,
   startConnectLoop,
-  supervisionSupported,
+  supervision,
 } = require('../src/index.js');
+
+const { supervisionSupported } = require('../src/daemon/supervisor.js');
 
 /** The hub ACKs every result it records, and the ACK is what ends a command's supervisor (about 30 MB).
  *  A test that read an answer and stopped there left 22 supervisors running until the run ended. */
 afterEach(async () => {
   for (const requestId of fs.readdirSync(INFLIGHT_ROOT)) {
-    if (fs.existsSync(path.join(INFLIGHT_ROOT, requestId, 'result'))) await inFlight.acknowledge(requestId);
+    if (fs.existsSync(path.join(INFLIGHT_ROOT, requestId, 'result'))) await supervision.acknowledge(requestId);
   }
 });
 
@@ -770,6 +771,32 @@ describe('daemon device path confinement', () => {
     // A hub from before paging names no page and still gets every entry.
     handle({ id: 'unpaged', method: 'listFiles', sandbox: scoped([root]), params: [root] }, ws, {});
     expect((await ws.response('unpaged')).result.map((entry) => entry.name).sort(byName)).toEqual(names.sort(byName));
+  });
+
+  // 2026-10-14, the owner's machine: a device root of 56,762 entries cost a statPath round trip per entry, and the
+  // listing never loaded. Each entry answers what that stat would; one gone since the read answers its name alone.
+  test('a listed entry carries its size and modification time, as a stat of it answers them', async () => {
+    const root = scratchDir('daemon-listed-stats');
+    fs.writeFileSync(path.join(root, 'twelve.txt'), 'twelve bytes');
+    fs.mkdirSync(path.join(root, 'inner'));
+    fs.symlinkSync(path.join(root, 'nowhere'), path.join(root, 'dangling'));
+
+    const ws = fakeWs();
+
+    handle({ id: 'listed', method: 'listFiles', sandbox: scoped([root]), params: [root, { offset: 0, limit: 10 }] }, ws, {});
+    const { entries } = (await ws.response('listed')).result;
+
+    const stated = (name) => {
+      const stat = fs.statSync(path.join(root, name));
+
+      return { size: stat.size, mtimeMs: stat.mtimeMs };
+    };
+
+    expect(Object.fromEntries(entries.map(({ name, ...rest }) => [name, rest]))).toEqual({
+      'twelve.txt': { type: 'file', ...stated('twelve.txt') },
+      inner: { type: 'dir', ...stated('inner') },
+      dangling: { type: 'file' },
+    });
   });
 
   // 2026-10-12 security review: a mutation was judged when its frame arrived and run on the path string after the

@@ -183,7 +183,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     // The gate triggers on tool calls plus a completed stream, so the turn must call something.
     const { model } = scriptedModel(
       'I renamed them',
-      { toolCall: { name: 'fact', input: { op: 'recall', key: 'probe' } } },
+      { toolCall: { name: 'file', input: { path: 'probe.txt' } } },
     );
 
     const events: SessionEvent[] = [];
@@ -661,7 +661,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const release = Promise.withResolvers<void>();
 
     const { model } = scriptedModel('I renamed them', {
-      toolCall: { name: 'fact', input: { op: 'recall', key: 'probe' } },
+      toolCall: { name: 'file', input: { path: 'probe.txt' } },
       onStream: async (prompt) => {
         if (!JSON.stringify(prompt).includes('output of ')) return;
         await release.promise;

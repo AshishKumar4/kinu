@@ -36,77 +36,57 @@ namespace Kinu.Safety.DeviceToken
 
 /-! ## The connect ticket -/
 
-/-- `DEVICE_CONNECT_TICKET_TTL_MS`. -/
+/-- `TICKET_TTL_MS` (packages/cf-backend/src/user/single-use-tickets.ts). -/
 def ticketTtl : Nat := 60 * 1000
 
 structure Ticket where
   device : Nat
   expiresAt : Nat
-  used : Bool
   deriving DecidableEq, Repr
 
-/-- `issueDeviceConnectTicket`, once the token verified. -/
+/-- `issueDeviceConnectTicket`, once the token verified (`SingleUseTickets.mint`). -/
 def issueTicket (tickets : List (Nat × Ticket)) (tk device now : Nat) : List (Nat × Ticket) :=
-  (tk, ⟨device, now + ticketTtl, false⟩) :: tickets
+  (tk, ⟨device, now + ticketTtl⟩) :: tickets
 
-/-- `UPDATE device_connect_tickets SET used_at`. -/
+/-- `SingleUseTickets.spend`: the ticket's row is deleted, so nothing records that it was used. -/
 def spend (tickets : List (Nat × Ticket)) (tk : Nat) : List (Nat × Ticket) :=
-  tickets.map fun p => if p.1 = tk then (p.1, { p.2 with used := true }) else p
+  tickets.filter (·.1 != tk)
 
-/-- `verifyDeviceConnectTicket`: an unspent ticket inside its minute is spent, and
-    names its device if the device is still live. -/
+/-- `verifyDeviceConnectTicket`: a presented ticket is gone, inside its minute or not (the expired one with the sweep),
+    and names its device only if it was inside its minute and the device is still live. It is spent before the device
+    is read, so a revoked device's ticket is burnt too. -/
 def verifyTicket (tickets : List (Nat × Ticket)) (live : Nat → Bool) (tk now : Nat) :
     List (Nat × Ticket) × Option Nat :=
-  match tickets.find? (·.1 == tk) with
-  | none => (tickets, none)
-  | some p =>
-    if p.2.used = true ∨ p.2.expiresAt ≤ now then (tickets, none)
-    else (spend tickets tk, if live p.2.device then some p.2.device else none)
+  (spend tickets tk,
+    match tickets.find? (·.1 == tk) with
+    | none => none
+    | some p => if now < p.2.expiresAt ∧ live p.2.device = true then some p.2.device else none)
 
-private theorem spend_cons (p : Nat × Ticket) (rest : List (Nat × Ticket)) (tk : Nat) :
-    spend (p :: rest) tk = (if p.1 = tk then (p.1, { p.2 with used := true }) else p) :: spend rest tk :=
-  rfl
+private theorem find_spend (tickets : List (Nat × Ticket)) (tk : Nat) :
+    (spend tickets tk).find? (·.1 == tk) = none := by
+  rw [List.find?_eq_none]
+  intro x hx
+  simp only [spend, List.mem_filter, bne_iff_ne, ne_eq, decide_eq_true_eq] at hx
+  simpa using hx.2
 
-private theorem find_spend (tk : Nat) : ∀ tickets : List (Nat × Ticket),
-    (spend tickets tk).find? (·.1 == tk) =
-      (tickets.find? (·.1 == tk)).map fun p => (p.1, { p.2 with used := true })
-  | [] => rfl
-  | p :: rest => by
-    rw [spend_cons]
-    by_cases hk : p.1 = tk
-    · simp [hk, List.find?]
-    · have hb : (p.1 == tk) = false := by simpa using hk
-      simp [hk, hb, List.find?, find_spend tk rest]
-
-/-- **A ticket is spent at most once**: after one verification admits it, a second
-    one admits nothing, at any time and whatever became of the device. -/
-theorem a_ticket_is_spent_once (tickets : List (Nat × Ticket)) (live live' : Nat → Bool)
-    (tk now now' : Nat) (h : (verifyTicket tickets live tk now).2.isSome = true) :
+/-- **A ticket is spent at most once**: once presented, whatever it answered, a second verification admits nothing,
+    at any time and whatever became of the device. -/
+theorem a_ticket_is_spent_once (tickets : List (Nat × Ticket)) (live live' : Nat → Bool) (tk now now' : Nat) :
     (verifyTicket (verifyTicket tickets live tk now).1 live' tk now').2 = none := by
-  unfold verifyTicket at h ⊢
-  cases hf : tickets.find? (·.1 == tk) with
-  | none => simp [hf] at h
-  | some p =>
-    simp only [hf] at h ⊢
-    by_cases hc : p.2.used = true ∨ p.2.expiresAt ≤ now
-    · simp [hc] at h
-    · simp only [if_neg hc]
-      rw [find_spend, hf]
-      simp
+  simp only [verifyTicket, find_spend]
 
 /-- **A ticket admits nothing from its minute on.** -/
 theorem a_ticket_dies_at_its_minute (tickets : List (Nat × Ticket)) (live : Nat → Bool)
     (tk device issued now : Nat) (hlate : issued + ticketTtl ≤ now) :
     (verifyTicket (issueTicket tickets tk device issued) live tk now).2 = none := by
-  simp [verifyTicket, issueTicket, List.find?, hlate]
+  simp [verifyTicket, issueTicket, List.find?, Nat.not_lt.mpr hlate]
 
 /-- **A revoked device's ticket admits nothing**, unspent and inside its minute:
     the device is re-read at the socket upgrade. -/
 theorem a_revoked_devices_ticket_admits_nothing (tickets : List (Nat × Ticket))
     (live : Nat → Bool) (tk device issued now : Nat) (hdead : live device = false) :
     (verifyTicket (issueTicket tickets tk device issued) live tk now).2 = none := by
-  simp only [verifyTicket, issueTicket, List.find?, beq_self_eq_true]
-  split <;> simp [hdead]
+  simp [verifyTicket, issueTicket, List.find?, hdead]
 
 /-! ## The device token -/
 
