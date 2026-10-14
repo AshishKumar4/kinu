@@ -153,8 +153,8 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
       {!picked && hidden.length > 0 && (
         <span className="relative flex shrink-0">
           {/* With none beside the tools, the count says what it counts. */}
-          <button type="button" aria-expanded={menu} aria-haspopup="menu" aria-label={`${String(hidden.length)} more pages`} title={titles(hidden)}
-            className="p-bar-more" onClick={() => setMenu(!menu)}>
+          <button type="button" aria-expanded={menu} aria-haspopup="menu" aria-label={`${String(hidden.length)} more ${hidden.length === 1 ? "page" : "pages"}`}
+            title={titles(hidden)} className="p-bar-more" onClick={() => setMenu(!menu)}>
             {shown.size === 0 ? <>{hidden.length} {hidden.length === 1 ? "page" : "pages"}<CaretDownIcon size={10} weight="bold" aria-hidden /></> : `+${String(hidden.length)}`}
           </button>
           {menu && <PagesMenu pages={hidden} open={surface} choose={choose} />}
