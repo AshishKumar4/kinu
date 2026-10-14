@@ -6,7 +6,7 @@
 // every path — the ladder's tiers (`.githooks/*` → `ladder.ts --tier`), the
 // deploy's rows (`deploy.sh` → `ladder.ts --gate`), the package scripts a hand
 // run reaches through `ladder.ts --run` (`bun run test:core`, `test:workerd`,
-// …), `scripts/test.sh`, `scripts/test-cli.ts`, `scripts/setup-worktree.sh` —
+// …), `scripts/test-cli.ts`, `scripts/setup-worktree.sh` —
 // so a hung suite is killed and NAMED wherever it was started, never left
 // holding `git push` open forever.
 //

@@ -201,9 +201,9 @@ CASES_STATUS=$?
 STATUS=$FLEET_STATUS
 if [[ $STATUS -eq 0 ]]; then STATUS=$CASES_STATUS; fi
 
-# WHAT IT SPENT, and the assertion that it spent anything. Two of the five cases
-# call a model; a run reporting no model call at all measured no agent, whatever
-# its exit code said.
+# WHAT IT SPENT, and the assertion that it spent anything. Some cases call a
+# model; a run reporting no model call at all measured no agent, whatever its
+# exit code said.
 bun scripts/eval-spend.ts "$SPEND" --expect-live
 SPEND_STATUS=$?
 

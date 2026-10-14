@@ -2981,14 +2981,6 @@ export function productFlowsTierCommand(source = readFileSync(resolve(root, PROD
   return line === undefined ? '' : line.slice('exec '.length);
 }
 
-/**
- * Deploy gates whose FILES the CI tier does not cover, each with the reason.
- * This map is the whole CI-vs-deploy delta, so "a green CI badge means
- * everything a deploy checks except these" is a sentence someone can check.
- *
- * Each entry is a reason. On 2026-08-17 the undeclared delta was five
- * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
- */
 /** Why no live-app row can run on a pull request: each boots the product's own dev server. */
 const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and a scripted model for minutes, which '
   + 'answers for the tree being deployed rather than a push: it runs in the deploy\'s source-phase job on armada, '
@@ -3008,6 +3000,14 @@ export function armadaPhaseRows(phases: readonly DeployPhase[]): Gate[] {
   return LADDER.filter((gate) => phases.some((phase) => phase === (gate.phase ?? 'source')) && onArmada(gate));
 }
 
+/**
+ * Deploy gates whose FILES the CI tier does not cover, each with the reason.
+ * This map is the whole CI-vs-deploy delta, so "a green CI badge means
+ * everything a deploy checks except these" is a sentence someone can check.
+ *
+ * Each entry is a reason. On 2026-08-17 the undeclared delta was five
+ * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
+ */
 export const CI_EXEMPT = {
   'bun run gate:infra':
     'needs a Cloudflare session. CI has none, and giving it one would put an account credential '

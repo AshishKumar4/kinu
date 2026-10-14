@@ -3,9 +3,8 @@
  * Coverage over the UNION of suites the repo's runners claim, not a hand-picked
  * subset.
  *
- * `bash scripts/test.sh --coverage` exists but measures one command's own
- * selection: core + cf-backend + cli-backend + cli in a single `bun test`.
- * Measured 2026-09-01 in this worktree, that is 8,655 tests across 600 files in
+ * One `bun test` over core + cf-backend + cli-backend + cli measures that
+ * command's own selection. Measured 2026-09-01, that is 8,655 tests across 600 files in
  * 339 s and a single merged text table — no agent-utils, no devbox, no
  * compaction, no pc-agent, no scripts gates, no root `tests/`, no workerd
  * layer. A number that names itself "coverage" while missing most of the
