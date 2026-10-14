@@ -1,15 +1,15 @@
-/** A pulse moving along one edge of a picture (search tree or connectome); choosing the next edge stays with each simulation. */
+/** A pulse moving along one edge of the hero's search tree; choosing the next edge stays with the simulation. */
 
 import { clamp, grown, PULSE_STRIDE } from './art';
 
 export interface Pulse {
   readonly id: number;
-  /** A depth for the tree, a lobe for the connectome. */
+  /** Its depth in the tree. */
   layer: number;
   edge: number;
   /** 0 at the edge's start, 1 at its end. */
   head: number;
-  /** A tree's pulse keeps its direction for life; a graph's turns with every edge. */
+  /** A tree's pulse keeps its direction for life. */
   direction: 1 | -1;
   readonly strength: number;
 }

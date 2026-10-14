@@ -114,7 +114,9 @@ interface Observed {
   readonly filesFiltered: string[];
   /** The stated-absence row a disconnected device leaves on the drive. */
   readonly filesOfflineRow: string;
-  readonly envCards: Array<{ name: string; status: string; mount: string }>;
+  /** Each environment's name as its chip says it, and its files' root as its head says it once chosen. */
+  readonly envNames: Record<string, string>;
+  readonly envMounts: Record<string, string>;
   readonly envFilesJumpLandsOnDrive: boolean;
   /** Every `input` frame the pane sent the workspace shell, in order. */
   readonly terminalInput: string[];
@@ -535,19 +537,17 @@ async function run(): Promise<Observed> {
     const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => el.textContent ?? '');
     await offline.close();
 
-    // The Environment tab, reworked: user cards, no capability doctrine, and
-    // a Files action that lands the drive.
+    // The Environment tab: each environment by its name, no capability
+    // doctrine, and a Files action that lands the drive.
     const env = await newPage();
     await env.setViewport({ width: 1280, height: 1100 });
     await env.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
     await env.reload({ waitUntil: 'networkidle0' });
     await env.waitForSelector('[data-env-card]');
 
-    const envCards = await env.$$eval('[data-env-card]', (cards) => cards.map((card) => ({
-      name: card.querySelector('.font-medium')?.textContent ?? '',
-      status: card.querySelector('[data-env-status]')?.textContent ?? '',
-      mount: card.querySelector('[data-env-mount]')?.textContent ?? '',
-    })));
+    const envNames = Object.fromEntries(await env.$$eval('[data-env-card]', (cards) => cards.map((card) => [
+      card.getAttribute('data-env-card') ?? '', (card.querySelector('button')?.textContent ?? '').trim(),
+    ])));
 
 
     // The workspace shell: the pane sends what is typed as `input` frames over
@@ -566,9 +566,19 @@ async function run(): Promise<Observed> {
 
     const terminalInput = await env.evaluate(() => window.__kinuTerminalInput ?? []);
 
+    // Each environment, chosen, names its files' root.
+    const envMounts: Record<string, string> = {};
+
+    for (const name of Object.keys(envNames)) {
+      await env.click(`[data-env-card="${name}"] button`);
+      await env.waitForSelector(`[data-env-card="${name}"] [aria-pressed="true"]`);
+      envMounts[name] = await env.$eval('[data-env-mount]', (mount) => mount.textContent ?? '');
+    }
+
     // The jump switches the surface at once (`openFiles` navigates focus); the
     // Files surface's chunk loads with its first view, so the drive is awaited.
-    await env.click('[data-env-card="workspace"] [data-env-files]');
+    await env.click('[data-env-card="workspace"] button');
+    await env.click('[data-env-files]');
     const envFilesJumpLandsOnDrive = await env.waitForSelector('[data-files-surface]') !== null;
 
     await env.close();
@@ -586,7 +596,7 @@ async function run(): Promise<Observed> {
       filesRoot, filesRoster, filesInMount, filesAfterUp, treeFileNames,
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
-      envCards, envFilesJumpLandsOnDrive,
+      envNames, envMounts, envFilesJumpLandsOnDrive,
       terminalInput,
       runNodes,
     };
@@ -899,15 +909,12 @@ describe('the drive, browsing the one composite plane', () => {
 });
 
 describe('the Environment tab, as a user reads it', () => {
-  test('one card per environment: status, mount path, and the device wears its own name', () => {
-    const byName = Object.fromEntries(observed.envCards.map((card) => [card.name, card]));
-    expect(byName["Ashish's MacBook"]?.status).toBe('active');
-    expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
-    expect(byName['Workspace']?.mount).toBe('/');
-    expect(byName[executorLabel('computer')]?.mount).toBe('/computer');
+  test('each environment is listed by its name, the device by its own, and names its files root once chosen', () => {
+    expect(observed.envNames).toEqual({ workspace: 'Workspace', device: "Ashish's MacBook", computer: executorLabel('computer') });
+    expect(observed.envMounts).toEqual({ workspace: '/', device: '/pc', computer: '/computer' });
   });
 
-  test("a card's Files action lands the drive", () => {
+  test("an environment's Files action lands the drive", () => {
     expect(observed.envFilesJumpLandsOnDrive).toBe(true);
   });
 
@@ -4269,26 +4276,21 @@ describe('the composer while a turn runs and under a status row', () => {
   });
 });
 
-describe('the Environment cards', () => {
+describe('the Environment tab', () => {
   // Staging, 2026-10-08: at the inspector's default width every card ran past the panel's right edge.
-  test('fit a panel as narrow as the inspector', async () => {
+  test('fits a panel as narrow as the inspector', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 340, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="computer"] [data-env-size]');
+      await page.click('[data-env-card="computer"] button');
+      await page.waitForSelector('[data-env-size]');
 
-      // Each card inside the page, and everything drawn in a card inside the card: its size choice ran past it.
-      const past = await page.$$eval('[data-env-card]', (cards) => cards.flatMap((card) => {
-        const edge = card.getBoundingClientRect().right;
-        const drawn = [...card.querySelectorAll('*')].filter((inner) => inner.getClientRects().length > 0);
-        const furthest = Math.max(edge, ...drawn.map((inner) => inner.getBoundingClientRect().right));
-
-        return [
-          [card.getAttribute('data-env-card'), Math.round(edge - document.documentElement.clientWidth)],
-          [`${card.getAttribute('data-env-card') ?? ''} contents`, Math.round(furthest - edge)],
-        ];
-      }).filter(([, beyond]) => Number(beyond) > 0));
+      // Every environment's chip, and everything the chosen computer's head draws, its size choice too, inside the page.
+      const past = await page.$$eval('[data-env-card], [data-env-card] *, section header, section header *', (drawn) => drawn
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => [element.getAttribute('data-env-card') ?? element.tagName, Math.round(element.getBoundingClientRect().right - document.documentElement.clientWidth)])
+        .filter(([, beyond]) => Number(beyond) > 0));
 
       expect(past).toEqual([]);
     });

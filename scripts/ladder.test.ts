@@ -349,6 +349,10 @@ describe('the ladder measures something', () => {
    *  that, when the fixture below spelled a puppeteer import as a literal. */
   const censusFile = relative(root, import.meta.path);
 
+  /** Programs the computer runs, carried as text: the desktop's wallpaper starts the box's own Chromium, headless,
+   *  to draw the mark (DEVBOX-DECISIONS D88). Nothing here launches a browser where the tests run. */
+  const IN_THE_COMPUTER: ReadonlySet<string> = new Set(['packages/devbox/src/desktop-wallpaper.ts']);
+
   test('every file that names a browser launcher is inside the derivation', () => {
     const corpus = readMatching(isParseable);
     const reaching = browserModules(corpus);
@@ -364,7 +368,7 @@ describe('the ladder measures something', () => {
     }
 
     const unseen = [...corpus]
-      .filter(([file, text]) => file !== censusFile && namesLauncher(text) && !reaching.has(file))
+      .filter(([file, text]) => file !== censusFile && !IN_THE_COMPUTER.has(file) && namesLauncher(text) && !reaching.has(file))
       .map(([file]) => file);
 
     expect(unseen, 'files that launch a browser by name and reach puppeteer through no import edge').toEqual([]);

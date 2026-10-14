@@ -72,7 +72,7 @@ export function DesktopScreen({ src, title }: { src: string; title: string }) {
   }, [unanswered, phase]);
 
   return (
-    <div data-desktop-frame className="relative h-full overflow-hidden rounded-lg border p-border bg-black">
+    <div data-desktop-frame className="relative h-full overflow-hidden bg-black">
       <iframe key={opened} ref={frame} data-desktop title={title} src={src} className="block h-full w-full border-0" />
       {phase !== "connected" && (
         <div role="status" className="p-desktop-veil absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">

@@ -768,7 +768,7 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
 
   if (view === "desktop") {
     return (
-      <div className="flex min-h-0 flex-1 p-3">
+      <div className="flex min-h-0 flex-1 bg-black">
         <DesktopScreen src={desktopClientUrl(location, workspace)} title={`${executorLabel("computer")}'s desktop`} />
       </div>
     );

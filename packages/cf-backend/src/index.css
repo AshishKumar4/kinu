@@ -87,8 +87,8 @@
    warm-brown hairlines (#262019) instead of alpha glows, one gold accent
    (#E0A458) rationed to intent, silk (#E3D2AE) as the bright end of the
    same thread, and three self-hosted faces — Schibsted Grotesk for
-   everything that reads, Newsreader for slates that ask for a serif,
-   Fragment Mono for labels and commands.
+   everything that reads, Newsreader for the brand mark alone, Fragment
+   Mono for labels and commands.
 
    Rules the tokens encode:
    · Hairlines are SOLID colours from the ground's own family. The mock
@@ -186,11 +186,6 @@ html, body, #root {
      it deepens the umber ground instead of greying it. */
   --c-scrim: rgba(10, 8, 5, 0.55);
   --c-shadow-drop: rgba(0, 0, 0, 0.3);
-
-  /* The rail over the living background: the sidebar's own tone, most of the
-     way opaque, so the tissue behind it shows as a faint stir and never as
-     shapes under the rows. Follows the theme through `--c-sidebar`. */
-  --c-sidebar-veil: color-mix(in srgb, var(--c-sidebar) 80%, transparent);
 
   /* elevation — role-named; dark = black-based, heavier */
   /* Dark draws no card shadow at all (the rule above): a card is a rung of
@@ -381,7 +376,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-bg       { background: var(--c-bg); }
 @utility p-recessed { background: var(--c-recessed); }
 @utility p-sidebar  { background: var(--c-sidebar); }
-@utility p-sidebar-veil { background: var(--c-sidebar-veil); }
 @utility p-surface  { background: var(--c-surface); }
 @utility p-elevated { background: var(--c-elevated); }
 @utility p-fill     { background: var(--c-fill); }
@@ -2222,6 +2216,65 @@ body > .annotation-toolbar {
   background: var(--c-accent-mark);
   box-shadow: 0 0 0 2px var(--c-bg);
 }
+
+/* Environment: one surface on the column's ground. The machines are a row of equal chips, the chosen one on the
+   accent's wash; the chosen machine's head sits on the ground itself; its terminal or screen runs from one hairline
+   to the column's foot. */
+.p-env-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 11px 0 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 9px;
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, border-color var(--dur-fast) ease-out;
+}
+.p-env-chip:hover { border-color: var(--c-border-strong); color: var(--c-text); }
+.p-env-chip:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+.p-env-chip[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--c-accent) 38%, transparent);
+  background: var(--c-accent-subtle);
+  color: var(--c-text);
+}
+.p-env-chip[aria-pressed="true"] > svg { color: var(--c-accent-mark); }
+/* One status language for machines and terminals: the dot's colour says the state, its motion says work. */
+.p-env-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--c-success); }
+.p-env-dot[data-tone="working"] { background: var(--c-accent-mark); animation: dot-pulse 1.4s ease-in-out infinite; }
+.p-env-dot[data-tone="attention"] { background: var(--c-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-warning) 28%, transparent); }
+.p-env-dot[data-tone="danger"] { background: var(--c-danger); }
+.p-env-dot[data-tone="off"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c-text-3); }
+@media (prefers-reduced-motion: reduce) { .p-env-dot[data-tone="working"] { animation: none; } }
+.p-env-name { font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.012em; color: var(--c-text); }
+.p-env-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 20px; font-weight: 500; color: var(--c-text-2); }
+.p-env-state[data-tone="attention"] { color: var(--c-warning); }
+.p-env-state[data-tone="danger"] { color: var(--c-danger); }
+.p-env-state[data-tone="off"] { color: var(--c-text-3); }
+.p-env-specs { font-size: 12px; line-height: 16px; color: var(--c-text-3); }
+.p-env-action {
+  display: inline-flex;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.p-env-action:hover { color: var(--c-text); border-color: var(--c-border-strong); }
+.p-env-action:disabled { opacity: 0.6; }
+/* The terminal's own ground, under its padding as under its text. */
+.p-terminal-ground { background: var(--c-bg); }
 
 /* The computer's screen while its session is not up: the recessed ground with the accent's glow rising from the foot. */
 .p-desktop-veil {

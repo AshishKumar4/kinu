@@ -81,6 +81,8 @@ export function Choice<Value extends string>(props: {
   disabled?: boolean;
   size?: 'sm' | 'base';
   className?: string;
+  /** The trigger's own words for the chosen value, where its option's label is too long to sit in a row. */
+  shown?: (value: Value) => string;
 }) {
   return (
     <Select
@@ -90,7 +92,11 @@ export function Choice<Value extends string>(props: {
       value={props.value}
       disabled={props.disabled}
       items={props.options}
-      renderValue={(value) => props.options.find((option) => option.value === value)?.label ?? value}
+      renderValue={(value) => {
+        const picked = props.options.find((option) => option.value === value);
+
+        return picked === undefined ? value : props.shown?.(picked.value) ?? picked.label;
+      }}
       onValueChange={(next) => {
         const picked = props.options.find((option) => option.value === next);
 

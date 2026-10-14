@@ -10,6 +10,7 @@ import {
   summarizeSoul,
   mintAgentName,
   workspaceSlug,
+  workspaceHostLabel,
   type NameOrigin,
   type WorkspaceTitleState,
 } from '../src/index';
@@ -335,5 +336,27 @@ describe('a minted agent name', () => {
     for (const brief of ['Fix the coupon expiry check', 'A'.repeat(40), '--- ## Notes ---', null]) {
       expect(mintAgentName({ brief, role: 'Research Rust Frameworks' }, free)).toMatch(contract);
     }
+  });
+});
+
+// D91: the computer answers to its workspace's name. The owner: "something nice and sensible, workspace related".
+describe("the computer's host name", () => {
+  const slug = workspaceSlug('0f6e0c1a-2b3c-4d5e-8f90-a1b2c3d4e5f6');
+
+  test('is the workspace name as one DNS label: lowercase, each run of anything else one hyphen, none at the ends', () => {
+    expect(workspaceHostLabel('Storefront', slug)).toBe('storefront');
+    expect(workspaceHostLabel('  Coupon fixes!! ', slug)).toBe('coupon-fixes');
+    expect(workspaceHostLabel('Café — Q4 / launch', slug)).toBe('caf-q4-launch');
+  });
+
+  test('is at most 63 characters and never ends in a hyphen', () => {
+    const label = workspaceHostLabel(`${'a'.repeat(62)} b`, slug);
+
+    expect(label.length).toBeLessThanOrEqual(63);
+    expect(label).toMatch(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u);
+  });
+
+  test("is the slug's own where the name is a placeholder, unread, or leaves nothing", () => {
+    for (const name of [null, slug, codenameFor(slug), '!!!']) expect(workspaceHostLabel(name, slug)).toBe(slug);
   });
 });
