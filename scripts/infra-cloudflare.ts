@@ -24,15 +24,12 @@
 
 import { spawnSync } from 'node:child_process';
 import { resolve as resolveHostname } from 'node:dns/promises';
-import { existsSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
-import { join } from 'node:path';
 import { connect } from 'node:tls';
 import * as v from 'valibot';
-import { parseJsonc } from './jsonc';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
-import type { InfraEnvironment } from './infra-manifest';
+import { deployedConfig, type InfraEnvironment } from './infra-manifest';
 import { restApiToken } from './cloudflare-rest';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
@@ -91,17 +88,9 @@ export interface Run {
  *  runs only inside one script is a gate nobody checks. An ambient
  *  CLOUDFLARE_ACCOUNT_ID still wins, because that is how a second account is
  *  addressed deliberately. */
-const DeclaredAccount = v.object({ account_id: v.optional(v.string()) });
-
 function declaredAccountId(): string | undefined {
-  const config = join(CF_BACKEND, 'wrangler.jsonc');
-
-  if (!existsSync(config)) return undefined;
-  // Bun decodes JSONC natively on `require` — structural, where the regex this
-  // replaces read the raw text and would have matched a commented-out id. The
-  // hex pin is the same contract the regex carried: an account id is 32 hex
-  // digits, and a placeholder must lose to the ambient variable, not win.
-  const declared = parseJsonc(readFileSync(config, 'utf8'), DeclaredAccount, 'wrangler.jsonc').account_id;
+  // The hex pin: an account id is 32 hex digits, and a placeholder must lose to the ambient variable, not win.
+  const declared = deployedConfig('production').account_id;
 
   return declared !== undefined && /^[0-9a-f]+$/.test(declared) ? declared : undefined;
 }
