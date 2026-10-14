@@ -10,7 +10,7 @@ import {
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
 import { settleLogged } from "@kinu.run/core/obs";
-import { previewHostSuffix } from '@kinu.run/core';
+import { markDocument, previewHostSuffix, workspaceHostLabel } from '@kinu.run/core';
 import type { OrchestratorAgent } from "./orchestrator";
 import { lifecycleIncident, restoreNotices } from "./sandbox-lifecycle";
 import {
@@ -32,7 +32,7 @@ interface KinuState extends DevboxState {
 /** Type-only, so nothing here reaches orchestrator code at runtime. */
 type SandboxRootClient = Pick<
   OrchestratorAgent,
-  "acceptSandboxLifecycleIncident" | "sandboxStopped" | "sandboxRestore"
+  "acceptSandboxLifecycleIncident" | "sandboxStopped" | "sandboxRestore" | "workspaceTitle"
 >;
 
 export class KinuDevbox extends Devbox<Env> {
@@ -52,8 +52,25 @@ export class KinuDevbox extends Devbox<Env> {
   /** A mount records its binding as its bucket, so the name stays what the deployed containers recorded (D47). */
   protected override get store(): string { return 'BACKUP_BUCKET'; }
 
-  /** What the product calls the box (`executorLabel`), in its prompt and on its desktop. */
-  protected override get hostname(): string { return 'computer'; }
+  /**
+   * The workspace's own name, as a host label (D91): read from the workspace at each start and each configure, so a
+   * rename names the box at its next one and nothing here keeps a copy. The slug's label where the name is unread.
+   */
+  protected override async hostname(): Promise<string | undefined> {
+    const workspaceName = (await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY))?.workspaceName;
+
+    if (workspaceName === undefined) return undefined;
+    let title: string | null = null;
+
+    await settleLogged('computer.name_unread', { doing: "reading the workspace's name for its computer", otherwise: 'unavailable' }, async () => {
+      title = await (await this.#rootAgent())?.workspaceTitle() ?? null;
+    }, { workspace: workspaceName });
+
+    return workspaceHostLabel(title, workspaceName);
+  }
+
+  /** The logo's own mark, so the desktop follows it when the mark changes. */
+  protected override get desktopMark(): string { return markDocument(); }
 
   /** The zone the edge serves, read as the edge reads it; absent turns port publishing off, and exec and files keep
    *  working. */

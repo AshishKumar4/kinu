@@ -64,6 +64,14 @@ async function installTools(bucket: string, cached: string | undefined): Promise
 
 interface Step { readonly contract: string; readonly ms: number; readonly detail: unknown }
 
+/** The desktop as its client draws it: pixels at the ground, the wallpaper's glow and the panel, and where it is drawn. */
+interface DesktopReading {
+  readonly desktop: readonly number[];
+  readonly glow: readonly number[];
+  readonly panel: readonly number[];
+  readonly rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
+}
+
 interface FixtureSecrets {
   readonly EVAL_IDENTITY: string;
   readonly DEVBOX_REGISTRY_TOKEN: string;
@@ -407,9 +415,10 @@ async function main(): Promise<void> {
 
         if (frame == null) throw new Error('the desktop client did not frame');
 
-        // The desktop a quarter in from its corner, where X never starts its pointer (the middle), and the foot's middle,
-        // in the desktop's own coordinates; and where the client draws it.
-        const screen = () => frame.evaluate((size, footY) => {
+        // The desktop a quarter in from its corner, where X never starts its pointer (the middle), the wallpaper's glow
+        // just above the panel's middle, and the foot's middle, in the desktop's own coordinates; and where the client
+        // draws it.
+        const screen = (): Promise<DesktopReading | null> => frame.evaluate((size, footY, glowY) => {
           const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
 
           if (canvas === undefined || canvas.width < 640) return null;
@@ -417,8 +426,11 @@ async function main(): Promise<void> {
           const at = (x: number, y: number) => [...context?.getImageData(x * canvas.width / size.width, y * canvas.height / size.height, 1, 1).data ?? []];
           const rect = canvas.getBoundingClientRect();
 
-          return { desktop: at(size.width / 4, size.height / 4), panel: at(size.width / 2, footY), rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height } };
-        }, DESKTOP_SIZE, DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2);
+          return {
+            desktop: at(size.width / 4, size.height / 4), glow: at(size.width / 2, glowY), panel: at(size.width / 2, footY),
+            rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+          };
+        }, DESKTOP_SIZE, DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2, DESKTOP_SIZE.height - DESKTOP_PANEL.height - 8);
 
         await frame.waitForFunction(() => {
           const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
@@ -429,18 +441,27 @@ async function main(): Promise<void> {
         const near = (rgba: readonly number[] | undefined, hex: string) => rgba !== undefined
           && [1, 3, 5].every((at, channel) => Math.abs((rgba[channel] ?? -99) - Number.parseInt(hex.slice(at, at + 2), 16)) <= 12);
 
-        // The first frame may come before the panel paints: a person sees the desktop within seconds, or sees none.
+        // The wallpaper's glow warms the ground above the panel: its red stands well above its blue, where the bare
+        // ground's sit within a few levels of each other (D88).
+        const glowing = (rgba: readonly number[] | undefined) => rgba !== undefined && (rgba[0] ?? 0) - (rgba[2] ?? 0) >= 12;
+
+        const drawn = (shown: DesktopReading | null) => shown !== null
+          && near(shown.desktop, DESKTOP_COLOURS.background) && glowing(shown.glow) && near(shown.panel, DESKTOP_COLOURS.panel);
+
+        // The first frame may come before the panel and the wallpaper paint: a person sees the desktop within seconds, or
+        // sees none.
         const seenBy = Date.now() + DESKTOP_SEEN_MS;
         let seen = await screen();
 
-        while (!(near(seen?.desktop, DESKTOP_COLOURS.background) && near(seen?.panel, DESKTOP_COLOURS.panel)) && Date.now() < seenBy) {
+        while (!drawn(seen) && Date.now() < seenBy) {
           await delay(250);
           seen = await screen();
         }
 
-        if (seen === null || !near(seen.desktop, DESKTOP_COLOURS.background) || !near(seen.panel, DESKTOP_COLOURS.panel)) {
-          throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, panel: seen?.panel })} `
-            + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its background ${DESKTOP_COLOURS.background} and panel ${DESKTOP_COLOURS.panel}`);
+        if (seen === null || !drawn(seen)) {
+          throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, glow: seen?.glow, panel: seen?.panel })} `
+            + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its ground ${DESKTOP_COLOURS.background}, the wallpaper's glow `
+            + `and the panel ${DESKTOP_COLOURS.panel}`);
         }
 
         const rect = seen.rect;

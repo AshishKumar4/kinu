@@ -398,11 +398,27 @@ export function containerApplications(): readonly ContainerApplication[] | { rea
   for (const row of loaded.rows) {
     const info = containerInfo(row.id);
 
-    if ('failure' in info) return info;
+    if ('failure' in info) {
+      // The account is shared: a fixture deleted between the list and its info read is gone, not unreadable
+      // (2026-10-13, staging's reset refused on a throwaway devbox application torn down mid-read).
+      if (listedNow(row.id) === false) continue;
+
+      return info;
+    }
+
     applications.push({ id: info.id, name: info.name, namespace: info.durable_objects?.namespace_id });
   }
 
   return applications;
+}
+
+/** Whether a fresh `containers list` still holds `id`; null when it cannot be read. */
+function listedNow(id: string): boolean | null {
+  const run = wrangler(['containers', 'list', '--json']);
+  const body = run.ok ? jsonBody(run.stdout, '[') : undefined;
+  const parsed = body === undefined ? undefined : v.safeParse(ContainerRows, tolerate(() => JSON.parse(body), 'malformed-input'));
+
+  return parsed?.success === true ? parsed.output.some((row) => row.id === id) : null;
 }
 
 /**

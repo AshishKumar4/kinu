@@ -175,7 +175,7 @@ export {
   planWorkspaceTitle, autoTitleMayReplace, nameOriginOf, persistAutoTitle, titleActorFromMessage,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
-  workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, codenameFor,
+  workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, workspaceHostLabel, codenameFor,
   type NameOrigin,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
@@ -2198,7 +2198,7 @@ export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
 export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork-tree-rows';
 
 export {
-  executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
+  executorLabel, executorSortKey, isActiveExecutionDevice,
   pickDefaultExecutor, type ExecutorAvailability,
 } from './read-models/executors';
 
@@ -2272,9 +2272,9 @@ export {
 } from './http/device-update';
 
 export {
-  COPY_SCRIPT, GITHUB_ICON, REPO_URL,
-  mark, markDocument, publicFooter, publicPage, wordmark,
-  type PublicPageOptions,
+  COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
+  mark, markDocument, publicFooter, publicPage,
+  type MarkId, type PublicPageOptions,
 } from './http/public-shell';
 
 export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';

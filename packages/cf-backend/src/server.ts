@@ -13,7 +13,7 @@ import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
   parseEgressParams, workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
-import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
+import { APP_ROUTES, ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
@@ -468,6 +468,25 @@ worker.all('/agents/*', async (c, next) => {
 
   return (await routeAgentRequest(new Request(routed, { headers }), c.env)) ?? next();
 });
+
+// A workspace's page wakes its object while the document, the app and its socket are still on the way: the claim
+// the socket makes a moment later then finds it constructed. Cold, that construction measured 725 ms of a 3.2 s
+// load (cmp-kinu-ux1, 2026-10-13). The socket's own claim, so a name the account does not hold wakes nothing; a
+// failure is the socket's to answer, and here is only logged.
+const workspacePage = async (c: Context<WorkerEnv>): Promise<Response> => {
+  const workspace = c.req.param('agentId');
+
+  if (workspace !== undefined) {
+    c.executionCtx.waitUntil(settleLogged('workspace.page_wake_failed', { doing: "waking a workspace for its page", otherwise: 'unavailable' },
+      async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace); }));
+  }
+
+  return await appShell(c);
+};
+
+worker.get(APP_ROUTES.workspace, workspacePage);
+
+worker.get(`${APP_ROUTES.workspace}/*`, workspacePage);
 
 worker.notFound(appShell);
 
