@@ -54,7 +54,7 @@ import type { ClaimOutcome } from './actor-claims';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import { turnInputMessage, type InputProducer, type LandedSteerRow, type PendingSendRow, type PendingSendStore, type UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
-import { unansweredReport } from './terminal-roster';
+import { turnEndOf, unansweredReport, type TurnEnd } from './terminal-roster';
 import type { TerminalTransition, TerminalTransitions } from './terminal-transition';
 import {
   classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun, recordExecutionEvent, settleExecutionContext,
@@ -66,7 +66,7 @@ import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
-import { taskTurnEnding, type OwedReport, type TaskTurnEnding } from '../subordinates/temporary';
+import { taskTurnEnding } from '../subordinates/temporary';
 import { SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, type SeenSplice } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
 import type { AgentTaskTree } from '../tools/task-store';
@@ -252,8 +252,8 @@ export interface OwedTerminalEffectsInput {
   /** Read off the settling turn itself; undefined for a person's message. */
   readonly event: string | undefined;
   readonly assistantText: string;
-  /** Decided before the commit; null when none is owed. */
-  readonly owedReport: OwedReport | null;
+  /** How the turn ended, as its hirer is told it once the answer committed; null for an actor no one hired. */
+  readonly turnEnd: TurnEnd | null;
   readonly completed: boolean;
   readonly trialContext: readonly ModelMessage[];
   /** A cold replay has no live toolset to ask. */
@@ -312,8 +312,6 @@ export interface ChatSessionPorts {
    * `FileDeps.slate`).
    */
   failedAnswerSlates?(lease: ActorTurnLease): Promise<JsonObject | null>;
-  /** The report this ending owes its caller; narration is read only if the report carries it. */
-  owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
   /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
@@ -1993,9 +1991,11 @@ export class ChatSession {
       ...(metadata !== null && { metadata }),
     }) : null;
 
-    const owedReport = await this.ports.owedReport?.(
-      taskTurnEnding(runError === null, interrupted), fullText, () => this.transcript.narration(execution.outputPartReferences),
-    ) ?? null;
+    // Read here, crossing nothing: what it owes the hirer is decided after the commit (#75).
+    const turnEnd = await turnEndOf(this.actorSession.runtime.actor, item, lease.turnId, {
+      ending: taskTurnEnding(runError === null, interrupted), assistantText: fullText,
+      narration: () => this.transcript.narration(execution.outputPartReferences),
+    });
 
     // A turn that is the reminder never owes another.
     const openWork = eventName === TASK_REMINDER_EVENT ? null : await this.ports.openWork();
@@ -2007,7 +2007,7 @@ export class ChatSession {
       turnId: lease.turnId,
       event: eventName,
       assistantText: fullText,
-      owedReport,
+      turnEnd,
       openWork,
       preparedAssistant,
       runError,
@@ -2106,7 +2106,7 @@ export class ChatSession {
     readonly turnId: string;
     readonly event: string | undefined;
     readonly assistantText: string;
-    readonly owedReport: OwedReport | null;
+    readonly turnEnd: TurnEnd | null;
     /** Null for a turn that owes no reminder. */
     readonly openWork: OpenWork | null;
     readonly preparedAssistant: PreparedConversationEntry | null;
@@ -2172,7 +2172,7 @@ export class ChatSession {
         opensConversation: () => [null, turnId].includes(this.transcript.firstUserTurnId()),
         event: input.event,
         assistantText: input.assistantText,
-        owedReport: input.owedReport,
+        turnEnd: input.turnEnd,
         completed: runError === null,
         taskReminder,
         trialContext: input.trialContext,

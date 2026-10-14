@@ -61,7 +61,7 @@ import { ActorSession, type ActorTurnLease,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
   assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, metadataTier, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
-  type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
+  type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
   terminalEffect,
   type TerminalEffectTable, type TerminalEffectFault,
   type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
@@ -202,9 +202,7 @@ export interface LocalParentRelay {
    * Which report this ending owes, or null. A `task` child owes one on every ending; a `durable`
    * child only for a completed, parent-driven turn with something to say and no `report` call.
    */
-  readonly owed: (
-    ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>,
-  ) => Promise<OwedReport | null>;
+  readonly owed: (turn: TurnReportFacts) => Promise<OwedReport | null>;
   /** Dedupe key on the parent's rail, so a replay cannot wake it twice. */
   readonly sequenceId: (messageId: string) => string;
   readonly send: (report: {
@@ -532,8 +530,6 @@ export class LocalAgentSession {
         // The owner's decision as an intent delivers it, as their own decision here decides it.
         decidePlan: (verdict) => this.planActions.decideAndHandOff(verdict, (turn) => this.enqueueTurn(turn)),
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
-        // Only the host knows the child's lifetime and whether the parent drove the turn.
-        owedReport: async (ending, assistantText, narration) => await this.parentRelay?.owed(ending, assistantText, narration) ?? null,
         // A running job's settle wakes the session; a reminder would race it.
         openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
@@ -1761,15 +1757,9 @@ export class LocalAgentSession {
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
-    // One claimed effect; the sequence id is the parent's dedupe key, so a replay is recognised.
-    if (input.owedReport !== null && relay !== null) {
-      parts.parentReport = {
-        text: input.owedReport.content,
-        status: input.owedReport.status,
-        sequenceId: relay.sequenceId(input.messageId),
-        ...(input.owedReport.quiet === true && { quiet: true as const }),
-      };
-    }
+    // Decided once its answer committed, by its relay; the sequence id is the parent's dedupe key, so a replay is
+    // recognised.
+    if (input.turnEnd !== null && relay !== null) parts.turnReport = { ...input.turnEnd, sequenceId: relay.sequenceId(input.messageId) };
 
     const role: TerminalActor['role'] = root
       ? { kind: 'workspace', mission: missionOf(soulIn(this.rt.space)), event: input.event ?? null }
@@ -1854,7 +1844,16 @@ export class LocalAgentSession {
         },
         // As the workspace object runs main's.
         startEvolution: () => { this.actorSession.orchestrator.startEvolution(); },
-        ...(relay !== null && { sendReport: (report) => relay.send(report) }),
+        ...(relay !== null && {
+          report: async (turn) => {
+            const owed = await relay.owed(turn);
+
+            return owed === null ? 'none' : await relay.send({
+              text: owed.content, status: owed.status, mode: turn.mode, sequenceId: turn.sequenceId, ...(owed.quiet === true && { quiet: true as const }),
+            });
+          },
+          sendReport: (report) => relay.send(report),
+        }),
       }),
     };
   }
