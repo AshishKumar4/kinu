@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./durability/contracts": "./src/durability/contracts.ts",
     "./incidents": "./src/incidents.ts",
-    "./sizes": "./src/sizes.ts"
+    "./sizes": "./src/sizes.ts",
+    "./desktop": "./src/desktop.ts"
   },
   "//dependencies:@cloudflare/sandbox": "Exact: the container reports one SANDBOX_VERSION and the SDK checks it against the installed one, so a range would let an install pick the container (scripts/release-config.test.ts). Lifts when the SDK accepts a compatible range.",
   "dependencies": {

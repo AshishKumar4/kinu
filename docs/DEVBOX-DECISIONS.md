@@ -4632,6 +4632,36 @@ side, because a `ReadableStream` crosses Workers RPC only with byte chunks (work
 unchanged: the container contracts' exec row holds `exec`, `exec` under an id and `execStream` to the same bytes and
 exit code.
 
+D88. The desktop wears Kinu's look: a wallpaper painted at the screen's own size, and the panel, the windows' frames
+and the terminals in the same warm darks (2026-10-13). The owner: the desktop had no proper wallpaper, and it should be
+a clean desktop. D80's ground was one flat slate (`xsetroot -solid #3b4252`) under tint2's and Openbox's stock
+colours. Now `DESKTOP_START` writes four things and runs one more: tint2's panel in `DESKTOP_COLOURS` (a hairline along
+its top, the open window's task over the accent), an Openbox theme `Kinu` loaded from a copy of the stock `rc.xml`
+with only its theme's name changed, X resources that put every xterm on the ground, and a Python program that paints
+the root. The program speaks X11 over the server's socket with the standard library alone: the image carries
+`python3` and Chromium and no image tool (`hsetroot`, `feh`), and adding one means a new tools tarball (D78). It reads
+the root's size from the connection's setup, so it fills whatever geometry the server started at; paints the ground at
+once; asks Chromium, headless with a profile of its own, to draw the mark from the SVG the box's class passes
+(`desktopMark`; `KinuDevbox` passes core's `markDocument()`, so a new mark arrives with no copy); composes the ground's
+fall, the accent's glow from below the panel, ordered dither and the mark centred above the panel; and leaves it as
+the root's pixmap, kept by the server (`RetainPermanent`, `_XROOTPMAP_ID`). A root that already names a pixmap is left
+alone, so a later open repaints nothing, and the start no longer resets the root on each open. Chromium's warning
+about `--no-sandbox` is off by policy (`CommandLineFlagSecurityWarningsEnabled`), with no first-run page. Measured on
+staging `c6dc27da1`'s box, by hand, on two X servers started beside the real one: at 1280x768 and 1920x1080 the
+picture filled the screen exactly, the mark sat at the centre above a full-width panel, and the theme drew the
+frames. The container tier's desktop check reads the glow above the panel as well as the ground and the panel.
+
+D91. The computer answers to its workspace's name, not to "computer" (2026-10-13; reverses D83's fixed name). The
+owner, on `root@computer`: "something nice and sensible, workspace related (maybe workspace name?)". `KinuDevbox`
+reads the workspace's display name from the workspace itself at each `configureContainer`, through the same root agent
+its notices reach, and names the box with it as one DNS label (`workspaceHostLabel`): lowercase, each run of anything
+outside `[a-z0-9]` one hyphen, none at either end, at most 63 characters; the slug's label where the name is a
+placeholder, unread, or leaves nothing. "Storefront" is `root@storefront`, "Coupon fixes" `root@coupon-fixes`. The box
+keeps no copy of the name: a rename names it at its next start, or at the next `configureEgress`, which configures a
+running box again. A name that cannot be read is logged (`computer.name_unread`) and the slug names the box. D83's
+mechanism stands: the kernel's name, `/etc/hostname` and `/etc/hosts`, set at every start. The executor's label in the
+product and the prompt stays "computer".
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

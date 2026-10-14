@@ -210,7 +210,7 @@ describe('the Environment panel', () => {
         await page.waitForSelector('[data-env-card="workspace"]', SOON);
 
         expect(await page.$('[data-env-card="device"]')).toBeNull();
-        await (await required(page, 'body', 'button', 'Connect your PC')).click();
+        await (await required(page, 'body', 'button', 'Connect a PC')).click();
         await page.waitForSelector('[role="dialog"]', SOON);
         expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
       } finally { await page.close(); }

@@ -51,7 +51,7 @@ export function SidebarRail() {
 
   return (
     <aside
-      className={`relative hidden shrink-0 overflow-hidden p-sidebar-veil border-r p-border transition-[width] duration-[180ms] ease-out motion-reduce:transition-none md:block ${railOpen ? "w-60" : "w-14 cursor-pointer"}`}
+      className={`relative hidden shrink-0 overflow-hidden p-sidebar border-r p-border transition-[width] duration-[180ms] ease-out motion-reduce:transition-none md:block ${railOpen ? "w-60" : "w-14 cursor-pointer"}`}
       data-rail={railOpen ? "" : undefined}
       data-rail-collapsed={railOpen ? undefined : ""}
       onClick={railOpen ? undefined : onRailClick}

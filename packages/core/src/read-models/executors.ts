@@ -25,10 +25,6 @@ export function executorSortKey(name: string): number {
   return idx === -1 ? 99 : idx;
 }
 
-export function isExecutorActive(exec: ExecutorInfo): boolean {
-  return exec.active || exec.status === "active";
-}
-
 /** Explicit-target devices: the PC when connected, remote runtimes once active, never the workspace
  * (callers append it). */
 export function isActiveExecutionDevice(exec: ExecutorInfo): boolean {
@@ -36,7 +32,7 @@ export function isActiveExecutionDevice(exec: ExecutorInfo): boolean {
 
   if (exec.name === "device") return true;
 
-  return isExecutorActive(exec);
+  return exec.active || exec.status === "active";
 }
 
 /** Default executor: the sticky `last_active_executor` when still available, else a static priority
