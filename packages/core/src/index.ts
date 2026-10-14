@@ -186,7 +186,7 @@ export {
 
 export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
 
-export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
+export { WORKSPACE_TITLE_MAX, workspaceDisplayTitle, workspaceTitleDraft, workspaceTitleProblem } from './read-models/workspace-title';
 
 export { EvolutionEngine } from './evolution/engine';
 

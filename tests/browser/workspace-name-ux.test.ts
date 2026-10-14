@@ -124,10 +124,10 @@ describe('the workspace sidebar names a workspace and addresses it separately', 
 });
 
 describe('the workspace frame names an untitled workspace the same way', () => {
-  // The sidebar gate above cannot see the workspace bar: it is rendered by
-  // WorkspacePage from the agent snapshot's displayName, not the roster row,
-  // and a fix that only patched the list would leave the defect standing the
-  // moment a person opened the workspace itself.
+  // The sidebar gate above cannot see the workspace bar: WorkspacePage renders
+  // it from the same roster row through its own code, and a fix that only
+  // patched the list would leave the defect standing the moment a person
+  // opened the workspace itself.
   let headerText: string;
   let headerLabels: string[];
   let renamePlaceholder: string | null;

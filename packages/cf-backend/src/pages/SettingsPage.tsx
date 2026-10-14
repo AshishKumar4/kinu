@@ -11,8 +11,9 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
   type ApprovalGrant, type ArchiveCursor, type EvolutionConfigView, type GepaRunSummary,
-  type InstructionSourceRow, type InstructionSourceView, type SeekCursor,
+  type InstructionSourceRow, type InstructionSourceView, type SeekCursor, WORKSPACE_TITLE_MAX,
 } from "@kinu.run/core";
+import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
 import type { AgentStatus, WorkspaceNotice } from "@kinu.run/core";
@@ -134,10 +135,12 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
   );
 }
 
-/** `clearMain` asks the one Clear Main dialog the chat tab's × opens. */
-export function WorkspaceSettings({ workspace: agentId, title, logo, state, clearMain }: {
-  workspace: string; title: string; logo: string | null | undefined; state: SettingsSource; clearMain: () => void;
+/** `clearMain` asks the one Clear Main dialog the chat tab's × opens. `titleDraft` is the roster's title as an edit
+ *  starts from it, null until its row is read. */
+export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo, state, clearMain }: {
+  workspace: string; title: string; titleDraft: string | null; logo: string | null | undefined; state: SettingsSource; clearMain: () => void;
 }) {
+  const { rename } = useWorkspaceRoster();
   // Stable pieces only: `state` is a fresh object every render, and depending on it loops refetches that clobber edits.
   const { rpc, connectionStatus, status, error: snapshotError, retryLoad } = state;
 
@@ -150,18 +153,18 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Identity rides the workspace snapshot, so it hydrates or fails with it.
-  const { hydrate: hydrateDisplayName, fail: failDisplayName } = displayName;
+  // The title is the roster's; the soul rides the workspace snapshot, so it hydrates or fails with it.
+  const { hydrate: hydrateDisplayName } = displayName;
   const { hydrate: hydrateSoul, fail: failSoul } = soul;
+
   useEffect(() => {
-    if (status) {
-      hydrateDisplayName(status.displayName || "");
-      hydrateSoul(status.soul || "");
-    } else if (snapshotError) {
-      failDisplayName({ cause: snapshotError });
-      failSoul({ cause: snapshotError });
-    }
-  }, [status, snapshotError, hydrateDisplayName, hydrateSoul, failDisplayName, failSoul]);
+    if (titleDraft !== null) hydrateDisplayName(titleDraft);
+  }, [titleDraft, hydrateDisplayName]);
+
+  useEffect(() => {
+    if (status) hydrateSoul(status.soul || "");
+    else if (snapshotError) failSoul({ cause: snapshotError });
+  }, [status, snapshotError, hydrateSoul, failSoul]);
 
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
@@ -213,7 +216,13 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
       commits.push(() => field.markSaved(value));
     };
 
-    write(displayName, (name) => rpc("setDisplayName", [name]));
+    write(displayName, async (name) => {
+      const titled = await rpc("setDisplayName", [name]);
+
+      rename(agentId, titled.displayName);
+
+      return titled;
+    });
     write(soul, (text) => rpc("setSoul", [text]));
     write(approval, (mode) => rpc("setShellApprovalMode", [mode]));
     write(advisor, (config) => rpc("setEvolutionConfig", [config]));
@@ -232,7 +241,7 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
     }), showing(setErr)), Effect.sync(() => {
       setSaving(false);
     }));
-  })), [rpc, displayName, soul, approval, advisor]);
+  })), [rpc, rename, agentId, displayName, soul, approval, advisor]);
 
   if (connectionStatus !== "connected") {
     return (
@@ -272,7 +281,7 @@ export function WorkspaceSettings({ workspace: agentId, title, logo, state, clea
           <Field label="Display name">
             <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
               {(value) => (
-                <input value={value} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
+                <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
               )}
             </FieldState>
           </Field>

@@ -6068,10 +6068,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await stub.setWorkspaceLogo(caller, this.name, svg)).drawn;
   }
 
+  /** The owner's title for the workspace, trimmed; the owner's object refuses one `workspaceTitleProblem` names. */
   @callable() async setDisplayName(displayName: string) {
-    await this.propagateDisplayName(displayName, 'user');
+    const title = displayName.trim();
 
-    return { displayName };
+    await this.propagateDisplayName(title, 'user');
+
+    return { displayName: title };
   }
 
   async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) {

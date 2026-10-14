@@ -517,7 +517,8 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
 }) {
   const drawer = useLayoutDrawer();
   const agentsNav = useAgentsNav();
-  const logo = useWorkspaceRoster().entries.find((entry) => entry.name === workspace)?.logo;
+  const { entries, rename } = useWorkspaceRoster();
+  const logo = entries.find((entry) => entry.name === workspace)?.logo;
   const [removing, setRemoving] = useState(false);
   const working = agents.filter((agent) => !agent.tab && agent.activity === "working").length;
   const chats = agents.filter((agent) => agent.tab).map(actions);
@@ -528,7 +529,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
         workspace={{
           name: workspace,
           title, logo, to: `/workspace/${workspace}/overview`, editValue,
-          rename: async (name) => { await state.setDisplayName(name); }, remove: () => setRemoving(true),
+          rename: async (name) => { rename(workspace, (await state.rpc("setDisplayName", [name])).displayName); }, remove: () => setRemoving(true),
         }}
         chats={chats}
         active={openBarItem(view, shown)}
@@ -564,9 +565,13 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
   open: (agent: PanelAgent) => void;
   clearMain: () => void;
 }) {
-  const logo = useWorkspaceRoster().entries.find((entry) => entry.name === workspace)?.logo;
+  const entry = useWorkspaceRoster().entries.find((each) => each.name === workspace);
+  const logo = entry?.logo;
 
-  if (view === "settings") return <WorkspaceSettings workspace={workspace} title={title} logo={logo} state={state} clearMain={clearMain} />;
+  if (view === "settings") {
+    return <WorkspaceSettings workspace={workspace} title={title} titleDraft={entry === undefined ? null : workspaceTitleDraft(entry)}
+      logo={logo} state={state} clearMain={clearMain} />;
+  }
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
 
@@ -802,16 +807,15 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   if (!agentId) return null;
 
   const as = state.actorSnapshot;
-  const rosterTitle = workspaceEntries.find((entry) => entry.name === agentId)?.displayName;
-  // No fallback to `agentId`: it is the URL slug, not a title.
-  const statusTitle = as?.displayName;
-  const storedTitle = statusTitle === undefined || statusTitle === "" ? rosterTitle : statusTitle;
-  const shownTitle = workspaceDisplayTitle({ name: agentId, displayName: storedTitle });
+  // The roster holds the title; the visit (`touchWorkspace`) makes this workspace its newest row.
+  const rosterEntry = workspaceEntries.find((entry) => entry.name === agentId);
+  // Blank until the row is read: `agentId` is the URL slug, not a title, and "Untitled" would be a false one.
+  const shownTitle = rosterEntry === undefined ? "" : workspaceDisplayTitle(rosterEntry);
 
   // The delete dialog goes with the bar, so a chat deleted from its sidebar row while the page connects asks too.
   const bar = (
     <>
-      <WorkspaceBar workspace={agentId} title={shownTitle} editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
+      <WorkspaceBar workspace={agentId} title={shownTitle} editValue={rosterEntry === undefined ? "" : workspaceTitleDraft(rosterEntry)}
         state={state} agents={agentsPanel.list} shown={shownAgent} view={view} inspector={inspectorControl} actions={chatActions} />
       <DeleteChat chat={deletingChat} workspace={agentId} shown={subName} dismiss={state.dismissSubordinate} onClose={() => setDeletingChat(null)} />
     </>

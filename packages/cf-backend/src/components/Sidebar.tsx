@@ -12,7 +12,7 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle, ThemeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
-import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
+import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
 import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
@@ -64,9 +64,8 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    const name = draft.trim();
 
-    if (name !== '' && waiting === null) commit(name);
+    if (waiting === null) commit(draft);
   };
 
   const said = error ?? waiting?.text ?? null;
@@ -77,7 +76,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
         <input
           autoFocus
           value={draft}
-          maxLength={60}
+          maxLength={WORKSPACE_TITLE_MAX}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {

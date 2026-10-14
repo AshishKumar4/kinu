@@ -253,16 +253,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     if (data.type === "cf_agent_stream_resuming" || data.type === "cf_agent_stream_resume_none") {
       setProbeAnswered(true);
       answered.current.resolve();
-    } else if (data.type === "workspace_renamed") {
-      const displayName = data.displayName;
-
-      if (displayName?.trim()) {
-        setActorSnapshot((prev) => prev ? { ...prev, displayName } : prev);
-      }
-
-      window.dispatchEvent(new CustomEvent("kinu:workspace-renamed", {
-        detail: { name: actorAddress.workspace, displayName },
-      }));
     } else if (data.type === "provider_wait") {
       // Each wait in a chain replaces the one before.
       setProviderWait({
@@ -276,7 +266,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
       if (failed !== null) setFrameError(failed);
     }
-  }, [actorAddress.workspace, clearProviderWait]);
+  }, [clearProviderWait]);
 
   const {
     messages,
@@ -749,14 +739,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     }
   }, [rpc, setSourceError, actorArgs, actorSnapshot?.reasoningEffort]);
 
-  const setDisplayName = useCallback(async (displayName: string): Promise<string> => {
-    const result = await rpc("setDisplayName", [displayName]);
-    const saved = result.displayName;
-    setActorSnapshot((prev) => prev ? { ...prev, displayName: saved } : prev);
-
-    return saved;
-  }, [rpc]);
-
   const rereadPlan = useCallback(() => refreshCurrentLiveResource(
     "plan",
     () => rpc("getActivePlanReview", []),
@@ -794,7 +776,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       clearConversation: () => rpc("clearConversation", []),
       setModel,
       setReasoningEffort,
-      setDisplayName,
       modelFallbacks,
       /** Returned steers are removed by the server's broadcast, not by the surface. */
       steerRuns,

@@ -9,6 +9,7 @@ import {
   createTestUserDO, createdWorkspace, testOwner, type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { WORKSPACE_TITLE_MAX } from '@kinu.run/core';
 import { unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
 import { orchestratorHarness } from './helpers/actor-harness';
@@ -356,6 +357,22 @@ describe('root-cloud title authority', () => {
     // An explicit owner write still applies.
     await harness.userDO.setWorkspaceDisplayName(owner, 'ws', 'Renamed Again', 'user');
     expect(await harness.userDO.getWorkspaceTitle(owner, 'ws')).toMatchObject({ displayName: 'Renamed Again' });
+    harness.close();
+  });
+
+  test('a title is stored trimmed, and an empty or overlong one is refused, keeping the title it had', async () => {
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+
+    await harness.userDO.registerWorkspace(owner, 'ws');
+    await harness.userDO.setWorkspaceDisplayName(owner, 'ws', '  Release dashboard  ', 'user');
+    expect(await harness.userDO.getWorkspaceTitle(owner, 'ws')).toMatchObject({ displayName: 'Release dashboard' });
+
+    for (const refused of ['   ', 'x'.repeat(WORKSPACE_TITLE_MAX + 1)]) {
+      await expect(harness.userDO.setWorkspaceDisplayName(owner, 'ws', refused, 'user')).rejects.toMatchObject({ code: 'bad_input' });
+    }
+
+    expect(await harness.userDO.getWorkspaceTitle(owner, 'ws')).toMatchObject({ displayName: 'Release dashboard' });
     harness.close();
   });
 });
