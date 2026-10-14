@@ -81,7 +81,8 @@ import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
 import { requireCloudflareAccountId } from './infra-cloudflare';
-import { deployedConfig } from './infra-manifest';
+import { INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig } from './infra-manifest';
+import { type Reread, type TelemetryWindow, afterRereads, keepWindows, keptWindows } from './telemetry-windows';
 
 /** The account this queries and the default worker, read off the manifest this
  *  inspects rather than restated beside it: a second spelling of the id is how
@@ -120,10 +121,12 @@ interface Args {
   readonly to: number;
   readonly grep: string | null;
   readonly json: boolean;
+  /** `version` under a deploy: the environment whose kept windows it reads again and keeps its own beside. */
+  readonly keepWindows: InfraEnvironment | null;
 }
 
 const USAGE = 'usage: prod-logs.ts <live|query|timeline <name|do-id>|errors|wakes|version <version-id>> '
-  + '[--worker kinu] [--seconds 120] [--since 6h|7d|ISO] [--until ISO] [--grep text] [--json]';
+  + '[--worker kinu] [--seconds 120] [--since 6h|7d|ISO] [--until ISO] [--grep text] [--json] [--keep-windows staging]';
 
 function instant(raw: string, flag: string): number {
   const at = Date.parse(raw);
@@ -168,6 +171,7 @@ function parseArgs(argv: readonly string[]): Args {
     to,
     grep: opt('grep'),
     json: argv.includes('--json'),
+    keepWindows: opt('keep-windows') === null ? null : v.parse(v.picklist(INFRA_ENVIRONMENTS), opt('keep-windows')),
   };
 }
 
@@ -1243,13 +1247,18 @@ async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<Obje
 }
 
 /**
- * How long after a window's end every row of its events has landed. Measured on staging 2026-10-14, 03:15-04:34Z, a
- * fixed window's per-minute counts read every minute across deploy 7591e6fec's wave: of 58,950 rows that landed after
- * the first read, 98.4% were in the first read after their minute ended, 99.96% within 3 min and all but 2 within
- * 8.5 min, so within 9.5 min of their event; those 2 landed 37 to 41 min late, past any hold a deploy waits out, as
- * 2026-10-08's 22 to 151 min rows did (see `SETTLE_CAP_MS`). Ten minutes covers every other row.
+ * How long after a window's end a deploy waits before its read can settle: the lag within which 99.96% of rows land.
+ * Measured on staging 2026-10-14, 03:15-04:34Z, a fixed window's per-minute counts read every minute across deploy
+ * 7591e6fec's wave: of 58,950 rows that landed after the first read, 98.4% were in the first read after their minute
+ * ended, 99.96% within 3 min and all but 2 within 8.5 min; those 2 landed 37 to 41 min late, as 2026-10-08's 22 to 151
+ * min rows did (see `SETTLE_CAP_MS`). A row later than the hold is not lost: the deploy keeps its window, and every
+ * later deploy reads it again until it is `LATE_HORIZON_MS` old (telemetry-windows.ts), reporting what landed late.
  */
-export const SETTLE_HOLD_MS = 10 * MINUTE_MS;
+export const SETTLE_HOLD_MS = 3 * MINUTE_MS;
+
+/** The hold of a reader no later reader follows, as the durability canary's verdict is: the same measurement's lag
+ *  within which every row but the two stragglers landed, 9.5 min, which `SETTLE_HOLD_MS` would leave unread. */
+export const LANDED_HOLD_MS = 10 * MINUTE_MS;
 
 /** The grid settling reads are taken on, from the window's end, so a read's own time never delays the next. */
 export const SETTLE_POLL_MS = 2 * MINUTE_MS;
@@ -1260,7 +1269,8 @@ export const SETTLE_POLL_MS = 2 * MINUTE_MS;
  * landed 22-75 min after their events, which an hour of reads covers, and a 1.3 s invocation's `actor.startup`
  * (08:19:16Z) was absent from a read at 10:25Z and present at 10:50Z, 126-151 min late, which it does not. A deploy
  * waits an hour, not two and a half, so "settled" means the counts held still across one gap inside this hour, never
- * that every row has landed; a row later than that is the next report's.
+ * that every row has landed; a row later than that is a later deploy's, which reads the window again
+ * (telemetry-windows.ts).
  */
 export const SETTLE_CAP_MS = 60 * MINUTE_MS;
 
@@ -1331,12 +1341,60 @@ export async function settledRead<T>(at: {
   }
 }
 
+/** The windows earlier deploys kept, each read once more (telemetry-windows.ts). Begun before this deploy's own read
+ *  and awaited after it, so it adds no wait; a window it cannot read is its finding, and the window stays kept. */
+async function rereadKept(environment: InfraEnvironment): Promise<{ readonly bucket: string; readonly rereads: Reread[] } | { readonly failed: string }> {
+  try {
+    const { bucket, windows } = keptWindows(environment);
+    const token = await readToken();
+
+    const rereads = await Promise.all(windows.map(async (window): Promise<Reread> => {
+      try {
+        const t = new Telemetry(token, { worker: window.worker, from: Date.parse(window.from), to: Date.parse(window.to) });
+
+        return { window, found: versionFindings(await versionRead(t, window.version)) };
+      } catch (cause) {
+        return { window, failed: cause instanceof Error ? cause.message : String(cause) };
+      }
+    }));
+
+    return { bucket, rereads };
+  } catch (cause) {
+    return { failed: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
+/** What landed late in the kept windows, with this deploy's `current` window kept beside them for the deploys after. */
+async function keepBeside(rereading: ReturnType<typeof rereadKept>, current: TelemetryWindow): Promise<VersionFinding[]> {
+  const reread = await rereading;
+
+  if ('failed' in reread) {
+    return [{ what: 'the kept telemetry windows', finding: `the windows earlier deploys kept could not be read: ${reread.failed}; `
+      + 'none was read again, and this window is not kept, so a row that lands after this read is read by no deploy' }];
+  }
+
+  const { late, kept } = afterRereads(reread.rereads, Date.now());
+
+  try {
+    keepWindows(reread.bucket, [...kept, current]);
+  } catch (cause) {
+    return [...late, { what: 'the kept telemetry windows', finding: `this window could not be kept for later deploys to read again: `
+      + `${cause instanceof Error ? cause.message : String(cause)}` }];
+  }
+
+  return late;
+}
+
 /** `version`: its findings printed and, under a deploy, written into its report, once the window's counts hold still.
  *  A window that cannot be read is a finding of its own: a deploy cannot say what its version did; and neither can a
- *  window whose counts still moved when the reader stopped, which answers "unsettled" and names nothing in it. */
+ *  window whose counts still moved when the reader stopped, which answers "unsettled" and names nothing in it. With
+ *  `--keep-windows`, the windows earlier deploys kept are read again beside it, and what landed late in them is this
+ *  deploy's finding. */
 async function versionCommand(args: Args): Promise<number> {
   const subject = args.target ?? '';
+  const rereading = args.keepWindows === null ? undefined : rereadKept(args.keepWindows);
   let findings: VersionFinding[];
+  let settled: readonly VersionFinding[] | null = null;
   let sampling = 1;
   let terminal: TerminalEffectStates | undefined;
   let settledNote = '';
@@ -1357,6 +1415,7 @@ async function versionCommand(args: Args): Promise<number> {
     if (read.settled) {
       terminal = read.value.read.effects.terminal;
       findings = versionFindings(read.value.read);
+      settled = findings;
       settledNote = `settled: ${late}`;
     } else {
       findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: no two reads `
@@ -1365,6 +1424,12 @@ async function versionCommand(args: Args): Promise<number> {
     }
   } catch (cause) {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
+  }
+
+  if (rereading !== undefined) {
+    const current = { worker: args.worker, version: subject, from: iso(args.from), to: iso(args.to), findings: settled?.map((each) => each.finding) ?? null };
+
+    findings = [...findings, ...await keepBeside(rereading, current)];
   }
 
   const dir = process.env['KINU_DEPLOY_REPORT'] ?? '';

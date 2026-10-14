@@ -1276,6 +1276,11 @@ export function liveClasses(exports: DeployedConfig['exports']): readonly string
   return Object.entries(exports ?? {}).flatMap(([name, entry]) => (entry.state === 'deleted' ? [] : [name]));
 }
 
+/** The R2 bucket `config` binds as `binding`, or none. */
+export function bucketOf(config: DeployedConfig, binding: string): string | undefined {
+  return config.r2_buckets?.find((entry) => entry.binding === binding)?.bucket_name;
+}
+
 /** What wrangler.jsonc deploys for `environment`, read as Wrangler reads it. */
 export function deployedConfig(environment: InfraEnvironment, configPath = WRANGLER_CONFIG): DeployedConfig {
   return environmentConfig(parseJsonc(

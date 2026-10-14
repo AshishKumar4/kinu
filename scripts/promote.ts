@@ -31,7 +31,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { deployment, environmentArgs, why, wrangler } from './infra-cloudflare';
+import { deployment, environmentArgs, r2Text, why, wrangler } from './infra-cloudflare';
 import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
 import { type Reset, ResetSchema, latestReset } from './reset';
 import { DEFAULT_TRIALS } from '../evals/src/config';
@@ -463,14 +463,9 @@ function verified(bucket: string, sha: string): Verified {
 
 /** Production's history, oldest first: empty before the first promotion. */
 function promotions(bucket: string): Promotion[] {
-  const run = wrangler(['r2', 'object', 'get', `${bucket}/${HISTORY_KEY}`, '--pipe', '--remote'], { timeoutMs: 600_000 });
+  const text = r2Text(bucket, HISTORY_KEY);
 
-  if (run.ok) return v.parse(v.array(PromotionSchema), JSON.parse(run.stdout));
-
-  // wrangler's own words for an object that does not exist; any other failure is no answer at all.
-  if (`${run.stderr}\n${run.stdout}`.includes('The specified key does not exist.')) return [];
-
-  throw new Error(`wrangler r2 object get ${bucket}/${HISTORY_KEY} failed: ${why(run)}`);
+  return text === undefined ? [] : v.parse(v.array(PromotionSchema), JSON.parse(text));
 }
 
 /** Refused unless `origin` serves `sha` with this very signed stamp: a record or a history entry names what a
