@@ -6,13 +6,11 @@
 import * as v from 'valibot';
 
 /** A tmux session name the attach and the read can pass unquoted: tmux reads `.` and `:` as targets. */
-export const SESSION_ID = /^[a-z0-9][a-z0-9-]{0,31}$/u;
-
-export const SessionIdSchema = v.pipe(v.string(), v.regex(SESSION_ID));
+const SessionIdSchema = v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]{0,31}$/u));
 
 export const SessionNameSchema = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(40));
 
-export const SessionRecordSchema = v.object({ id: SessionIdSchema, name: SessionNameSchema, cwd: v.string() });
+const SessionRecordSchema = v.object({ id: SessionIdSchema, name: SessionNameSchema, cwd: v.string() });
 
 export type SessionRecord = v.InferOutput<typeof SessionRecordSchema>;
 
@@ -38,10 +36,10 @@ export interface TerminalSession extends SessionRecord {
 }
 
 /** A running session's state as the read finds it, before its record names it. */
-export type SessionState = Omit<TerminalSession, 'name' | 'open'>;
+type SessionState = Omit<TerminalSession, 'name' | 'open'>;
 
 /** Each running session's state, keyed by its id. */
-export type SessionsRead = ReadonlyMap<string, SessionState>;
+export type SessionsRead = ReadonlyMap<string, Omit<TerminalSession, 'name' | 'open'>>;
 
 /**
  * The read, one exec: each session's pane (`P`), each listening port under a session's shell (`L`), and the branch of
@@ -63,32 +61,49 @@ done`;
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'fish', 'dash']);
 
-/** The read's rows as each running session's state, keyed by id. */
+/** A pane: the session it is in, its folder, its foreground command, and its last command's exit, time and line. */
+const PaneRow = v.tuple([v.literal('P'), SessionIdSchema, v.string(), v.string(), v.string(), v.string(), v.string()]);
+
+const ListenerRow = v.tuple([v.literal('L'), SessionIdSchema, v.pipe(v.string(), v.toNumber(), v.integer(), v.minValue(1), v.maxValue(65_535))]);
+
+const BranchRow = v.tuple([v.literal('B'), v.string(), v.pipe(v.string(), v.minLength(1))]);
+
+const Mark = v.pipe(v.string(), v.minLength(1), v.toNumber(), v.integer());
+
+/** A pane's row as its session's state; the marks stay unset until its first numbered command. */
+function paneState([, id, cwd, command, exit, at, last]: v.InferOutput<typeof PaneRow>): SessionState & { ports: number[] } {
+  const ended = v.safeParse(v.tuple([Mark, Mark]), [exit, at]);
+
+  return {
+    id,
+    cwd,
+    running: SHELLS.has(command) ? null : command,
+    last: ended.success ? { exit: ended.output[0], at: ended.output[1] * 1000, command: last } : null,
+    ports: [],
+    branch: null,
+  };
+}
+
+/** The read's rows, one record a line, each validated by its kind's schema; a row no schema takes is no row. */
 export function parseSessionsRead(text: string): SessionsRead {
+  const rows = text.split('\n').map((line) => line.split('\t'));
   const sessions = new Map<string, SessionState & { ports: number[] }>();
   const branches = new Map<string, string>();
-  const listening: Array<[string, number]> = [];
 
-  for (const line of text.split('\n')) {
-    const [kind, ...fields] = line.split('\t');
+  for (const row of rows) {
+    const pane = v.safeParse(PaneRow, row);
 
-    if (kind === 'P') {
-      const [id = '', cwd = '', command = '', exit = '', at = '', last = ''] = fields;
+    if (pane.success) sessions.set(pane.output[1], paneState(pane.output));
+    const branch = v.safeParse(BranchRow, row);
 
-      if (!SESSION_ID.test(id)) continue;
-      const ended = exit === '' || at === '' ? null : { exit: Number(exit), at: Number(at) * 1000, command: last };
-      sessions.set(id, { id, cwd, running: SHELLS.has(command) ? null : command, last: ended, ports: [], branch: null });
-    }
-
-    if (kind === 'L' && fields[0] !== undefined) listening.push([fields[0], Number(fields[1])]);
-
-    if (kind === 'B' && fields[0] !== undefined && fields[1] !== undefined) branches.set(fields[0], fields[1]);
+    if (branch.success) branches.set(branch.output[1], branch.output[2]);
   }
 
-  for (const [id, port] of listening) {
-    const session = sessions.get(id);
+  for (const row of rows) {
+    const listener = v.safeParse(ListenerRow, row);
+    const session = listener.success ? sessions.get(listener.output[1]) : undefined;
 
-    if (session !== undefined && Number.isInteger(port) && !session.ports.includes(port)) session.ports.push(port);
+    if (listener.success && session !== undefined && !session.ports.includes(listener.output[2])) session.ports.push(listener.output[2]);
   }
 
   return new Map([...sessions].map(([id, session]) => [id, { ...session, branch: branches.get(session.cwd) ?? null }]));

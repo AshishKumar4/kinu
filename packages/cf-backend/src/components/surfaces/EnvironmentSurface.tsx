@@ -25,11 +25,12 @@ import { Loader } from "@cloudflare/kumo";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ComputerSize, useComputerSize, type ComputerSizeState } from "@/components/SandboxSize";
-import { detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import type { TerminalSession } from "@kinu.run/devbox";
 import { DesktopScreen } from "./DesktopScreen";
 import {
-  ONE_SHELL, SessionDetails, SessionTabs, opening, sessionTone, since, useComputerSessions, type ComputerSessions, type SessionTone,
+  NewSessionRow, ONE_SHELL, SessionDetails, SessionTabs, openSession, sessionTone, since, useComputerSessions, type ComputerSessions,
+  type SessionTone,
 } from "./EnvironmentSessions";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
@@ -307,12 +308,7 @@ function SessionRail({ environments, execByName, sessions, selected, shown, pcOf
                 current={current(session.id)} onChoose={() => shown.choose(m.name, session.id)} />
             ))}
             {computer && m.live && <RailRow icon name="Desktop" detail={null} ports={[]} current={current("desktop")} onChoose={() => shown.choose(m.name, "desktop")} />}
-            {computer && m.live && (
-              <button type="button" onClick={() => opening(sessions, (id) => shown.choose("computer", id))}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 p-meta p-text-3 hover:bg-[var(--c-neutral-tint)] hover:p-text">
-                <PlusIcon size={12} aria-hidden />New session
-              </button>
-            )}
+            {computer && m.live && <NewSessionRow onOpen={() => openSession(sessions, (id) => shown.choose("computer", id))} />}
           </section>
         );
       })}
@@ -450,9 +446,9 @@ function EnvironmentView({ mount, exec, name, workspace, restartingTo, executorO
   const tabs = wide ? null : (
     <SessionTabs label={`${name} sessions`} sessions={sessions?.sessions ?? null} current={tab} desktop={desktop !== null}
       onChoose={(id) => shown.choose(mount.name, id)} onDesktop={() => shown.choose(mount.name, "desktop")}
-      onOpen={sessions === null ? null : () => opening(sessions, (id) => shown.choose(mount.name, id))}
-      onRename={(id, next) => { if (sessions !== null) detach(sessions.rename(id, next)); }}
-      onClose={(id) => { if (sessions !== null) detach(sessions.close(id)); }} />
+      onOpen={sessions === null ? null : () => openSession(sessions, (id) => shown.choose(mount.name, id))}
+      onRename={(id, next) => sessions?.rename(id, next) ?? Effect.void}
+      onClose={(id) => sessions?.close(id) ?? Effect.void} />
   );
 
   if (restartingTo !== null) return <>{tabs}<div className="p-terminal-ground flex min-h-0 flex-1 flex-col"><Restarting to={restartingTo === "" ? null : restartingTo} /></div></>;

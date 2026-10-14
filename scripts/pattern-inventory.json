@@ -554,6 +554,13 @@
       "decision": "xml"
     },
     {
+      "file": "packages/devbox/src/sessions.ts",
+      "kind": "hand-parser",
+      "owner": "parseSessionsRead",
+      "sourceSha256": "7d1eb42f7cdd929901c3972d0b1f3bf5f9fe09a2154d070d3a5634ae3eb75888",
+      "decision": "framing"
+    },
+    {
       "file": "packages/devbox/tests/store-gateway.test.ts",
       "kind": "regex-literal",
       "owner": "uploadId",

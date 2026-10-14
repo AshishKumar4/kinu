@@ -69,24 +69,26 @@ export function useComputerSessions(rpc: Rpc, watching: boolean): ComputerSessio
     Effect.catch((cause) => Effect.sync(() => { if (live.current) setFailure(renderThrownChain({ cause })); })),
   ), [rpc]);
 
+  // Only a page someone can see reads.
+  const readSeen = useCallback(() => Effect.suspend(() => (document.visibilityState === "visible" ? read() : Effect.void)), [read]);
+
   useEffect(() => {
     live.current = true;
 
     if (!watching) return () => { live.current = false; };
 
-    const tick = () => { if (document.visibilityState === "visible") detach(read()); };
+    const stop = new AbortController();
+    const timer = setInterval(() => detach(readSeen()), SESSIONS_EVERY_MS);
 
-    const timer = setInterval(tick, SESSIONS_EVERY_MS);
-
-    tick();
-    document.addEventListener("visibilitychange", tick);
+    detach(readSeen());
+    document.addEventListener("visibilitychange", () => detach(readSeen()), { signal: stop.signal });
 
     return () => {
       live.current = false;
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", tick);
+      stop.abort();
     };
-  }, [watching, read]);
+  }, [watching, readSeen]);
 
   const call = <T,>(doing: string, method: string, args: unknown[]) => attempt({ doing, otherwise: "io" }, () => rpc<T>(method, args)).pipe(
     Effect.tap(() => read()),
@@ -126,9 +128,9 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
   desktop: boolean;
   onChoose: (id: string) => void;
   onDesktop: () => void;
-  onOpen: (() => void) | null;
-  onRename: (id: string, name: string) => void;
-  onClose: (id: string) => void;
+  onOpen: (() => Effect.Effect<void>) | null;
+  onRename: (id: string, name: string) => Effect.Effect<void>;
+  onClose: (id: string) => Effect.Effect<void>;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
 
@@ -145,7 +147,7 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
 
           return renaming === session.id ? (
             <input key={session.id} autoFocus defaultValue={session.name} aria-label={`Rename ${session.name}`} maxLength={40}
-              className="p-session-rename" onBlur={(event) => { setRenaming(null); onRename(session.id, event.currentTarget.value); }}
+              className="p-session-rename" onBlur={(event) => { setRenaming(null); detach(onRename(session.id, event.currentTarget.value)); }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") event.currentTarget.blur();
 
@@ -160,7 +162,7 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
               </button>
               {sessions.length > 1 && (
                 <button type="button" aria-label={`Close ${session.name}`} title={`Close ${session.name}: its shell ends`} className="p-session-close"
-                  onClick={() => onClose(session.id)}><XIcon size={10} weight="bold" /></button>
+                  onClick={() => detach(onClose(session.id))}><XIcon size={10} weight="bold" /></button>
               )}
             </span>
           );
@@ -172,7 +174,7 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
         )}
       </div>
       {onOpen !== null && (
-        <button type="button" aria-label="New session" title="New session" className="p-bar-icon mb-1 shrink-0" onClick={onOpen}>
+        <button type="button" aria-label="New session" title="New session" className="p-bar-icon mb-1 shrink-0" onClick={() => detach(onOpen())}>
           <PlusIcon size={14} />
         </button>
       )}
@@ -200,6 +202,16 @@ export function SessionDetails({ session, name }: { session: TerminalSession | n
 }
 
 /** Opens a session, then shows it; a refusal stays with the hook's failure. */
-export function opening(sessions: ComputerSessions, show: (id: string) => void): void {
-  detach(sessions.open().pipe(Effect.map((record) => { if (record !== null) show(record.id); })));
+export function openSession(sessions: ComputerSessions, show: (id: string) => void): Effect.Effect<void> {
+  return sessions.open().pipe(Effect.map((record) => { if (record !== null) show(record.id); }));
+}
+
+/** The wide column's new session, under the computer's sessions. */
+export function NewSessionRow({ onOpen }: { onOpen: () => Effect.Effect<void> }) {
+  return (
+    <button type="button" onClick={() => detach(onOpen())}
+      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 p-meta p-text-3 hover:bg-[var(--c-neutral-tint)] hover:p-text">
+      <PlusIcon size={12} aria-hidden />New session
+    </button>
+  );
 }
