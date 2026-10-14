@@ -1,26 +1,23 @@
-import { AskedQuestionsContext, askedBy } from "@/components/QuestionCard";
+import { askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
-import { Fragment, createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
+import { createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
 import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, GearIcon, ListIcon, UsersThreeIcon,
-  WarningCircleIcon, PaperclipIcon,
+  WarningCircleIcon,
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  desktopClientUrl, executorLabel, isPlaceholderMission, ownerAsks, planSurface,
+  desktopClientUrl, executorLabel, ownerAsks, planSurface,
 } from "@kinu.run/core";
 import type { OwedOwnerIntent, PlanReview, Rpc, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
-import type { WorkspaceNotice } from "@kinu.run/core";
-import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
-import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
@@ -30,18 +27,17 @@ import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { ConnectedModelPicker } from "@/components/ModelPicker";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
 import { TurnRevert } from "@/components/RevertTurnDialog";
-import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
+import { DeviceOfflineRow, HelperChatBase } from "@/components/MessageView";
+import { ChatColumn, EmptyConversation } from "@/components/ChatColumn";
 import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
 import { AttentionStack, type AttentionStackProps } from "@/components/AttentionStack";
 import { ChatImageContext } from "@/components/ChatImages";
-import { foldEventTurns, placeEvents, subordinateEventRow, type PlacedEvent } from "@/components/ChatEvents";
+import { placeEvents, subordinateEventRow, type PlacedEvent } from "@/components/ChatEvents";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
-import { classifyProgrammaticTurn, liveTailRow, messageSignalId, messagesUpTo, threadLiveTail, turnFailure, turnFailureFacts, turnRows } from "@kinu.run/core";
+import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { DesktopScreen } from "@/components/surfaces/DesktopScreen";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -50,7 +46,6 @@ import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { FileLinkContext } from "@/components/surfaces/shared";
-import { TranscriptViewport } from "@/components/TranscriptViewport";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
 import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
@@ -60,7 +55,6 @@ import { NewChatView } from "@/components/workspaces/NewChatView";
 import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
 import { WorkspaceSettings } from "@/pages/SettingsPage";
 import { useLayoutDrawer } from "@/components/layout";
-import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
@@ -68,102 +62,6 @@ import { useCarriedAttachments, useOpeningMessage } from "@/components/workspace
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
-export function EmptyConversation({ mission }: { mission: string }) {
-  const brief = isPlaceholderMission(mission) ? null : mission.trim();
-
-  return (
-    <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-      <KinuMark size={34} className="mb-4 text-[var(--c-accent)] opacity-70" />
-      {brief && (
-        <>
-          <p className="p-eyebrow">Mission</p>
-          <p className="mt-2 max-w-md whitespace-pre-wrap p-heading p-title p-text-2">{brief}</p>
-        </>
-      )}
-      <p className="mt-4 text-sm p-text-3">Send the first message to start.</p>
-    </div>
-  );
-}
-
-/** Fixed widths: a skeleton that reflows on every render is a second animation. */
-const SKELETON_ROWS: readonly { mine: boolean; width: string }[] = [
-  { mine: true, width: "38%" },
-  { mine: false, width: "82%" },
-  { mine: false, width: "64%" },
-  { mine: true, width: "46%" },
-  { mine: false, width: "74%" },
-];
-
-/** Shown between connect and transcript arrival, where EmptyConversation would falsely
- *  claim an empty chat. Transcript-shaped so messages land where the bars already are. */
-export function ConversationSkeleton() {
-  return (
-    <div className="space-y-5" role="status" aria-busy="true" data-testid="conversation-skeleton">
-      <span className="sr-only">Loading this conversation…</span>
-      {SKELETON_ROWS.map((row, index) => (
-        <div key={index} className={`flex ${row.mine ? "justify-end" : "justify-start"}`} aria-hidden>
-          <div className="max-w-[82%] space-y-2" style={{ width: row.width }}>
-            <div className="p-skeleton-bar h-3.5 rounded-md" />
-            <div className="p-skeleton-bar h-3.5 w-[70%] rounded-md" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * What the prompt box says about how the last turn ended: the newest answer's recorded failure until it is dismissed,
- * an answer stream's error no answer recorded, and a retry on its way. Retry runs the failed turn again from its
- * message instead of appending a duplicate. A `refused` stream error is the runtime refusing this tab, in its own
- * words, which no turn caused and no retry of one answers.
- */
-export function turnEndNotices(at: {
-  readonly newest: UIMessage | undefined;
-  readonly live: boolean;
-  readonly retryOwed: boolean;
-  readonly dismissed: string | null;
-  readonly chatError: { readonly body: string; readonly refused: boolean } | null;
-  readonly retry: () => void;
-  readonly dismiss: (messageId: string) => void;
-  readonly clearChatError: () => void;
-}): ComposerNotice[] {
-  const notices: ComposerNotice[] = [];
-  const retry = { label: "Retry", icon: <ArrowsClockwiseIcon size={12} />, onClick: at.retry, disabled: at.live || at.retryOwed };
-  const failure = at.newest === undefined || at.live ? null : turnFailure({ metadata: at.newest.metadata });
-
-  if (failure !== null && at.newest !== undefined && at.dismissed !== at.newest.id) {
-    const { provider, words, facts, raw } = turnFailureFacts(failure);
-    const id = at.newest.id;
-    const stopped = provider === null ? "This turn stopped before its answer was done" : `${provider} refused the model call, so this turn stopped`;
-
-    notices.push({
-      id: "turn-failure", tone: "danger", ...(provider !== null && { title: provider }), text: words,
-      detail: { summary: `${stopped}. Retry runs it again from your message.`, facts, raw },
-      action: retry, onDismiss: () => at.dismiss(id), hooks: { "data-turn-failure-notice": "" },
-    });
-  }
-
-  if (at.chatError?.refused === true) {
-    notices.push({
-      id: "chat-error-refused", tone: "neutral", text: `This tab couldn't reconnect: ${at.chatError.body}`,
-      onDismiss: at.clearChatError, hooks: { "data-chat-error": "refused" },
-    });
-  } else if (at.chatError !== null) {
-    const { provider, words, facts, raw } = turnFailureFacts(at.chatError.body);
-
-    notices.push({
-      id: "chat-error", tone: "danger", ...(provider !== null && { title: provider }), text: words,
-      detail: { summary: "The answer stopped streaming, and this turn produced no answer. Retry runs it again from your message.", facts, raw },
-      action: retry, onDismiss: at.clearChatError, hooks: { "data-chat-error": "live" },
-    });
-  }
-
-  if (at.retryOwed) notices.push({ id: "retry-owed", tone: "progress", text: "Retry is on its way. The agent runs it when it next wakes." });
-
-  return notices;
-}
-
 interface TerminalCloseState {
   readonly code: number;
   readonly reason: string;
@@ -533,7 +431,7 @@ function AgentChatColumn({ workspace, subName, subordinates, rpc, ids, input }: 
 /** One subordinate's chat over its own facet socket; Work Surface and Timeline stay on
  *  the parent socket. The facet exposes no fork/feedback/takes/restore. */
 function SubordinateChatColumn({
-  workspace, subName, title, input: takesInput,
+  workspace, subName, title, input,
 }: {
   workspace: string;
   subName: string;
@@ -541,21 +439,14 @@ function SubordinateChatColumn({
   input: boolean;
 }) {
   const state = useActorChat({ workspace, subordinate: subName });
-  const live = state.liveness.kind === "live";
-  const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
+  const pane = `${workspace}/agents/${subName}`;
+  const ui = useConversationUiState(pane);
 
-  // No model write from an agent pane: only the workspace pin is honoured, and the
-  // snapshot carries the actor's effective model, rendered read-only.
-
-  const ui = useConversationUiState(`${workspace}/agents/${subName}`);
-  const input = ui.draft;
-  const setInput = ui.setDraft;
   usePlanApprovedMode(state.activePlan, ui.setMode);
+
   const showPlanWindow = useContext(AgentPlanWindowContext);
   const attention = useContext(AttentionContext);
   const retryOwed = state.paneActorId !== null && retryIsOwed(attention?.stack.owedIntents ?? [], state.paneActorId, state.messages);
-  // The answer whose failure notice was dismissed: its line in the thread keeps the Retry.
-  const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);
 
   useEffect(() => { showPlanWindow({ plan: state.activePlan, rpc: state.rpc }); }, [showPlanWindow, state.activePlan, state.rpc]);
   useEffect(() => () => { showPlanWindow(null); }, [showPlanWindow]);
@@ -571,21 +462,6 @@ function SubordinateChatColumn({
   const questions = attention?.reads.questions;
   const asked = useMemo(() => (state.paneActorId === null ? [] : askedBy(questions ?? [], state.paneActorId)), [questions, state.paneActorId]);
 
-  const { thread } = chat;
-  const repeats = useMemo(() => foldEventTurns(thread.entries.map(({ message }) => message)), [thread.entries]);
-
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  useAutogrow(inputRef, input);
-
-  const { notice: steerNotice, send, stop } = useSteerActions({
-    sendChat: (text, files) => state.sendChat(text, [...files], ui.mode),
-    abortChat: state.abortChat,
-    draft: input,
-    setDraft: ui.updateDraft,
-    steerRuns: state.steerRuns,
-  });
-
   useOpeningMessage(state.connectionStatus === "connected", (text, files) => { state.sendChat(text, [...files], ui.mode); });
 
   if (state.terminalClose && !state.agentStatus) {
@@ -600,76 +476,21 @@ function SubordinateChatColumn({
     );
   }
 
-  const as = state.agentStatus;
-
-  // An admitted turn with the operator's message last has no assistant row to ask, so the
-  // live indicator is decided here. See `threadLiveTail`.
-  const tail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
-  const liveRow = liveTailRow({ rows: thread.entries.map(({ message }) => message), liveness: state.liveness });
+  const live = state.liveness.kind === "live";
 
   return (
-    <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
-      <ErrorBoundary label="Agent chat">
-        <AskedQuestionsContext.Provider value={asked}>
-        <TranscriptViewport chat={chat} live={live} padClass="pt-5 pb-12"
-          scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
-          pending={<ConversationSkeleton />}
-          empty={
-            <div className="flex h-full flex-col items-center justify-center text-center">
-              <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
-              <p className="text-sm p-text-3">This agent's conversation starts here.</p>
-            </div>
-          }
-          rows={(before) => thread.entries.map(({ message: msg, steers }, i) => (
-            <Fragment key={msg.id}>
-              {before(msg.id)}
-              {repeats[i] !== 0 && <MessageView message={msg} steers={steers} answerSlates={answerChat} liveTail={msg.id === liveRow ? tail : null}
-                repeats={repeats[i]}
-                onRetry={i === thread.entries.length - 1 && !live && !retryOwed && dismissedFailure === msg.id ? state.retryLastMessage : undefined} />}
-            </Fragment>
-          ))}>
-          <ChatLiveTail tail={tail} />
-          {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
-        </TranscriptViewport>
-        </AskedQuestionsContext.Provider>
-      </ErrorBoundary>
-
-      {!takesInput && <ViewOnlyBar running={live} onStop={stop} />}
-      {takesInput && <div className="p-composer-dock">
-        <Composer
-          textareaRef={inputRef}
-          value={input}
-          onValueChange={setInput}
-          onSend={send}
-          placeholder={live
-            ? `Steer ${title}…`
-            : `Message ${title}…`}
-          disabled={state.connectionStatus !== "connected"}
-          liveness={state.liveness}
-          onRecover={state.recoverTurn}
-          onStop={stop}
-          attention={attention !== null && state.paneActorId !== null
-            ? <AttentionStack asks={ownerAsks(attention.reads, { raisedBy: state.paneActorId })} {...attention.stack} />
-            : undefined}
-          mode={{ value: ui.mode, onChange: ui.setMode }}
-          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={(...args: Parameters<typeof state.setModel>) => detach(Effect.promise(async () => state.setModel(...args)))} size="xs"
-            effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
-          notices={[
-            ...(loadNotices(state.error, state.retryLoad)),
-            ...(state.newerDeployedBuild ? [{
-              id: "version", tone: "info" as const,
-              text: "A new version is ready. Reload this tab to use it.",
-              action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
-            }] : []),
-            ...turnEndNotices({
-              newest: thread.entries.at(-1)?.message, live, retryOwed, dismissed: dismissedFailure, chatError: state.chatError,
-              retry: state.retryLastMessage, dismiss: setDismissedFailure, clearChatError: state.clearChatError,
-            }),
-            ...(steerNotice ? [steerNotice] : []),
-          ]}
-        />
-      </div>}
-    </div>
+    <ChatColumn pane={pane} label="Agent chat" state={state} ui={ui} chat={chat} retryOwed={retryOwed} input={input}
+      placeholder={live ? `Steer ${title}…` : `Message ${title}…`}
+      attention={attention !== null && state.paneActorId !== null
+        ? <AttentionStack asks={ownerAsks(attention.reads, { raisedBy: state.paneActorId })} {...attention.stack} />
+        : undefined}
+      empty={
+        <div className="flex h-full flex-col items-center justify-center text-center">
+          <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
+          <p className="text-sm p-text-3">This agent's conversation starts here.</p>
+        </div>
+      }
+      asked={asked} answerSlates={answerChat} layout={{ startFirst: false, padClass: "pt-5 pb-12" }} />
   );
 }
 
@@ -682,20 +503,6 @@ const SIDE_SOURCES = [
 ] as const;
 
 type SideSource = (typeof SIDE_SOURCES)[number]["source"];
-
-function loadNotices(error: WorkspaceNotice | null, onRetry: () => void): ComposerNotice[] {
-  if (error === null) return [];
-  const notice = workspaceLoadNotice(error, onRetry);
-
-  if (error.retry !== null) {
-    notice.action = {
-      label: error.retry, icon: <ArrowsClockwiseIcon size={11} />, onClick: onRetry,
-    };
-  }
-
-  return [notice];
-}
-
 
 type WorkspaceState = ReturnType<typeof useKinu>;
 
@@ -823,16 +630,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const view = useMatch(WORKSPACE_VIEW)?.params.view;
   const [inspectorControl, setInspectorControl] = useState<InspectorControl | null>(null);
 
-  // `setModel` records failure on `state.error` and rolls the picker back itself.
-  const setModel = state.setModel;
-
-  const onPickModel = useCallback(async (spec: string): Promise<void> => {
-    await setModel(spec);
-  }, [setModel]);
-
   const [sideErrors, setSideErrors] = useState<Partial<Record<SideSource, string>>>({});
-
-  const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
   const reportSide = useCallback((source: SideSource, message: string | null) => {
     setSideErrors((prev) => {
@@ -897,11 +695,12 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     decideMemory: decideAccountProposal,
   }), [workspaceRpc, state.owedIntents, resolveConsent, refreshPendingActions, show, decideAccountProposal]);
 
-  const ui = useConversationUiState(`${agentId ?? ""}/main`);
-  const setChatMode = ui.setMode;
-  usePlanApprovedMode(subName === undefined ? state.activePlan : null, setChatMode);
+  const mainPane = `${agentId ?? ""}/main`;
+  const ui = useConversationUiState(mainPane);
+
+  usePlanApprovedMode(subName === undefined ? state.activePlan : null, ui.setMode);
+
   const chatInput = ui.draft;
-  const setChatInput = ui.setDraft;
   const [forkFor, setForkFor] = useState<string | null>(null);
 
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
@@ -912,17 +711,12 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
 
   const { history, thread, positions, transcript } = chat;
   const retryOwed = retryIsOwed(state.owedIntents, null, state.messages);
-  // The answer whose failure notice was dismissed: its line in the thread keeps the Retry.
-  const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);
 
-  const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // The hook spends the per-message aggregate cap (one DO row, see core/cloud-wire) inside its
   // reducer, so concurrent additions cannot reserve the same remaining capacity.
   const attachments = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
   useCarriedAttachments(attachments.offer);
-  const { dragOver, handlers: chatDrop } = useFileDrop(attachments.add);
-
-  useAutogrow(chatInputRef, chatInput);
+  const chatDrop = useFileDrop(attachments.add);
 
   // A visit the roster does not take is a gone workspace; asked again when the socket drops.
   const dropped = state.connectionStatus === "disconnected";
@@ -953,15 +747,6 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
       else setBranchNotice(result.reason ?? "Branching is unavailable right now.");
     }), showing(setBranchNotice))));
   }, [chatInput, ui.mode, live, state]);
-
-  const { notice: steerNotice, send: handleSend, stop: handleStop } = useSteerActions({
-    sendChat: (text, files) => state.sendChat(text, [...files], ui.mode),
-    abortChat: state.abortChat,
-    draft: chatInput,
-    setDraft: ui.updateDraft,
-    attachments: { parts: attachments.parts, clear: attachments.clear },
-    steerRuns: state.steerRuns,
-  });
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
@@ -1003,11 +788,6 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
 
   const threadMessages = useMemo(() => thread.entries.map(({ message }) => message), [thread.entries]);
   const placed = useMemo(() => placeEvents(threadMessages, looseEvents), [threadMessages, looseEvents]);
-  const repeats = useMemo(() => foldEventTurns(threadMessages), [threadMessages]);
-
-  const mainTail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
-  const mainLiveRow = liveTailRow({ rows: threadMessages, liveness: state.liveness });
-  const providerWait = useProviderWaitNotice(state.providerWait);
 
   // A turn being reverted, and what the revert said once done.
   const [revertFor, setRevertFor] = useState<string | null>(null);
@@ -1098,103 +878,50 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                 </AttentionContext.Provider>
               </AgentPlanWindowContext.Provider>
             ) : (
-            <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
-              {...chatDrop}>
-            {dragOver && (
-              <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
-                style={{ borderColor: "var(--c-accent)", background: "var(--c-accent-subtle)" }}>
-                <div className="flex items-center gap-2 text-sm p-text px-3 py-1.5 rounded-lg p-elevated border p-border">
-                  <PaperclipIcon size={16} className="p-accent" />Drop files to attach
-                </div>
-              </div>
-            )}
-            <ErrorBoundary label="Chat">
-            <AskedQuestionsContext.Provider value={asked}>
-            <TranscriptViewport chat={chat} live={live} startFirst padClass="pt-7 pb-12"
-              scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
-              pending={<ConversationSkeleton />}
+            <ChatColumn pane={mainPane} label="Chat" state={state} ui={ui} chat={chat} retryOwed={retryOwed} input
+              placeholder={live ? "Steer the running turn…" : "Send a message..."}
+              attention={<AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />}
               empty={<EmptyConversation mission={as?.purpose ?? ""} />}
-              rows={(before) => thread.entries.map(({ message: msg, steers }, i) => {
-                const takes = takesByTurn[msg.id];
-                const signalId = messageSignalId({ metadata: msg.metadata });
+              asked={asked} answerSlates={WORKSPACE_CHAT} layout={{ startFirst: true, padClass: "pt-7 pb-12" }}
+              extras={{
+                before: (i) => placed.before.get(i),
+                row: (msg, i) => {
+                  const takes = takesByTurn[msg.id];
+                  const signalId = messageSignalId({ metadata: msg.metadata });
 
-                return (
-                  <Fragment key={msg.id}>
-                    {before(msg.id)}
-                    {placed.before.get(i)}
-                    {repeats[i] !== 0 && <MessageView
-                      message={msg}
-                      repeats={repeats[i]}
-                      steers={steers}
-                      splices={i === thread.entries.length - 1 ? liveSplices : undefined}
-                      answerSlates={WORKSPACE_CHAT}
-                      liveTail={msg.id === mainLiveRow ? mainTail : null}
-                      onRetry={i === thread.entries.length - 1 && !live && !retryOwed && dismissedFailure === msg.id ? state.retryLastMessage : undefined}
-                      onFork={onForkMessage}
-                      onFeedback={onMessageFeedback}
-                      feedback={feedbackByMessage[msg.id] ?? null}
-                      onRevert={setRevertFor}
-                      takesChip={hasComparableTakes(takes)
-                        ? <TakesChip set={takes} onPick={onPickTake} />
-                        : undefined}
-                      signalState={signalId === null ? undefined : cardStates.get(signalId)}
-                      onOpenChangeNote={openChangeNote}
-                    />}
-                  </Fragment>
-                );
-              })}>
-              <ChatLiveTail tail={mainTail} />
-              {placed.after}
-              {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
-              {state.branchRuns.map((run) => (
-                <BranchRunChip
-                  key={run.branchId}
-                  run={run}
-                  takes={run.turnId ? takesByTurn[run.turnId] : undefined}
-                  rpc={state.rpc}
-                  headActivity={state.headActivity}
-                  headDeltas={state.headDeltas}
-                  onPick={onPickTake}
-                  onDismiss={() => state.dismissBranchRun(run.branchId)}
-                />
-              ))}
-              <ModelFallbackRows notices={state.modelFallbacks} />
-              <DeviceOfflineRow devices={state.unavailableDevices} />
-            </TranscriptViewport>
-            </AskedQuestionsContext.Provider>
-            </ErrorBoundary>
-
-            <div className="p-composer-dock">
-              <Composer
-                textareaRef={chatInputRef}
-                value={chatInput}
-                onValueChange={setChatInput}
-                onSend={handleSend}
-                placeholder={live ? "Steer the running turn…" : "Send a message..."}
-                disabled={state.connectionStatus !== "connected"}
-                liveness={state.liveness}
-                onRecover={state.recoverTurn}
-                onStop={handleStop}
-                onBranch={handleBranch}
-                attention={(
-                  <AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />
-                )}
-                mode={{ value: ui.mode, onChange: setChatMode }}
-                attachments={{
-                  parts: [...attachments.parts],
-                  onAdd: attachments.add,
-                  onRemove: attachments.remove,
-                }}
-                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={(...args: Parameters<typeof onPickModel>) => detach(Effect.promise(async () => onPickModel(...args)))} size="xs"
-                  effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
-                notices={[
-                  ...(loadNotices(state.error, state.retryLoad)),
-                  ...(state.newerDeployedBuild ? [{
-                    id: "version", tone: "info" as const,
-                    text: "A new version is ready. Reload this tab to use it.",
-                    action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
-                  }] : []),
-                  ...(attachments.refusal ? [{ id: "attach", tone: "warning" as const, text: attachments.refusal }] : []),
+                  return {
+                    splices: i === thread.entries.length - 1 ? liveSplices : undefined,
+                    onFork: onForkMessage,
+                    onFeedback: onMessageFeedback,
+                    feedback: feedbackByMessage[msg.id] ?? null,
+                    onRevert: setRevertFor,
+                    takesChip: hasComparableTakes(takes) ? <TakesChip set={takes} onPick={onPickTake} /> : undefined,
+                    signalState: signalId === null ? undefined : cardStates.get(signalId),
+                    onOpenChangeNote: openChangeNote,
+                  };
+                },
+                afterTail: placed.after,
+                trailing: (
+                  <>
+                    {state.branchRuns.map((run) => (
+                      <BranchRunChip
+                        key={run.branchId}
+                        run={run}
+                        takes={run.turnId ? takesByTurn[run.turnId] : undefined}
+                        rpc={state.rpc}
+                        headActivity={state.headActivity}
+                        headDeltas={state.headDeltas}
+                        onPick={onPickTake}
+                        onDismiss={() => state.dismissBranchRun(run.branchId)}
+                      />
+                    ))}
+                    <DeviceOfflineRow devices={state.unavailableDevices} />
+                  </>
+                ),
+                attachments,
+                drop: chatDrop,
+                onBranch: handleBranch,
+                notices: [
                   ...SIDE_SOURCES.flatMap(({ source, label }) => {
                     const message = sideErrors[source];
 
@@ -1208,16 +935,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
                     text: `Branch unavailable: ${branchNotice}`, onDismiss: () => setBranchNotice(null) }] : []),
                   ...(restoreNotice ? [{ id: "restore", tone: "neutral" as const, text: restoreNotice,
                     onDismiss: () => setRestoreNotice(null) }] : []),
-                  ...turnEndNotices({
-                    newest: thread.entries.at(-1)?.message, live, retryOwed, dismissed: dismissedFailure, chatError: state.chatError,
-                    retry: state.retryLastMessage, dismiss: setDismissedFailure, clearChatError: state.clearChatError,
-                  }),
-                  ...providerWait,
-                  ...(steerNotice ? [steerNotice] : []),
-                ]}
-              />
-            </div>
-            </div>
+                ],
+              }} />
             ))}
         </ChatSlates></HelperChatBase.Provider>}
         inspector={(
