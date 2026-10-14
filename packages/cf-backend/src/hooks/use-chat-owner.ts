@@ -224,13 +224,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    * Whether the server has answered the resume probe the SDK sends as this socket opens. Until it has, the chat is not
    * settled: `useChat` keeps one status for a resume and a send, so a send before the answer has its turn's state ended
    * by it (the Stop of a new chat's opening turn lasted 10 ms, 2026-10-14), and a stream the drop interrupted is still
-   * the SDK's to rejoin.
+   * the SDK's to rejoin. `answered` settles with it, for the send that waits on it.
    */
   const [probeAnswered, setProbeAnswered] = useState(false);
-
-  useEffect(() => {
-    if (connectionStatus !== "connected") setProbeAnswered(false);
-  }, [connectionStatus]);
+  const answered = useRef(Promise.withResolvers<void>());
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   // Keyed by source so one recovery never erases another's error; none expire on a timer.
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
@@ -318,6 +315,13 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       // No close-code list: the SDK classifies terminal closes (`isTerminalCloseEvent`) and
       // publishes `connectionError`.
       setConnectionStatus("disconnected");
+      setProbeAnswered(false);
+
+      // The next socket asks anew: a send still waiting on this one's answer waits on that one's.
+      const next = Promise.withResolvers<void>();
+
+      answered.current.resolve(next.promise);
+      answered.current = next;
       // Nothing can re-announce this socket's wait once it is gone.
       clearProviderWait();
     }, [clearProviderWait]),
@@ -337,6 +341,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const everyFrame = useCallback((data: SocketFrame) => {
     if (data.type === "cf_agent_stream_resuming" || data.type === "cf_agent_stream_resume_none") {
       setProbeAnswered(true);
+      answered.current.resolve();
     } else if (data.type === "workspace_renamed") {
       const displayName = data.displayName;
 
@@ -400,11 +405,19 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    *  held. `isStreaming` only mirrors it for rendering. */
   const sendLatch = useRef(newSendLatch());
 
+  /** Every send that starts a turn, the opening's, the composers' and Retry's, begins once the socket's probe is
+   *  answered: no caller can send into the probe's answer, and none checks for itself. A Stop pressed meanwhile
+   *  frees the latch, and the send never goes. */
   const startTurn = useCallback(
-    (begin: () => Promise<void>): boolean => admitTurn(sendLatch.current, () => {
-      setModelFallbacks([]);
+    (begin: () => Promise<void>): boolean => admitTurn(sendLatch.current, async () => {
+      const owner = sendLatch.current.owner;
 
-      return begin();
+      setModelFallbacks([]);
+      await answered.current.promise;
+
+      if (sendLatch.current.owner !== owner) return;
+
+      await begin();
     }),
     [],
   );
@@ -882,8 +895,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       /** Until true, empty `messages` means "not delivered", not "there is nothing". */
       transcriptSeeded,
       connectionStatus,
-      /** The socket is open and the server answered its resume probe: a turn sent now is the chat's alone. */
-      settled: connectionStatus === "connected" && probeAnswered,
       /** Set when reconnecting cannot help (not this caller's workspace, or gone). The SDK owns the
        *  classification and clears it on open. */
       terminalClose: connectionError,

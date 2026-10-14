@@ -586,7 +586,7 @@ function SubordinateChatColumn({
     steerRuns: state.steerRuns,
   });
 
-  useOpeningMessage(state.settled, (text, files) => { state.sendChat(text, [...files], ui.mode); });
+  useOpeningMessage(state.connectionStatus === "connected", (text, files) => { state.sendChat(text, [...files], ui.mode); });
 
   if (state.terminalClose && !state.agentStatus) {
     return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
