@@ -1,9 +1,8 @@
 import type { ModelAttemptIdentity } from '@kinu.run/core';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Local CLI runtime factory. Two file planes: agent state always lives in the
- * Nimbus filesystem over SQLite; the workspace plane (`file`, `shell`, `eval`,
- * AGENTS.md) binds to `config.cwd` when set, else shares the in-SQLite tree.
+ * Local CLI runtime factory: an agent's file plane is the workspace's folder and its space on this machine
+ * (`localFilePlane`), over the workspace's one SQLite database.
  */
 
 import type { Database } from 'bun:sqlite';

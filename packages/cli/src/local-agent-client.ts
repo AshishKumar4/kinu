@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes } from '@kinu.run/core';
+import { DriverLeaseHold, localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { getChatHistoryPage, getToolList, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
@@ -9,7 +9,6 @@ import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  DriverLeaseHold,
   OS_LEASE_PROCESS,
   makeExecRaw,
   makeSql,
@@ -20,7 +19,6 @@ import {
   type LocalModelResolver,
   type McpServerConfig,
   type LocalAgentSessionOpts,
-  type SessionEvent,
 } from '@kinu.run/cli-backend';
 import {
   agentDbPath,

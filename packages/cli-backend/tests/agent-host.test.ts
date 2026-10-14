@@ -36,21 +36,22 @@ import {
   type SqlExecutor,
   type TeamToolDeps,
   type TemporaryRunRequest,
+  DriverLeaseHold,
+  type DriverKind,
+  type DriverLeaseHolder,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import type { Subprocess } from 'bun';
 import {
   LocalAgentHost,
-  DriverLeaseHold,
-  type DriverKind,
-  type DriverLeaseHolder,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';

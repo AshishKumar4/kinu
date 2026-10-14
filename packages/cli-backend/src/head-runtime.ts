@@ -1,6 +1,5 @@
-// Local HeadRuntime backing the `agents` fork action: each head runs in-process as
-// a logical actor of the forked workspace, with actor-keyed rows in the one store
-// (no per-head scratch database), so a head can take a claimed turn.
+// Local HeadRuntime: each head of a branching run is an in-process actor of the workspace, seated by its host, with
+// actor-keyed rows in the one store, so it takes a claimed turn as any agent does.
 
 import { type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
 type WebSearchProvider,
@@ -11,14 +10,12 @@ type SeatedActor, type TurnLedgers, type WriteObserver,
 runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
 actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, headMergeLLM, spawnSeatedHead,
 localMissionScope, type CodemodeBuilder, } from '@kinu.run/core'
-import type { CLIRuntime } from './runtime';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 
 export interface CLIHeadRuntimeDeps {
   /** Profile the merge's `judge` route resolves against; read per merge. */
   profile: () => Promise<ResolvedTurnProfile>;
   bindMergeModel: RouteModelBinder;
-  parentRuntime: CLIRuntime;
   webSearch: WebSearchProvider;
   /** Grounds head outcomes and the merge. Omit ⇒ neutral scores + n=1 merge. */
   grounding?: HeadGrounding;

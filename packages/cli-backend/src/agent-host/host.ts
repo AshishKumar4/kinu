@@ -95,12 +95,12 @@ import { OS_LEASE_PROCESS } from './lease-process';
 import {
   DriverLeaseHold, REAL_CLOCK,
   type DriverKind, type DriverLeaseHolder,
+  type SessionEvent,
 } from '@kinu.run/core';
 import {
   LocalAgentSession,
   type LocalAgentSessionOpts,
   type LocalParentRelay,
-  type SessionEvent,
 } from '../local-session';
 import { createLocalActorHost } from '../actor-host';
 import type { LocalOrchestration } from '../orchestration';

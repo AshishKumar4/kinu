@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import type { LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import { PendingSendStore } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { fakeModel, gatedFactCallStream, setup, steerStatuses, textStream, transcript, turnStarts } from './helpers/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 

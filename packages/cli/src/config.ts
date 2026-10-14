@@ -17,12 +17,13 @@ import {
   type ModelInfo,
   type OpenAICompatCredential,
   type ProfileCatalogEnvelope,
+  CLOUD_PROXY_PROVIDER_IDS,
+  cloudProxyBaseURL,
 } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  makeSql, CLOUD_PROXY_PROVIDER_IDS,
-  cloudProxyBaseURL,
+  makeSql,
   createFileOAuthStore,
   ensureSecretDir,
   kinuHome,

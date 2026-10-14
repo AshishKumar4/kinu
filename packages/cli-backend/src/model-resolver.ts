@@ -92,11 +92,6 @@ export interface LocalCloudSession {
   token: string;
 }
 
-// Re-exported: this module is the CLI's endpoint/credential seam.
-export {
-  CLOUD_PROXY_PROVIDER_IDS, cloudProxyBaseURL, type CloudProxyProviderId,
-} from '@kinu.run/core';
-
 type PerCloudSession<T> = Map<string, { base: typeof fetch | undefined; value: T }>;
 
 /** One value per session + base fetch, shared by every conversation the session runs. */

@@ -17,13 +17,14 @@ import {
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
+import type { SessionEvent } from '@kinu.run/core';
 import {
   LocalAgentHost,
   makeWorkspaceSchemaSql,
   openWorkspaceCLI,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
-  type SessionEvent, workspaceHome,
+  workspaceHome,
 } from '@kinu.run/cli-backend';
 // The v2 fixture model is a test helper, not a package export: reuse it rather than keep a second copy.
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';

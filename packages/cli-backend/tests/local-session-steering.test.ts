@@ -15,8 +15,10 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider, CHAT_SESSION_ID, JsonObjectSchema, WORKSPACE_RUN_ID, usageTotal, profileCatalogDigest, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY, type AgentsToolDeps, type JsonObject, type JsonValue, type ProfileCatalogEnvelope, defaultLoopOrigin, MergeOutputSchema,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
+import { cloudProxyBaseURL } from '@kinu.run/core';
+import { createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { nodeSeatFactory } from './actor-fixture';
 import * as v from 'valibot';

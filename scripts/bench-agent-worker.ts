@@ -21,7 +21,7 @@ import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index
 import { createWorkspace } from '../packages/core/src/workspace-birth';
 import { openWorkspaceCLI, LocalAgentSession } from '../packages/cli-backend/src/index';
 import { makeSql, workspaceHome } from '../packages/cli-backend/src/runtime';
-import type { SessionEvent } from '../packages/cli-backend/src/index';
+import type { SessionEvent } from '../packages/core/src/index';
 import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
 import { parseAgentWorkerInput, type WorkerOutput } from './bench-worker-protocol';
 
