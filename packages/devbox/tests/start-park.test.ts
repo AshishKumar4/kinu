@@ -4,6 +4,9 @@
 import { TestDevbox } from './support/test-devbox';
 import { expect, test, vi } from 'bun:test';
 
+import { Effect } from 'effect';
+
+import type { DiskChain, DiskChainPorts } from '../src/disk-chain';
 import { DevboxError, devboxFailure, type DevboxFailure } from '../src/errors';
 import { harness, wakeWhileArmed, type FakeSandbox } from './support/devbox-harness';
 
@@ -134,5 +137,41 @@ test('a new deploy lifts a refused start once the container is gone: the next ca
   expect({ same: [sameAnswer, sameStarts - starts], next: [await next.resolveReadiness(), container.startOptions.length - starts] }).toEqual({
     same: [expect.objectContaining({ code: 'refused' }), 0],
     next: [{ kind: 'restored' }, 1],
+  });
+});
+
+/** A box whose work directory refuses to attach for a reason no retry changes: the recovery ladder's own refusal. */
+class UnattachableBox extends ParkingBox {
+  protected override diskChain(_ports: DiskChainPorts): DiskChain {
+    return {
+      attach: () => Effect.fail(new DevboxError('configuration', 'the work directory names a store this box cannot mount')),
+      commit: () => Effect.succeed({ kind: 'skipped', reason: 'nothing attached', bytes: undefined, movedBytes: 0 }),
+    };
+  }
+}
+
+test('the recovery ladder\'s refusal is a park too: kept under its own deploy, lifted under another', async () => {
+  deployed = 'v1';
+  failure = undefined;
+  const { box, container, state, env, rows } = harness(UnattachableBox);
+  await refusalOf(box.resolveReadiness());
+  const parked = rows.get('devbox:restoration');
+
+  const redeployed = (version: string) => {
+    deployed = version;
+    const successor = new UnattachableBox(state, env);
+    container.owner = successor;
+
+    return successor;
+  };
+
+  redeployed('v1');
+  const kept = rows.get('devbox:restoration');
+  redeployed('v2');
+
+  expect({ parked, kept, lifted: rows.has('devbox:restoration') }).toEqual({
+    parked: expect.objectContaining({ phase: 'unattached', retry: false, version: 'v1' }),
+    kept: expect.objectContaining({ phase: 'unattached', retry: false, version: 'v1' }),
+    lifted: false,
   });
 });

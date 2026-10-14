@@ -1535,7 +1535,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // The tag leads: `recordIncident` truncates at INCIDENT_REASON_MAX_CHARS, and a long cause
     // chain would cut a trailing tag that the host's prose tells the agent to read.
     const reason = `[${failure} -> ${decision.action}] ${describe(thrown)}`;
-    const restoration = { phase: 'unattached', reason, retry: decision.action !== 'refuse' } as const;
+
+    // A refusal is a park, kept with the deploy it was made under, as `#settle` keeps one (D94).
+    const restoration = decision.action === 'refuse'
+      ? { phase: 'unattached', reason, retry: false, version: this.#version() } as const
+      : { phase: 'unattached', reason, retry: true } as const;
 
     if (!await this.#settleRecovery(claim, generation, decision, restoration)) return;
 
