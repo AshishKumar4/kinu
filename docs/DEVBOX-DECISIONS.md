@@ -4712,6 +4712,25 @@ a handled outcome, traced as `devbox.name.kept` with what was found. The contain
 `getaddrinfo` of the box's own name takes; it fails a box that does not answer to its name or takes over a second to
 resolve it.
 
+D93. A person sees the box by its workspace's name; the kernel keeps the platform's (2026-10-13; reverses the kernel
+rename of D83, D91 and D92). Measured on a real platform container through the container tier's scratch Worker
+(`d343df16e`, the fixture's rename off and the probe renaming in place), timing `getent hosts` with `date +%s%N`, three
+samples each, and Python's `getaddrinfo`: the platform's own kernel name is a 64-hex container id that /etc/hosts does
+not list; `getent` of it found nothing in 10, 4 and 4 ms, and `getaddrinfo` refuses it before any lookup, since 64
+characters is no DNS label. Renamed to `contract-box`, `getaddrinfo` of the box's own name took 408 ms at the platform's
+DNS (nameserver 1.1.1.1) and answered 11.9.0.1 and fd00::119:1; the /etc/hostname UUID resolved the same way in 407 ms,
+and so did names that exist nowhere (`kinu-no-such-host-zz`: 409 ms, fd00::119:1): the platform's DNS answers every
+single-label name with that address. The box is fd00::11 on cfeth0, and a request to [fd00::119:1] timed out: the
+address is not the box. So a renamed kernel made every lookup of the box's own name wait ~400 ms for an address that is
+not it, where the platform's name fails at once. The kernel is left alone. The box keeps the name to show in
+/etc/devbox-shown-name at each start, best-effort as D92 made it (`devbox.name.unshown` when it cannot), and every
+shell a person opens, the terminal's tmux shell and the desktop's terminal, starts from one rc
+(/etc/devbox-shell.bashrc, `SHELL_RC`): the image's /etc/bash.bashrc and the person's ~/.bashrc first, then the shown
+name in place of `\h` and `\H` in whatever PS1 they left, its title escape included. A person's own prompt is kept and
+only its host part changes; a prompt that names no host is left alone. The container tier's `box-name` step reads, in
+the real container, that the kernel was not renamed, the shown name the box keeps, and the prompt a shell started from
+that rc expands.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
