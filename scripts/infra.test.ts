@@ -30,7 +30,7 @@ import {
   type Audit, type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observe, observedRow, phaseFrom, recordedResetIds,
   supplyDrift, supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
-import { deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
+import { deleteR2Prefix, deletedByRest, restAnswer, restApiToken, restCall } from './cloudflare-rest';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { POLL_SECONDS, settle, type SettleClock } from './edge-settled';
 import { plan, provisionSecrets, putSecret, type SecretIo } from './infra-provision';
@@ -1405,6 +1405,11 @@ describe('the Cloudflare REST calls wrangler cannot make', () => {
       if (request.headers.get('authorization') !== 'Bearer t') return new Response('no', { status: 403 });
       const url = new URL(request.url);
 
+      if (url.pathname.includes('/containers/applications/')) {
+        return url.pathname.endsWith('/gone') ? Response.json({ success: false, errors: [{ message: 'not found' }] }, { status: 404 })
+          : Response.json({ success: true, errors: [], messages: [], result: null });
+      }
+
       if (request.method === 'GET') {
         const prefix = url.searchParams.get('prefix') ?? '';
         const matching = [...objects].filter((key) => key.startsWith(prefix)).sort();
@@ -1455,6 +1460,17 @@ describe('the Cloudflare REST calls wrangler cannot make', () => {
   test('every object under the prefix is deleted, a page at a time, and nothing outside it', async () => {
     expect({ deleted: await deleteR2Prefix(prefix), left: [...objects], calls: deletes.length })
       .toEqual({ deleted: 3, left: ['releases/keep.json'], calls: 2 });
+  });
+
+  // 2026-10-14: wrangler 4.145 refuses a 32-hex application id, so its delete goes over the same transport, and a
+  // refusal is classified by its status as any other.
+  test('an application is deleted over the one transport, and a refusal names its status', async () => {
+    const api = prefix.api;
+    const deleted = await restCall({ method: 'DELETE', path: '/accounts/acct/containers/applications/a1', token: 't', api }, v.object({ success: v.literal(true) }));
+
+    expect(deleted).toEqual({ success: true });
+    await expect(restAnswer({ method: 'DELETE', path: '/accounts/acct/containers/applications/gone', token: 't', api }))
+      .rejects.toMatchObject({ code: 'missing', message: expect.stringContaining('answered 404') });
   });
 
   test('a key the delete does not answer fails the reset rather than reading as gone', async () => {

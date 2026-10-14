@@ -6,11 +6,10 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import {
-  WRANGLER_FAILED, containerAppIds, deleteContainerApps, runWrangler,
-} from './fixtures/r2-bench/deploy-substrate';
+import { WRANGLER_FAILED, runWrangler } from './ephemeral-deployment';
 import { snapshotRegistry, type ApplicationSweep } from '../packages/devbox/src/snapshot-registry';
-import { restApiToken } from './cloudflare-rest';
+import { registryToken } from './cloudflare-rest';
+import { containerApplicationsNamed, deleteContainerApplication } from './infra-cloudflare';
 import { AwsClient } from 'aws4fetch';
 import {
   writeManifest,
@@ -300,7 +299,7 @@ export function sourceRevision(): SourceRevision {
  *  application exists and again before a teardown, so a run interrupted anywhere has them. */
 export function recordApplicationIds(manifest: TeardownManifest): void {
   const learnt = manifest.entries.filter((entry) => entry.kind === 'container-app' && !entry.done).map((entry) => {
-    const ids = containerAppIds(REPO_ROOT, [entry.name], log).map((found) => found.id).filter((id) => !entry.ids.includes(id));
+    const ids = containerApplicationsNamed([entry.name]).map((found) => found.id).filter((id) => !entry.ids.includes(id));
 
     entry.ids.push(...ids);
 
@@ -315,7 +314,7 @@ export interface ContainerAppPorts {
   /** The ids the platform lists under `name` now. */
   readonly listed: (name: string) => readonly string[];
   /** Deletes the application `name`; a failure's words, or undefined. */
-  readonly remove: (name: string) => string | undefined;
+  readonly remove: (name: string) => Promise<string | undefined>;
   readonly sweep: (applicationId: string) => Promise<ApplicationSweep>;
 }
 
@@ -334,7 +333,7 @@ export async function containerAppTeardown(entry: TeardownEntry, persist: () => 
     persist();
   }
 
-  const failed = listed.length === 0 ? undefined : ports.remove(entry.name);
+  const failed = listed.length === 0 ? undefined : await ports.remove(entry.name);
 
   if (failed !== undefined) return { ok: false, error: failed };
 
@@ -353,12 +352,20 @@ export async function containerAppTeardown(entry: TeardownEntry, persist: () => 
 
 /** The account's own ports: wrangler's listing, the application deletion, and the registry client the boxes use. */
 function accountContainerAppPorts(): ContainerAppPorts {
-  const token = (process.env['DEVBOX_REGISTRY_TOKEN'] ?? '').trim() || restApiToken();
+  const token = registryToken();
   const registry = snapshotRegistry({ account: BENCH_ACCOUNT_ID, token, fetch: (input, init) => fetch(input, init) });
 
   return {
-    listed: (name) => containerAppIds(REPO_ROOT, [name], log).map((found) => found.id),
-    remove: (name) => deleteContainerApps(REPO_ROOT, [name], log).find((status) => /failed/i.test(status)),
+    listed: (name) => containerApplicationsNamed([name]).map((found) => found.id),
+    remove: async (name) => {
+      try {
+        for (const found of containerApplicationsNamed([name])) await deleteContainerApplication(found);
+
+        return undefined;
+      } catch (cause) {
+        return cause instanceof Error ? cause.message : String(cause);
+      }
+    },
     sweep: async (applicationId) => (token === ''
       ? { kind: 'refused', reason: 'deleting snapshots needs DEVBOX_REGISTRY_TOKEN or KINU_CLOUDFLARE_API_TOKEN' }
       : await registry.deleteApplication(applicationId)),
