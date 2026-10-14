@@ -1255,10 +1255,15 @@ declare global {
     __kinuOpenTerminals?: () => void;
     /** Every directory the Files frame was asked to list, in order. */
     __kinuListings?: string[];
+    /** With `resize=held`, answers the computer's resize under way. */
+    __kinuEndResize?: () => void;
   }
 }
 
 const TERMINAL_PATH = /^\/api\/workspaces\/[^/]+\/terminal$/u;
+
+/** `computer=asleep`: the computer sleeps until its terminal opens, as a page that read it before then finds it. */
+let computerAwake = new URLSearchParams(location.search).get("computer") !== "asleep";
 
 class GalleryShellSocket extends EventTarget {
   static readonly CONNECTING = 0;
@@ -1287,8 +1292,9 @@ class GalleryShellSocket extends EventTarget {
     // A PTY's lanes (the computer's sessions, a PC) carry the screen as bytes; the workspace's, as frames.
     const screen = ptyScreen(query);
 
-    // The runtime replays its screen before ready.
+    // The runtime replays its screen before ready; the computer is awake once its terminal opens.
     const open = () => {
+      if (query.get("executor") === "computer") computerAwake = true;
       this.readyState = 1;
       const opened = new Event("open");
       this.onopen?.(opened);
@@ -1477,7 +1483,6 @@ const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
  * Non-agent sockets (vite HMR) fall through to the real WebSocket.
  */
 const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
-  getComputerSize: { account: null, chosen: null, size: "medium", running: "medium", startRefused: null },
   getWorkspaceSnapshot: {
     status: {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
@@ -1567,6 +1572,11 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
     const method = request.method;
 
     const answerRpc = () => {
+      // The computer's size and its restart, as the page's injected `Rpc` answers them.
+      if (method === "getComputerSize") return galleryComputerSize(null);
+
+      if (method === "resizeComputer") return galleryResize(request.args ?? []);
+
       if (AGENT_RPC.has(method)) return AGENT_RPC.get(method);
 
       // Answered here, not by the blanket `[]` fall-through (wrong shape for non-array reads); Column C's injected `Rpc` and this socket must resolve the same fixture stores.
@@ -1577,16 +1587,16 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
       return {};
     };
 
-    const result = answerRpc();
-
-    queueMicrotask(() => {
+    const answer = (result: Awaited<ReturnType<typeof answerRpc>>) => {
       const message = new MessageEvent("message", {
         data: JSON.stringify({ type: "rpc", id: request.id, success: true, result }),
       });
 
       this.onmessage?.(message);
       this.dispatchEvent(message);
-    });
+    };
+
+    Promise.resolve(answerRpc()).then(answer, String);
   }
 
   close(): void {
@@ -1780,7 +1790,9 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
   // A `SandboxSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
-  if (method === "getComputerSize") return rpcResult(v.parse(JsonValueSchema, AGENT_RPC.get(method))).json<T>();
+  if (method === "getComputerSize") return rpcResult(galleryComputerSize(null)).json<T>();
+
+  if (method === "resizeComputer") return rpcResult(await galleryResize(args ?? [])).json<T>();
 
   if (method.endsWith("ComputerSession") || method === "listComputerSessions") return rpcResult(v.parse(JsonValueSchema, gallerySessions(method, args ?? []))).json<T>();
 
@@ -1791,6 +1803,18 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 
   return rpcResult({}).json<T>();
 };
+
+/** The computer's size as its box reads it: running only while it is awake. */
+function galleryComputerSize(running: string | null): JsonValue {
+  return { account: null, chosen: null, size: running ?? "medium", running: computerAwake ? running ?? "medium" : null, startRefused: null };
+}
+
+/** A resize restarts the computer at the size asked for; `resize=held` answers it only at `__kinuEndResize()`. */
+async function galleryResize(args: readonly unknown[]): Promise<JsonValue> {
+  if (new URLSearchParams(location.search).get("resize") === "held") await new Promise<void>((resolve) => { window.__kinuEndResize = resolve; });
+
+  return galleryComputerSize(typeof args[0] === "string" ? args[0] : null);
+}
 
 /** The computer's sessions (D90) as its box keeps them: a shell, a dev server listening, a test run that failed. */
 const GALLERY_SESSIONS: TerminalSession[] = [
@@ -1815,7 +1839,7 @@ function gallerySessions(method: string, args: readonly unknown[]): readonly Ter
 
   if (method === "closeComputerSession" && found !== undefined) GALLERY_SESSIONS.splice(at, 1);
 
-  return method === "listComputerSessions" ? GALLERY_SESSIONS : null;
+  return method === "listComputerSessions" ? GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })) : null;
 }
 
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
