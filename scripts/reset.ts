@@ -25,9 +25,13 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
-import { deleteApplicationByRest, deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
+import { deleteR2Prefix, deletedByRest } from './cloudflare-rest';
+import { registryToken, restApiToken } from './cloudflare-token';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
-import { type ContainerApplication, type DeployedBinding, containerApplications, deployment, why, wrangler } from './infra-cloudflare';
+import {
+  type ContainerApplication, type DeployedBinding, containerApplications, deleteContainerApplication, deployedVersion, deployment,
+  requireCloudflareAccountId, why, wrangler,
+} from './infra-cloudflare';
 import {
   type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, deployedConfig, liveClasses,
 } from './infra-manifest';
@@ -110,12 +114,14 @@ export function servingOf(versionId: string, bindings: readonly DeployedBinding[
  */
 export interface ResetTarget {
   serving: () => Serving;
+  /** The version the deployment serves, read from the deployment alone ({@link deployedVersion}). */
+  servedVersion: () => string;
   applications: () => readonly ContainerApplication[];
   /** The newest reset record of the releases bucket, or none. */
   latest: () => Reset | undefined;
   /** Uploads the placeholder that deletes `classes`, and answers its version. */
   deployPlaceholder: (classes: readonly string[], tag: string) => string;
-  deleteApplication: (application: Reset['applications'][number]) => void;
+  deleteApplication: (application: Reset['applications'][number]) => Promise<void>;
   /** Deletes every container snapshot the application made, which deleting it leaves, and answers how many. */
   deleteSnapshots: (application: Reset['applications'][number]) => Promise<number>;
   /** Deletes every object under the prefix, and answers how many. */
@@ -183,6 +189,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
   const worker = config.name ?? '';
   const releases = bucketOf(config, 'RELEASES_BUCKET') ?? '';
   const site = origin(config);
+  const account = requireCloudflareAccountId();
 
   return {
     serving: () => {
@@ -191,6 +198,13 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
       if (live.state !== 'deployed') throw new Error(`${worker} serves no version to reset: ${live.state === 'unknown' ? live.reason : 'it has no deployment'}`);
 
       return servingOf(live.versionId, live.bindings);
+    },
+    servedVersion: () => {
+      const served = deployedVersion(environment);
+
+      if (served.state !== 'deployed') throw new Error(`${worker} serves no version: ${served.state === 'unknown' ? served.reason : 'it has no deployment'}`);
+
+      return served.versionId;
     },
     applications: () => {
       const listed = containerApplications();
@@ -217,20 +231,9 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
 
       return /Version ID:\s*([0-9a-f-]{36})/u.exec(run(['deploy', '-c', placeholder, '--message', `kinu ${environment} ${tag}`]))?.[1] ?? '';
     },
-    deleteApplication: (application) => {
-      if (!deletedByRest(application.id)) {
-        run(['containers', 'delete', application.id]);
-
-        return;
-      }
-
-      const deleted = deleteApplicationByRest(config.account_id ?? '', application.id);
-
-      if (!deleted.ok) throw new Error(deleted.reason);
-    },
+    deleteApplication: deleteContainerApplication,
     deleteSnapshots: async (application) => {
-      const token = (process.env['DEVBOX_REGISTRY_TOKEN'] ?? '').trim() || restApiToken();
-      const swept = await snapshotRegistry({ account: config.account_id ?? '', token, fetch: (input, init) => fetch(input, init) }).deleteApplication(application.id);
+      const swept = await snapshotRegistry({ account, token: registryToken(), fetch: (input, init) => fetch(input, init) }).deleteApplication(application.id);
 
       if (swept.kind === 'refused') throw new Error(`${application.name}'s snapshots were not deleted: ${swept.reason}`);
 
@@ -238,7 +241,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
 
       return swept.deleted;
     },
-    deleteChains: (chains) => deleteR2Prefix({ accountId: config.account_id ?? '', bucket: chains.bucket, prefix: chains.prefix }),
+    deleteChains: (chains) => deleteR2Prefix({ accountId: account, bucket: chains.bucket, prefix: chains.prefix }),
     putRecord: (key, file) => {
       run(['r2', 'object', 'put', `${releases}/${key}`, '--file', file, '--content-type', 'application/json', '--remote']);
     },
@@ -286,18 +289,23 @@ export function pendingReset(worker: string, live: Serving, latest: Reset | unde
 }
 
 /**
- * The infrastructure rows `reset` deleted and a deploy recreates, by the ids every infra report keys resources on:
- * the namespace of each class it deleted and each container application it deleted, and — while `live` is still its
- * placeholder — every binding the placeholder does not carry, out of `resources`. Only the pre-upload gate of a
- * `--reset` deploy asks; a version that is not the placeholder carries its own bindings, so the record then answers
- * for its classes and applications alone.
+ * The infrastructure rows `reset` deleted, or deletes when it is finished, and a deploy recreates, by the ids every
+ * infra report keys resources on: the namespace of each class it deleted, each container application it names and
+ * that application's hold on its class's namespace, and — while `live` is still its placeholder — every binding the
+ * placeholder does not carry, out of `resources`. Only the pre-upload gate of a `--reset` deploy asks; a version that
+ * is not the placeholder carries its own bindings, so the record then answers for its classes and applications alone.
+ *
+ * The hold is the reset's because a reset stopped after its placeholder leaves the application bound to a namespace
+ * the placeholder deleted, and only finishing the reset deletes it: staging, 2026-10-14, the reset of 56377b387
+ * stopped there, and the gate refused the `--reset` deploy that would have finished it.
  */
 export function resetResourceIds(reset: Reset, live: Serving | undefined, resources: readonly Resource[]): readonly string[] {
-  const placeholder = live !== undefined && live.versionId === reset.placeholderVersion;
+  // A reset stopped before its record named its placeholder still serves it: the one `pendingReset` resumes.
+  const placeholder = live !== undefined && pendingReset(reset.worker, live, reset) !== undefined;
 
   return [
     ...reset.classes.map((entry) => `durable-object.${reset.worker}:${entry.className}`),
-    ...reset.applications.map((application) => `container.${application.name}`),
+    ...reset.applications.flatMap((application) => [`container.${application.name}`, `container-namespace.${application.name}`]),
     ...placeholder
       ? resources.filter((resource) => resource.kind === 'binding' && resource.binding !== PLACEHOLDER_BINDING).map((resource) => resource.id)
       : [],
@@ -347,12 +355,12 @@ function begin(input: WipeInput, live: Serving): Reset {
 
   // Before the first deletion: from the placeholder on, the storage is gone, and no rollback may cross that.
   record(target, input.recordFile, started);
+  // The placeholder binds no class by construction (`deployPlaceholder` writes its config), so what is read back is
+  // only that the deployment serves it: the version's own view may not exist yet (`deployedVersion`).
   const placeholderVersion = target.deployPlaceholder([...live.bound.keys()], tag);
-  const after = target.serving();
+  const served = target.servedVersion();
 
-  if (after.versionId !== placeholderVersion || after.bound.size > 0) {
-    throw new Error(`the placeholder uploaded as '${placeholderVersion}', and ${worker} does not serve it without Durable Objects`);
-  }
+  if (served !== placeholderVersion) throw new Error(`the placeholder uploaded as '${placeholderVersion}', and ${worker} serves '${served}'`);
 
   const retired = [...live.bound.keys()].filter((name) => !classes.includes(name));
   const added = classes.filter((name) => !live.bound.has(name));
@@ -383,7 +391,7 @@ async function finish(input: WipeInput, reset: Reset): Promise<Reset> {
     if (refused !== undefined) throw new Error(refused);
 
     for (const application of left) {
-      target.deleteApplication(application);
+      await target.deleteApplication(application);
       console.log(`reset: deleted container application ${application.name} (${application.id})`);
     }
 

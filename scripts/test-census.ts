@@ -3051,16 +3051,6 @@ export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
     declared.add(command);
   }
 
-  // `scripts/test.sh` names its four directories WITHOUT a trailing slash, and
-  // `claims()` resolves a bare directory to nothing — only `dir/` sweeps the
-  // paths under it. Bun runs both spellings identically, so the claim is
-  // resolved in the form the resolver understands and the divergence is stated
-  // here rather than silently producing a zero.
-  add('bash scripts/test.sh', 'developer default',
-    'scripts/test.sh:36-40 — four directories, resolved with the trailing slash claims() needs; '
-    + 'the bare spelling test.sh uses would resolve to nothing',
-    claims('bun test packages/core/tests/ packages/cf-backend/tests/ packages/cli-backend/tests/ '
-      + 'packages/cli/tests/', tracked));
   add('tools/oxlint/anti-slop rules.test.ts', 'aggregator',
     'dynamic import inside the aggregator (isAntiSlopRuleSuite)',
     tracked.filter(isAntiSlopRuleSuite));

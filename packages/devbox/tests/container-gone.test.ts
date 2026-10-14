@@ -4,7 +4,7 @@ import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';
 
 import { chainBox, chainHead } from './support/chain-box';
-import { gate, harness, STAMP_COMMAND } from './support/devbox-harness';
+import { gate, harness } from './support/devbox-harness';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
 
@@ -40,7 +40,7 @@ describe('a heartbeat landing inside a restoration leaves that restoration alone
     // A beat that re-drove would stamp a second time and turn the parked attempt stale
     // under its own container commands.
     expect({
-      stamps: container.execs.filter((command) => command.includes(STAMP_COMMAND)).length,
+      stamps: container.stamps,
       replacedCount: state.replacedCount,
       tickSawReplacement: state.lastTick?.replaced === true,
       ready: state.ready,
@@ -69,11 +69,11 @@ describe('a heartbeat landing inside a restoration leaves that restoration alone
     const observed = await box.devboxState();
     expect(observed.ready).toBe(false);
     expect(observed.lastTick?.replaced).toBe(true);
-    expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toHaveLength(1);
+    expect(container.stamps).toBe(1);
     await box.devboxStartup();
     const state = await box.devboxState();
     expect({
-      stamps: container.execs.filter((command) => command.includes(STAMP_COMMAND)).length,
+      stamps: container.stamps,
       replacedCount: state.replacedCount,
       tickSawReplacement: state.lastTick?.replaced,
     }).toEqual({ stamps: 2, replacedCount: 1, tickSawReplacement: true });

@@ -12,6 +12,7 @@ import { readSessionTranscript, type SessionTranscriptReader } from '../src/sess
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 interface Workspace {
   readonly db: Database;
@@ -57,6 +58,7 @@ async function seedActorState({ ws, actor, text, runId, version }: SeededActorSt
 
   const history = new SessionHistory({
     sql: ws.sql, actor, transactionSync: (write) => ws.db.transaction(write)(), files: noFilePlane,
+    claims: claimFences(ws.sql, actor),
   });
 
   await seedTranscriptEntry(history, CHAT_SESSION_ID, {

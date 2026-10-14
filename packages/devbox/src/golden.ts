@@ -2,7 +2,7 @@
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { DevboxError, attempt } from './errors';
-import type { SnapshotDeletion } from './snapshot-registry';
+import { OwedSchema, SNAPSHOT_LIFE_MS, payDebt, type SnapshotDeletion } from './snapshot-registry';
 import { shellPath } from './stream-archive';
 import { TOOLS_STAMP, toolsInstallCommand } from './tools';
 
@@ -14,13 +14,11 @@ export const GOLDEN_NAME = 'devbox-golden';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const LIFE_MS = 29 * DAY_MS;
-
 export const GOLDEN_REFRESH_MS = 25 * DAY_MS;
 
-/** A box's own lineage wakes for LIFE_MS from its root, a delta on the golden it started from, so a golden no slot holds
+/** A box's own lineage wakes for SNAPSHOT_LIFE_MS from its root, a delta on the golden it started from, so a golden no slot holds
  *  any more is deleted once every lineage rooted on it is past waking, with a day's margin. */
-const RETIRE_MS = LIFE_MS + DAY_MS;
+const RETIRE_MS = SNAPSHOT_LIFE_MS + DAY_MS;
 
 const ARCHIVE = '/tmp/devbox-tools.tgz';
 
@@ -36,7 +34,7 @@ export const GoldenStateSchema = v.object({
   /** The step a build under way is at, so a box's caller can tell a moving build from a stuck one. */
   building: v.optional(v.string()),
   /** Goldens no slot holds, each deleted from `at` on: a snapshot id, or the digest an earlier delete left. */
-  retiring: v.optional(v.array(v.object({ ref: v.string(), at: v.number() })), []),
+  retiring: v.optional(v.array(OwedSchema), []),
 });
 
 export type GoldenState = v.InferOutput<typeof GoldenStateSchema>;
@@ -81,7 +79,7 @@ const VERIFY_COMMAND = 'set -e; for t in bun git tmux tini s3fs fuse-overlayfs m
   + '&& devbox-squashfuse $d/l.sqsh $d/m && fuse-overlayfs -o lowerdir=$d/m,upperdir=$d/u,workdir=$d/w $d/o && cat $d/o/f '
   + '&& fusermount3 -u $d/o && fusermount3 -u $d/m && rm -rf $d';
 
-const usable = (golden: v.InferOutput<typeof Golden> | undefined, now: number) => golden !== undefined && now - Math.max(golden.takenAt, golden.renewedAt ?? 0) < LIFE_MS;
+const usable = (golden: v.InferOutput<typeof Golden> | undefined, now: number) => golden !== undefined && now - Math.max(golden.takenAt, golden.renewedAt ?? 0) < SNAPSHOT_LIFE_MS;
 
 /** A golden of other tools still serves, refreshed in the box's gate, while the pinned one builds. */
 export function goldenFor(ports: GoldenPorts, box: string, lost?: string): Effect.Effect<GoldenAnswer, DevboxError> {
@@ -147,30 +145,10 @@ function retire(next: GoldenState, before: GoldenState, now: number): GoldenStat
 
 /** The retired goldens whose time has come, each deleted or kept owed: a refusal, or no authority, waits for the next. */
 function deleteRetired(ports: GoldenPorts): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const now = ports.now();
-
-    for (const due of ports.read().retiring.filter(retired => retired.at <= now)) {
-      let owing = due.ref;
-
-      // Written before any tag goes: once they are gone the digest alone finds the manifest.
-      const pending = ports.delete(due.ref, (digest) => {
-        const held = ports.read();
-
-        ports.write({ ...held, retiring: held.retiring.map(retired => retired.ref === owing ? { ...retired, ref: digest } : retired) });
-        owing = digest;
-      });
-
-      if (pending === undefined) return;
-      const outcome = yield* Effect.promise(() => pending);
-      const owed = outcome.kind === 'refused' ? [{ ...due, ref: outcome.left ?? owing }] : [];
-
-      if (outcome.kind === 'refused') console.error(`[devbox] the retired golden ${due.ref} was not deleted: ${outcome.reason}`);
-      const held = ports.read();
-
-      ports.write({ ...held, retiring: held.retiring.flatMap(retired => retired.ref === owing ? owed : [retired]) });
-    }
-  });
+  return Effect.promise(() => payDebt({
+    read: () => ports.read().retiring, write: (retiring) => { ports.write({ ...ports.read(), retiring: [...retiring] }); },
+    delete: ports.delete, now: ports.now, called: 'the retired golden',
+  }));
 }
 
 function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<GoldenState, 'current' | 'previous'>, DevboxError> {

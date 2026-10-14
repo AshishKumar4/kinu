@@ -17,12 +17,21 @@ export type SessionPayload =
 
 export interface SessionFilePlane { readonly vfs: VFS; readonly artifactDirectory: string }
 
+/** A stored payload's columns as the reference they hold: its JSON inline, or its file and digest; null for any other
+ *  triple, which every table that holds one refuses by its CHECK save for all three empty, an absent payload. */
+export function payloadReference(json: string | null, path: string | null, digest: string | null): SessionPayload | null {
+  if (json !== null && path === null && digest === null) return { json, path: null, digest: null };
+
+  if (json === null && path !== null && digest !== null) return { json: null, path, digest };
+
+  return null;
+}
+
+/** A payload that must be there: one its columns do not reference fails. */
 export function storedPayload(json: string | null, path: string | null, digest: string | null): Effect.Effect<SessionPayload, KinuError> {
-  if (json !== null && path === null && digest === null) return Effect.succeed({ json, path: null, digest: null });
+  const payload = payloadReference(json, path, digest);
 
-  if (json === null && path !== null && digest !== null) return Effect.succeed({ json: null, path, digest });
-
-  return Effect.fail(new KinuError('io', 'invalid session payload reference'));
+  return payload === null ? Effect.fail(new KinuError('io', 'invalid session payload reference')) : Effect.succeed(payload);
 }
 
 // Payload leaves half the platform row bound for keys/metadata; independent of model token policy.

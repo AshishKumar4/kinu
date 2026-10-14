@@ -5,20 +5,11 @@ import { settle, tolerate } from '../obs/effect';
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import { Effect } from 'effect';
-import { DEVICE_FRAMES, DEVICE_METHOD } from './device-protocol';
+import { DEVICE_FRAMES } from './device-protocol';
 import type { DeviceCancelResult } from './device-tunnel';
-
-export const DEVICE_RELAY = {
-  method: DEVICE_METHOD.codexRelay,
-  head: DEVICE_FRAMES.relayHead,
-  body: DEVICE_FRAMES.relayBody,
-} as const;
 
 export type RelayedProvider = 'codex' | 'chatgpt';
 
-export const DEVICE_CHATGPT = { status: DEVICE_METHOD.chatgptStatus, signIn: DEVICE_METHOD.chatgptSignIn, signOut: DEVICE_METHOD.chatgptSignOut } as const;
-
-export type DeviceChatGptMethod = (typeof DEVICE_CHATGPT)[keyof typeof DEVICE_CHATGPT];
 
 export const DeviceChatGptStatusSchema = v.object({
   signedIn: v.boolean(),
@@ -45,8 +36,8 @@ export interface DeviceRelayRequest {
 }
 
 const RelayFrameSchema = v.variant('type', [
-  v.object({ type: v.literal(DEVICE_RELAY.head), relay: v.string(), status: v.number(), headers: HeaderPairsSchema }),
-  v.object({ type: v.literal(DEVICE_RELAY.body), relay: v.string(), data: v.string() }),
+  v.object({ type: v.literal(DEVICE_FRAMES.relayHead), relay: v.string(), status: v.number(), headers: HeaderPairsSchema }),
+  v.object({ type: v.literal(DEVICE_FRAMES.relayBody), relay: v.string(), data: v.string() }),
 ]);
 
 export type DeviceRelayFrame = v.InferOutput<typeof RelayFrameSchema>;

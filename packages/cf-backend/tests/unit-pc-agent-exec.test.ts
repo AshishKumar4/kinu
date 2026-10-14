@@ -17,10 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  BoundedOutput, COMMAND_OUTPUT_LIMITS, DEVICE_CANCEL_METHOD, DEVICE_EXEC_ACK_METHOD,
-
-  DEVICE_UNKNOWN_METHOD, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
-  type DeviceStatus, type DeviceTransport, type TunnelSocket,
+  BoundedOutput, COMMAND_OUTPUT_LIMITS, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
+  type DeviceStatus, type DeviceTransport, type TunnelSocket, DEVICE_ERRORS, DEVICE_METHOD,
 } from '@kinu.run/core';
 
 const require_ = createRequire(import.meta.url);
@@ -479,7 +477,7 @@ function commandWithDescendant(dir: string, name: string) {
 }
 
 function cancel(id: string, target: string, socket: ReplySocket): void {
-  handle({ id, method: DEVICE_CANCEL_METHOD, params: [target] }, socket);
+  handle({ id, method: DEVICE_METHOD.cancel, params: [target] }, socket);
 }
 
 function acknowledge(id: string, target: string, socket: ReplySocket): void {
@@ -1032,13 +1030,13 @@ describe('the daemon answers in the words the hub reads', () => {
     clock.advance(60_000);
     await expect(running).rejects.toThrow('the device confirmed its work stopped');
     expect(isRunning(descendant)).toBe(false);
-    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId]);
+    await tunnel.rpc(DEVICE_METHOD.execAck, [requestId]);
     tunnel.dispose();
   });
   test('a method this daemon does not know reaches the hub as unknown, the way a newer frame meets an older daemon', async () => {
     const { tunnel } = deviceChain();
 
-    await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toMatchObject({ code: 'unsupported', cause: { code: DEVICE_UNKNOWN_METHOD } });
+    await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toMatchObject({ code: 'unsupported', cause: { code: DEVICE_ERRORS.unknownMethod } });
     tunnel.dispose();
   });
 
@@ -1055,7 +1053,7 @@ describe('the daemon answers in the words the hub reads', () => {
 
     expect(heard).toEqual({ stdout: 'first\n', stderr: 'second\n' });
     expect(v.parse(ExecResultSchema, answer)).toEqual({ stdout: 'first\n', stderr: 'second\n', exitCode: 0 });
-    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [id]);
+    await tunnel.rpc(DEVICE_METHOD.execAck, [id]);
     tunnel.dispose();
   });
 });

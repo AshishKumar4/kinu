@@ -12,6 +12,12 @@ const invocationMode = new AsyncLocalStorage<WorkMode>();
 
 const PlanPermission = v.object({ planAllowed: v.literal(true) });
 
+/** The mode messages merged into one turn run under: Plan where any was typed under it, as merging never widens what a
+ *  message was typed under. */
+export function narrowestMode(modes: readonly (WorkMode | undefined)[]): WorkMode {
+  return modes.includes('plan') ? 'plan' : 'build';
+}
+
 export function hasPlanPermission(operation: ToolSet[string]): boolean {
   return v.is(PlanPermission, operation);
 }

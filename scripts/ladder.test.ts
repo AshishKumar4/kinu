@@ -559,7 +559,7 @@ describe('the ladder measures something', () => {
     expect(claims('bun test scripts/bench*.test.ts', tracked).length).toBeGreaterThan(0);
 
     const benchRigGate = LADDER.find(gate =>
-      gate.run.includes('scripts/deploy-substrate.test.ts'));
+      gate.run.includes('scripts/ephemeral-deployment.test.ts'));
 
     expect(benchRigGate?.tier).toBe('ci');
     // `bun run test` fans out through package.json into three package suites.

@@ -12,7 +12,7 @@ import {
 import type { StoredValue } from '../src/storage';
 import { handClock } from '../../test-utils/src/hand-clock';
 import {
-  Devbox, FakeSandbox, gate, harness, READY_GOLDEN, SandboxFailure, STAMP_COMMAND,
+  Devbox, FakeSandbox, gate, harness, READY_GOLDEN, SandboxFailure,
   type FakeStorage, type Harness, type StartFault,
 } from './support/devbox-harness';
 
@@ -209,7 +209,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
-    expect(container.execs.some((command) => command.includes(STAMP_COMMAND))).toBe(true);
+    expect(container.stamps).toBeGreaterThan(0);
     expect((await box.devboxState()).ready).toBe(true);
   });
 
@@ -252,7 +252,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     expect({
       starts: container.containerStarts,
-      stamps: container.execs.filter(command => command.includes(STAMP_COMMAND)).length,
+      stamps: container.stamps,
       ready: (await box.devboxState()).ready,
     }).toEqual({ starts: 2, stamps: 2, ready: true });
   });
@@ -275,7 +275,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
 describe('a startup attempt owns a generation, and a superseded one is inert', () => {
   const stamps = (container: FakeSandbox): number =>
-    container.execs.filter(command => command.includes(STAMP_COMMAND)).length;
+    container.stamps;
 
   test('a superseded attempt cannot publish readiness for a generation that is gone', async () => {
     // The boot-id stamp is the attempt's last await, so parking there and replacing the
@@ -312,7 +312,7 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     await successor;
     claiming.release();
     await stale;
-    expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toHaveLength(1);
+    expect(container.stamps).toBe(1);
     expect(rows.has('devbox:last-attach')).toBe(true);
   });
 
@@ -364,7 +364,8 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     const joined = box.devboxStartup();
     successorGate.release();
     await Promise.all([successor, joined]);
-    expect(stamps(container)).toBe(2);
+    // The successor records its container once; the superseded attempt records nothing.
+    expect(stamps(container)).toBe(1);
     expect((await box.devboxState()).ready).toBe(true);
   });
 
@@ -381,7 +382,8 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     const fresh = box.devboxStartup();
     stalled.release();
     await Promise.all([stale, fresh]);
-    expect(stamps(container)).toBe(2);
+    // The new generation records its container once; the superseded attempt records nothing.
+    expect(stamps(container)).toBe(1);
     expect((await box.devboxState()).ready).toBe(true);
   });
 
@@ -431,7 +433,7 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
 // granted about 20 s later was restored and watched, and ran with no workspace for hours.
 describe('a destroyed box starts nothing of its own until it is asked again', () => {
   const stamps = (container: FakeSandbox): number =>
-    container.execs.filter(command => command.includes(STAMP_COMMAND)).length;
+    container.stamps;
 
   test('a start in flight when the box is torn down leaves no container and nothing armed', async () => {
     const { box, container } = harness(TestBox);
@@ -787,7 +789,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect({ armed: armed(container), destroys: container.destroys })
         .toEqual({ armed: 0, destroys: 0 });
       expect(ladder(rows)?.stage).toBe('replace');
-      expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toEqual([]);
+      expect(container.stamps).toBe(0);
       expect(rows.has('devbox:last-attach')).toBe(false);
       await expect(box.exec('ls')).rejects.toMatchObject(
         { code: 'refused' });
@@ -897,7 +899,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   /** A landed attach ends on this command, so a test can tell whether an attach was attempted
    *  at all, not only what state it left. */
   const stamps = (container: FakeSandbox): number =>
-    container.execs.filter(command => command.includes(STAMP_COMMAND)).length;
+    container.stamps;
 
   /** Models an isolate reset after the ladder decided `retry` but before its arming write landed.
    *  The fake's rows ARE the schedule, so dropping them is the world the reset leaves. */

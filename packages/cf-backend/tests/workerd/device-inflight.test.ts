@@ -11,8 +11,8 @@ import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import type { DeviceHelloSchema } from '@kinu.run/core';
 import {
-  DEVICE_CANCEL_METHOD, DEVICE_CONNECT_PATH, DEVICE_EXEC_ACK_METHOD,
-  DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, JsonValueSchema, nextDeviceRequestId, type JsonValue,
+  DEVICE_CONNECT_PATH,
+  DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, JsonValueSchema, nextDeviceRequestId, type JsonValue, DEVICE_METHOD,
 } from '@kinu.run/core';
 
 /** A stub held across a reset is broken by it; re-acquire from the id, as a real caller does. */
@@ -212,7 +212,7 @@ async function machine(owner: string, workspace: string, answer: (frame: v.Infer
 const holding = (cancelled: 'terminated' | 'unknown') => (frame: v.InferOutput<typeof FrameSchema>): Answer => {
   if (frame.method === 'exec') return { hold: true };
 
-  if (frame.method === DEVICE_CANCEL_METHOD) return { said: { requestId: v.parse(v.string(), frame.params[0]), cancelled } };
+  if (frame.method === DEVICE_METHOD.cancel) return { said: { requestId: v.parse(v.string(), frame.params[0]), cancelled } };
 
   return { said: frame.method === 'which' ? { present: [] } : DONE };
 };
@@ -239,7 +239,7 @@ describe('a machine that answers a cancellation for another command', () => {
   it('confirms nothing on a Stop or on the tool\'s own abort, keeps the request live, and is counted as unstopped', async () => {
     // Believing this kill claim would delete a row whose processes are still running.
     const at = await machine(OWNER, 'ws-mispaired', (frame) => ({
-      said: frame.method === DEVICE_CANCEL_METHOD ? { requestId: 'rpc-elsewhere0-4', cancelled: 'terminated' } : DONE,
+      said: frame.method === DEVICE_METHOD.cancel ? { requestId: 'rpc-elsewhere0-4', cancelled: 'terminated' } : DONE,
     }));
 
     const request = nextDeviceRequestId();
@@ -267,7 +267,7 @@ describe('a completion held past its own cancellation', () => {
 
     await at.asked('exec');
     expect(await account(owner).stopAgent('ws-held', AGENT)).toEqual([{ requestId: request, outcome: 'unknown' }]);
-    expect(asked(at, DEVICE_EXEC_ACK_METHOD)).toContain(request);
+    expect(asked(at, DEVICE_METHOD.execAck)).toContain(request);
     expect(await account(owner).requests()).toEqual([]);
     const atSettlement = at.frames.length;
 
@@ -288,7 +288,7 @@ describe('withdrawing a workspace\'s consent while its command runs', () => {
 
     await at.asked('exec');
     expect(await account(owner).withdrawConsent('ws-consent', at.deviceId)).toEqual({ ok: true });
-    expect(asked(at, DEVICE_CANCEL_METHOD)).toEqual([]);
+    expect(asked(at, DEVICE_METHOD.cancel)).toEqual([]);
     at.release();
     expect(answered(await running)).toMatchObject({ exitCode: 0 });
 
@@ -309,7 +309,7 @@ describe('withdrawing a workspace\'s consent while its command runs', () => {
     await at.asked('exec');
     // Revocation stops and confirms the running command, so no unstopped-command incident.
     expect(await account(owner).revoke(at.deviceId)).toEqual({ ok: true, unstoppedCommands: 0 });
-    expect(asked(at, DEVICE_CANCEL_METHOD)).toEqual([request]);
+    expect(asked(at, DEVICE_METHOD.cancel)).toEqual([request]);
     // The socket went with the machine: the caller is told so, not handed a result.
     expect(await running).toMatchObject({ ok: false });
     expect(await account(owner).requests()).toEqual([]);
@@ -333,12 +333,12 @@ describe('stopping a turn that runs a command on the owner\'s machine', () => {
     // The command is stamped with the running turn, which is how Stop finds it.
     expect(row?.actorId).not.toBeNull();
     expect(await account(owner).stopWork('ws-stop')).toEqual([{ requestId: row?.requestId, outcome: 'terminated' }]);
-    expect(asked(at, DEVICE_CANCEL_METHOD)).toEqual([row?.requestId]);
-    expect(asked(at, DEVICE_EXEC_ACK_METHOD)).toContain(row?.requestId);
+    expect(asked(at, DEVICE_METHOD.cancel)).toEqual([row?.requestId]);
+    expect(asked(at, DEVICE_METHOD.execAck)).toContain(row?.requestId);
     expect(await account(owner).pendingConsents('ws-stop')).toBe(0);
     expect(await account(owner).requests()).toEqual([]);
     expect(await account(owner).stopWork('ws-stop')).toEqual([]);
-    expect(asked(at, DEVICE_CANCEL_METHOD)).toEqual([row?.requestId]);
+    expect(asked(at, DEVICE_METHOD.cancel)).toEqual([row?.requestId]);
     at.release();
     await running;
     await account(owner).releaseTurn();
@@ -351,7 +351,7 @@ describe('stopping a turn that runs a command on the owner\'s machine', () => {
 
     // The machine cannot perform the kill at first, so nothing observed the work end.
     const at = await machine(owner, 'ws-unconfirmed', (frame) => {
-      if (frame.method === DEVICE_CANCEL_METHOD && !killWorks) return { failed: 'the kernel refused the kill' };
+      if (frame.method === DEVICE_METHOD.cancel && !killWorks) return { failed: 'the kernel refused the kill' };
 
       return holding('terminated')(frame);
     }, true);

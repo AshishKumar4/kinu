@@ -51,13 +51,10 @@ function guarded(provider: CodemodeProvider, nested: (namespace: string, member:
 }
 
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
-  // The running program's channel, read per provider call: a detach changes the owning job mid-program.
-  let deviceRequests: DeviceRequestChannel | undefined;
-  // The running program's stop signal: a program's calls arrive over RPC, outside its async context.
-  let programStop: AbortSignal | undefined;
-
-  // Each executor as this factory's programs call it: `exec` carries the running program's device-request channel.
-  const programExecutor = (p: ExecutorProviderSurface): ExecutorProviderSurface => {
+  // Each executor as one program calls it, built per program: its calls arrive over RPC, outside its async context, and
+  // a program moved to the background keeps calling while the next one runs, so each call carries its own program's
+  // stop and channel. The channel is read per call: a detach changes the owning job mid-program.
+  const programExecutor = (programStop: AbortSignal | undefined, deviceRequests: DeviceRequestChannel | undefined) => (p: ExecutorProviderSurface): ExecutorProviderSurface => {
     const wrapped: typeof p.tools = {};
 
     for (const [name, entry] of Object.entries(p.tools)) {
@@ -126,14 +123,14 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
       const reachable = reach(surface.native);
 
-      // Built per call with the call's signal: createCodeTool runs its executor without the tool call's options,
-      // so a program's tool calls are stopped with its eval only through what this closure binds.
-      const build = (mode: WorkMode, signal: AbortSignal | undefined): Tool => {
+      // Built per call with the call's signal and channel: createCodeTool runs its executor without the tool call's
+      // options, so a program's tool calls are stopped with its eval, and owned by it, only through what this binds.
+      const build = (mode: WorkMode, signal: AbortSignal | undefined, channel: DeviceRequestChannel | undefined): Tool => {
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them. A native name
         // shadows an external one.
         const toolsProvider = toolsNamespace({ ...toolsInWorkMode(mode, reach(surface.external())), ...reachable }, signal);
 
-        const providers = scope.namespaces(programExecutor);
+        const providers = scope.namespaces(programExecutor(signal, channel));
         const reached = [...scope.reach.narrowProviders([toolsProvider]), ...providersInWorkMode(mode, scope.reach.narrowProviders(providers))];
         const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
@@ -171,27 +168,16 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       };
 
       return withCraftedToolDeclarations(permitInPlan({
-        ...build('build', undefined),
+        ...build('build', undefined, undefined),
         execute: (input, context) => {
-          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', context.abortSignal).execute;
+          const channel = readDeviceRequestChannel({ toolOptions: context });
+          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', context.abortSignal, channel).execute;
 
           if (execute === undefined) throw new Error('Codemode executor is not callable');
-          const channel = readDeviceRequestChannel({ toolOptions: context });
 
-          return withCodemodeProgram(async () => {
-            const outer = deviceRequests;
-            const outerStop = programStop;
-
-            if (channel !== undefined) deviceRequests = channel;
-            programStop = context.abortSignal;
-
-            try {
-              return v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context));
-            } finally {
-              deviceRequests = outer;
-              programStop = outerStop;
-            }
-          }, context.abortSignal);
+          return withCodemodeProgram(async () => (
+            v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context))
+          ), context.abortSignal);
         },
       }), surface.craftedTools);
     },

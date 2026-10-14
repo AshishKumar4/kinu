@@ -8,7 +8,7 @@ import { DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity }
 import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
 import type { SignalCardEvent, SignalCardState } from '../types/signals';
-import { TURN_AUTHOR_METADATA_KEY, turnAuthor } from '../utils/ui-message';
+import { TURN_AUTHOR_METADATA_KEY, turnTags } from '../types/turn-metadata';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
 import { promotedSlateIds } from './markdown-links';
@@ -66,7 +66,7 @@ export function classifyProgrammaticTurn(
 ): ClassifiedProgrammaticTurn | null {
   const { metadata } = row;
 
-  if (turnAuthor({ metadata }) === "operator") return null;
+  if (turnTags({ metadata }).author === "operator") return null;
   const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
   const turn = parsed.success ? parsed.output : {};
 

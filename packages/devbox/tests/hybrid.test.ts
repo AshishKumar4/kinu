@@ -220,6 +220,26 @@ test('discarding the workspace deletes its whole lineage', async () => {
     .toEqual({ deleted: ['snapshot-1', 'snapshot-2'], snapshot: false, pending: [] });
 });
 
+// Review finding 11: a rest's snapshot that finished after a discard was published as the next wake.
+test('a discard while a rest takes its snapshot leaves nothing to wake from: the late snapshot is owed and deleted', async () => {
+  asked.length = 0;
+  registry.deleted.length = 0;
+  const { box, container, rows } = chainBox(HybridBox);
+  await box.devboxStartup();
+  const taking = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  container.snapshotHold = { entered: taking.resolve, release: release.promise };
+  const rest = box.quiesce();
+
+  await taking.promise;
+  await box.discardState();
+  release.resolve();
+  await rest;
+
+  expect({ snapshot: rows.has('devbox:snapshot'), deleted: registry.deleted, pending: rows.get('devbox:dead-snapshots') ?? [] })
+    .toEqual({ snapshot: false, deleted: ['snapshot-1'], pending: [] });
+});
+
 test('a deletion refused after the tags went is owed as the digest the registry left, and the next sweep deletes that', async () => {
   const { box, container, rows } = await rested();
   container.snapshots.delete('snapshot-1');

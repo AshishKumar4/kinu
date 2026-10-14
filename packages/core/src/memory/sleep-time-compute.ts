@@ -8,7 +8,7 @@ import type { LLM } from '../types/primitives';
 import type { FactsStore, Veracity } from './facts';
 import { normalizeFactKey, VERACITIES } from './facts';
 import type { AccountProposal } from './account';
-import { turnAuthor } from '../utils/ui-message';
+import { turnTags } from '../types/turn-metadata';
 import type { ConversationProjection } from '../session/transcript';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { KinuError, settleSync } from '../obs/index';
@@ -53,7 +53,7 @@ export interface SleepTimeTurn {
   readonly task: string;
   readonly output: string;
   readonly toolCalls: readonly string[];
-  /** The owner's own words in the turn (`turnAuthor` operator): the only source an account fact is proposed from. */
+  /** The owner's own words in the turn (its author the operator): the only source an account fact is proposed from. */
   readonly ownerWords: string;
 }
 
@@ -99,7 +99,7 @@ export function sleepTimeWindow(
     } else if (current !== null) {
       current.task.push(row.content);
 
-      if (turnAuthor(row) === 'operator') current.owner.push(row.content);
+      if (turnTags(row).author === 'operator') current.owner.push(row.content);
     }
   }
 

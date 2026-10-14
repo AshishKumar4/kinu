@@ -4,11 +4,15 @@
 // sockets, the process tree and /proc are real.
 import { TestDevbox } from './support/test-devbox';
 import { afterAll, describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { PortListener } from '../src/devbox';
+import { INCIDENT_PREFIX } from '../src/incidents';
+import { Processes } from '../src/processes';
+import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY } from '../src/lifecycle';
 import { harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { pipeExec as localExec } from './support/native-process';
@@ -77,6 +81,35 @@ describe("a port's listener", () => {
     } finally {
       for (const execId of ['direct', 'parent', 'none']) await box.killExec(execId);
       await Promise.allSettled(served);
+    }
+  });
+
+  // Devbox review P1-2: the rest ask matched a listener to a command by its process group, so a server in a group of its
+  // own, as a job's server under its tmux pane is (D95), went unnamed. The listener's ancestry finds it.
+  test("the rest ask names the port a command's server listens on, whatever process group the server is in", async () => {
+    const { box, container, rows } = harness(TestBox, undefined, localExec);
+    await box.devboxStartup();
+    const fifo = join(mkdtempSync(join(root, 'rest-')), 'port');
+
+    await runToExit(['mkfifo', fifo]);
+    const command = Bun.spawn(['sh', '-c', `setsid ${server(fifo)} & wait`]);
+    const port = Number((await Bun.file(fifo).text()).trim());
+
+    try {
+      // The box's record of a running command, its pid the real one at the root of the tree.
+      await new Processes(container.handle()).start('serve', { processId: 'serve' });
+      container.processes.set('serve', { id: 'serve', pid: command.pid, status: 'running', command: 'serve' });
+      rows.set(LAST_INTERACTION_KEY, Date.now() - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+      rows.set(QUIET_SINCE_KEY, Date.now() - DEFAULT_DEVBOX_POLICY.quietConfirmMs - 60_000);
+      await box.devboxHeartbeat();
+
+      const asks = [...rows.entries()].filter(([key]) => key.startsWith(INCIDENT_PREFIX))
+        .map(([, row]) => v.parse(v.object({ stage: v.string(), reason: v.string() }), row)).filter((row) => row.stage === 'rest');
+
+      expect(asks.map((ask) => ask.reason.includes(String(port)))).toEqual([true]);
+    } finally {
+      await runToExit(['pkill', '-f', fifo]);
+      command.kill();
     }
   });
 

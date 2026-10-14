@@ -27,6 +27,7 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/utils/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { getRunEvents } from '../src/read-models/runs';
 import { profileCatalogDigest } from '../src/profiles/catalog';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 /** One text step, finishReason 'stop', so the head ends in a single step. */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
@@ -428,8 +429,9 @@ describe('durable delegated turn opening', () => {
       const lease = session.beginTurn({ runId: 'run-empty', turnId: 'assignment-a' }, 'build', Date.now());
       session.reserveClaim(lease);
 
-      await session.openDelegatedTurn(lease, {
-        messages: [{ role: 'user', content: 'New assignment.' }],
+      await session.openTurnInput(lease, {
+        item: { metadata: { drainTurnId: 'drain-empty' } },
+        message: { role: 'user', content: 'New assignment.' },
         birthContext: async () => [{ role: 'user', content: 'Do not resurrect this birth prefix.' }],
       });
 
@@ -458,7 +460,11 @@ describe('durable delegated turn opening', () => {
     session.reserveClaim(lease);
 
     try {
-      await session.openDelegatedTurn(lease, { messages: [{ role: 'user', content: text }], birthContext: async () => [{ role: 'user', content: birth }] });
+      await session.openTurnInput(lease, {
+        item: { metadata: { drainTurnId: `drain-${turnId}` } },
+        message: { role: 'user', content: text },
+        birthContext: async () => [{ role: 'user', content: birth }],
+      });
     } finally {
       session.finishTurn(lease);
     }
@@ -624,6 +630,7 @@ async function seededTranscript(count: number, extra?: (history: SessionHistory)
   const history = new SessionHistory({
     sql, actor, transactionSync: (write) => db.transaction(write)(),
     files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(sql, actor),
   });
 
   for (let i = 0; i < count; i++) {
