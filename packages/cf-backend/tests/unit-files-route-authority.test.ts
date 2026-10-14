@@ -178,6 +178,7 @@ async function seam(options: {
   const kv = makeKv();
 
   const bindings = {
+    ...OAUTH_DEPLOYMENT,
     AUTH_KV: kv,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     ASSETS: { fetch: async () => new Response('<!doctype html>the app', { status: 200 }) },

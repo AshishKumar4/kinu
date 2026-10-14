@@ -13,7 +13,7 @@ import { fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { driveBound, tenantDrive, type MossaicObject } from '../src/drive/tenant';
-import { accountIdFor, deriveBuiltinUserId } from '../src/auth/store';
+import { accountIdFor } from '../src/auth/store';
 
 /** The account ids the edge derives from these addresses (SHA-256 of the lowercased address, first 32 hex), stated. */
 const ALICE_ID = 'ff8d9819fc0e12bf0d24892e45987e24';
@@ -110,7 +110,7 @@ describe('the Drive on the UserDO', () => {
     const email = 'carol@example.com';
     // The id password and passkey sign-in mint: the account's object is addressed by it, and every workspace the
     // account claims records it as the owner whose tenant `/shared` opens.
-    const account = await deriveBuiltinUserId(email);
+    const account = await accountIdFor({}, email);
     const carol = await signedIn(mossaic, email, account);
 
     expect(await upload(carol, owner, '/plan.txt', [bytes('one tenant')])).toEqual({ ok: true, value: { ok: true } });

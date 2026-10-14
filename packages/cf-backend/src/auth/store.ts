@@ -91,13 +91,13 @@ async function deriveUserId(email: string): Promise<string> {
 }
 
 /** Never the userId an OAuth login of the address gets. */
-export async function deriveBuiltinUserId(email: string): Promise<string> {
+async function deriveBuiltinUserId(email: string): Promise<string> {
   return deriveUserId(`builtin:${email.trim().toLowerCase()}`);
 }
 
 /**
- * The account an address is here: a deployment offers built-in sign-in or OAuth, never both (`builtinSignInOn`), so
- * this is the id its sign-in mints, and so the one any person named by address (a share's recipient) is resolved to.
+ * The account an address is here, the one rule every sign-in mints by and every person named by address (a share's
+ * recipient) resolves by: a deployment offers built-in sign-in or OAuth, never both (`builtinSignInOn`).
  */
 export async function accountIdFor(env: SignInDeclarationEnv, email: string): Promise<string> {
   return builtinSignInOn(env) ? deriveBuiltinUserId(email) : deriveUserId(email);
@@ -267,7 +267,7 @@ function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: 
       return yield* Effect.die(new Error('OAuth provider did not report this email address as verified.'));
     }
 
-    const userId = builtin ? (yield* Effect.promise(async () => deriveBuiltinUserId(email))) : (yield* Effect.promise(async () => deriveUserId(email)));
+    const userId = yield* Effect.promise(async () => accountIdFor(env, email));
 
     const stored = yield* Effect.promise(async () => sessionAuthority(env, userId)
       .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));

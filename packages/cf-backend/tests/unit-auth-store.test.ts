@@ -50,10 +50,12 @@ function setupEnv() {
     kv,
     ensuredProfiles,
     liveSessions: () => [...rows.keys()],
+    // A deployment that signs in through OAuth, as these logins do.
     env: {
       AUTH_KV: kv,
       UserDO: { idFromName: (name) => name, get: () => userDO },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      SIGN_IN_PROVIDERS: 'google',
     } satisfies AuthStoreEnv<string>,
   };
 }
