@@ -9,6 +9,8 @@ import { CANARY_PREFIX, canaryAsk, type CanaryLoad } from './canary-script';
 import { ledgerFindings, measureCanaryLedger, readCanaryLedger, withInterruptedSteps, type CanaryFinding, type CanaryMeasurement } from './durability-canary-ledger';
 import { measureCanaryTelemetry, telemetryFindings, type CanaryActivation, type CanaryTelemetryMeasurement, type CanaryTouch, type CanaryWindow } from './durability-canary-telemetry';
 import { SETTLE_CAP_MS, SETTLE_HOLD_MS, SETTLE_POLL_MS, settledRead } from './prod-logs';
+import { deploymentAt } from './infra-manifest';
+import { EVAL_IDENTITY_ENV, evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
 
 const MINUTE = 60_000;
 
@@ -62,7 +64,14 @@ const recheckCapMs = numberFlag('max-recheck-minutes', '60') * MINUTE;
 
 if (tailMs <= TELEMETRY_LAG) throw new Error('--tail-minutes must exceed 2 so the idle window after the settling margin is nonempty');
 
-const worker = flag('worker', 'kinu-staging');
+// The Worker whose telemetry the canary reads: the one serving the origin it targets (`KINU_EVAL_ORIGIN`).
+const target = evalTargetVerdict(process.env[EVAL_IDENTITY_ENV.origin]);
+
+if (target.kind === 'refused') throw new Error(target.reason);
+
+const worker = deploymentAt(target.origin)?.worker;
+
+if (worker === undefined) throw new Error(`${target.origin} is no deployment wrangler.jsonc declares, so the canary has no telemetry to read`);
 
 const out = flag('out', `/mnt/local/kinu/logs/bg-canary-${iso(Date.now()).replaceAll(':', '-')}.json`);
 

@@ -1025,8 +1025,6 @@ fi
 # (packages/test-utils/src/eval-identity.ts): each deployment has its own.
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
-# Production, the baseline leg's origin: the evals measure the candidate on staging against it.
-EVAL_BASELINE_ORIGIN="https://kinu.run"
 
 # THE STATISTICS, on armada (L19). scripts/evals-map.ts runs each trial as one `armada map` task at
 # this commit, both legs at once: every eval task five trials each on staging, which must be serving
@@ -1092,6 +1090,9 @@ else
   # Started first, so its hours run while the wave runs here. Without its run
   # this build has no verdict to be promoted on, so a failed start is a red.
   if [ "$KINU_EVALS" = "1" ] && [ "$KINU_SERVING" = "1" ]; then
+    # Production, the baseline leg's origin, as wrangler.jsonc declares it: the evals measure the candidate on staging
+    # against it.
+    EVAL_BASELINE_ORIGIN="$(bun "$KINU_ROOT/scripts/eval-target.ts" production | head -1)"
     if provision_eval_keys "$KINU_EVAL_ORIGIN" "$EVAL_BASELINE_ORIGIN"; then
       start_evals \
         || step_red evals "the evals" "evals-map.ts was not started for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"

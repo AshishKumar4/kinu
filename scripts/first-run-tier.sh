@@ -66,9 +66,13 @@ export KINU_EVAL_SPEND_FILE="$SPEND"
 # The tier runs inside the deploy, against the build it just shipped, so the
 # eval-service bearer for THIS deployment may not exist yet. The web identity
 # can approve the device flow that mints one; a persisted session is reused.
-IDENTITY_ENV="$(bun -e "import { EVAL_DEPLOYMENT_ORIGIN, evalWebIdentityEnv } from '@kinu.run/test-utils'; console.log(evalWebIdentityEnv(process.argv[1] || EVAL_DEPLOYMENT_ORIGIN))" "${KINU_EVAL_ORIGIN:-}")" \
-  && [[ -n "$IDENTITY_ENV" ]] \
-  || { echo "first-run: cannot name the variable holding ${KINU_EVAL_ORIGIN:-the deployment}'s DEV_IDENTITY_SECRET." >&2; exit 1; }
+mapfile -t TARGET <<< "$(bun scripts/eval-target.ts)"
+if [[ ${#TARGET[@]} -ne 2 ]]; then
+  echo "first-run: no deployment to drive (scripts/eval-target.ts said why)." >&2
+  exit 1
+fi
+export KINU_EVAL_ORIGIN="${TARGET[0]}"
+IDENTITY_ENV="${TARGET[1]}"
 if [[ -n "${!IDENTITY_ENV:-}" && -z "${KINU_EVAL_TOKEN:-}" ]]; then
   bun scripts/eval-session-mint.ts || exit 1
 fi
