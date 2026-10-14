@@ -1,15 +1,13 @@
 /** D65 lineage ownership: wake selection, publication, and deletion share one owner. */
 import * as v from 'valibot';
 import { attemptSync, settleSync } from './errors';
-import type { SnapshotRegistry } from './snapshot-registry';
+import { OwedSchema, SNAPSHOT_LIFE_MS, payDebt, type Owed, type SnapshotRegistry } from './snapshot-registry';
 
 const SNAPSHOT_KEY = 'devbox:snapshot';
 
 const DEAD_SNAPSHOTS_KEY = 'devbox:dead-snapshots';
 
 const WOKE_FROM_KEY = 'devbox:woke-from';
-
-const LIFE_MS = 29 * 24 * 60 * 60 * 1000;
 
 const Record = v.object({
   id: v.string(), image: v.string(), chainRev: v.number(), takenAt: v.number(), lineage: v.array(v.string()),
@@ -42,7 +40,7 @@ export class Snapshots {
     const held = this.record;
     const rev = this.ports.chainRev();
 
-    if (held === null || held.image !== this.ports.base() || Date.now() - held.rootTakenAt > LIFE_MS) return undefined;
+    if (held === null || held.image !== this.ports.base() || Date.now() - held.rootTakenAt > SNAPSHOT_LIFE_MS) return undefined;
 
     return rev !== undefined && rev > held.chainRev ? undefined : held.id;
   }
@@ -63,7 +61,7 @@ export class Snapshots {
     const takenAt = Date.now();
 
     if (lineage !== this.#lineage) {
-      this.ports.kv.put(DEAD_SNAPSHOTS_KEY, [...new Set([...this.#dead(), snapshot.id])]);
+      this.#owe([snapshot.id]);
 
       return;
     }
@@ -81,12 +79,20 @@ export class Snapshots {
     this.#lineage += 1;
 
     if (held === null) return;
-    this.ports.kv.put(DEAD_SNAPSHOTS_KEY, [...new Set([...this.#dead(), ...held.lineage, held.id])]);
+    this.#owe([...held.lineage, held.id]);
     this.ports.kv.delete(SNAPSHOT_KEY);
   }
 
-  #dead(): readonly string[] {
-    const dead = v.safeParse(v.array(v.string()), this.ports.kv.get(DEAD_SNAPSHOTS_KEY));
+  /** Dead snapshots are owed a deletion at once. */
+  #owe(ids: readonly string[]): void {
+    const owed = this.#dead();
+    const now = Date.now();
+
+    this.ports.kv.put(DEAD_SNAPSHOTS_KEY, [...owed, ...ids.filter((id) => !owed.some((dead) => dead.ref === id)).map((ref) => ({ ref, at: now }))]);
+  }
+
+  #dead(): readonly Owed[] {
+    const dead = v.safeParse(v.array(OwedSchema), this.ports.kv.get(DEAD_SNAPSHOTS_KEY));
 
     return dead.success ? dead.output : [];
   }
@@ -98,24 +104,9 @@ export class Snapshots {
     const registry = this.ports.registry();
 
     if (registry === undefined) return;
-
-    for (const id of this.#dead()) {
-      // Once its tags go, the manifest is found by its digest alone, so the debt is the digest from then on: written
-      // before the first tag goes, so a sweep cut off mid-delete still owes what is left.
-      let owing = id;
-
-      const outcome = await registry.delete(id, (digest) => {
-        this.ports.kv.put(DEAD_SNAPSHOTS_KEY, this.#dead().map(dead => dead === owing ? digest : dead));
-        owing = digest;
-      });
-
-      if (outcome.kind === 'refused') {
-        console.error(`[devbox] the dead snapshot ${id} was not deleted: ${outcome.reason}`);
-      }
-
-      const owed = outcome.kind === 'refused' ? [outcome.left ?? owing] : [];
-
-      this.ports.kv.put(DEAD_SNAPSHOTS_KEY, this.#dead().flatMap(dead => dead === owing ? owed : [dead]));
-    }
+    await payDebt({
+      read: () => this.#dead(), write: (owed) => { this.ports.kv.put(DEAD_SNAPSHOTS_KEY, owed); }, delete: (ref, owe) => registry.delete(ref, owe),
+      now: () => Date.now(), called: 'the dead snapshot',
+    });
   }
 }
