@@ -508,9 +508,7 @@ describe('every ending is a named state, and no ending rejects into the platform
 
   test('an operation is refused, re-armably, when no container was ever admitted', async () => {
     const { box, container } = await stoppedBoxWithService();
-    container.containerUnavailable = new Error(
-      'there is no container instance that can be provided to this durable object',
-    );
+    container.containerUnavailable = new Error('There is no container instance that can be provided to this Durable Object, try again later');
 
     await expect(box.exec('echo hello')).rejects.toMatchObject(
       { code: 'io' });

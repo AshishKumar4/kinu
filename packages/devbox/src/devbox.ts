@@ -39,11 +39,11 @@ import {
   admissionStep,
   classifyRecovery,
   isCapacityRefusal,
-  isTerminalRecovery,
   parseRecoveryRow,
   quiesceStep,
   recoveryStep,
   restartPlan,
+  waitingCanChange,
   type DevboxIncident,
   type DevboxPolicy,
   type IncidentDisposition,
@@ -411,10 +411,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#activate();
   }
 
-  /** Constructor work is two synchronous storage reads, so no event waits on it; it does not yet
+  /** Constructor work is synchronous storage, so no event waits on it; it does not yet
    *  have control-port proof. */
   #activate(): void {
     if (this.ctx.container?.running !== true) return;
+    const parked = this.ctx.storage.kv.get<SettledRestoration>(SETTLED_KEY);
+
+    // A park made under another deploy is lifted: that deploy may be the change its refusal waits on (D94).
+    if (parked?.phase === 'unattached' && !parked.retry && parked.version !== this.#version()) this.ctx.storage.kv.delete(SETTLED_KEY);
     this.#adoptionPending = this.#durableClaim() !== undefined;
     const settled = this.ctx.storage.kv.get<SettledRestoration>(SETTLED_KEY);
 
@@ -961,7 +965,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const generation = this.#generation;
 
     if (restoration.phase !== 'unstarted') {
-      await this.ctx.storage.put(SETTLED_KEY, restoration);
+      // A park keeps the deploy it was made under (D94).
+      await this.ctx.storage.put(SETTLED_KEY, restoration.phase === 'unattached' && !restoration.retry ? { ...restoration, version: this.#version() } : restoration);
     } else {
       await this.ctx.storage.delete(SETTLED_KEY);
     }
@@ -1260,7 +1265,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #startInputs(): StartInputs {
-    return { size: this.#size(), store: this.#bucket() !== undefined, internet: this.enableInternet };
+    return { size: this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
+  }
+
+  #version(): string | null {
+    return this.workerVersion ?? null;
   }
 
   #refusedStart(): string | undefined {
@@ -1304,7 +1313,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
   }
 
-  /** An admission that did not start: refused once if it would fail the same way again (D47), else retried. */
+  /** An admission that did not start: retried only where waiting can change the answer, else parked once (D94, amending
+   *  D47's terminal classes). */
   async #refuseAdmission(
     { generation, since, startsContainer, inputs }: { readonly generation: number; readonly since: number; readonly startsContainer: boolean; readonly inputs: StartInputs },
     failed: { readonly cause: unknown },
@@ -1323,8 +1333,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     const failure = classifyRecovery(failed);
 
-    // A start that fails the same way every time is refused once, not re-armed each second (D47).
-    if (isTerminalRecovery(failure)) {
+    // A start that fails the same way every time is refused once, not re-armed each second: staging 7e411119d's box
+    // named itself into a read-only /etc/hostname, an unclassified failure, and took 1,873 alarms in 30 minutes (D94).
+    if (!waitingCanChange(failed)) {
       const refusal = `[${failure} -> refuse] ${reason}`;
       this.#adoptionPending = false;
 
@@ -1533,7 +1544,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // The tag leads: `recordIncident` truncates at INCIDENT_REASON_MAX_CHARS, and a long cause
     // chain would cut a trailing tag that the host's prose tells the agent to read.
     const reason = `[${failure} -> ${decision.action}] ${describe(thrown)}`;
-    const restoration = { phase: 'unattached', reason, retry: decision.action !== 'refuse' } as const;
+
+    // A refusal is a park, kept with the deploy it was made under, as `#settle` keeps one (D94).
+    const restoration = decision.action === 'refuse'
+      ? { phase: 'unattached', reason, retry: false, version: this.#version() } as const
+      : { phase: 'unattached', reason, retry: true } as const;
 
     if (!await this.#settleRecovery(claim, generation, decision, restoration)) return;
 
@@ -2964,6 +2979,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** The name a person sees for the box in its prompts, its terminal titles and its desktop, read at each start (D93);
    *  unset, the platform's host name. */
   protected async shownName(): Promise<string | undefined> { return undefined; }
+  /** The Worker version this object runs, read at construction and at each start: a start refused under another is asked
+   *  again (D94). Unset, only a changed input or a caller's explicit ask lifts a refusal. */
+  protected get workerVersion(): string | undefined { return undefined; }
   /** The mark at the centre of the desktop's wallpaper, an SVG document drawn in its own colour (D88); unset, none. */
   protected get desktopMark(): string | undefined { return undefined; }
 
