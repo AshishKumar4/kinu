@@ -315,13 +315,12 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Single-use tickets keep long-lived device tokens out of URLs and edge logs.
+  // Single-use tickets keep long-lived device tokens out of URLs and edge logs; spending one deletes its row.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_connect_tickets (
       ticket_hash       TEXT PRIMARY KEY,
       device_id         TEXT NOT NULL,
       expires_at        INTEGER NOT NULL,
-      used_at           INTEGER,
       -- Whether the token exchanged for this ticket was the device's CURRENT
       -- secret rather than the one-shot grace. The accept reads it to decide
       -- whether its rotation may leave a grace behind: a machine recovering ON
@@ -331,7 +330,7 @@ export function initUserTables(sql: SqlExec): void {
       token_was_current INTEGER
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at, used_at)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at)`);
 
   // A device the browser asked to connect, issued before the machine registers: the machine claims this id, so the
   // page that asked watches the one row it will become. Unclaimed past `expires_at`, it claims nothing.
@@ -350,11 +349,10 @@ export function initUserTables(sql: SqlExec): void {
       agent_name     TEXT NOT NULL,
       cli_token_hash TEXT NOT NULL,
       capabilities   TEXT NOT NULL,
-      expires_at     INTEGER NOT NULL,
-      used_at        INTEGER
+      expires_at     INTEGER NOT NULL
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_cli_agent_connect_tickets_exp ON cli_agent_connect_tickets (expires_at, used_at)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_cli_agent_connect_tickets_exp ON cli_agent_connect_tickets (expires_at)`);
 
   initExperienceLibraryTables(sql);
 

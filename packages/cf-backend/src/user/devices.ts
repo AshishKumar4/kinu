@@ -6,6 +6,7 @@ import {
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
+import { SingleUseTickets } from './single-use-tickets';
 
 interface DeviceConsentCheck {
   agentName: string;
@@ -21,7 +22,6 @@ interface DeviceConsentCheck {
  *  that stops rotating expires on this clock. */
 const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
-const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
 /** How long a browser's connect command stays claimable: long enough to install the CLI and sign in. */
 const DEVICE_JOIN_TTL_MS = 30 * 60 * 1000;
@@ -157,7 +157,11 @@ export class UserDevices {
   /** Durable record of commands running on devices (see ./device-inflight.ts); the ledger owns the table. */
   readonly _inflight: DeviceRequestLedger;
 
+  /** Single-use socket tickets a daemon trades its long-lived token for, so the token stays out of URLs and edge logs. */
+  private readonly connectTickets: SingleUseTickets<{ device_id: string; token_was_current: number | null }>;
+
   constructor(private readonly host: UserDevicesHost) {
+    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_connect_tickets', ['device_id', 'token_was_current']);
     this._devices = new DeviceSocketHub(host.ctx);
     this._inflight = new DeviceRequestLedger(host.ctx.storage.sql);
   }
@@ -475,19 +479,8 @@ export class UserDevices {
     const verified = await this.verifyDeviceToken(await ownerCaller(this.host.env), token);
 
     if (!verified.ok || !verified.deviceId) return { ok: false };
-    const now = Date.now();
-    this.host.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
     const ticket = `pct_${randomToken(32)}`;
-    const expiresAt = now + DEVICE_CONNECT_TICKET_TTL_MS;
-    this.host.sqlx(
-      `INSERT INTO device_connect_tickets
-         (ticket_hash, device_id, expires_at, token_was_current)
-       VALUES (?, ?, ?, ?)`,
-      await sha256Hex(ticket),
-      verified.deviceId,
-      expiresAt,
-      verified.current === true ? 1 : 0,
-    );
+    const expiresAt = this.connectTickets.mint(ticket, { device_id: verified.deviceId, token_was_current: verified.current === true ? 1 : 0 }, Date.now());
 
     return { ok: true, ticket, expiresAt };
   }
@@ -521,21 +514,9 @@ export class UserDevices {
     await this.host.requireTier(caller, 'device.manage');
 
     if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) return { ok: false };
-    const now = Date.now();
-    this.host.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
-    const ticketHash = await sha256Hex(ticket);
+    const row = this.connectTickets.spend(ticket, Date.now());
 
-    const row = this.host.sqlx<{
-      device_id: string; expires_at: number; used_at: number | null; token_was_current: number | null;
-    }>(
-      `SELECT device_id, expires_at, used_at, token_was_current
-         FROM device_connect_tickets
-        WHERE ticket_hash = ? LIMIT 1`,
-      ticketHash,
-    )[0];
-
-    if (!row || row.used_at !== null || row.expires_at <= now) return { ok: false };
-    this.host.sqlx(`UPDATE device_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
+    if (!row) return { ok: false };
 
     const active = this.host.sqlx<{ id: string }>(
       `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, row.device_id,

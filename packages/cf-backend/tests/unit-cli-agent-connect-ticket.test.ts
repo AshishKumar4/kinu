@@ -27,3 +27,22 @@ test('an issued ticket redeems once, for its workspace, with the expiry it was i
     .toMatchObject({ ok: false });
   harness.close();
 });
+
+test('a ticket shown to another workspace is refused and burnt, so it cannot then open its own', async () => {
+  const harness = createTestUserDO({ durableObjectId: USER_ID });
+  const owner = await testOwner();
+  await harness.userDO.ensureProfile(owner, 'owner@example.com', 'Owner');
+  await harness.userDO.registerWorkspace(owner, 'jarvis', 'Jarvis');
+  await harness.userDO.registerWorkspace(owner, 'friday', 'Friday');
+  const session = await harness.userDO.mintCliToken(owner, USER_ID, 'a'.repeat(64), 'ticket test');
+
+  const issued = await harness.userDO.issueCliAgentConnectTicket(owner, {
+    userId: USER_ID, agentClass: ORCHESTRATOR_AGENT_SLUG, agentName: 'jarvis', cliTokenHash: session.tokenHash,
+  });
+
+  const at = (agentName: string) => ({ userId: USER_ID, agentClass: ORCHESTRATOR_AGENT_SLUG, agentName, capability: 'agent.websocket' } as const);
+
+  expect(await harness.userDO.verifyCliAgentConnectTicket(owner, issued.ticket ?? '', at('friday'))).toEqual({ ok: false, error: 'wrong agent' });
+  expect(await harness.userDO.verifyCliAgentConnectTicket(owner, issued.ticket ?? '', at('jarvis'))).toEqual({ ok: false, error: 'invalid ticket' });
+  harness.close();
+});

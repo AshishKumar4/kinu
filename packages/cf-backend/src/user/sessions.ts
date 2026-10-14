@@ -9,10 +9,10 @@ import {
 } from '@kinu.run/core/identity';
 import { closeEndedRosterSockets, rosterSockets } from './roster';
 import { singletonValue, type SessionStands, type UserObjectHost } from './user-host';
+import { SingleUseTickets } from './single-use-tickets';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
-const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
 export const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
 
@@ -93,7 +93,14 @@ export interface UserSessionsHost extends Pick<UserObjectHost, 'ctx' | 'env' | '
 
 /** The account's sign-ins, sessions, tokens and connect tickets. */
 export class UserSessions {
-  constructor(private readonly host: UserSessionsHost) {}
+  /** Single-use socket tickets a CLI bearer trades for one agent socket. */
+  private readonly connectTickets: SingleUseTickets<{
+    user_id: string; agent_class: string; agent_name: string; cli_token_hash: string; capabilities: string;
+  }>;
+
+  constructor(private readonly host: UserSessionsHost) {
+    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'cli_agent_connect_tickets', ['user_id', 'agent_class', 'agent_name', 'cli_token_hash', 'capabilities']);
+  }
 
   /** Called before the cookie is issued. An existing hash throws; the caller compensates. */
   async registerBrowserSession(
@@ -536,7 +543,6 @@ export class UserSessions {
     if (!this.host.workspaceRegistered(input.agentName)) return { ok: false, error: 'agent not found' };
 
     const now = Date.now();
-    this.host.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
 
     if (!this.cliBearerScopes(input.cliTokenHash, now)) return { ok: false, error: 'invalid CLI token' };
 
@@ -544,19 +550,14 @@ export class UserSessions {
 
     if (!capabilities.includes(CLI_AGENT_WEBSOCKET_CAPABILITY)) return { ok: false, error: 'missing websocket capability' };
     const ticket = `pat_${input.userId}_${randomToken(32)}`;
-    const expiresAt = now + CLI_AGENT_CONNECT_TICKET_TTL_MS;
-    this.host.sqlx(
-      `INSERT INTO cli_agent_connect_tickets
-         (ticket_hash, user_id, agent_class, agent_name, cli_token_hash, capabilities, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      await sha256Hex(ticket),
-      input.userId,
-      input.agentClass,
-      input.agentName,
-      input.cliTokenHash,
-      JSON.stringify(capabilities),
-      expiresAt,
-    );
+
+    const expiresAt = this.connectTickets.mint(ticket, {
+      user_id: input.userId,
+      agent_class: input.agentClass,
+      agent_name: input.agentName,
+      cli_token_hash: input.cliTokenHash,
+      capabilities: JSON.stringify(capabilities),
+    }, now);
 
     return { ok: true, ticket, expiresAt };
   }
@@ -580,25 +581,10 @@ export class UserSessions {
     validateWorkspaceName(expected.agentName);
 
     const now = Date.now();
-    this.host.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
-    const ticketHash = await sha256Hex(ticket);
+    // Spent on presentation, a match or not: a ticket shown to the wrong agent is burnt, never left live.
+    const row = this.connectTickets.spend(ticket, now);
 
-    const row = this.host.sqlx<{
-      user_id: string;
-      agent_class: string;
-      agent_name: string;
-      cli_token_hash: string;
-      capabilities: string;
-      expires_at: number;
-      used_at: number | null;
-    }>(
-      `SELECT user_id, agent_class, agent_name, cli_token_hash, capabilities, expires_at, used_at
-         FROM cli_agent_connect_tickets
-        WHERE ticket_hash = ? LIMIT 1`,
-      ticketHash,
-    )[0];
-
-    if (!row || row.used_at !== null || row.expires_at <= now) return { ok: false, error: 'invalid ticket' };
+    if (!row) return { ok: false, error: 'invalid ticket' };
 
     if (row.user_id !== expected.userId) return { ok: false, error: 'wrong user' };
 
@@ -608,8 +594,6 @@ export class UserSessions {
     const capabilities = parseCapabilityList(row.capabilities);
 
     if (!capabilities.includes(expected.capability)) return { ok: false, error: 'missing capability' };
-
-    this.host.sqlx(`UPDATE cli_agent_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
 
     if (!this.host.workspaceRegistered(expected.agentName)) return { ok: false, error: 'agent not found' };
     const bearerScopes = this.cliBearerScopes(row.cli_token_hash, now);
