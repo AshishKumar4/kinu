@@ -2235,6 +2235,19 @@ async function relisted(page: Page, act: () => Promise<void>, loadsDocument = fa
   return v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 }
 
+/** The Drive place a person's files are in, chosen where it is drawn: the column, or below `lg` the switch. */
+const MY_STUFF_PLACE = `[...document.querySelectorAll('[data-drive-place="mine"], [data-drive-tab="mine"]')].find((place) => place.getClientRects().length > 0)`;
+
+/**
+ * Opens My stuff, where New is: a first visit to the Drive lands on Slates when the account has a slate, as the
+ * approved design does. With My stuff the only place there is no column or switch, and the page is already there.
+ */
+async function openMyStuff(page: Page): Promise<void> {
+  await until(page, 'My stuff or its place', `document.querySelector('[data-drive-new]') !== null || ${MY_STUFF_PLACE} !== undefined`);
+  await page.evaluate(`document.querySelector('[data-drive-new]') === null && ${MY_STUFF_PLACE}?.click()`);
+  await until(page, "My stuff's New", `document.querySelector('[data-drive-new]') !== null`);
+}
+
 /** Name a Drive entry through the page's name dialog: the field opens with
  *  its current value selected, so typing replaces it. */
 async function nameInDialog(page: Page, name: string): Promise<void> {
@@ -2276,6 +2289,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
   try {
     await page.evaluateOnNewDocument(COUNT_DRIVE_LISTINGS);
     await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); }, true);
+    await openMyStuff(page);
     await relisted(page, async () => {
       await page.click('[data-drive-new]');
       await page.click('[data-drive-new-folder]');
@@ -2294,7 +2308,11 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
       await nameInDialog(page, renamed);
     });
 
-    const afterRename = await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
+    await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
+    await openMyStuff(page);
+    await painted(page);
+
+    const afterRename = v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 
     // Deleted through the page only where the page lists it; a missed rename is
     // the verdict's finding, and the `finally` below removes what is left.
