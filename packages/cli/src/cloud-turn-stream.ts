@@ -1,7 +1,7 @@
 /** One cloud turn's accumulated stream, as its live frames arrive. */
 import * as v from 'valibot';
 import {
-  JsonObjectSchema, parseJsonValue,
+  JsonObjectSchema, parseJsonValue, STEP_CUT_CHUNK, StepCutDataSchema,
   type JsonObject, type JsonValue, type ToolOutcome,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
@@ -11,6 +11,8 @@ import type { AgentClientEvent, AgentSendResult, AgentTurnResult } from './agent
 export class CloudTurnStream {
   private readonly startedAt = Date.now();
   private text = '';
+  /** How much of `text` the finished steps wrote: a cut step's output is retracted back to it. */
+  private stepText = 0;
   private steps = 0;
   private readonly toolCalls: AgentTurnResult['toolCalls'] = [];
   private readonly toolById = new Map<string, AgentTurnResult['toolCalls'][number]>();
@@ -146,7 +148,19 @@ export class CloudTurnStream {
 
       case 'finish-step': {
         this.steps += 1;
+        this.stepText = this.text.length;
         this.emit({ type: 'step-finish', stepIndex: this.steps });
+
+        return;
+      }
+
+      // A resumed turn retracts the step its agent did not finish: what it wrote is not the answer.
+      case STEP_CUT_CHUNK: {
+        const cut = v.safeParse(StepCutDataSchema, chunk.data);
+
+        if (!cut.success) return;
+        this.text = this.text.slice(0, this.stepText);
+        this.emit({ type: 'step-cut', stepIndex: cut.output.stepIndex });
 
         return;
       }

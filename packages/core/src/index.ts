@@ -1715,6 +1715,7 @@ export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTur
 export {
   ChatSession, type ChatSessionOptions, type ChatSessionPorts, type OpenWork, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type TurnOpening, type TurnOpeningAsk, openingCacheCold, type OwedTerminalEffectsInput, type SessionEvent, type TurnEndEvent, type SendOptions, type SendLandingWaiter, type DeliveredRun,
+  STEP_CUT_CHUNK, StepCutDataSchema,
 } from './orchestrator/chat-session';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
@@ -1793,6 +1794,7 @@ export { stampAuthorship, turnAuthorship, type TurnAuthorship } from './orchestr
 
 export {
   AgentDeliveries, AgentStops, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, initAgentStopsTable, type OwedStop, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, type OwedDelivery, type DeliveredAssignment, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput, type IntentInput, type IntentResult, type OwedIntent, type OwnerIntent, type OwedOwnerIntent, OwedIntentSchema, OwedOwnerIntentSchema,
+  SendMetadataSchema, sentWords, type SendMetadata, type SentWords,
 } from './subordinates/deliveries';
 
 export { DeliveryCoordinator, InProcessDeliveries, type CrossedDelivery, type DeliveryHost } from './subordinates/delivery-coordinator';

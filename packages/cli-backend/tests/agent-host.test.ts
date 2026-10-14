@@ -28,7 +28,9 @@ import {
   HeadCapture,
   bindActorHandle,
   READS_CHANGED_EVENT,
+  JsonValueSchema,
   type ActorHandle,
+  type JsonValue,
   type HostedAgentRef,
   type LLMProviderConfig,
   type SqlExecutor,
@@ -53,7 +55,7 @@ import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
 import { hireDeathModel } from './hire-death-model';
-import { swarmsOn, toolSequenceModel } from './helpers/local-session';
+import { swarmsOn, toolCallStream, toolSequenceModel } from './helpers/local-session';
 import { staticModelPlane } from '../src/profile-authority';
 
 /** A roster row's lifetime is its actor's. */
@@ -1122,6 +1124,49 @@ describe('LocalAgentHost', () => {
       view.close();
       expect(assignments.map((row) => row.body)).toEqual([brief]);
       expect(reports).toBe(1);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("a hire's programs reach its own planes only, as on the cloud; the workspace's own agent reaches the whole surface", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    // What a program reaches of the workspace's own planes: delegation, the agent's own lifecycle, its tasks and memory.
+    const probe = 'return [typeof agents, typeof agent, typeof tasks, typeof memory];';
+
+    // Every turn runs the probe once, then answers.
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => ({
+        stream: options.prompt.at(-1)?.role === 'tool' ? textStream('done', usage) : toolCallStream('eval', { code: probe }, usage),
+        response: { headers: {} },
+      }),
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const reached = new Map<string, string>();
+
+    host.subscribe((agent, event) => {
+      if (event.type === 'tool-result' && event.toolName === 'eval') reached.set(agent, String(event.result));
+    });
+
+    try {
+      const root = await host.acquire('root');
+      await root.send('Look around.', { id: crypto.randomUUID() });
+
+      const team = await host.team('root');
+      await team.create({ name: 'auditor', role: 'researcher', mission: 'Watch the ledger.' });
+      const answered = awaitTurns(host, 'root/auditor', 1);
+      await team.assign({ name: 'auditor', task: 'Look around.', mode: 'build' });
+      await answered;
+
+      const seen = (agent: string): JsonValue => v.parse(v.object({ result: JsonValueSchema }), JSON.parse(present(reached.get(agent), `${agent}'s program`))).result;
+
+      expect({ root: seen('root'), hire: seen('root/auditor') })
+        .toEqual({ root: ['object', 'object', 'object', 'object'], hire: ['undefined', 'undefined', 'undefined', 'undefined'] });
     } finally {
       await host.close();
     }

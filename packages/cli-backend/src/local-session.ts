@@ -72,7 +72,7 @@ import { ActorSession, type ActorTurnLease,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
-  actorNamespaces, SURFACE_POLICY, type SurfaceActor,
+  actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
   agentRoleSwitch,
   REPORT_TOOL, turnAuthorship, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
@@ -175,6 +175,14 @@ interface LocalHostedSession {
 /** The jobs a session's runners drive: its host tree's set, or, for a session outside a host, its own. */
 function drivenJobs(hosted: LocalHostedSession | undefined): Set<string> {
   return hosted?.jobsDriven ?? new Set();
+}
+
+/** The session's agent seated over its runtime: as its host seated it, or, outside a host, the workspace's own. */
+function seatOf(hosted: LocalHostedSession | undefined, rt: CLIRuntime, stores: AgentStores): SeatedActor {
+  if (hosted !== undefined) return hosted.actor;
+  const record = localActorDirectory(rt.actor).directory.describe(rt.actor);
+
+  return { reference: actorReferenceOf(record), record, handle: rt.actor, stores, runtime: rt };
 }
 
 type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
@@ -292,6 +300,11 @@ export class LocalAgentSession {
   }
 
   private readonly stores: AgentStores;
+  /** What this agent reaches by what it is (`actorReach`), as on the cloud: the workspace's own agent its programs'
+   *  whole surface and what lies outside, a hire only its own planes. */
+  private readonly actorReach: ActorReach;
+  /** This agent seated over its runtime, as a confined program's namespaces are built over it. */
+  private readonly seat: SeatedActor;
   private readonly jobs: BackgroundJobStore;
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
@@ -450,6 +463,8 @@ export class LocalAgentSession {
     // Hosted, these are the stores the root's host bound; a second set would be a second memo.
     this.stores = opts.hosted?.actor.stores ?? this.rt.stores;
     const stores = this.stores;
+    this.seat = seatOf(opts.hosted, this.rt, stores);
+    this.actorReach = actorReach(actorPolicy(this.seat.record));
     this.jobs = stores.jobs;
     this.taskList = stores.taskList;
     this.headJournal = new LiveHeadJournal(this.rt.storage.sql, this.rt.actor, this.headActivity);
@@ -1679,7 +1694,9 @@ export class LocalAgentSession {
       },
       ...(this.ancestors && { ancestors: this.ancestors }),
       toolset: (mode) => this.turnToolSet(mode),
+      // What lies outside the workspace is its own agent's alone.
       externalTools: async (window) => {
+        if (!this.actorReach.external) return {};
         await this.admitMcp(window);
 
         return this.extraTools;
@@ -2449,11 +2466,20 @@ export class LocalAgentSession {
     this.cachedModelSpec = null;
   }
 
-  /** One list for both the turn resolver and the tool builder, so they cannot disagree. */
+  /** One list for both the turn resolver and the tool builder, so they cannot disagree. A hire's programs reach its own
+   *  planes only (`SURFACE_POLICY.confined`): no delegation, lifecycle or role switch of the workspace's. */
   private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
     const report = this.reportGateOpen() ? this.reportDeps : null;
+    const reported = report === null ? {} : { report: () => report };
 
-    return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, report === null ? {} : { report: () => report });
+    if (this.actorReach.surface === 'program') return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, reported);
+    const acc = this.actorSession.orchestrator.acc;
+
+    // A program here runs in this process, which holds no Browser Run socket client, so no browser sessions.
+    return actorNamespaces(hostedSurfaceActor(this.seat, {
+      web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
+      conversations: this.ownConversations(), vectorStore: null, ledgers: () => ({ files: acc.files, context: acc.context }),
+    }), SURFACE_POLICY.confined, reported);
   }
 
   /** This session's actor as its namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */
@@ -2737,7 +2763,7 @@ export class LocalAgentSession {
       escalations: this.actorSession.orchestrator.acc.escalations,
       craft: this.actorSession.orchestrator.acc.craft,
       vectorStore: null,
-      external: () => this.turnExternalTools,
+      ...(this.actorReach.external && { external: () => this.turnExternalTools }),
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
         const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
@@ -2750,7 +2776,7 @@ export class LocalAgentSession {
         return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
-      roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null),
+      ...(this.actorReach.lanes && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
       jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },

@@ -64,7 +64,7 @@ export function encodeChatRequest(input: {
     init: {
       method: 'POST',
       body: JSON.stringify({
-        messages: [createUserUiMessage(input.requestId, input.text, [], input.mode)],
+        messages: [createUserUiMessage(input.requestId, input.text, [], input.mode === undefined ? {} : { kinuMode: input.mode })],
         trigger: 'submit-message',
       }),
     },
