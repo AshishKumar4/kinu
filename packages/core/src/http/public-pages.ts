@@ -183,7 +183,7 @@ export function approvalDocument(title: string, body: string): string {
     title: `${title} - Kinu.run`,
     styles: CARD_CSS,
     body: `<main class="gate"><div class="card">
-  <span class="lockup">${mark(18)} Kinu.run</span>
+  <span class="lockup">${mark(18)} Kinu</span>
   <h1 class="small">${escapeHtml(title)}</h1>
   ${body}
 </div></main>\n`,
