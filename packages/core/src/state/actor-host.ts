@@ -86,6 +86,9 @@ export interface SeatHostDeps<R extends AgentRuntime = AgentRuntime> {
   loopFor(bound: SeatedActor<R>): LoopSeed | Promise<LoopSeed>;
   /** Called after the rows are gone, so a failed reclaim leaves no half-removed readable actor. */
   discardBytes?(record: WorkspaceActor): Promise<void>;
+  /** The stores an actor's runtime already holds, where it was built before the host bound it (a local root): an actor
+   *  has one bundle, so the host binds it with these rather than a second. */
+  storesFor?(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): AgentStores | undefined;
   readonly tracing: (() => AgentTracing) | undefined;
 }
 
@@ -268,7 +271,7 @@ export function createSeatHost<A extends SeatedActor<R>, R extends AgentRuntime>
 
     const binding = { reference: actorReferenceOf(reference), record, handle };
 
-    const stores = createAgentStores(
+    const stores = deps.storesFor?.(binding) ?? createAgentStores(
       () => deps.storage.sql,
       () => handle,
       (write) => deps.storage.transactionSync(write),

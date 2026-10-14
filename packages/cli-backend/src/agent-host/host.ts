@@ -479,6 +479,8 @@ export class LocalAgentHost {
       // Every hirer here, the root included, is an entry of this process.
       sayToParent: (child, signal) => this.sayToHirer(child, signal),
       actorRuntimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
+      // The root's runtime is built before its host binds it, with the stores the host then binds it with.
+      storesFor: (bound) => runtimes.get(bound.reference.actorId)?.stores,
       parentRuntimeFor: (bound) => bound.reference.parentActorId === null
         ? ws.rt : this.requireActorEntry(bound.reference.parentActorId).ws.rt,
       loopFor: (bound) => {
@@ -545,7 +547,7 @@ export class LocalAgentHost {
     const openConfig = this.childOpenConfig(parent, binding);
 
     const built = createCLIRuntime(db, {
-      ...openConfig, agentName: binding.name, actor: bound.handle,
+      ...openConfig, agentName: binding.name, actor: bound.handle, stores: bound.stores,
     });
 
     const shared = shareLocalWorkspacePlane(built, parent.ws.rt);
