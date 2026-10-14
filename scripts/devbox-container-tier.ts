@@ -56,7 +56,16 @@ try: a=sorted({r[4][0] for r in socket.getaddrinfo(socket.gethostname(), None)})
 except Exception as e: a=[type(e).__name__]
 print("%d %s" % ((time.time()-t)*1000, " ".join(a)))' 2>&1 | tail -1)"`,
   `printf "fqdn=%s\\n" "$(python3 -c 'import socket; print(socket.getfqdn())' 2>&1 | tail -1)"`,
-  `printf "addresses=%s\\n" "$(ip -o addr show scope global 2>/dev/null | awk '{ sub("/.*", "", $4); print $4 }' | tr '\\n' ' ')"`,
+  // The lookup's answers that are the box's own: an address a socket on the box can bind, and not loopback's.
+  `printf "own=%s\\n" "$(python3 -c 'import ipaddress,socket
+own=[]
+for info in socket.getaddrinfo(socket.gethostname(), None, type=socket.SOCK_DGRAM):
+    address=info[4][0]
+    if ipaddress.ip_address(address.split("%")[0]).is_loopback: continue
+    try: socket.socket(info[0], socket.SOCK_DGRAM).bind(info[4])
+    except OSError: continue
+    own.append(address)
+print(" ".join(sorted(set(own))))' 2>&1 | tail -1)"`,
   `( cd /var/tmp && timeout 8 python3 -m http.server ${String(NAME_HTTP_PORT)} >/var/tmp/name-http.log 2>&1 & )`,
   `for _ in $(seq 40); do python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${String(NAME_HTTP_PORT)}/', timeout=1)" 2>/dev/null && break; sleep 0.1; done`,
   `printf "http=%s\\n" "$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:${String(NAME_HTTP_PORT)}/', timeout=2).status)" 2>&1 | tail -1) $(tail -1 /var/tmp/name-http.log | cut -c1-80)"`,
@@ -692,7 +701,7 @@ async function main(): Promise<void> {
     await step('box-name', async () => {
       const named = new Map((await shell(BOX_NAME_READ)).split('\n').map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
       const [lookupMs, ...looked] = (named.get('lookup') ?? '').split(' ');
-      const own = new Set((named.get('addresses') ?? '').split(' ').filter((address) => address !== ''));
+      const own = (named.get('own') ?? '').split(' ').filter((address) => address !== '');
 
       process.stdout.write(`[${run}] box name ${JSON.stringify(Object.fromEntries(named))}\n`);
 
@@ -700,8 +709,8 @@ async function main(): Promise<void> {
 
       if (named.get('prompt')?.includes(`@${BOX_NAME}`) !== true) throw new Error(`a shell's prompt reads ${named.get('prompt') ?? 'nothing'}, not ${BOX_NAME}`);
 
-      if (Number(lookupMs) > NAME_LOOKUP_MS || !looked.some((address) => own.has(address))) {
-        throw new Error(`its own name resolved in ${lookupMs ?? '?'} ms to ${looked.join(' ')}, not at once to one of its addresses ${[...own].join(' ')}`);
+      if (Number(lookupMs) > NAME_LOOKUP_MS || own.length === 0) {
+        throw new Error(`its own name resolved in ${lookupMs ?? '?'} ms to ${looked.join(' ')}, not at once to an address of the box itself`);
       }
 
       if (named.get('fqdn') !== BOX_NAME) throw new Error(`getfqdn answered ${named.get('fqdn') ?? 'nothing'}`);
