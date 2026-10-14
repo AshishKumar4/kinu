@@ -36,7 +36,7 @@ namespace Kinu.Safety.DeviceToken
 
 /-! ## The connect ticket -/
 
-/-- `DEVICE_CONNECT_TICKET_TTL_MS`. -/
+/-- `TICKET_TTL_MS` (packages/cf-backend/src/user/single-use-tickets.ts). -/
 def ticketTtl : Nat := 60 * 1000
 
 structure Ticket where
