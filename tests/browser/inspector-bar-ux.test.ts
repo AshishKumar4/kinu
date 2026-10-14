@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ElementHandle, Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
-import { openInspectorPage } from '../../scripts/product-flows';
+import { openInspectorPage, sessionLine } from '../../scripts/product-flows';
 
 declare global {
   interface Window {
@@ -176,6 +176,25 @@ describe('the Environment panel', () => {
         await page.waitForSelector('[role="tab"][aria-selected="true"]', SOON);
         expect(await control(page, 'body', 'tab', 'Desktop')).not.toBeNull();
         expect(await page.$$eval('[role="tablist"] [role="tab"]', (tabs) => tabs.length)).toBeGreaterThan(1);
+      } finally { await page.close(); }
+    });
+  });
+
+  // The computer-sessions flow reads the line with this reader on a deployment (staging f1f0b451b read two folders).
+  test("a session's line names its whole folder to the flows' reader, in a narrow pane and a wide one", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        // A 420-pixel window shows the folder's last part, the 720-pixel column its whole path.
+        for (const [width, query] of [[420, '&narrow'], [1280, '']] as const) {
+          await page.setViewport({ width, height: 1000 });
+          await page.goto(`${origin}/gallery.html?frame=environment${query}`, { waitUntil: 'networkidle0' });
+          await (await required(page, '[data-env-card]', 'button', COMPUTER)).click();
+          await page.waitForSelector('[data-session-cwd]', SOON);
+
+          expect(await page.evaluate(sessionLine('body'))).toMatchObject({ folder: '/workspace/storefront' });
+        }
       } finally { await page.close(); }
     });
   });
