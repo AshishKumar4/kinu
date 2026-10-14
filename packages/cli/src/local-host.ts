@@ -51,11 +51,12 @@ export function createLocalHost(process: LocalHostProcess): LocalAgentHost {
  */
 async function openLocalAgent(ref: HostedAgentRef, db: Database, dbPath: string, process: LocalHostProcess): Promise<LocalHostedAgent> {
   const opened = process.root?.name === ref.name ? process.root : undefined;
-  const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver(opened ?? {});
+  const { defaults, resolver: modelResolver } = createConfiguredLocalModelResolver(opened ?? {});
   const cloud = resolveCloudSession();
 
   const openConfig = {
-    llm: llmConfig,
+    llm: defaults.endpoint,
+    defaultSpec: defaults.spec,
     providerCredentials: resolveProviderCredentials,
     oauthStore: createOAuthStore(),
     ...(cloud !== null && { cloud }),

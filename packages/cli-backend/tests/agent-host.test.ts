@@ -477,7 +477,6 @@ async function seedAgent(state: string, name: string): Promise<string> {
     await createWorkspace(db, {
       name,
       purpose: `Test agent ${name}`,
-      llm: DUMMY_LLM,
       home: workspaceHome(db),
     });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));

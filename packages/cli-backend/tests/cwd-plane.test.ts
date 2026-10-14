@@ -64,7 +64,7 @@ async function openedWorkspace(state: string, name: string, cwd: string) {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = workspaceDatabase(dbPath);
-  await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM, home: workspaceHome(db) });
+  await createWorkspace(db, { name, purpose: `Test agent ${name}`, home: workspaceHome(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   return openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd });
@@ -846,7 +846,7 @@ describe('SOUL.md is the workspace\'s own file', () => {
     const dbPath = join(state, 'jarvis', 'agent.db');
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = workspaceDatabase(dbPath);
-    await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM, home: workspaceHome(db) });
+    await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
     expect(soulIn(rt.space)).toContain('Test agent jarvis');

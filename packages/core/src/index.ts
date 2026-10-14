@@ -436,7 +436,7 @@ export {
   type OverflowRecoveryDecision,
 } from './turn-failure';
 
-export { createVercelAILLM, createChatModel } from './llm';
+export { createChatModel } from './llm';
 
 // Surfaces import this instead of retyping the number.
 export { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
@@ -1311,7 +1311,6 @@ export {
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
   buildModelCallEvent,
-  unpricedLedgerSink,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,

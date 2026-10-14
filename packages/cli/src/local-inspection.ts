@@ -206,12 +206,12 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
 /** Null when nothing names a model. */
 export async function readLocalNextTurnTier(name: string, opts: LocalModelResolverOptions = {}): Promise<ResolvedTurnProfile['tier'] | null> {
   const envelope = await createProfileAuthorityReader()();
-  const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
+  const { defaults, resolver } = createConfiguredLocalModelResolver(opts);
 
   return withLocalDbAsync(name, async (db) => {
     const { config } = openWorkspaceMainActor(makeSql(db));
 
-    if (envelope === null && config.getModel() === null && llmConfig === null) return null;
+    if (envelope === null && config.getModel() === null && defaults.spec === null) return null;
 
     return createLocalProfileAuthority({ config, plane: resolverModelPlane(resolver), envelope: async () => envelope })
       .nextTurnTier({ workMode: 'build' });

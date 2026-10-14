@@ -1,9 +1,10 @@
 import { createLocalModelResolver, type LocalModelResolver } from '@kinu.run/cli-backend';
-import { parseModelSpec, type LLMProviderConfig } from '@kinu.run/core';
+import { parseModelSpec } from '@kinu.run/core';
 import {
   createOAuthStore,
   resolveCloudSession,
-  resolveLLMConfig,
+  resolveModelDefaults,
+  type LocalModelDefaults,
   resolveProviderCredentials,
 } from './config';
 import { readDefaultTier } from './profiles';
@@ -17,8 +18,8 @@ export interface LocalModelResolverOptions {
 }
 
 interface ConfiguredLocalModelResolver {
-  /** Default endpoint for bare ids, or null. */
-  llmConfig: LLMProviderConfig | null;
+  /** The model a bare id or no choice means, and an endpoint the process was given. */
+  defaults: LocalModelDefaults;
   resolver: LocalModelResolver;
 }
 
@@ -53,16 +54,17 @@ export function findUnusableModel(opts: LocalModelResolverOptions = {}): Promise
 }
 
 export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptions = {}): ConfiguredLocalModelResolver {
-  // A null endpoint only removes the bare-id default.
-  const llmConfig = resolveLLMConfig({ ...opts, defaultModel: readDefaultTier()?.model });
+  // A null spec only removes the bare-id default.
+  const defaults = resolveModelDefaults({ ...opts, defaultModel: readDefaultTier()?.model });
   const cloud = resolveCloudSession();
 
   const resolver = createLocalModelResolver({
-    llm: llmConfig,
+    llm: defaults.endpoint,
+    defaultSpec: defaults.spec,
     credentials: resolveProviderCredentials,
     oauthStore: createOAuthStore(),
     cloud: cloud ?? undefined,
   });
 
-  return { llmConfig, resolver };
+  return { defaults, resolver };
 }

@@ -23,8 +23,10 @@ export interface WorkspaceInfo {
 }
 
 interface CLIOpenOptions {
-  /** Default endpoint for bare ids; null when nothing derives one. */
+  /** An endpoint this process was given (`--base-url` and `--auth`), served as itself; null without one. */
   llm: LLMProviderConfig | null;
+  /** The model a bare id or no choice means; absent, the given endpoint's own. */
+  defaultSpec?: string | null;
   providerCredentials?: ProviderCredentialSource;
   oauthStore?: LocalOAuthStore;
   /** The signed-in session, whose worker rates turns. */

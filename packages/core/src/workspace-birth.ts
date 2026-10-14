@@ -1,7 +1,6 @@
 import { writeText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from './types/agent-runtime';
-import type { Executor, RawSqlExec, SqlExecutor, Storage } from './types/primitives';
-import type { LLMProviderConfig } from './llm';
+import type { Executor, LLM, RawSqlExec, SqlExecutor, Storage } from './types/primitives';
 import { initAllTables } from './state/workspace-schema';
 import { seedSoul, SOUL_PATH, UNTITLED_WORKSPACE_NAME } from './identity/soul';
 import { createInlineCraftStore, wrapDatabase, type AgentDatabase } from './identity/inline-primitives';
@@ -10,9 +9,8 @@ import { adaptMemory } from './memory/vector-sync';
 import { bootstrapScaffold } from './scaffold/bootstrap';
 import { nanoid } from './utils/nanoid';
 import { nowMs } from './utils/date';
-import { createVercelAILLM } from './llm';
-import { unpricedLedgerSink } from './events/model-call-event';
-import { initRunEventTables, RunEventRecorder } from './events/recorder';
+import { KinuError } from './obs/index';
+import { initRunEventTables } from './events/recorder';
 import { buildRuntime } from './runtime-builder';
 import { createSqlFiber } from './execution/fiber';
 import { cloudPlanes } from './vfs/resolve';
@@ -27,7 +25,6 @@ export interface WorkspaceBirthConfig {
   /** The human name heading SOUL.md and MEMORY.md; never the slug. Set later by `planWorkspaceTitle` if absent. */
   title?: string;
   purpose: string;
-  llm: LLMProviderConfig;
   scaffold?: string;
   /** Main's home, where the seeds land as files: SOUL.md, the first memory note and the scaffold. */
   home: VFS & Required<Pick<VFS, 'readRange'>>;
@@ -40,7 +37,17 @@ interface WorkspaceComponents {
   readonly transactionSync: Storage['transactionSync'];
   readonly home: WorkspaceBirthConfig['home'];
   readonly actor: ActorHandle;
-  readonly llm: LLMProviderConfig;
+}
+
+/** The model of a workspace being born: none. Birth calls no model, so it holds no endpoint; the runtime the workspace
+ *  opens with routes every call. A call is refused as the LLM contract fails, by its promise. */
+function bornWithoutModel(): LLM {
+  const refused = (): Promise<never> => Promise.reject(new KinuError('unsupported', 'a workspace being born calls no model'));
+
+  return {
+    stream: () => ({ [Symbol.asyncIterator]: () => ({ next: refused }) }),
+    complete: refused,
+  };
 }
 
 function buildComponents(components: WorkspaceComponents) {
@@ -53,10 +60,7 @@ function buildComponents(components: WorkspaceComponents) {
   const executor: Executor = { languages: ['javascript'], execute: async () => ({ result: undefined, error: 'a workspace being born runs no programs' }) };
   initRunEventTables(execRaw);
 
-  // A birth-time call is the new workspace's spend, unpriced: nothing is resolved yet.
-  const llm = createVercelAILLM(components.llm, {
-    source: 'reflection', report: unpricedLedgerSink(new RunEventRecorder(sql, actor)),
-  });
+  const llm = bornWithoutModel();
 
   const schedule = { after: async (_ms: number, fn: () => Promise<void>) => { await fn(); }, cron: async () => {}, fiber: createSqlFiber(sql, actor) };
 
@@ -94,7 +98,7 @@ export async function createWorkspace(
 
   await home.mkdir('memory', { recursive: true });
   await writeText(home, 'memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
-  const rt = buildComponents({ db, sql, execRaw, transactionSync, home, actor, llm: config.llm });
+  const rt = buildComponents({ db, sql, execRaw, transactionSync, home, actor });
 
   // The loop's versioned source, its pointer and its live view, through the one writer every reopen heals with.
   await bootstrapScaffold(rt, config.scaffold);

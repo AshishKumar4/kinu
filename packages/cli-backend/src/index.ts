@@ -49,7 +49,7 @@ export { OS_LEASE_PROCESS } from './agent-host/lease-process';
 
 export {
   createLocalModelResolver,
-  defaultSpecForEndpoint, stripProvider,
+  stripProvider,
   type LocalModelResolver, type LocalCloudSession,
   type LocalProviderCredentials,
 } from './model-resolver';
