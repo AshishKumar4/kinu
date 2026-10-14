@@ -22,7 +22,7 @@ export { requireSchemaGenesis, schemaGenesisOf, stampSchemaGenesis } from './sch
 
 export { localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles } from './local-archive';
 
-export { withConfigLock } from './config-lock';
+export { tryLock, withConfigLock } from './config-lock';
 
 export {
   KinuAgentConfigSchema, OpenAiCompatConfigSchema, readConfigFile, updateConfigFile,
