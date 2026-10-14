@@ -2917,13 +2917,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * A person's words, delivered and answered where they landed when `land`: in the running turn or opening one. Refused
    * at the door as the agent would refuse them, before anything is written; refused too under an id the agent holds.
    * View-only agents take none. A crossing that fails is the sender's to hear, and the words stay owed. `admitted` is
-   * told once they are the agent's input, before the wait for where they landed.
+   * told in the commit that owes them to the agent: a Stop from there on cancels them, on their way or taken.
    */
   private async deliverWords(actorId: string, delivery: Delivery, land: boolean, admitted?: () => void): Promise<SendLanding | null> {
     const refused = wordsRefusal(delivery);
 
     const crossed: CrossedDelivery = refused === null
-      ? await whenActorTakesInput(this.boundSql, actorId, () => this.deliver(actorId, delivery))
+      ? await whenActorTakesInput(this.boundSql, actorId, () => this.deliver(actorId, delivery, admitted))
       : { failure: refused };
 
     // An id the agent holds already was sent before: refused, as at the door.
@@ -2932,7 +2932,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     await heard(crossed, () => null);
-    admitted?.();
 
     // Heard once a turn took them, off the crossing lane: what waits behind them crosses meanwhile.
     return land ? await (await this.agentCalls(actorId)).landing(this.agentSnapshot(actorId), delivery.id) : null;

@@ -782,18 +782,6 @@ export class ChatSession {
     return this.reopening || this.running();
   }
 
-  /**
-   * A turn that reads a person's next words at its next step: one running, re-opening or queued, that no Stop has ended.
-   * A stopped one reads nothing more, so words sent after the Stop wait as the next turn, which their owner meant;
-   * steered into it, they were handed back with its unread words (staging, 2026-10-14).
-   */
-  private takesSteers(): boolean {
-    if (this.actorSession.stopping || this.taken?.cut !== undefined) return false;
-
-    return this.reopening || this.actorSession.inFlight
-      || this.queue.some((item) => (item.kind === 'user' || item.yieldsToUserMessage === true) && item.cut === undefined);
-  }
-
   /** A turn runs or is queued; a Retry claimed but not yet queued aside. */
   private running(): boolean {
     return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
@@ -1145,7 +1133,7 @@ export class ChatSession {
       throw new KinuError('bad_input', 'send requires the message text');
     }
 
-    if (card === undefined && this.takesSteers()) {
+    if (card === undefined && this.turnInFlight()) {
       const { id } = opts;
       const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
 
@@ -1207,12 +1195,8 @@ export class ChatSession {
     this.abandonQuestions();
     this.cancelQueued();
 
-    // Taken by the pump, its execution not yet claimed: no lease is there to abort, so its driver reads this. With none
-    // taken, the person's words at the queue's head are the turn the Stop is for, which the owner saw start: it ends
-    // unrun when the pump takes it, its words kept, as a turn stopped as it opened ends.
-    const stopped = this.taken ?? this.queue.find((item) => item.kind === 'user');
-
-    if (stopped !== undefined) stopped.cut ??= new KinuError('cancelled', 'The agent was stopped before this turn ran.');
+    // Taken by the pump, its execution not yet claimed: no lease is there to abort, so its driver reads this.
+    if (this.taken !== null) this.taken.cut ??= new KinuError('cancelled', 'The agent was stopped before this turn ran.');
     this.runningRun?.controller.abort(new KinuError('cancelled', 'the agent was stopped'));
     const opened = this.handBackOpeningWords();
     const { steers, cancelled } = this.actorSession.interrupt();

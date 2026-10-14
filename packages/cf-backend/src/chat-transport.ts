@@ -51,7 +51,7 @@ export interface ChatWire {
   /** The open turn's first answer text reached the room: told once a turn, as the text streams in. */
   firstText?(): void;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. `admitted` is told once the words
-   *  are the agent's input, ahead of where they land. */
+   *  are owed to the agent, where a Stop reaches them, ahead of where they land. */
   send(
     input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode },
     admitted: () => void,
@@ -278,9 +278,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /**
    * Sends and Stops in the order their tabs sent them: a Stop stops what was sent before it, and what is sent after it is
-   * taken once the Stop has reached the agent. A send holds the order until its words are admitted, never to its
-   * landing. Staging, 2026-10-14: a Stop 113 ms after a new chat's opening reached the agent first, so the opening ran
-   * and took the next send as a steer.
+   * taken once the Stop has reached the agent. A send holds the order until its words are owed to the agent, never to
+   * its landing. Staging, 2026-10-14: a Stop 113 ms after a new chat's opening reached the agent first, so the opening
+   * ran and took the next send as a steer.
    */
   private intake: Promise<void> = Promise.resolve();
 
