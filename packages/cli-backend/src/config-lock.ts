@@ -1,9 +1,10 @@
 import { Effect } from 'effect';
-import { classify, tolerate, settle } from '@kinu.run/core/obs';
-import { lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { tolerate, settle } from '@kinu.run/core/obs';
+import { lstatSync, mkdirSync, readlinkSync, symlinkSync, unlinkSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { hostGenerationReader, type GenerationProbe, type SupportedPlatform } from './process-generation';
 
 /**
  * Acquisitions the current async call already holds (path → token). A nested take
@@ -15,19 +16,11 @@ const LOCK_POLL_MS = 50;
 
 const LOCK_RECORD_VERSION = 'v1';
 
-type SupportedPlatform = 'linux' | 'darwin';
-
 type Liveness = 'live' | 'gone' | 'unknown';
 
-type ProcessIdentityProbe =
-  | { readonly state: 'read'; readonly identity: string }
-  | { readonly state: 'absent' }
-  | { readonly state: 'unreadable' };
-
 /**
- * Pids are reused, so the platform tag plus `identity` names one process
- * generation: Linux `/proc/<pid>/stat` field 22; Darwin SHA-256 of
- * `/bin/ps -p <pid> -o lstart=` under `LC_ALL=C`. The token identifies one acquisition.
+ * Pids are reused, so the platform tag plus `identity` names one process generation (`process-generation.ts`). The
+ * token identifies one acquisition.
  */
 export interface LockOwner {
   readonly version: typeof LOCK_RECORD_VERSION;
@@ -48,8 +41,7 @@ interface ProcessIdentity {
   readonly identity: string;
 }
 
-/** Linux reads procfs; Darwin runs absolute `/bin/ps` with `LC_ALL=C` (no shell,
- *  no locale drift). Unsupported systems refuse rather than write an unprovable record. */
+/** Unsupported systems refuse rather than write an unprovable record. */
 interface ProcessIdentityBoundary {
   self(pid: number): Promise<ProcessIdentity>;
   liveness(owner: LockOwner): Promise<Liveness>;
@@ -59,7 +51,7 @@ interface ConfigLock {
   with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T>;
 }
 
-/** Asynchronous throughout: a synchronous wait could only spawn `ps` synchronously on Darwin. */
+/** Asynchronous: a wait polls on a timer, so the process keeps running while another holds the lock. */
 export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
   return {
     async with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {
@@ -192,25 +184,9 @@ function readOwner(lockPath: string): LockOwner | null {
   return target === undefined ? null : decodeLockOwner(target);
 }
 
-/** Field 22 is process start ticks since boot. */
-export function procStartTicks(stat: string): string | null {
-  const close = stat.lastIndexOf(')');
-
-  if (close === -1) return null;
-  const startTicks = stat.slice(close + 2).split(' ')[19];
-
-  return startTicks === undefined || !/^\d+$/u.test(startTicks) ? null : startTicks;
-}
-
-export function darwinStartIdentity(lstart: string): string | null {
-  const canonical = lstart.trim();
-
-  return canonical === '' ? null : createHash('sha256').update(canonical, 'utf8').digest('base64url');
-}
-
 export function createProcessIdentityBoundary(
   platform: SupportedPlatform,
-  read: (pid: number) => ProcessIdentityProbe | Promise<ProcessIdentityProbe>,
+  read: (pid: number) => GenerationProbe | Promise<GenerationProbe>,
 ): ProcessIdentityBoundary {
   return {
     self(pid): Promise<ProcessIdentity> {
@@ -237,46 +213,14 @@ export function createProcessIdentityBoundary(
 }
 
 function hostProcessIdentity(): ProcessIdentityBoundary {
-  if (process.platform === 'linux') return createProcessIdentityBoundary('linux', readLinuxIdentity);
+  const host = hostGenerationReader();
 
-  if (process.platform === 'darwin') return createProcessIdentityBoundary('darwin', readDarwinIdentity);
-  throw new Error(`Refusing to take the config lock: ${process.platform} cannot prove a process `
-    + 'generation after a crash. Kinu supports this lock on Linux and macOS.');
-}
-
-function readLinuxIdentity(pid: number): ProcessIdentityProbe {
-  try {
-    const startTicks = procStartTicks(readFileSync(`/proc/${String(pid)}/stat`, 'utf8'));
-
-    return startTicks === null ? { state: 'unreadable' } : { state: 'read', identity: startTicks };
-  } catch (error) {
-    return classify({ cause: error }) === 'enoent' ? { state: 'absent' } : { state: 'unreadable' };
+  if (host === null) {
+    throw new Error(`Refusing to take the config lock: ${process.platform} cannot prove a process `
+      + 'generation after a crash. Kinu supports this lock on Linux and macOS.');
   }
-}
 
-/** `ps` runs to its exit rather than synchronously: 1 names a pid no process holds, and a `ps` that could not
- *  run at all refuses rather than guess whether a lock is abandoned. */
-async function readDarwinIdentity(pid: number): Promise<ProcessIdentityProbe> {
-  try {
-    const ps = Bun.spawn({
-      cmd: ['/bin/ps', '-p', String(pid), '-o', 'lstart='],
-      env: { LC_ALL: 'C', LANG: 'C' },
-      stdout: 'pipe',
-      stderr: 'ignore',
-    });
-
-    const [stdout, exitCode] = await Promise.all([new Response(ps.stdout).text(), ps.exited]);
-
-    if (exitCode === 1) return { state: 'absent' };
-
-    if (exitCode !== 0) return { state: 'unreadable' };
-    const identity = darwinStartIdentity(stdout);
-
-    return identity === null ? { state: 'unreadable' } : { state: 'read', identity };
-  } catch (error) {
-    throw new Error(`Cannot read Darwin process identity for pid ${String(pid)}; refusing to `
-      + 'guess whether its lock is abandoned.', { cause: error });
-  }
+  return createProcessIdentityBoundary(host.platform, (pid) => host.read(pid));
 }
 
 /**

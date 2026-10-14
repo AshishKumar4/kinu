@@ -5,20 +5,22 @@ import type { Storage } from '../types/primitives';
 import type { JobHolder } from './runner';
 
 const JOB_HOLDERS_DDL = `CREATE TABLE IF NOT EXISTS background_job_holders (
-  job_id TEXT PRIMARY KEY,
-  pid    INTEGER NOT NULL
+  job_id     TEXT    PRIMARY KEY,
+  pid        INTEGER NOT NULL,
+  generation TEXT    NOT NULL
 )`;
 
-/** Liveness by pid, as the driver lease's: a reused pid holds its job until that process ends. */
+/** Liveness by process generation, as the driver lease's: a pid reused by a later process holds no job. */
 export function processJobHolder({ sql, execRaw, transactionSync }: Pick<Storage, 'sql' | 'execRaw' | 'transactionSync'>, proc: LeaseProcess): JobHolder {
   execRaw(JOB_HOLDERS_DDL);
 
   const hold = (jobId: string): void => {
-    void sql`INSERT OR REPLACE INTO background_job_holders (job_id, pid) VALUES (${jobId}, ${proc.pid})`;
+    void sql`INSERT OR REPLACE INTO background_job_holders (job_id, pid, generation) VALUES (${jobId}, ${proc.pid}, ${proc.generation})`;
   };
 
-  const heldElsewhere = (jobId: string): boolean => sql<{ pid: number }>`SELECT pid FROM background_job_holders WHERE job_id = ${jobId}`
-    .some((row) => row.pid !== proc.pid && proc.isAlive(row.pid));
+  const heldElsewhere = (jobId: string): boolean => sql<{ pid: number; generation: string }>`
+    SELECT pid, generation FROM background_job_holders WHERE job_id = ${jobId}`
+    .some((row) => row.pid !== proc.pid && proc.isAlive({ pid: Number(row.pid), generation: row.generation }));
 
   return {
     hold,

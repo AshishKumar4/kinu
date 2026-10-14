@@ -19,7 +19,7 @@ import { LocalAgentSession, type LocalAgentSessionOpts } from '../src/local-sess
 import { type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { staticModelPlane } from '../src/profile-authority';
-import { OS_LEASE_PROCESS } from '../src/agent-host/lease-process';
+import { osLeaseProcess } from '../src/agent-host/lease-process';
 import * as v from 'valibot';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, swarmsOn, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, SEARCH_ASK, SEARCH_TASK, textStream, toolCallStream, } from './helpers/local-session';
@@ -1040,13 +1040,19 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const daemon = Bun.spawn(['sleep', '600']);
     const gone = Bun.spawn(['true']);
     await gone.exited;
+    // The daemon's pid as an earlier process recorded it, before that process ended and the pid was reused.
+    const reused = { ...osLeaseProcess(daemon.pid), generation: 'an-earlier-run' };
 
     try {
-      for (const [id, fiber, pid] of [['bgjob-held', 'f-held', daemon.pid], ['bgjob-gone', 'f-gone', gone.pid]] as const) {
+      for (const [id, fiber, holder] of [
+        ['bgjob-held', 'f-held', osLeaseProcess(daemon.pid)],
+        ['bgjob-gone', 'f-gone', osLeaseProcess(gone.pid)],
+        ['bgjob-reused', 'f-reused', reused],
+      ] as const) {
         db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', '${id}', 'shell', 'build', 'running', 1)`);
         db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', '${fiber}', 'bg:run', '{"phase":"running","jobId":"${id}","kind":"shell"}', 1)`);
         // As that process's own runner records the job it runs.
-        processJobHolder(rt.storage, { ...OS_LEASE_PROCESS, pid }).hold(id);
+        processJobHolder(rt.storage, holder).hold(id);
       }
 
       await session.recoverBackgroundJobs();
@@ -1055,6 +1061,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       expect(jobStatus(db, 'bgjob-held')).toBe('running');
       expect(db.query(`SELECT id FROM fibers`).all()).toEqual([{ id: 'f-held' }]);
       expect(jobStatus(db, 'bgjob-gone')).toBe('failed');
+      expect(jobStatus(db, 'bgjob-reused')).toBe('failed');
     } finally {
       daemon.kill();
     }

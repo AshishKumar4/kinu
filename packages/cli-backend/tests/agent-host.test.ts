@@ -55,6 +55,7 @@ import { LocalAgentSession } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
+import { osLeaseProcess } from '../src/agent-host/lease-process';
 import { ANSWERING_HIRE_ANSWER, answeringHireModel, hireDeathModel } from './hire-death-model';
 import { swarmsOn, toolCallStream, toolSequenceModel } from './helpers/local-session';
 import { staticModelPlane } from '../src/profile-authority';
@@ -2600,7 +2601,7 @@ describe('LocalAgentHost — the driver lease', () => {
       const hold = new DriverLeaseHold({
         sql: makeSql(db),
         execRaw: makeExecRaw(db),
-        proc: { pid: rival.pid, isAlive: () => true },
+        proc: osLeaseProcess(rival.pid),
       }, kind);
 
       const refusal = hold.acquire();

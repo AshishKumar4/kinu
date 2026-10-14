@@ -145,7 +145,7 @@ import { createLocalActorHost } from './actor-host';
 import { createLocalOrchestration, type LocalOrchestration } from './orchestration';
 import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
-import { OS_LEASE_PROCESS } from './agent-host/lease-process';
+import { osLeaseProcess } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers, readMemoryTail } from '@kinu.run/core';
@@ -576,7 +576,7 @@ export class LocalAgentSession {
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channelFor(this.rt.actor.actorId));
     this.jobsDrivenHere = drivenJobs(opts.hosted);
-    this.jobHolder = processJobHolder(this.rt.storage, OS_LEASE_PROCESS);
+    this.jobHolder = processJobHolder(this.rt.storage, osLeaseProcess(process.pid));
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
