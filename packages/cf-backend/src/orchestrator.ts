@@ -135,7 +135,7 @@ import {
 
   listProposedTasks, updateProposedTaskStatus,
   hybridSearch, memorySnippetRehydrator, type HybridHit,
-  type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore,
+  type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
@@ -253,7 +253,7 @@ import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
 import { agentEmailAddress } from "./email/inbound";
 import {
-  createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
+  createEmailThreadDispatcher,
   sendInboundEmailReceipt, sendOwnerEmail,
 } from "./email/outbound";
 import { EmailOutbox } from "@kinu.run/core";

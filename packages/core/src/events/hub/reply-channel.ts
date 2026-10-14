@@ -9,6 +9,7 @@ import {
 import { ulid } from './ulid';
 import type { SqlExec } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
+import type { EventLog } from './log';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
 import { Effect } from 'effect';
 import { renderThrownChain, settle } from '../../obs/index';
@@ -181,3 +182,54 @@ export type ReplyOutcome =
   | { outcome: 'channel_closed'; state: ReplyChannelState }
   | { outcome: 'no_dispatcher'; kind: ReplyChannelKind }
   | { outcome: 'failed'; detail?: string };
+
+/** `pending` stays true while a retryable email channel is still open. */
+export interface EmailReplyDispatchResult {
+  delivered: number;
+  pending: boolean;
+}
+
+/**
+ * A settled turn's reply to the mail that started it: sent on every open `email_thread` channel its events opened, each
+ * attempt audited as a `reply_attempt` row. Empty text sends nothing and only reports what is still owed.
+ */
+export async function dispatchEmailRepliesForTurn(
+  deps: { log: EventLog; replies: ReplyChannelStore },
+  drainTurnId: string,
+  replyText: string,
+  now: number,
+): Promise<EmailReplyDispatchResult> {
+  const events = deps.log.query({ turn_id: drainTurnId, variant: 'email' });
+
+  if (!replyText.trim()) {
+    return {
+      delivered: 0,
+      pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
+    };
+  }
+
+  let delivered = 0;
+
+  for (const ev of events) {
+    const channel = deps.replies.findOpenByEvent(ev.id);
+
+    if (!channel || channel.kind !== 'email_thread') continue;
+    const outcome = await deps.replies.reply(channel.id, replyText, now);
+    deps.log.appendNonEventRow({
+      kind: 'reply_attempt',
+      turn_id: drainTurnId,
+      step_idx: null,
+      parent_id: ev.id,
+      trace_id: ev.trace_id,
+      payload: { channel_id: channel.id, kind: 'email_thread', outcome },
+      now,
+    });
+
+    if (outcome.outcome === 'delivered') delivered++;
+  }
+
+  return {
+    delivered,
+    pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
+  };
+}
