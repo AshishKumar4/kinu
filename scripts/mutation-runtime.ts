@@ -3,19 +3,12 @@
  * pristine bytes of every mutated file (put back on an interrupt), the suite runner, and the cheap defender guess.
  * Each program keeps its own way of choosing and writing a mutant.
  */
-import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { gitEnv } from '../packages/test-utils/src/git-env';
+import { gitIn } from '../packages/test-utils/src/git-env';
 import { moduleSpecifiers, parse } from './syntax';
 
 export const root = new URL('..', import.meta.url).pathname;
-
-function git(...args: readonly string[]): string {
-  return execFileSync('git', ['-C', root, ...args], {
-    env: gitEnv(), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-  }).trim();
-}
 
 /**
  * Refuse to run anywhere a concurrent reader could load a mutant.
@@ -25,8 +18,8 @@ function git(...args: readonly string[]): string {
  * its own workspace scope, so a mutation there is visible to this process only.
  */
 export function requireOwnWorktree(): void {
-  const tree = git('rev-parse', '--show-toplevel');
-  const main = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
+  const tree = gitIn(root, 'rev-parse', '--show-toplevel');
+  const main = dirname(gitIn(root, 'rev-parse', '--path-format=absolute', '--git-common-dir'));
 
   if (tree === main) {
     throw new Error(
@@ -44,7 +37,7 @@ export function requireOwnWorktree(): void {
  *  edit would survive intact, but if this process is killed outright `git checkout --` is the recovery, and that
  *  recovery must not be able to destroy work. */
 export function requireCleanTargets(files: readonly string[]): void {
-  const dirty = git('status', '--porcelain', '--', ...files);
+  const dirty = gitIn(root, 'status', '--porcelain', '--', ...files);
 
   if (dirty !== '') {
     throw new Error(

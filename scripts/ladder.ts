@@ -58,6 +58,7 @@ import { modulesReaching } from './import-closure';
 import type { ModuleEdges } from './module-edges';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, evalWebIdentityEnv, LIVE_MODEL_ENV, SCRIPTED_MODEL_KEY_ENV } from '../packages/test-utils/src/index';
+import { gitIn } from '../packages/test-utils/src/git-env';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
 import { resourceCostFile, withResourceCosts } from './gate-cost';
@@ -3710,7 +3711,7 @@ const SCRATCH_TMPDIR = '/mnt/local/kinu/tmp';
 
 
 function fullRevision(): string {
-  return Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();
+  return gitIn(root, 'rev-parse', 'HEAD');
 }
 
 function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, timingPath?: string): string[] {

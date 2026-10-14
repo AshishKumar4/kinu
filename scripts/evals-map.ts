@@ -10,7 +10,7 @@ import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalCallWidth, EvalTask } from '../evals/src/task';
 import { ARMS, deployedBuild } from '../evals/src/target';
 import { evalTargetVerdict, evalWebIdentityEnv } from '../packages/test-utils/src/eval-identity';
-import { gitEnv } from '../packages/test-utils/src/git-env';
+import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
 import { LOCAL_CHECK, processEvals } from './evals-post';
@@ -170,14 +170,9 @@ async function main(): Promise<number> {
     pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
   } });
 
-  const definitions = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: ROOT, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' });
+  const sha = gitIn(ROOT, 'rev-parse', 'HEAD');
 
-  if (definitions.exitCode !== 0) throw new Error(`reading the definitions commit: ${definitions.stderr.toString()}`);
-  const sha = definitions.stdout.toString().trim();
-
-  const dirty = Bun.spawnSync(['git', 'status', '--porcelain'], { cwd: ROOT, env: gitEnv(), stdout: 'pipe' });
-
-  if (dirty.stdout.toString().trim() !== '') throw new Error('armada measures a committed checkout: commit the tree first');
+  if (gitIn(ROOT, 'status', '--porcelain') !== '') throw new Error('armada measures a committed checkout: commit the tree first');
   const candidateOrigin = values.pass ? process.env['KINU_EVAL_ORIGIN'] : 'https://staging.kinu.run';
   const target = evalTargetVerdict(candidateOrigin);
 

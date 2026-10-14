@@ -28,6 +28,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
+import { gitIn } from '../packages/test-utils/src/git-env';
 
 /** The dedicated checkout continuous staging deploys from, and no one edits. */
 export const WORKTREE = '/mnt/local/kinu/wt/staging-loop';
@@ -40,14 +41,6 @@ export const SECRETS_FILE = join(homedir(), '.config', 'kinu', 'secrets.env');
 
 /** What scripts/deploy.sh exits with when another deploy of the environment holds its lock: nothing ran. */
 export const DEPLOY_BUSY = 75;
-
-function git(cwd: string, args: readonly string[]): string {
-  const run = Bun.spawnSync(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
-
-  if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')} failed: ${run.stderr.toString().trim()}`);
-
-  return run.stdout.toString().trim();
-}
 
 /** Every `node_modules` tree of `worktree`: the root's and each workspace's, none inside another. */
 function nodeModulesTrees(worktree: string): string[] {
@@ -110,8 +103,8 @@ function writeState(file: string, tip: string): void {
 /** The worktree at `tip`, clean but for the installed packages, which a deploy's frozen install reconciles, and the
  *  deploy reports, whose differential reads the previous one. */
 function checkout(worktree: string, tip: string): void {
-  git(worktree, ['checkout', '--quiet', '--detach', '--force', tip]);
-  git(worktree, ['clean', '-ffdxq', '-e', 'node_modules', '-e', 'bench-artifacts']);
+  gitIn(worktree, 'checkout', '--quiet', '--detach', '--force', tip);
+  gitIn(worktree, 'clean', '-ffdxq', '-e', 'node_modules', '-e', 'bench-artifacts');
 }
 
 /** Deploys the newest tip until the last one deployed is the tip; answers the tips it deployed, in order. */
@@ -119,7 +112,7 @@ export async function runLoop(input: LoopInput): Promise<string[]> {
   const deployed: string[] = [];
 
   for (;;) {
-    const tip = git(input.worktree, ['rev-parse', `refs/remotes/origin/${input.branch}`]);
+    const tip = gitIn(input.worktree, 'rev-parse', `refs/remotes/origin/${input.branch}`);
 
     if (tip === readState(input.stateFile)) return deployed;
     checkout(input.worktree, tip);
@@ -260,15 +253,15 @@ async function install(branch: string): Promise<void> {
   if (!existsSync(SECRETS_FILE)) throw new Error(`${SECRETS_FILE} does not exist: write the deploy's credentials there (mode 600), then install`);
 
   const root = new URL('..', import.meta.url).pathname;
-  const common = git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  const common = gitIn(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
   // Read off the manifest, not restated: the origin a promotion round asks which build production serves.
   const { deployedConfig } = await import('./infra-manifest');
   const production = deployedConfig('production').vars?.CLI_PUBLIC_ORIGIN ?? '';
 
-  git(root, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]);
+  gitIn(root, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`);
 
   for (const worktree of [WORKTREE, PROMOTE_WORKTREE]) {
-    if (!existsSync(worktree)) git(root, ['worktree', 'add', '--quiet', '--detach', worktree, `refs/remotes/origin/${branch}`]);
+    if (!existsSync(worktree)) gitIn(root, 'worktree', 'add', '--quiet', '--detach', worktree, `refs/remotes/origin/${branch}`);
   }
 
   const directory = join(homedir(), '.config', 'systemd', 'user');
