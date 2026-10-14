@@ -9,6 +9,7 @@ import { detach } from '@kinu.run/core/obs';
 import { ONBOARDING_STEPS } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { evidenceDir } from '@kinu.run/test-utils';
 
 const ONBOARDING_STEP_IDS = ONBOARDING_STEPS.map((step) => step.id);
 
@@ -916,7 +917,7 @@ describe('what the Devices page says about a machine\'s history', () => {
   });
 });
 
-const MEMORY_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'account-memory');
+const MEMORY_SHOTS = evidenceDir('account-memory');
 
 describe('Settings → Memory', () => {
   test('lists what waits on the owner, each kept fact with who said it, its revisions, and the notes, at both widths', async () => {

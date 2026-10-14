@@ -34,6 +34,7 @@ import { SILENCE_NOTICE_ENV } from './deadline';
 import { BLANK_PAGE, explained, recordScriptFailures } from './script-failures';
 import { launchTestChrome } from './test-chrome';
 import { recordOwner } from './process-owner';
+import { evidenceDir } from '@kinu.run/test-utils';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -241,7 +242,7 @@ function detachedCause(error: Error): boolean {
   return false;
 }
 
-const STUCK_SHOTS = join(REPO, '..', 'kinu-logs', 'gallery-stuck');
+const STUCK_SHOTS = evidenceDir('gallery-stuck');
 
 let stuckShots = 0;
 

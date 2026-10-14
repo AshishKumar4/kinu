@@ -18,7 +18,7 @@
  * The fixture is the gallery's own: `?frame=drive` mounts the real DrivePage
  * over an in-memory tenant driven by the SAME core rules the Durable Object
  * runs (gallery-drive.tsx), so every refusal here is the product's rule.
- * Screenshots land in ~/kinu-logs/drive-ux/ (outside the worktree).
+ * Screenshots land in `evidenceDir('drive-ux')`, beside the checkout.
  */
 import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
@@ -27,13 +27,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { packZip } from '@kinu.run/core';
-import { scratchDir } from '@kinu.run/test-utils';
+import { evidenceDir, scratchDir } from '@kinu.run/test-utils';
 import type { Page } from 'puppeteer';
 
 import { contrast, rgba, withGallery, type Gallery } from '../../scripts/gallery-harness';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
-const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'drive-ux');
+const SHOTS = evidenceDir('drive-ux');
 
 mkdirSync(SHOTS, { recursive: true });
 

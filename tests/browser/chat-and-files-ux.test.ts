@@ -33,7 +33,7 @@ import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
 import { executorLabel, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
+import { evidenceDir, present } from '@kinu.run/test-utils';
 
 
 /** One live-tail message, as the browser laid it out. */
@@ -2808,7 +2808,7 @@ test('code retains syntax colors through streaming and long sidebar titles stay 
 });
 
 /** Where the agent tab strip's photographs land, outside the worktree. */
-const TAB_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'chat-and-files-ux');
+const TAB_SHOTS = evidenceDir('chat-and-files-ux');
 
 mkdirSync(TAB_SHOTS, { recursive: true });
 

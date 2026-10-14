@@ -8,6 +8,7 @@ import { settleSync } from '@kinu.run/core/obs';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** The temporary directory of the session that loaded this module, before any test home replaced TMPDIR. */
 const SESSION_TMPDIR = tmpdir();
@@ -165,6 +166,12 @@ export function scratchDir(label: string, parent = tmpdir()): string {
   minted.add(dir);
 
   return dir;
+}
+
+/** Where a run keeps evidence named `name` for a person to read: `kinu-logs/<name>` beside this checkout, so it
+ *  outlives the scratch and stays out of the tree. The caller creates it when it writes. */
+export function evidenceDir(name: string): string {
+  return join(fileURLToPath(new URL('../../../..', import.meta.url)), 'kinu-logs', name);
 }
 
 /** A path inside a fresh scratch directory, e.g. for `dbPath`. */
