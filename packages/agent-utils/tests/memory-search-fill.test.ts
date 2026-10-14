@@ -2,11 +2,11 @@
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
 import { createTestSql } from "@kinu.run/test-utils";
-import { createMemoryVfs } from "./helpers";
+import { memoryPlane } from "./helpers";
 
-function createStore() {
+async function createStore() {
 	const { sql, transactionSync } = createTestSql()
-	const store = new MemoryStore(createMemoryVfs(), sql, transactionSync);
+	const store = new MemoryStore(await memoryPlane(), sql, transactionSync);
 	store.ensureSchema();
 
 	return { store };
@@ -20,7 +20,7 @@ async function note(store: MemoryStore, path: string, content: string): Promise<
 
 describe("MemoryStore.search fills an underfull strict page", () => {
 	test("the strict hit leads and ranked partials fill the rest", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		await note(store, "memory/both.md", "wrangler staging deploy succeeded");
 		await note(store, "memory/one.md", "wrangler tail is noisy");
 		await note(store, "memory/two.md", "staging database was reseeded");
@@ -34,7 +34,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 	});
 
 	test("fills to exactly the requested capacity and never past it", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		await note(store, "memory/strict.md", "alpha beta together");
 
 		for (let i = 0; i < 8; i++) {
@@ -47,7 +47,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 	});
 
 	test("a chunk already held as a strict hit is not repeated", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		await note(store, "memory/a.md", "redis eviction policy discussion");
 		await note(store, "memory/b.md", "redis cluster resharding notes");
 		await note(store, "memory/c.md", "eviction of stale cache entries");
@@ -59,7 +59,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 	});
 
 	test("a full strict page admits no partial", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 
 		for (let i = 0; i < 4; i++) {
 			await note(store, `memory/pair-${i}.md`, `epsilon zeta pair ${i}`);
@@ -73,7 +73,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 	});
 
 	test("the page is stable across repeated identical searches", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		await note(store, "memory/pair.md", "gamma delta");
 
 		for (let i = 0; i < 4; i++) {
@@ -86,7 +86,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 	});
 
 	test("a single-term query still answers, with no second fetch to make", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		await note(store, "memory/only.md", "postgres vacuum notes");
 		expect((await store.search("postgres", 5)).map((h) => h.path)).toEqual(["memory/only.md"]);
 	});
@@ -95,7 +95,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 // The note is the text's only copy, and locally a shell edits it beside the memory tool.
 describe("MemoryStore.search reads its hits from their notes", () => {
 	test("a note changed under the index is re-chunked when searched: its old words find nothing, its new ones it", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		await note(store, "memory/deploy.md", "wrangler staging deploy succeeded");
 		await store.writeFile("memory/deploy.md", "kubernetes ingress now fronts staging");
 
@@ -105,11 +105,11 @@ describe("MemoryStore.search reads its hits from their notes", () => {
 
 	test("a note deleted under the index leaves no hit", async () => {
 		const { sql, transactionSync } = createTestSql()
-		const files = createMemoryVfs();
+		const files = await memoryPlane();
 		const store = new MemoryStore(files, sql, transactionSync);
 		store.ensureSchema();
 		await note(store, "memory/gone.md", "postgres vacuum notes");
-		files.files.delete("memory/gone.md");
+		await files.unlink("memory/gone.md");
 
 		expect(await store.search("postgres", 5)).toEqual([]);
 		expect(sql<{ n: number }>`SELECT count(*) AS n FROM memory_note_chunks`[0]?.n).toBe(0);
