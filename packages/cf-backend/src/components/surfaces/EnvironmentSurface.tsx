@@ -707,14 +707,15 @@ function GiveAccess({ name, onGive }: { name: string; onGive: () => Effect.Effec
   const [giving, setGiving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
-  const give = () => {
+  const give = Effect.suspend(() => {
     setGiving(true);
     setFailure(null);
-    detach(onGive().pipe(
-      Effect.catch((cause) => Effect.sync(() => setFailure(renderThrownChain({ cause })))),
-      Effect.ensuring(Effect.sync(() => setGiving(false))),
-    ));
-  };
+
+    return onGive();
+  }).pipe(
+    Effect.catch((cause) => Effect.sync(() => setFailure(renderThrownChain({ cause })))),
+    Effect.ensuring(Effect.sync(() => setGiving(false))),
+  );
 
   return (
     <div data-env-give-access className="flex min-h-0 flex-1 items-center justify-center border-t p-border px-8">
@@ -727,7 +728,7 @@ function GiveAccess({ name, onGive }: { name: string; onGive: () => Effect.Effec
             terminal there, inside the machine&apos;s sandbox. You can take it back on the Devices page.
           </p>
         </div>
-        <FilledButton onClick={give} disabled={giving}>{giving ? "Giving access…" : "Give this workspace access"}</FilledButton>
+        <FilledButton onClick={() => detach(give)} disabled={giving}>{giving ? "Giving access…" : "Give this workspace access"}</FilledButton>
         {failure !== null && <p className="p-meta p-danger">{failure}</p>}
       </div>
     </div>

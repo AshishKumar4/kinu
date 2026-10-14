@@ -203,9 +203,9 @@ export type DeviceConsent = v.InferOutput<typeof DeviceConsentSchema>;
 
 export const listDeviceConsents = () => settle(api(v.array(DeviceConsentSchema), 'GET', '/devices/consents'));
 
-/** The owner gives one workspace one machine: the grant the consent card's "always" records. */
+/** The owner gives one workspace one machine: the binding the consent card's "always" records, answered back. */
 export const grantDeviceConsent = (deviceId: string, agentName: string) =>
-  settle(api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`));
+  settle(api(DeviceConsentSchema, 'POST', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`));
 
 /** The row is deleted, so the next device call asks again instead of reading as a standing refusal. */
 export const revokeDeviceConsent = (deviceId: string, agentName: string) =>

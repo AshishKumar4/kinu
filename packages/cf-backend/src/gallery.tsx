@@ -1160,10 +1160,10 @@ function accountMachinesFixture(asked: string, method: string): Response | null 
     return fixtureJson(galleryPcGranted ? [{ agentName: WORKSPACE_PAGE_NAME, deviceId: GALLERY_PC.id, policy: "allow", lastMethod: null, lastSummary: null }] : []);
   }
 
-  if (path === `/api/user/devices/${GALLERY_PC.id}/consent` && method === "PUT") {
+  if (path === `/api/user/devices/${GALLERY_PC.id}/consent` && method === "POST") {
     galleryPcGranted = true;
 
-    return fixtureJson({ ok: true });
+    return fixtureJson({ agentName: WORKSPACE_PAGE_NAME, deviceId: GALLERY_PC.id, policy: "allow", lastMethod: null, lastSummary: null });
   }
 
   return null;

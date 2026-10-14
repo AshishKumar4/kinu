@@ -338,30 +338,31 @@ userRoutes.put('/api/user/devices/:id/sandbox', async (c) => {
   return json({ body: { ok: true } });
 });
 
-// The owner gives this workspace this machine from the workspace's Env tab.
-userRoutes.put('/api/user/devices/:id/consent', (c) => settle(Effect.tryPromise({
+/** One workspace's binding to one machine, named by the path's device and the query's `agentName`. */
+function bindingAsked(c: UserContext): { readonly agentName: string; readonly deviceId: string } | null {
+  const agentName = new URL(c.req.url).searchParams.get('agentName')?.trim();
+
+  return agentName ? { agentName, deviceId: decodeURIComponent(rawParam(c, 'id')) } : null;
+}
+
+// The owner gives this workspace this machine from the workspace's Env tab; the answer is the binding recorded.
+userRoutes.post('/api/user/devices/:id/consent', (c) => settle(Effect.tryPromise({
   try: async () => {
-    const agentName = new URL(c.req.url).searchParams.get('agentName')?.trim();
+    const asked = bindingAsked(c);
 
-    if (!agentName) return err(400, 'Query must carry ?agentName=');
-
-    const result = await c.get('stub').grantDeviceConsent(c.get('owner'), agentName, decodeURIComponent(rawParam(c, 'id')));
-
-    if (!result.ok) return err(404, 'no such machine or workspace');
-
-    return json({ body: { ok: true } });
+    return asked === null
+      ? err(400, 'Query must carry ?agentName=')
+      : json({ body: await c.get('stub').grantDeviceConsent(c.get('owner'), asked.agentName, asked.deviceId) });
   },
   catch: (cause) => authoredRefusal({ doing: 'giving this workspace the machine', cause }),
 })));
 
 userRoutes.delete('/api/user/devices/:id/consent', async (c) => {
-  const agentName = new URL(c.req.url).searchParams.get('agentName')?.trim();
+  const asked = bindingAsked(c);
 
-  if (!agentName) return err(400, 'Query must carry ?agentName=');
+  if (asked === null) return err(400, 'Query must carry ?agentName=');
 
-  const result = await c.get('stub').revokeDeviceConsent(
-    c.get('owner'), agentName, decodeURIComponent(rawParam(c, 'id')),
-  );
+  const result = await c.get('stub').revokeDeviceConsent(c.get('owner'), asked.agentName, asked.deviceId);
 
   if (!result.ok) return err(400, 'grant not revoked');
 

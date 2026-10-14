@@ -161,6 +161,15 @@ type DeviceJoin = {
 const SERVED_STAMP_KEY = 'devices.served_stamp';
 
 /** The owner's machines: tunnels, tokens, consents, tiers and requests. */
+/** One workspace's binding to one machine, as the owner's Devices page and Env tab read it. */
+export interface DeviceBinding {
+  readonly agentName: string;
+  readonly deviceId: string;
+  readonly policy: string;
+  readonly lastMethod: string | null;
+  readonly lastSummary: string | null;
+}
+
 export class UserDevices {
   // The reverse-WS tunnel from a user's machine terminates here, not on an agent, so every agent
   // can reach the device via `deviceRpc()`. A WebSocket cannot cross RPC; the worker forwards the upgrade.
@@ -1101,13 +1110,7 @@ export class UserDevices {
     return { allowed: true };
   }
 
-  async listDeviceConsents(caller: UserCaller): Promise<Array<{
-    agentName: string;
-    deviceId: string;
-    policy: string;
-    lastMethod: string | null;
-    lastSummary: string | null;
-  }>> {
+  async listDeviceConsents(caller: UserCaller): Promise<DeviceBinding[]> {
     await this.host.requireTier(caller, 'device.consent');
 
     return this.host.sqlx<{
@@ -1126,23 +1129,26 @@ export class UserDevices {
   }
 
   /**
-   * The owner gives one workspace one machine, from that workspace's Env tab: the grant the consent card's "always"
+   * The owner gives one workspace one machine, from that workspace's Env tab: the binding the consent card's "always"
    * records, decided by the owner in person rather than asked of them by an agent. Owner session only, so a workspace
-   * cannot grant itself a machine; a machine it does not hold, or a workspace that is not the owner's, grants nothing.
+   * cannot grant itself a machine. Answers the binding it recorded.
    */
-  async grantDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
+  async grantDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<DeviceBinding> {
     const resolved = await this.host.requireTier(caller, 'device.consent');
 
-    if (resolved.kind !== 'owner_session') throw new CapabilityDeniedError('Only the account owner can give a workspace a machine.');
+    return settle(Effect.gen({ self: this }, function* () {
+      if (resolved.kind !== 'owner_session') return yield* new KinuError('denied', 'Only the account owner can give a workspace a machine.');
 
-    const device = this.host.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId)[0];
-    const workspace = this.host.sqlx<{ name: string }>(`SELECT name FROM user_workspaces WHERE name = ? LIMIT 1`, agentName)[0];
+      const device = this.host.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId)[0];
 
-    if (!device || !workspace) return { ok: false };
-    this.setDeviceBinding(agentName, deviceId, 'allow');
-    await this.devicesMoved();
+      if (device === undefined) return yield* new KinuError('missing', `No machine ${deviceId} on this account.`);
 
-    return { ok: true };
+      if (!this.host.workspaceRegistered(agentName)) return yield* new KinuError('missing', `No workspace named ${agentName}.`);
+      this.setDeviceBinding(agentName, deviceId, 'allow');
+      yield* Effect.promise(async () => this.devicesMoved());
+
+      return { agentName, deviceId, policy: 'allow', lastMethod: null, lastSummary: null };
+    }));
   }
 
   /** Deletes the row (not 'deny') so the next call asks again; takes effect on that next call.
