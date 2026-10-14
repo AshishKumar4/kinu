@@ -1,5 +1,5 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { expect, test } from 'bun:test';
+import { expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   BlueprintBundleSchema, BlueprintForkSchema, BlueprintInspectionSchema, PublishedBlueprintSchema, SlateShareRecordSchema, type AgentRuntime, type SlateAnswer,
@@ -179,8 +179,15 @@ test('naming users on a blueprint records them with the owner and projects the r
     await recipient.userDO.shareCards_put(caller, { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card });
     const [arrived] = await recipient.userDO.sharesReceived_list(caller);
 
-    await new Promise((later) => { setTimeout(later, 5); });
-    await recipient.userDO.shareCards_put(caller, { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' } });
+    // Sent again a minute later.
+    setSystemTime(new Date(Date.now() + 60_000));
+
+    try {
+      await recipient.userDO.shareCards_put(caller, { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' } });
+    } finally {
+      setSystemTime();
+    }
+
     expect(await recipient.userDO.sharesReceived_list(caller)).toEqual([
       { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' }, receivedAt: arrived?.receivedAt },
     ]);

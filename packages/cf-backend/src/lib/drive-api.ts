@@ -53,18 +53,18 @@ export interface UploadWatch {
   readonly progress: (share: number) => void;
 }
 
-function upload(query: string, body: Blob, watch: UploadWatch): Promise<void> {
+function upload(query: string, body: Blob, watch: UploadWatch): Effect.Effect<void> {
   const sent = (bytes: number): void => { watch.progress(body.size === 0 ? 1 : Math.min(1, bytes / body.size)); };
 
-  return settle(Effect.asVoid(api(Ok, 'PUT', `/files?${query}`, { body, signal: watch.signal, sent })));
+  return Effect.asVoid(api(Ok, 'PUT', `/files?${query}`, { body, signal: watch.signal, sent }));
 }
 
-export async function uploadFile(path: string, file: Blob, watch: UploadWatch): Promise<void> {
-  await upload(`path=${encodeURIComponent(path)}`, file, watch);
+export function uploadFile(path: string, file: Blob, watch: UploadWatch): Promise<void> {
+  return settle(upload(`path=${encodeURIComponent(path)}`, file, watch));
 }
 
-export async function uploadZip(folder: string, archive: Blob, watch: UploadWatch): Promise<void> {
-  await upload(`folder=${encodeURIComponent(folder)}&unpack=zip`, archive, watch);
+export function uploadZip(folder: string, archive: Blob, watch: UploadWatch): Promise<void> {
+  return settle(upload(`folder=${encodeURIComponent(folder)}&unpack=zip`, archive, watch));
 }
 
 export async function uploadFolder(folder: string, files: readonly PickedFile[], watch: UploadWatch): Promise<void> {

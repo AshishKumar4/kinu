@@ -17,8 +17,8 @@ export function getSharedLibrary(): Promise<SharedLibrary> {
 }
 
 /** Shared was opened: the account's unseen shares are seen, on every device. */
-export async function markSharedSeen(): Promise<void> {
-  await settle(api(v.object({ seen: v.literal(true) }), 'POST', '/api/shared/seen'));
+export function markSharedSeen(): Promise<void> {
+  return settle(Effect.asVoid(api(v.object({ seen: v.literal(true) }), 'POST', '/api/shared/seen')));
 }
 
 /** Refused as 404 when unminted or revoked. */

@@ -211,8 +211,9 @@ class FixtureUpload extends EventTarget {
 
   send(body: Blob | null): void {
     this.upload.dispatchEvent(new ProgressEvent("progress", { loaded: body?.size ?? 0, total: body?.size ?? 0 }));
-    // A fetch that fails, stopped or dropped, is told to the page as XMLHttpRequest tells it: by its event.
-    detach(Effect.catchCause(Effect.promise(async () => {
+    // Answered after `send` returns, as XMLHttpRequest answers; a fetch that fails, stopped or dropped, is told to the
+    // page as XMLHttpRequest tells it: by its event.
+    setTimeout(() => detach(Effect.catchCause(Effect.promise(async () => {
       const answer = await window.fetch(this.#url, { method: this.#method, body, signal: this.#stop.signal });
 
       this.status = answer.status;
@@ -220,7 +221,7 @@ class FixtureUpload extends EventTarget {
       this.dispatchEvent(new Event("load"));
     }), showing((chain) => {
       this.dispatchEvent(this.#stop.signal.aborted ? new Event("abort") : new ErrorEvent("error", { message: chain }));
-    })));
+    }))));
   }
 
   abort(): void {

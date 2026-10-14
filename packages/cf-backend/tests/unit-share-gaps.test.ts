@@ -534,17 +534,21 @@ test("a share is unseen until its person opens Shared, on any device, and one ma
   expect(present(await sharedRequest(world.env, viewer, post('/api/shared/seen', {})), 'the seen answer').status).toBe(200);
   expect(await unseen()).toEqual([false]);
 
-  // Made a moment after Shared was opened.
-  await new Promise((later) => { setTimeout(later, 5); });
+  // Reaching pat a minute after Shared was opened.
+  setSystemTime(new Date(Date.now() + 60_000));
 
-  const again = present(await sharedRequest(world.env, owner, post('/api/shared/live', {
-    workspace: 'issues-owner', slate: 'issues', visibility: 'users', emails: ['pat@example.test'], fork: false,
-  })), 'the second share answer');
+  try {
+    const again = present(await sharedRequest(world.env, owner, post('/api/shared/live', {
+      workspace: 'issues-owner', slate: 'issues', visibility: 'users', emails: ['pat@example.test'], fork: false,
+    })), 'the second share answer');
 
-  expect(again.status).toBe(201);
-  await world.ownerUser.userDO.alarm();
-  expect((await unseen()).filter(Boolean)).toHaveLength(1);
-  expect(await unseen()).toHaveLength(2);
+    expect(again.status).toBe(201);
+    await world.ownerUser.userDO.alarm();
+    expect((await unseen()).filter(Boolean)).toHaveLength(1);
+    expect(await unseen()).toHaveLength(2);
+  } finally {
+    setSystemTime();
+  }
 });
 
 /** The account delete as its route runs it: the typed email, then the forget sweep, then the object's teardown. */
