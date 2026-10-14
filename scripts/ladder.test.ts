@@ -24,7 +24,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { childEnv, git, initRepo, runToExit, scratchDir, spawnTest } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
+  CI_EXEMPT, GATE_DEADLINE_SECONDS, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
   HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, onArmada, secretGroup,
@@ -39,6 +39,7 @@ import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
 import { armadaVerdict, ciVerdictRow, readFileTimings, readHostedCosts, withRunnerCosts } from './ci-verdicts';
+import { KILL_AFTER_SECONDS } from './deadline';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
@@ -704,6 +705,16 @@ describe('a deploy\'s armada rows', () => {
       ],
       reasons: true, atDeploy: true, local: here.length,
     });
+  });
+
+  // 2026-10-08 to 2026-10-14: the first-run row's 1800 s bound equalled armada's, which killed 10 of its 21 runs first,
+  // so the tier's own report of the hung case never ran.
+  test('end a silent run themselves, before armada ends its task', () => {
+    const config = v.parse(v.object({ task: v.object({ timeout: v.number() }) }), JSON.parse(readFileSync(resolve(root, '.armada.json'), 'utf8')));
+    const rows = LADDER.filter(onArmada);
+
+    expect(rows.filter((gate) => (gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS) + KILL_AFTER_SECONDS >= config.task.timeout).map((gate) => gate.label))
+      .toEqual([]);
   });
 });
 

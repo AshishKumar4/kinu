@@ -2450,11 +2450,12 @@ export const LADDER: readonly Gate[] = [
     evidence: 'first-run',
     phase: 'post-publish',
     deadline: {
-      seconds: 1_800,
-      why: 'covers the deployed episodes, on the scripted model over a socket. '
-        + 'Two attach real daemons; one drives Chrome against the deployed app. '
-        + 'The six-case deployed wall is unmeasured. This configured bound stays unchanged '
-        + 'until a deployed run measures it and the cost in LADDER.',
+      seconds: 720,
+      why: 'must end a hang before armada does. Armada kills a task at 1800 s (`.armada.json`), so a silence bound '
+        + 'of 1800 s never fired: in 10 of the 21 deploy waves from 2026-10-08 to 2026-10-14 armada killed this row '
+        + 'at about 1805 s, "exited 124 and reported no row", the tier\'s `stopped` trap never ran, and nothing named '
+        + 'the case that hung. Every deployed run that ended took 243 to 644 s in all (green 276 to 321 s), so none '
+        + 'was silent for 720 s; a hang is now ended about 16 minutes in, with the case files that never reported.',
     },
     alone: 'runs AFTER the upload, in the wave of the deployment\'s tiers and the local source gates '
       + '(L18): its subject is the DEPLOYED build rather than this tree. It attaches real machines to '
@@ -2468,8 +2469,7 @@ export const LADDER: readonly Gate[] = [
     // 3.84s and took 4.07s wall time on the 24-thread box.
     // `bun test tests/first-run/wiring.test.ts` passed 14 tests in 253ms
     // and took 0.33s wall time. These runs measure collection and predicates.
-    // The deployed six-case wall is unmeasured. Its deadline remains 1800s.
-    // The declared deployed cost below remains unchanged.
+    // Deployed on armada 2026-10-08 to 2026-10-14: 276 to 321 s green; the declared cost below is unchanged.
     seconds: 197,
     catches: 'a product defect a USER meets on the build that just deployed, which every other '
       + 'gate in this ladder is structurally unable to see: they all run BEFORE the upload, on '
