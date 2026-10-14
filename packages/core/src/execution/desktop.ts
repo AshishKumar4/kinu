@@ -224,6 +224,20 @@ function answered(member: DesktopMember, answer: DesktopAnswer): ExecutorToolRes
   }
 }
 
+/** Once `signal` aborts; without one, never. */
+function stopped(signal: AbortSignal | undefined): Effect.Effect<void> {
+  if (signal === undefined) return Effect.never;
+
+  return Effect.callback<void>((resume) => {
+    const stop = (): void => { resume(Effect.void); };
+
+    if (signal.aborted) stop();
+    else signal.addEventListener('abort', stop, { once: true });
+
+    return Effect.sync(() => { signal.removeEventListener('abort', stop); });
+  });
+}
+
 export interface DesktopDeps {
   /** The box's desktop, which `signal` stops; absent, no computer is configured. */
   readonly box: ((request: DesktopRequest, signal: AbortSignal | undefined) => Promise<DesktopAnswer>) | undefined;
@@ -243,7 +257,7 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
   const alone = Semaphore.makeUnsafe(1);
 
   /** One call's `planned` actions, sent in order while its program runs in the foreground. */
-  const drive = (member: DesktopMember, planned: readonly DesktopAction[] | KinuError, context: CallContext): Effect.Effect<ExecutorToolResult | Refusal> => Effect.gen(function* () {
+  const send = (member: DesktopMember, planned: readonly DesktopAction[] | KinuError, context: CallContext): Effect.Effect<ExecutorToolResult | Refusal> => Effect.gen(function* () {
     const { box } = deps;
 
     if (box === undefined) return deps.notConfigured();
@@ -270,7 +284,26 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
     }
 
     return answered(member, answer);
-  }).pipe(Effect.catch((failure) => Effect.succeed(refusalOf(failure))), alone.withPermits(1));
+  }).pipe(Effect.catch((failure) => Effect.succeed(refusalOf(failure))));
+
+  /**
+   * A call, run whole once it holds the screen. Its program's stop ends the wait for the screen at once, behind another
+   * program's call; once the call holds the screen, a stop reaches the box, which ends the action and lets go of what
+   * it held before answering.
+   */
+  const drive = (member: DesktopMember, planned: readonly DesktopAction[] | KinuError, context: CallContext): Effect.Effect<ExecutorToolResult | Refusal> => {
+    let holding = false;
+
+    const whole = Effect.suspend(() => {
+      holding = true;
+
+      return send(member, planned, context);
+    }).pipe(Effect.uninterruptible, alone.withPermits(1));
+
+    return Effect.raceFirst(whole, Effect.flatMap(stopped(context.signal), () => (holding ? Effect.never : Effect.succeed(
+      refusalOf(new KinuError('cancelled', `computer.${member}: its program stopped while another call held the screen, so nothing reached it.`)),
+    ))));
+  };
 
   /** A member: its named input read as it arrives, then its plan driven with the call's context. */
   const member = <S extends v.GenericSchema>(

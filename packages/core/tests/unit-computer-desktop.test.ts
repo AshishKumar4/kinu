@@ -303,6 +303,37 @@ describe('a program driving the desktop', () => {
     expect(result).toEqual([expect.objectContaining({ reason: 'cancelled' }), expect.objectContaining({ reason: 'cancelled' })]);
   });
 
+  test("a program stopped while another program's look holds the screen is answered at once, and nothing of it reaches the box", async () => {
+    const looking = Promise.withResolvers<void>();
+    const seen = Promise.withResolvers<void>();
+
+    // As the box answers a look: it holds the screen until the test lets it go.
+    const { box, actions } = desktopBox(async (action) => {
+      if (action.kind === 'screenshot') {
+        looking.resolve();
+        await seen.promise;
+      }
+
+      return accepted(action);
+    });
+
+    const computer = computerOf(box);
+    const look = withCodemodeProgram(async () => ({ result: [await call(computer, 'screenshot')] }));
+
+    await looking.promise;
+    const stop = new AbortController();
+    const queued = withCodemodeProgram(async () => ({ result: [await call(computer, 'click', [1, 2])] }), stop.signal);
+
+    stop.abort();
+    // Answered while the other program's look still holds the screen, which is let go only after.
+    const stopped = await queued;
+
+    seen.resolve();
+
+    expect({ stopped: stopped.result, look: (await look).result, sent: actions() })
+      .toEqual({ stopped: [expect.objectContaining({ reason: 'cancelled' })], look: [SHOWN], sent: [{ kind: 'screenshot' }] });
+  });
+
   test('a program moved to the background may still look, but no longer acts on the screen', async () => {
     const { box, actions } = desktopBox();
     const computer = computerOf(box);
