@@ -14,6 +14,7 @@ import {
   credentialToHeaders,
   refusedLogin,
   rotateLogin,
+  renewableLogin,
   usableLogin,
   type LoginRenewal,
   type AuthRequest,
@@ -99,9 +100,9 @@ export interface LocalOAuthStore {
   save(key: string, credential: OAuthCredential): Promise<void>;
 }
 
-/** A login a call can use: one without a refresh token is no login, as a hosted account refuses to store one. */
+/** A login a call can use: one with its access token, and renewable (`renewableLogin`), as a hosted account stores one. */
 function renewable(login: { readonly accessToken?: string; readonly refreshToken?: string } | null | undefined): boolean {
-  return Boolean(login?.accessToken && login.refreshToken);
+  return Boolean(login?.accessToken) && renewableLogin(login);
 }
 
 export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof fetch } = {}): LocalOAuthStore {
