@@ -268,6 +268,21 @@ describe('createFileOAuthStore', () => {
     expect(readFileSync(configPath, 'utf-8')).toBe(intact.slice(0, -12));
   });
 
+  // The login store read the file by its own schema, which checked only the logins: a field the CLI refuses was kept
+  // and written back. One schema now: what the CLI refuses, a login save refuses too, and the file is left as it was.
+  test('a config the CLI refuses is refused by a login save too, and is left as it was', async () => {
+    const dir = scratchDir('oauth-store');
+    const configPath = join(dir, 'config.json');
+    const refused = `${JSON.stringify({ updateCheck: 'sometimes', providers: { openai: { apiKey: 'sk-openai' } } }, null, 2)}\n`;
+
+    writeFileSync(configPath, refused);
+
+    const store = createFileOAuthStore(configPath);
+
+    await expect(store.save(CHATGPT_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).rejects.toThrow();
+    expect(readFileSync(configPath, 'utf-8')).toBe(refused);
+  });
+
   test('refreshing one ChatGPT account keeps the other sessions', async () => {
     const dir = scratchDir('oauth-store');
     const configPath = join(dir, 'config.json');

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
@@ -11,12 +11,10 @@ import {
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
-  JsonObjectSchema, accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
-  ProfileCatalogEnvelopeSchema,
+  accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
   type LLMProviderConfig,
   type ModelInfo,
   type OpenAICompatCredential,
-  type ProfileCatalogEnvelope,
   PROVIDER_KEY_ENV,
   SESSION_CREDENTIAL_ENV,
   CLOUD_PROXY_PROVIDER_IDS,
@@ -27,17 +25,23 @@ import { Effect } from 'effect';
 import {
   makeSql,
   createFileOAuthStore,
+  KinuAgentConfigSchema,
+  OpenAiCompatConfigSchema,
   ensureSecretDir,
   kinuHome,
+  readConfigFile,
   stripProvider,
-  withConfigLock,
-  writeSecretFile,
+  updateConfigFile as updateConfigAt,
+  type KinuAgentConfig,
+  type KinuConfig,
   type LocalCloudSession,
   type LocalOAuthStore,
   type LocalProviderCredentials,
   type McpServerConfig,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
+
+export type { KinuAgentConfig, KinuConfig, LocalApiKeyProvider, LocalOAuthSession } from '@kinu.run/cli-backend';
 
 export const AGENT_HOME = kinuHome();
 
@@ -49,108 +53,7 @@ const KINU_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 const DEFAULT_ORIGIN = 'https://kinu.run';
 
-export type KinuAgentConfig = v.InferOutput<typeof KinuAgentConfigSchema>;
-
 export type AgentMode = KinuAgentConfig['mode'];
-
-/** `localProfile` keeps core's readonly envelope type; the schema's output is its mutable twin. */
-export type KinuConfig = Omit<v.InferOutput<typeof KinuConfigSchema>, 'localProfile'> & { localProfile?: ProfileCatalogEnvelope };
-
-export type LocalApiKeyProvider = v.InferOutput<typeof LocalApiKeyProviderSchema>;
-
-export type LocalOAuthSession = v.InferOutput<typeof LocalOAuthSessionSchema>;
-
-const StringMapSchema = v.record(v.string(), v.string());
-
-const AgentRefFields = {
-  name: v.string(),
-  createdAt: v.string(),
-  updatedAt: v.string(),
-};
-
-const KinuAgentConfigSchema = v.variant('mode', [
-  v.object({
-    ...AgentRefFields, mode: v.literal('local'), localName: v.pipe(v.string(), v.nonEmpty()),
-    cwd: v.pipe(v.string(), v.nonEmpty()), workspaceId: v.pipe(v.string(), v.nonEmpty()), identityId: v.pipe(v.string(), v.nonEmpty()),
-    cloudName: v.optional(v.never()), displayName: v.optional(v.never()),
-  }),
-  v.object({
-    ...AgentRefFields, mode: v.literal('cloud'), cloudName: v.pipe(v.string(), v.nonEmpty()), displayName: v.string(),
-    localName: v.optional(v.never()), cwd: v.optional(v.never()), workspaceId: v.optional(v.never()), identityId: v.optional(v.never()),
-  }),
-]);
-
-const McpServerConfigSchema = v.object({
-  command: v.string(),
-  args: v.optional(v.array(v.string())),
-  env: v.optional(StringMapSchema),
-  timeoutMs: v.optional(v.number()),
-});
-
-const OpenAiCompatConfigSchema = v.strictObject({
-  baseURL: v.string(),
-  apiKey: v.optional(v.string()),
-  extraHeaders: v.optional(StringMapSchema),
-  contextWindow: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
-});
-
-const LocalApiKeyProviderSchema = v.object({
-  apiKey: v.optional(v.string()),
-  accounts: v.optional(v.record(v.string(), v.object({ apiKey: v.string() }))),
-});
-
-const LocalOAuthSessionSchema = v.object({
-  accessToken: v.optional(v.string()),
-  refreshToken: v.optional(v.string()),
-  expiresAt: v.optional(v.number()),
-  metadata: v.optional(JsonObjectSchema),
-});
-
-const KinuConfigSchema = v.object({
-  origin: v.optional(v.string()),
-  accessToken: v.optional(v.string()),
-  tokenExpiresAt: v.optional(v.string()),
-  user: v.optional(v.object({
-    id: v.string(),
-    email: v.string(),
-    displayName: v.optional(v.nullable(v.string())),
-  })),
-  agents: v.optional(v.record(v.string(), KinuAgentConfigSchema)),
-  updateCheck: v.optional(v.boolean()),
-  updateCheckedAt: v.optional(v.number()),
-  updateLatestSeen: v.optional(v.string()),
-  providers: v.optional(v.object({
-    openai: v.optional(LocalApiKeyProviderSchema),
-    anthropic: v.optional(LocalApiKeyProviderSchema),
-    openrouter: v.optional(LocalApiKeyProviderSchema),
-    chatgpt: v.optional(v.object({
-      ...LocalOAuthSessionSchema.entries,
-      accounts: v.optional(v.record(v.string(), LocalOAuthSessionSchema)),
-    })),
-    claude: v.optional(v.object({
-      ...LocalOAuthSessionSchema.entries,
-      accounts: v.optional(v.record(v.string(), LocalOAuthSessionSchema)),
-    })),
-    openaiCompat: v.optional(v.record(v.string(), OpenAiCompatConfigSchema)),
-  })),
-  mcpServers: v.optional(v.record(v.string(), McpServerConfigSchema)),
-  deviceConnectPromptDismissed: v.optional(v.boolean()),
-  /** Shadow-git checkpoints kept per working directory (default 50). */
-  checkpointKeep: v.optional(v.number()),
-  /**
-   * Bumped on every provider change so resident sessions in other processes know to re-sweep their cached listing.
-   * Only inequality is read; absent reads as 0.
-   */
-  providerRevision: v.optional(v.number()),
-  /** Failed server-side logout. The raw token is the only copy (the server stores a hash); kept until a retry confirms revocation. */
-  pendingRevocation: v.optional(v.object({
-    token: v.string(),
-    origin: v.string(),
-    at: v.number(),
-  })),
-  /** Signed-out profile authority; never holds account data. */
-  localProfile: v.optional(ProfileCatalogEnvelopeSchema),
-});
 
 export function ensureAgentHome(): void {
   ensureSecretDir(AGENT_HOME);
@@ -342,29 +245,15 @@ function assertIdentityUnchanged(agent: Extract<KinuAgentConfig, { mode: 'local'
   });
 }
 
+/** This machine's config (`readConfigFile`). */
 export function loadConfigFile(): KinuConfig {
-  if (!existsSync(CONFIG_PATH)) return {};
-
-  return settleSync(Effect.try({
-    try: () => v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'))),
-    catch: (cause) => new KinuError('io', `${CONFIG_PATH} is malformed. Remove it and reconnect with kinu setup.`, { cause }),
-  }));
+  return readConfigFile(CONFIG_PATH);
 }
 
-function writeConfigFileUnlocked(config: KinuConfig): void {
-  ensureAgentHome();
-  writeSecretFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
-}
-
-/** The one config writer; always read-modify-write under the lock, since a blind overwrite drops other processes' writes. */
-export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | void): Promise<KinuConfig> {
-  return withConfigLock(CONFIG_PATH, () => {
-    const config = loadConfigFile();
-    const next = mutator(config) ?? config;
-    writeConfigFileUnlocked(next);
-
-    return next;
-  });
+/** The one config writer (`updateConfigFile`): `mutate` changes the config in place, under the lock, since a blind
+ *  overwrite drops other processes' writes. */
+export function updateConfigFile<T>(mutate: (config: KinuConfig) => T | Promise<T>): Promise<T> {
+  return updateConfigAt(CONFIG_PATH, mutate);
 }
 
 /** Read on every profile resolution, so a plain file read. An unreadable config throws rather than answer 0. */

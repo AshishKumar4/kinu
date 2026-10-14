@@ -24,6 +24,11 @@ export { localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFil
 
 export { withConfigLock } from './config-lock';
 
+export {
+  KinuAgentConfigSchema, OpenAiCompatConfigSchema, readConfigFile, updateConfigFile,
+  type KinuAgentConfig, type KinuConfig, type LocalApiKeyProvider, type LocalOAuthSession,
+} from './config-file';
+
 export { hostToolchainCapabilities } from './host-toolchain';
 
 export { type ProfileEnvelopeSource } from './profile-authority';

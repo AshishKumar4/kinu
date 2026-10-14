@@ -53,11 +53,11 @@ beforeAll(() => {
 
 afterEach(async () => {
   for (const name of workspaces.splice(0)) rmSync(agentDir(name), { recursive: true, force: true });
-  await updateConfigFile(() => ({}));
+  await updateConfigFile((config) => { for (const key of Object.keys(config)) Reflect.deleteProperty(config, key); });
 });
 
 afterAll(async () => {
-  await updateConfigFile(() => configBefore);
+  await updateConfigFile((config) => { Object.assign(config, configBefore); });
 
   if (daemonBefore === undefined) delete process.env.KINU_SKIP_DAEMON;
   else process.env.KINU_SKIP_DAEMON = daemonBefore;
