@@ -208,6 +208,13 @@ export interface Gate {
    *  armada, in its phase's one job at the deploy's exact SHA ({@link armadaPhaseRows}), so nothing heavy runs here
    *  unless a row says why it must. */
   readonly here?: string;
+  /**
+   * Why the CI tier does not run this deploy row, whose files it then does not cover. The rows that carry one are the
+   * whole CI-vs-deploy delta, so "a green CI badge means everything a deploy checks except these" is a sentence
+   * someone can check. On 2026-08-17 the undeclared delta was five packages, 41 of 42 CLI files, the root suites and
+   * both Layergate runs.
+   */
+  readonly ciExempt?: string;
   /** Where its evidence lands under the deploy's report, for a row armada runs: the row writes it under
    *  BENCH_ARTIFACTS in its container, its verdict carries it back, and the deploy unpacks it there. */
   readonly evidence?: string;
@@ -247,6 +254,12 @@ const CLIENT_BUILD: Inputs = { ...AMBIENT_BY_NAME, corpus: true };
 function workersPool(base: string): Inputs {
   return { ...AMBIENT_BY_NAME, env: [...AMBIENT_BY_NAME.env ?? [], ...base === 'packages/cf-backend' ? ['KINU_CLOUDFLARE_API_TOKEN'] : []], reads: [`${base}/`] };
 }
+
+/** Why no live-app row can run on a pull request: each boots the product's own dev server. */
+const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and a scripted model for minutes, which '
+  + 'answers for the tree being deployed rather than a push: it runs in the deploy\'s source-phase job on armada, '
+  + 'in a container of its own. The boot is offline (KINU_DEV_OFFLINE) and mints its own keys, '
+  + 'so it needs no credential (measured 2026-10-08 with none passed: every row booted).';
 
 /** Gates that run before the deploy tier. The deploy tier is parsed from
  *  deploy.sh — see the header. Cheapest first inside each tier, so the first
@@ -2141,6 +2154,9 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:mutation-fences',
     label: 'Concurrency fences stay load-bearing',
+    ciExempt: 'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs eight '
+      + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada, whose '
+      + 'checkout carries the whole history.',
     tier: 'deploy',
     // Four fences, each proved twice (pristine green, mutant red) inside one
     // sparse `git worktree add --detach` copy: 2.5s measured 2026-08-31 on the
@@ -2276,6 +2292,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
     label: 'Live app in a browser: a running turn',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.0 s at load 2.9, its five scenarios 11-34 s each beside the dev server's boot.
     // 2026-10-01, interleaved twice at load 9-29: 204 s median without the #30 rows, 289 s with them as two rows of
@@ -2305,6 +2322,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts',
     label: 'Live app in a browser: a wait on the provider',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-10-13 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 059486671: 218.8 s wall,
     // when the minute-limited turn waited 60-120 s; it waits one stated minute now, so the measure is an upper bound.
@@ -2322,6 +2340,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
     label: 'Live app in a browser: a page that loses the turn',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.1 s at load 3.7, its four scenarios 20-33 s each beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
@@ -2346,6 +2365,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
     label: 'Live app in a browser: a long chat and its plans',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 167.9 s at load 2.7, its four scenarios 10-104 s each, chat-scroll the long one beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
@@ -2371,6 +2391,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
     label: 'Live app in a browser: a slate that serves its own page, in its answer',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Unmeasured: the plans file's walkthrough (about 60 s) and the dev server's boot, the plans row's figures.
     seconds: 120,
@@ -2387,6 +2408,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
     label: 'Live app in a browser: the inspector column\'s layout',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 120.3 s at load 3.1, its three scenarios 14-38 s each beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
@@ -2412,6 +2434,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:infra',
     label: 'Declared infrastructure exists and is bound',
+    ciExempt: 'needs a Cloudflare session. CI has none, and giving it one would put an account credential '
+      + 'with write scope on every pull request. Without a session the gate reports BLOCKED and '
+      + 'non-zero rather than skipping, so it cannot be run there and read as a pass — which is '
+      + 'why it lives at the deploy tier, immediately after `wrangler whoami` has proved there is '
+      + 'a session to use.',
     here: 'until it moves: it reads the account through this machine\'s wrangler session, which no armada run carries yet.',
     phase: 'upload',
     alone: 'holds every upload, with the secret scan beside it: an account that cannot be proved never '
@@ -2462,6 +2489,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:first-run',
     label: 'First-run tier',
+    ciExempt: 'has nothing to run against at CI. Its subject is the deployment that just went up, so it '
+      + 'runs AFTER the upload and the smoke gate, on a build that exists — at CI there is no such '
+      + 'build, and pointing it at the previous one would report the last deploy\'s product under '
+      + "this pull request's name. It also creates workspaces, links real machines and spends "
+      + 'model calls on a shared account, none of which belongs on a pull request.',
     evidence: 'first-run',
     phase: 'post-publish',
     deadline: {
@@ -2518,6 +2550,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:devbox-e2e',
     label: 'Devbox contracts on real golden containers',
+    ciExempt: 'needs staging eval authority and a Cloudflare session to create and remove throwaway real containers, R2 and snapshots; no pull request holds those credentials.',
     evidence: 'devbox',
     // Its Worker, bucket and containers through the deploy's REST token, never a wrangler login; its desktop client in
     // the container's own Chrome. The staging identity whatever the deployment: production is never its authority.
@@ -2537,6 +2570,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
+    ciExempt: 'has nothing to run against at CI: its subject is the deployment that just went up, as the '
+      + 'eval identity, whose secret no pull request holds.',
     phase: 'post-publish',
     alone: 'runs after the upload and the smoke gate, in the wave of the tiers whose subject is the '
       + 'build that just shipped and the local source gates (L18), its Chrome in the browser lane '
@@ -2569,6 +2604,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/eval-pass-tier.sh',
     label: 'One trial of every eval task, on the deployment',
+    ciExempt: 'has nothing to run against at CI: its subject is the deployment that just went up, as eval-service, '
+      + 'whose secret no pull request holds.',
     evidence: 'evals',
     phase: 'soak',
     deadline: { seconds: EVAL_TASK_TIMEOUT_SECONDS, why: 'the local command waits for native armada jobs; '
@@ -2981,13 +3018,6 @@ export function productFlowsTierCommand(source = readFileSync(resolve(root, PROD
   return line === undefined ? '' : line.slice('exec '.length);
 }
 
-/** Why no live-app row can run on a pull request: each boots the product's own dev server. */
-const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and a scripted model for minutes, which '
-  + 'answers for the tree being deployed rather than a push: it runs in the deploy\'s source-phase job on armada, '
-  + 'in a container of its own. The boot is offline (KINU_DEV_OFFLINE) and mints its own keys, '
-  + 'so it needs no credential (measured 2026-10-08 with none passed: every row booted).';
-
-
 /** Whether armada runs `gate` at deploy: every deploy row that does not say why it runs here ({@link Gate.here}). On
  *  this box they lost to its load: on 2026-10-07 the staging deploy of 8505a3ce6 killed live-app-plans and
  *  live-app-sleep at the 480 s silence bound, at load 28 on 24 threads with 25 of 30 GB swap in use. */
@@ -3000,47 +3030,6 @@ export function armadaPhaseRows(phases: readonly DeployPhase[]): Gate[] {
   return LADDER.filter((gate) => phases.some((phase) => phase === (gate.phase ?? 'source')) && onArmada(gate));
 }
 
-/**
- * Deploy gates whose FILES the CI tier does not cover, each with the reason.
- * This map is the whole CI-vs-deploy delta, so "a green CI badge means
- * everything a deploy checks except these" is a sentence someone can check.
- *
- * Each entry is a reason. On 2026-08-17 the undeclared delta was five
- * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
- */
-export const CI_EXEMPT = {
-  'bun run gate:infra':
-    'needs a Cloudflare session. CI has none, and giving it one would put an account credential '
-    + 'with write scope on every pull request. Without a session the gate reports BLOCKED and '
-    + 'non-zero rather than skipping, so it cannot be run there and read as a pass — which is '
-    + 'why it lives at the deploy tier, immediately after `wrangler whoami` has proved there is '
-    + 'a session to use.',
-  'bun run gate:mutation-fences':
-    'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs eight '
-    + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada, whose '
-    + 'checkout carries the whole history.',
-  'bun run gate:first-run':
-    'has nothing to run against at CI. Its subject is the deployment that just went up, so it '
-    + 'runs AFTER the upload and the smoke gate, on a build that exists — at CI there is no such '
-    + 'build, and pointing it at the previous one would report the last deploy\'s product under '
-    + "this pull request's name. It also creates workspaces, links real machines and spends "
-    + 'model calls on a shared account, none of which belongs on a pull request.',
-  'bun run gate:devbox-e2e':
-    'needs staging eval authority and a Cloudflare session to create and remove throwaway real containers, R2 and snapshots; no pull request holds those credentials.',
-  'bash scripts/product-flows-tier.sh':
-    'has nothing to run against at CI: its subject is the deployment that just went up, as the '
-    + 'eval identity, whose secret no pull request holds.',
-  'bash scripts/eval-pass-tier.sh':
-    'has nothing to run against at CI: its subject is the deployment that just went up, as eval-service, '
-    + 'whose secret no pull request holds.',
-  'bun test --timeout=0 tests/browser/live-app-turns.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-own-server.test.ts': LIVE_APP_AT_CI,
-} satisfies Record<string, string>;
-
 /** Every gate at or below `tier`. */
 export function gatesFor(tier: Tier): Gate[] {
   const upto = TIERS.indexOf(tier);
@@ -3051,7 +3040,7 @@ export function gatesFor(tier: Tier): Gate[] {
 /** The gates `--tier=<tier>` runs: every gate at or below it, and below the deploy tier none of the written CI
  *  exemptions, which CI cannot host. */
 export function tierRun(tier: Tier): Gate[] {
-  return gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+  return gatesFor(tier).filter((gate) => tier === 'deploy' || gate.ciExempt === undefined);
 }
 
 /** Six independent contended runs: each runner keeps the same suite and its own burners. */
@@ -3640,7 +3629,7 @@ function printMatrix(): void {
   for (const gate of all) {
     const at = TIERS.indexOf(gate.tier);
     const cells = TIERS.map((_, index) => (index >= at ? 'yes    ' : '-      ')).join('');
-    const note = gate.run in CI_EXEMPT ? '  ci-exempt' : '';
+    const note = gate.ciExempt === undefined ? '' : '  ci-exempt';
     const files = claims(gate.run, tracked).length;
     console.log(
       `${gate.run.padEnd(width)}  ${cells}${gate.seconds.toFixed(1)}s`.padEnd(width + 39)
