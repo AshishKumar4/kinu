@@ -261,7 +261,8 @@ function restatedChunks(parts: readonly JsonObject[], step: number): UIMessageCh
 
 export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** Tabs told a stream is resuming whose replay has not gone out, each with its hold: live chunks skip them until it has.
-   *  A socket redialled under the same id takes a hold of its own, which the closed one's replay never releases. */
+   *  A socket keeps its hold however often it is told, so the replay it acked releases it; a socket redialled under the
+   *  same id takes a hold of its own, which the closed one's replay never releases. */
   private readonly pendingResume = new Map<string, number>();
 
   /** Holds taken so far, each hold's number. */
@@ -339,7 +340,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private notifyResuming(connection: ChatSocket, live: LiveStream, probeId: string | undefined): void {
     const frame = { type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, ...(probeId !== undefined && { probeId }) };
 
-    if (sendIfOpen(connection, JSON.stringify(frame)) && !live.joined.has(connection.id)) this.pendingResume.set(connection.id, ++this.holds);
+    if (sendIfOpen(connection, JSON.stringify(frame)) && !live.joined.has(connection.id) && !this.pendingResume.has(connection.id)) {
+      this.pendingResume.set(connection.id, ++this.holds);
+    }
   }
 
   /** Releases `id`'s hold if it is still `hold`: a replay never releases the hold a redial under its id took since. */
