@@ -10,7 +10,7 @@ import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 
 import {
   MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, listWithVfsOps,
-  readBoundedWithVfsOps, partialTreeRemovalMessage, removeTree,
+  readBoundedWithVfsOps, partialTreeRemovalMessage, removeTree, type VfsMountRouting,
 } from '../vfs/mounts';
 import { move } from '@nimbus-sh/core/vfs/move.js';
 import { inlineFileType } from './file-types';
@@ -23,7 +23,7 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
 
 export interface ExecutorFileLookup {
-  getProvider(name: string): { files?: VFS; homeDir(segment?: string): Promise<string> } | undefined;
+  getProvider(name: string): { files?: VFS & Pick<VfsMountRouting, 'places'>; homeDir(segment?: string): Promise<string> } | undefined;
 }
 
 /** `consistency`: `durable` survives everything, `ephemeral` dies with the container,
@@ -389,9 +389,11 @@ export function getExecutorFiles(
     return yield* step(async () => {
     // A machine's mount point lists as the directory it is: a stat of it asks the machine, and a computer asked starts.
     const listed = await listWithVfsOps(vfs, dir, (child) => MOUNT_EXECUTORS[child] === undefined);
+    // The rest of a namespace's `/` is the machine's, which the owner never browses to.
+    const places = dir === '/' ? vfs.places?.() : undefined;
 
     // A null `stat` is one unreadable child, or a mount point, not a failed listing.
-    const entries: DirEntry[] = listed.filter(({ name }) => !isSystemManaged(name)).map(({ name, type, stat }) => ({
+    const entries: DirEntry[] = listed.filter(({ name }) => !isSystemManaged(name) && (places?.includes(name) ?? true)).map(({ name, type, stat }) => ({
       name, type: (stat?.type ?? type) === 'directory' ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
     }));
 
