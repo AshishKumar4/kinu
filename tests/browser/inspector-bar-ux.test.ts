@@ -50,6 +50,16 @@ const DESKTOP_FILL = `(() => {
   return Math.max(screen.width / area.width, screen.height / area.height);
 })()`;
 
+/** The workspace shell's computer in its Environment panel, at its first session's terminal. */
+async function openTheComputer(page: Page, origin: string): Promise<void> {
+  await page.setViewport({ width: 1440, height: 900 });
+  await page.goto(`${origin}/gallery.html?frame=workspaceshell&env=computer`, { waitUntil: 'networkidle0' });
+  await page.click('#inspector button[aria-label="Environment"]');
+  await page.waitForFunction((name) => [...document.querySelectorAll('#inspector button')].some((chip) => chip.textContent?.trim() === name), SOON, COMPUTER);
+  await (await required(page, '#inspector', 'button', COMPUTER)).click();
+  await page.waitForSelector('#inspector .xterm-rows', SOON);
+}
+
 /** A desktop client that says its session is up, as KasmVNC's own says it to the screen that frames it (DesktopScreen). */
 const DESKTOP_CLIENT = `<script>parent.postMessage({ action: 'connection_state', value: 'connected' }, location.origin);</script>`;
 
@@ -301,12 +311,7 @@ describe('the Environment panel', () => {
 
       try {
         await answerTheDesktop(page);
-        await page.setViewport({ width: 1440, height: 900 });
-        await page.goto(`${origin}/gallery.html?frame=workspaceshell&env=computer`, { waitUntil: 'networkidle0' });
-        await page.click('#inspector button[aria-label="Environment"]');
-        await page.waitForFunction((name) => [...document.querySelectorAll('#inspector button')].some((chip) => chip.textContent?.trim() === name), SOON, COMPUTER);
-        await (await required(page, '#inspector', 'button', COMPUTER)).click();
-        await page.waitForSelector('#inspector .xterm-rows', SOON);
+        await openTheComputer(page, origin);
         await page.evaluate(`window.__terminalLeft = ${SHOWN_TERMINAL}`);
 
         await (await required(page, '#inspector', 'tab', 'Desktop')).click();
@@ -328,6 +333,27 @@ describe('the Environment panel', () => {
         await page.click('[data-desktop-return]');
         await page.waitForFunction(`${DESKTOP_FILL} < 0.9 && document.querySelector('[data-rail]') !== null`, SOON);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
+      } finally { await page.close(); }
+    });
+  });
+
+  test('a session closed out of sight takes its kept terminal with it', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await openTheComputer(page, origin);
+
+        const [first, second] = await page.$$eval('#inspector [role="tab"]', (tabs) => tabs.map((tab) => (tab.textContent ?? '').trim()));
+
+        if (first === undefined || second === undefined) throw new Error('the computer has fewer than two sessions');
+        await (await required(page, '#inspector', 'tab', second)).click();
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
+        // A tab's close shows under the pointer.
+        await (await required(page, '#inspector', 'tab', first)).hover();
+        await (await required(page, '#inspector', 'button', `Close ${first}`)).click();
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 1, SOON);
+        expect(await page.evaluate(`${SHOWN_TERMINAL} !== undefined`)).toBe(true);
       } finally { await page.close(); }
     });
   });

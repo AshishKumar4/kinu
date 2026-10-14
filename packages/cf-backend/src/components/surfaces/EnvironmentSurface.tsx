@@ -513,7 +513,9 @@ function MachinePanes({ showing, sessions, pane }: {
   // Recorded while rendering, as React keeps what an earlier render saw: the pane mounts on this render, not the next.
   if (unopened.length > 0) setOpened([...opened, ...unopened]);
   const listed = sessions?.sessions ?? null;
-  const open = [...opened, ...unopened].filter((id) => listed === null || id === "desktop" || listed.some((session) => session.id === id));
+  // A pane out of sight goes with its session; the one shown follows its tab, as a tab chosen before the list reads.
+  const stillOpen = (id: string) => listed === null || id === "desktop" || listed.some((session) => session.id === id);
+  const open = [...opened, ...unopened].filter((id) => showing.includes(id) || stillOpen(id));
 
   return (
     <div className="relative flex min-h-0 flex-1">
