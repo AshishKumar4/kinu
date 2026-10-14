@@ -4,7 +4,10 @@
  * a PC that is not connected offered rather than listed.
  */
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 import type { ElementHandle, Page } from 'puppeteer';
+import { detach } from '@kinu.run/core/obs';
+import { DESKTOP_CLIENT_ROOT } from '../../packages/core/src/http/desktop-client';
 import { withGallery } from '../../scripts/gallery-harness';
 import { openInspectorPage, sessionLine } from '../../scripts/product-flows';
 
@@ -27,6 +30,37 @@ const TOOL_NAMES = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment'
 
 /** The harness waits forever by default; a control that never comes fails here instead. */
 const SOON = { timeout: 10_000 };
+
+/** The terminal shown in the inspector, of every one it keeps open. */
+const SHOWN_TERMINAL = `[...document.querySelectorAll('#inspector .xterm-rows')].find((rows) => rows.checkVisibility({ visibilityProperty: true }))`;
+
+/** The desktop's client document, which a reopened client replaces. */
+const DESKTOP_WINDOW = `document.querySelector('#inspector [data-desktop-frame] iframe').contentWindow`;
+
+/** The desktop shown with its session up: no veil of Kinu's over it. */
+const DESKTOP_UP = `(() => {
+  const screen = document.querySelector('#inspector [data-desktop-frame]');
+  return screen !== null && screen.checkVisibility({ visibilityProperty: true }) && screen.querySelector('[role="status"]') === null;
+})()`;
+
+/** The share of the workspace area the desktop's screen covers. */
+const DESKTOP_COVER = `(() => {
+  const screen = document.querySelector('#inspector [data-desktop-frame]').getBoundingClientRect();
+  const area = document.querySelector('main').getBoundingClientRect();
+  return (screen.width * screen.height) / (area.width * area.height);
+})()`;
+
+/** A desktop client that says its session is up, as KasmVNC's own says it to the screen that frames it (DesktopScreen). */
+const DESKTOP_CLIENT = `<script>parent.postMessage({ action: 'connection_state', value: 'connected' }, location.origin);</script>`;
+
+/** The desktop's client, answered by that one: the gallery has no computer for the real one to reach. */
+async function answerTheDesktop(page: Page): Promise<void> {
+  await page.setRequestInterception(true);
+  page.on('request', (request) => detach(Effect.promise(async () => {
+    if (new URL(request.url()).pathname !== `${DESKTOP_CLIENT_ROOT}vnc.html`) await request.continue();
+    else await request.respond({ status: 200, contentType: 'text/html', body: DESKTOP_CLIENT });
+  })));
+}
 
 /**
  * The control in `scope` that the accessibility tree names `name` with `role`, or null. Read from the tree itself:
@@ -255,6 +289,45 @@ describe('the Environment panel', () => {
         await (await required(page, 'body', 'button', 'Connect a PC')).click();
         await page.waitForSelector('[role="dialog"]', SOON);
         expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
+      } finally { await page.close(); }
+    });
+  });
+
+  // Production f9c17ac7b (the owner, 2026-10-14): each switch reopened the pane it showed, and the desktop's full screen
+  // was a second client in a new tab.
+  test("the computer's terminal and desktop switch without reopening, and the desktop expands over the workspace and back", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await answerTheDesktop(page);
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell&env=computer`, { waitUntil: 'networkidle0' });
+        await page.click('#inspector button[aria-label="Environment"]');
+        await page.waitForFunction((name) => [...document.querySelectorAll('#inspector button')].some((chip) => chip.textContent?.trim() === name), SOON, COMPUTER);
+        await (await required(page, '#inspector', 'button', COMPUTER)).click();
+        await page.waitForSelector('#inspector .xterm-rows', SOON);
+        await page.evaluate(`window.__terminalLeft = ${SHOWN_TERMINAL}`);
+
+        await (await required(page, '#inspector', 'tab', 'Desktop')).click();
+        await page.waitForFunction(DESKTOP_UP, SOON);
+        await page.evaluate(`Object.assign(${DESKTOP_WINDOW}, { __left: true })`);
+
+        const shell = await page.$$eval('#inspector [role="tab"]', (tabs) => (tabs[0]?.textContent ?? '').trim());
+
+        await (await required(page, '#inspector', 'tab', shell)).click();
+        expect(await page.evaluate(`${SHOWN_TERMINAL} === window.__terminalLeft`)).toBe(true);
+        await (await required(page, '#inspector', 'tab', 'Desktop')).click();
+        // Up at once, in the client it was left in: no veil while a new one opens.
+        expect(await page.evaluate(`[${DESKTOP_UP}, ${DESKTOP_WINDOW}.__left === true]`)).toEqual([true, true]);
+
+        await page.click('[data-desktop-expand]');
+        await page.waitForFunction(`${DESKTOP_COVER} > 0.8 && document.querySelector('[data-rail-collapsed]') !== null`, SOON);
+        expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
+
+        await page.click('[data-desktop-return]');
+        await page.waitForFunction(`${DESKTOP_COVER} < 0.5 && document.querySelector('[data-rail]') !== null`, SOON);
+        expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
       } finally { await page.close(); }
     });
   });

@@ -19,10 +19,10 @@ import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   openWaitsNamed, slateOpensFromSlates, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
-  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, reopenedWorkspaceRunsTheDeployedBuild, computerSessionsComeBackByName, agentJobIsAnsweredInItsSession,
+  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild, computerSessionsComeBackByName, agentJobIsAnsweredInItsSession,
   type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
-  type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type ReopenVerdict, type SessionsVerdict, type AgentJobVerdict,
+  type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type DesktopSwitchVerdict, type ReopenVerdict, type SessionsVerdict, type AgentJobVerdict,
 } from '../../scripts/product-flows';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
@@ -625,6 +625,23 @@ describe(productFlowTestName('desktop-resize', "a resized computer's desktop dra
 
     expect(resized.to).not.toBe(resized.from);
     expect(resized.backAfterS).toBeGreaterThan(0);
+  });
+});
+
+// Switching the computer between its terminal and desktop reopens neither, and the desktop expands in place.
+describe(productFlowTestName('desktop-switch', "a computer's terminal and desktop switch without reopening"), () => {
+  let observed: DesktopSwitchVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('desktop-switch', computerSwitchKeepsItsScreens);
+  });
+
+  test('each came back in the client it was left in, expanded and back', () => {
+    const switched = verdictOf(observed, 'desktop-switch');
+
+    console.log(`desktop-switch: terminal back after ${String(switched.terminalAfterMs)} ms, desktop after ${String(switched.desktopAfterMs)} ms`);
+    expect(switched).toMatchObject({ keptDesktop: true, keptTerminal: true, expandedRailFolded: true, keptExpanded: true, keptReturned: true });
+    expect(switched.expandedCover).toBeGreaterThan(0.8);
   });
 });
 

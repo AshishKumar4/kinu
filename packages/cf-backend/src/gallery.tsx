@@ -117,6 +117,27 @@ import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
+/** `&env=computer`: the workspace shell with its computer up, so Environment shows its terminal and its desktop. */
+const SHELL_COMPUTER = frame === "workspaceshell" && new URLSearchParams(location.search).get("env") === "computer";
+
+/** The shell's machines under `&env=computer`, as `listMounts` and the snapshot's executors answer them. */
+const SHELL_MACHINES = {
+  mounts: [
+    { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
+    { name: "computer", prefix: "computer.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
+  ],
+  executors: [
+    {
+      name: "computer", kind: "computer", available: true, configured: true, active: true, status: "active",
+      capabilities: ["shell", "npm", "git", "fs_owned", "net_inbound", "process_long"],
+    },
+    {
+      name: "workspace", kind: "workspace", available: true, configured: true, active: true, status: "active",
+      capabilities: ["javascript", "typescript", "python", "shell", "npm", "fs_shared"],
+    },
+  ],
+};
+
 // Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
 
@@ -1373,7 +1394,7 @@ window.WebSocket = new Proxy(window.WebSocket, {
 
     if (path === ROSTER_SOCKET_ROUTE) return new GalleryRosterSocket();
 
-    if (frame === "environment" && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
+    if ((frame === "environment" || SHELL_COMPUTER) && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
 
     return protocols === undefined ? new target(url) : new target(url, protocols);
   },
@@ -1508,7 +1529,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     memoryContent: "",
     // The full-screen explorer reads its tree off the snapshot.
     mcts: MCTS_ROWS,
-    timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
+    timeline: [], executors: SHELL_COMPUTER ? SHELL_MACHINES.executors : [], executorOutputs: [], lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
     // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
     chat: {
       name: "checkout-coupon-bug-9935d3", actorId: "agent_01j9x7q2m4checkoutfixes", displayName: "Storefront", role: "default",
@@ -3192,6 +3213,8 @@ const workspacePageRpc: SocketCall = async <T,>(method: string, args?: unknown[]
   const page = WORKSPACE_PAGE_RPC.get(method);
 
   if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
+
+  if (SHELL_COMPUTER && method === "listMounts") return rpcResult(v.parse(JsonValueSchema, SHELL_MACHINES.mounts)).json<T>();
 
   return agentPageFallback<T>(method, args);
 };

@@ -2694,6 +2694,109 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
   }
 }
 
+export interface DesktopSwitchVerdict {
+  readonly workspace: string;
+  /** Milliseconds from choosing the terminal until it showed its prompt, and from choosing the desktop until it drew. */
+  readonly terminalAfterMs: number;
+  readonly desktopAfterMs: number;
+  /** Whether the desktop came back in the client it was left in, and the terminal in its own: nothing reopened. */
+  readonly keptDesktop: boolean;
+  readonly keptTerminal: boolean;
+  /** Expanded: the desktop covered this share of the page's workspace area, the sidebar folded, and the client stayed. */
+  readonly expandedCover: number | null;
+  readonly expandedRailFolded: boolean;
+  readonly keptExpanded: boolean;
+  /** Back from expanded: the desktop in the column again, in the client it was left in. */
+  readonly keptReturned: boolean;
+}
+
+/** The terminal a person sees in the inspector: the one shown, of every one the column keeps open. */
+const SHOWN_TERMINAL = `[...document.querySelectorAll('#inspector .xterm-rows')].find((rows) => rows.checkVisibility({ visibilityProperty: true }))`;
+
+/** The desktop's client document, marked so a reopened one is told apart from the one left. */
+const DESKTOP_WINDOW = `document.querySelector('#inspector [data-desktop-frame] iframe')?.contentWindow`;
+
+/**
+ * Row: a computer's terminal and desktop switch without reopening either, and its desktop expands in place.
+ *
+ * Production 71d06f4a9 and f9c17ac7b (the owner, 2026-10-14): each switch between Terminal and Desktop showed a loading
+ * state, because the column dropped what it did not show and opened it again; and the desktop's full screen opened a
+ * new tab drawing a thin strip. The reader opens the desktop, the terminal, the desktop again, then expands it and
+ * comes back, and the row reads whether each came back in the client it was left in, and how long each switch took.
+ */
+export async function computerSwitchKeepsItsScreens(target: FlowTarget): Promise<DesktopSwitchVerdict> {
+  const workspace = await createFlowWorkspace(target, 'desktop-switch');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${workspace}`);
+
+    await openInspector(page);
+    await page.evaluate(stripTab('Environment'));
+    const computer = executorLabel('computer');
+
+    await until(page, 'the computer in the Environment panel', `[...document.querySelectorAll('#inspector button')].some((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)})`);
+    await page.evaluate(`[...document.querySelectorAll('#inspector button')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)}).click()`);
+    const tab = (name: string) => `[...document.querySelectorAll('#inspector [role="tab"]')].find((each) => (each.textContent ?? '').trim() === ${JSON.stringify(name)})`;
+    const shell = `${SESSION_TABS}[0]`;
+
+    await until(page, "the computer's Desktop tab", `${tab('Desktop')} !== undefined && ${shell} !== undefined`);
+    await page.evaluate(`${tab('Desktop')}.click()`);
+    await until(page, "the computer's desktop", DESKTOP_DRAWN);
+    await page.evaluate(`Object.assign(${DESKTOP_WINDOW}, { __kinuLeft: true })`);
+
+    const shellName = v.parse(v.string(), await page.evaluate(shell));
+    let chosen = performance.now();
+
+    await page.evaluate(`${tab(shellName)}.click()`);
+    await until(page, "the shell's prompt", `/[#$]\\s*$/m.test(${SHOWN_TERMINAL}?.textContent ?? '')`);
+    const terminalAfterMs = Math.round(performance.now() - chosen);
+
+    await page.evaluate(`window.__kinuTerminalLeft = ${SHOWN_TERMINAL}`);
+    chosen = performance.now();
+    await page.evaluate(`${tab('Desktop')}.click()`);
+    await until(page, 'the desktop again', DESKTOP_DRAWN);
+    const desktopAfterMs = Math.round(performance.now() - chosen);
+    const keptDesktop = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
+
+    await page.evaluate(`${tab(shellName)}.click()`);
+    await until(page, 'the shell again', `${SHOWN_TERMINAL} !== undefined`);
+    const keptTerminal = v.parse(v.boolean(), await page.evaluate(`${SHOWN_TERMINAL} === window.__kinuTerminalLeft`));
+
+    await page.evaluate(`${tab('Desktop')}.click()`);
+    await until(page, 'the desktop to show', DESKTOP_DRAWN);
+    const expand = `document.querySelector('#inspector [data-desktop-expand]')`;
+    const expandable = v.parse(v.boolean(), await page.evaluate(`${expand} !== null`));
+    let expandedCover: number | null = null;
+    let expandedRailFolded = false;
+    let keptExpanded = false;
+    let keptReturned = false;
+
+    if (expandable) {
+      await page.evaluate(`${expand}.click()`);
+
+      const cover = `(() => {
+        const screen = document.querySelector('#inspector [data-desktop-frame]')?.getBoundingClientRect();
+        const area = document.querySelector('main')?.getBoundingClientRect();
+        return screen === undefined || area === undefined ? 0 : (screen.width * screen.height) / (area.width * area.height);
+      })()`;
+
+      await until(page, 'the desktop to fill the workspace', `${cover} > 0.8`);
+      expandedCover = Math.round(v.parse(v.number(), await page.evaluate(cover)) * 100) / 100;
+      expandedRailFolded = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-rail-collapsed]') !== null`));
+      keptExpanded = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
+      await page.evaluate(`document.querySelector('[data-desktop-return]').click()`);
+      await until(page, 'the desktop back in the column', `${cover} < 0.8`);
+      keptReturned = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
+    }
+
+    await page.close();
+
+    return { workspace, terminalAfterMs, desktopAfterMs, keptDesktop, keptTerminal, expandedCover, expandedRailFolded, keptExpanded, keptReturned };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 export interface AgentJobVerdict {
   readonly workspace: string;
   /** What the job's tab and its details said while it waited, and what its terminal showed once answered. */
