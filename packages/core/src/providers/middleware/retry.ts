@@ -23,7 +23,7 @@ import { inAttempt, type Attempt } from './attempt';
 import { generateFromStream } from './stream-generate';
 import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
 import type { ProviderWaitInfo } from '../types';
-import { recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
+import { attemptKey, recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 
 /** Full-jitter backoff; unmeasured. */
 const BASE_DELAY_MS = 2_000;
@@ -143,7 +143,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
   const pacer = policy.pacer ?? providerPacer;
   const signal = params.abortSignal;
   const { retries } = kinuOptions(params);
-  const lane = new CallLane(policy.lane, capture);
+  const lane = new CallLane(policy.lane, capture, policy.modelId);
 
   const warn = policy.warn ?? ((message: string) => diagnostics.failure('provider.rate_limited', new KinuError('unavailable', message)));
 
@@ -174,7 +174,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
     for (let attemptNumber = 1; ; attemptNumber++) {
       const checked = yield* lane.toCheck(pacer);
 
-      if (checked !== null) yield* cooledDown({ policy, pacer, lane: checked, owned, retries, now, signal, reportWait });
+      if (checked !== null) yield* cooledDown({ policy, pacer, keys: checked, owned, retries, now, signal, reportWait });
 
       capture.identity = null;
       const [opened] = yield* Effect.promise(() => Promise.allSettled([withAttemptIdentity(capture, () => open(waits >= retries))]));
@@ -222,7 +222,10 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       }
 
       const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attemptNumber));
-      const declared = pacer.declareWait(yield* lane.billed(), waitMs);
+      // A limit the refusal states in its words is its model's (Workers AI's per-minute limit): another model on the
+      // lane, a fallback's among them, still answers. A header's or a backoff's wait holds the whole lane.
+      const billed = yield* lane.billed();
+      const declared = pacer.declareWait(header === null && retryAfter !== null ? lane.ownModel(billed) : billed, waitMs);
 
       yield* spendRetry(() => handedOver(policy.provider, waitMs, failure));
       owned = declared;
@@ -235,7 +238,11 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
 
 /** The answering attempt owns a refusal; a new send checks its prospective lane afresh. */
 class CallLane {
-  constructor(private readonly lane: string | LaneLookup, private readonly capture: AttemptIdentityCapture) {}
+  constructor(
+    private readonly lane: string | LaneLookup,
+    private readonly capture: AttemptIdentityCapture,
+    private readonly modelId: string | undefined,
+  ) {}
 
   billed(): Effect.Effect<string> {
     if (this.capture.identity !== null) return Effect.succeed(this.capture.identity.lane);
@@ -243,18 +250,35 @@ class CallLane {
     return typeof this.lane === 'string' ? Effect.succeed(this.lane) : Effect.promise(this.lane.billed);
   }
 
-  /** The lane to check before an attempt, or null while nothing under its route is cooling. */
-  toCheck(pacer: ProviderPacer): Effect.Effect<string | null> {
-    if (typeof this.lane === 'string') return Effect.succeed(this.lane);
-
-    return pacer.coolingUnder(this.lane.route) ? Effect.promise(this.lane.billed) : Effect.succeed(null);
+  /** This call's model on `billed`: the fallback route's parking key, so a model's own limit also parks its selection. */
+  ownModel(billed: string): string {
+    return this.modelId === undefined ? billed : attemptKey({ lane: billed, modelId: this.modelId });
   }
+
+  /** The lane and this call's model on it, to check before an attempt; null while nothing under its route is cooling. */
+  toCheck(pacer: ProviderPacer): Effect.Effect<readonly string[] | null> {
+    const keys = (billed: string) => [...new Set([billed, this.ownModel(billed)])];
+
+    if (typeof this.lane === 'string') return Effect.succeed(keys(this.lane));
+
+    return pacer.coolingUnder(this.lane.route) ? Effect.promise(this.lane.billed).pipe(Effect.map(keys)) : Effect.succeed(null);
+  }
+}
+
+/** The longest cooldown among `keys`, or null. */
+function longestCooling(pacer: ProviderPacer, keys: readonly string[]): ReturnType<ProviderPacer['cooling']> {
+  return keys.map((key) => pacer.cooling(key)).reduce((longest, cooling) => {
+    if (cooling === null) return longest;
+
+    return longest === null || cooling.untilMs > longest.untilMs ? cooling : longest;
+  }, null);
 }
 
 interface CooldownCheck {
   readonly policy: RetryPolicy;
   readonly pacer: ProviderPacer;
-  readonly lane: string;
+  /** The lane and the call's model on it. */
+  readonly keys: readonly string[];
   /** The deadline this call declared itself, which it waits out without announcing. */
   readonly owned: number | null;
   readonly retries: number;
@@ -266,10 +290,10 @@ interface CooldownCheck {
 /** The lane's cooldown waited out, re-read after each wait since a sibling may extend it; one past the longest wait, or
  *  any for a call with no retries, ends the call instead. */
 function cooledDown(check: CooldownCheck): Effect.Effect<void> {
-  const { pacer, lane, policy, signal } = check;
+  const { pacer, keys, policy, signal } = check;
 
   return Effect.gen(function* () {
-    for (let cooling = pacer.cooling(lane); cooling !== null; cooling = pacer.cooling(lane)) {
+    for (let cooling = longestCooling(pacer, keys); cooling !== null; cooling = longestCooling(pacer, keys)) {
       if (signal?.aborted === true) return yield* Effect.die(signal.reason);
       const { waitMs, untilMs, reason } = cooling;
 
@@ -304,8 +328,8 @@ function waitSource(header: number | null, stated: number | null): ProviderWaitI
   return stated === null ? 'backoff' : 'stated';
 }
 
-/** A wait a refusal states in its body rather than a header: Workers AI's per-minute limit, a minute. Null for any
- *  other, whose wait is the backoff's. */
+/** A wait a refusal states in its body rather than a header: Workers AI's per-minute limit, a minute, which is its
+ *  model's ("per account, per model" for the models Kinu runs, ibid.). Null for any other, whose wait is the backoff's. */
 function statedInWords(failure: APICallError): number | null {
   return failure.statusCode === 429 && workersAiCode(failure.responseBody ?? '') === WORKERS_AI_MINUTE_LIMIT ? MINUTE_MS : null;
 }

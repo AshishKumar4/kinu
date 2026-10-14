@@ -363,20 +363,21 @@ describe('a failed call hands the turn down its fallback chain', () => {
 /** Two accounts of one OpenAI-compatible provider on one endpoint; `answerFor` decides by the key each request carries. */
 /** A turn on `primary` (default `openai-compat@work/m`) whose chain is `fallbacks`; `defaultAccount` is the profile's pick for a bare spec. */
 async function accountTurn(
-  answerFor: (key: string, seen: number) => Response,
+  answerFor: (key: string, seen: number, model: string) => Response,
   fallbacks: readonly string[],
   opts: { readonly primary?: string; readonly defaultAccount?: string; readonly lookupFails?: boolean } = {},
 ) {
   const primary = opts.primary ?? 'openai-compat@work/m';
-  const served: { key: string; handover: boolean }[] = [];
+  const served: { key: string; handover: boolean; model: string }[] = [];
 
   const server = Bun.serve({
     port: 0,
-    fetch(request) {
+    async fetch(request) {
       const key = request.headers.get('authorization') ?? '';
-      served.push({ key, handover: request.headers.has('x-kinu-rate-limit-handover') });
+      const { model } = v.parse(ServedSchema, await request.json());
+      served.push({ key, handover: request.headers.has('x-kinu-rate-limit-handover'), model });
 
-      return answerFor(key, served.filter((entry) => entry.key === key).length);
+      return answerFor(key, served.filter((entry) => entry.key === key).length, model);
     },
   });
 
@@ -557,6 +558,22 @@ describe('an account that hits its limit hands the turn to the next account of i
     expect(events.flatMap((event) => (event.type === 'step-finish' ? [{ account: event.account?.name, fallback: event.fallback }] : [])))
       .toEqual([{ account: 'home', fallback: 'openai-compat@home/m' }]);
   });
+
+  // Workers AI limits the models Kinu runs "per account, per model" (developers.cloudflare.com/workers-ai/platform/
+  // limits, read 2026-10-14). Its per-minute refusal once parked the whole account's lane, so the next model of the
+  // chain, on that account and free to answer, sat out the first one's minute.
+  test('a model Workers AI refuses for its per-minute limit hands over, and the next model on the account answers at once', async () => {
+    const minute = Response.json({ errors: [{ code: 3021, message: 'rate limiting: inference request per min rate reached' }] }, { status: 429 });
+
+    const { events, served } = await accountTurn(
+      (_key, _seen, model) => (model === 'minute-limited' ? minute.clone() : answer('from the next model')),
+      ['openai-compat@work/free-model'],
+      { primary: 'openai-compat@work/minute-limited' },
+    );
+
+    expect(served.map((entry) => entry.model)).toEqual(['minute-limited', 'free-model']);
+    expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'from the next model' });
+  }, 5_000);
 
   test('a lone model keeps waiting out its limit, and nothing hands over', async () => {
     const { events, served } = await accountTurn(
