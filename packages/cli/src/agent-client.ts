@@ -6,7 +6,7 @@ import type {
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
   EvolutionConfigView,
-  EvolutionDebt, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView,
+  RefinementDecisionInput, RefinementDecisionResult, RefinementListing, RefinementRequestView,
   StagedSkillResult,
   ReasoningEffort, TierId, Usage, RunEvent, JsonObject, ToolOutcome,
   AdmittedInstructionDecision,
@@ -14,7 +14,7 @@ import type {
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, ReviewAnnotation, PlanDecisionOutcome, PlanReviewDecision, PlanReviewResult, SendMetadata, WorkMode, AskingAgent, OwnerAnswer, OwedIntent,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
-  ModelTestResult, ContextFill,
+  ModelTestResult, ContextFill, PendingDeviceConsent,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -240,19 +240,6 @@ export interface AgentChangelogView {
   unseenCount: number;
 }
 
-/** Refinements and evolution debt in one shape, so a debt count never renders against a stale list. */
-export interface AgentRefinementView {
-  requests: RefinementRequestView[];
-  debt: EvolutionDebt;
-}
-
-export interface PendingDeviceConsent {
-  consentId: string;
-  deviceLabel: string;
-  method: string;
-  command: string;
-}
-
 export type DeviceConsentDecision = 'once' | 'always' | 'deny';
 
 export interface DeviceConsentSurface {
@@ -357,7 +344,7 @@ export interface AgentClient {
   describeTools(): Promise<AgentToolSurface>;
   changelog(): Promise<AgentChangelogView>;
   revertChangelogEntry(id: string): Promise<ChangelogRevertResult>;
-  refinements(): Promise<AgentRefinementView>;
+  refinements(): Promise<RefinementListing>;
   /** Resolves with the durable request; the agent's behaviour has not moved yet. */
   requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView>;
   /** The only path by which a proposed skill becomes trusted instructions; owner client only. */

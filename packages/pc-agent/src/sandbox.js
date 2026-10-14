@@ -29,7 +29,7 @@ const util = require('node:util');
 
 const update = require('./update.js');
 
-const { RELEASE_SIGNING_PUBLIC_KEY_ENV } = require('../../core/src/http/release-message.ts');
+const { fromDotenv, launchDotenv: suppliedBy, launchDotenvFiles, unsandboxedCommandEnvironment } = require('../../core/src/cli/command-env.ts');
 
 const { MACHINE_SANDBOX_REASONS } = require('../../core/src/execution/machine-sandbox-reasons.ts');
 
@@ -129,60 +129,30 @@ const ENV_ALLOWLIST = Object.freeze([
 const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
 
 /**
- * What never crosses into a command of either tier: the credentials Kinu's
- * CLI reads from its environment (cli-backend model-resolver.ts
- * PROVIDER_CREDENTIAL_ENV and SESSION_CREDENTIAL_ENV; this file ships alone and cannot import them, so
- * cli-backend's cwd-plane test holds the lists together), and the two
- * settings this daemon itself reads: its update key and its predecessor.
- */
-const WITHHELD_ENV = Object.freeze([
-  'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY',
-  'KINU_TOKEN', 'KINU_AUTH', 'AI_GATEWAY_AUTH', 'KINU_LLM_HEADERS', 'KINU_PROVIDER_CREDENTIALS',
-  RELEASE_SIGNING_PUBLIC_KEY_ENV, update.PREDECESSOR_ENV,
-]);
-
-/**
- * The values dotenv files put into this process at launch, by name: the files
- * Bun loads from its working directory for NODE_ENV (bun.sh/docs/runtime/env;
- * `.env.local` is skipped under test) and wrangler's `.dev.vars`. They are the
- * project's secrets, not the owner's shell, so no command inherits them.
+ * The values dotenv files put into this process at launch, by name: the files Bun loads from its working directory
+ * for NODE_ENV and wrangler's `.dev.vars` (core's `launchDotenvFiles`). They are the project's secrets, not the owner's
+ * shell, so no command inherits them. A file that is there but cannot be read stops the daemon, which could otherwise
+ * pass on what it held.
  */
 function launchDotenv(dir, nodeEnv) {
-  const mode = nodeEnv === undefined || nodeEnv === '' ? 'development' : nodeEnv;
-  const files = ['.env', `.env.${mode}`, ...(mode === 'test' ? [] : ['.env.local']), `.env.${mode}.local`, '.dev.vars'];
-  const supplied = new Map();
-
-  for (const file of files) {
+  return suppliedBy(launchDotenvFiles(nodeEnv).flatMap((file) => {
     let text;
 
     try {
       text = fs.readFileSync(path.join(dir, file), 'utf8');
     } catch (err) {
-      if (err && (err.code === 'ENOENT' || err.code === 'EISDIR' || err.code === 'EACCES')) continue;
+      if (err && err.code === 'ENOENT') return [];
       throw err;
     }
 
-    for (const [name, value] of Object.entries(util.parseEnv(text))) supplied.set(name, value);
-  }
-
-  return supplied;
+    return [util.parseEnv(text)];
+  }));
 }
 
-/** An UNSANDBOXED command's environment: this daemon's own, as the owner's
- *  shell would give it, less what {@link WITHHELD_ENV} names and what a
- *  dotenv file supplied. */
+/** An UNSANDBOXED command's environment, as core decides it for the CLI's shell too (`unsandboxedCommandEnvironment`):
+ *  this daemon's own, as the owner's shell would give it, less what Kinu reads from it and what a dotenv file supplied. */
 function rawEnvironment(source, dotenv) {
-  const withheld = new Set(WITHHELD_ENV);
-  const env = {};
-
-  for (const name of Object.keys(source)) {
-    const value = source[name];
-
-    if (value === undefined || withheld.has(name) || dotenv.get(name) === value) continue;
-    env[name] = value;
-  }
-
-  return env;
+  return unsandboxedCommandEnvironment(source, dotenv);
 }
 
 /** GPU character devices, enumerated at every exec rather than at daemon start
@@ -635,7 +605,7 @@ function sandboxEnvironment(source, overrides, dotenv = new Map()) {
     const value = source[name];
     const allowed = ENV_ALLOWLIST.includes(name) || ENV_ALLOWLIST_FAMILY.test(name);
 
-    if (allowed && value !== undefined && dotenv.get(name) !== value) env[name] = value;
+    if (allowed && value !== undefined && !fromDotenv(dotenv, name, value)) env[name] = value;
   }
 
   for (const name of Object.keys(overrides)) {
@@ -969,7 +939,6 @@ module.exports = {
   MAC_DENY_SUBPATHS,
   ENV_ALLOWLIST,
   ENV_ALLOWLIST_FAMILY,
-  WITHHELD_ENV,
   VIEW_INVISIBLE,
   VIEW_READ_ONLY,
   VIEW_WRITABLE,

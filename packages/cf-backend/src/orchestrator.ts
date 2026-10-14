@@ -29,7 +29,7 @@ import {
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubordinateReportLedger, type ActorToolsets,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
-  createTeamToolDeps, delegationExhausted,
+  createTeamToolDeps,
   agentNamer,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
   type BoundActor, type HeadInput,
@@ -124,7 +124,7 @@ import {
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
-  type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
+  type RefinementListing, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
@@ -1765,26 +1765,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       profile: () => agentsProfileContext(operation()?.profile ?? null, operation()?.inputs ?? null),
     };
 
-    const team = this.actorTeam(actor, reach);
-
-    if (team !== null) deps.team = team;
+    deps.team = this.actorTeam(actor, reach);
 
     if (reach.external) deps.peers = this.getPeersToolDeps();
 
     return deps;
   }
 
-  /** Its subtree's team: the workspace's own roster where its programs reach the workspace's, else its own. */
-  private actorTeam(actor: CFSeat, reach: ActorReach): TeamToolDeps | null {
-    return reach.surface === 'program' ? this.teamProfile().team ?? null : this.hostedTeamToolDeps(actor);
+  /** Its subtree's team: the workspace's own roster where its programs reach the workspace's, else its own. What a
+   *  capped agent is offered of it is core's (`offered`). */
+  private actorTeam(actor: CFSeat, reach: ActorReach): TeamToolDeps {
+    return reach.surface === 'program' ? this.getTeamToolDeps() : this.hostedTeamToolDeps(actor);
   }
 
-  /** Built from this actor's own roster. Null at the cap. */
-  private hostedTeamToolDeps(actor: BoundActor): TeamToolDeps | null {
+  /** Built from this actor's own roster. */
+  private hostedTeamToolDeps(actor: BoundActor): TeamToolDeps {
     const seams = this.hostedSeams();
     const delegation = hostedDelegationBudget(seams, actor);
-
-    if (delegationExhausted(delegation)) return null;
     const roster = seams.roster(actor);
     roster.ensureSchema();
 
@@ -1938,7 +1935,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       profileInputs: async () => inputs,
       choices,
       ancestors: () => this.ancestorProfiles(actor.handle) ?? [],
-      agentsActions: () => agentsActionsFor({ swarm: {}, swarms: betaSwarms(inputs.envelope.catalog), team: team ?? undefined, ...(reach.external && { peers: {} }) }),
+      agentsActions: () => agentsActionsFor({ swarm: {}, swarms: betaSwarms(inputs.envelope.catalog), team, ...(reach.external && { peers: {} }) }),
       temporaryAsk: () => team?.temporary !== undefined,
       soul: async () => (reach.lanes ? this.getSoulText() : await this.loadSoulText()),
       agentsMd: (window) => this.workspaceAgentsMd(window, trust),
@@ -7189,9 +7186,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */
   @callable()
-  async listRefinements(limit = 20): Promise<{
-    requests: RefinementRequestView[]; debt: EvolutionDebt;
-  }> {
+  async listRefinements(limit = 20): Promise<RefinementListing> {
     return listRefinements(this.refinementDeps, limit);
   }
 

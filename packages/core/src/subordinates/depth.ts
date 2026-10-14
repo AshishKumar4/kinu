@@ -65,9 +65,8 @@ export function delegationDepthRefusal(budget: DelegationBudget): DelegationDept
       `Cannot create an agent below this one: it is at delegation depth ${budget.depth} of the `
       + `global maximum ${DELEGATION_MAX_DEPTH}, so a child of it would be depth ${budget.depth + 1}. `
       + 'This covers BOTH lifetimes that birth a child: a durable hire and a `lifetime:"task"` '
-      + 'hire, because they add a level through the same substrate. Hand the work to an agent '
-      + 'that already exists with agents({op:"assign", agent, message}) instead (that adds no depth), or run '
-      + 'the work as a search: agents({op:"swarm", task, config:{context:"inherit"}}) inherits '
-      + 'your conversation and adds no depth to the subordinate tree.',
+      + 'hire, because they add a level through the same substrate. An agent at this depth has no team; run '
+      + 'the work as a search where searches are on: agents({op:"swarm", task, config:{context:"inherit"}}) inherits '
+      + 'your conversation and adds no depth to the subordinate tree. Otherwise do the work yourself.',
   };
 }

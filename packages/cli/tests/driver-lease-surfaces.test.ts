@@ -35,8 +35,8 @@ async function scenario(body: string): Promise<JsonObject> {
     const { join } = await import('node:path');
     const { Database } = await import('bun:sqlite');
     const { createWorkspace } = await import('@kinu.run/core/workspace-birth');
-    const { initWorkspaceSchema } = await import('@kinu.run/core');
-    const { DriverLeaseHold, makeExecRaw, makeSql, makeWorkspaceSchemaSql, workspaceHome } =
+    const { DriverLeaseHold, initWorkspaceSchema } = await import('@kinu.run/core');
+    const { makeExecRaw, makeSql, makeWorkspaceSchemaSql, workspaceHome } =
       await import('./packages/cli-backend/src/index.ts');
     const { leaseHolder } = await import('./packages/cli-backend/tests/driver-lease-probe.ts');
     const { resolveLLMConfig, placeLocalWorkspace } = await import('./packages/cli/src/config.ts');

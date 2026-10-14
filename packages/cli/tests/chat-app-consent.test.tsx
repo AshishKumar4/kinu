@@ -110,7 +110,7 @@ describe('ChatApp consent ownership', () => {
 
     const pending = {
       consentId: 'consent-1',
-      deviceLabel: 'Workstation',
+      deviceId: 'workstation', deviceLabel: 'Workstation', createdAt: 1,
       method: 'shell',
       command: 'bun test',
     };
@@ -155,7 +155,7 @@ describe('ChatApp consent ownership', () => {
       consents: {
         listPending: async () => [{
           consentId: 'consent-enter',
-          deviceLabel: 'Workstation',
+          deviceId: 'workstation', deviceLabel: 'Workstation', createdAt: 1,
           method: 'shell',
           command: 'bun test',
         }],
@@ -187,7 +187,7 @@ describe('ChatApp consent ownership', () => {
       consents: {
         listPending: async () => [{
           consentId: 'long-consent',
-          deviceLabel: 'Workstation',
+          deviceId: 'workstation', deviceLabel: 'Workstation', createdAt: 1,
           method: 'shell',
           command: `bun run ${'private-argument '.repeat(200)}`,
         }],
@@ -222,7 +222,7 @@ describe('ChatApp consent ownership', () => {
     const agent = fakeClient({
       name: 'shell',
       consents: {
-        listPending: async () => [{ consentId: 'consent-raw', deviceLabel: 'Workstation', method: 'shell', command }],
+        listPending: async () => [{ consentId: 'consent-raw', deviceId: 'workstation', deviceLabel: 'Workstation', createdAt: 1, method: 'shell', command }],
         resolve: async () => ({ ok: true }),
       },
     });
@@ -250,7 +250,7 @@ describe('ChatApp consent ownership', () => {
     const agent = fakeClient({
       name: 'shell',
       consents: {
-        listPending: async () => [{ consentId: 'consent-bidi', deviceLabel: 'Workstation', method: 'shell', command }],
+        listPending: async () => [{ consentId: 'consent-bidi', deviceId: 'workstation', deviceLabel: 'Workstation', createdAt: 1, method: 'shell', command }],
         resolve: async () => ({ ok: true }),
       },
     });

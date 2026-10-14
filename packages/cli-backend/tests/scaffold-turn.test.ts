@@ -12,7 +12,8 @@ import {
   INITIAL_SCAFFOLD_SOURCE,
 } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';

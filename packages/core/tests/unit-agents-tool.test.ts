@@ -5,7 +5,7 @@ import { createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeam
 import { swarmSeats } from './helpers-actor-host';
 
 import * as v from 'valibot';
-import { delegationChoices } from '../src/delegation/agents-tool';
+import { agentsWired, delegationChoices } from '../src/delegation/agents-tool';
 import { AGENTS_OPS } from '../src/operations/agents';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
@@ -259,8 +259,8 @@ describe('agents tool — the field contract', () => {
   });
 });
 
-// Depth cap: primarily enforced by not wiring `team` at the cap; these cover the seam, since a
-// ToolSet is cached across turns and a facet's identity is seeded after it is built.
+// Depth cap: core offers no team at the cap (`offered`); these cover the seam too, since a ToolSet is cached across
+// turns and a facet's identity is seeded after it is built.
 
 /** A hire chain `depth` levels below the root. */
 const budgetAt = (depth: number) => ({ depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) });
@@ -282,16 +282,41 @@ describe('agents tool — delegation depth', () => {
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
     expect(below.team.calls).toMatchObject([{ action: 'spawn' }]);
 
+    // At the cap a hire is no operation the agent has.
     const atCap = depthDeps(4);
     const pending = agentsTool(atCap.deps).execute({ op: 'hire', role: 'researcher', mission: 'm' });
-    await expect(pending).rejects.toMatchObject({ code: 'denied' });
+    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     expect(atCap.team.calls).toEqual([]);
   });
 
-  test('the refusal lands in refused, not in broke', async () => {
-    const { deps } = depthDeps(4);
+  // The CLI offered a capped agent its whole team less the task rung, the cloud none of it; the cap is core's now.
+  test('an agent at the cap is offered no team, on every backend: a wired team below it is offered whole', () => {
+    expect({ below: agentsActionsFor(depthDeps(3).deps), atCap: agentsActionsFor(depthDeps(4).deps) })
+      .toEqual({ below: ['hire', 'assign', 'message', 'list', 'dismiss'], atCap: [] });
+  });
+
+  // A tool with nothing to take and nothing to explain is no tool: a capped agent with no search has no `agents` at all.
+  test('a capped agent has the agents tool only for a search: offered, or withheld by the beta it names', () => {
+    expect({
+      noSearch: agentsWired(depthDeps(4).deps),
+      searchesOff: agentsWired(depthDeps(4, { swarm: swarmDeps(), swarms: false }).deps),
+      searchesOn: agentsWired(depthDeps(4, { swarm: swarmDeps() }).deps),
+    }).toEqual({ noSearch: false, searchesOff: true, searchesOn: true });
+  });
+
+  // A toolset is cached across turns, and a facet's identity is seeded after it is built: one served below the cap
+  // still offers a hire there, which the cap refuses.
+  test('a hire a toolset served below the cap still offers is refused as the cap, in refused, not in broke', async () => {
+    let depth = 3;
+    const team = makeTeam();
+    const deps = withBuildMode({ team: { ...team.deps, get delegation() { return budgetAt(depth); } }, profile: () => testProfile() });
+    const served = agentsTool(deps);
+
+    depth = 4;
     const args = { op: 'hire', role: 'researcher', mission: 'm' } satisfies AgentsCall;
-    expect(await recordedFailure(agentsTool(deps).execute(args), args)).toMatchObject({ reason: 'denied', refused: true });
+
+    expect(await recordedFailure(served.execute(args), args)).toMatchObject({ reason: 'denied', refused: true });
+    expect(team.calls).toEqual([]);
   });
 
   // Minting a workspace would reset depth to 0; `peers` is never wired below the orchestrator, so a subordinate is not offered it.

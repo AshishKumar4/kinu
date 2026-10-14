@@ -6,7 +6,8 @@ import { HeadJournal, defaultLoopOrigin, initHeadsTables, initBackgroundJobsTabl
 import { initWorkspaceSchema } from '@kinu.run/core';
 import type { LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { makeExecRaw, makeSql } from '../src/runtime';
 import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 

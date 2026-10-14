@@ -114,12 +114,15 @@ describe('where a provider secret is written', () => {
     expect(storedConfig(home).providers).toMatchObject({ openrouter: { apiKey: 'sk-or-secret' } });
   });
 
-  // An endpoint the Worker cannot reach (including fc00::/7 and 100.64.0.0/10) keeps its key local.
+  // An endpoint the Worker cannot reach keeps its key local: what its egress refuses (core's `refusedHostname`), or plain http.
   test.each([
     'https://[fd00::1]:11434/v1',
     'https://100.64.3.4/v1',
     'http://localhost:11434/v1',
     'https://10.0.0.8/v1',
+    'https://[::ffff:10.0.0.8]/v1',
+    'https://models.internal/v1',
+    'https://ollama.localhost/v1',
   ])('an endpoint the proxy cannot reach keeps the key on this machine: %s', async (endpoint) => {
     const home = kinuHome({ origin: 'http://127.0.0.1:1', accessToken: 'ptc_test_token' });
     const res = await runStore(home, { local: false, endpoint });
@@ -145,15 +148,18 @@ describe('where a provider secret is written', () => {
     }
   });
 
-  test('a public https endpoint lets the account hold the key', async () => {
+  test.each([
+    'https://[2606:4700:4700::1111]/v1',
+    'https://localhost-models.example.com/v1',
+  ])('a public https endpoint lets the account hold the key: %s', async (endpoint) => {
     const { received, server, origin } = accountStore();
     const home = kinuHome({ origin, accessToken: 'ptc_test_token' });
 
     try {
-      const res = await runStore(home, { local: false, endpoint: 'https://[2606:4700:4700::1111]/v1' });
+      const res = await runStore(home, { local: false, endpoint });
       expect(res.exitCode, res.stdout).toBe(0);
       expect(received).toEqual([{ path: '/api/cli/credentials/openai-compat.default', method: 'POST', auth: 'Bearer ptc_test_token',
-        body: { kind: 'openai-compat', baseURL: 'https://[2606:4700:4700::1111]/v1', apiKey: 'sk-or-secret' } }]);
+        body: { kind: 'openai-compat', baseURL: endpoint, apiKey: 'sk-or-secret' } }]);
       expect(JSON.stringify(storedConfig(home))).not.toContain('sk-or-secret');
     } finally {
       await server.stop(true);

@@ -2,7 +2,7 @@
 // The CLI needs `bun:sqlite` and `Bun.stdin`, so an unresolvable or too-old Bun is a hard stop.
 
 /** The user's minimum Bun, independent of the repository's dev Bun. */
-const KINU_BUN_VERSION = '1.4.3';
+export const KINU_BUN_VERSION = '1.4.3';
 
 /** Non-`major.minor.patch` input is not comparable; the shell half treats it as incompatible. */
 function bunVersionKey(version: string): number {
@@ -11,6 +11,11 @@ function bunVersionKey(version: string): number {
   if (!parts) throw new Error(`Not a major.minor.patch version: ${version}`);
 
   return Number(parts[1]) * 1_000_000 + Number(parts[2]) * 1_000 + Number(parts[3]);
+}
+
+/** Whether a Bun of `version` is the approved one or newer; one that is not `major.minor.patch` is not. */
+export function approvedBun(version: string): boolean {
+  return /^\d+\.\d+\.\d+/.test(version) && bunVersionKey(version) >= bunVersionKey(KINU_BUN_VERSION);
 }
 
 /** Relative to `$KINU_HOME`. */

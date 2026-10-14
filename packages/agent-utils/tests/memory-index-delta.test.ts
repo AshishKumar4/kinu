@@ -1,11 +1,11 @@
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
 import { createTestSql } from "@kinu.run/test-utils";
-import { createMemoryVfs } from "./helpers";
+import { memoryPlane } from "./helpers";
 
-function createStore() {
+async function createStore() {
 	const { sql, transactionSync } = createTestSql()
-	const fs = createMemoryVfs();
+	const fs = await memoryPlane();
 	const store = new MemoryStore(fs, sql, transactionSync);
 	store.ensureSchema();
 
@@ -22,7 +22,7 @@ const doc = (count: number, fill = "x") =>
 
 describe("MemoryStore.indexFile delta", () => {
 	test("first index reports every chunk as upserted, nothing deleted", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		const delta = await store.indexFile(PATH, doc(60));
 		expect(delta.deletedIds).toEqual([]);
 		expect(delta.upserted.length).toBeGreaterThan(1);
@@ -34,7 +34,7 @@ describe("MemoryStore.indexFile delta", () => {
 	});
 
 	test("re-indexing identical content produces an empty delta", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		const content = doc(60);
 		await store.indexFile(PATH, content);
 		const delta = await store.indexFile(PATH, content);
@@ -43,7 +43,7 @@ describe("MemoryStore.indexFile delta", () => {
 	});
 
 	test("a changed chunk (same line ranges) re-upserts that id, deletes nothing", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		await store.indexFile(PATH, doc(60, "x"));
 		// Same line count and per-line length → identical chunk ids, changed text.
 		const delta = await store.indexFile(PATH, doc(60, "y"));
@@ -53,7 +53,7 @@ describe("MemoryStore.indexFile delta", () => {
 	});
 
 	test("shrinking the file deletes the vanished chunk ids", async () => {
-		const { store } = createStore();
+		const { store } = await createStore();
 		const big = await store.indexFile(PATH, doc(60));
 		const bigIds = new Set(big.upserted.map((c) => c.id));
 		const small = await store.indexFile(PATH, doc(3));
@@ -69,7 +69,7 @@ describe("MemoryStore.indexFile delta", () => {
 describe("canonical index publication", () => {
   test.each(['replace', 'delete'])('a failed %s publication rolls back lexical rows, stamp and projection obligations together', async (operation) => {
     const { sql, transactionSync } = createTestSql();
-    const fs = createMemoryVfs();
+    const fs = await memoryPlane();
     const initial = new MemoryStore(fs, sql, transactionSync);
     initial.ensureSchema();
     await initial.writeFile(PATH, 'retained words');
@@ -90,7 +90,7 @@ describe("canonical index publication", () => {
   });
 
   test('bounded projection deliveries contain every indexed chunk once and stale acknowledgements retain newer edits', async () => {
-    const { store } = createStore();
+    const { store } = await createStore();
     const content = doc(60);
     await store.writeFile(PATH, content);
     const indexed = await store.indexFile(PATH, content);

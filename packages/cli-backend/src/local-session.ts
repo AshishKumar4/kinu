@@ -222,7 +222,6 @@ export interface LocalParentRelay {
   }) => Promise<string>;
 }
 
-export type { SessionEvent } from '@kinu.run/core';
 
 /** Shows the ask's queue row; resolving null leaves the row waiting there. `signal` aborts once another surface
  *  decided it. */
@@ -2517,7 +2516,6 @@ export class LocalAgentSession {
       // No `spec` stamp: the merge runs on the routed judge tier; the provider's `modelId` is the record.
       reportModelCall: (report) => this.modelCallSink(report),
       operations: this.modelOperations,
-      parentRuntime: this.rt,
       webSearch: this.getWebSearchProvider(),
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,

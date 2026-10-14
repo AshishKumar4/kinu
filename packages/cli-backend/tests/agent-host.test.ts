@@ -36,21 +36,22 @@ import {
   type SqlExecutor,
   type TeamToolDeps,
   type TemporaryRunRequest,
+  DriverLeaseHold,
+  type DriverKind,
+  type DriverLeaseHolder,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import type { Subprocess } from 'bun';
 import {
   LocalAgentHost,
-  DriverLeaseHold,
-  type DriverKind,
-  type DriverLeaseHolder,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
@@ -1886,8 +1887,7 @@ describe('LocalAgentHost', () => {
     const events: SessionEvent[] = [];
     reopened.subscribe((agent, event) => { if (agent === address) events.push(event); });
     await (await reopened.acquire(address)).send('Hire another researcher.', { id: crypto.randomUUID() });
-    expect(events.filter((event) => event.type === 'tool-result' && event.toolName === 'agents'))
-      .toMatchObject([{ success: false, reason: 'denied' }]);
+    expect(events.filter((event) => event.type === 'tool-result' && event.toolName === 'agents' && event.success)).toEqual([]);
     expect(await capped.list()).toEqual([]);
     await reopened.close();
   });
