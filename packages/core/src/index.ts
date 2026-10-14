@@ -1013,6 +1013,7 @@ export {
   busyShell, callJob, createBashShell, createShellSession, machineShellCall, shellExecOptions, type MachineShellCall, type MachineShellPlace,
   type MachineShells, type ShellSession,
   createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
+  DESKTOP_MEMBERS,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   deviceToolchainAnswer, freshDeviceToolchain,
@@ -2271,9 +2272,9 @@ export {
 } from './http/device-update';
 
 export {
-  COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
+  COPY_SCRIPT, GITHUB_ICON, REPO_URL,
   mark, markDocument, publicFooter, publicPage,
-  type MarkId, type PublicPageOptions,
+  type PublicPageOptions,
 } from './http/public-shell';
 
 export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';

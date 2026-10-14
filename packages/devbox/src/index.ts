@@ -2,6 +2,8 @@
 
 export { Devbox, type DevboxState, type PortListener } from './devbox';
 
+export { type SessionLast, type SessionRecord, type TerminalSession } from './sessions';
+
 export { GOLDEN_NAME } from './golden';
 
 export { DevboxError, devboxFailure, type DevboxErrorCode } from './errors';

@@ -117,6 +117,7 @@ export const FIRST_RUN_CASES = [
   'steer-correction',
   'multi-account',
   'turn-rated',
+  'computer-desktop',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -658,6 +659,20 @@ export const FIRST_RUN_DEFECTS = {
       + 'which leaves today\'s `rated` at 0 when the budget ends. The case waits on the `reads_changed` frame naming '
       + 'getQuality, so a build that rates without announcing it is red the same way.',
   },
+  'computer-desktop': {
+    id: 'computer-desktop',
+    found: 'The owner (2026-10-13, issue #100) asked the agent to use the computer while its desktop was open in the Env '
+      + 'panel. The agent took a web.screenshot of a remote browser, found no DISPLAY, installed Xvfb and started a '
+      + 'second screen nobody could see, and could not read the PNG it took of it.',
+    missedBecause: 'nothing returned the screen to a model, no process on the computer was told where the screen was, '
+      + 'and the desktop started only when a person opened it: every gate exercised the desktop through a person\'s '
+      + 'client, never through an agent.',
+    provedRedAt: null,
+    redDirection: 'Not yet run on a deployment: the scripted model learns this ask with the deploy that ships the desktop. '
+      + 'The red direction is fd76708a1, where the program stops at its first line: the same program through the eval '
+      + 'tool (packages/cli-backend/tests/computer-desktop-eval.test.ts) fails on that build with "computer.screenshot is '
+      + 'not a function", so no image comes back, and a window opened from its shell has no display to open on.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** The model every case's workspace pins: the scripted one, served by the tiers' Worker (scripts/tier-model.ts). */
@@ -788,6 +803,7 @@ const SHORT_SUBJECT = {
   'steer-correction': 'steer',
   'multi-account': 'accounts',
   'turn-rated': 'rated',
+  'computer-desktop': 'desktop',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

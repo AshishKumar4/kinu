@@ -52,7 +52,7 @@ export type TerminalWorkspace = Pick<OrchestratorAgent, 'prepareTerminal' | 'ope
 interface TerminalSandbox {
   fetch(request: Request): Promise<Response>;
   noteTerminalActivity(): Promise<void>;
-  resetShell(): Promise<void>;
+  resetShell(session?: string): Promise<void>;
 }
 
 export interface TerminalRouteDeps {
@@ -362,9 +362,9 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
     });
   }
 
-  // The persistent tmux session goes; the next native PTY attach creates its shell.
+  // The session's tmux session goes; the next native PTY attach creates its shell, in the session's folder.
   if (call.verb === "reset") {
-    return sandboxCommand(call, () => sandbox.resetShell(), {
+    return sandboxCommand(call, () => sandbox.resetShell(call.url.searchParams.get("session") ?? undefined), {
       doing: "restarting the terminal's shell",
       report: (error) => diagnostics.failure("terminal.reset_failed", error, call.scope),
     });

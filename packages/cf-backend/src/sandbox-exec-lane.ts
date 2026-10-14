@@ -15,7 +15,7 @@ import type { SandboxPreviewExposures } from "@kinu.run/core";
 type ContainerOperations = Pick<KinuDevbox,
   "exec" | "execStream" | "killExec" | "releaseExec" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest">;
+  | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest" | "desktop">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -242,6 +242,8 @@ export function adaptCloudflareSandbox(
     listFiles: (path, opts) => settle(onContainer(() => handle.listFiles(path, opts))),
     statFile: (path, opts) => settle(onContainer(() => handle.statFile(path, opts))),
     deleteFile: (path) => settle(onContainer(() => jsonResultOrVoid(handle.deleteFile(path)))),
+    // Never retried: a repeated click is a second click.
+    desktop: (request) => settle(onContainer(() => handle.desktop(request))),
     // Published first: the edge verifies preview hostnames against the record (`preview-proxy.ts`).
     // Then `servePreviewRequest`'s gates run here, without forwarding.
     exposePort: (port, opts) => settle(Effect.gen(function* () {

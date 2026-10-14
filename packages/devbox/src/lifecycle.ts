@@ -310,6 +310,15 @@ export function isCapacityRefusal(thrown: { readonly cause: unknown }): boolean 
   return false;
 }
 
+/** Waiting is the change that can make these succeed: the platform finds a container, its transport or the container
+ *  comes up, or a replaced runtime's successor runs. Any other start failure answers the same until something it read
+ *  changes, a deploy, the box's inputs or a caller asking again, so a clock only asks it again (D94). */
+export function waitingCanChange(thrown: { readonly cause: unknown }): boolean {
+  const failure = classifyRecovery(thrown);
+
+  return failure === 'transient' || failure === 'stale-owner' || isCapacityRefusal(thrown);
+}
+
 /** Stages are actions: retry the same identity, then replace it; a failure at `replace` is
  *  terminal. Stored durably: `onStart` is a container hook, so an alarm-woken object skips it. */
 const RECOVERY_STAGES = ['retry', 'replace'] as const;
@@ -384,7 +393,7 @@ interface RecoveryDecision {
 }
 
 /** No retry and no replacement changes the answer: the same container, or its successor, fails the same way. */
-export function isTerminalRecovery(failure: RecoveryClass): boolean {
+function isTerminalRecovery(failure: RecoveryClass): boolean {
   return failure === 'exhausted' || failure === 'permanent';
 }
 

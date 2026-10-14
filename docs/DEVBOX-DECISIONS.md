@@ -4651,6 +4651,59 @@ staging `c6dc27da1`'s box, by hand, on two X servers started beside the real one
 picture filled the screen exactly, the mark sat at the centre above a full-width panel, and the theme drew the
 frames. The container tier's desktop check reads the glow above the panel as well as the ground and the panel.
 
+D89. An agent drives the desktop the owner watches, one action at a time (2026-10-14, issue #100). The owner asked an
+agent to use the computer while its desktop was open in the Env panel; the agent found no `DISPLAY`, installed Xvfb,
+started a second screen nobody could see, and could not read the PNG it took of it. Now the box answers
+`desktop({ driver, action })`, which `computer.screenshot()`, `click`, `type`, `key`, `scroll`, `move` and `drag`
+send one action at a time. Each call first runs the desktop check, the start script that the owner's socket route
+also runs, single-flight, so a look and a pane opened at once share one session; the check brings back any part of
+the session that died and ends by printing X's own geometry. The session's files and its background are written only
+by a run that starts X, so a check on a running desktop costs a few `pgrep`s. It is bounded at 60 s, a few times a fresh X's start:
+an X that stays alive and never opens its port would otherwise hold every later desktop call, and the box's rest,
+behind it. A point off that screen is refused before any input.
+One agent drives at a time: an agent takes the screen by looking once no other agent has called in 30 s, input is
+taken only from the agent holding it, and a screen X started afresh is nobody's, so every action lands on a screen
+its agent saw. The owner is not a driver. Each action is one xdotool invocation bounded at 5 s, with no
+`mousemove --sync`, which waits about 15 s when the pointer is already at the point; what a click holds and a drag
+presses is released whether or not the run ends cleanly. It runs under a UTF-8 locale: on a real box, under the C
+locale the box starts in, `xdotool type -- "aüb"` typed "a" and stopped at an invalid multi-byte sequence. Under
+UTF-8 it typed "ab": Chromium dropped the ü, whose key xdotool binds for the moment of the press, at 12 ms a
+character, and took it at 150 ms. So a character past ASCII is never typed: core sends it as its own key,
+`key U00FC`, which reached Chromium every time. The capture is `scrot -p`, read back as bytes in the same
+run. A watch takes `scrot -p -t 50` at even times over its window, at most 10 s, and tiles the half-size
+thumbnails into one PNG, two to a row up to four frames and four to a row up to eight; a small Python program does
+it, as the image carries Python and no image tool. Measured on two vision models, four half-size frames in one sheet
+cost what one screenshot does and read motion, a large word and 11 px text as well as four separate screenshots; eight
+at a third of the size lost 11 px text on both. A held key is `keydown`, a wait, `keyup` in one run, at most 10 s,
+with `keyup` again however the run ends; an action's bound is its own wait plus 5 s. Both run on the container runtime's exec directly rather than D87's `exec`: they are the box's own fixed
+commands, not a caller's; the capture is binary, which `exec` decodes as text; and xdotool's argv carries typed text
+without a shell to quote it. The screen is 1280×768, down from 1280×800: tile-based vision models resize a
+screenshot 800 high to 1228×768 at their default detail, and none Kinu serves resizes one 768 high, so an agent's
+points are the screen's own pixels. Every process the box starts gets `DISPLAY=:0`, so a window a program opens
+lands on that screen; the environment is `CONTAINER_ENV`, renamed from `CONTAINER_TRUST_ENV` because it no longer
+holds only the trust bundles. While no X runs, a program that needs a display fails as it did without `DISPLAY`
+(cannot open a display), and one that only checks the variable is told of a display that is not there; a headless
+browser ignores it. A tool that picks a dialog over a prompt because `DISPLAY` is set (a GUI pinentry, an askpass) now
+asks on the owner's screen, which is where the owner watches.
+
+D90. The computer's terminal sessions are named tmux sessions the box keeps by id, name and folder (2026-10-13, the
+owner: a cmux-like experience across the machines). One `devbox` session became any number: the page attaches with
+`session=<id>` (`terminalSocket`), and the box keeps `devbox:sessions`, each session's id, name and last folder,
+valibot-parsed on read like the other rows. A session's shell is bash with an rc that runs the person's own rc first
+and then records, at each prompt after a command the history numbers, the exit status, the time and the command line
+as the pane's tmux options. `terminalSessions()` reads every session in one exec of the box's own fixed program through
+the raw launch, as `portListeners` does: `tmux list-panes -a` for folder, foreground command and those marks, the
+listener probe with each listener's ancestry walked to a pane's shell for its ports, and `git symbolic-ref` for each
+folder's branch. Measured on staging `22883ccda`'s box with eight sessions: `tmux list-panes -a` took 10.5 ms in the
+box, and the exec's round trip from the workspace 150 ms, the same as a bare `true`; so the Environment tab reads every
+3 s while it is open and its page visible, and nothing reads otherwise. A box that is not running is not woken to be
+read: its sessions are listed as they were left. A read that finds a session in a new folder keeps that folder. A
+container's restart (a resize, D50; a rest) ends the tmux server and every session with it, as it ends a running
+command (D87); nothing reopens them from an alarm: the next attach to a session opens a fresh shell in its kept folder
+under its name. Closing a session ends its tmux session and forgets it; the box always keeps one, so closing the last
+leaves a fresh `shell`. Not measured: bash's `HISTCONTROL=ignoredups` numbers a repeated command once, so its second
+run leaves the earlier mark. The product flow `computer-sessions` reads it all on a deployment.
+
 D91. The computer answers to its workspace's name, not to "computer" (2026-10-13; reverses D83's fixed name). The
 owner, on `root@computer`: "something nice and sensible, workspace related (maybe workspace name?)". `KinuDevbox`
 reads the workspace's display name from the workspace itself at each `configureContainer`, through the same root agent
@@ -4695,6 +4748,44 @@ name in place of `\h` and `\H` in whatever PS1 they left, its title escape inclu
 only its host part changes; a prompt that names no host is left alone. The container tier's `box-name` step reads, in
 the real container, that the kernel was not renamed, the shown name the box keeps, and the prompt a shell started from
 that rc expands.
+
+D94. Only a start refusal that waiting can change re-arms; any other parks until a deploy, an input or a caller changes
+it (2026-10-14; amends D47). Staging `7e411119d` (D92's failure) showed what D47 left open. Box
+`9e3714066addd4583a5fe3029923f5882b296418136e3332362aeba6f6dcd46f`, a `KinuDevbox`, took 1,873 alarm invocations
+from 01:00 to 01:30Z with no caller, and its deploy report counted 887 idle wakes from 00:00 to 01:00Z and 218 in the
+next hour. Every one was a startup admission that ran `configureContainer` and was refused with "naming the box
+computer: name-box: 1: cannot create /etc/hostname: Read-only file system". A `devboxIncidents` pass ran about every
+6 s (0.7 to 1.1 s wall each) to deliver the incident each refusal filed. The failure was the box's own
+`DevboxError('process')`, whose code `classifyRecovery` does not map, so it was `unclassified`. D47 parked only
+`permanent` and `exhausted`, and every other admission failure armed a startup a second out.
+
+The default is now the other way. `#refuseAdmission` re-arms only where waiting is the change that can make the start
+succeed (`waitingCanChange`): the class is `transient` (the transport or the container not up yet) or `stale-owner`
+(a replaced runtime's successor runs), or the platform has no room (`isCapacityRefusal`). Every other admission
+failure, `unclassified` and `abandoned` included, parks as D47's terminal classes did. It settles `unattached` with no
+retry, records D52's start refusal when it started the container, files one incident and drops the startup row.
+D47's ladder in `#recover` is unchanged and still bounded: retry, replace, then refuse.
+
+A park is lifted by a change that can make the start succeed. D52 already lifted it on a changed size, internet
+setting or bound store, or on the owner's `start()`/`attachNow()` (Kinu's `startComputer`). Now another deploy of
+the Worker lifts it too, so a fix's deploy ends parks without each owner asking. The host names its version through
+`workerVersion` (Kinu: `CF_VERSION_METADATA.id`). The start refusal carries it as one more start input. A park over a
+running container keeps it in its settled row, whether `#settle` wrote that row or `#recover`'s ladder did, and the
+next construction under another version drops it, so the box's next caller asks again. Nothing is armed for either, so a parked box wakes only for a caller.
+
+Red then green, in `packages/devbox/tests/start-park.test.ts` (FakeSandbox), and on the platform's containers
+(`gate:devbox-e2e`'s `parked-start`). In the unit test, a box whose `configureContainer` throws the staging failure
+configures once, arms no startup, files one attach incident and refuses its callers through a minute of the alarms it
+armed. On `d343df16e` it armed a startup and configured again at each alarm. A refusal for want of room still arms its
+startup. A successor under the same version answers the park, and one under another version configures or starts the
+box again, with its container running or gone. In the real-container contract, the fixture's `-parked` box writes
+/etc/hostname in its configure step and the platform refuses the write. The tier asks it once, watches 20 s, and
+requires one refusal that names no retry, at most one startup arming and one incident. Armada job
+20261014015704-930e3ec5 ran the whole tier on both. On `7ce7f4a31` (the contract, before this change) the box
+answered "A startup is armed, so ask again", armed its startup 20 times and filed 19 incidents in the 20 s. On
+`83313af6a` it answered "[unclassified -> refuse] ... nothing retries it", armed nothing and filed one incident, and
+every other contract and the cleanup passed. In the unit test on `7ce7f4a31`, a minute of alarms configured the box
+61 times and filed 61 incidents.
 
 ## Open
 

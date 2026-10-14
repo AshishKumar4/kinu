@@ -19,10 +19,10 @@ import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces, accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
   openWaitsNamed, slateOpensFromMyStuff, slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer,
-  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, reopenedWorkspaceRunsTheDeployedBuild,
+  writtenFileShowsInFilesAndChanges, changesStormStaysBounded, openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, reopenedWorkspaceRunsTheDeployedBuild, computerSessionsComeBackByName,
   type AgentPlanVerdict, type AgentReturnVerdict, type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict, type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
-  type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type ReopenVerdict,
+  type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type ReopenVerdict, type SessionsVerdict,
 } from '../../scripts/product-flows';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
@@ -642,5 +642,28 @@ describe(productFlowTestName('reopen', 'a workspace reopened by Back loads the d
     expect(reopened.restored).toBe(false);
     expect(reopened.navigation).toBe('back_forward');
     expect(reopened.transferBytes).toBeGreaterThan(0);
+  });
+});
+
+// The computer's sessions are named, say their folder and ports, and come back by name and folder after a restart.
+describe(productFlowTestName('computer-sessions', "the computer's sessions come back by name and folder"), () => {
+  let observed: SessionsVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('computer-sessions', computerSessionsComeBackByName);
+  });
+
+  test("a session's line names the folder its shell is in and the port its server listens on", () => {
+    const sessions = verdictOf(observed, 'computer-sessions');
+
+    expect(sessions.folder).toBe('/workspace/flow-web');
+    expect(sessions.ports).toContain(':8765');
+  });
+
+  test('after the computer restarts at another size, the renamed session is there, its shell in its folder', () => {
+    const sessions = verdictOf(observed, 'computer-sessions');
+
+    expect(sessions.namesAfter).toContain('web');
+    expect(sessions.folderAfter).toBe('/workspace/flow-web');
   });
 });

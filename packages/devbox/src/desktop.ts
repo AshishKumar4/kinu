@@ -8,8 +8,9 @@ const LOG = '/tmp/devbox-desktop.log';
 /** The session's own files: its two launchers and its panel's configuration. */
 const SESSION = '/usr/local/share/devbox/desktop';
 
-/** The screen, which the client scales to its frame. */
-export const DESKTOP_SIZE = { width: 1280, height: 800 } as const;
+/** The screen, which the client scales to its frame. 768 high: no vision model Kinu serves resizes a screenshot this size,
+ *  so an agent's points are the screen's own pixels (D89). */
+export const DESKTOP_SIZE = { width: 1280, height: 768 } as const;
 
 /**
  * The desktop's look (D88): its ground falls from `background` at the top to `foot` and glows in `glow` from below the
@@ -164,30 +165,30 @@ XTerm*internalBorder: 8`;
  * browser to launch, and the wallpaper, so a fresh desktop is a desktop and not a black screen (D80, D88). Its first
  * argument is the mark the wallpaper centres, an SVG document, or empty for none.
  */
-export const DESKTOP_START = `cd /
-printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-component-update --no-first-run --no-default-browser-check"' > /etc/chromium.d/devbox
-mkdir -p /etc/chromium/policies/managed ${SESSION} /usr/local/share/themes/Kinu/openbox-3
-printf '%s\\n' '{"CommandLineFlagSecurityWarningsEnabled": false}' > /etc/chromium/policies/managed/devbox.json
-printf '%s\\n' ${launcher('Terminal', `sh -c "cd /workspace 2>/dev/null; exec xterm -e bash --rcfile ${SHELL_RC_FILE} -i"`, '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
-cat > ${SHELL_RC_FILE} <<'SHELLRC'
+const DESKTOP_START = `cd /
+if ! pgrep -x Xkasmvnc >/dev/null; then
+  printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-component-update --no-first-run --no-default-browser-check"' > /etc/chromium.d/devbox
+  mkdir -p /etc/chromium/policies/managed ${SESSION} /usr/local/share/themes/Kinu/openbox-3
+  printf '%s\\n' '{"CommandLineFlagSecurityWarningsEnabled": false}' > /etc/chromium/policies/managed/devbox.json
+  printf '%s\\n' ${launcher('Terminal', `sh -c "cd /workspace 2>/dev/null; exec xterm -e bash --rcfile ${SHELL_RC_FILE} -i"`, '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
+  cat > ${SHELL_RC_FILE} <<'SHELLRC'
 ${SHELL_RC}
 SHELLRC
-printf '%s\\n' ${launcher('Browser', 'chromium', '/usr/share/icons/hicolor/48x48/apps/chromium.png')} > ${SESSION}/browser.desktop
-cat > ${SESSION}/tint2rc <<'PANEL'
+  printf '%s\\n' ${launcher('Browser', 'chromium', '/usr/share/icons/hicolor/48x48/apps/chromium.png')} > ${SESSION}/browser.desktop
+  cat > ${SESSION}/tint2rc <<'PANEL'
 ${PANEL}
 PANEL
-cat > /usr/local/share/themes/Kinu/openbox-3/themerc <<'WINDOWS'
+  cat > /usr/local/share/themes/Kinu/openbox-3/themerc <<'WINDOWS'
 ${WINDOWS}
 WINDOWS
-cat > ${SESSION}/Xresources <<'TERMINALS'
+  cat > ${SESSION}/Xresources <<'TERMINALS'
 ${TERMINALS}
 TERMINALS
-cat > ${SESSION}/wallpaper.py <<'WALLPAPER'
+  cat > ${SESSION}/wallpaper.py <<'WALLPAPER'
 ${WALLPAPER_PY}
 WALLPAPER
-printf '%s' "\${1-}" > ${SESSION}/mark.svg
-sed '/<theme>/,/<\\/theme>/ s#<name>[^<]*</name>#<name>Kinu</name>#' /etc/xdg/openbox/rc.xml > ${SESSION}/rc.xml
-if ! pgrep -x Xkasmvnc >/dev/null; then
+  printf '%s' "\${1-}" > ${SESSION}/mark.svg
+  sed '/<theme>/,/<\\/theme>/ s#<name>[^<]*</name>#<name>Kinu</name>#' /etc/xdg/openbox/rc.xml > ${SESSION}/rc.xml
   setsid Xkasmvnc :0 -geometry ${String(DESKTOP_SIZE.width)}x${String(DESKTOP_SIZE.height)} -depth 24 -interface 0.0.0.0 -websocketPort ${String(DESKTOP_PORT)} \\
     -DisableBasicAuth 1 -sslOnly 0 -SecurityTypes None -AlwaysShared -publicIP 127.0.0.1 >${LOG} 2>&1 </dev/null &
   server=$!
@@ -196,16 +197,22 @@ until (exec 3<>/dev/tcp/127.0.0.1/${String(DESKTOP_PORT)}) 2>/dev/null; do
   pgrep -x Xkasmvnc >/dev/null || { [ -n "\${server-}" ] && kill -0 "$server" 2>/dev/null; } || { tail -n 20 ${LOG} >&2; exit 1; }
   sleep 0.05
 done
-DISPLAY=:0 xrdb -nocpp -merge ${SESSION}/Xresources
+[ -z "\${server-}" ] || DISPLAY=:0 xrdb -nocpp -merge ${SESSION}/Xresources
 if ! pgrep -x openbox >/dev/null; then
   DISPLAY=:0 setsid openbox --config-file ${SESSION}/rc.xml >/dev/null 2>&1 </dev/null &
   wm=$!
   until pgrep -x openbox >/dev/null; do kill -0 "$wm" 2>/dev/null || exit 1; sleep 0.01; done
 fi
-DISPLAY=:0 setsid python3 ${SESSION}/wallpaper.py ${SESSION}/mark.svg '${DESKTOP_COLOURS.background}' '${DESKTOP_COLOURS.foot}' \\
+[ -z "\${server-}" ] || DISPLAY=:0 setsid python3 ${SESSION}/wallpaper.py ${SESSION}/mark.svg '${DESKTOP_COLOURS.background}' '${DESKTOP_COLOURS.foot}' \\
   '${DESKTOP_COLOURS.glow}' ${String(DESKTOP_PANEL.height)} >>${LOG} 2>&1 </dev/null &
 if ! pgrep -x tint2 >/dev/null; then
   DISPLAY=:0 setsid tint2 -c ${SESSION}/tint2rc >>${LOG} 2>&1 </dev/null &
   panel=$!
   until DISPLAY=:0 xdotool search --class tint2 >/dev/null 2>&1; do kill -0 "$panel" 2>/dev/null || { tail -n 20 ${LOG} >&2; exit 1; }; sleep 0.02; done
 fi`;
+
+/** The start, which brings back any part of the session that died, then the screen's size as X reports it, and `fresh`
+ *  when this run started X: a screen nobody has seen. */
+export const DESKTOP_CHECK = `${DESKTOP_START}
+DISPLAY=:0 xdotool getdisplaygeometry
+[ -z "\${server-}" ] || echo fresh`;
