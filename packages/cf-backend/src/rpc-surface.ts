@@ -113,6 +113,7 @@ const USER_DO_METHODS = [
   'issueCliAgentConnectTicket',
   'issueDeviceConnectTicket',
   'issueDeviceJoin',
+  'joinDevice',
   'listAIGateways',
   'listAccessTokens',
   'listActiveWorkspaces',
