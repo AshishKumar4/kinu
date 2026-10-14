@@ -7,6 +7,10 @@
 import type { ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
 import * as v from 'valibot';
 import type { LostToolCall } from '../tools/effect-claim';
+import { toolPairingParts } from '../session/tool-pairing';
+
+/** Any part a model message carries, so a pairing scan hands each call and result back as the SDK typed it. */
+type ModelPart = Exclude<ModelMessage['content'], string>[number];
 
 /** For a call nothing claimed: the interrupt may land before, during or after it. */
 export const INTERRUPTED_TOOL_RESULT =
@@ -30,21 +34,21 @@ export function trailingUnpairedCalls(history: readonly ModelMessage[], toolName
   while (history[at]?.role === 'tool') at--;
   const asking = history[at];
 
-  if (asking?.role !== 'assistant' || !Array.isArray(asking.content)) return [];
-  const answered = new Set(history.slice(at + 1).flatMap((message) => message.role === 'tool' ? message.content.map((part) => part.type === 'tool-result' ? part.toolCallId : '') : []));
+  if (asking?.role !== 'assistant') return [];
+  const parts = toolPairingParts<ModelPart>(history.slice(at));
+  const answered = new Set(parts.flatMap(({ role, part }) => role === 'tool' && part.type === 'tool-result' ? [part.toolCallId] : []));
 
-  return asking.content.flatMap((part) => part.type === 'tool-call' && part.toolName === toolName && !answered.has(part.toolCallId)
+  return parts.flatMap(({ at: index, part }) => index === 0 && part.type === 'tool-call' && part.toolName === toolName && !answered.has(part.toolCallId)
     ? [{ toolCallId: part.toolCallId, input: part.input }] : []);
 }
 
 /** Every call in the history that no `tool-result` answers, `providerExecuted` ones skipped as the SDK skips them. */
 export function unpairedToolCalls(messages: readonly ModelMessage[]): LostCallQuery[] {
-  const answered = new Set(messages.flatMap((message) => (message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])) : [])));
+  const parts = toolPairingParts<ModelPart>(messages);
+  const answered = new Set(parts.flatMap(({ role, part }) => role === 'tool' && part.type === 'tool-result' ? [part.toolCallId] : []));
 
-  return messages.flatMap((message) => (message.role === 'assistant' && Array.isArray(message.content)
-    ? message.content.flatMap((part) => (part.type === 'tool-call' && part.providerExecuted !== true && !answered.has(part.toolCallId)
-      ? [{ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input }] : []))
-    : []));
+  return parts.flatMap(({ role, part }) => role === 'assistant' && part.type === 'tool-call' && part.providerExecuted !== true && !answered.has(part.toolCallId)
+    ? [{ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input }] : []);
 }
 
 /**
