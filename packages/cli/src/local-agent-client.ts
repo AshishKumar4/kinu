@@ -71,17 +71,17 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
   const { transcript, surface, ...root } = opts;
   const host = createLocalHost({ driverKind: 'interactive', surface: surface ?? 'interactive', root: { ...root, name } });
 
-  return await hostedLocalAgentClient({ agentName: name, host, dbPath, transcript: transcript ?? {} });
+  return await settle(hostedLocalAgentClient({ agentName: name, host, dbPath, transcript: transcript ?? {} }));
 }
 
 /** A client over the agent `host` opens at `agentName`; the client owns the host and closes it. */
-function hostedLocalAgentClient(deps: Omit<LocalAgentClientDeps, 'session' | 'rt'>): Promise<LocalAgentClient> {
-  return settle(Effect.gen(function* () {
+function hostedLocalAgentClient(deps: Omit<LocalAgentClientDeps, 'session' | 'rt'>): Effect.Effect<LocalAgentClient> {
+  return Effect.gen(function* () {
     const session = yield* Effect.promise(() => deps.host.acquire(deps.agentName));
     const rt = yield* Effect.promise(() => deps.host.runtime(deps.agentName));
 
     return new LocalAgentClient({ ...deps, session, rt });
-  }).pipe(Effect.onError(() => Effect.promise(() => deps.host.close()))));
+  }).pipe(Effect.onError(() => Effect.promise(() => deps.host.close())));
 }
 
 /** Only the process running a job can end it, so another live driver's job is refused, naming that process. */
