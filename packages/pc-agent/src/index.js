@@ -697,9 +697,12 @@ function rawWorkingDirectory(msg, roots) {
  *
  * `source` is the environment the tier's own allow-list filters. A command
  * takes this daemon's; a terminal session takes the same with `TERM` set to
- * the terminal it was just given, which is the only difference between them.
+ * the terminal it was just given. `statusFd` is the descriptor the sandbox
+ * reports on, which only a command's supervisor holds open: a terminal's
+ * program has its pty alone, and a sandbox told to write to a descriptor it
+ * does not have exits before the shell starts.
  */
-async function planFromFrame(msg, command, source = process.env) {
+async function planFromFrame(msg, command, { source = process.env, statusFd } = {}) {
   const frame = frameSandbox(msg);
 
   if (frame.tier === 'raw') {
@@ -734,7 +737,7 @@ async function planFromFrame(msg, command, source = process.env) {
     command,
     source,
     dotenv: LAUNCH_DOTENV,
-    statusFd: 3,
+    ...(statusFd !== undefined && { statusFd }),
   });
 }
 
@@ -1020,7 +1023,7 @@ async function openTerminalSession(msg, ws, ctx) {
   assertCommandShellPresent();
 
   if (!ctx || !ctx.sessions) throw new Error('this daemon was started without terminal support');
-  const plan = await planFromFrame(msg, SESSION_COMMAND, sessionSource());
+  const plan = await planFromFrame(msg, SESSION_COMMAND, { source: sessionSource() });
 
   const opened = ctx.sessions.open({
     session: id,
@@ -1155,7 +1158,7 @@ function startCommand(msg, cmd, ws, ctx) {
   const { id } = msg;
 
   const published = (async () => {
-    const plan = await planFromFrame(msg, cmd);
+    const plan = await planFromFrame(msg, cmd, { statusFd: supervisor.STATUS_FD });
     const checkpoints = ctx && ctx.checkpoints;
     // A command's checkpoint covers its working tree.
     const tree = checkpoints && msg.checkpoint ? plan.view.workingTree(hintedDir(msg.checkpoint) ?? plan.cwd) : null;
