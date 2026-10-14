@@ -106,6 +106,24 @@ describe('Esc / Esc-Esc state machine', () => {
     expect(closed.state.queue).toEqual([]);
     expect(closed.effects).toEqual([{ kind: 'send-queued', text: 'held follow-up' }]);
   });
+
+  // core-rest review P1-24: closing walk-back drained the queue by its own rule, beside a send still out.
+  test('closing walk-back while a send is out holds the queue until that send ends', () => {
+    const waiting = run(
+      initialInputState,
+      { type: 'turn-start' },
+      { type: 'send-started' },
+      { type: 'queue', text: 'held follow-up' },
+      { type: 'turn-settled' },
+      { type: 'open-walkback' },
+    );
+
+    expect(waiting.effects).toEqual([{ kind: 'clear-input' }]);
+    const closed = reduceInput(waiting.state, esc(2_000));
+    expect({ open: closed.state.walkbackOpen, queue: closed.state.queue, effects: closed.effects })
+      .toEqual({ open: false, queue: ['held follow-up'], effects: [] });
+    expect(reduceInput(closed.state, { type: 'send-ended' }).effects).toEqual([{ kind: 'send-queued', text: 'held follow-up' }]);
+  });
 });
 
 describe('queue ordering', () => {
