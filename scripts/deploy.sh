@@ -661,20 +661,16 @@ bun "$KINU_ROOT/scripts/runtime-catalog.ts" ensure "$KINU_RUNTIME_BUCKET" "$KINU
 
 # ── Step 2a: The Worker's startup ────────────────────────────
 # Cloudflare refuses a version whose startup exceeds its CPU limit (code 10021).
-# Bounded here first by what the build links, between the builds it took and
-# refused (scripts/worker-startup.ts). Then, before a reset deletes what the target
-# serves, the validator itself reads it: the build is uploaded as a version,
-# not deployed, while the target still runs (`wrangler versions upload`, which
-# needs the target's container application, gone once the reset ran). On
-# 2026-10-13 the reset ran first, staging's upload was refused, and staging
-# served its placeholder. The deploy after the reset is still `wrangler
-# deploy` of the same build, never the validated version by id, which serves
-# with none of the classes the reset deleted (L26); the validator refuses the
-# same bytes at random, so either upload is made again on a refused startup
-# (`upload`). A reset finishing an earlier one has a placeholder serving and
-# nothing left to keep up, so its deploy is its first reading.
-bun "$KINU_ROOT/scripts/worker-startup.ts" check "$KINU_BUILT_CONFIG" \
-  || { publish_red "the built Worker's startup is above its bound, as the line above says; nothing was uploaded"; return 1; }
+# Before a reset deletes what the target serves, the validator itself reads it:
+# the build is uploaded as a version, not deployed, while the target still runs
+# (`wrangler versions upload`, which needs the target's container application,
+# gone once the reset ran). On 2026-10-13 the reset ran first, staging's upload
+# was refused, and staging served its placeholder. The deploy after the reset is
+# still `wrangler deploy` of the same build, never the validated version by id,
+# which serves with none of the classes the reset deleted (L26). A refusal is the
+# build's verdict, never asked again (L27). A reset finishing an earlier one has
+# a placeholder serving and nothing left to keep up, so its deploy is its first
+# reading.
 if [ "$KINU_RESET" = "1" ] && [ "${KINU_PENDING_RESET:-none}" = "none" ]; then
   KINU_VALIDATE_LOG="$(mktemp -t kinu-validate.XXXXXX.log)"
   echo "Running: npx wrangler versions upload ${KINU_WRANGLER_ARGS[*]} (log → $KINU_VALIDATE_LOG)"

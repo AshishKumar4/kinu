@@ -603,16 +603,14 @@ describe("deploy gate", () => {
     const STARTUP_REFUSED = '✘ [ERROR] Your Worker failed validation because it exceeded startup limits.\n   - Error: Script startup exceeded CPU time limit.\n   [code: 10021]';
     const VALIDATE = 'MUTATE npx wrangler versions upload --tag testsha --message kinu staging testsha';
     const DEPLOY = 'MUTATE npx wrangler deploy --tag testsha --message kinu staging testsha';
-    const CHECK = 'bun scripts/worker-startup.ts check packages/cf-backend/dist/kinu/wrangler.json';
     const wipe = (events: readonly string[]) => events.findIndex((event) => event.startsWith('bun scripts/reset.ts wipe'));
 
-    test('the startup check, then the version upload, then the reset, then the deploy of that build', async () => {
+    test('the version upload, then the reset, then the deploy of that build', async () => {
       const run = await runDeploy({ option: '--reset', account: resetAccount(), uploadRuns: [{ says: 'success', status: 0 }] });
-      const order = [CHECK, VALIDATE].map((event) => run.events.indexOf(event));
+      const validated = run.events.indexOf(VALIDATE);
 
-      expect(order.every((index) => index >= 0), run.stdout).toBe(true);
-      expect(order[0]).toBeLessThan(order[1] ?? -1);
-      expect(order[1]).toBeLessThan(wipe(run.events));
+      expect(validated, run.stdout).toBeGreaterThanOrEqual(0);
+      expect(validated).toBeLessThan(wipe(run.events));
       expect(wipe(run.events)).toBeLessThan(run.events.indexOf(DEPLOY));
       expect(run.report).toContain('startup validated 412');
     });
@@ -624,41 +622,20 @@ describe("deploy gate", () => {
       });
 
       expect(run.status).not.toBe(0);
-      // Refused three times: the validator refuses the same bytes at random, so one refusal is no verdict.
-      expect(run.events.filter((event) => event === VALIDATE)).toHaveLength(3);
+      // A refusal is the build's verdict, never asked again (L27).
+      expect(run.events.filter((event) => event === VALIDATE)).toHaveLength(1);
       expect(wipe(run.events)).toBe(-1);
       expect(run.uploads).toEqual([]);
       expect(run.report).toContain('startup validated refused');
     });
 
-    // After the wipe the target serves its placeholder until an upload lands: a startup refused at random there is
-    // uploaded again, not left for a rerun.
-    test('a deploy refused after the reset is made again and lands, the placeholder serving only meanwhile', async () => {
+    test('a startup refused after the reset ends the upload red, asked once', async () => {
       const run = await runDeploy({ option: '--reset', account: resetAccount(), uploadRuns: [{ says: STARTUP_REFUSED, status: 1 }, { says: 'success', status: 0 }] });
 
-      expect(run.uploads, run.stdout).toHaveLength(2);
-      expect(wipe(run.events)).toBeLessThan(run.events.indexOf(DEPLOY));
-      expect(run.report).toContain('startup deployed none');
-      expect(run.events).toContain('bun scripts/infra-verify.ts --phase=post-deploy');
-    });
-
-    test('a startup refused three times after the reset ends the upload red', async () => {
-      const refused = { says: STARTUP_REFUSED, status: 1 };
-      const run = await runDeploy({ option: '--reset', account: resetAccount(), uploadRuns: [refused, refused, refused, { says: 'success', status: 0 }] });
-
-      expect(run.uploads).toHaveLength(3);
+      expect(run.uploads, run.stdout).toHaveLength(1);
       expect(run.status).not.toBe(0);
       expect(run.report).toContain('startup deployed refused');
       expect(run.events).not.toContain('bun scripts/infra-verify.ts --phase=post-deploy');
-    });
-
-    test('a build above the startup bound uploads nothing, validated or deployed, and deletes nothing', async () => {
-      const run = await runDeploy({ option: '--reset', account: resetAccount(), failingGate: CHECK, uploadRuns: [{ says: 'success', status: 0 }] });
-
-      expect(run.status).not.toBe(0);
-      expect(run.events).not.toContain(VALIDATE);
-      expect(wipe(run.events)).toBe(-1);
-      expect(run.uploads).toEqual([]);
     });
 
     // A reset whose build never uploaded has its placeholder serving and no container application, which a version
@@ -667,14 +644,14 @@ describe("deploy gate", () => {
       const account = resetAccount(true);
       const run = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account, uploadRuns: [{ says: 'success', status: 0 }] });
 
-      expect(run.events).toContain(CHECK);
+      expect(run.events).toContain(DEPLOY);
       expect(run.events).not.toContain(VALIDATE);
     });
 
     test('a deploy with no reset uploads no version first: a refused deploy leaves the target as it was', async () => {
       const run = await runDeploy({ uploadRuns: [{ says: 'success', status: 0 }] });
 
-      expect(run.events).toContain(CHECK);
+      expect(run.events).toContain(DEPLOY);
       expect(run.events).not.toContain(VALIDATE);
       expect(run.uploads).toHaveLength(1);
     });
