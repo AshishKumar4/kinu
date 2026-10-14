@@ -293,7 +293,7 @@ that stopped the loop. Every other clean end is `completed`.
   system prompt. Rungs run cheapest first: superseded ephemeral context, then
   older images and files (moved to `<home>/attachments/<sha256>.<ext>`, priced
   for the model serving the request, a fallback once one takes over, the newest
-  two images kept; the stub names the file as `vfs://…`, and a `file` read of an
+  three images kept, as within a turn; the stub names the file as `vfs://…`, and a `file` read of an
   image shows it again; a plan belongs to the history, not the model it was
   priced for, so a fallback replays it and folds further only if it needs to),
   skills,

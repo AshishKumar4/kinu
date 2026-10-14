@@ -14,6 +14,7 @@ import {
 } from '@kinu.run/core';
 import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
 import { screenshot } from '../../compaction/tests/helpers';
+import { KEEP_RECENT_IMAGES } from '../../compaction/src/attachments';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
@@ -27,6 +28,9 @@ const FALLBACK = 'openai/gpt-4o-mini';
 const WINDOW = 128_000;
 
 const SHOTS = 20;
+
+/** The newest few, which stay in the request. */
+const NEWEST = Array.from({ length: KEEP_RECENT_IMAGES }, (_, n) => SHOTS - KEEP_RECENT_IMAGES + n);
 
 const ASK = `Check each of the ${String(SHOTS)} settings screens and tell me which shows an error.`;
 
@@ -125,7 +129,7 @@ function workspace(models: { readonly primary: TestLanguageModelV2; readonly fal
 }
 
 describe('older screenshots leave as links, priced for the model serving the request', () => {
-  test('a turn its Claude model is refused falls back to gpt-4o-mini, which is sent the newest two and links to the rest', async () => {
+  test('a turn its Claude model is refused falls back to gpt-4o-mini, which is sent the newest few and links to the rest', async () => {
     const asked = { primary: new Array<Prompt>(), fallback: new Array<Prompt>() };
 
     const primary = new TestLanguageModelV2({
@@ -159,8 +163,8 @@ describe('older screenshots leave as links, priced for the model serving the req
     const served = carried(present(asked.fallback[0], 'the request gpt-4o-mini served'));
 
     expect(refused).toEqual({ inline: Array.from({ length: SHOTS }, (_, n) => n), links: [] });
-    expect(served.inline).toEqual([SHOTS - 2, SHOTS - 1]);
-    expect((await reopened(rt, served.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: SHOTS - 2 }, (_, n) => n));
+    expect(served.inline).toEqual(NEWEST);
+    expect((await reopened(rt, served.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: SHOTS - KEEP_RECENT_IMAGES }, (_, n) => n));
   });
 
   test('a search on the fast tier inherits the conversation priced for its gpt-4o-mini nodes', async () => {
@@ -199,11 +203,11 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const node = carried(present(nodes[0], 'the search node\'s request'));
 
-    expect(node.inline).toEqual([SHOTS - 2, SHOTS - 1]);
-    expect((await reopened(rt, node.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: SHOTS - 2 }, (_, n) => n));
+    expect(node.inline).toEqual(NEWEST);
+    expect((await reopened(rt, node.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: SHOTS - KEEP_RECENT_IMAGES }, (_, n) => n));
   });
 
-  test('a search node its Claude model refuses falls back to gpt-4o-mini, which is sent the newest two and links to the rest', async () => {
+  test('a search node its Claude model refuses falls back to gpt-4o-mini, which is sent the newest few and links to the rest', async () => {
     const asked = { primary: new Array<Prompt>(), fallback: new Array<Prompt>() };
 
     const primary = new TestLanguageModelV2({
@@ -248,7 +252,7 @@ describe('older screenshots leave as links, priced for the model serving the req
     const served = carried(present(asked.fallback[0], 'the node request gpt-4o-mini served'));
 
     expect(refused).toEqual({ inline: Array.from({ length: SHOTS }, (_, n) => n), links: [] });
-    expect(served.inline).toEqual([SHOTS - 2, SHOTS - 1]);
-    expect((await reopened(rt, served.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: SHOTS - 2 }, (_, n) => n));
+    expect(served.inline).toEqual(NEWEST);
+    expect((await reopened(rt, served.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: SHOTS - KEEP_RECENT_IMAGES }, (_, n) => n));
   });
 });

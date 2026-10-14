@@ -4694,6 +4694,15 @@ holds only the trust bundles. While no X runs, a program that needs a display fa
 (cannot open a display), and one that only checks the variable is told of a display that is not there; a headless
 browser ignores it. A tool that picks a dialog over a prompt because `DISPLAY` is set (a GUI pinentry, an askpass) now
 asks on the owner's screen, which is where the owner watches.
+A watch stays a frame sheet on a model that also takes video (2026-10-14; the owner asked for a clip there, if it
+measured better). Measured on the gateway's Gemini (`gemini-4-argon-contributor`), over a real box's frames of a
+moving page and twelve redrawn texts: the four-frame sheet costs 1,075 tokens, answered all ten questions on the
+moving page in 9 runs of 9, and read a still 12 px line 48 of 48 times and an 11 px code that changes each second 34
+of 36. A 3 s clip at Gemini's default resolution, 70 tokens a frame, costs 195 to 828 at 1 to 4 frames a second and
+read the line 31 to 36 of 48 and the codes 3 to 7 of 36; at 1 frame a second it also missed what moved between its
+samples. At high resolution the sheet's four frames as a clip cost 1,028 and read 48 of 48 and 36 of 36, so the clip
+that reads as well costs what the sheet does, 4% less. It would need ffmpeg, which the image lacks, and a wire Kinu
+does not speak: the gateway serves its Gemini only on Google's own API.
 
 D90. The computer's terminal sessions are named tmux sessions the box keeps by id, name and folder (2026-10-13, the
 owner: a cmux-like experience across the machines). One `devbox` session became any number: the page attaches with
