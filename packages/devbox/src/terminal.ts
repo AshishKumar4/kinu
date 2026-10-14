@@ -2,23 +2,22 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { CONTAINER_ENV } from './processes';
-import { SAVED_SESSIONS, SESSION_RC, SESSION_RESUME, SESSION_RESUME_FILE, TMUX_CONF, type SessionRecord } from './sessions';
+import { INSTALL_SESSION_FILES, SAVED_SESSIONS, SESSIONS_FORGET, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE, type SessionRecord } from './sessions';
+import { DEVBOX_WORKDIR } from './storage';
 
-const ENV = { ...CONTAINER_ENV, TERM: 'xterm-256color' };
+const ENV = { ...CONTAINER_ENV, ...SESSION_FILES, TERM: 'xterm-256color' };
 
 /**
- * `$1` the config, `$2` the session's id, `$3` its folder, `$4` the shell's rc, `$5` the resume script: joins the
- * session, or opens it there, first showing what it had before a restart when the box saved it (D97).
+ * `$1` the session's id, `$2` its folder: joins the session, or opens it there, first showing what it had before a
+ * restart when the box saved it (D97).
  */
-const ATTACH = `printf '%s\\n' "$1" > /etc/devbox-tmux.conf
-printf '%s\\n' "$4" > /etc/devbox-session.bashrc
-printf '%s\\n' "$5" > ${SESSION_RESUME_FILE}
-if tmux has-session -t "=$2" 2>/dev/null; then tmux source-file /etc/devbox-tmux.conf; fi
-cd "$3" 2>/dev/null || cd /workspace
-if ! tmux has-session -t "=$2" 2>/dev/null && [ -f "${SAVED_SESSIONS}/$2/screen" ]; then
-  tmux -f /etc/devbox-tmux.conf new-session -d -s "$2" -c "$PWD" "sh ${SESSION_RESUME_FILE} $2; exec /bin/bash --rcfile /etc/devbox-session.bashrc -i"
+const ATTACH = `${INSTALL_SESSION_FILES}
+if tmux has-session -t "=$1" 2>/dev/null; then tmux source-file ${TMUX_CONF_FILE}; fi
+cd "$2" 2>/dev/null || cd ${DEVBOX_WORKDIR}
+if ! tmux has-session -t "=$1" 2>/dev/null && [ -f "${SAVED_SESSIONS}/$1/screen" ]; then
+  tmux -f ${TMUX_CONF_FILE} new-session -d -s "$1" -c "$PWD" "sh ${SESSION_RESUME_FILE} $1; exec /bin/bash --rcfile ${SESSION_RC_FILE} -i"
 fi
-exec tmux -f /etc/devbox-tmux.conf new-session -A -s "$2" -c "$PWD" /bin/bash --rcfile /etc/devbox-session.bashrc -i`;
+exec tmux -f ${TMUX_CONF_FILE} new-session -A -s "$1" -c "$PWD" /bin/bash --rcfile ${SESSION_RC_FILE} -i`;
 
 const Size = v.object({ cols: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(1000)), rows: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(1000)) });
 
@@ -98,7 +97,7 @@ export function terminalSocket(container: Container, params: URLSearchParams, se
     const size = yield* attemptSync('invalid-input', () => v.parse(Size, { cols: Number(params.get('cols') ?? 80), rows: Number(params.get('rows') ?? 24) }));
     const abort = new AbortController();
 
-    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', ATTACH, 'devbox-terminal', TMUX_CONF, session.id, session.cwd, SESSION_RC, SESSION_RESUME], {
+    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', ATTACH, 'devbox-terminal', session.id, session.cwd], {
       pty: size, stdin: 'pipe', env: ENV, signal: abort.signal,
     }));
 
@@ -128,7 +127,7 @@ export function terminalSocket(container: Container, params: URLSearchParams, se
 /** Ends a session's shell and screen, and what a restart saved of it (D97); its next attach opens a fresh one. */
 export function resetTerminal(container: Container, id: string): Promise<void> {
   return settle(Effect.gen(function* () {
-    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', `if tmux has-session -t "=$1" 2>/dev/null; then tmux kill-session -t "=$1"; fi; rm -rf "${SAVED_SESSIONS}/$1"`, 'devbox-reset', id]));
+    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', `if tmux has-session -t "=$1" 2>/dev/null; then tmux kill-session -t "=$1"; fi\n${SESSIONS_FORGET}`, 'devbox-reset', id]));
     const response = yield* attempt('process', () => process.output());
 
     if (response.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', new TextDecoder().decode(response.stderr)));

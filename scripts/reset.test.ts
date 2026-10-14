@@ -38,6 +38,10 @@ function account(failing?: keyof ResetTarget) {
     sessions: true,
     checkpoints,
     snapshotsOf,
+    /** Whether a placeholder's own view answers 100146 "could not be found" once it is served, as Cloudflare's did for
+     *  seconds after the upload on 2026-10-14. */
+    viewLags: false,
+    unviewed: '',
   };
 
   const step = (name: keyof ResetTarget): void => {
@@ -47,13 +51,24 @@ function account(failing?: keyof ResetTarget) {
   };
 
   const target: ResetTarget = {
-    serving: () => state.serving,
+    serving: () => {
+      if (state.unviewed === state.serving.versionId) throw new Error('`wrangler versions view` failed: The requested Worker version could not be found [code: 100146]');
+
+      return state.serving;
+    },
+    servedVersion: () => {
+      step('servedVersion');
+
+      return state.serving.versionId;
+    },
     applications: () => state.applications,
     latest: () => state.records.get(LATEST_RESET_KEY),
     deployPlaceholder: (classes, tag) => {
       step('deployPlaceholder');
       state.placeholders.push(`${tag}: ${classes.join(', ')}`);
       state.serving = { versionId: `placeholder-${String(state.placeholders.length)}`, bound: new Map() };
+
+      if (state.viewLags) state.unviewed = state.serving.versionId;
 
       return state.serving.versionId;
     },
@@ -125,6 +140,34 @@ describe('a reset stopped anywhere can be finished', () => {
     expect(state.placeholders).toHaveLength(1);
     // Taken before the placeholder deleted them; each resumed run checks what its restore is owed instead.
     expect(state.checkpoints).toEqual(['capture with 0 placeholder(s)', 'owed with 1 placeholder(s)', 'owed with 1 placeholder(s)']);
+  });
+
+  // Staging, 2026-10-14: the reset of 56377b387 stopped between its placeholder and the record naming it, the
+  // application bound to the namespace the placeholder deleted; the `--reset` deploy after it finishes the reset.
+  test('stopped after its placeholder and before its record names it, a rerun deletes the applications the record names', async () => {
+    const { state, target } = account('servedVersion');
+    const input = { environment: 'staging' as const, config, recordFile, restToken: 'a-rest-token', target };
+
+    await expect(wipe(input)).rejects.toThrow('servedVersion failed');
+    const started = state.records.get(LATEST_RESET_KEY);
+
+    expect([started?.state, started?.placeholderVersion, state.applications.length]).toEqual(['started', '', 3]);
+
+    const done = await wipe(input);
+
+    expect([done.state, done.placeholderVersion, state.applications.map((application) => application.name)])
+      .toEqual(['done', 'placeholder-1', ['another-worker-box']]);
+  });
+
+  // Staging, 2026-10-14: the placeholder deployed at 13:43:32; the deployment named it at 13:43:38 and its own view
+  // answered 100146 at 13:43:39, and the reset was refused with its placeholder serving.
+  test('finishes when its placeholder is served before the placeholder\'s own view answers', async () => {
+    const { state, target } = account();
+    state.viewLags = true;
+
+    const done = await wipe({ environment: 'staging', config, recordFile, restToken: 'a-rest-token', target });
+
+    expect([done.state, done.placeholderVersion, state.unviewed]).toEqual(['done', 'placeholder-1', 'placeholder-1']);
   });
 
   test('a reset that cannot take eval-service\'s credentials deletes and records nothing', async () => {

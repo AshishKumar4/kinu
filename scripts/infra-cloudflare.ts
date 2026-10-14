@@ -323,6 +323,13 @@ export interface ContainerApplication {
   readonly namespace: string | undefined;
 }
 
+/** How an application is deleted by hand. Wrangler 4.145's `containers delete` takes only a UUID and refuses a 32-hex
+ *  application id ("Expected a container ID but got …", staging, 2026-10-14), which the REST API deletes, as a reset
+ *  does (`deleteApplicationByRest`). A reset whose record names the application deletes it itself. */
+export const APPLICATION_DELETE = 'a 32-hex id through the REST API, `DELETE /client/v4/accounts/<account>/containers/applications/<id>`, '
+  + 'a UUID with `npx wrangler containers delete <id>`; when a reset record names it, `bun run deploy --reset` finishes '
+  + 'that reset, which deletes it';
+
 /**
  * Whether a container class's Durable Object namespace and `application`, the one the deploy names, are bound to
  * each other or to nothing else. `namespace` undefined is a class with no namespace yet: the Worker was never
@@ -356,8 +363,7 @@ export function namespaceBinding(
     return {
       state: 'absent',
       detail: `${blocking.join('; ')}: \`wrangler deploy\` uploads the Worker, then refuses the application. Delete `
-        + 'each one named here (`npx wrangler containers delete <id>`) and deploy again; a namespace and its storage stay '
-        + 'with their Worker.',
+        + `each one named here and deploy again: ${APPLICATION_DELETE}. A namespace and its storage stay with their Worker.`,
     };
   }
 
@@ -470,37 +476,10 @@ export type Deployment =
  * carries the complete binding set, both through wrangler's own commands.
  */
 export function deployment(environment: InfraEnvironment): Deployment {
-  const status = wrangler(['deployments', 'status', '--json', ...environmentArgs(environment)]);
+  const served = deployedVersion(environment);
 
-  if (!status.ok) {
-    const complaint = why(status);
-
-    // wrangler says this in prose and there is no exit code that distinguishes
-    // it, so the one string it uses is matched deliberately and narrowly.
-    return /not found|does not exist|no deployments/iu.test(complaint)
-      ? { state: 'absent' }
-      : { state: 'unknown', reason: `\`wrangler deployments status\` failed: ${complaint}` };
-  }
-
-  const statusBody = jsonBody(status.stdout, '{');
-
-  if (statusBody === undefined) {
-    return { state: 'unknown', reason: '`wrangler deployments status --json` printed no JSON' };
-  }
-
-  let versionId: string;
-
-  try {
-    versionId = v.parse(DeploymentStatus, JSON.parse(statusBody)).versions[0]?.version_id ?? '';
-  } catch (error) {
-    return {
-      state: 'unknown',
-      reason: `could not read \`wrangler deployments status --json\` — ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-
-  if (versionId.length === 0) return { state: 'absent' };
-
+  if (served.state !== 'deployed') return served;
+  const { versionId } = served;
   const view = wrangler(['versions', 'view', versionId, '--json', ...environmentArgs(environment)]);
 
   if (!view.ok) {
@@ -535,6 +514,45 @@ export function deployment(environment: InfraEnvironment): Deployment {
       reason: `could not read \`wrangler versions view --json\` — ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+/**
+ * The version the active deployment serves, from the deployment alone. Right after an upload this is the reading to
+ * take: the deployment names the new version at once, while the version's own view can answer 100146 "could not be
+ * found" for seconds (staging, 2026-10-14: the reset's placeholder deployed at 13:43:32, the deployment named it at
+ * 13:43:38, and `versions view` of it answered 404 at 13:43:39).
+ */
+export function deployedVersion(environment: InfraEnvironment): { readonly state: 'deployed'; readonly versionId: string } | Exclude<Deployment, { state: 'deployed' }> {
+  const status = wrangler(['deployments', 'status', '--json', ...environmentArgs(environment)]);
+
+  if (!status.ok) {
+    const complaint = why(status);
+
+    // wrangler says this in prose and there is no exit code that distinguishes
+    // it, so the one string it uses is matched deliberately and narrowly.
+    return /not found|does not exist|no deployments/iu.test(complaint)
+      ? { state: 'absent' }
+      : { state: 'unknown', reason: `\`wrangler deployments status\` failed: ${complaint}` };
+  }
+
+  const statusBody = jsonBody(status.stdout, '{');
+
+  if (statusBody === undefined) {
+    return { state: 'unknown', reason: '`wrangler deployments status --json` printed no JSON' };
+  }
+
+  let versionId: string;
+
+  try {
+    versionId = v.parse(DeploymentStatus, JSON.parse(statusBody)).versions[0]?.version_id ?? '';
+  } catch (error) {
+    return {
+      state: 'unknown',
+      reason: `could not read \`wrangler deployments status --json\` — ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  return versionId.length === 0 ? { state: 'absent' } : { state: 'deployed', versionId };
 }
 
 /**

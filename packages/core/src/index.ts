@@ -24,7 +24,7 @@ export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
   chatTurnParts, declareTerminalRoster, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema,
-  type HandedOffTurn, type SettledRun, type TerminalTurnFacts, type TerminalTurnParts,
+  type HandedOffTurn, type SettledRun, type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
 
 export { SleepTimeLane, initSleepTimeUpdatesTable, type SleepTimeLaneDeps } from './orchestrator/sleep-time-lane';
@@ -40,7 +40,7 @@ export {
 } from './orchestrator/terminal-transition';
 
 export {
-  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, turnRecordingEffects, subordinateTerminalEffects, branchesTerminalEffect,
+  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, turnRecordingEffects, actorTerminalEffects, branchesTerminalEffect,
   terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,

@@ -1008,8 +1008,9 @@ function containerDrafts(config: DeployedConfig): Draft[] {
         + 'none, which the deploy then creates and binds',
       manual: `another container application holds the ${container.class_name} namespace, so \`wrangler deploy\` `
         + 'uploads the Worker and then refuses to create its container with DURABLE_OBJECT_ALREADY_HAS_APPLICATION. '
-        + 'Delete that application (`npx wrangler containers delete <id>`) and deploy again, or name it in this '
-        + 'container\'s `name`; the namespace and its Durable Objects\' storage stay with the Worker.',
+        + 'Delete that application and deploy again (a 32-hex id through the REST API, a UUID with '
+        + '`npx wrangler containers delete <id>`), or name it in this container\'s `name`; the namespace and its Durable '
+        + 'Objects\' storage stay with the Worker.',
     },
   ]);
 }

@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
-import { SAVED_SESSIONS, SESSION_RC, SESSION_RESUME, SESSION_RESUME_FILE, TMUX_CONF } from './sessions';
+import { INSTALL_SESSION_FILES, READS_TERMINAL, SAVED_SESSIONS, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE } from './sessions';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
@@ -103,6 +103,8 @@ function whileCurrent<A>(current: (() => boolean) | undefined, mutate: () => Eff
  * and leaves a shell under its output. `trap : INT` keeps the pane alive past a ^C its job takes with the default action.
  * After a restart it first shows what the session had (D97); the job runs again from its spec, so no line is offered.
  */
+const JOB_PANE_FILE = '/etc/devbox-job-pane.sh';
+
 const JOB_PANE = `dir=$1
 trap : INT
 if [ -f "${SAVED_SESSIONS}/$2/screen" ]; then rm -f "${SAVED_SESSIONS}/$2/running"; sh ${SESSION_RESUME_FILE} "$2"; fi
@@ -110,19 +112,17 @@ while [ ! -e "$dir/piped" ]; do sleep 0.05; done
 printf '\\033[2m$ %s\\033[0m\\n' "$(cat "$dir/command")"
 sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" /bin/bash -c "$(cat "$dir/command")"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
-exec /bin/bash --rcfile /etc/devbox-session.bashrc -i`;
+exec /bin/bash --rcfile ${SESSION_RC_FILE} -i`;
 
 /** In a session (D95): the session's files, then the session, its pane copied to the job's one log. */
 const RUN_IN_SESSION = `session=$DEVBOX_SESSION
-printf '%s\\n' "$DEVBOX_TMUX_CONF" >/etc/devbox-tmux.conf
-printf '%s\\n' "$DEVBOX_SESSION_RC" >/etc/devbox-session.bashrc
-printf '%s\\n' "$DEVBOX_JOB_PANE" >/etc/devbox-job-pane.sh
-printf '%s\\n' "$DEVBOX_SESSION_RESUME" >${SESSION_RESUME_FILE}
-unset DEVBOX_SESSION DEVBOX_TMUX_CONF DEVBOX_SESSION_RC DEVBOX_JOB_PANE DEVBOX_SESSION_RESUME
+${INSTALL_SESSION_FILES}
+printf '%s\\n' "$DEVBOX_JOB_PANE" >${JOB_PANE_FILE}
+unset DEVBOX_SESSION DEVBOX_JOB_PANE
 printf '%s' "$3" >"$dir/command"
 : >"$dir/stdout.log"; : >"$dir/stderr.log"
 tmux kill-session -t "=$session" 2>/dev/null
-if ! tmux -f /etc/devbox-tmux.conf new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "sh /etc/devbox-job-pane.sh $dir $session" 2>"$dir/stderr.log"; then
+if ! tmux -f ${TMUX_CONF_FILE} new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "sh ${JOB_PANE_FILE} $dir $session" 2>"$dir/stderr.log"; then
   echo 1 >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
   exit 0
 fi
@@ -159,11 +159,10 @@ const UNLAUNCH = `[ -f "$1/pid" ] || [ -f "$1/exit" ] || ln -s unlaunched "$1/la
  * \`waiting PID\`: a process in PID's tree reads its terminal, as a prompt does (D95). \`last_line DIR\`: the last line
  * the job wrote, its colours stripped, base64 so it rides one status line.
  */
-const WAITING = `waiting() {
+const WAITING = `${READS_TERMINAL}
+waiting() {
   for c in $(cat /proc/$1/task/$1/children 2>/dev/null); do waiting "$c" && return 0; done
-  [ "$(cut -d' ' -f1-2 "/proc/$1/syscall" 2>/dev/null)" = '0 0x0' ] || return 1
-  case "$(readlink "/proc/$1/fd/0")" in /dev/pts/*) return 0 ;; esac
-  return 1
+  reads_terminal "$1"
 }
 last_line() {
   tail -c 4096 "$1/stdout.log" 2>/dev/null | tr -d '\\r' | sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g' | awk 'NF { l = $0 } END { print l }' | base64 -w0
@@ -267,11 +266,9 @@ export class Processes {
 
       const env = options.session === undefined ? CONTAINER_ENV : {
         ...CONTAINER_ENV,
+        ...SESSION_FILES,
         DEVBOX_SESSION: options.session,
-        DEVBOX_TMUX_CONF: TMUX_CONF,
-        DEVBOX_SESSION_RC: SESSION_RC,
         DEVBOX_JOB_PANE: JOB_PANE,
-        DEVBOX_SESSION_RESUME: SESSION_RESUME,
       };
 
       const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
