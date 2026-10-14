@@ -1,10 +1,10 @@
-// The nightly sweeps' wiring: each part's shard denominator is its map's part count, and the timer runs both.
+// The nightly sweeps' wiring: each part's shard denominator is its map's part count, and the timer runs them all.
 import { describe, expect, test } from 'bun:test';
 import { mapArgv, sweepUnits, SWEEPS, WORKTREE } from './nightly-sweeps';
 
 describe('the nightly sweeps on armada', () => {
   test('each sweep cuts its work into exactly as many shards as its map runs parts', () => {
-    // `sweep:flakes` takes `--shard=k/n`, `bench.ts validate` takes `--shard k/n`.
+    // `sweep:flakes` takes `--shard=k/n`; `bench.ts validate` and `mutation-pilot.ts` take `--shard k/n`.
     for (const sweep of SWEEPS) {
       const denominator = /--shard[= ]\{item\}\/(\d+)/u.exec(sweep.command.join(' '))?.[1];
       expect(sweep.parts).toBeGreaterThan(0);
@@ -25,7 +25,7 @@ describe('the nightly sweeps on armada', () => {
     expect(flakes.command.join(' ')).toContain('{out}');
   });
 
-  test('the timer runs both sweeps each night at the fetched tip, from its own checkout', () => {
+  test('the timer runs every sweep each night at the fetched tip, from its own checkout', () => {
     const units = sweepUnits();
 
     expect(units.timer.text).toContain('OnCalendar=*-*-* 07:30:00 UTC');

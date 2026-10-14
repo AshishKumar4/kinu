@@ -44,6 +44,7 @@ import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { ACTIVITY_SURFACE, type SurfaceKind } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
+import { AttentionStack } from "@/components/AttentionStack";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
@@ -89,7 +90,7 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
-  missingSubordinateHistory,
+  missingSubordinateHistory, ownerAsks,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
@@ -116,6 +117,27 @@ import * as v from "valibot";
 import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
+
+/** `&env=computer`: the workspace shell with its computer up, so Environment shows its terminal and its desktop. */
+const SHELL_COMPUTER = frame === "workspaceshell" && new URLSearchParams(location.search).get("env") === "computer";
+
+/** The shell's machines under `&env=computer`, as `listMounts` and the snapshot's executors answer them. */
+const SHELL_MACHINES = {
+  mounts: [
+    { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
+    { name: "computer", prefix: "computer.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
+  ],
+  executors: [
+    {
+      name: "computer", kind: "computer", available: true, configured: true, active: true, status: "active",
+      capabilities: ["shell", "npm", "git", "fs_owned", "net_inbound", "process_long"],
+    },
+    {
+      name: "workspace", kind: "workspace", available: true, configured: true, active: true, status: "active",
+      capabilities: ["javascript", "typescript", "python", "shell", "npm", "fs_shared"],
+    },
+  ],
+};
 
 // Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
@@ -1373,7 +1395,7 @@ window.WebSocket = new Proxy(window.WebSocket, {
 
     if (path === ROSTER_SOCKET_ROUTE) return new GalleryRosterSocket();
 
-    if (frame === "environment" && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
+    if ((frame === "environment" || SHELL_COMPUTER) && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
 
     return protocols === undefined ? new target(url) : new target(url, protocols);
   },
@@ -1508,7 +1530,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     memoryContent: "",
     // The full-screen explorer reads its tree off the snapshot.
     mcts: MCTS_ROWS,
-    timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
+    timeline: [], executors: SHELL_COMPUTER ? SHELL_MACHINES.executors : [], executorOutputs: [], lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
     // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
     chat: {
       name: "checkout-coupon-bug-9935d3", actorId: "agent_01j9x7q2m4checkoutfixes", displayName: "Storefront", role: "default",
@@ -2864,6 +2886,17 @@ const MIXED_ASKS: PendingAction[] = [
 
 const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS]]);
 
+/** A proposal made after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
+const LATE_ASKS: PendingAction[] = [{
+  id: "proposal-late", kind: "workspace_proposal", title: "Create workspace “Release notes”", detail: "Draft each release's notes.", at: NOW,
+  proposal: { name: "Release notes", brief: "Draft each release's notes.", soul: "# Release notes\n\nKeep them short." },
+}];
+
+window.addEventListener("gallery:arrive-ask", () => {
+  document.documentElement.dataset.galleryArrived = "1";
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listPendingActions"] }));
+});
+
 /** `&asksHold=1`: a read of the queue after the first decision waits for `gallery:release-asks`, as a slow one would. */
 const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
 
@@ -2871,7 +2904,8 @@ const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
 async function galleryPendingActions(): Promise<JsonValue> {
   const asked = new URLSearchParams(location.search).get("asks");
   const decided = (document.documentElement.dataset.galleryDecided ?? "").split(",");
-  const asks = ASK_SETS.get(asked ?? "") ?? [];
+  const arrived = document.documentElement.dataset.galleryArrived === "1" ? LATE_ASKS : [];
+  const asks = [...(ASK_SETS.get(asked ?? "") ?? []), ...arrived];
 
   if (ASKS_HELD && decided.some((id) => id !== "")) {
     const released = Promise.withResolvers<void>();
@@ -3181,6 +3215,8 @@ const workspacePageRpc: SocketCall = async <T,>(method: string, args?: unknown[]
   const page = WORKSPACE_PAGE_RPC.get(method);
 
   if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
+
+  if (SHELL_COMPUTER && method === "listMounts") return rpcResult(v.parse(JsonValueSchema, SHELL_MACHINES.mounts)).json<T>();
 
   return agentPageFallback<T>(method, args);
 };
@@ -5732,10 +5768,15 @@ const approvalsRpc: SocketCall = async <T,>(method: string, args?: unknown[]): P
   return workRpc<T>(method, args);
 };
 
+/** Parked commands where they are decided, the attention stack, beside Work's rows that open it. */
 function ApprovalsFrame() {
+  const rpc = workspaceRpc(approvalsRpc);
+
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5 space-y-5">
+        <AttentionStack asks={ownerAsks({ pendingActions: PARKED_ONLY, pendingConsents: [] })} rpc={rpc}
+          resolveConsent={async () => {}} onDecided={async () => {}} onReview={() => {}} decideMemory={async () => {}} />
         <WorkSurface
           surface="Work" onSurface={() => {}}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""

@@ -9,6 +9,8 @@ import { TrashIcon, WarningIcon } from '@phosphor-icons/react';
 import { FilledButton } from '../ui/FilledButton';
 import { Modal } from '../ui/Modal';
 import { inputCls } from '../ui/form';
+import { Status } from '../ui/Status';
+import { JOB_TONE } from '../surfaces/work-jobs';
 import {
   BackgroundJobRowSchema, fetchWorkspaceDetail, panelRows, runAction,
   type BackgroundJobRow, type ControlAction, type JsonValue,
@@ -85,13 +87,7 @@ const JOB_CONTROLS = [
   },
 ] as const;
 
-const JOB_STATUS_TONE: Record<BackgroundJobRow['status'], string> = {
-  running: 'p-accent p-t-status',
-  serving: 'p-accent p-t-status',
-  completed: 'p-success p-t-status',
-  failed: 'p-danger p-t-status',
-  cancelled: 'p-danger p-t-status',
-};
+
 
 /** Holds the action itself, so the modal cannot describe one thing and send another. */
 interface PendingControl {
@@ -305,9 +301,7 @@ function JobRows(
         <li key={job.id} className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="p-annotation p-text-2">{job.kind}</span>
-            <span className={JOB_STATUS_TONE[job.status]}>
-              {job.status}
-            </span>
+            <Status tone={JOB_TONE[job.status]}>{job.status}</Status>
             <span className="p-meta p-text-3">{when(job.createdAt)}</span>
             {(job.resumeAttempts ?? 0) > 0 && (
               <span className="p-t-status p-warning">

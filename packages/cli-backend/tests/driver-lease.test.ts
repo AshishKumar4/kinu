@@ -14,6 +14,7 @@ import {
   type SqlValue,
 } from '@kinu.run/core';
 import { makeExecRaw, makeSql } from '../src/runtime';
+import { osLeaseProcess } from '../src/agent-host/lease-process';
 import { leaseHolder } from './driver-lease-probe';
 
 function workspace() {
@@ -23,9 +24,10 @@ function workspace() {
   return { db, dir };
 }
 
-/** One process-shaped driver over a shared database; `alive` scripts process existence, the only OS fact the lease reads. */
+/** One process-shaped driver over a shared database; `alive` scripts which holders still run, the only OS fact the
+ *  lease reads. */
 function driver(db: Database, pid: number, alive: Set<number>, kind: DriverKind): DriverLeaseHold {
-  const proc: LeaseProcess = { pid, isAlive: (other) => alive.has(other) };
+  const proc: LeaseProcess = { pid, generation: '', isAlive: (holder) => alive.has(holder.pid) };
 
   return new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc }, kind);
 }
@@ -96,7 +98,7 @@ describe('the local driver lease', () => {
         const sql: SqlExecutor = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
           const rows = base<T>(strings, ...values);
 
-          if (!interleaved && strings.join('?').startsWith('SELECT pid, token, kind FROM driver_lease')) {
+          if (!interleaved && strings.join('?').startsWith('SELECT pid, generation, token, kind FROM driver_lease')) {
             interleaved = true;
             daemon.release();
 
@@ -106,7 +108,7 @@ describe('the local driver lease', () => {
           return rows;
         };
 
-        const user = new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: { pid: 312, isAlive: (other) => alive.has(other) } }, 'interactive');
+        const user = new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: { pid: 312, generation: '', isAlive: (holder) => alive.has(holder.pid) } }, 'interactive');
 
         expect(user.acquire()).toBeNull();
         expect(leaseHolder(db)).toEqual({ pid: 312, kind: 'interactive' });
@@ -197,6 +199,58 @@ describe('the local driver lease', () => {
       expect(leaseHolder(db)).toEqual(
         a.held() ? { pid: 701, kind: 'daemon' } : { pid: 702, kind: 'daemon' },
       );
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('the lease asks the operating system whether its holder still runs', () => {
+  /** A live process the test owns, standing for the holder's pid after the holder ended and the pid was reused. */
+  async function withSleeper(body: (pid: number) => void): Promise<void> {
+    const sleeper = Bun.spawn({ cmd: ['sleep', '120'], stdout: 'ignore', stderr: 'ignore' });
+
+    try {
+      body(sleeper.pid);
+    } finally {
+      sleeper.kill();
+      await sleeper.exited;
+    }
+  }
+
+  /** The lease taken in the name of `holder`, as the process it names took it. */
+  function heldBy(db: Database, holder: LeaseProcess): void {
+    expect(new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc: holder }, 'interactive').acquire()).toBeNull();
+  }
+
+  test('a holder whose pid a later process now runs holds nothing: the pid was reused', async () => {
+    const { db } = workspace();
+
+    try {
+      await withSleeper((pid) => {
+        heldBy(db, { ...osLeaseProcess(pid), generation: 'an-earlier-run' });
+
+        expect(new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc: osLeaseProcess(process.pid) }, 'daemon').acquire())
+          .toBeNull();
+        expect(leaseHolder(db)).toEqual({ pid: process.pid, kind: 'daemon' });
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('a holder still running the generation it recorded keeps the lease', async () => {
+    const { db } = workspace();
+
+    try {
+      await withSleeper((pid) => {
+        heldBy(db, osLeaseProcess(pid));
+
+        const refusal = new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc: osLeaseProcess(process.pid) }, 'daemon')
+          .acquire();
+
+        expect(refusal?.holder).toEqual({ pid, kind: 'interactive' });
+      });
     } finally {
       db.close();
     }

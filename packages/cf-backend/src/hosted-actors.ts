@@ -258,7 +258,7 @@ function admitHostedTask(
 
     // The first work an agent is given is its brief: its stand-in title shows at once, before the turn that opens its
     // chat names it from the same words. A later message ("Continue") never titles it.
-    if (result.admitted && brief && await titleActorFromMessage(actor.handle, input.body)) seams.announce(actor);
+    if (result.admitted && brief && (await titleActorFromMessage(actor.handle, input.body)).changed) seams.announce(actor);
 
     return {
       ...result,
@@ -483,8 +483,16 @@ export async function hostedParentReport(
 
 /** Names a hosted actor after the work it was given, with the title its own isolate suggested (null: the stand-in
  *  only). A failure throws, so the agent's owed row keeps it. */
-export async function hostedAutoTitle(seams: HostedActorSeams, actor: BoundActor, subject: string, title: string | null): Promise<void> {
-  if (await titleActorFromMessage(actor.handle, subject, async () => title)) seams.announce(actor);
+/**
+ * A hosted agent's title from `subject`: with no `title`, the stand-in lands and the mission its model should name
+ * is answered, or null when the title is not the auto-titler's; with one, that name lands.
+ */
+export async function hostedAutoTitle(seams: HostedActorSeams, actor: BoundActor, subject: string, title: string | null): Promise<string | null> {
+  const titled = await titleActorFromMessage(actor.handle, subject, title === null ? undefined : async () => title);
+
+  if (titled.changed) seams.announce(actor);
+
+  return title === null ? titled.mission : null;
 }
 
 /** One actor's child substrate: every verb is a call on the workspace's one host. */

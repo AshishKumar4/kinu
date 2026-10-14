@@ -6,13 +6,15 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
-import { createMockFetch, createTestActors, createTestSql, unobservedSpend, OPENAI_RESPONSES_BODY, WORKERS_AI_MODELS_DEV } from '@kinu.run/test-utils';
+import {
+  createMockFetch, createTestActors, createTestSql, unobservedSpend, unpricedLedger, OPENAI_RESPONSES_BODY, WORKERS_AI_MODELS_DEV,
+} from '@kinu.run/test-utils';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
 import type { ModelRelayHub } from '../src/egress/model-relay-route';
 import { NO_RELAY_MACHINE } from './helpers/user-credentials';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
-  resolveTurnProfile, RunEventRecorder, initRunEventTables, unpricedLedgerSink,
+  resolveTurnProfile, RunEventRecorder, initRunEventTables,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
@@ -290,7 +292,7 @@ describe('OwnedModelServices', () => {
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
       getCredentialsRevision: async () => 0,
-      reportModelCall: unpricedLedgerSink(ledger),
+      reportModelCall: unpricedLedger(ledger),
     });
 
     const page = await services.getWebSearchProvider().fetch('https://example.test/');

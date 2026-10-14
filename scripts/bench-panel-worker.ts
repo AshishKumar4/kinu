@@ -111,7 +111,7 @@ async function main(): Promise<void> {
 
   if (fresh) {
     await createWorkspace(db, {
-      name: input.workspaceName, purpose: input.purpose, llm: analyst, home: workspaceHome(db),
+      name: input.workspaceName, purpose: input.purpose, home: workspaceHome(db),
     });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
     // tables for the panel arms' starting point.

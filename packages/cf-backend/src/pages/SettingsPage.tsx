@@ -10,10 +10,12 @@ import {
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
-  type ApprovalGrant, type ArchiveCursor, type EvolutionConfigView, type GepaRunSummary,
-  type InstructionSourceRow, type InstructionSourceView, type SeekCursor, WORKSPACE_TITLE_MAX,
+  type ApprovalGrant, type ArchiveCursor, type EvolutionConfigView,
+  type InstructionSourceRow, type InstructionSourceView, type SeekCursor, type ShellApprovalMode, WORKSPACE_TITLE_MAX,
 } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { StatusDot } from "@/components/ui/Status";
+import { GEPA_TONE } from "@/components/surfaces/evolution-panels";
 import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
 import type { AgentStatus, WorkspaceNotice } from "@kinu.run/core";
@@ -23,14 +25,13 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { CardSlot } from "@/components/ui/CardSlot";
 import { WorkspaceLogo } from "@/components/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
-type ApprovalMode = "strict" | "allow_all" | "deny_all";
-
-const APPROVAL_LABEL: Record<ApprovalMode, string> = {
+const APPROVAL_LABEL: Record<ShellApprovalMode, string> = {
   strict: "Strict (review)",
   allow_all: "Allow all",
   deny_all: "Deny all",
@@ -73,6 +74,7 @@ function useSettingField<T>(): SettingField<T> {
   };
 }
 
+/** The field's slot: the owner's edit while there is one, else its read as every card shows a read. */
 function FieldState<T>({ field, what, onRetry, children }: {
   field: SettingField<T>;
   what: string;
@@ -81,11 +83,7 @@ function FieldState<T>({ field, what, onRetry, children }: {
 }) {
   if (field.value !== null) return <>{children(field.value)}</>;
 
-  if (field.resource.status === "error") {
-    return <LoadFailure what={what} message={field.resource.message} onRetry={onRetry} />;
-  }
-
-  return <p className="text-xs p-text-3">Loading {what}…</p>;
+  return <CardSlot resource={field.resource} what={what} onRetry={onRetry}>{children}</CardSlot>;
 }
 
 const ADVISOR_SWITCH = [{ id: "off", label: "Off" }, { id: "on", label: "On" }] as const;
@@ -99,7 +97,7 @@ function saveLabel(saving: boolean, saved: boolean): string {
 }
 
 /** The workspace socket's pieces settings read; the page shares the chat's socket rather than opening its own. */
-export interface SettingsSource {
+interface SettingsSource {
   readonly rpc: WorkspaceRpc;
   readonly connectionStatus: ConnectionStatus;
   /** The workspace as a whole, from its opening. */
@@ -146,7 +144,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
   const displayName = useSettingField<string>();
   const soul = useSettingField<string>();
-  const approval = useSettingField<ApprovalMode>();
+  const approval = useSettingField<ShellApprovalMode>();
   const advisor = useSettingField<AdvisorConfig>();
 
   const [saving, setSaving] = useState(false);
@@ -331,7 +329,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
           <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
             {(value) => (
               <div className="grid grid-cols-3 gap-2">
-                {(['strict', 'allow_all', 'deny_all'] satisfies ApprovalMode[]).map((m) => (
+                {(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((m) => (
                   <button
                     key={m}
                     onClick={() => approval.edit(m)}
@@ -648,21 +646,14 @@ function WorkspaceBackupCard({
         with <code className="font-mono">kinu import &lt;file&gt;</code>. Download one before you delete a
         workspace. The archive holds everything in the workspace, so keep it as safe as a password.
       </p>
-      <button
-        type="button"
-        onClick={() => detach(Effect.promise(async () => { await download(); }))}
-        disabled={busy || !workspace}
-        className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
-      >{busy ? "Exporting…" : "Download archive"}</button>
+      <FilledButton onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
+        {busy ? "Exporting…" : "Download archive"}
+      </FilledButton>
       {status && <div className="p-meta p-text-2 mt-1">{status}</div>}
       {err && <div className="p-meta p-danger mt-1">Export failed: {err}</div>}
     </Card>
   );
 }
-
-const GEPA_DOT = {
-  completed: 'p-dot-success', running: 'p-dot-warning', aborted: 'p-dot-neutral',
-} satisfies Record<GepaRunSummary['status'], string>;
 
 function GepaOptimizationCard({
   rpc,
@@ -706,12 +697,7 @@ function GepaOptimizationCard({
         Searches for a better agent loop, judged against your recent low-rated and satisfied turns without
         running it, and may propose one for you to promote. Each run makes several model calls.
       </p>
-      <button
-        type="button"
-        onClick={run}
-        disabled={running}
-        className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
-      >{running ? 'Optimising…' : 'Run optimisation'}</button>
+      <FilledButton onClick={run} disabled={running}>{running ? 'Optimising…' : 'Run optimisation'}</FilledButton>
       {msg && <div className="p-meta p-text-2 mt-1">{msg}</div>}
       {resource.status === "error" && (
         <LoadFailure what="the optimisation history" message={resource.message} onRetry={reload} className="mt-2" />
@@ -720,7 +706,7 @@ function GepaOptimizationCard({
         <div className="mt-2 space-y-1">
           {runs.slice(0, 5).map(r => (
             <div key={r.runId} className="p-meta p-text-3 flex items-center gap-2">
-              <span className={`size-1.5 rounded-full ${GEPA_DOT[r.status]}`} />
+              <StatusDot tone={GEPA_TONE[r.status]} />
               <span className="font-mono">{r.iterations} iters</span>
               <span>· {r.metricCalls} evals</span>
               <span className="ml-auto">{r.stopReason ?? r.status}</span>
@@ -737,28 +723,23 @@ function AlwaysActiveSkillsCard({
 }: {
   rpc: WorkspaceRpc;
 }) {
-  const [names, setNames] = useState<string[]>([]);
+  const load = useCallback(async () => (await rpc('getAlwaysActiveSkills', [])).names, [rpc]);
+  const pinned = useAsyncResource(load);
+  const names = lastValue(pinned.resource) ?? [];
+  const publish = pinned.set;
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [saveErr, setErr] = useState<string | null>(null);
+  const err = saveErr ?? (pinned.resource.status === 'error' ? pinned.resource.message : null);
 
-  // React owns the async transition so a malformed response reaches this card's visible error.
-  const refresh = useCallback((): void => {
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      setNames((yield* Effect.promise(async () => rpc('getAlwaysActiveSkills', []))).names);
-    }), showing(setErr))));
-  }, [rpc]);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const save = useCallback((next: string[]) => detach(Effect.gen(function* () {
+  const save = useCallback((next: string[]) => settle(Effect.gen(function* () {
     setBusy(true);
     setErr(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      setNames((yield* Effect.promise(async () => rpc('setAlwaysActiveSkills', [next]))).names);
+      publish((yield* Effect.promise(async () => rpc('setAlwaysActiveSkills', [next]))).names);
     }), showing(setErr)), Effect.sync(() => { setBusy(false); }));
-  })), [rpc]);
+  })), [rpc, publish]);
 
   const add = useCallback(async () => {
     const n = input.trim();
@@ -804,12 +785,7 @@ function AlwaysActiveSkillsCard({
           onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))}
           className={inputCls + " text-xs"}
         />
-        <button
-          type="button"
-          onClick={() => detach(Effect.promise(async () => { await add(); }))}
-          disabled={busy || !input.trim()}
-          className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50 shrink-0"
-        >Pin</button>
+        <FilledButton onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</FilledButton>
       </div>
       {err && <div className="p-meta p-danger mt-1">{err}</div>}
     </Card>

@@ -73,9 +73,11 @@ interface CLIRuntimeOptions {
    * the developer's repo.
    */
   cwd: string;
-  /** Default endpoint for bare ids; null when nothing derives one. The stored
-   *  chat model (actor_config) drives the seams instead. */
+  /** An endpoint this process was given (`--base-url` and `--auth`), served as itself; null without one. The stored
+   *  chat model (actor_config) drives the seams. */
   llm: LLMProviderConfig | null;
+  /** The model a bare id or no choice means; absent, the given endpoint's own. */
+  defaultSpec?: string | null;
   /** The stores the host bound this actor with, where it bound it before its runtime: one bundle per actor. */
   stores?: AgentStores;
   agentName?: string;
@@ -272,6 +274,7 @@ function buildCLIRuntime(
   const localResolver = (): LocalModelResolver => {
     specResolver ??= createLocalModelResolver({
       llm: config.llm,
+      defaultSpec: config.defaultSpec,
       credentials: config.providerCredentials,
       oauthStore: config.oauthStore,
     });
@@ -302,6 +305,7 @@ function buildCLIRuntime(
 
   let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
+    defaultSpec: config.defaultSpec,
     affinity: actorAffinity(actor),
     credentials: config.providerCredentials,
     oauthStore: config.oauthStore,

@@ -83,11 +83,13 @@
  *
  * NOT A GATE, and deliberately not wired into any tier: it mutates the working
  * tree, it costs minutes, and its output is a reading list rather than a
- * verdict. `scripts/nightly-mutation.sh` is how it runs unattended.
+ * verdict. `scripts/nightly-sweeps.ts` runs it each night on armada, a shard of the sample per part, each part in a
+ * worktree of its own inside its container.
  *
  *   bun scripts/mutation-pilot.ts --list        # the pool and the sample, running nothing
  *   bun scripts/mutation-pilot.ts               # the budget, killed/survived
  *   bun scripts/mutation-pilot.ts --budget 8
+ *   bun scripts/mutation-pilot.ts --shard 2/4   # every fourth mutant of the sample, from the second
  *   bun scripts/mutation-pilot.ts --only packages/core/src/mcts/uct.ts:44:boundary
  */
 
@@ -520,9 +522,17 @@ if (import.meta.main) {
     return select(all, budget);
   };
 
-  const selected = chooseMutants();
+  const chosen = chooseMutants();
 
-  if (selected.length === 0) throw new Error(`no mutant matches --only ${String(only)}`);
+  if (chosen.length === 0) throw new Error(`no mutant matches --only ${String(only)}`);
+  const shard = value('--shard') ?? '1/1';
+  const [part = Number.NaN, parts = Number.NaN] = shard.split('/').map(Number);
+
+  if (!Number.isInteger(part) || !Number.isInteger(parts) || part < 1 || part > parts) {
+    throw new Error(`--shard takes k/n with 1 <= k <= n, not ${shard}`);
+  }
+
+  const selected = chosen.filter((_, index) => index % parts === part - 1);
 
   if (argv.includes('--list')) {
     const byOperator = new Map<Operator, number>();

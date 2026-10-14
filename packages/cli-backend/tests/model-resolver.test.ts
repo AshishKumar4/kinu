@@ -481,14 +481,10 @@ describe('createLocalModelResolver', () => {
     expect(sent).toEqual([{ host: 'api.openai.com', auth: 'Bearer sk-openai' }, { host: 'api.example.com', auth: 'Bearer gateway' }]);
   });
 
-  test('uses Anthropic as the default provider when the resolved local config is direct Anthropic', async () => {
+  test('an Anthropic default spec is the default model, on a provider its key makes available', async () => {
     const resolver = createLocalModelResolver({
-      llm: {
-        name: 'anthropic',
-        baseURL: 'https://api.anthropic.com/v1',
-        headers: { 'x-api-key': 'sk-ant', 'anthropic-version': '2023-06-01' },
-        model: 'claude-sonnet-4-5',
-      },
+      llm: null,
+      defaultSpec: 'anthropic/claude-sonnet-4-5',
       credentials: () => ({ anthropicApiKey: 'sk-ant' }),
       fetch: asFetchFunction(async () => new Response('{}')),
     });
@@ -498,14 +494,11 @@ describe('createLocalModelResolver', () => {
     expect(providers.find((p) => p.id === 'anthropic')?.available).toBe(true);
   });
 
-  test('uses the direct OpenAI provider as default when configured from OpenAI credentials', () => {
+  test('a bare id takes the default spec\'s provider: OpenAI\'s, from its credentials', () => {
     const resolver = createLocalModelResolver({
-      llm: {
-        name: 'openai',
-        baseURL: 'https://api.openai.com/v1',
-        headers: { Authorization: 'Bearer sk-openai' },
-        model: 'gpt-4o-mini',
-      },
+      llm: null,
+      defaultSpec: 'openai/gpt-4o-mini',
+      credentials: () => ({ openaiApiKey: 'sk-openai' }),
       fetch: asFetchFunction(async () => new Response('{}')),
     });
 
@@ -865,12 +858,8 @@ describe('createLocalModelResolver — claude subscription provider', () => {
 describe('createLocalModelResolver — signed out', () => {
   test('cloud providers stay visible but honestly unavailable, saying they are signed out', async () => {
     const resolver = createLocalModelResolver({
-      llm: {
-        name: 'openai',
-        baseURL: 'https://api.openai.com/v1',
-        headers: { Authorization: 'Bearer sk-openai' },
-        model: 'gpt-4o-mini',
-      },
+      llm: null,
+      defaultSpec: 'openai/gpt-4o-mini',
       credentials: () => ({ openaiApiKey: 'sk-openai' }),
       fetch: asFetchFunction(async () => new Response('{}')),
     });

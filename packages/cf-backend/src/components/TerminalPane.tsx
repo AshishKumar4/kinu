@@ -7,7 +7,7 @@ import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
-import { describeError } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 import { renderThrownChain, showing, tolerate, detach, hold } from "@kinu.run/core/obs";
 import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
@@ -288,7 +288,7 @@ function PtyTerminal({ workspace, executor, session, frame }: { workspace: strin
         }
       }), (failed) => Effect.sync(() => {
         if (keepaliveOperations.current.get(keepaliveKey) === owner) {
-          setFailure(describeError({ cause: Cause.squash(failed) }));
+          setFailure(readFailureText({ cause: Cause.squash(failed) }));
         }
       })), Effect.sync(() => {
         if (keepaliveOperations.current.get(keepaliveKey) === owner) {
@@ -314,7 +314,7 @@ function PtyTerminal({ workspace, executor, session, frame }: { workspace: strin
     );
 
     if (!response.ok) {
-      setFailure(describeError({ cause: await response.text() }));
+      setFailure(readFailureText({ cause: await response.text() }));
 
       return;
     }
@@ -537,13 +537,13 @@ function LineTerminal(
         if (thrown !== undefined) {
           // A rejected exec produces no output row, so clear the marker and reprint the prompt here.
           clearBusy(term, lineState);
-          term.write(`\x1b[31m${describeError(thrown)}\x1b[0m\r\n`);
+          term.write(`\x1b[31m${readFailureText(thrown)}\x1b[0m\r\n`);
           writePrompt(term);
         }
       }), (failed) => Effect.sync(() => {
         if (lineState.finishCommand(generation) && termRef.current === term) {
           clearBusy(term, lineState);
-          setFailure(describeError({ cause: Cause.squash(failed) }));
+          setFailure(readFailureText({ cause: Cause.squash(failed) }));
         }
       })), Effect.sync(() => {
         if (commandOperation.current === owner) commandOperation.current = null;

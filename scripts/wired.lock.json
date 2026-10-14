@@ -1,6 +1,4 @@
 [
-  "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedCommands (unreached-export)",
-  "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedDecisionFlow (unreached-export)",
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#hasLiveForkRun (unreached-export)",
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#unexplainedForkRoots (unreached-export)",
   "packages/cf-backend/src/gallery-agent-stub.ts#useAgent (unreached-export)",
@@ -11,10 +9,8 @@
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.gitBin (unsupplied-field)",
   "packages/cli-backend/src/config-lock.ts#createConfigLock (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#createProcessIdentityBoundary (unreached-export)",
-  "packages/cli-backend/src/config-lock.ts#darwinStartIdentity (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#decodeLockOwner (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#encodeLockOwner (unreached-export)",
-  "packages/cli-backend/src/config-lock.ts#procStartTicks (unreached-export)",
   "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.fetch (unsupplied-field)",
   "packages/cli/src/local-agent-client.ts#LocalAgentClient (unreached-export)",
   "packages/cli/src/tui/streaming-buffer.ts#createStreamingBufferController (unreached-export)",

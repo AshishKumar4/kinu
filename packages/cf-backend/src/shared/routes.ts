@@ -180,7 +180,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity): Prom
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
-  const owned = workspaceOwner(env, body.workspace);
+  const owned = claim.success;
   const published = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'publish', id: body.slate, version: body.version, include: body.include });
 
   if (!published.ok) return err(ERROR_STATUS[published.reason], published.error);
@@ -222,7 +222,7 @@ async function fork(request: Request, env: Env, identity: AuthIdentity): Promise
     : await workspaceOwner(env, body.ownerWorkspace).liveShareBundle(body.live, identity.userId);
 
   if (!bundle.ok) return err(404, NOT_FOUND);
-  const admitted = await workspaceOwner(env, body.workspace).admitBlueprint(bundle.value);
+  const admitted = await claim.success.admitBlueprint(bundle.value);
 
   if (!admitted.ok) return err(ERROR_STATUS[admitted.reason], admitted.error);
   const result: BlueprintFork = admitted.value;
@@ -258,7 +258,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
 
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
 
-  const owned = workspaceOwner(env, body.workspace);
+  const owned = claim.success;
 
   const created = await owned.slateAs(ROOT_SLATE_CALLER, {
     op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork,
@@ -292,7 +292,7 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
-  const revoked = await workspaceOwner(env, body.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: body.share });
+  const revoked = await claim.success.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: body.share });
 
   if (!revoked.ok) return err(ERROR_STATUS[revoked.reason], revoked.error);
 

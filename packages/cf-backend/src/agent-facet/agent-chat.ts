@@ -5,7 +5,7 @@ import {
   PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane,
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
-  bindRoute, completeOnRoute, ownProfileChoices, planWorkspaceTitle, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
+  bindRoute, completeOnRoute, ownProfileChoices, resolveAgentTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
@@ -614,16 +614,13 @@ export class FacetChat {
     await workspace.answerAmended(await database.history(TRANSCRIPT_WINDOW));
   }
 
-  /** The stand-in lands first, as every actor's does: the model's name may be refused, and parks here. */
+  /** The stand-in lands first, as every actor's does: the model's name may be refused. The workspace plans the title. */
   private async applyTitle(subject: string): Promise<void> {
-    const { actor, workspace } = this.deps;
-    const { config } = actor.stores;
-    const plan = planWorkspaceTitle({ slug: actor.record.name, displayName: config.getDisplayName(), nameOrigin: config.getNameOrigin(), mission: subject });
+    const { workspace } = this.deps;
+    const mission = await workspace.autoTitle(subject, null);
 
-    if (plan === null) return;
-
-    if (plan.provisional !== null) await workspace.autoTitle(subject, null);
-    await workspace.autoTitle(subject, await this.suggestTitle(plan.mission));
+    if (mission === null) return;
+    await workspace.autoTitle(subject, await this.suggestTitle(mission));
   }
 
   /** Down the fast tier's chain on the agent's own models, as every actor's title is named. */

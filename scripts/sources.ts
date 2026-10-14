@@ -247,6 +247,14 @@ export const isProductSource = (file: string): boolean =>
 export const isShippedSource = (file: string): boolean =>
   SHIPPED_SOURCE.test(file) && !TEST_FILE.test(file) && !isTestScaffold(file) && !file.endsWith('.d.ts');
 
+/** The package a file belongs to: its directory under `packages/`, else its top-level directory (`scripts`, `tests`,
+ *  `evals`, `tools`), or its own name at the root. */
+export function packageOf(file: string): string {
+  const [top, name] = file.split('/');
+
+  return top === 'packages' && name !== undefined ? name : top ?? file;
+}
+
 /** Test code, by the SAME pattern `no-ambient-git-in-tests` governs it with.
  *  Both arms: a `.test.` / `.eval.` / `.spec.` basename, and anything under a
  *  `tests/` directory — the second arm is how a package's `tests/helpers/`

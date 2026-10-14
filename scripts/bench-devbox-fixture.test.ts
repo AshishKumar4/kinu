@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { containerAppTeardown, type ContainerAppPorts } from './bench-devbox-fixture';
-import { createManifest } from './fixtures/storage-matrix/cleanup';
+import { createManifest } from './bench-teardown';
 
 /** The platform and registry a container application's teardown reaches, recording what each was asked in order. */
 function appPlatform(listed: string[][], sweeps: ('refuse' | 'ok')[]) {

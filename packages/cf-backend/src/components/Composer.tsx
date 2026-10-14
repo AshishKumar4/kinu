@@ -15,6 +15,7 @@ import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl
 import type { WorkspaceNotice } from "@kinu.run/core";
 import { composing } from "@/components/ui/form";
 import type { ProviderWaitShown } from "@/hooks/use-chat-owner";
+import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -122,7 +123,7 @@ function Notice({ notice }: { notice: ComposerNotice }) {
         )}
         {(detail?.raw !== undefined || action !== undefined) && (
           <div className="p-pill-foot">
-            {detail?.raw && <CopyButton text={detail.raw} />}
+            {detail?.raw && <CopyRawButton text={detail.raw} />}
             {actionButton}
           </div>
         )}
@@ -149,16 +150,14 @@ function Notice({ notice }: { notice: ComposerNotice }) {
   );
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
+/** Copies a notice's raw detail, saying whether it took, as every copy in the app does. */
+function CopyRawButton({ text }: { text: string }) {
+  const { status, copy } = useCopy();
 
   return (
-    <button type="button" className="p-pill-action !bg-transparent p-text-3"
-      onClick={() => detach(Effect.promise(async () => {
-        await navigator.clipboard.writeText(text);
-        setCopied(true);
-      }))}>
-      {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}{copied ? "Copied" : "Copy"}
+    <button type="button" onClick={() => copy(text)}
+      className={`p-pill-action !bg-transparent ${status === "failed" ? "p-danger" : "p-text-3"}`}>
+      {status === "copied" ? <CheckIcon size={13} /> : <CopyIcon size={13} />}{copyLabel(status)}
     </button>
   );
 }
@@ -276,7 +275,7 @@ function ModeSegment({ value, onChange, disabled }: {
   );
 }
 
-export interface ComposerProps {
+interface ComposerProps {
   value: string;
   onValueChange: (value: string) => void;
   onSend: () => void;

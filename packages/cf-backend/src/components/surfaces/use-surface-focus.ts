@@ -56,7 +56,7 @@ interface ReadyChip {
   readonly title: string;
 }
 
-export interface SurfaceFocus {
+interface SurfaceFocus {
   readonly surface: SurfaceKind | null;
   readonly readyChip: ReadyChip | null;
   readonly dismissChip: () => void;

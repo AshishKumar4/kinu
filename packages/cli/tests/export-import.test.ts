@@ -287,7 +287,6 @@ describe('kinu export / import', () => {
 
     await createWorkspace(db, {
       name: 'skywriter', purpose: 'archive restart proof',
-      llm: { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
       // In memory, a workspace has no space: its home is a map.
       home: createMemoryVfs().vfs,
     });
@@ -407,15 +406,16 @@ describe('kinu export / import', () => {
 
     const commands = [
       ['import', archive, '--name', 'from-archive'], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')],
-      ['memory', 'scout', 'wrangler'],
+      ['memory', 'scout', 'wrangler'], ['executors', 'scout', 'workspace', 'true'],
     ];
 
     for (const args of commands) {
       const refused = await result(runCli(home, args));
 
       expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain('made by an older Kinu');
-      expect(refused.stderr).toContain('kinu create');
+      // The workspace by the name the user gave it, and the one command that starts fresh.
+      expect(refused.stderr).toContain('"scout" was made by an older version of Kinu');
+      expect(refused.stderr).toContain('kinu create <new-name>');
     }
 
     expect(() => restoredDb(home, 'from-archive')).toThrow('unable to open database file');

@@ -15,8 +15,8 @@ import {
 import { rosterBucket, rosterMatches, AccountMemoryFrameSchema, RosterFrameSchema, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import type { AccountMemoryProposal } from "@kinu.run/core";
 import {
-  decideAccountMemory, getAccountMemory, listWorkspaces, ROSTER_SOCKET_ROUTE,
-  type RosterFilterBucket, 
+  decideAccountMemory, getAccountMemory, listWorkspaces, registerWorkspace, ROSTER_SOCKET_ROUTE,
+  type RosterFilterBucket,
 } from "@/lib/user-api";
 import { ApiError } from "@/lib/http";
 import { detach, diagnostics, renderThrownChain, settle, settleSync, tolerate } from "@kinu.run/core/obs";
@@ -34,7 +34,7 @@ export interface RosterFilter {
   readonly q?: string;
 }
 
-export interface RosterPages {
+interface RosterPages {
   readonly entries: readonly RosterEntry[];
   readonly total: number;
   readonly counts: RosterCounts;
@@ -48,6 +48,8 @@ interface WorkspaceRosterValue extends RosterPages {
   readonly pending: boolean;
   readonly refresh: () => void;
   readonly upsert: (entry: WorkspaceEntry) => void;
+  /** Makes a workspace from its mission (its SOUL.md and title, not a chat turn) and lists it at once. */
+  readonly create: (mission: string) => Promise<WorkspaceEntry>;
   readonly rename: (name: string, displayName: string) => void;
   readonly remove: (name: string) => void;
   readonly subscribe: (listener: FrameListener) => () => void;
@@ -207,7 +209,7 @@ interface RosterSocket extends EventTarget {
 }
 
 /** Null: reads only. */
-export type RosterLive = (() => RosterSocket) | null;
+type RosterLive = (() => RosterSocket) | null;
 
 function openRosterSocket(): RosterSocket {
   return new WebSocket(`${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${ROSTER_SOCKET_ROUTE}`);
@@ -345,6 +347,14 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
       : [added, ...entries]);
   }, [edit]);
 
+  const create = useCallback(async (mission: string): Promise<WorkspaceEntry> => {
+    const created = await registerWorkspace(undefined, mission.trim());
+
+    upsert(created);
+
+    return created;
+  }, [upsert]);
+
   const rename = useCallback((name: string, displayName: string): void => {
     edit((entries) => entries.map((entry) => entry.name === name ? { ...entry, displayName } : entry));
   }, [edit]);
@@ -354,9 +364,9 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
   }, [edit]);
 
   const value = useMemo<WorkspaceRosterValue>(() => ({
-    ...pages, total: pages.counts.all, pending, refresh, upsert, rename, remove, subscribe, epoch, accountProposals,
+    ...pages, total: pages.counts.all, pending, refresh, upsert, create, rename, remove, subscribe, epoch, accountProposals,
     decideAccountProposal,
-  }), [pages, pending, refresh, upsert, rename, remove, subscribe, epoch, accountProposals, decideAccountProposal]);
+  }), [pages, pending, refresh, upsert, create, rename, remove, subscribe, epoch, accountProposals, decideAccountProposal]);
 
   return <WorkspaceRosterContext.Provider value={value}>{children}</WorkspaceRosterContext.Provider>;
 }

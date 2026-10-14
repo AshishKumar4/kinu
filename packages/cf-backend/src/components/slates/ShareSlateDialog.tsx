@@ -9,7 +9,7 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type ShareMode = "live" | "blueprint";
 
-export interface ShareSlateDialogProps {
+interface ShareSlateDialogProps {
   workspace: string;
   slate: string;
   title: string;

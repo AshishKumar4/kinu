@@ -15,7 +15,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
 import { readAllOutcome } from '@kinu.run/core';
 
-export const OPENCODE_PROVIDER_ID = 'opencode';
+const OPENCODE_PROVIDER_ID = 'opencode';
 
 const OPENCODE_LABEL = 'OpenCode (shared auth)';
 

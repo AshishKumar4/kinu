@@ -496,7 +496,6 @@ describe('Live Smoke — one real turn per backend', () => {
       await createWorkspace(db, {
         name: 'live-smoke',
         purpose: 'A precise assistant that uses its tools rather than answering from memory.',
-        llm: LLM_CONFIG,
         home: workspaceHome(db),
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));

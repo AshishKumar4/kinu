@@ -35,6 +35,7 @@ import {
 import {
   type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, deployedConfig, liveClasses,
 } from './infra-manifest';
+import { servedHealth } from './served-health';
 
 /** What one reset deleted, or is deleting. */
 export const ResetSchema = v.object({
@@ -89,8 +90,6 @@ const CHAIN_PREFIX = 'boxes/';
 const HEALTH_MS = 120_000;
 
 const HEALTH_POLL_MS = 2_000;
-
-const StamplessSchema = v.pipe(v.string(), v.parseJson(), v.object({ build: v.null() }));
 
 /** The version a Worker serves, and the class → namespace of every Durable Object it binds. */
 export interface Serving {
@@ -246,9 +245,7 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
       run(['r2', 'object', 'put', `${releases}/${key}`, '--file', file, '--content-type', 'application/json', '--remote']);
     },
     stampless: async (attempt) => {
-      const answer = await fetch(`${site}/api/health?reset=${String(attempt)}`);
-
-      return answer.status === 200 && v.safeParse(StamplessSchema, await answer.text()).success;
+      return (await servedHealth(site, { query: `?reset=${String(attempt)}` })).build === null;
     },
     forgetSessions: () => {
       rmSync(dirname(evalSessionPath(site, undefined)), { recursive: true, force: true });

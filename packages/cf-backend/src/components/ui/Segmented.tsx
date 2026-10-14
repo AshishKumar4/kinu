@@ -1,7 +1,7 @@
 /** Roving tabindex: the strip is one tab stop, arrows move inside it. */
 import { useRef, useState } from "react";
 
-export interface SegmentOption<T extends string> {
+interface SegmentOption<T extends string> {
   readonly id: T;
   readonly label: string;
   readonly count?: number;

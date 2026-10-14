@@ -35,7 +35,7 @@ export function createLocalHost(process: LocalHostProcess): LocalAgentHost {
   const options: LocalAgentHostOptions = {
     roster: listLocalRefsAllProjects,
     dbPath: agentDbPath,
-    open: (ref, db, dbPath) => openLocalAgent(ref, db, dbPath, process),
+    open: (ref, db) => openLocalAgent(ref, db, process),
     driverKind: process.driverKind,
     ...(process.surface !== undefined && { surface: process.surface }),
     ...(process.wakeAt !== undefined && { wakeAt: process.wakeAt }),
@@ -49,13 +49,14 @@ export function createLocalHost(process: LocalHostProcess): LocalAgentHost {
  * provider revision read live, so a role resolves alike everywhere and a provider connected elsewhere is seen. Only the
  * root a frontend was opened for takes its flags and folder; any other (a peer) works where it was placed.
  */
-async function openLocalAgent(ref: HostedAgentRef, db: Database, dbPath: string, process: LocalHostProcess): Promise<LocalHostedAgent> {
+async function openLocalAgent(ref: HostedAgentRef, db: Database, process: LocalHostProcess): Promise<LocalHostedAgent> {
   const opened = process.root?.name === ref.name ? process.root : undefined;
-  const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver(opened ?? {});
+  const { defaults, resolver: modelResolver } = createConfiguredLocalModelResolver(opened ?? {});
   const cloud = resolveCloudSession();
 
   const openConfig = {
-    llm: llmConfig,
+    llm: defaults.endpoint,
+    defaultSpec: defaults.spec,
     providerCredentials: resolveProviderCredentials,
     oauthStore: createOAuthStore(),
     ...(cloud !== null && { cloud }),
@@ -63,7 +64,7 @@ async function openLocalAgent(ref: HostedAgentRef, db: Database, dbPath: string,
     cwd: opened?.cwd ?? ref.cwd,
   };
 
-  const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
+  const { rt } = await openWorkspaceCLI(db, ref.name, openConfig);
 
   return {
     rt,

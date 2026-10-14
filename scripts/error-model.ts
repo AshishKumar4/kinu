@@ -131,6 +131,12 @@ export const DECLARED = byFile([
     reason: 'the machine pidfile protocol the device daemon claims through as well: its CommonJS build carries this leaf, '
       + 'which holds no runner, so it throws and catches as plain code, and each caller brings a failure in at its own edge',
   }],
+  ['packages/core/src/workspace-birth.ts', {
+    mechanisms: ['promise-rejection'],
+    within: ['bornWithoutModel'],
+    reason: 'the `LLM` contract a birth runtime holds: a workspace being born calls no model, and the contract fails a call '
+      + 'by its promise, as every other implementation does',
+  }],
   ['packages/compaction/src/codec.ts', {
     mechanisms: ['throw', 'catch'],
     reason: 'the `Codec` @better-compact/core calls: an invalid handle is thrown, the library\'s codec contract, and a value '

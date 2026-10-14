@@ -22,12 +22,12 @@ import type { useFileDrop } from "@/hooks/use-file-drop";
 import type { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 
-export type ChatState = ReturnType<typeof useChatOwner>["chat"];
+type ChatState = ReturnType<typeof useChatOwner>["chat"];
 
 type RowProps = Omit<ComponentProps<typeof MessageView>, "message" | "steers" | "repeats" | "answerSlates" | "liveTail" | "onRetry">;
 
 /** What the workspace's own chat adds to the column; an agent's pane has none of it. */
-export interface ChatColumnExtras {
+interface ChatColumnExtras {
   /** Each row's own controls (fork, feedback, takes, revert), and what was placed before it. */
   readonly row?: (message: UIMessage, index: number) => RowProps;
   readonly before?: (index: number) => ReactNode;

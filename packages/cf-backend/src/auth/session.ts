@@ -194,9 +194,11 @@ function authRefusal(request: Request, refused: AuthError): Response {
   return new Response(null, { status: 302, headers: { location: login.toString(), 'cache-control': 'no-store' } });
 }
 
-/** A browser navigating to a page; the agent transport never is one. */
+/** A browser navigating to a page; an API or the agent transport never is one, whatever it accepts. */
 function wantsPage(request: Request): boolean {
-  if (new URL(request.url).pathname.startsWith('/agents/')) return false;
+  const { pathname } = new URL(request.url);
+
+  if (pathname.startsWith('/api/') || pathname.startsWith('/agents/')) return false;
   const accept = request.headers.get('accept') ?? '';
 
   return request.method === 'GET' && (accept.includes('text/html') || accept.includes('*/*'));

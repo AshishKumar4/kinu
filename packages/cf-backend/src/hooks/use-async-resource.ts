@@ -1,6 +1,6 @@
 /** Tri-state fetch: a failed fetch must never render as an empty answer or an endless spinner. */
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as v from "valibot";
+import { readFailureText } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
 import { detach } from "@kinu.run/core/obs";
 
@@ -23,7 +23,7 @@ export function loadSucceeded<T>(value: T): AsyncResource<T> {
 }
 
 export function loadFailed<T>(previous: AsyncResource<T>, thrown: { cause: unknown }): AsyncResource<T> {
-  return { status: "error", message: describeError(thrown), last: lastValue(previous) };
+  return { status: "error", message: readFailureText(thrown), last: lastValue(previous) };
 }
 
 export function lastValue<T>(resource: AsyncResource<T>): T | null {
@@ -45,15 +45,6 @@ export function mapResource<T, U>(resource: AsyncResource<T>, map: (value: T) =>
   }
 
   return resource;
-}
-
-/** Wrapped so the value crosses as a thrown thing, the shape `renderThrownChain` and `toKinuError` take. */
-export function describeError({ cause }: { cause: unknown }): string {
-  if (cause instanceof Error && cause.message) return cause.message;
-
-  if (v.is(v.string(), cause) && cause.trim()) return cause;
-
-  return "request failed";
 }
 
 /** Reload delay after a load, or null once nothing is left to watch. */

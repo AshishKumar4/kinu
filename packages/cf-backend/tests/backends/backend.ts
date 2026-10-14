@@ -273,7 +273,7 @@ function bornWorkspace(): Promise<string> {
   born ??= (async () => {
     const path = scratchPath('shared-backend-born', 'agent.db');
     const db = workspaceDatabase(path);
-    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT, home: workspaceHome(db) });
+    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', home: workspaceHome(db) });
     db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
     db.close();
 

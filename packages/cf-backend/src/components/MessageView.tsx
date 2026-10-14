@@ -19,7 +19,7 @@ import {
   describeToolCall, executorLabel, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
-import { ASK_OWNER_TOOL, changeNotesCard, slatesChanged } from "@kinu.run/core";
+import { ASK_OWNER_TOOL, changeNotesCard, clockTime, slatesChanged } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
@@ -38,6 +38,7 @@ import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type Sign
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure, turnFailureFacts } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
+import { StatusDot } from "@/components/ui/Status";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 
 const MessageCreatedAtSchema = v.looseObject({
@@ -74,10 +75,6 @@ export function eventTurnKey(message: UIMessage): string | null {
   return JSON.stringify([kind, rowText(message)]);
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
 function FilePartView({ part }: { part: FileUIPart }) {
   return part.mediaType.startsWith("image/")
     ? <img src={part.url} alt={part.filename ?? "image"} className="max-h-48 max-w-full rounded-lg border p-border" />
@@ -90,7 +87,7 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 
   if (isNaN(d.getTime())) return null;
 
-  return <span className="p-annotation p-text-3 mt-1 block">{formatTime(d)}</span>;
+  return <span className="p-annotation p-text-3 mt-1 block">{clockTime(d)}</span>;
 }
 
 // A settled call takes a line's gap, prose and grouped cards a section's. The block carries
@@ -338,7 +335,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   if (isRunning) {
     stateName = "running";
     stateTone = "p-accent-subtle p-accent";
-    stateBadge = <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>;
+    stateBadge = <><StatusDot tone="live" />Running</>;
   } else if (failed) {
     stateName = "failed";
     stateTone = "p-fill p-text-4";

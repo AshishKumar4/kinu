@@ -1,8 +1,15 @@
 import { spawnSync } from 'node:child_process';
+import { stripGitContext } from '../../packages/test-utils/src/git-env';
 
+/** `git` in this checkout, its exit status an answer (`diff --quiet`, `cat-file -e`). A hook's `GIT_DIR` is dropped so
+ *  it cannot answer for another repository; the user's own config and agent stay, since this one fetches from origin,
+ *  which `gitIn`'s bare environment could not. */
 export function git(args: readonly string[]) {
+  const env = { ...process.env };
+
+  stripGitContext(env);
   // A release's product diff runs to megabytes; spawnSync's default 1 MiB buffer is no limit of git's.
-  const result = spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: Infinity });
+  const result = spawnSync('git', args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: Infinity });
 
   if (result.error !== undefined) throw new Error(`git ${args.join(' ')} could not start`, { cause: result.error });
 

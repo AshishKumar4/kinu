@@ -292,7 +292,8 @@
   ],
   "background_job_holders@packages/core/src/jobs/process-holder.ts": [
     "job_id TEXT PRIMARY KEY",
-    "pid INTEGER NOT NULL"
+    "pid INTEGER NOT NULL",
+    "generation TEXT NOT NULL"
   ],
   "background_job_serves@packages/core/src/jobs/store.ts": [
     "actor_id TEXT NOT NULL",
@@ -395,8 +396,7 @@
     "agent_name TEXT NOT NULL",
     "cli_token_hash TEXT NOT NULL",
     "capabilities TEXT NOT NULL",
-    "expires_at INTEGER NOT NULL",
-    "used_at INTEGER"
+    "expires_at INTEGER NOT NULL"
   ],
   "compaction_archive@packages/core/src/state/workspace-schema.ts": [
     "actor_id TEXT NOT NULL",
@@ -612,7 +612,6 @@
     "ticket_hash TEXT PRIMARY KEY",
     "device_id TEXT NOT NULL",
     "expires_at INTEGER NOT NULL",
-    "used_at INTEGER",
     "token_was_current INTEGER"
   ],
   "device_consent_asks@packages/core/src/safety/device-consent.ts": [
@@ -658,6 +657,7 @@
   "driver_lease@packages/core/src/execution/driver-lease.ts": [
     "id TEXT PRIMARY KEY",
     "pid INTEGER NOT NULL",
+    "generation TEXT NOT NULL",
     "token TEXT NOT NULL",
     "kind TEXT NOT NULL CHECK(kind IN ('interactive', 'daemon'))"
   ],

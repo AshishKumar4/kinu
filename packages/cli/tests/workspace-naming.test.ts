@@ -119,7 +119,7 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
   const db = workspaceDatabase(dbPath);
 
   try {
-    const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM, home: workspaceHome(db) });
+    const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     rt.actor.config.setDisplayNameOrigin('', 'auto');
   } finally {
