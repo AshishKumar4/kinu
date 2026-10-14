@@ -111,6 +111,7 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
     planes: cloudPlanes(WORKSPACE_ROOT),
     actor,
     toolFiles: vfs,
+    agentStateVfs: vfs,
     storage: {
       vfs,
       home: WORKSPACE_ROOT,

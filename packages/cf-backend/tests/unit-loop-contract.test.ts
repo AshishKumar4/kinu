@@ -24,7 +24,7 @@ async function installVersion(
 ): Promise<string> {
   const rt = actor.runtime;
   const source = markerSource(marker);
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const files = rt.agentStateVfs;
   await files.mkdir('scaffold', { recursive: true });
   await writeText(files, `${rt.identity.scaffold.path}.v${String(version)}`, source);
   // UPSERT: acquiring the actor already seeded a v1 row.
@@ -175,7 +175,7 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
       expect(row?.parent_version).toBe(2);
       const rt = child.runtime;
 
-      const raw = await readText((rt.agentStateVfs ?? rt.storage.vfs), `${rt.identity.scaffold.path}.v1`);
+      const raw = await readText(rt.agentStateVfs, `${rt.identity.scaffold.path}.v1`);
 
       // `encoding: 'utf8'` was requested, so a non-string is the plane breaking its contract.
       const source = v.parse(v.string(), raw);

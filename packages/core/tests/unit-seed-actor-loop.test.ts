@@ -82,7 +82,7 @@ function build(): Fixture {
 async function parentAtV1(fx: Fixture): Promise<AgentRuntime> {
   const parent = fx.actorRuntime(fx.main, 'main');
   await seedActorLoop(parent, null, { kind: 'builtin' });
-  const vfs = parent.agentStateVfs ?? parent.storage.vfs;
+  const vfs = parent.agentStateVfs;
   await writeText(vfs, `${parent.identity.scaffold.path}.v1`, PARENT_V1);
   void fx.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
     VALUES (${parent.actor.actorId}, 1, ${Date.now()}, 'promoted in test', 'current', 0)`;
@@ -114,7 +114,7 @@ describe('seedActorLoop', () => {
     expect(seeded.version).toBe(1);
     expect(getCurrentScaffoldVersion(fx.sql, child)).toBe(1);
     expect(await rt.identity.scaffold.read()).toBe(PARENT_V1);
-    const versioned = rt.agentStateVfs ?? rt.storage.vfs;
+    const versioned = rt.agentStateVfs;
     expect(await readText(versioned, `${rt.identity.scaffold.path}.v1`)).toBe(PARENT_V1);
 
     // Lineage gives the child's evolution a parent to diff against.
@@ -133,7 +133,7 @@ describe('seedActorLoop', () => {
     const rt = fx.actorRuntime(child, 'node-1');
     await seedActorLoop(rt, parent, defaultLoopOrigin('swarm'));
 
-    const parentVfs = parent.agentStateVfs ?? parent.storage.vfs;
+    const parentVfs = parent.agentStateVfs;
     await writeText(parentVfs, `${parent.identity.scaffold.path}.v2`, PARENT_V2);
     void fx.sql`UPDATE scaffold_versions SET status = 'historical'
       WHERE actor_id = ${parent.actor.actorId} AND status = 'current'`;
@@ -153,7 +153,7 @@ describe('seedActorLoop', () => {
     const rt = fx.actorRuntime(child, 'head-2');
     await seedActorLoop(rt, parent, { kind: 'inherit' });
 
-    const childVfs = rt.agentStateVfs ?? rt.storage.vfs;
+    const childVfs = rt.agentStateVfs;
     const own = '// the child own loop\nasync function* run() {}\n';
     await writeText(childVfs, `${rt.identity.scaffold.path}.v2`, own);
     void fx.sql`UPDATE scaffold_versions SET status = 'historical'

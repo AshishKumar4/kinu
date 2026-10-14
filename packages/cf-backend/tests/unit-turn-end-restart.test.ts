@@ -237,7 +237,7 @@ test("a node whose isolate dies after its run's end committed, before it was tol
 
   // Main's current loop is the noting one, which the node inherits as it is hired.
   const { actor: main } = await hostedMainActor(workspace);
-  const files = main.runtime.agentStateVfs ?? main.runtime.storage.vfs;
+  const files = main.runtime.agentStateVfs;
 
   await files.mkdir('scaffold', { recursive: true });
   await writeText(files, `${main.runtime.identity.scaffold.path}.v2`, NOTING_LOOP);

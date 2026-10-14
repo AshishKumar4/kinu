@@ -16,7 +16,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { initScaffoldTables } from './schemas';
-import { getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource } from './versions';
+import { getCurrentScaffoldVersion, readScaffoldVersion, scaffoldSource } from './versions';
 
 import { nowMs } from '../utils/date';
 
@@ -61,7 +61,7 @@ async function writeVersion(vfs: VFS, path: string, version: number, source: str
 export async function bootstrapScaffold(rt: AgentRuntime, initialSource: string = INITIAL_SCAFFOLD_SOURCE): Promise<void> {
   initScaffoldTables(rt.storage.execRaw);
   const sql = rt.storage.sql;
-  const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+  const vfs = rt.agentStateVfs;
   const path = rt.identity.scaffold.path;
   const versionedPath = (version: number) => `${path}.v${version}`;
 
@@ -130,7 +130,7 @@ export function seedActorLoop(
 
     const inherited = yield* inheritedSource(parent, origin);
     const version = 1;
-    const vfs = child.agentStateVfs ?? child.storage.vfs;
+    const vfs = child.agentStateVfs;
     yield* Effect.promise(() => writeVersion(vfs, child.identity.scaffold.path, version, inherited.source));
     child.actor.assertCurrent();
     void child.storage.sql`
@@ -156,7 +156,7 @@ function inheritedSource(
         SELECT version FROM scaffold_versions
         WHERE actor_id = ${parent.actor.actorId} AND version = ${origin.version}`.length > 0;
 
-      const source = known ? yield* Effect.promise(() => readVersionedScaffoldSource({ path: parent.identity.scaffold.path, vfs: parent.agentStateVfs ?? parent.storage.vfs }, origin.version)) : null;
+      const source = known ? yield* Effect.promise(() => scaffoldSource(parent, origin.version)) : null;
 
       if (source === null) {
         return yield* new KinuError('missing', `the parent actor retains no version ${origin.version} to inherit`);

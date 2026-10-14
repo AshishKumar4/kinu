@@ -32,7 +32,7 @@ function scaffoldVfsPath(rt: AgentRuntime, suffix: string): string {
 
 /** A second runtime over the same durable state — the cold reopen. */
 function reopen(rt: AgentRuntime): AgentRuntime {
-  const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+  const vfs = rt.agentStateVfs;
 
   return {
     ...rt,
@@ -147,7 +147,7 @@ describe('proposal boundary — source lands before the pending row', () => {
     await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
     await bootstrapScaffold(rt);
 
-    const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+    const vfs = rt.agentStateVfs;
     const realWrite = vfs.writeFile.bind(vfs);
     rt.agentStateVfs = {
       ...vfs,
@@ -171,7 +171,7 @@ describe('proposal boundary — source lands before the pending row', () => {
       WHERE actor_id = ${rt.actor.actorId}`)[0]?.n).toBe(1); // only v0
 
     // A retry succeeds cleanly once the disk recovers.
-    rt.agentStateVfs = undefined;
+    rt.agentStateVfs = vfs;
 
     const retry = await modifyScaffold(
       rt,

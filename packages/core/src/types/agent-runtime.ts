@@ -23,9 +23,9 @@ export type CraftStore = Pick<SqlCraftStore, 'create' | 'update' | 'get' | 'dele
 export interface AgentRuntime {
   readonly actor: ActorHandle;
   storage: Storage;
-  /** The agent's own state (SOUL.md, scaffold, memory, transcripts) when a shared file plane
-   *  must not hold it. Absent when they coincide; readers use `agentStateVfs ?? storage.vfs`. */
-  agentStateVfs?: VFS;
+  /** The agent's own state (SOUL.md, scaffold, memory, transcripts): its own plane where a shared file plane must not
+   *  hold it, else `storage.vfs` itself. */
+  agentStateVfs: VFS;
   /** `storage.vfs` as the agent's own file tools reach it: gated past its own files. */
   toolFiles: VFS & Partial<Pick<VfsMountRouting, 'resolve'>>;
   /** Where each `root://` plane, `~` and a relative path land on this machine. */

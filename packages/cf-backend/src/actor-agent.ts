@@ -1577,7 +1577,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected get advisor(): ActorAdvisor {
     this._advisor ??= new ActorAdvisor({
-      actor: this.actorHandle(), vfs: () => this.rt.agentStateVfs ?? this.rt.storage.vfs, notes: () => this.engine,
+      actor: this.actorHandle(), vfs: () => this.rt.agentStateVfs, notes: () => this.engine,
       port: () => this.temporaryAgentPort(), reviewed: this.actorDirectoryStore().describe(this.actorHandle()).input,
       send: (signal) => this.workspaceAgentDeliveries().signals.send(signal),
       profile: () => this.operationProfile()?.profile ?? null, scoped: (turn) => this.lanes.scopedTurn(turn),
