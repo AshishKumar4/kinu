@@ -24,7 +24,6 @@ import {
   replayPlanSnapshot,
   toPlanSnapshot,
   transformTurns,
-  writeTranscript,
   COMPACTION_PRESETS,
   type AttachmentPolicy,
   type BoundaryContextPlan,
@@ -83,24 +82,22 @@ interface Ladder {
   readonly spec: LadderSpec & { readonly attachments: AttachmentPolicy };
   readonly codec: CodecOps;
   readonly engine: Engine;
+  /** The same engine for a forced fold, saving nothing: the extension saves the plan such a fold settles on. */
+  readonly fold: Engine;
 }
 
 type SizedContext = TransformContext & { readonly contextWindow: number; readonly ladder: Ladder };
+
+/** What a request's history asks of a plan, whichever trigger runs it. */
+type PlanRequest = Pick<BuildPlanInputs,
+  'bypassSummaries' | 'sessionKey' | 'contextLimit' | 'triggerRatio' | 'targetRatio' | 'recentToolResultBudgetTokens'
+  | 'providerReportedTokens'>;
 
 function sized(ctx: TransformContext, ladder: Ladder): SizedContext | null {
   const owned = ctx.trigger === 'user' ? measuredTokens(ctx, kinuCodec.encode([...ctx.messages]), 0, ladder.codec) : null;
   const contextWindow = ctx.contextWindow ?? owned;
 
   return ctx.messages.length === 0 || contextWindow === null || contextWindow <= 0 ? null : { ...ctx, contextWindow, ladder };
-}
-
-interface ForceRebuildInputs {
-  readonly turns: Turn[];
-  readonly ctx: SizedContext;
-  /** Monotonic floor: pruned tool results stay pruned, summaries are reused. */
-  readonly prior: PlanSnapshot | null;
-  readonly reportedTokens: number;
-  readonly summarize: (jobs: BoundarySummaryJob[]) => Promise<Record<string, string>>;
 }
 
 interface PrefixUpgradeInputs {
@@ -126,10 +123,16 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   const profile = deps.profile ?? { ...COMPACTION_PRESETS.light, triggerPercent: COMPACTION_TRIGGER_PERCENT };
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
+  // A forced fold's plan is saved by the extension, with an owner's trigger and only once whole; never the plan a failed
+  // summary fell back to, nor a cleared one: a forced fold that finds nothing to fold keeps the plan it was given.
+  const foldPorts: EnginePorts = { ...deps.ports, plans: { load: (sessionKey) => deps.ports.plans.load(sessionKey), save: () => undefined } };
+
   const ladderFor = (model: string): Ladder => {
     const spec = { ...kinuSpec, attachments: kinuAttachments(deps.attachments, model) };
 
-    return { spec, codec: attachmentCodec(kinuCodec, spec.attachments), engine: createEngine(spec, deps.ports) };
+    return {
+      spec, codec: attachmentCodec(kinuCodec, spec.attachments), engine: createEngine(spec, deps.ports), fold: createEngine(spec, foldPorts),
+    };
   };
 
   /** A cancelled turn cancels only its own calls; its abort is no summary failure. */
@@ -164,7 +167,7 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     });
 
   // /compact: target 0, a trigger past the largest turn; any window serves.
-  const buildInputs = (ctx: SizedContext, reportedTokens: number, turns: readonly Turn[]): BuildPlanInputs => ({
+  const planRequest = (ctx: SizedContext, reportedTokens: number, turns: readonly Turn[]): PlanRequest => ({
     // A bypass drops a plan's summary; a server-compacting model keeps its own in history.
     bypassSummaries: serverCompactor(ctx.model) !== null,
     sessionKey: ctx.sessionKey,
@@ -175,6 +178,10 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     targetRatio: ctx.trigger === 'user' ? 0 : profile.targetPercent / 100,
     recentToolResultBudgetTokens: profile.recentToolTokens,
     providerReportedTokens: reportedTokens,
+  });
+
+  const buildInputs = (ctx: SizedContext, reportedTokens: number, turns: readonly Turn[]): BuildPlanInputs => ({
+    ...planRequest(ctx, reportedTokens, turns),
     citablePath: (sessionKey, rangeHash) => deps.ports.transcripts.citablePath(sessionKey, rangeHash),
   });
 
@@ -202,34 +209,6 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
     }
 
     return freed;
-  }
-
-  /** An armed rebuild over the prior plan as the monotonic floor. */
-  async function forceRebuild(
-    { turns, ctx, prior, reportedTokens, summarize }: ForceRebuildInputs,
-  ): Promise<ProcessResult> {
-    const { spec } = ctx.ladder;
-    const inputs: BuildPlanInputs = { ...buildInputs(ctx, reportedTokens, turns), force: true, priorPlan: prior ?? undefined };
-    let plan = await preparePlan(turns, inputs, spec, deps.ports.logger);
-
-    if (!plan) return { outcome: 'unchanged' };
-
-    if (plan.summaryJobs.length > 0) {
-      const summaries = await summarize(plan.summaryJobs);
-
-      if (Object.keys(summaries).length > 0) {
-        plan = await preparePlan(
-          turns,
-          { ...inputs, priorPlan: toPlanSnapshot(plan), assistantSummaries: summaries },
-          spec,
-          deps.ports.logger,
-        ) ?? plan;
-      }
-    }
-
-    await writeTranscript(plan, { transcripts: deps.ports.transcripts, logger: deps.ports.logger, codec: kinuCodec });
-
-    return { outcome: 'planned', turns: transformTurns(turns, plan.rawTailStartIndex, plan, spec), plan };
   }
 
   /** Replace a last-resort preview prefix summary with an LLM handoff summary and rebuild. Skipped when
@@ -373,22 +352,17 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
 
       const reportedTokens = measuredTokens(ctx, turns, relieveEphemeralPressure(ctx, turns), ctx.ladder.codec);
 
-      const processed =
-        ctx.trigger !== 'auto'
-          ? await forceRebuild({ turns, ctx, prior, reportedTokens, summarize })
-          : await ctx.ladder.engine.process({
-              bypassSummaries: compactor !== null,
-              sessionKey: ctx.sessionKey,
-              turns,
-              contextLimit: ctx.contextWindow,
-              triggerRatio: profile.triggerPercent / 100,
-              targetRatio: profile.targetPercent / 100,
-              recentToolResultBudgetTokens: profile.recentToolTokens,
-              providerReportedTokens: reportedTokens,
-              summarize,
-            });
+      // A forced fold rebuilds over the saved plan as its monotonic floor: pruned tool results stay pruned, summaries are
+      // reused.
+      const forced = ctx.trigger !== 'auto';
+
+      const processed = await (forced ? ctx.ladder.fold : ctx.ladder.engine).process({
+        ...planRequest(ctx, reportedTokens, turns), turns, force: forced, summarize,
+      });
 
       ctx.abortSignal?.throwIfAborted();
+      // The engine falls back from a failed summary; the owner's fold fails whole instead.
+      failure.signal.throwIfAborted();
 
       if (processed.outcome === 'unchanged') {
         const remaining = prior ? await deps.ports.plans.load(ctx.sessionKey) : null;
@@ -414,8 +388,8 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
 
       const applied = upgraded ?? processed;
 
-      // The engine and an upgrade save theirs.
-      if (upgraded === null && ctx.trigger !== 'auto' && processed.outcome === 'planned') {
+      // The automatic engine and an upgrade save theirs.
+      if (upgraded === null && forced && processed.outcome === 'planned') {
         await deps.ports.plans.save(ctx.sessionKey, savedPlan(ctx, processed.plan));
       }
 
