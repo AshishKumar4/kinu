@@ -45,6 +45,8 @@ interface Run {
 async function desktopBox(answer: (run: readonly string[], held: () => ExecProcess) => ExecProcess | undefined = () => undefined) {
   const runs: Run[] = [];
   const killed: string[] = [];
+  // What ended a run and what let up after it, in the order the box asked.
+  const order: string[] = [];
   const holding = new Map<number, (exitCode: number) => void>();
   // The next check finds X gone and starts it: the screen is a new one.
   let restarted = false;
@@ -64,6 +66,7 @@ async function desktopBox(answer: (run: readonly string[], held: () => ExecProce
       const end = holding.get(pid);
 
       killed.push(String(pid));
+      order.push('kill');
       holding.delete(pid);
       end?.(137);
 
@@ -73,6 +76,8 @@ async function desktopBox(answer: (run: readonly string[], held: () => ExecProce
     const grouped = argv[0] === 'setsid' && argv[1] === '-w';
     const run = grouped ? argv.slice(2) : argv;
     runs.push({ argv: run, grouped, locale: options?.env?.['LC_ALL'] });
+
+    if (run[3] === 'devbox-let-up') order.push('let up');
     const answered = answer(run, held);
 
     if (answered !== undefined) return answered;
@@ -96,7 +101,9 @@ async function desktopBox(answer: (run: readonly string[], held: () => ExecProce
   };
 
   return {
-    box, runs, killed, started,
+    box, runs, killed, started, order,
+    /** The let-up's runs: what the box asked X to let up after a run that did not end cleanly. */
+    letUps: () => runs.filter((run) => run.argv[3] === 'devbox-let-up').length,
     restartX: () => { restarted = true; },
     input: () => runs.filter((run) => run.argv[0] === 'xdotool').map((run) => run.argv.join(' ')),
   };
@@ -119,13 +126,11 @@ describe("an agent's desktop action on the box", () => {
     expect(runs.map((run) => (run.argv[3] === 'devbox-desktop' ? 'check' : run.argv.join(' ').replace(/^\/bin\/bash -c .* devbox-screenshot$/su, 'capture')))).toEqual([
       'check', 'capture',
       'check', 'xdotool keydown ctrl keydown shift mousemove 640 92 click --repeat 2 --delay 80 3 keyup ctrl keyup shift',
-      'xdotool keyup ctrl keyup shift',
       'check', 'xdotool mousemove 5 6 click --repeat 3 --delay 20 4 click --repeat 2 --delay 20 7',
       'check', 'xdotool mousemove 0 0 mousedown 1 sleep 0.05 mousemove 50 25 sleep 0.05 mousemove 100 50 sleep 0.05 mouseup 1',
-      'xdotool mouseup 1',
     ]);
-    // Every run a caller asked for is in its own group, which its stop ends; only the box's own releases are not.
-    expect(runs.filter((run) => !run.grouped).map((run) => run.argv.join(' '))).toEqual(['xdotool keyup ctrl keyup shift', 'xdotool mouseup 1']);
+    // Every run is in its own group, which its stop ends; a run that ended cleanly let up all it pressed itself.
+    expect(runs.filter((run) => !run.grouped)).toEqual([]);
   });
 
   // 2026-10-14, a real box: under the C locale `xdotool type -- "aüb"` typed "a", then "Invalid multi-byte sequence".
@@ -150,13 +155,13 @@ describe("an agent's desktop action on the box", () => {
     ]);
   });
 
-  test('a held key is pressed, held and let go in one run, and let go even when the run fails', async () => {
-    const { box, input } = await desktopBox((run) => (run.includes('keydown') ? ended(new Uint8Array(), 1, 'killed') : undefined));
+  test('a held key is pressed, held and let go in one run, and what X holds is let up when the run fails', async () => {
+    const { box, input, letUps } = await desktopBox((run) => (run.includes('keydown') ? ended(new Uint8Array(), 1, 'killed') : undefined));
 
     await box.desktop(look('main'));
 
     await expect(box.desktop({ driver: 'main', action: { kind: 'key', keys: 'w', holdMs: 800 } })).rejects.toThrow('killed');
-    expect(input()).toEqual(['xdotool keydown w sleep 0.8 keyup w', 'xdotool keyup w']);
+    expect([input(), letUps()]).toEqual([['xdotool keydown w sleep 0.8 keyup w'], 1]);
   });
 
   test('a screenshot is the PNG the box captured, byte for byte, with the size its header names', async () => {
@@ -181,13 +186,13 @@ describe("an agent's desktop action on the box", () => {
     expect(input()).toEqual([]);
   });
 
-  test('what a click holds is released even when its run fails, and the failure is the answer', async () => {
-    const { box, input } = await desktopBox((run) => (run.includes('click') ? ended(new Uint8Array(), 1, "Can't open display") : undefined));
+  test('what a click holds is let up even when its run fails, and the failure is the answer', async () => {
+    const { box, input, letUps } = await desktopBox((run) => (run.includes('click') ? ended(new Uint8Array(), 1, "Can't open display") : undefined));
 
     await box.desktop(look('main'));
 
     await expect(box.desktop({ driver: 'main', action: { kind: 'click', at: [1, 1], button: 'left', count: 1, hold: ['super'] } })).rejects.toThrow("Can't open display");
-    expect(input()).toEqual(['xdotool keydown super mousemove 1 1 click --repeat 1 --delay 80 1 keyup super', 'xdotool keyup super']);
+    expect([input(), letUps()]).toEqual([['xdotool keydown super mousemove 1 1 click --repeat 1 --delay 80 1 keyup super'], 1]);
   });
 
   test('a request the box cannot type or name is refused whole', async () => {
@@ -202,19 +207,51 @@ describe("an agent's desktop action on the box", () => {
 });
 
 describe('a stopped desktop call', () => {
-  test('a held key is let go once its run is ended, and the call answers that it was stopped', async () => {
-    const { box, input, killed, started, runs } = await desktopBox((run, held) => (run.includes('keydown') ? held() : undefined));
+  // Any action that presses something can be cut between its press and its release: a chord, one click of three, one
+  // character of a long text, a drag's button, a wheel's turn. Each, stopped mid-run, is let up after its run has gone.
+  test.each<[string, DesktopRequest['action']]>([
+    ['a held key', { kind: 'key', keys: 'w', holdMs: 10_000 }],
+    ['a chord', { kind: 'key', keys: 'ctrl+shift+t' }],
+    ['a triple click holding a modifier', { kind: 'click', at: [5, 5], button: 'left', count: 3, hold: ['shift'] }],
+    ['a long text', { kind: 'type', text: 'a'.repeat(50) }],
+    ['a drag', { kind: 'drag', from: [0, 0], to: [9, 9] }],
+    ['a scroll', { kind: 'scroll', at: [5, 5], dy: 50, dx: 0 }],
+  ])('%s, stopped mid-run, is ended, then what X holds is let up, and the call answers that it was stopped', async (_, action) => {
+    const { box, killed, started, order, letUps } = await desktopBox((run, held) => (run[0] === 'xdotool' ? held() : undefined));
 
     await box.desktop(look('main'));
-    const holding = box.desktop({ driver: 'main', execId: 'hold-1', action: { kind: 'key', keys: 'w', holdMs: 10_000 } });
+    const pressing = box.desktop({ driver: 'main', execId: 'press-1', action });
 
-    await started((run) => run.argv.includes('keydown'));
-    expect(await box.killExec('hold-1')).toBe(true);
-    await expect(holding).rejects.toMatchObject({ code: 'cancelled' });
+    await started((run) => run.argv[0] === 'xdotool');
+    expect(await box.killExec('press-1')).toBe(true);
+    await expect(pressing).rejects.toMatchObject({ code: 'cancelled' });
 
-    // Its run was ended, and no other: a check that had ended is not ended again. Then what it held was let go.
-    expect([killed.length, input()]).toEqual([1, ['xdotool keydown w sleep 10 keyup w', 'xdotool keyup w']]);
-    expect(runs.at(-1)?.argv.join(' ')).toBe('xdotool keyup w');
+    // Its run was ended, and no other: a check that had ended is not ended again. Then, once it had gone, the let-up.
+    expect([killed.length, order, letUps()]).toEqual([1, ['kill', 'let up'], 1]);
+    // The desktop is the agent's again at once: its next look is answered.
+    expect(await box.desktop(look('main'))).toMatchObject({ kind: 'screen' });
+  });
+
+  // 2026-10-14, a real box: a look stopped as it began left its desktop check owned by nobody, and the next look waited on
+  // it for good (270 s, until the edge cancelled it).
+  test('a call stopped at any point of its start leaves the desktop to the next call', async () => {
+    const { box } = await desktopBox();
+
+    for (let ticks = 0; ticks < 24; ticks += 1) {
+      const execId = `early-${String(ticks)}`;
+      const looking = box.desktop({ driver: 'main', execId, action: { kind: 'screenshot' } });
+
+      for (let tick = 0; tick < ticks; tick += 1) await Promise.resolve();
+      await box.killExec(execId);
+
+      // Stopped, or answered before the stop reached it.
+      const [outcome] = await Promise.allSettled([looking]);
+
+      expect(outcome?.status === 'fulfilled' ? outcome.value : outcome?.reason).toMatchObject(outcome?.status === 'fulfilled' ? { kind: 'screen' } : { code: 'cancelled' });
+
+      // Answered at once, or this test's own bound fails it.
+      expect(await box.desktop(look('main'))).toMatchObject({ kind: 'screen' });
+    }
   });
 
   test('the call that started the desktop check, stopped, ends the check and answers once it has gone', async () => {
