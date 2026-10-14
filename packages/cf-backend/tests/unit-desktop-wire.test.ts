@@ -7,7 +7,7 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { DESKTOP_SIZE, WATCH_SHEET } from '@kinu.run/devbox/desktop';
-import { createSandboxExecutor, executorNamespace, type JsonValue, type SandboxHandle } from '@kinu.run/core';
+import { createSandboxExecutor, executorNamespace, projectJsonValue, type JsonValue, type SandboxHandle } from '@kinu.run/core';
 import { DESKTOP_INPUTS } from '../../core/src/execution/desktop';
 import { sandboxHandleLifecycle } from '../../core/tests/helpers/sandbox-handle-lifecycle';
 import { DesktopRequestSchema } from '../../devbox/src/desktop-input';
@@ -54,27 +54,40 @@ test("every action core sends at the limits of its members' inputs is one the bo
 
   const computer = executorNamespace(createSandboxExecutor(box, { desktop: { driver: 'main', screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } } }));
 
-  const call = async (member: string, ...args: JsonValue[]): Promise<void> => {
+  /** A program's call: its value, or the refusal it branches on, which core answers without asking the box. */
+  const call = async (member: string, ...args: JsonValue[]): Promise<JsonValue> => {
     const tool = computer.tools[member];
 
     if (tool === undefined) throw new Error(`computer has no ${member}`);
-    await tool.execute(...args);
+
+    return projectJsonValue({ value: await tool.execute(...args) });
   };
 
   const corner: JsonValue = [DESKTOP_SIZE.width - 1, DESKTOP_SIZE.height - 1];
+  const longest = bound(DESKTOP_INPUTS.type.text, 'max_length');
   // Every kind of character typing plans differently: runs of ASCII, line breaks, tabs, and keys past ASCII.
-  const text = 'Typed run, then\r\na line\tand a tab: Grüße 😀 '.repeat(bound(DESKTOP_INPUTS.type.text, 'max_length')).slice(0, bound(DESKTOP_INPUTS.type.text, 'max_length'));
+  const mixed = 'Typed run, then\r\na line\tand a tab: Grüße 😀 '.repeat(longest).slice(0, longest);
 
-  await call('screenshot');
-  await call('watch', bound(DESKTOP_INPUTS.watch.seconds, 'max_value'), { fps: bound(DESKTOP_INPUTS.watch.fps, 'max_value') });
-  await call('watch', bound(DESKTOP_INPUTS.watch.seconds, 'min_value'), { fps: bound(DESKTOP_INPUTS.watch.fps, 'min_value') });
-  await call('click', corner, { button: 'middle', count: bound(DESKTOP_INPUTS.click.count, 'max_value'), hold: 'ctrl+shift+alt+super' });
-  await call('type', text);
-  await call('key', 'ctrl+shift+F12', { hold: bound(DESKTOP_INPUTS.key.hold, 'max_value') });
-  await call('key', 'super', { hold: bound(DESKTOP_INPUTS.key.hold, 'min_value') });
-  await call('scroll', corner, bound(DESKTOP_INPUTS.scroll.dy, 'min_value'), { dx: bound(DESKTOP_INPUTS.scroll.dx, 'max_value') });
-  await call('move', corner);
-  await call('drag', [0, 0], corner);
+  const answers = [
+    await call('screenshot'),
+    await call('watch', bound(DESKTOP_INPUTS.watch.seconds, 'max_value'), { fps: bound(DESKTOP_INPUTS.watch.fps, 'max_value') }),
+    await call('watch', bound(DESKTOP_INPUTS.watch.seconds, 'min_value'), { fps: bound(DESKTOP_INPUTS.watch.fps, 'min_value') }),
+    await call('click', corner, { button: 'middle', count: bound(DESKTOP_INPUTS.click.count, 'max_value'), hold: 'ctrl+shift+alt+super' }),
+    await call('type', 'a'.repeat(longest)),
+    await call('type', mixed),
+    await call('key', 'ctrl+shift+F12', { hold: bound(DESKTOP_INPUTS.key.hold, 'max_value') }),
+    await call('key', 'super', { hold: bound(DESKTOP_INPUTS.key.hold, 'min_value') }),
+    await call('scroll', corner, bound(DESKTOP_INPUTS.scroll.dy, 'min_value'), { dx: bound(DESKTOP_INPUTS.scroll.dx, 'max_value') }),
+    await call('move', corner),
+    await call('drag', [0, 0], corner),
+  ];
 
-  expect({ refused, asked: [...asked].sort() }).toEqual({ refused: [], asked: ['click', 'drag', 'key', 'move', 'screenshot', 'scroll', 'type', 'watch'] });
+  const shown = `data:image/png;base64,${PNG}`;
+
+  // Every call was core's to send, not refused before the box: the looks answer the screen, the rest nothing.
+  expect({ answers, refused, asked: [...asked].sort() }).toEqual({
+    answers: [shown, shown, shown, ...answers.slice(3).map(() => null)],
+    refused: [],
+    asked: ['click', 'drag', 'key', 'move', 'screenshot', 'scroll', 'type', 'watch'],
+  });
 });
