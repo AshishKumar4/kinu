@@ -2866,10 +2866,10 @@ const MIXED_ASKS: PendingAction[] = [
 const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS]]);
 
 /** A proposal made after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
-const LATE_ASK: PendingAction = {
+const LATE_ASKS: PendingAction[] = [{
   id: "proposal-late", kind: "workspace_proposal", title: "Create workspace “Release notes”", detail: "Draft each release's notes.", at: NOW,
   proposal: { name: "Release notes", brief: "Draft each release's notes.", soul: "# Release notes\n\nKeep them short." },
-};
+}];
 
 window.addEventListener("gallery:arrive-ask", () => {
   document.documentElement.dataset.galleryArrived = "1";
@@ -2883,7 +2883,7 @@ const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
 async function galleryPendingActions(): Promise<JsonValue> {
   const asked = new URLSearchParams(location.search).get("asks");
   const decided = (document.documentElement.dataset.galleryDecided ?? "").split(",");
-  const arrived = document.documentElement.dataset.galleryArrived === "1" ? [LATE_ASK] : [];
+  const arrived = document.documentElement.dataset.galleryArrived === "1" ? LATE_ASKS : [];
   const asks = [...(ASK_SETS.get(asked ?? "") ?? []), ...arrived];
 
   if (ASKS_HELD && decided.some((id) => id !== "")) {
