@@ -368,11 +368,9 @@ harbor run \
   --jobs-dir bench-artifacts/harbor-jobs -n 1 -k 1 -r 0 -y
 ```
 
-Three launcher scripts sit around the harness:
+Two launcher scripts sit around the harness:
 
 - `scripts/tbench-arm.sh`: one Terminal-Bench 2.1 arm.
-- `scripts/tbench-after-deploy.sh`: the same arm, held until the deployed
-  worker serves a declared sha.
 - `bun scripts/bench-external.ts compare|gain`: pairs retained Harbor trials
   through this repo's one statistics path, with no credential.
 
