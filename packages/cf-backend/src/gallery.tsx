@@ -1656,6 +1656,8 @@ const GalleryPushFrameSchema = v.object({
   // A provider asking the turn to wait (`provider_wait`).
   provider: v.optional(v.string()),
   waitMs: v.optional(v.number()),
+  attempt: v.optional(v.number()),
+  source: v.optional(v.string()),
 });
 
 window.addEventListener("gallery:push-frame", (event: Event) => {

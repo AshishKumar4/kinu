@@ -120,7 +120,7 @@ describe("an agent's chat says when its turn waits on the provider, as the works
       await page.waitForSelector(`${AUDITOR_PANE} [data-composer-root] textarea`);
 
       const shown = await page.evaluate(async (pane) => {
-        window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: { type: 'provider_wait', provider: 'anthropic', waitMs: 60_000 } }));
+        window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: { type: 'provider_wait', provider: 'anthropic', waitMs: 60_000, attempt: 1, source: 'header' } }));
         await new Promise((painted) => { requestAnimationFrame(() => { requestAnimationFrame(painted); }); });
 
         return [...document.querySelectorAll(`${pane} [data-composer-root] [role="status"]`)]
