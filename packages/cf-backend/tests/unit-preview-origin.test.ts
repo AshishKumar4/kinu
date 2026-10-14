@@ -844,6 +844,21 @@ describe("signing a preview's owner in on its own host", () => {
     expect(visits).toEqual([null, null]);
   });
 
+  // Staging b11719d71's live-app rows: under `vite dev` the preview zone is `*.preview.localhost` and the app is
+  // `http://localhost`, two sites, so no cookie the entry mints is kept in the app's frame, and the entry the preview
+  // sent its frame to was the deployed app's. A `.localhost` name is the machine's own, as the dev identity's loopback is.
+  test('on the local dev server, whose preview names only this machine resolves, every visit is the workspace\'s own', async () => {
+    const visits: Array<string | null> = [];
+    const local = { ...ENV, PREVIEW_HOST_SUFFIX: 'preview.localhost' };
+    const url = present((await nimbusPreviewUrl(local, 'hello', 4321, NIMBUS_CAPABILITY)).url, 'a local preview');
+    const env = { ...ownedWorkspace(visits), PREVIEW_HOST_SUFFIX: 'preview.localhost' };
+
+    await handleNimbusPreviewHostRequest(new Request(url, { headers: { 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'cross-site' } }), env);
+    await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { 'sec-fetch-mode': 'navigate' } }), ownedWorkspace(visits));
+
+    expect(visits).toEqual([PREVIEW_SELF, null]);
+  });
+
   test("the workspace's own pass reads as itself on its own previews, and is minted for no other workspace's", async () => {
     const visits: Array<string | null> = [];
     const pass = present(await selfPreviewPass(ENV, 'hello', new URL(NIMBUS_URL)), 'the pass');
