@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
-import { DEVICE_METHOD, DEVICE_RELAY, JsonValueSchema } from '@kinu.run/core';
+import { DEVICE_METHOD, JsonValueSchema, DEVICE_FRAMES } from '@kinu.run/core';
 import { deviceRouteFetch } from '../../src/egress/model-relay-route';
 
 it('a UserDO reset mid-relay reaches its caller as an interrupted device relay', async () => {
@@ -17,7 +17,7 @@ it('a UserDO reset mid-relay reaches its caller as an interrupted device relay',
     const frame = v.parse(v.object({ id: v.string(), method: v.string(), params: v.array(JsonValueSchema) }), JSON.parse(String(event.data)));
 
     if (frame.method === DEVICE_METHOD.codexRelay) {
-      machine.send(JSON.stringify({ type: DEVICE_RELAY.head, relay: frame.id, status: 200, headers: [] }));
+      machine.send(JSON.stringify({ type: DEVICE_FRAMES.relayHead, relay: frame.id, status: 200, headers: [] }));
     } else if (frame.method === DEVICE_METHOD.ping) {
       machine.send(JSON.stringify({ id: frame.id, result: 'pong' }));
     }

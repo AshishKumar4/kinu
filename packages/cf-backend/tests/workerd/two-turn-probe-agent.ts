@@ -8,6 +8,7 @@ import { seedTranscriptEntry } from '@kinu.run/test-utils/transcript';
 import { AgentFacet as ShippedAgentFacet } from '../../src/agent-facet/agent-facet';
 import { meterInPlace, type OperationCost, type SqlMeter } from './sql-meter';
 import { Crossings, type PhasedCrossings } from './crossings';
+import { claimFences } from '@kinu.run/core';
 
 /** The calls the workspace makes into main's isolate while the meter runs: one phase, since a turn's steps run under the
  *  one grant it holds while its budget lasts (`step-pacer.ts`), and nothing else is called into it per step. */
@@ -84,6 +85,7 @@ export class AgentFacet extends ShippedAgentFacet {
     const history = new SessionHistory({
       sql, actor, transactionSync: (write) => this.ctx.storage.transactionSync(write),
       files: async () => { throw new Error('a seeded entry is short enough to need no files'); },
+      claims: claimFences(sql, actor),
     });
 
     for (const entry of entries) {

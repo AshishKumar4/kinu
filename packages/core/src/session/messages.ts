@@ -37,6 +37,25 @@ export interface PreparedMessage {
   readonly content: PreparedContent;
 }
 
+/**
+ * Every turn's claim as the session reads it, through its harness, which declares the claim table: the session never
+ * names it. A claim is live while the epoch that opened it still owns it and it has not settled.
+ */
+export interface ClaimFences {
+  live(turnId: string, epoch: number): boolean;
+  /** Throws `denied` where {@link live} is false. */
+  assertLive(turnId: string, epoch: number): void;
+  /**
+   * Throws `denied` unless `epoch` still owns `turnId`'s claim, settled or not: a run's report is written under its last
+   * round's claim, which a cancelled or failed round settles before the report is assembled.
+   */
+  assertOwned(turnId: string, epoch: number): void;
+  /** The run an open claim of `turnId` runs; null where its claim settled or never was. */
+  openRun(turnId: string): string | null;
+  /** Every open claim's turn and the epoch that holds it, read at once: a scan over many rows asks it once. */
+  openClaims(): ReadonlyMap<string, number>;
+}
+
 /** The claim a write belongs to, and the check that throws once it is no longer current. */
 export interface ClaimFence {
   readonly turnId: string;
@@ -428,7 +447,9 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     const actorId = this.actor.actorId;
 
     for (const piece of segmented(text)) {
-      // Two statements, not one with an optional clause: a store without claims has no claim table to name.
+      // Two statements, not one with an optional clause: a store without claims has no claim table to name. The fenced
+      // one names the claim table itself, the one place the session does: one statement per flush, as the production
+      // turn's statement count is measured (complexity.test.ts).
       const appended = fence === null
         ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
           SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts

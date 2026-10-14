@@ -12,6 +12,7 @@ import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
 import { getLocalAgentState, inspectLocalSubordinate, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
 import { present } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
+import { claimFences } from '@kinu.run/core';
 
 if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu')) || !resolve(AGENT_HOME).startsWith(resolve(tmpdir()))) {
   throw new Error(`local-inspection suite refuses to run against a real Kinu home (${AGENT_HOME}); scripts/test-preload.ts provides a throwaway one.`);
@@ -37,6 +38,7 @@ async function say(db: Database, actor: ActorHandle, said: { id: string; content
   const history = new SessionHistory({
     sql: makeSql(db), actor, transactionSync: (write) => db.transaction(write)(),
     files: () => Promise.reject(new Error('a short message stores no file')),
+    claims: claimFences(makeSql(db), actor),
   });
 
   await seedTranscriptEntry(history, said.session ?? CHAT_SESSION_ID, { id: said.id, origin: 'input', message: { role: 'user', content: said.content } });

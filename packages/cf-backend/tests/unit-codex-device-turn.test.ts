@@ -2,7 +2,7 @@
 // turn through the production seam (the root's ActorSession), and with no machine the turn is refused in so many words.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { CODEX_CRED_KEY, DEVICE_RELAY, asFetchFunction, requestUrl, type JsonValue } from '@kinu.run/core';
+import { CODEX_CRED_KEY, asFetchFunction, requestUrl, type JsonValue, DEVICE_FRAMES, DEVICE_METHOD } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import {
   agentSql, catalogTurn, driveUntil, hostedSubordinateHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask, mainDatabase } from './helpers/actor-harness';
@@ -61,12 +61,12 @@ async function codexWorkspace(): Promise<CodexWorkspace> {
   user = createTestUserDO({
     durableObjectId: OWNER_USER_ID,
     deviceResponder: async (frame: DeviceFrame): Promise<JsonValue> => {
-      if (frame.method !== DEVICE_RELAY.method || frame.device === undefined || user === null) return { present: [] };
+      if (frame.method !== DEVICE_METHOD.codexRelay || frame.device === undefined || user === null) return { present: [] };
       const request = v.parse(v.object({ url: v.string(), body: v.nullable(v.string()) }), frame.params[0]);
       relayed.push(request.url);
       const reply = answer(request.body ?? '{}', 'from the machine');
-      await user.sendDeviceHello({ type: DEVICE_RELAY.head, relay: frame.id, status: reply.status, headers: [...reply.headers] }, frame.device);
-      await user.sendDeviceHello({ type: DEVICE_RELAY.body, relay: frame.id, data: Buffer.from(await reply.text()).toString('base64') }, frame.device);
+      await user.sendDeviceHello({ type: DEVICE_FRAMES.relayHead, relay: frame.id, status: reply.status, headers: [...reply.headers] }, frame.device);
+      await user.sendDeviceHello({ type: DEVICE_FRAMES.relayBody, relay: frame.id, data: Buffer.from(await reply.text()).toString('base64') }, frame.device);
 
       return { bytes: 0 };
     },

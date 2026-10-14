@@ -1,6 +1,9 @@
 /** Browser account authority and roster lifecycle, independent of the CLI turn transport. */
 import * as v from 'valibot';
-import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, parseJsonValue, type EvalAccount, type JsonValue } from '@kinu.run/core';
+import {
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, parseJsonValue, ProfileCatalogEnvelopeSchema, type EvalAccount, type JsonValue,
+  type ProfileCatalog,
+} from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalAccount, evalWebIdentityEnv, infraBoundary } from '@kinu.run/test-utils';
 
@@ -16,6 +19,9 @@ export type PublicWebIdentity =
   | { readonly kind: 'loopback'; readonly account?: EvalAccount }
   /** A remote deployment: the synthetic identity's secret, sent per request. */
   | { readonly kind: 'secret'; readonly secret: string; readonly account?: EvalAccount };
+
+/** A local dev server's identity: its loopback origin is the boundary, so no header is sent. */
+export const LOOPBACK_IDENTITY: PublicWebIdentity = { kind: 'loopback' };
 
 /** A workspace as its owner's browser reaches it. */
 export type WorkspaceWeb = { readonly origin: string; readonly identity: PublicWebIdentity; readonly workspace: string };
@@ -63,7 +69,7 @@ export function resolveWebIdentity(
 
 export type EvalTarget = { readonly origin: string; readonly identity: PublicWebIdentity };
 
-const RosterRowSchema = v.object({ name: v.string(), lastVisited: v.number() });
+const RosterRowSchema = v.object({ name: v.string(), lastVisited: v.number(), displayName: v.optional(v.string()) });
 
 const RosterPageSchema = v.object({ entries: v.array(RosterRowSchema), nextCursor: v.nullable(v.string()) });
 
@@ -92,17 +98,48 @@ export function sweptAway(answer: DeploymentAnswer, lastMarked: number, now: num
     + `${String(WORKSPACE_LEASE_MS / 60_000)} min lease after which a run's sweep deletes it, so this 404 measured nothing of the build`;
 }
 
+/** The POST /api/user/workspaces body, the fields `handleCreateWorkspaceRequest` parses (user/workspace-access.ts):
+ *  `name` is the URL name asked for, `displayName` the title the sidebar shows when it differs, `purpose` the mission
+ *  (absent: the workspace is born with no genesis turn), `model` its model. */
+export interface CreateWorkspaceBody {
+  readonly name: string;
+  readonly displayName?: string;
+  readonly purpose?: string;
+  readonly model?: string;
+}
+
+const CreatedSchema = v.object({ name: v.string() });
+
+/**
+ * The tooling's one client of the account's workspaces, the routes the sidebar uses. Every call opens a connection of
+ * its own: a local dev server (Vite's Node server) retires an idle keep-alive socket after 5 s, and Bun reuses the
+ * pooled one as it closes, so the next request died with ECONNRESET before its handler ran.
+ */
+function workspaces(account: { readonly origin: string; readonly identity: PublicWebIdentity }, path: string, init: RequestInit, doing: string): Promise<JsonValue> {
+  const url = `${account.origin}/api/user/workspaces${path}`;
+  const headers = webHeaders(account.identity);
+
+  if (init.body !== undefined) headers['content-type'] = 'application/json';
+
+  return infraBoundary(`${init.method ?? 'GET'} ${url}`, async () => readJson(await fetch(url, { ...init, keepalive: false, headers }), doing));
+}
+
+/** Create a workspace through the app's own route; the name it answers with is the one the URL takes, which is not
+ *  always the one asked for. */
+export async function createWorkspace(origin: string, identity: PublicWebIdentity, body: CreateWorkspaceBody): Promise<string> {
+  return v.parse(CreatedSchema, await workspaces({ origin, identity }, '', { method: 'POST', body: JSON.stringify(body) }, 'create a workspace')).name;
+}
+
 /** Every workspace on the identity's account, page by page, as the sidebar's roster lists them. */
 export async function listWorkspaces(origin: string, identity: PublicWebIdentity): Promise<RosterRow[]> {
   const rows: RosterRow[] = [];
   let cursor: string | null = null;
 
   do {
-    const url = `${origin}/api/user/workspaces${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`;
-
     // Annotated because the loop reads its own result: `page.nextCursor` feeds the next iteration.
-    const page: v.InferOutput<typeof RosterPageSchema> = v.parse(RosterPageSchema, await infraBoundary(`GET ${url}`, async () =>
-      readJson(await fetch(url, { headers: webHeaders(identity) }), 'list the workspaces')));
+    const page: v.InferOutput<typeof RosterPageSchema> = v.parse(RosterPageSchema, await workspaces(
+      { origin, identity }, cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`, {}, 'list the workspaces',
+    ));
 
     rows.push(...page.entries);
     cursor = page.nextCursor;
@@ -113,11 +150,36 @@ export async function listWorkspaces(origin: string, identity: PublicWebIdentity
 
 /** Delete a workspace, the DELETE the sidebar's Remove issues. */
 export async function deleteWorkspace(origin: string, identity: PublicWebIdentity, name: string): Promise<void> {
-  await infraBoundary(`DELETE ${origin}/api/user/workspaces/${name}`, async () => {
-    const response = await fetch(`${origin}/api/user/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', headers: webHeaders(identity) });
+  await workspaces({ origin, identity }, `/${encodeURIComponent(name)}`, { method: 'DELETE' }, `delete the workspace ${name}`);
+}
 
-    await readJson(response, `delete the workspace ${name}`);
-  });
+/** Writers per account racing for its catalog, and a spare: each lost race means another writer landed (409, measured
+ *  on staging 569bb6869d, 2026-09-27, when the tiers of one deploy set the same account up at once). */
+const CATALOG_WRITE_ATTEMPTS = 4;
+
+/** What a workspace needs of its account's catalog: the catalog with it, or null when the catalog already holds it. */
+export type CatalogNeed = (catalog: ProfileCatalog) => ProfileCatalog | null;
+
+/** Bring the account's catalog to what `needs` ask of it, the tooling's one writer of it. The cases of one run and the
+ *  tiers of one deploy race to write it, so a lost version race reads again, until nothing is left to write. */
+export async function settleCatalog(origin: string, headers: Record<string, string>, needs: readonly CatalogNeed[]): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    const read = await fetch(`${origin}/api/user/profile-catalog`, { headers, keepalive: false });
+    const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await readJson(read, 'read the profile catalog'));
+    const wanted = needs.reduce<ProfileCatalog | null>((sofar, need) => need(sofar ?? catalog) ?? sofar, null);
+
+    if (wanted === null) return;
+
+    const answer = await fetch(`${origin}/api/user/profile-catalog`, {
+      method: 'PUT',
+      keepalive: false,
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ catalog: wanted, expectedVersion: version }),
+    });
+
+    if (answer.ok || (answer.status === 409 && attempt < CATALOG_WRITE_ATTEMPTS)) continue;
+    await readJson(answer, 'write the profile catalog');
+  }
 }
 
 export function webHeaders(identity: PublicWebIdentity): Record<string, string> {

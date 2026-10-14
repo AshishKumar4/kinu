@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS, nanoid, type UserCaller, DeviceTerminalHub,
+  DEVICE_PTY_MAX_AXIS, nanoid, type UserCaller, DeviceTerminalHub, DEVICE_FRAMES, DEVICE_METHOD,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, authoredRefusal, diagnostics, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -10,8 +10,8 @@ import type { UserObjectHost } from './user-host';
 /** Read before the RPC correlator: these frames carry no request id, and the correlator
  *  would drop them silently. */
 const DeviceTerminalFrameSchema = v.variant('type', [
-  v.object({ type: v.literal(DEVICE_PTY_OUTPUT), session: v.string(), data: v.string() }),
-  v.object({ type: v.literal(DEVICE_PTY_EXIT), session: v.string(), exitCode: v.number() }),
+  v.object({ type: v.literal(DEVICE_FRAMES.ptyOutput), session: v.string(), data: v.string() }),
+  v.object({ type: v.literal(DEVICE_FRAMES.ptyExit), session: v.string(), exitCode: v.number() }),
 ]);
 
 const TERMINAL_DEFAULT_AXIS = { cols: 80, rows: 24 } as const;
@@ -111,7 +111,7 @@ export class UserTerminals {
 
       yield* attemptInItsWords('io', () => this.host.devices.deviceRpc(
         caller,
-        DEVICE_PTY_OPEN_METHOD,
+        DEVICE_METHOD.ptyOpen,
         [bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows)],
         { agentName, deviceId: target, requestId: session, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
       ));

@@ -208,18 +208,18 @@ void expirationAt;
     code: "setTimeout(() => controller.abort(new Error('version HTTP timeout')), timeoutMs);\n",
   },
   {
-    path: "scripts/liveness-capture.ts",
-    label: "liveness-capture timer",
+    path: "scripts/swarm-capture.ts",
+    label: "swarm-capture timer",
     code: "setTimeout(() => reject(new Error('liveness capture timeout')), timeoutMs);\n",
   },
   {
-    path: "scripts/ws-test-harness.ts",
-    label: "ws-test-harness timer",
+    path: "scripts/socket-harness.ts",
+    label: "socket-harness timer",
     code: "setTimeout(() => reject(new Error('WebSocket test timeout')), timeoutMs);\n",
   },
   {
-    path: "scripts/ws-reconnect-drill.ts",
-    label: "ws-reconnect drill timer",
+    path: "scripts/reconnect-drill.ts",
+    label: "reconnect drill timer",
     code: "setTimeout(() => reject(new Error('WebSocket reconnect timeout')), timeoutMs);\n",
   },
   {

@@ -73,26 +73,29 @@
  *   bun scripts/prod-logs.ts kills [--since 24h] [--until ISO] [--json]
  * `--since` takes 30m / 6h / 7d or an ISO instant; `--worker` works everywhere.
  */
-import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
-import { KinuError, classifyErrorCode } from '@kinu.run/core/obs';
-import { codeForStatus } from '../packages/core/src/providers/util';
+import { classifyErrorCode } from '@kinu.run/core/obs';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
-import { parseJsonc } from './jsonc';
+import { restAnswer } from './cloudflare-rest';
+import { requireCloudflareAccountId } from './infra-cloudflare';
+import { deployedConfig } from './infra-manifest';
 
 /** The account this queries and the default worker, read off the manifest this
  *  inspects rather than restated beside it: a second spelling of the id is how
  *  a query runs against one account while the deploy targets another. */
-const WRANGLER_CONFIG = new URL('../packages/cf-backend/wrangler.jsonc', import.meta.url).pathname;
+const ACCOUNT = requireCloudflareAccountId();
 
-const WranglerRef = v.object({ account_id: v.string(), name: v.string() });
+/** The Worker a query names when `--worker` does not: production's, as wrangler.jsonc declares it. */
+function productionWorker(): string {
+  const { name } = deployedConfig('production');
 
-const WRANGLER = parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'), WranglerRef, 'wrangler.jsonc');
+  if (name === undefined) throw new Error('wrangler.jsonc names no production Worker');
 
-const ACCOUNT = WRANGLER.account_id;
+  return name;
+}
 
 const HOUR_MS = 3_600_000;
 
@@ -159,7 +162,7 @@ function parseArgs(argv: readonly string[]): Args {
   return {
     mode,
     target,
-    worker: opt('worker') ?? WRANGLER.name,
+    worker: opt('worker') ?? productionWorker(),
     seconds: Number(opt('seconds') ?? '120'),
     from,
     to,
@@ -367,30 +370,21 @@ export class Telemetry {
     private readonly args: Pick<Args, 'worker' | 'from' | 'to'>,
   ) {}
 
-  /** The answer's JSON text; `result` parses it. */
+  /** The answer's JSON text; `result` parses it. A refusal is classified by its status (`restAnswer`). */
   async raw(body: QueryBody): Promise<string> {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
-      {
-        method: 'POST',
-        headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          // REQUIRED: the endpoint rejects a body without it as `ZodError … path:
-          // ["queryId"]` under HTTP 400 (measured 2026-08-21). It names the saved
-          // query the run is filed under, so it is a constant rather than a flag.
-          queryId: 'kinu-prod-logs',
-          timeframe: { from: this.args.from, to: this.args.to },
-          ...body,
-        }),
+    return await restAnswer({
+      method: 'POST',
+      path: `/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
+      token: this.token,
+      body: {
+        // REQUIRED: the endpoint rejects a body without it as `ZodError … path:
+        // ["queryId"]` under HTTP 400 (measured 2026-08-21). It names the saved
+        // query the run is filed under, so it is a constant rather than a flag.
+        queryId: 'kinu-prod-logs',
+        timeframe: { from: this.args.from, to: this.args.to },
+        ...body,
       },
-    );
-
-    const answer = await response.text();
-
-    // Classified as any HTTP answer is: a 5xx or a 429 is `unavailable`, the API refusing for its own reasons.
-    if (!response.ok) throw new KinuError(codeForStatus(response.status) ?? 'io', `telemetry query answered ${response.status}: ${answer.slice(0, 300)}`);
-
-    return answer;
+    });
   }
 
   private filters(filters: readonly Filter[]): Filter[] {
@@ -856,10 +850,38 @@ function objectOf(event: Pick<TelemetryEvent, 'source' | '$workers'>): string {
   return event.$workers.durableObjectId ?? event.source.fields.object ?? '';
 }
 
+/**
+ * Whose terminal ledger a row is: an agent isolate's relayed lines name its actor, its workspace's own lines none. A
+ * workspace and the agent its isolate hosts close the same turn, under the same sequence, each in its own ledger:
+ * staging f9c17ac7b, 2026-10-14, the workspace settled turn-3-3vtxwl/96e9d157 while its agent still owed that turn's
+ * task reminder, so neither's row stands for the other's.
+ */
+function ledgerOf(event: Pick<TelemetryEvent, 'source'>): string {
+  return event.source.fields.actor ?? '';
+}
+
+/** When each object was destroyed: the earliest of its own `destroyed` abort and the destroy its owner logged. */
+export function deletionTimes(
+  aborted: readonly Pick<TelemetryEvent, 'timestamp' | '$workers'>[], tornDown: readonly Pick<TelemetryEvent, 'timestamp' | 'source'>[],
+): Map<string, number> {
+  const destroyedAt = new Map<string, number>();
+
+  const note = (object: string | undefined, at: number): void => {
+    if (object === undefined || object === '') return;
+    destroyedAt.set(object, Math.min(destroyedAt.get(object) ?? at, at));
+  };
+
+  for (const row of aborted) note(row.$workers.durableObjectId, row.timestamp);
+
+  for (const row of tornDown) note(row.source.fields.object, row.timestamp);
+
+  return destroyedAt;
+}
+
 export function terminalEffectStates(
   events: readonly Pick<TelemetryEvent, 'timestamp' | 'source' | '$workers'>[], destroyedAt: ReadonlyMap<string, number> = new Map(),
 ): TerminalEffectStates {
-  const states = new Map<string, Map<string, { latest: (typeof events)[number]; observed: boolean }>>();
+  const states = new Map<string, Map<string, { sequence: string; latest: (typeof events)[number]; observed: boolean }>>();
   const marks = effectMarks(events);
   let observations = 0;
 
@@ -880,9 +902,10 @@ export function terminalEffectStates(
       states.set(object, sequences);
     }
 
-    const state = sequences.get(sequence);
+    const ledgered = `${ledgerOf(event)}\u0000${sequence}`;
+    const state = sequences.get(ledgered);
 
-    if (state === undefined) sequences.set(sequence, { latest: event, observed: isOwed });
+    if (state === undefined) sequences.set(ledgered, { sequence, latest: event, observed: isOwed });
     else {
       state.observed ||= isOwed;
 
@@ -893,7 +916,7 @@ export function terminalEffectStates(
   const sorted: Record<keyof Omit<TerminalEffectStates, 'observations'>, EffectSample[]> = { settled: [], owed: [], parked: [], deleted: [] };
 
   for (const [object, sequences] of states) {
-    for (const [sequence, { latest, observed }] of sequences) {
+    for (const { sequence, latest, observed } of sequences.values()) {
       if (observed) sorted[sequenceState({ object, sequence, latest, marks, destroyedAt })].push(sampleOf(object, sequence, latest));
     }
   }
@@ -1164,14 +1187,11 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
     throw new Error('terminal-effect history is capped or sampled; narrow the window before classifying its sequences');
   }
 
-  // The SDK's `destroy()` aborts the isolate with this reason once its storage is gone.
+  // The SDK's `destroy()` aborts the isolate with this reason once its storage is gone; the owner's object logs the
+  // destroy it called, which the destroyed object's own rows can be missing.
   const { events: destroyedRows } = await t.events([...scope, eq('$metadata.message', 'destroyed')], EVENT_CAP);
-  const destroyedAt = new Map<string, number>();
-
-  for (const row of destroyedRows) {
-    const object = row.$workers.durableObjectId ?? '';
-    destroyedAt.set(object, Math.min(destroyedAt.get(object) ?? row.timestamp, row.timestamp));
-  }
+  const { events: teardownRows } = await t.events([...scope, eq('event', 'workspace.destroyed')], EVENT_CAP);
+  const destroyedAt = deletionTimes(destroyedRows, teardownRows);
 
   const alarm = [...invocations, eq('$workers.eventType', 'alarm')];
   const alarms = alarmsThatRan(await perMinute(t, alarm), await perMinute(t, [...alarm, eq('$workers.outcome', 'canceled')]), destroyedAt);

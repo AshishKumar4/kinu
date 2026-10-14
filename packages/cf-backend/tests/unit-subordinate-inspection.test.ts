@@ -16,6 +16,7 @@ import {
   type SubordinateInspectionRequest,
   type WorkspaceActorDirectory,
 } from '@kinu.run/core';
+import { claimFences } from '@kinu.run/core';
 
 interface InspectionFixture {
   readonly sql: ReturnType<typeof createTestWorkspace>['sql'];
@@ -44,6 +45,7 @@ function workspaceFixture(): InspectionFixture {
     const built = new SessionHistory({
       sql: created.sql, actor, transactionSync: (write) => created.db.transaction(write)(),
       files: async () => ({ vfs: created.vfs, artifactDirectory: `/actors/${actor.actorId}/.kinu/context` }),
+      claims: claimFences(created.sql, actor),
     });
 
     histories.set(actor.actorId, built);

@@ -2,7 +2,9 @@
   "//": "Typecheck for the standalone scripts that gate CI. Every .ts here is included by default: a maintained list silently excludes the next script someone forgets. `moduleDetection: force` makes that glob safe because scripts/ is a folder of runnable programs, not a package, and files with no import or export would otherwise share one global scope.",
   "excluded": "The first four entries are declared compiler debt. scripts/typecheck-coverage.ts resolves this config through TypeScript and asserts that its four SCRIPT_TYPECHECK_DEBT rows are exactly the untypechecked scripts/*.ts files; delete both rows when each error is fixed. The remaining exclusions are workerd sources with their own checked configs.",
   "extends": "../tsconfig.base.json",
+  "//target": "Bun runs these programs as written, and Bun 1.4 has ES2024's library (`toSorted`, `Map.groupBy`), which the pinned armada client's source, typechecked here through its import, uses.",
   "compilerOptions": {
+    "target": "ES2024",
     "noEmit": true,
     "declaration": false,
     "declarationMap": false,

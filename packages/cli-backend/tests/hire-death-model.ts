@@ -19,6 +19,11 @@ function streamOf(parts: readonly LanguageModelV2StreamPart[]): ReadableStream<L
   });
 }
 
+/** A non-streamed call's answer, the same for every caller. */
+async function acknowledge() {
+  return { content: [{ type: 'text' as const, text: 'acknowledged' }], finishReason: 'stop' as const, usage: USAGE, warnings: [] };
+}
+
 const answer = (text: string): LanguageModelV2StreamPart[] => [
   { type: 'stream-start', warnings: [] },
   { type: 'text-start', id: '0' },
@@ -34,7 +39,7 @@ export function hireDeathModel() {
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    doGenerate: async () => ({ content: [{ type: 'text', text: 'acknowledged' }], finishReason: 'stop' as const, usage: USAGE, warnings: [] }),
+    doGenerate: acknowledge,
     doStream: async (options) => {
       const prompt = JSON.stringify(options.prompt);
 
@@ -55,6 +60,33 @@ export function hireDeathModel() {
       }
 
       return { stream: streamOf(answer('summarised')), response: { headers: {} } };
+    },
+  });
+
+  return { model, childCalls: () => childCalls };
+}
+
+/** The task a hire answers in words alone, so its report is the automatic one its turn's end owes. */
+export const ANSWERING_HIRE_TASK = 'Name the ledger the export reads.';
+
+/** The answer the hirer must hear exactly once. */
+export const ANSWERING_HIRE_ANSWER = 'the March ledger';
+
+/** Every call answers at once; the hire's answers {@link ANSWERING_HIRE_ANSWER}. `childCalls` counts the hire's. */
+export function answeringHireModel() {
+  let childCalls = 0;
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: acknowledge,
+    doStream: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+      const hire = options.tools?.some((tool) => tool.name === REPORT_TOOL) === true && prompt.includes(ANSWERING_HIRE_TASK);
+
+      if (hire) childCalls += 1;
+
+      return { stream: streamOf(answer(hire ? ANSWERING_HIRE_ANSWER : 'acknowledged')), response: { headers: {} } };
     },
   });
 

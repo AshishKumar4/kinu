@@ -85,13 +85,15 @@ export class SessionProposals {
     });
   }
 
-  preview(id: string): readonly ContextEntry[] {
-    const proposal = this.requirePending(id);
+  /** The selected context as the pending proposal `id` would leave it; blocked where the history it was proposed over
+   *  was rewritten under it: it is no longer pending, or no longer on the selected context. */
+  preview(id: string): { readonly entries: readonly ContextEntry[] } | { readonly blocked: 'history_rewritten' } {
+    const proposal = this.pendingRow(id);
     const selected = this.context.selected();
 
-    if (selected === null || selected.contextId !== proposal.context_id) throw new KinuError('denied', 'proposal belongs to another selected context');
+    if (proposal === null || selected === null || selected.contextId !== proposal.context_id) return { blocked: 'history_rewritten' };
 
-    return this.compose(id, this.context.entries(selected));
+    return { entries: this.compose(id, this.context.entries(selected)) };
   }
 
   previewAt(id: string, selection: ContextSelection): readonly ContextEntry[] {
@@ -129,6 +131,11 @@ export class SessionProposals {
     })));
   }
 
+  /** Every proposal still pending on `contextId`, closed for `reason`. */
+  closeAll(contextId: string, reason: ContextProposalClosure): void {
+    for (const proposal of this.pending(contextId)) this.close(proposal.proposal_id, reason);
+  }
+
   close(id: string, reason: ContextProposalClosure): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE context_proposals SET status='closed',closed_reason=${reason}
@@ -136,12 +143,18 @@ export class SessionProposals {
   }
 
   private requirePending(id: string): ProposalRow {
+    const row = this.pendingRow(id);
+
+    if (row === null) throw new KinuError('denied', 'context proposal is not pending');
+
+    return row;
+  }
+
+  private pendingRow(id: string): ProposalRow | null {
     this.actor.assertCurrent();
     const row = this.sql<ProposalRow>`SELECT context_id,base_revision,author,via,cause,turn_id,status FROM context_proposals WHERE actor_id=${this.actor.actorId} AND proposal_id=${id}`[0];
 
-    if (row === undefined || row.status !== 'pending') throw new KinuError('denied', 'context proposal is not pending');
-
-    return row;
+    return row?.status === 'pending' ? row : null;
   }
 
   private compose(id: string, current: readonly ContextEntry[]): ContextEntry[] {

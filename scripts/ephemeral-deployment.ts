@@ -9,7 +9,9 @@
  *   - `wrangler delete` needs TWO routes: `--config` has failed against
  *     /workers/services while `--name` succeeded on the first try.
  *   - Deleting the Worker does NOT delete its container application, which keeps
- *     a live instance and blocks the next deploy on the name.
+ *     a live instance and blocks the next deploy on the name: it is listed and
+ *     deleted by `containerApplicationsNamed` and `deleteContainerApplication`
+ *     (`infra-cloudflare.ts`), as the reset deletes one.
  *   - `finally` does not run on a signal, and a killed driver has already left a
  *     fixture Worker live on workers.dev once.
  *
@@ -18,18 +20,7 @@
  * nothing about what is measured inside one.
  */
 
-import * as v from 'valibot';
-import { deleteApplicationByRest, deletedByRest } from '../../cloudflare-rest';
-import { requireCloudflareAccountId, wrangler } from '../../infra-cloudflare';
-
-/** What `wrangler containers list --json` is trusted to say. Parsed rather than
- *  cast, because a listing this driver cannot understand must not read as
- *  "nothing to clean up" — a leaked container application holds a live instance
- *  and blocks the next deploy. */
-const ContainerAppListSchema = v.array(v.looseObject({
-  id: v.optional(v.string()),
-  name: v.optional(v.string()),
-}));
+import { wrangler } from './infra-cloudflare';
 
 /** One line for a thrown value, in the shape `new Error(message, { cause })`
  *  already spells. */
@@ -71,84 +62,6 @@ export function runWrangler(
 
   if (options.allowFailure === true) return `${WRANGLER_FAILED}: ${detail}`;
   throw new Error(`wrangler ${args.join(' ')} failed: ${detail}`);
-}
-
-/**
- * Container applications matching `names`, by id.
- *
- * MEASURED: `wrangler delete` removes the Worker and LEAVES the container
- * application behind holding a live instance, so the next deploy fails with
- * "already an application with the name … associated with a different durable
- * object namespace". `containers delete` takes an id rather than a name, which is
- * why this resolves one.
- */
-export function containerAppIds(
-  repoRoot: string,
-  names: readonly string[],
-  log: (message: string) => void,
-  wrangle: typeof runWrangler = runWrangler,
-): { id: string; name: string }[] {
-  const output = wrangle(repoRoot, ['containers', 'list', '--json'], { allowFailure: true });
-
-  if (output.startsWith(WRANGLER_FAILED)) {
-    log(`container application listing failed: ${output.slice(0, 240)}`);
-    throw new Error('container application listing failed; absence is unproved');
-  }
-
-  const start = output.indexOf('[');
-
-  if (start === -1) {
-    log(`container application listing returned no JSON array: ${output.slice(0, 240)}`);
-    throw new Error('container application listing had no JSON array; absence is unproved');
-  }
-
-  try {
-    const apps = v.parse(ContainerAppListSchema, JSON.parse(output.slice(start)));
-
-    return apps
-      .filter((app): app is { id: string; name: string } =>
-        app.id !== undefined && app.name !== undefined && names.includes(app.name))
-      .map((app) => ({ id: app.id, name: app.name }));
-  } catch (error) {
-    log('container application listing did not match its schema');
-    throw new Error('container application listing was invalid; absence is unproved', {
-      cause: error,
-    });
-  }
-}
-
-export function deleteContainerApps(
-  repoRoot: string,
-  names: readonly string[],
-  log: (message: string) => void,
-): string[] {
-  const found = containerAppIds(repoRoot, names, log);
-
-  if (found.length === 0) return ['absent'];
-
-  return found.map((app) => {
-    if (deletedByRest(app.id)) {
-      const deleted = deleteApplicationByRest(requireCloudflareAccountId(), app.id);
-
-      if (!deleted.ok) {
-        log(`WARNING: container application ${app.name} (${app.id}) was NOT deleted: ${deleted.reason}`);
-
-        return `${app.name}: FAILED`;
-      }
-
-      return `${app.name}: absent`;
-    }
-
-    const deleted = runWrangler(repoRoot, ['containers', 'delete', app.id], { allowFailure: true });
-
-    if (!wranglerProvesAbsence(deleted)) {
-      log(`WARNING: container application ${app.name} (${app.id}) was NOT deleted`);
-
-      return `${app.name}: FAILED`;
-    }
-
-    return `${app.name}: absent`;
-  });
 }
 
 /**

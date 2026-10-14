@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { actorConnectionTag, turnAuthor } from '@kinu.run/core';
+import { actorConnectionTag, turnTags } from '@kinu.run/core';
 import type { ModelMessage, UIMessage } from 'ai';
 import * as v from 'valibot';
 import {
@@ -82,7 +82,7 @@ describe('a message typed while the agent is working', () => {
     const admitted = (await storedChat(h)).filter((message) => message.role === 'user');
     expect(admitted).toHaveLength(1);
     expect(admitted[0]?.parts).toEqual([{ type: 'text', text: 'nothing is running' }]);
-    expect(turnAuthor(admitted[0])).toBe('operator');
+    expect(turnTags(admitted[0]).author).toBe('operator');
     expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'build' });
     expect(steerFrames(h.frames)).toEqual([]);
     expect(turn.prompt.filter((m) => !v.is(DynamicContextSchema, m))).toEqual([...turn.messages]);
@@ -99,7 +99,7 @@ describe('a message typed while the agent is working', () => {
     await h.agent.send('tighten the rollout plan first', 'm-plan', [], 'plan');
     await opened;
     const admitted = (await storedChat(h)).filter((message) => message.role === 'user');
-    expect(turnAuthor(admitted[0])).toBe('operator');
+    expect(turnTags(admitted[0]).author).toBe('operator');
     expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get(admitted[0].id)).toEqual({ work_mode: 'plan' });
     await chatSessionTurns(h.agent).settle({ messageId: 'a-plan', text: 'ok' });
   });
@@ -190,7 +190,7 @@ describe('a steer that never saw a step boundary', () => {
     expect((await rerun).identity.turnId).toBe('steer-5');
     const asked = present((await storedChat(h)).filter((message) => message.role === 'user').at(-1), 'the rerun\'s user row');
     expect(asked.id).toBe('steer-5');
-    expect(turnAuthor(asked)).toBe('operator');
+    expect(turnTags(asked).author).toBe('operator');
     // No kinuEvent: that would make it a programmatic turn (one-shot surface, no outcome review, a card instead of a bubble).
     expect(asked).not.toHaveProperty('metadata.kinuEvent');
     expect(mainDatabase(h).query('SELECT work_mode FROM actor_turn_claims WHERE turn_id = ?').get('steer-5')).toEqual({ work_mode: 'build' });
@@ -289,7 +289,7 @@ describe('an eviction with acknowledged steers', () => {
     // One rerun turn, opened under the first send's id, each send published under its own.
     const rerun = (await storedChat(restarted)).filter((message) => message.role === 'user').slice(-2);
 
-    expect(rerun.map((message) => [message.id, message.parts, turnAuthor(message)])).toEqual([
+    expect(rerun.map((message) => [message.id, message.parts, turnTags(message).author])).toEqual([
       ['steer-dead-1', [{ type: 'text', text: 'orphaned by an eviction' }], 'operator'],
       ['steer-dead-2', [{ type: 'text', text: 'also orphaned' }], 'operator'],
     ]);

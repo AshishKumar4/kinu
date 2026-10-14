@@ -14,6 +14,7 @@ import {
 import { FORK_SECTIONS, perSection, type ForkRows, type ForkRowSection } from '../src/identity/fork-sections';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
   return 'rows' in frame;
@@ -206,6 +207,7 @@ describe('forkTransferFrames source streamer', () => {
     const history = new SessionHistory({
       sql: ws.sql, actor: chat.actor, transactionSync: (write) => ws.db.transaction(write)(),
       files: async () => ({ vfs: ws.vfs, artifactDirectory: SOURCE_ARTIFACTS }),
+      claims: claimFences(ws.sql, chat.actor),
     });
 
     history.revertTo(CHAT_SESSION_ID, 'm2', () => Effect.void);

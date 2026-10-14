@@ -554,6 +554,28 @@ const DEFERRAL_NOTE: Record<Exclude<Phase, 'post-deploy'>, string> = {
   bootstrap: 'deferred by the bootstrap phase; the post-deploy run rejects it if the upload does not create it',
 };
 
+/**
+ * THE ONE TOLERANCE, and the whole behavioural difference between the three phases: the note a required row's absence
+ * is deferred with, or undefined when it is a finding. `post-deploy` has none: the upload has run. `bootstrap` defers
+ * every deploy-owned absence, because a class new to `exports` cannot exist before the deploy that declares it. `full`
+ * defers one only while the Worker itself is absent — the pre-first-deploy state, in which nothing bound to a Worker
+ * could exist either — and the rows a reset deleted or is to delete, by its record, which only a `--reset` deploy
+ * carries (`resetIds`): a reset deletes what the deploy owns by design, and the application still holding a namespace
+ * its placeholder deleted is the reset's to delete before the upload recreates both. No record, no deferral.
+ */
+function deferral(entry: Row, phase: Phase, workerDeployed: boolean, resetIds: readonly string[]): string | undefined {
+  if (phase === 'post-deploy') return undefined;
+
+  if (deployOwned(entry.origin) && (phase === 'bootstrap' || !workerDeployed || resetIds.includes(entry.id))) {
+    return `${entry.id} is absent and is created by the deploy itself — ${DEFERRAL_NOTE[phase]}`;
+  }
+
+  return resetIds.includes(entry.id)
+    ? `${entry.id} is held by an application the reset record names, which the reset this deploy finishes deletes — `
+      + 'the post-deploy run rejects it if the upload does not bind the namespace it creates'
+    : undefined;
+}
+
 /** Pure, so the self-test drives every branch without a Cloudflare account. */
 export function audit(request: AuditRequest): Audit {
   const { infrastructure, rows, supplied, unreadFields, phase = 'full', resetIds = [] } = request;
@@ -592,25 +614,12 @@ export function audit(request: AuditRequest): Audit {
       continue;
     }
 
-    if (
-      entry.verdict === 'absent'
-      && entry.required
-      && deployOwned(entry.origin)
-      // THE ONE TOLERANCE, and the whole behavioural difference between the three
-      // phases. `post-deploy` has none: the upload has run. `bootstrap` defers
-      // every deploy-owned absence, because a class new to `exports` cannot
-      // exist before the deploy that declares it. `full` defers one only while
-      // the Worker itself is absent — the pre-first-deploy state, in which
-      // nothing bound to a Worker could exist either — and the rows a reset
-      // deleted, by its record, which only a `--reset` deploy carries
-      // (`resetIds`): a reset deletes what the deploy owns by design, and the
-      // upload that recreates it has not run. No record, no deferral.
-      && phase !== 'post-deploy'
-      && (phase === 'bootstrap' || !workerDeployed || resetIds.includes(entry.id))
-    ) {
+    const deferred = entry.verdict === 'absent' && entry.required ? deferral(entry, phase, workerDeployed, resetIds) : undefined;
+
+    if (deferred !== undefined) {
       // Deferred, never skipped: nothing reachable from here can create it, and
       // the run that collects it tolerates nothing.
-      notes.push(`${entry.id} is absent and is created by the deploy itself — ${DEFERRAL_NOTE[phase]}`);
+      notes.push(deferred);
       continue;
     }
 

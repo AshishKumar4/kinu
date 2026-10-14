@@ -12,9 +12,6 @@ export interface AgentClientFlags {
   auth?: string;
   /** `--no-auto-evolve`: turns the agent's learning setting off. */
   noAutoEvolve?: boolean;
-  /** One task turn, then exit. The outcome ledger needs it: the next prompt is a fresh task, not a verdict on
-   *  the previous answer. */
-  oneShot?: boolean;
 }
 
 /**
@@ -36,7 +33,8 @@ export async function createAgentClient(
       agentName: target.name,
       cloudName: target.cloudName,
       transcript: opts,
-      oneShot: opts.oneShot,
+      // One task turn, then exit: the next prompt is a fresh task, not a verdict on the answer before it.
+      oneShot: surface === 'one-shot',
     }), opts);
   }
 
@@ -47,7 +45,6 @@ export async function createAgentClient(
     model: opts.model,
     baseUrl: opts.baseUrl,
     auth: opts.auth,
-    oneShot: opts.oneShot,
     transcript: opts,
     surface,
     cwd: local.cwd,

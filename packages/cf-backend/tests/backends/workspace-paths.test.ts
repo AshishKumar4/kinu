@@ -131,6 +131,17 @@ for (const name of testBackends()) {
       }
     });
 
+    // On the CLI a missing path was answered as if the file tool were not the machine's own folder, which it is there.
+    test('a path the file tool finds nothing at is answered with where it landed, as this backend reads it', async () => {
+      const plane = await publicPlane(name);
+
+      try {
+        await expect(plane.file({ op: 'read', path: 'missing/notes.txt' })).rejects.toThrow(join(plane.workdir, 'missing', 'notes.txt'));
+      } finally {
+        plane.end?.();
+      }
+    });
+
     // 2026-10-04: the file tool printed `root://path` references it could not read back, and took `~` as a name.
     test('the file tool reads a file by the reference it printed, and `~` as the shell names it', async () => {
       const plane = await publicPlane(name);

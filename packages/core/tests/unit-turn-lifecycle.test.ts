@@ -316,6 +316,14 @@ describe('applyOverflowRecovery', () => {
 });
 
 
+/** An agent that reviews no turns, whose conversation this turn did not open. */
+const QUIET_AGENT: Parameters<typeof declareTerminalRoster>[1] = {
+  role: { kind: 'agent', opensConversation: () => false },
+  advisor: { reviewsTurns: false, snapshot: () => { throw new Error('no review'); } },
+  turn: { userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1, hadError: false, feedback: null, turnId: 't', origin: 'user' },
+  reachableTools: [],
+};
+
 test('an earned overflow retry is recorded as one inline terminal effect', () => {
   const facts: Parameters<typeof declareTerminalRoster>[0] = {
     messageId: 'answer-1',
@@ -330,11 +338,11 @@ test('an earned overflow retry is recorded as one inline terminal effect', () =>
     evolutionEnabled: false,
   };
 
-  const owed = declareTerminalRoster(facts, { overflowRetry: true });
+  const owed = declareTerminalRoster(facts, QUIET_AGENT, { overflowRetry: true });
   expect(owed.filter((effect) => effect.name === 'overflow_retry')).toEqual([
     { name: 'overflow_retry', scope: 'answer-1', lane: 'inline', input: {} },
   ]);
-  expect(declareTerminalRoster(facts).some((effect) => effect.name === 'overflow_retry')).toBe(false);
+  expect(declareTerminalRoster(facts, QUIET_AGENT).some((effect) => effect.name === 'overflow_retry')).toBe(false);
 });
 
 // Which id work captured inside a turn is credited to; both backends share it for alternate takes and steer branches.

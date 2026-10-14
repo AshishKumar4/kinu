@@ -72,6 +72,10 @@ export interface LocalProviderCredentials {
   apiKeyAccounts?: Readonly<Record<string, string>>;
 }
 
+/** The machine's provider credentials as they stand now: read again at every ask, so a key another process connects,
+ *  replaces or removes reaches an open session at its next request, as an OAuth login does. */
+export type ProviderCredentialSource = () => LocalProviderCredentials;
+
 export const PROVIDER_CREDENTIAL_ENV = {
   openaiApiKey: 'OPENAI_API_KEY',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
@@ -131,7 +135,7 @@ export interface LocalModelResolverConfig {
   /** Default endpoint for bare model ids. Null when nothing derives one: explicit
    *  `provider/model` specs still resolve, bare ids fail with the fixes named. */
   llm: LLMProviderConfig | null;
-  credentials?: LocalProviderCredentials;
+  credentials?: ProviderCredentialSource;
   oauthStore?: LocalOAuthStore;
   /** When present, workers-ai + my-gateway resolve through the worker's AI proxy;
    *  when absent they list as unavailable, signed out. */
@@ -192,8 +196,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
  */
 export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalModelResolver {
   const localEndpoint = opts.llm;
-  const credentials = opts.credentials ?? {};
-  const authStore = buildAuthStore(localEndpoint, credentials, opts.oauthStore);
+  const authStore = buildAuthStore(localEndpoint, opts.credentials ?? (() => ({})), opts.oauthStore);
 
   const cloud = opts.cloud;
   const defaultSpec = defaultSpecForEndpoint(localEndpoint);
@@ -648,48 +651,52 @@ interface LocalAuthStore {
 
 function buildAuthStore(
   localEndpoint: LLMProviderConfig | null,
-  credentials: LocalProviderCredentials,
+  credentials: ProviderCredentialSource,
   oauthStore?: LocalOAuthStore,
 ): LocalAuthStore {
-  const store = new Map<string, AuthResolution>();
+  // The endpoint given at open (`--base-url`/`--auth`, or the configured one) stands for the process.
+  const endpoint: ReadonlyMap<string, AuthResolution> = new Map(localEndpoint?.name === 'openai-compat'
+    ? [['openai-compat.default', { headers: localEndpoint.headers, baseURL: localEndpoint.baseURL }]]
+    : []);
 
-  const apiKeys = {
-    'openai.bearer': credentials.openaiApiKey,
-    'anthropic.bearer': credentials.anthropicApiKey,
-    'openrouter.bearer': credentials.openrouterApiKey,
-    ...credentials.apiKeyAccounts,
+  // Each key read as the machine holds it now.
+  const stored = (): Map<string, AuthResolution> => {
+    const current = credentials();
+    const store = new Map(endpoint);
+
+    const apiKeys = {
+      'openai.bearer': current.openaiApiKey,
+      'anthropic.bearer': current.anthropicApiKey,
+      'openrouter.bearer': current.openrouterApiKey,
+      ...current.apiKeyAccounts,
+    };
+
+    for (const [key, token] of Object.entries(apiKeys)) {
+      if (token) store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
+    }
+
+    for (const [name, compat] of Object.entries(current.openaiCompat ?? {})) {
+      store.set(`openai-compat.${name}`, {
+        headers: credentialToHeaders(`openai-compat.${name}`, compat),
+        baseURL: compat.baseURL,
+        ...(compat.contextWindow !== undefined && { contextWindow: compat.contextWindow }),
+      });
+    }
+
+    return store;
   };
-
-  for (const [key, token] of Object.entries(apiKeys)) {
-    if (token) store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
-  }
-
-  if (localEndpoint?.name === 'openai-compat') {
-    store.set('openai-compat.default', {
-      headers: localEndpoint.headers,
-      baseURL: localEndpoint.baseURL,
-    });
-  }
-
-  for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    store.set(`openai-compat.${name}`, {
-      headers: credentialToHeaders(`openai-compat.${name}`, compat),
-      baseURL: compat.baseURL,
-      ...(compat.contextWindow !== undefined && { contextWindow: compat.contextWindow }),
-    });
-  }
 
   return {
     has(key: string): boolean {
       if (isOAuthLoginKey(key)) return oauthStore?.has(key) ?? false;
 
-      return store.has(key);
+      return stored().has(key);
     },
     keys(): string[] {
-      return [...store.keys(), ...(oauthStore?.keys() ?? [])];
+      return [...stored().keys(), ...(oauthStore?.keys() ?? [])];
     },
     async get(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
-      if (!isOAuthLoginKey(key)) return store.get(key) ?? null;
+      if (!isOAuthLoginKey(key)) return stored().get(key) ?? null;
 
       return oauthStore ? oauthStore.getAuth(key, authOpts) : null;
     },

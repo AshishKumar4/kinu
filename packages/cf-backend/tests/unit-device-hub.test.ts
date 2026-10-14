@@ -4,11 +4,8 @@ import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import {
   DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH,
-  DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD,
-  DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES,
-  DEVICE_RELAY,
-  DEVICE_UNKNOWN_METHOD, TUNNEL_DISCONNECTED, DEVICE_CHATGPT, DEVICE_CANCEL_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION,
-  connectedDevices, type JsonValue,
+  DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES, TUNNEL_DISCONNECTED, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION,
+  connectedDevices, type JsonValue, DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -229,7 +226,7 @@ describe('DeviceSocketHub', () => {
 
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION - 1, DEVICE_FEATURES);
     hub = new DeviceSocketHub(ctx);
-    await expect(hub.chatgpt('dev-a', DEVICE_CHATGPT.status)).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(hub.chatgpt('dev-a', DEVICE_METHOD.chatgptStatus)).rejects.toMatchObject({ code: 'unavailable' });
     await expect(hub.relay('dev-a', 'relay-after-wake', { method: 'GET', url: 'https://chatgpt.com/backend-api/models', headers: [], body: null }))
       .rejects.toMatchObject({ code: 'unavailable' });
   });
@@ -313,7 +310,7 @@ describe('DeviceTerminalHub socket ownership', () => {
     let serving = terminals;
 
     const daemon = socketPeer((data) => {
-      const input = v.parse(v.object({ type: v.literal(DEVICE_PTY_INPUT), session: v.string(), data: v.string() }), JSON.parse(v.parse(v.string(), data)));
+      const input = v.parse(v.object({ type: v.literal(DEVICE_FRAMES.ptyInput), session: v.string(), data: v.string() }), JSON.parse(v.parse(v.string(), data)));
       serving.toPane(input.session, Buffer.from(input.data, 'base64'));
     });
 
@@ -440,7 +437,7 @@ describe('DeviceSocketHub toolchain probe', () => {
 
 describe('DeviceSocketHub Codex relay', () => {
   const RelayCallSchema = v.object({
-    id: v.string(), method: v.literal(DEVICE_RELAY.method),
+    id: v.string(), method: v.literal(DEVICE_METHOD.codexRelay),
     params: v.tuple([v.object({ method: v.string(), url: v.string(), headers: v.array(v.tuple([v.string(), v.string()])), body: v.nullable(v.string()) })]),
   });
 
@@ -463,8 +460,8 @@ describe('DeviceSocketHub Codex relay', () => {
     expect(call.id).toBe('relay-1');
     expect(call.params[0]).toEqual(REQUEST);
 
-    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-1', status: 200, headers: [['content-type', 'text/event-stream']] }));
-    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-1', data: encode('data: one\n\n') }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_FRAMES.relayHead, relay: 'relay-1', status: 200, headers: [['content-type', 'text/event-stream']] }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_FRAMES.relayBody, relay: 'relay-1', data: encode('data: one\n\n') }));
     const response = await relaying;
 
     expect(response.status).toBe(200);
@@ -475,7 +472,7 @@ describe('DeviceSocketHub Codex relay', () => {
     const reader = response.body.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: one\n\n');
 
-    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-1', data: encode('data: two\n\n') }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_FRAMES.relayBody, relay: 'relay-1', data: encode('data: two\n\n') }));
     hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-1', result: { bytes: 22 } }));
     expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: two\n\n');
     expect((await reader.read()).done).toBe(true);
@@ -484,11 +481,11 @@ describe('DeviceSocketHub Codex relay', () => {
   test('a Stop tells the machine to drop the upstream call and fails the body', async () => {
     const { hub, ws } = connected();
     const relaying = hub.relay('dev-a', 'relay-2', REQUEST);
-    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-2', status: 200, headers: [] }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_FRAMES.relayHead, relay: 'relay-2', status: 200, headers: [] }));
     const response = await relaying;
 
     const stopping = hub.cancelRelay('relay-2');
-    expect(JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null')).toEqual({ id: expect.any(String), method: DEVICE_CANCEL_METHOD, params: ['relay-2'] });
+    expect(JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null')).toEqual({ id: expect.any(String), method: DEVICE_METHOD.cancel, params: ['relay-2'] });
     const cancel = v.parse(v.object({ id: v.string() }), JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null'));
     hub.handleMessage('dev-a', JSON.stringify({ id: cancel.id, result: { requestId: 'relay-2', cancelled: 'terminated' } }));
     await stopping;
@@ -498,8 +495,8 @@ describe('DeviceSocketHub Codex relay', () => {
   test('a machine that drops mid-answer fails the body, never ends it as if complete', async () => {
     const { hub, ws } = connected();
     const relaying = hub.relay('dev-a', 'relay-3', REQUEST);
-    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-3', status: 200, headers: [] }));
-    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-3', data: encode('data: half') }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_FRAMES.relayHead, relay: 'relay-3', status: 200, headers: [] }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_FRAMES.relayBody, relay: 'relay-3', data: encode('data: half') }));
     const response = await relaying;
 
     ws.readyState = 3;
@@ -520,18 +517,18 @@ describe('DeviceSocketHub Codex relay', () => {
   test('a reader that stops reading tells the machine to drop the upstream call', async () => {
     const { hub, ws } = connected();
     const relaying = hub.relay('dev-a', 'relay-6', REQUEST);
-    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-6', status: 200, headers: [] }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_FRAMES.relayHead, relay: 'relay-6', status: 200, headers: [] }));
     const response = await relaying;
 
     const leaving = response.body?.cancel(new DOMException('the reader left', 'AbortError'));
     const cancel = v.parse(v.object({ id: v.string() }), JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null'));
     hub.handleMessage('dev-a', JSON.stringify({ id: cancel.id, result: { requestId: 'relay-6', cancelled: 'terminated' } }));
     await leaving;
-    expect(ws.sent.map((frame) => JSON.parse(frame))).toContainEqual({ id: expect.any(String), method: DEVICE_CANCEL_METHOD, params: ['relay-6'] });
+    expect(ws.sent.map((frame) => JSON.parse(frame))).toContainEqual({ id: expect.any(String), method: DEVICE_METHOD.cancel, params: ['relay-6'] });
     // What the machine sent before it heard is dropped, not written into a cancelled body.
-    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-6', data: 'bGF0ZQ==' }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_FRAMES.relayBody, relay: 'relay-6', data: 'bGF0ZQ==' }));
     hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-6', result: { bytes: 4 } }));
-    expect(ws.sent.filter((frame) => frame.includes(DEVICE_CANCEL_METHOD))).toHaveLength(1);
+    expect(ws.sent.filter((frame) => frame.includes(DEVICE_METHOD.cancel))).toHaveLength(1);
   });
 
 
@@ -554,19 +551,19 @@ describe('DeviceSocketHub ChatGPT sign-in calls', () => {
   test('a machine that fails to say is not signed in; a daemon without the calls is the same', async () => {
     const { hub, ws } = connected();
 
-    const failing = hub.chatgpt('dev-a', DEVICE_CHATGPT.status);
+    const failing = hub.chatgpt('dev-a', DEVICE_METHOD.chatgptStatus);
     expect(answerLast(hub, ws, { error: { code: 'io', message: 'EIO reading pc-agent.chatgpt.json' } }).method).toBe('chatgptStatus');
     expect(await failing).toBeNull();
 
-    const older = hub.chatgpt('dev-a', DEVICE_CHATGPT.status);
-    answerLast(hub, ws, { error: { code: DEVICE_UNKNOWN_METHOD, message: 'unknown method: chatgptStatus' } });
+    const older = hub.chatgpt('dev-a', DEVICE_METHOD.chatgptStatus);
+    answerLast(hub, ws, { error: { code: DEVICE_ERRORS.unknownMethod, message: 'unknown method: chatgptStatus' } });
     expect(await older).toBeNull();
   });
 
   // No deadline rides these calls: the machine's answer ends one, or the machine going.
   test('a machine that goes while it is asked is not signed in', async () => {
     const { hub, ws } = connected();
-    const asked = hub.chatgpt('dev-a', DEVICE_CHATGPT.status);
+    const asked = hub.chatgpt('dev-a', DEVICE_METHOD.chatgptStatus);
 
     hub.handleClose('dev-a', ws);
     expect(await asked).toBeNull();
@@ -575,7 +572,7 @@ describe('DeviceSocketHub ChatGPT sign-in calls', () => {
   test('a sign-in the machine could not start keeps its failure', async () => {
     const { hub, ws } = connected();
 
-    const starting = hub.chatgpt('dev-a', DEVICE_CHATGPT.signIn).then(() => '', (...rejection: [unknown]) => renderThrownChain({ cause: rejection[0] }));
+    const starting = hub.chatgpt('dev-a', DEVICE_METHOD.chatgptSignIn).then(() => '', (...rejection: [unknown]) => renderThrownChain({ cause: rejection[0] }));
     answerLast(hub, ws, { error: { code: 'io', message: 'EADDRINUSE 127.0.0.1' } });
 
     expect(await starting).toContain('EADDRINUSE 127.0.0.1');
@@ -731,7 +728,7 @@ describe('the daemon keepalive, answered by the hub', () => {
 
     for (let turn = 0; turn < 100; turn += 1) {
       await new Promise<void>((resolve) => { setImmediate(resolve); });
-      const openRaw = device.sent.find((raw) => raw.includes(`"${DEVICE_PTY_OPEN_METHOD}"`));
+      const openRaw = device.sent.find((raw) => raw.includes(`"${DEVICE_METHOD.ptyOpen}"`));
 
       if (openRaw) {
         const openId = v.parse(v.object({ id: v.string() }), JSON.parse(openRaw)).id;
@@ -764,11 +761,11 @@ describe('the daemon keepalive, answered by the hub', () => {
     expect(pane.sent).toEqual([JSON.stringify({ type: 'ready' })]);
 
     const typed = device.sent.slice(framesBefore).map((raw) => v.parse(
-      v.object({ type: v.literal(DEVICE_PTY_INPUT), session: v.string(), data: v.string() }),
+      v.object({ type: v.literal(DEVICE_FRAMES.ptyInput), session: v.string(), data: v.string() }),
       JSON.parse(raw),
     ));
 
-    expect(typed).toEqual([{ type: DEVICE_PTY_INPUT, session, data: 'cGluZw==' }]);
+    expect(typed).toEqual([{ type: DEVICE_FRAMES.ptyInput, session, data: 'cGluZw==' }]);
 
     await harness.joinFibers();
     harness.close();

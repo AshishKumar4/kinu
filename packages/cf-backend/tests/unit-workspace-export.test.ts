@@ -11,6 +11,7 @@ import { seedTranscriptEntry, readTranscriptRows } from '@kinu.run/test-utils';
 import { createTestActor, createTestWorkspace } from '../../core/tests/helpers';
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
 import { wrapDatabase } from '@kinu.run/core/identity';
+import { claimFences } from '@kinu.run/core';
 
 /** Enough chained entries that one page cannot hold the conversation. */
 const MESSAGES = 450;
@@ -34,6 +35,7 @@ async function workspace(): Promise<WorkspaceFixture> {
     sql: ws.sql, actor,
     transactionSync: (write) => ws.db.transaction(write)(),
     files: async () => ({ vfs: ws.vfs, artifactDirectory: '/home/agent/.kinu/context' }),
+    claims: claimFences(ws.sql, actor),
   });
 
   const said: string[] = [];

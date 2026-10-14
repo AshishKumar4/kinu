@@ -10,7 +10,6 @@ import type { ShellSession } from '../execution/shell-session';
 import type { Memory, ShellExecResult, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
-import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import { withVfsErrorHint } from '../vfs/errno';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
@@ -29,7 +28,7 @@ import { TurnFileLedger } from '../vfs/file-ledger';
 import { branchableToolCall } from './outcome';
 import { TurnContextBudget } from '../context-budget';
 import { parseInput, type JsonValue } from '../utils/json';
-import { cloudPlanes, type PathPlanes } from '../vfs/resolve';
+import { addressingHint, cloudPlanes, type PathPlanes } from '../vfs/resolve';
 import type { VfsMountRouting } from '../vfs/mounts';
 import { SlateBuildNoteSchema } from '../operations/file';
 
@@ -92,8 +91,9 @@ export interface InlineExecutorDeps {
   slateBuild?: (slate: string) => Promise<SlateCallResult>;
 }
 
-/** Every VFS error out of `workspace.*` gets vfsAddressingHint; code, errno and path are kept. */
-function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorProvider['tools'] {
+/** A path `workspace.*` found nothing at, or a directory it read as a file, says how paths are read here
+ *  (`addressingHint`); code, errno and path are kept. */
+function withVfsGuidance(planes: PathPlanes, tools: ExecutorProvider['tools']): ExecutorProvider['tools'] {
   const guided: ExecutorProvider['tools'] = {};
 
   for (const [name, entry] of Object.entries(tools)) {
@@ -103,8 +103,8 @@ function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorPr
         try {
           return await entry.execute(...args);
         } catch (err) {
-          if (!isVfsError(err)) throw err;
-          throw withVfsErrorHint(err, await vfsAddressingHint(vfs, 'workspace.*'));
+          if (!isVfsError(err) || (err.code !== 'ENOENT' && err.code !== 'EISDIR')) throw err;
+          throw withVfsErrorHint(err, addressingHint(planes));
         }
       },
     };
@@ -386,7 +386,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},
-    tools: withVfsGuidance(vfs, tools),
+    tools: withVfsGuidance(planes, tools),
     positionalArgs: true,
     // No inbound TCP surface here; Worker slates use their separate host.
     async exposePort(port) {

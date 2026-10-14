@@ -77,7 +77,6 @@ interface LocalAgentClientOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
-  oneShot?: boolean;
   transcript?: CliSessionOptions;
   surface?: InvocationSurface;
   /** The folder it works in; absent, the ref's recorded one. */
@@ -92,14 +91,13 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
   }
 
   const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
-  const providerCredentials = resolveProviderCredentials();
   const oauthStore = createOAuthStore();
   const db = new Database(dbPath);
 
   const cloud = resolveCloudSession();
 
   const openConfig = {
-    llm: llmConfig, providerCredentials, oauthStore,
+    llm: llmConfig, providerCredentials: resolveProviderCredentials, oauthStore,
     ...(cloud !== null && { cloud }),
     checkpointKeep: loadConfigFile().checkpointKeep,
     cwd: opts.cwd ?? resolveLocalAgent(name).cwd,
