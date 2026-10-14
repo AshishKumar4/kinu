@@ -12,7 +12,9 @@
  */
 import * as v from 'valibot';
 import type { ExpectedFailure } from '../packages/core/src/obs/expected-failure';
-import { DYNAMIC_CONTEXT_OPEN_TAG, STEER_SKILLS_HEADING, SYSTEM_REMINDER_TAG, WORKSPACE_INSTRUCTIONS_TAG } from '../packages/core/src/utils/prompt-sections';
+import {
+  DYNAMIC_CONTEXT_OPEN_TAG, MID_TURN_DELIVERY_OPENING, STEER_SKILLS_HEADING, SYSTEM_REMINDER_TAG, WORKSPACE_INSTRUCTIONS_TAG,
+} from '../packages/core/src/utils/prompt-sections';
 import { SCRIPTED_MODEL_ID } from '../packages/test-utils/src/scripted-model-spec';
 
 /** What an unscripted request gets. One string, so a row that waits for the
@@ -84,8 +86,12 @@ export interface ScriptedCall {
 export interface ScriptedRequest {
   /** What was said to the agent, oldest first: every user-role message's text but the runtime state the
    *  product sends in that role (dynamic context, workspace instructions, stop reminders, activated skills),
-   *  so the last entry is the latest ask. */
+   *  so the last entry is the latest ask, or a delivery spliced into the turn that answers it. */
   readonly userTexts: readonly string[];
+  /** The latest ask: the last of `userTexts` that is not a delivery spliced into a running turn. */
+  readonly ask: string;
+  /** The deliveries spliced into the turn since `ask`, oldest first: what arrived while it worked. */
+  readonly delivered: readonly string[];
   /** Inputs since the last tool-less answer: simultaneous wakes and steers, without prior answered turns. */
   readonly unansweredUserTexts: readonly string[];
   /** What the agent said, oldest first: every assistant-role message's text. */
@@ -96,8 +102,10 @@ export interface ScriptedRequest {
   readonly called: readonly string[];
   /** The same calls, each with its arguments and result, so a script answers from what the product returned. */
   readonly calls: readonly ScriptedCall[];
-  /** The calls made since the latest ask: the work its turn has done so far. */
+  /** The calls made since the last of `userTexts`: since a delivery, when one landed after the ask. */
   readonly turn: readonly ScriptedCall[];
+  /** The calls made since `ask`: the work its turn has done so far, which a delivery spliced into it does not restart. */
+  readonly askTurn: readonly ScriptedCall[];
   readonly available: readonly string[];
   /** Whether the call asked for a stream; a workspace's titling asks for one completion. */
   readonly streamed: boolean;
@@ -147,17 +155,25 @@ function isAsk(message: OutboundMessage): boolean {
   return message.role === 'user' && !isRuntimeState(message.content ?? '');
 }
 
-/** Every tool call, each matched to its result by id, and where the latest ask sits among them. */
+/** A drain spliced into a running turn, after the ask it works on: what arrived meanwhile, not a new ask. */
+function isDelivery(text: string): boolean {
+  return /^\d+ events? (.*)/su.exec(text)?.[1]?.startsWith(MID_TURN_DELIVERY_OPENING) === true;
+}
+
+/** Every tool call, each matched to its result by id, and where the latest user text and the latest ask sit among them. */
 function callsOf(messages: readonly OutboundMessage[]) {
   const results = new Map<string, string>(messages.flatMap((message) => (
     message.role === 'tool' && message.tool_call_id !== undefined ? [[message.tool_call_id, message.content ?? '']] : []
   )));
 
   const calls: ScriptedCall[] = [];
+  let latestSaid = 0;
   let latestAsk = 0;
 
   for (const message of messages) {
-    if (isAsk(message)) latestAsk = calls.length;
+    if (isAsk(message)) latestSaid = calls.length;
+
+    if (isAsk(message) && !isDelivery(message.content ?? '')) latestAsk = calls.length;
 
     for (const call of message.tool_calls ?? []) {
       const name = call.function?.name;
@@ -167,7 +183,7 @@ function callsOf(messages: readonly OutboundMessage[]) {
     }
   }
 
-  return { calls, latestAsk };
+  return { calls, latestSaid, latestAsk };
 }
 
 /** A body this protocol cannot read, refused the way a provider refuses one: `400`, with an OpenAI-shaped error
@@ -190,7 +206,9 @@ export function readScriptedRequest(body: string): { readonly request: ScriptedR
   }
 
   const messages = parsed.output.messages ?? [];
-  const { calls, latestAsk } = callsOf(messages);
+  const { calls, latestSaid, latestAsk } = callsOf(messages);
+  const userTexts = messages.flatMap((message) => isAsk(message) ? [message.content ?? ''] : []);
+  const askAt = userTexts.reduce((at, text, index) => isDelivery(text) ? at : index, -1);
   let unansweredFrom = 0;
 
   for (const [index, message] of messages.entries()) {
@@ -199,13 +217,16 @@ export function readScriptedRequest(body: string): { readonly request: ScriptedR
 
   return {
     request: {
-      userTexts: messages.flatMap((message) => isAsk(message) ? [message.content ?? ''] : []),
+      userTexts,
+      ask: userTexts[askAt] ?? '',
+      delivered: userTexts.slice(askAt + 1),
       unansweredUserTexts: messages.slice(unansweredFrom).flatMap((message) => isAsk(message) ? [message.content ?? ''] : []),
       assistantTexts: messages.flatMap((message) => message.role === 'assistant' && message.content ? [message.content] : []),
       system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
       called: calls.map((call) => call.name),
       calls,
-      turn: calls.slice(latestAsk),
+      turn: calls.slice(latestSaid),
+      askTurn: calls.slice(latestAsk),
       available: (parsed.output.tools ?? []).flatMap((tool) => tool.function?.name === undefined ? [] : [tool.function.name]),
       streamed: parsed.output.stream === true,
     },
