@@ -125,11 +125,14 @@ async function awaitSettled(target: { settleState(): Promise<SettleState> }): Pr
     const state = await target.settleState();
 
     if (state.busy.length === 0 && state.schedules === previous) return;
-    previous = state.busy.length === 0 ? state.schedules : null;
 
     if (Date.now() - started > 15000) {
-      throw new Error(`two-turn probe: the object never settled: ${state.busy.join(', ') || 'its schedule rows kept changing'}`);
+      const changing = `its schedule rows kept changing, from ${previous ?? '(busy)'} to ${state.schedules}`;
+
+      throw new Error(`two-turn probe: the object never settled: ${state.busy.join(', ') || changing}`);
     }
+
+    previous = state.busy.length === 0 ? state.schedules : null;
 
     const tick = Promise.withResolvers<void>();
 
