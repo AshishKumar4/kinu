@@ -1,6 +1,6 @@
 /** Codemode sandbox contract: namespace names, the crafted `tools.*` declaration, and crafted-tool labelling. */
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { asSchema, type ToolSet } from 'ai';
 import { JsonObjectSchema, decodeJsonValue, type JsonValue } from '../utils/json';
@@ -33,13 +33,14 @@ const SANDBOX_TOOL = 'eval';
 export function shownConsoleValue(logged: { readonly value: unknown }): string {
   const { value } = logged;
 
-  if (typeof value === 'string') return value;
+  return settleSync(Effect.gen(function* () {
+    if (typeof value === 'string') return value;
+    const shown = yield* Effect.result(Effect.try({ try: () => JSON.stringify(value) ?? String(value), catch: (cause) => cause }));
 
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch (error) {
-    return `[unserializable: ${error instanceof Error ? error.message : String(error)}]`;
-  }
+    if (Result.isSuccess(shown)) return shown.success;
+
+    return `[unserializable: ${shown.failure instanceof Error ? shown.failure.message : String(shown.failure)}]`;
+  }));
 }
 
 /** `workspace.createTool` takes a function as itself and sends its source: every function argument is sent so. */
