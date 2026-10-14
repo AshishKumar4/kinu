@@ -30,6 +30,19 @@ it('a slate survives eviction on its own URL', async () => {
   ]);
 });
 
+// The exposure review (2026-10-14): an unshared slate's preview URL served anyone who held it, its calls running as the owner.
+it("a slate's preview serves no one whom its URL alone reaches: a page load is sent to sign in, a script is refused", async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('stranger'));
+  const boot = await subject.serveSlate({ workspace: 'durability-stranger', owner: 'd'.repeat(32), id: 'ledger', body: 'ledger-body' });
+  const page = await subject.visitPreview(boot.url, { 'sec-fetch-mode': 'navigate', accept: 'text/html' });
+  const script = await subject.visitPreview(boot.url, { 'sec-fetch-mode': 'cors', accept: '*/*' });
+  const entry = new URL(page.location ?? 'https://unset.test/');
+
+  expect([page.status, page.body.includes('ledger-body'), entry.origin + entry.pathname, entry.searchParams.get('to')])
+    .toEqual([303, false, 'https://app.test/__kinu/preview', boot.url]);
+  expect([script.status, script.body.includes('ledger-body')]).toEqual([403, false]);
+});
+
 it('a slate is listed once in the work surface, under its title, in this activation and the next', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('titled'));
   const boot = await subject().serveSlate({ workspace: 'durability-titled', owner: 'durability-owner', id: 'tally', body: 'tally-body' });

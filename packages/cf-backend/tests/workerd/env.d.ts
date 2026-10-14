@@ -310,6 +310,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
+  visitPreview(url: string, headers: Record<string, string>): Promise<PreviewAnswer & { location: string | null }>;
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
   holdPreview(url: string): Promise<RpcAnswer>;
   callHeldPreview(method: string): Promise<RpcAnswer>;

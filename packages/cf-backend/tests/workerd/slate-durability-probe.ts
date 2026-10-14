@@ -594,6 +594,15 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return { status: response.status, body: await response.text() };
   }
 
+  /** A visitor's request to a preview that carries only `headers`: what someone who holds the URL alone is answered. */
+  async visitPreview(url: string, headers: Record<string, string>): Promise<PreviewAnswer & { location: string | null }> {
+    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers }), this.env);
+
+    if (response === null) throw new Error(`the preview edge declined ${url}`);
+
+    return { status: response.status, body: await response.text(), location: response.headers.get('location') };
+  }
+
   /** Uses the WebSocket arm: a 101 cannot cross the RPC boundary the plain drive uses. */
   async rpcPreview(url: string, method: string, args: JsonValue[] = []): Promise<RpcAnswer> {
     const opened = await this.previewSocket(url);
