@@ -1776,8 +1776,19 @@ The validator's readings, 32 uploads each of two scratch Workers built from the 
 | 6198decac + the MCP cut and this change | 0 | 397 ms | 480 ms | 849 ms |
 
 Its slow readings came in episodes that met both Workers in the same minute: the slowest of each tree and two of the
-refusals fell in rounds 10, 11, 23 and 24. So the median moved and the tail did not. Moving `SlateHost` and the
-agent-core it reaches off the startup path is the next cut.
+refusals fell in rounds 10, 11, 23 and 24. So the median moved and the tail did not.
+
+The orchestrator's `SlateHost` now loads at the object's first slate call, and agent-core with it. A turn's failing
+slates and a file change read the object's one `SlateBuilds`, which the orchestrator owns. The startup closure fell
+from 6,385 to 5,533 KiB, and `wrangler check startup` ran 299 ms, median of 15. The validator, 32 uploads each,
+interleaved, 06:56 to 07:13Z:
+
+| Tree | Refused | Median | p90 | Max of those taken |
+|---|---|---|---|---|
+| 4f8392898 (the MCP cut) | 1 | 393 ms | 560 ms | 790 ms |
+| 4f8392898 + the slate host at first use | 0 | 284 ms | 444 ms | 578 ms |
+
+The MCP cut's refusal came in round 11, where the slate-host build read 303 ms.
 
 ## Providers
 
