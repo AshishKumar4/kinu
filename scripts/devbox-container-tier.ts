@@ -36,7 +36,7 @@ const ASK_AGAIN_TIMES = 12;
 
 const ASK_AGAIN_MS = 5_000;
 
-/** The name the fixture's boxes show (its `shownName`, set through the Worker's vars). */
+/** The name the fixture's boxes answer to (its `hostname`, set through the Worker's vars). */
 const BOX_NAME = 'contract-box';
 
 /** The port the name step's server binds; no other step listens on it. */
@@ -68,12 +68,18 @@ const NAME_LOOKUP_MS = 50;
 /** How long the tier watches a refused box for another start: the box this contract caught re-armed every second. */
 const PARKED_WATCH_MS = 20_000;
 
-/** A server a session runs in a folder of its own, as the computer-sessions flow does on a deployment. */
-const SESSION_FOLDER = '/workspace/flow-web';
+/**
+ * A server a session runs in a folder of its own, as the computer-sessions flow does on a deployment. The folder's name
+ * holds a space, quotes, a backslash, a dollar and the marker 7591e6fec's fix reserved: any folder reads back whole.
+ */
+const SESSION_FOLDER = String.raw`/workspace/flow web/<<kinu>>/a"b'c $x 	`;
 
 const SESSION_PORT = 8765;
 
-const SESSION_SERVER = `mkdir -p ${SESSION_FOLDER} && cd ${SESSION_FOLDER} && python3 -m http.server ${String(SESSION_PORT)}`;
+/** The folder as one shell word: single-quoted, each single quote closed, escaped and reopened. */
+const SESSION_FOLDER_WORD = `'${SESSION_FOLDER.replaceAll("'", String.raw`'\''`)}'`;
+
+const SESSION_SERVER = `mkdir -p ${SESSION_FOLDER_WORD} && cd ${SESSION_FOLDER_WORD} && python3 -m http.server ${String(SESSION_PORT)}`;
 
 /** How many times, and how far apart, the sessions are read while the server starts: a person waits seconds. */
 const SESSION_READS = 20;
@@ -686,7 +692,7 @@ async function main(): Promise<void> {
     await step('terminal-sessions', async () => {
       const Session = v.looseObject({ id: v.string(), open: v.boolean(), cwd: v.string(), ports: v.array(v.number()) });
 
-      await shell(`tmux new-session -d -s shell -c /workspace && tmux send-keys -t '=shell:' '${SESSION_SERVER}' Enter`, names[1]);
+      await shell(`tmux new-session -d -s shell -c /workspace && tmux send-keys -t '=shell:' -l ${`'${SESSION_SERVER.replaceAll("'", String.raw`'\''`)}'`} && tmux send-keys -t '=shell:' Enter`, names[1]);
       let shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
 
       for (let asked = 0; !(shell$?.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT)) && asked < SESSION_READS; asked++) {
