@@ -93,7 +93,7 @@ describe('OwnedModelServices', () => {
     globalThis.fetch = requests.fetch;
 
     const services = new OwnedModelServices({
-      env, agentName: () => 'actor', workspaceId: () => 'workspace', appTitle: 'Kinu', ownerRequired: true,
+      env, agentName: () => 'actor', workspaceId: () => 'workspace', workspaceName: () => 'workspace', appTitle: 'Kinu', ownerRequired: true,
       getOwnerUserId: () => 'owner', getUserCaller: testOwner, getCredentialsRevision: async () => 0,
       reportModelCall: unobservedSpend,
     });
@@ -110,7 +110,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(),
       agentName: () => 'actor',
-      workspaceId: () => 'workspace',
+      workspaceId: () => 'workspace', workspaceName: () => 'workspace',
       appTitle: 'Kinu',
       ownerRequired: true,
       getOwnerUserId: () => null,
@@ -128,7 +128,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(fakeUserDO(), platformGatewayEnv()),
       agentName: () => 'head',
-      workspaceId: () => 'workspace',
+      workspaceId: () => 'workspace', workspaceName: () => 'workspace',
       appTitle: 'Kinu (exploration)',
       ownerRequired: false,
       getOwnerUserId: () => null,
@@ -146,7 +146,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(),
       agentName: () => 'research-head',
-      workspaceId: () => 'workspace',
+      workspaceId: () => 'workspace', workspaceName: () => 'workspace',
       appTitle: 'Kinu (exploration)',
       ownerRequired: false,
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
@@ -176,7 +176,7 @@ describe('OwnedModelServices', () => {
         'openrouter.bearer': { Authorization: 'Bearer openrouter-token' },
       })),
       agentName: () => agentName,
-      workspaceId: () => 'workspace',
+      workspaceId: () => 'workspace', workspaceName: () => 'workspace',
       appTitle,
       ownerRequired: true,
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
@@ -215,7 +215,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(fakeUserDO({ 'tavily': { Authorization: 'Bearer tavily-token' } })),
       agentName: () => 'head',
-      workspaceId: () => 'workspace',
+      workspaceId: () => 'workspace', workspaceName: () => 'workspace',
       appTitle: 'Kinu (exploration)',
       ownerRequired: false,
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
@@ -251,7 +251,7 @@ describe('OwnedModelServices', () => {
         AI: { ...stubAiBinding().binding, toMarkdown: async () => [{ format: 'markdown', data: '# Converted' }] },
       },
       agentName: () => 'actor',
-      workspaceId: () => 'workspace',
+      workspaceId: () => 'workspace', workspaceName: () => 'workspace',
       appTitle: 'Kinu',
       ownerRequired: false,
       getOwnerUserId: () => null,
@@ -281,7 +281,7 @@ function snapshotServices(
   return new OwnedModelServices({
     env: fakeEnv(fakeUserDO(credentials), platformGatewayEnv()),
     agentName: () => 'snapshot',
-    workspaceId: () => 'workspace',
+    workspaceId: () => 'workspace', workspaceName: () => 'workspace',
     appTitle: 'Kinu',
     ownerRequired: false,
     getOwnerUserId: () => owner,
@@ -404,7 +404,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(counted, platformGatewayEnv()),
       agentName: () => 'snapshot',
-      workspaceId: () => 'workspace',
+      workspaceId: () => 'workspace', workspaceName: () => 'workspace',
       appTitle: 'Kinu',
       ownerRequired: false,
       getOwnerUserId: () => 'owner-1',

@@ -17,7 +17,8 @@ import {
   type AgentProviderRegistry, type UserCredentialClient,
 } from './providers/agent-registry';
 import type { ActorReference, ModelCallSink, UserCaller } from '@kinu.run/core';
-import type { ObjectNamespace } from '@kinu.run/core';
+import type { LabelSignerEnv, ObjectNamespace, PreviewSuffixEnv } from '@kinu.run/core';
+import { selfPreviewPass } from './viewer-pass';
 
 type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider>[0]['AI']>['toMarkdown'];
 
@@ -26,7 +27,7 @@ interface OwnedAiBinding extends WorkersAIBinding {
   toMarkdown?: MarkdownConversion;
 }
 
-export interface OwnedModelEnv<Id> extends ProviderEnv {
+export interface OwnedModelEnv<Id> extends ProviderEnv, PreviewSuffixEnv, LabelSignerEnv {
   AI?: OwnedAiBinding;
   BROWSER: BrowserRunQuickActions;
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
@@ -38,6 +39,8 @@ export interface OwnedModelServicesOptions<Id> {
   readonly agentName: () => string;
   /** The workspace whose conversations share a prompt cache (`actorAffinity`). */
   readonly workspaceId: () => string;
+  /** The workspace's name, which its previews' hosts carry. */
+  readonly workspaceName: () => string;
   readonly appTitle: string;
   readonly ownerRequired: boolean;
   readonly getOwnerUserId: () => string | null;
@@ -179,6 +182,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
       this.options.env,
       () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
       this.options.reportModelCall,
+      (url) => selfPreviewPass(this.options.env, this.options.workspaceName(), url),
     );
 
     return this.webSearchProviderCache;

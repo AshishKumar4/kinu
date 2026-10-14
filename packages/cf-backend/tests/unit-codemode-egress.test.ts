@@ -10,7 +10,8 @@ import {
 } from '@kinu.run/core/obs';
 import { exports as workersExports } from 'cloudflare:workers';
 import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
-import { nimbusPreviewUrl } from '../src/nimbus-route';
+import { nimbusPreviewUrl, type PreviewVisit } from '../src/nimbus-route';
+import { PREVIEW_SELF } from '../src/viewer-pass';
 import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -176,8 +177,9 @@ function previewEgress(suffix: string) {
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (workspace: string) => ({
-        routeWorkspacePreview: async (port: number, _handle: string, _request: Request, path: string) =>
-          new Response(`preview of ${workspace} port ${String(port)} ${path}`),
+        // A preview opens only for its owner and the workspace itself, which its programs' fetches are.
+        routeWorkspacePreview: async ({ port, pathname, viewer }: PreviewVisit) =>
+          new Response(`preview of ${workspace} port ${String(port)} ${pathname}${viewer === PREVIEW_SELF ? '' : ` as ${String(viewer)}`}`),
       }),
     },
   });

@@ -10,7 +10,9 @@ import { newWebSocketRpcSession, type RpcStub } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
-import { handleNimbusPreviewHostRequest } from '../../src/nimbus-route';
+import { handleNimbusPreviewHostRequest, previewEntry, previewRefusalText } from '../../src/nimbus-route';
+import { previewViewerKey, selfPreviewPass, viewerCookieResponse } from '../../src/viewer-pass';
+import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH } from '@kinu.run/core';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
@@ -585,9 +587,20 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return (await this.workspaceTarget(workspace)).executorRows();
   }
 
-  /** A `null` answer is the edge declining the hostname, a fixture fault, so it throws. */
+  /** The workspace's own pass to its preview (`selfPreviewPass`): what its own browsers and fetches carry. */
+  private async selfPass(url: string): Promise<Record<string, string>> {
+    const at = new URL(url);
+    const workspace = parseWorkspacePreviewLabel(at.hostname.split('.')[0] ?? '')?.workspace ?? '';
+    const pass = await selfPreviewPass(this.env, workspace, at);
+
+    if (pass === null) throw new Error(`no pass of its own for ${url}`);
+
+    return { cookie: `${pass.name}=${pass.value}` };
+  }
+
+  /** The workspace itself reading its preview. A `null` answer is the edge declining the hostname, a fixture fault, so it throws. */
   async drivePreview(url: string): Promise<PreviewAnswer> {
-    const response = await handleNimbusPreviewHostRequest(new Request(url), this.env);
+    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers: await this.selfPass(url) }), this.env);
 
     if (response === null) throw new Error(`the preview edge declined ${url}`);
 
@@ -601,6 +614,47 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     if (response === null) throw new Error(`the preview edge declined ${url}`);
 
     return { status: response.status, body: await response.text(), location: response.headers.get('location') };
+  }
+
+  /**
+   * `userId` opening the preview as their browser does: the preview's host sends them to the app's entry, which knows
+   * them (here, `userId` stands for the app's sign-in), and the entry's ticket becomes the host's cookie.
+   */
+  async visitPreviewAs(url: string, userId: string): Promise<PreviewAnswer & { entry: number }> {
+    const entry = await previewEntry(new Request(`https://app.test${PREVIEW_ENTRY_PATH}?to=${encodeURIComponent(url)}`), this.env, userId);
+    const exchangeAt = entry.headers.get('location');
+
+    if (entry.status !== 303 || exchangeAt === null) return { entry: entry.status, status: entry.status, body: await entry.text() };
+    const exchange = await handleNimbusPreviewHostRequest(new Request(exchangeAt), this.env);
+    const cookie = exchange?.headers.get('set-cookie')?.split(';')[0];
+    const next = exchange?.headers.get('location');
+
+    if (cookie === undefined || next === null || next === undefined) throw new Error(`the exchange at ${exchangeAt} set no cookie`);
+    const page = await handleNimbusPreviewHostRequest(new Request(new URL(next, url), { headers: { cookie, 'sec-fetch-mode': 'navigate' } }), this.env);
+
+    if (page === null) throw new Error(`the preview edge declined ${url}`);
+
+    return { entry: entry.status, status: page.status, body: await page.text() };
+  }
+
+  /** What a preview tells a visitor it does not admit, as text and as the entry page writes it. */
+  refusalText(slate: boolean) {
+    return { text: previewRefusalText(slate), html: escapeHtml(previewRefusalText(slate)) };
+  }
+
+  /** A visitor carrying a valid viewer cookie for this preview minted for `userId`, as if they had once owned it. */
+  async visitPreviewWithCookieOf(url: string, userId: string): Promise<PreviewAnswer> {
+    const at = new URL(url);
+    const preview = parseWorkspacePreviewLabel(at.hostname.split('.')[0] ?? '');
+
+    if (preview === null) throw new Error(`${url} is no preview`);
+    const issued = await viewerCookieResponse(this.env, { workspace: preview.workspace, handle: previewViewerKey(preview.port, preview.handle), subject: userId }, '/');
+    const cookie = issued.headers.get('set-cookie')?.split(';')[0] ?? '';
+    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers: { cookie } }), this.env);
+
+    if (response === null) throw new Error(`the preview edge declined ${url}`);
+
+    return { status: response.status, body: await response.text() };
   }
 
   /** Uses the WebSocket arm: a 101 cannot cross the RPC boundary the plain drive uses. */
@@ -669,7 +723,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     endpoint.pathname = '/__rpc';
 
     const response = await handleNimbusPreviewHostRequest(
-      new Request(endpoint.toString(), { headers: { Upgrade: 'websocket' } }), this.env);
+      new Request(endpoint.toString(), { headers: { Upgrade: 'websocket', ...await this.selfPass(url) } }), this.env);
 
     if (response === null) throw new Error(`the preview edge declined ${endpoint.toString()}`);
 

@@ -43,6 +43,24 @@ it("a slate's preview serves no one whom its URL alone reaches: a page load is s
   expect([script.status, script.body.includes('ledger-body')]).toEqual([403, false]);
 });
 
+it("a slate's preview opens for its signed-in owner and the workspace itself; anyone else is told it isn't shared with them", async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('owner-only'));
+  const owner = 'e'.repeat(32);
+  const stranger = 'f'.repeat(32);
+  const boot = await subject.serveSlate({ workspace: 'durability-owner-only', owner, id: 'ledger', body: 'ledger-body' });
+  const socket = await subject.visitPreview(`${boot.url}__rpc`, { upgrade: 'websocket' });
+
+  // The owner goes through the app's entry and the host's exchange; the workspace's own reads carry its own pass.
+  expect(await subject.visitPreviewAs(boot.url, owner)).toEqual({ entry: 303, status: 200, body: 'ledger-body' });
+  expect(await subject.drivePreview(boot.url)).toEqual({ status: 200, body: 'ledger-body' });
+  // The entry refuses a stranger before any ticket; a cookie for someone who no longer owns the workspace names no one.
+  const refusal = await subject.refusalText(true);
+
+  expect(await subject.visitPreviewAs(boot.url, stranger)).toMatchObject({ entry: 403, status: 403, body: expect.stringContaining(refusal.html) });
+  expect(await subject.visitPreviewWithCookieOf(boot.url, stranger)).toEqual({ status: 403, body: refusal.text });
+  expect([socket.status, socket.body]).toEqual([403, refusal.text]);
+});
+
 it('a slate is listed once in the work surface, under its title, in this activation and the next', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('titled'));
   const boot = await subject().serveSlate({ workspace: 'durability-titled', owner: 'durability-owner', id: 'tally', body: 'tally-body' });

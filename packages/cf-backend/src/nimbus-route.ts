@@ -2,41 +2,146 @@
  * Workspace previews at `<port>-<capability-handle>-<token>-<workspace>.<PREVIEW_HOST_SUFFIX>`; the name routes to the Durable Object.
  * Needs both an HMAC token (HKDF subkey, verified before any object is touched) and the live port capability.
  * Guest code on a separate origin: the Kinu session and `x-kinu-*` headers are stripped; never add a path that restores them.
+ *
+ * A preview opens only for its workspace's signed-in owner: a slate's calls run as the owner, so its URL is no bearer
+ * link. The owner is signed in on a preview host as a live share's viewer is (`viewer-pass.ts`): the app's
+ * `PREVIEW_ENTRY_PATH` knows its visitor, checks they own the workspace and mints a ticket, which the host's
+ * `VIEWER_EXCHANGE_PATH` turns into its viewer cookie. The edge reads the cookie; the workspace compares its subject with
+ * its owner. The workspace's own browsers and fetches carry a short pass whose subject is `PREVIEW_SELF`.
  */
 
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
-import { workspaceAddressRefusal } from '@kinu.run/core';
+import {
+  escapeHtml, ingressAdmitted, PREVIEW_ENTRY_PATH, publicPage, SHARE_VIEWER_REQUESTS_PER_MINUTE, VIEWER_EXCHANGE_PATH, workspaceAddressRefusal,
+} from '@kinu.run/core';
 import { previewHostSuffix, previewPortSuffix } from '@kinu.run/core';
 import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '@kinu.run/core';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
-import { labelSigner } from '@kinu.run/core';
 import { reoriginateRequest } from '@kinu.run/core';
 import type { LabelSignerEnv, PreviewPortEnv, PreviewSuffixEnv, WorkspacePreviewUrl } from '@kinu.run/core';
+import type { KvStore } from '@kinu.run/agent-utils';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
-
-const previewSigner = labelSigner('kinu.workspace-preview.salt', 'kinu.workspace-preview.v4');
+import {
+  mintViewerTicket, previewMessage, previewSigner, previewViewerKey, ticketUser, verifiedPreview, viewerCookie, viewerCookieResponse,
+} from './viewer-pass';
 
 export interface WorkspacePreviewHost {
   fetch(request: Request): Promise<Response>;
-  routeWorkspacePreview(
-    port: number, handle: string, request: Request, pathname: string,
-  ): Promise<Response>;
+  routeWorkspacePreview(preview: PreviewVisit, request: Request): Promise<Response>;
+  /** Whether `userId` owns the workspace, and whether `port` serves a slate: what the app's entry page tells its visitor. */
+  previewAccess(userId: string, port: number): Promise<PreviewAccess>;
+}
+
+/** One request to a preview, as the edge verified it. */
+export interface PreviewVisit {
+  readonly port: number;
+  readonly handle: string;
+  readonly pathname: string;
+  /** The subject of the visitor's verified viewer cookie for this preview, or null without one. */
+  readonly viewer: string | null;
+}
+
+export interface PreviewAccess {
+  readonly owned: boolean;
+  readonly slate: boolean;
 }
 
 export interface NimbusPreviewEnv<Id> extends PreviewSuffixEnv, LabelSignerEnv {
   OrchestratorAgent: ObjectNamespace<Id, WorkspacePreviewHost>;
+  /** Bounds each visitor's ticket exchanges, as on a live share's host. */
+  AUTH_KV?: KvStore;
+  /** The app's origin, where a preview's visitor is signed in. */
+  CLI_PUBLIC_ORIGIN?: string;
+}
+
+
+
+/** What a preview tells a visitor it does not admit. */
+export function previewRefusalText(slate: boolean): string {
+  return slate ? "This slate isn't shared with you" : "This preview isn't shared with you";
+}
+
+/** A page load, which can be sent to sign in, rather than a script's request, which can only be refused. */
+export function isNavigation(request: Request): boolean {
+  const mode = request.headers.get('sec-fetch-mode');
+
+  return mode === null ? request.method === 'GET' && (request.headers.get('accept') ?? '').includes('text/html') : mode === 'navigate';
+}
+
+/** Where a visitor the preview does not know is sent: the app, which signs them in and sends its owner back. */
+export function previewEntryUrl(env: { readonly CLI_PUBLIC_ORIGIN?: string }, preview: string): string | null {
+  const origin = env.CLI_PUBLIC_ORIGIN;
+
+  if (origin === undefined || !URL.canParse(origin)) return null;
+  const entry = new URL(PREVIEW_ENTRY_PATH, origin);
+  entry.searchParams.set('to', preview);
+
+  return entry.toString();
+}
+
+
+
+/**
+ * The app's {@link PREVIEW_ENTRY_PATH}, behind its sign-in: the workspace's owner is sent on to the preview with a
+ * ticket for its host; anyone else is told the preview is not shared with them.
+ */
+export async function previewEntry<Id>(
+  request: Request,
+  env: PreviewSuffixEnv & LabelSignerEnv & { OrchestratorAgent: ObjectNamespace<Id, Pick<WorkspacePreviewHost, 'previewAccess'>> },
+  userId: string,
+): Promise<Response> {
+  const to = new URL(request.url).searchParams.get('to');
+  const target = to !== null && URL.canParse(to) ? new URL(to) : null;
+  const preview = target === null ? null : await verifiedPreview(env, target.hostname);
+
+  if (target === null || preview === null) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+  const stub = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(preview.workspace));
+  const access = await stub.previewAccess(userId, preview.port);
+
+  if (!access.owned) {
+    const text = previewRefusalText(access.slate);
+    const html = publicPage({ title: text, body: `<main><section class="section"><h1>${escapeHtml(text)}</h1></section></main>` });
+
+    return new Response(html, { status: 403, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+  }
+
+  const ticket = await mintViewerTicket(env, preview.workspace, previewViewerKey(preview.port, preview.handle), userId);
+
+  if (ticket === null) return new Response('Preview authentication is unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } });
+  const exchange = new URL(VIEWER_EXCHANGE_PATH, target.origin);
+  exchange.searchParams.set('ticket', ticket);
+  exchange.searchParams.set('next', `${target.pathname}${target.search}`);
+
+  return new Response(null, { status: 303, headers: { location: exchange.toString(), 'cache-control': 'no-store' } });
+}
+
+/** A path on this host to go on to after the exchange: never another origin's. */
+function sameHostPath(next: string | null): string {
+  return next !== null && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') ? next : '/';
+}
+
+/** The preview host's ticket exchange: the owner's ticket becomes the host's viewer cookie, then their page. */
+async function exchangePreviewTicket(
+  request: Request, env: NimbusPreviewEnv<unknown>, workspace: string, key: string,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const ticket = await ticketUser(env, workspace, key, url.searchParams.get('ticket') ?? '');
+
+  if (ticket === null) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+
+  if (env.AUTH_KV !== undefined && !await ingressAdmitted(env.AUTH_KV, 'workspace-preview', `${key}:${ticket.userId}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
+    return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
+  }
+
+  return await viewerCookieResponse(env, { workspace, handle: key, subject: ticket.userId }, sameHostPath(url.searchParams.get('next')));
 }
 
 export function nimbusPreviewConfigured(env: PreviewSuffixEnv & LabelSignerEnv): boolean {
   return previewHostSuffix(env) !== null && previewSigner.secret(env) !== undefined;
 }
 
-/** `v4`: a token keyed by the raw secret must not verify under the subkey. */
-function previewMessage(workspace: string, port: number, handle: string): string {
-  return `kinu:workspace-preview:v4:${workspace}:${port}:${handle}`;
-}
 
 /** A reason rather than a throw: without a preview host, or with a name a hostname label cannot carry, the port still works. */
 export function nimbusPreviewUrl(
@@ -103,6 +208,12 @@ export async function handleNimbusPreviewHostRequest<Id>(
     return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   }
 
+  const key = previewViewerKey(port, handle);
+
+  if (url.pathname === VIEWER_EXCHANGE_PATH) return await exchangePreviewTicket(request, env, workspace, key);
+  // Read before the sanitizer strips the cookie. A consent cookie is a live share's, never a preview's.
+  const cookie = await viewerCookie(env, workspace, key, request.headers.get('cookie'));
+  const viewer = cookie === null || cookie.consented ? null : cookie.subject;
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
 
@@ -112,7 +223,7 @@ export async function handleNimbusPreviewHostRequest<Id>(
   // A WebSocket upgrade uses `fetch`: a 101 cannot cross a Durable Object RPC boundary.
   if (headers.get('upgrade')?.toLowerCase() === 'websocket') {
     const target = new URL(request.url);
-    target.pathname = `${WORKSPACE_PREVIEW_PATH}/${port}/${handle}${url.pathname}`;
+    target.pathname = `${WORKSPACE_PREVIEW_PATH}/${port}/${handle}/${encodeURIComponent(viewer ?? '')}${url.pathname}`;
 
     return await stub.fetch(reoriginateRequest(request, target.toString(), {
       headers, redirect: request.redirect,
@@ -120,10 +231,8 @@ export async function handleNimbusPreviewHostRequest<Id>(
   }
 
   return await stub.routeWorkspacePreview(
-    port,
-    handle,
+    { port, handle, pathname: url.pathname, viewer },
     reoriginateRequest(request, request.url, { headers, redirect: request.redirect }),
-    url.pathname,
   );
 }
 

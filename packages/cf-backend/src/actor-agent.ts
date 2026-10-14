@@ -927,6 +927,7 @@ export abstract class ActorAgent extends Agent<Env> {
     env: this.env,
     agentName: () => this.actorHandle().name,
     workspaceId: () => this.actorHandle().workspaceId,
+    workspaceName: () => this.workspaceName(),
     appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),

@@ -67,7 +67,8 @@ import { agentArtifactDirectory, agentHome, agentNameOfUid, MAIN_AGENT } from '@
 import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
-import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
+import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
+import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
@@ -1979,11 +1980,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await runHeadSplit(new HeadController(runtimeForSplit, journal, REAL_CLOCK), parent, request);
   }
 
-  /** Reached by RPC, or via `fetch` for a WebSocket upgrade, which cannot cross RPC as a 101. */
-  async routeWorkspacePreview(
-    port: number, handle: string, request: Request, pathname: string,
-  ): Promise<Response> {
-    return await this.hostedWorkspace().routePreview(port, handle, request, pathname);
+  /**
+   * Reached by RPC, or via `fetch` for a WebSocket upgrade, which cannot cross RPC as a 101. A preview opens only for
+   * the workspace's owner, its own browsers and fetches ({@link PREVIEW_SELF}) and a slate picture's capture, so a
+   * slate's calls, which run as the owner, run for no one else; this is decided before anything of the slate starts.
+   */
+  async routeWorkspacePreview({ port, handle, pathname, viewer }: PreviewVisit, request: Request): Promise<Response> {
+    const owner = this.getOwnerUserId();
+    const admitted = viewer === PREVIEW_SELF || (owner !== null && viewer === owner) || this.pictures.captures(port, handle, Date.now());
+
+    if (admitted) return await this.hostedWorkspace().routePreview(port, handle, request, pathname);
+    diagnostics.event('preview.route.refused', { port, handle, reason: viewer === null ? 'no-viewer' : 'not-owner', owner: '', detail: '' });
+    const entry = viewer === null && isNavigation(request) ? previewEntryUrl(this.env, request.url) : null;
+    const headers = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
+
+    // A page load is sent to the app, which signs its visitor in and sends the owner back; a script's request is refused.
+    if (entry !== null) return new Response(null, { status: 303, headers: { ...headers, location: entry } });
+
+    return new Response(previewRefusalText(await this.hostedWorkspace().servesSlate(port)), { status: 403, headers: { ...headers, 'content-type': 'text/plain; charset=utf-8' } });
+  }
+
+  /** What the app's preview entry tells `userId` (`nimbus-route.ts`): a read, which never claims the workspace. */
+  async previewAccess(userId: string, port: number): Promise<PreviewAccess> {
+    return { owned: this.getOwnerUserId() === userId, slate: await this.hostedWorkspace().servesSlate(port) };
   }
 
   /**
@@ -1992,14 +2011,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly _forwarded = new Hono({ getPath: rawPath })
     .all(`${WORKSPACE_PREVIEW_PATH}/*`, beneath(WORKSPACE_PREVIEW_PATH, async (c) => {
-      const [port, handle, ...rest] = c.req.path.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
+      // The viewer segment is the one the edge wrote: empty when the visitor carried no verified cookie.
+      const [port, handle, viewer, ...rest] = c.req.path.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
       const parsed = Number(port);
 
-      if (!Number.isInteger(parsed) || !handle) {
+      if (!Number.isInteger(parsed) || !handle || viewer === undefined) {
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
 
-      return await this.routeWorkspacePreview(parsed, handle, c.req.raw, `/${rest.join('/')}`);
+      const visit = { port: parsed, handle, pathname: `/${rest.join('/')}`, viewer: viewer === '' ? null : decodeURIComponent(viewer) };
+
+      return await this.routeWorkspacePreview(visit, c.req.raw);
     }))
     .all(`${SLATE_SHARE_PATH}/*`, beneath(SLATE_SHARE_PATH, async (c) => {
       const [handle, claimText, ...rest] = c.req.path.slice(SLATE_SHARE_PATH.length + 1).split('/');

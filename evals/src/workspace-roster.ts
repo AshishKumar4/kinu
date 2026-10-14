@@ -128,6 +128,53 @@ export function webHeaders(identity: PublicWebIdentity): Record<string, string> 
   return headers;
 }
 
+/** A preview's visit is three hops (the preview, the app's entry, the ticket's exchange) and the page's own redirects. */
+const MAX_PREVIEW_REDIRECTS = 10;
+
+/** Who opens a preview as its owner: the app's origin, the credential it knows them by, and where they enter it. */
+export interface PreviewOwner {
+  readonly origin: string;
+  readonly headers: Readonly<Record<string, string>>;
+  /** The app's entry a non-browser client asks first (`CLI_PREVIEW_ENTRY_PATH`); absent, the visit starts at the preview, as a browser's does. */
+  readonly entry?: string;
+}
+
+/** The web identity a session's browser opens its previews as. */
+export function browserOwner(web: Pick<WorkspaceWeb, 'origin' | 'identity'>): PreviewOwner {
+  return { origin: web.origin, headers: webHeaders(web.identity) };
+}
+
+/**
+ * A preview opened the way its owner opens it, as a page load. A workspace's preview opens only for its owner, so the
+ * visit goes as theirs does: the preview sends it to the app (or a CLI asks the app's entry first), which knows the
+ * account by `owner.headers` and sends it back with a ticket, which the preview's host turns into its cookie. Each
+ * origin keeps its own cookies, and the account's credential goes to the app alone. Answers the last response, its
+ * body unread.
+ */
+export async function openPreviewAsOwner(owner: PreviewOwner, url: string | URL): Promise<Response> {
+  const app = new URL(owner.origin).origin;
+  const jar = new Map<string, string>();
+  let at = owner.entry === undefined ? new URL(url) : new URL(`${owner.entry}?to=${encodeURIComponent(String(url))}`, app);
+
+  for (let hop = 0; ; hop++) {
+    const headers = new Headers({ accept: 'text/html' });
+    const cookie = jar.get(at.origin);
+
+    if (at.origin === app) for (const [name, value] of Object.entries(owner.headers)) headers.set(name, value);
+
+    if (cookie !== undefined) headers.set('cookie', cookie);
+    const response = await fetch(at, { redirect: 'manual', headers });
+    const set = response.headers.get('set-cookie');
+
+    if (set !== null) jar.set(at.origin, set.split(';')[0] ?? '');
+    const location = response.headers.get('location');
+
+    if (response.status < 300 || response.status >= 400 || location === null || hop === MAX_PREVIEW_REDIRECTS) return response;
+    await response.body?.cancel();
+    at = new URL(location, at);
+  }
+}
+
 /** One response body, or the deployment's own words on a failure. The body is
  *  kept on the error path deliberately: a 409 naming an unserveable model and a
  *  503 naming a missing binding are different repairs. */
