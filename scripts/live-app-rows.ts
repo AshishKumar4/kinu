@@ -21,7 +21,7 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, recordDeadEnds,
-  countRpc, frameLedger, named, openInspector, painted, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
+  countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
   until, waitOn, type ControlAttempt, type RpcCounter,
 } from './product-flows';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
@@ -1504,11 +1504,11 @@ async function previewsListed(page: Page): Promise<() => Promise<void>> {
   };
 }
 
-/** The work surface's page tabs. */
+/** Every page the work surface's bar holds, those behind its opener among them. */
 async function pageTabs(page: Page): Promise<readonly string[]> {
   await painted(page);
 
-  return v.parse(v.array(v.string()), await page.$$eval('#inspector nav[aria-label="Pages"] button[aria-label]', (tabs) => tabs.map((tab) => tab.getAttribute('aria-label') ?? '')));
+  return v.parse(v.array(v.string()), await page.evaluate(PAGE_TABS));
 }
 
 async function openedInWorkSurface(page: Page): Promise<string> {
