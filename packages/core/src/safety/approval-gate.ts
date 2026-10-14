@@ -145,20 +145,18 @@ function shellMoved(shell: string, how: 'changed' | 'could not be read', cause?:
 
 /** A named shell's state from its machine's `read` (null: unreadable), or the NOT RUN refusal that says it could not be
  *  read; a failed read never escapes. */
-export function namedShellState(read: () => Promise<string | null>, shell: string): Promise<string | KinuError> {
-  return settle(Effect.match(attempt({ doing: `reading the state of shell ${JSON.stringify(shell)}`, otherwise: 'unavailable' }, read), {
+function namedShellState(read: () => Promise<string | null>, shell: string) {
+  return Effect.match(attempt({ doing: `reading the state of shell ${JSON.stringify(shell)}`, otherwise: 'unavailable' }, read), {
     onSuccess: (state): string | KinuError => state ?? shellMoved(shell, 'could not be read'),
     onFailure: (failure) => shellMoved(shell, 'could not be read', failure),
-  }));
+  });
 }
 
 /**
  * Why a call pinned to its named shell's state must not run now: the shell, read again just before, no longer restores
- * exactly that, or cannot be read. Null: run it. Called only for a pinned run (one an answer was asked for), inside the
- * shell's hold, so nothing of this agent moves the shell between this read and the run; the refusal refunds a spent
- * approval. An unpinned run awaits nothing here, so its dispatch keeps its timing.
+ * exactly that, or cannot be read. Null: run it. The refusal refunds a spent approval.
  */
-export async function pinnedShellMoved(
+async function pinnedShellMoved(
   pinned: string, shell: string, read: (() => Promise<string | KinuError>) | undefined,
 ): Promise<KinuError | null> {
   const now = read === undefined ? shellMoved(shell, 'could not be read') : await read();
@@ -166,6 +164,30 @@ export async function pinnedShellMoved(
   if (now instanceof KinuError) return now;
 
   return now === pinned ? null : shellMoved(shell, 'changed');
+}
+
+/**
+ * A gated call in its named shell: `call` asked with what the shell restores (`shellState`), where `read` reads that on
+ * the shell's machine, and `run`, which runs a call pinned to that state (one an answer was asked for) only while the
+ * shell still restores exactly that, else answers `notRun` ({@link pinnedShellMoved}). A member runs it inside the
+ * shell's hold, so nothing of this agent moves the shell between the read and the run. An unpinned run awaits nothing
+ * first, so its dispatch keeps its timing.
+ */
+export function namedShellCall(call: CommandCall, name: string | undefined, read: ((name: string) => Promise<string | null>) | undefined) {
+  const state = name === undefined || read === undefined ? undefined : () => settle(namedShellState(() => read(name), name));
+
+  async function pinnedRun<R>(pinned: string, run: () => Promise<R>, notRun: (moved: KinuError) => R): Promise<R> {
+    const moved = await pinnedShellMoved(pinned, name ?? '', state);
+
+    return moved === null ? await run() : notRun(moved);
+  }
+
+  return {
+    call: { ...call, ...(state !== undefined && { shellState: state }) } satisfies CommandCall,
+    run: <R>(pinned: string | undefined, run: () => Promise<R>, notRun: (moved: KinuError) => R): Promise<R> => (
+      pinned === undefined ? run() : pinnedRun(pinned, run, notRun)
+    ),
+  };
 }
 
 /** A member's reading of one call: what runs and how to run exactly that, or its own refusal before anything runs. */
