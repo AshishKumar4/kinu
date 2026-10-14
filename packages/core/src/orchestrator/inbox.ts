@@ -20,6 +20,7 @@ import { StepInjections } from '../prompting/step-injections';
 import { nanoid } from '../utils/nanoid';
 import { metadataBroadcastEvent, type SeenSplice } from '../read-models/background-event';
 import type { WorkMode } from '../types/turn';
+import { narrowestMode } from '../execution/work-mode';
 import { parseJsonObject, type JsonObject } from '../utils/json';
 import type { SessionPayload } from '../session/payload';
 import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
@@ -779,19 +780,18 @@ export class Inbox {
     opts: { readonly idempotent: boolean },
   ): Promise<SendOutcome> {
     const [first] = group;
-    // Plan is narrower: merging never widens what a message was typed under.
-    const mode: WorkMode = group.some((signal) => signal.user.mode === 'plan') ? 'plan' : 'build';
 
+    // Merged by the session into one rerun ({@link ChatSession.enqueueTurn}).
     const turn: ProgrammaticTurn = {
       text: group.map((signal) => signal.text).join('\n\n'),
-      metadata: {
-        ...first.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator',
-        ...(group.some((signal) => signal.user.mode !== undefined) && { kinuMode: mode }),
-      },
+      metadata: first.metadata,
       origin: 'user',
-      sends: group.map((signal) => ({ id: signal.user.id, text: signal.text, ...(signal.user.files !== undefined && { files: signal.user.files }) })),
+      sends: group.map((signal) => ({
+        id: signal.user.id, text: signal.text,
+        ...(signal.user.files !== undefined && { files: signal.user.files }), ...(signal.user.mode !== undefined && { mode: signal.user.mode }),
+      })),
       ...(opts.idempotent && {
-        idempotencyKey: `steer-rerun:${this.steers.turnId?.() ?? 'live'}:${mode}:${first.user.id}`,
+        idempotencyKey: `steer-rerun:${this.steers.turnId?.() ?? 'live'}:${narrowestMode(group.map((signal) => signal.user.mode))}:${first.user.id}`,
       }),
     };
 

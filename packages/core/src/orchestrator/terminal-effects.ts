@@ -18,7 +18,7 @@ import { writeActivityLog } from '../identity/activity-log';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode, providerStatusOf } from '../providers/util';
 import { statedRetryAfterMs } from '../providers/fallback-cooldown';
 import type { AgentOrchestrator } from './agent-orchestrator';
-import { improvementLanesOpen, recordedTurn, type TurnContinuity } from './evolution-lanes';
+import { evolutionPassOpen, improvementLanesOpen, recordedTurn, type TurnContinuity } from './evolution-lanes';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
@@ -234,24 +234,39 @@ export function chatTerminalEffects(deps: {
   };
 }
 
-export interface SubordinateEffectPorts {
+export interface ActorEffectPorts {
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
-  applyTitle(subject: string): Promise<void>;
+  /** Null once named, or why the name cannot be applied yet: the row stays owed and retries. A row without `standIn`
+   *  over a titled conversation changes nothing; a stand-in's row keeps `standIn` through retries, so titling is retried
+   *  until a name lands. */
+  applyTitle(subject: string, standIn: boolean): Promise<string | null>;
+  /** The turn's evolution pass; absent where the actor's lanes are another object's (a cloud agent's, the workspace's). */
+  readonly startEvolution?: () => void;
   /** Absent with no hirer. */
   readonly sendReport?: (report: {
     readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
   }) => Promise<string>;
 }
 
-/** A hired actor's turn effects, alike on every backend. */
-export function subordinateTerminalEffects(ports: SubordinateEffectPorts): TerminalEffectTable {
-  const { sendReport } = ports;
+/** The effects every actor's settled turn owes its own lanes ({@link declareTerminalRoster}), one body each, alike on
+ *  every backend; an actor supplies the ports. */
+export function actorTerminalEffects(ports: ActorEffectPorts): TerminalEffectTable {
+  const { sendReport, startEvolution } = ports;
 
   return {
+    // The verdict uses the recorded mode and switch, so a fresh activation's defaults cannot open an unearned pass. Not
+    // joined at exit: the window it would close carries to the next session.
     improvement_lanes: terminalEffect({
-      input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
-      runSync: () => ({ status: 'completed' }),
+      input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema, autoEvolve: v.boolean() }),
+      runSync: ({ status, workMode, autoEvolve }) => {
+        if (startEvolution === undefined || !evolutionPassOpen(status, workMode, autoEvolve)) return { status: 'completed', detail: 'no evolution pass for this turn' };
+        startEvolution();
+
+        return { status: 'completed' };
+      },
     }),
+    // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is keyed on the turn,
+    // so a replay hires no second advisor.
     advisor_review: terminalEffect({
       input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
       run: async ({ status, workMode, advisor }) => {
@@ -261,11 +276,11 @@ export function subordinateTerminalEffects(ports: SubordinateEffectPorts): Termi
       },
     }),
     auto_title: terminalEffect({
-      input: v.object({ subject: v.string() }),
-      run: async ({ subject }) => {
-        await ports.applyTitle(subject);
+      input: v.object({ subject: v.string(), standIn: v.optional(v.boolean()) }),
+      run: async ({ subject, standIn }) => {
+        const unreachable = await ports.applyTitle(subject, standIn === true);
 
-        return { status: 'completed' };
+        return unreachable === null ? { status: 'completed' } : { status: 'owed', detail: unreachable };
       },
     }),
     // The mode comes off the row, so a cold replay keeps a Plan report Plan.

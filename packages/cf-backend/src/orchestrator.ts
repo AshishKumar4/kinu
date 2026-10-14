@@ -153,7 +153,7 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, turnAuthorship,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
-  missionOf, summarizeSoul, workspaceGenesisSignal, WORKSPACE_CREATED_EVENT, isPlaceholderMission, drawWorkspaceLogo,
+  missionOf, summarizeSoul, workspaceGenesisSignal, isPlaceholderMission, drawWorkspaceLogo,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
@@ -3488,12 +3488,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.terminal.settle({
       transition: { turnId: settled.turnId, messageId: settled.messageId },
       declare: () => [
-        ...declareTerminalRoster(facts, this.rosterParts(settled, scoped, missionOf(this.getSoulText()), this.advisor.reviewsTurns)),
+        ...declareTerminalRoster(facts, {
+          role: { kind: 'workspace', mission: missionOf(this.getSoulText()), event: settled.event },
+          advisor: this.advisor, turn: scoped, reachableTools: settled.reachableTools,
+        }, this.rosterParts(settled, scoped)),
         // Its outcome the run's own: a tool that failed inside a turn that answered is not a failed turn.
         { name: 'fleet_turn', scope: settled.messageId, lane: 'detached', input: { turn: facts.scopedTurn, completed: settled.completed } },
       ],
     });
     this.turnBranches.retire(settled.turnId);
+    // For the next turn, which an alarm, an email or a wake after an eviction opens without the page's warmup.
+    this.warmUserMcpInBackground();
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. Main's conversation is its isolate's. */
@@ -3512,7 +3517,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Its chat's follow-up turns are owed in main's own isolate; everything else its settled turn owes, here. */
-  private rosterParts(settled: HandedOffTurn, scoped: CompletedTurn, mission: string | null, reviewsTurns: boolean): TerminalTurnParts {
+  private rosterParts(settled: HandedOffTurn, scoped: CompletedTurn): TerminalTurnParts {
     return {
       // Over the row main's transcript persisted, so a cut turn's announcement replays from it; owed only when an
       // extension here listens, as reading the answer back crosses into main's isolate for the whole turn.
@@ -3523,12 +3528,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       eventReplies: { answered: new Set(settled.answeredDeliveries), requestId: settled.messageId },
       // Each with the task its head was started on, as the journal recorded it at the branch's start.
       branches: this.turnBranches.of(settled.turnId).map((id) => ({ id, task: this.headJournal.readHeadView(branchHeadId(id))?.task ?? '' })),
-      // Owed only when the actor reviews turns, as the lane it replaced was started only then.
-      advisor: reviewsTurns ? projectJsonValue({ value: this.advisorSnapshotFor(scoped, settled.reachableTools) }) : undefined,
-      sleepTime: true,
-      // The genesis turn owes the naming: the create stored a stand-in title, and no other turn replaces one.
-      autoTitle: { mission, standIn: settled.event === WORKSPACE_CREATED_EVENT },
-      logo: settled.event === WORKSPACE_CREATED_EVENT ? { mission } : undefined,
     };
   }
 
@@ -3585,20 +3584,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }),
 
       sleep_time: this.sleepTime.effect(),
-
-      auto_title: terminalEffect({
-        input: v.object({ subject: v.string(), standIn: v.optional(v.boolean()) }),
-        // Replayable. A row without `standIn` over a titled workspace changes nothing; the
-        // genesis row keeps `standIn` through retries, so titling is retried until a name lands.
-        run: async ({ subject, standIn }) => {
-          const unreachable = await this.titlingRefusal();
-
-          if (unreachable !== null) return { status: 'owed', detail: unreachable };
-          await this.applyAutoTitle(subject, standIn === true);
-
-          return { status: 'completed' };
-        },
-      }),
 
       workspace_logo: terminalEffect({
         input: v.object({ subject: v.string() }),

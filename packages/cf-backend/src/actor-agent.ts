@@ -66,7 +66,6 @@ import {
   type ScaffoldControl,
   refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity,
-  type AdvisorRecoverySnapshot,
   buildBuiltinTools,
   buildMcpToolSet, McpToolSurfaceCache,
   type WebSearchProvider,
@@ -82,7 +81,7 @@ import {
   type PromptFile, PromptFileSchema,
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
-  type AgentOrchestrator, type AgentOrchestratorDeps, improvementLanesOpen, evolutionPassOpen, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
+  type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
   EvolutionLanes, drainPendingEvents, ActorAdvisor, readMissionLabels, turnLedgers, type SeatedActor, type DynamicDelegate,
   type ComposedRequest,
   type AgentsToolDeps,
@@ -179,8 +178,6 @@ import {
   // Once-only lifecycle for one settled response; both backends drive this state machine.
   TerminalTransitions, initTerminalEffectTable,
   terminalEffect, turnRecordingEffects, type AgentAnswer,
-  RunEndReasonSchema, WorkModeSchema,
-  AdvisorRecoverySnapshotSchema,
   type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory, type CodemodeScope } from "./codemode-tool";
@@ -1170,32 +1167,18 @@ export abstract class ActorAgent extends Agent<Env> {
             : { status: 'completed', detail: refusal };
         },
       }),
-      improvement_lanes: terminalEffect({
-        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema, autoEvolve: v.boolean() }),
-        // Lanes read durable queues on re-entry (per-turn snapshots do not survive), and the verdict
-        // uses the recorded mode so a fresh activation's default cannot open an unearned lane.
-        runSync: ({ status, workMode, autoEvolve }) => {
-          this.warmUserMcpInBackground();
+      // Its lanes read durable queues on re-entry (per-turn snapshots do not survive).
+      ...actorTerminalEffects({
+        hireAdvisor: (advisor) => this.advisor.hire(advisor),
+        applyTitle: async (subject, standIn) => {
+          const unreachable = await this.titlingRefusal();
 
-          if (!evolutionPassOpen(status, workMode, autoEvolve)) {
-            return { status: 'completed', detail: 'improvement lanes closed for this turn' };
-          }
+          if (unreachable !== null) return unreachable;
+          await this.applyAutoTitle(subject, standIn);
 
-          this.settleEvolutionInBackground();
-
-          return { status: 'completed' };
+          return null;
         },
-      }),
-
-      // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is
-      // keyed on the turn, so a replay hires no second advisor.
-      advisor_review: terminalEffect({
-        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
-        run: async ({ status, workMode, advisor }) => {
-          if (improvementLanesOpen(status, workMode)) await this.advisor.hire(advisor);
-
-          return { status: 'completed' };
-        },
+        startEvolution: () => { this.settleEvolutionInBackground(); },
       }),
     };
   }
@@ -1866,15 +1849,6 @@ export abstract class ActorAgent extends Agent<Env> {
     })), Effect.sync(() => {
       if (this._mcpWarmTask === owner) this._mcpWarmTask = null;
     })));
-  }
-
-  /** The advisor's input, recorded while the turn is in memory so a cold re-drive reviews the same
-   *  tool surface. `reachable` is the turn's own ToolSet keys as reported at the settle. */
-  protected advisorSnapshotFor(turn: CompletedTurn, reachable: readonly string[]): AdvisorRecoverySnapshot {
-    return {
-      turn,
-      reachable: [...reachable],
-    };
   }
 
   /** This actor's ports and models for core's scaffold control plane (evolution/control.ts). */

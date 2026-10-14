@@ -139,8 +139,7 @@ describe('Inbox — the user kind, accepted', () => {
     expect(queued).toEqual([{
       text: 'nothing is running',
       origin: 'user',
-      sends: [{ id: 's1', text: 'nothing is running' }],
-      metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
+      sends: [{ id: 's1', text: 'nothing is running', mode: 'build' }],
     }]);
     // The idle path: no idempotency key and nothing queued, but the broadcast still owes where the words went.
     expect(queued[0].idempotencyKey).toBeUndefined();
@@ -381,7 +380,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'also check staging' }]);
   });
 
-  test('leftover users rerun as ONE user-origin turn, stamped operator under their mode', async () => {
+  test('leftover users rerun as ONE user-origin turn, each send under its own mode', async () => {
     const { inbox, queued, broadcasts } = setup({ turnInFlight: true, turnId: 'turn-9' });
     inbox.beginTurn();
     await inbox.prepareStep(step(0, HISTORY));
@@ -395,9 +394,8 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     expect(queued).toEqual([{
       text: 'one more thing\n\nand this',
       origin: 'user',
-      sends: [{ id: 's1', text: 'one more thing' }, { id: 's2', text: 'and this' }],
+      sends: [{ id: 's1', text: 'one more thing', mode: 'build' }, { id: 's2', text: 'and this', mode: 'build' }],
       idempotencyKey: 'steer-rerun:turn-9:build:s1',
-      metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     }]);
     // Each steer's landing is announced under its own id; admission alone does not tell the surface.
     expect(steerStatuses(broadcasts).map((status) => [status.status, status.steerId])).toEqual([
@@ -502,7 +500,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     // One turn: the users' rerun (the absorbed user is never requeued, its row exists), which both events ride.
     expect(queued.map((turn) => turn.text)).toEqual(['typed too late']);
     expect(queued[0]).toMatchObject({
-      origin: 'user', sends: [{ id: 's2', text: 'typed too late' }], metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
+      origin: 'user', sends: [{ id: 's2', text: 'typed too late', mode: 'build' }],
     });
     expect(queued[0].idempotencyKey).toMatch(/^steer-rerun:.*:build:/);
 
@@ -629,17 +627,16 @@ describe('Inbox — the user kind beside the event kind', () => {
     inbox.settle({ completed: true });
     await Promise.resolve();
 
-    // One turn, in typed order; a plan-mode message anywhere makes the turn plan, since merging never widens a
-    // grant.
+    // One turn, in typed order, each send under its own mode, keyed under plan: a plan-mode message anywhere makes the
+    // turn plan, since merging never widens a grant (the session's merge: send-state.test.ts).
     expect(queued.map((turn) => ({
       text: turn.text,
-      kinuMode: turn.metadata?.kinuMode,
-      steerIds: turn.sends?.map((send) => send.id),
+      modes: turn.sends?.map((send) => [send.id, send.mode]),
       idempotencyKey: turn.idempotencyKey,
       origin: turn.origin,
     }))).toEqual([
       {
-        text: 'build this\n\nplan that\n\nbuild the other', kinuMode: 'plan', steerIds: ['s1', 's2', 's3'],
+        text: 'build this\n\nplan that\n\nbuild the other', modes: [['s1', 'build'], ['s2', 'plan'], ['s3', 'build']],
         idempotencyKey: 'steer-rerun:live:plan:s1', origin: 'user',
       },
     ]);
