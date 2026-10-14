@@ -1,7 +1,7 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessage, type UIMessageChunk } from 'ai';
 import {
-  actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan, imageModelOutput,
+  actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, driveDeliveredRun, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
   turnSourcesFromBundle, captureOperationProfile, PROVIDER_WAIT_PART, type ModelCallReport, type ModelOperationEvent, type ProviderWaitInfo,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type SerializedMessage, type SessionEvent, type TurnEndEvent,
@@ -17,7 +17,7 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, CacheWarmArm, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, CacheWarmArm, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
 
 /** The answer's metadata, unless the workspace reads the turn's narration before it can say it. One shape, not a union:
  *  a stub's promise of a union is a union of promises. */
@@ -515,10 +515,9 @@ interface PreparedRun {
 
 /**
  * A delivered run's own parts (D2): each round's preparation, under that round's claim, by its workspace over this
- * isolate's models and tools, and the projection of its rounds into its end. Its rounds are core's driver
- * (`driveExecution`, through `runHeadInference`), run in its chat's turn, which `signal` stops. One commit ends it: its
- * answer, its run's end, every claim of its rounds still open, and its end kept on its held input (`recordEnd`), where a
- * restart tells it and never runs it again.
+ * isolate's models and tools, and the projection of its rounds into its end, kept on its held input (`recordEnd`), where a
+ * restart tells it and never runs it again. Core drives it (`driveDeliveredRun`), in its chat's turn, which `signal`
+ * stops.
  */
 export async function deliveredRun(
   { database, workspace, models, pacer }: { readonly database: AgentDatabase; readonly workspace: AgentWorkspace; readonly models: FacetModels; readonly pacer: StepPacer },
@@ -535,11 +534,6 @@ export async function deliveredRun(
   // Its rounds' reviews ride its end: no advice crosses before the end commits.
   const reviews: AgentReview[] = [];
   let produced: readonly ModelMessage[] | undefined;
-
-  openTurnRun(actor.stores.eventRecorder, runId, {
-    agentId: actor.record.actorId, causedBy: 'swarm', userMessage: task.body,
-    turnIndex: actor.session.orchestrator.sessionTurnIndex,
-  });
 
   // Each round's: the workspace knows the run by its own turn, and each round reopens it at that round's epoch.
   const prepare = async (capability: TurnCapability) => {
@@ -605,47 +599,28 @@ export async function deliveredRun(
   };
 
   try {
-    const report = await runHeadInference({ key: { turnId: task.sequenceId, runId, mode: task.mode }, actor, prepare });
-    const completion = report.canonicalCompletion;
-    // No slates are asked for: a crossing here would leave a death in it to run the run again (#75), and the agent a run
-    // is delivered to, a node or a head, is a run actor whose transcript holds no turn, so no answer carries them.
-    const answer = completion === undefined ? () => {} : await database.prepareAnswer(completion);
+    // The agent a run is delivered to, a node or a head, is a run actor whose transcript holds no turn: no slates are
+    // stamped on its answer.
+    await driveDeliveredRun(actor, task, {
+      prepare,
+      prepareAnswer: (completion) => database.prepareAnswer(completion),
+      // Prepared before the commit, spilled if it outgrows a row; kept by it.
+      ended: async (report) => {
+        const charges = spend.takeCharges();
 
-    const charges = spend.takeCharges();
-
-    const ended: AgentTurnEnd = {
-      ...report,
-      activity: database.takeActivity(),
-      figures: database.figures(),
-      errorMessage: report.errorMessage ?? null,
-      ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
-      ...(reviews.length > 0 && { reviews }),
-      ...(charges.length > 0 && { charges }),
-    };
-
-    // Prepared before the commit, spilled if it outgrows a row; kept by it.
-    const keepEnd = await recordEnd({ ended });
-
-    const closing = actor.stores.eventRecorder.collect(() => actor.runtime.storage.transactionSync(() => {
-      closeTurnRun(actor.stores.eventRecorder, runId, {
-        turnIndex: actor.session.orchestrator.sessionTurnIndex,
-        usage: report.usage,
-        workMode: actor.session.workMode,
-        ...classifyRunEnd({
-          completed: report.status === 'completed',
-          interrupted: report.status === 'aborted',
-          errorText: report.errorMessage,
-        }),
-      });
-      answer();
-      keepEnd();
-
-      // A round a dead isolate opened and the run, run again, never reached: the run's end is its end too.
-      return actor.stores.claims.settleRunIn(runId, 'indeterminate');
-    }));
-
-    closing.value();
-    closing.publish();
+        return await recordEnd({
+          ended: {
+            ...report,
+            activity: database.takeActivity(),
+            figures: database.figures(),
+            errorMessage: report.errorMessage ?? null,
+            ...(produced !== undefined && { produced: encodeModelMessageValues(produced) }),
+            ...(reviews.length > 0 && { reviews }),
+            ...(charges.length > 0 && { charges }),
+          },
+        });
+      },
+    });
   } finally {
     // Its steps' grant answers: the run ran its last.
     pacer.release(task.sequenceId);

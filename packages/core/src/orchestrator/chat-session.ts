@@ -57,7 +57,7 @@ import type { OwedEffect } from './terminal-effects';
 import { turnEndOf, unansweredReport, type TurnEnd } from './terminal-roster';
 import type { TerminalTransition, TerminalTransitions } from './terminal-transition';
 import {
-  classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun, recordExecutionEvent, settleExecutionContext,
+  classifyRunEnd, closeRunIn, closeTurnRun, creditedTurnId, openTurnRun, recordExecutionEvent, settleExecutionContext,
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
@@ -1693,7 +1693,7 @@ export class ChatSession {
    * commit that rolls back leaves it open on both sides. Takes the name: `classifyRunEnd` runs once per turn, so a Stop
    * seals `aborted` on both backends.
    */
-  private closeRunIn(end: RunEndClassification, lease: ActorTurnLease): () => void {
+  private closeTurnRunIn(end: RunEndClassification, lease: ActorTurnLease): () => void {
     // Settled before the early return, under the same name as the run.
     const claimClosed = this.actorSession.claimOpen(lease) ? this.actorSession.closeTurnClaim(lease, end.reason) : null;
     const { runId } = this;
@@ -2230,12 +2230,7 @@ export class ChatSession {
 
       if (told !== undefined) this.ports.terminal().record(told.transition, [told.owed]);
 
-      const closing = this.eventRecorder.collect(() => this.closeRunIn(ending.end, ending.lease));
-
-      closed = () => {
-        closing.value();
-        closing.publish();
-      };
+      closed = closeRunIn(this.eventRecorder, () => this.closeTurnRunIn(ending.end, ending.lease));
     });
     closed();
   }

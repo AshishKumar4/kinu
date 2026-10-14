@@ -558,6 +558,8 @@ export { subordinateForkContext, subordinateTurnContext } from './subordinates/s
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
+export { driveDeliveredRun, type DeliveredRunPorts } from './heads/delivered-run';
+
 export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
