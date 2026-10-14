@@ -332,7 +332,6 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
 
       return Response.json({ ok: true });
     case '/exec': return Response.json(await box.exec(body.command ?? ''));
-    case '/sessions': return Response.json(await box.terminalSessions());
     case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]')), body.stop));
     case '/agent-desktop-stop': return Response.json({ stopped: await box.stopAgentDesktop(body.stop ?? '') });
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
@@ -372,6 +371,9 @@ async function answer(request: Request, env: Env, ctx: ExecutionContext): Promis
   const body = request.method === 'POST' ? v.parse(Body, await request.json()) : {};
 
   try {
+    // The box's terminal sessions as the Environment tab reads them (D90).
+    if (url.pathname === '/sessions') return Response.json(await box.terminalSessions());
+
     return await contractRoute(url, name, box, body);
   } catch (cause) { return Response.json({ error: describeThrown({ cause }) }, { status: 500 }); }
 }

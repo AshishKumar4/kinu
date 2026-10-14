@@ -79,9 +79,10 @@ const PARKED_WATCH_MS = 20_000;
 
 /**
  * A server a session runs in a folder of its own, as the computer-sessions flow does on a deployment. The folder's name
- * holds a space, quotes, a backslash, a dollar and the marker 7591e6fec's fix reserved: any folder reads back whole.
+ * holds a space, quotes, a dollar and the marker f588b0bed reserved: any folder reads back whole. A tab and a
+ * backslash are the unit test's, from real tmux: typed into a pane, a tab completes instead of arriving.
  */
-const SESSION_FOLDER = String.raw`/workspace/flow web/<<kinu>>/a"b'c $x 	`;
+const SESSION_FOLDER = `/workspace/flow web/<<kinu>>/a"b'c $x`;
 
 const SESSION_PORT = 8765;
 
