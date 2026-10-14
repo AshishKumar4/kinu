@@ -2967,8 +2967,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#renewContainer();
     const name = await this.hostname();
 
-    // The kernel keeps a name for the boot alone, so each start names the box again (D83, D91).
-    if (name !== undefined) await nameBox(this.#container(), name);
+    // The kernel keeps a name for the boot alone, so each start names the box again (D83, D91, D92).
+    if (name === undefined) return;
+    const naming = await nameBox(this.#container(), name);
+
+    if (!naming.named) this.#trace('name.kept', { name, detail: naming.detail });
   }
 
   getExposedPorts() {

@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { workspaceOwner, type WorkspaceOwnerNamespace } from '../workspace-owner-rpc';
-import { relayedAnswer, type JsonValue, type SlateSurfaceResult } from '@kinu.run/core';
+import { isJsonAnswer, ownedStream, relayedAnswer, type JsonValue, type SlateSurfaceResult } from '@kinu.run/core';
 import type { SlateCaller } from '@kinu.run/core/slates';
 
 /** Only the host mints these props; a process receives the stub, not authority to mint one. `name` is `workspace`, the
@@ -22,6 +22,15 @@ export class SlateBinding extends WorkerEntrypoint<SlateBindingEnv, SlateBinding
   call(path: string[], args: JsonValue[], invocation: string | null, authorize?: boolean): Promise<SlateSurfaceResult> {
     const { workspace, id, name, caller } = this.ctx.props;
 
-    return relayedAnswer(workspaceOwner(this.env, workspace).slateCallAs(caller, id, name, { path, args, invocation, ...(authorize === true && { authorize: true }) }));
+    return relayedAnswer(workspaceOwner(this.env, workspace).slateCallAs(caller, id, name, { path, args, invocation, ...(authorize === true && { authorize: true }) }))
+      .then(withOwnedStreams);
   }
+}
+
+/** `ai.stream`'s text and `agent.ask`'s reply leave as this isolate's own streams, never as the ones received. */
+function withOwnedStreams(result: SlateSurfaceResult): SlateSurfaceResult {
+  if (!result.ok || isJsonAnswer(result.value)) return result;
+  const { value } = result;
+
+  return { ...result, value: value instanceof ReadableStream ? ownedStream(value) : { ...value, reply: ownedStream(value.reply) } };
 }
