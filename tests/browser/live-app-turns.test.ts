@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
-import { DROPPED_FILE_ARRIVED, PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/scripted-model';
+import { DROPPED_FILE_ARRIVED, PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/live-app-scripts';
 import { liveRows } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-turns', [
