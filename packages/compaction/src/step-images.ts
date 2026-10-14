@@ -51,10 +51,29 @@ export interface TurnImages {
   readonly links: Map<unknown, string | null>;
 }
 
+/** Files the calls `ours` returned in `messages`, by a look at the parts alone: most steps have too few to move any. */
+function carriedFiles(messages: readonly ModelMessage[], ours: ReadonlySet<string>): number {
+  let files = 0;
+
+  for (const message of messages) {
+    if (message.role !== 'tool') continue;
+
+    for (const part of message.content) {
+      if (part.type === 'tool-result' && ours.has(part.toolCallId) && part.output.type === 'content') {
+        files += part.output.value.filter((entry) => entry.type === 'file').length;
+      }
+    }
+  }
+
+  return files;
+}
+
 /** A step's pass over `messages`: undefined when no image moves; synchronous when every moving image is stored already. */
 export function moveStepImages(
   messages: readonly ModelMessage[], store: AttachmentStore, turn: TurnImages,
 ): ModelMessage[] | undefined | Promise<ModelMessage[] | undefined> {
+  // Read whole only when a batch could move: a long turn's history is large, and its steps are many.
+  if (turn.calls.size === 0 || carriedFiles(messages, turn.calls) < KEEP_RECENT_IMAGES + STEP_IMAGE_BATCH) return undefined;
   const { links } = turn;
   const turns = kinuCodec.encode([...messages]);
   const images = imagesOf(turns, store, turn.calls);
