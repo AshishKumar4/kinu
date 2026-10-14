@@ -28,12 +28,13 @@ class TestBox extends TestDevbox<unknown> {
 
 describe('a stale attempt\'s boot-id stamp does not overwrite the successor\'s', () => {
   test('a stamp parked on the stale attempt never regresses the newer boot id', async () => {
-    // The park is the stamp exec, the last await before the durable boot-id write; without
-    // the fence both writes land after the successor has fully settled.
+    // A box whose last container the platform replaced: its row names a kernel that is gone, so the stamp reads the
+    // replacement count after it reads the kernel. That read is where the stale attempt parks, holding its kernel's id.
     const harnessed = harness(TestBox);
-    const { box, container, rows } = harnessed;
+    const { box, container, rows, storage } = harnessed;
+    rows.set(BOOT_ID_KEY, 'a-kernel-the-platform-replaced');
     const parked = gate();
-    container.stampGate = parked;
+    storage.gateOn('devbox:replaced-count', parked);
     const stale = box.devboxStartup();
     await parked.reached;
     // The generation turns over underneath the parked attempt, exactly as a
@@ -42,14 +43,16 @@ describe('a stale attempt\'s boot-id stamp does not overwrite the successor\'s',
     const successor = box.devboxStartup();
     await successor;
     const successorBootId = v.parse(StampedBootIdSchema, rows.get(BOOT_ID_KEY));
+    const counted = (await box.devboxState()).replacedCount;
 
     parked.release();
     await stale;
 
-    // A stale attempt must not regress the live generation's boot id: the heartbeat
-    // would read the mismatch and replace a healthy container.
+    // A stale attempt must not regress the live generation's boot id, nor count a replacement it no longer owns: the
+    // heartbeat would read the mismatch and replace a healthy container.
     expect(v.parse(StampedBootIdSchema, rows.get(BOOT_ID_KEY))).toBe(successorBootId);
-    expect((await box.devboxState()).replacedCount).toBe(0);
+    expect(successorBootId).toBe(container.bootId);
+    expect((await box.devboxState()).replacedCount).toBe(counted);
     expect((await box.devboxState()).ready).toBe(true);
   });
 });

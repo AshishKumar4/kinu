@@ -1055,26 +1055,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #stampBootId(generation: number): Promise<void> {
     const previous = await this.ctx.storage.get<string>(BOOT_ID_KEY);
     const actual = await this.#readBootId();
+    const replaced = previous === undefined || previous === actual ? undefined : (await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0) + 1;
 
+    // A stale attempt writes nothing: the row names the container of record.
     if (!this.#owns(generation)) return;
 
-    if (actual === previous) {
-      this.#stampPhase('bootId');
-
-      return;
-    }
-
-    if (previous !== undefined) {
-      const replaced = (await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0) + 1;
-
-      if (!this.#owns(generation)) return;
+    if (replaced !== undefined) {
       await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
       console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
     }
 
-    // A stale attempt writes nothing: the row names the container of record.
-    if (!this.#owns(generation)) return;
-    await this.ctx.storage.put(BOOT_ID_KEY, actual);
+    if (actual !== previous) await this.ctx.storage.put(BOOT_ID_KEY, actual);
     this.#stampPhase('bootId');
   }
 

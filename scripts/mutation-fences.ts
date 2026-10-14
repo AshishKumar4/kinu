@@ -152,8 +152,8 @@ export const FENCES: readonly Fence[] = [
     // successor's identity and the next heartbeat re-drives a healthy box.
     snippet: `    // A stale attempt writes nothing: the row names the container of record.
     if (!this.#owns(generation)) return;
-    await this.ctx.storage.put(BOOT_ID_KEY, actual);`,
-    mutation: `    await this.ctx.storage.put(BOOT_ID_KEY, actual);`,
+`,
+    mutation: ``,
     owner: {
       suite: 'packages/devbox/tests/stale-stamp-fence.test.ts',
       grep: 'a stamp parked on the stale attempt never regresses the newer boot id',
