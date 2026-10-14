@@ -247,13 +247,13 @@ export const CATALOGUE: readonly Mutation[] = [
     control: 'unit-exec-ratio-budget.test.ts',
   },
   {
-    id: 'effort-judge-rung',
-    file: 'packages/core/src/providers/effort.ts',
-    find: "  judge: 'medium',",
-    replace: "  judge: 'low',",
-    decision: 'a judge call gets the medium reasoning rung',
-    symbol: 'REASONING_EFFORT_FOR_STAGE',
-    control: 'unit-strategy.test.ts',
+    id: 'effort-turn-default',
+    file: 'packages/core/src/profiles/resolve.ts',
+    find: "const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = 'medium';",
+    replace: "const DEFAULT_TURN_REASONING_EFFORT: ReasoningEffort = 'low';",
+    decision: 'a turn and a tier slot that ask no effort get the medium reasoning rung',
+    symbol: 'resolveTurnProfile',
+    control: 'unit-turn-profile-resolve.test.ts',
   },
   {
     id: 'provider-options-override-wins',
@@ -290,6 +290,6 @@ export const CATALOGUE: readonly Mutation[] = [
     find: "    return { home, tmp, cred: agentCred(identity), isolation: 'private-home' };",
     replace: "    return { home, tmp, cred: undefined, isolation: 'private-home' };",
     decision: "a provisioned node's commands run as its own confined uid",
-    symbol: 'agentHomeNodeProvisioner',
+    symbol: 'facetHomeProvisioner',
   },
 ];

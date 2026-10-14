@@ -48,7 +48,7 @@
     "Egress interception totality": 10.526256913999998,
     "Core layering": 1.7559573039999814,
     "CLI reference is current": 1.5207562990000005,
-    "Hammer and fence gate self-tests": 4.470502426000021,
+    "Hammer, fence gate and sweep catalogue self-tests": 4.470502426000021,
     "Schema drift": 4.941982931000006,
     "UI gate self-tests: chat and files": 300.593269082,
     "Effect diagnostics": 44.555597465,
