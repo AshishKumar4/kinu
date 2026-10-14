@@ -13,7 +13,7 @@ import {
   facetHomeProvisioner, facetHomeReleaser, actorHomeName, actorStateRoot,
   actorScaffoldPath, agentArtifactDirectory, agentHome, MAIN_AGENT, WORKSPACE_ROOT, type ActorHost,
   type SeatHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
-  type AgentRuntime, type ContextEventRecorder, type DeferredApprovalChannel, type LoopOrigin,
+  type AgentRuntime, type DeferredApprovalChannel, type LoopOrigin,
   type ModelCallReport, type ModelOperationSink,
   type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs,
   type ResolvedTurnProfile, type SeatedActor, type SlateCallResult, type SlateOperation, type SqlExec,
@@ -209,7 +209,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
         contextPlane: {
           actorId: bound.handle.actorId,
           own: () => (bound.handle.parentActorId === null
-            ? localContextTree(() => ({ claims: bound.stores.claims, events: contextEventsFor(bound) }), { author: bound.handle.actorId, child: false })
+            ? localContextTree(() => ({ claims: bound.stores.claims, events: bound.stores.eventRecorder }), { author: bound.handle.actorId, child: false })
             : seams.contextTree(bound.handle.actorId, { author: bound.handle.actorId, child: false })),
           children: childContextResolver({
             directory: seams.directory,
@@ -302,11 +302,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
   host = createSeatHost<CFSeat, CFRuntime>(deps, { compose: (seated) => Effect.succeed(seated) });
 
   return host;
-}
-
-/** Null until the `context_edit` run-event variant exists; a recorder that cannot represent it would drop or throw. */
-function contextEventsFor(_actor: BoundActor): ContextEventRecorder | null {
-  return null;
 }
 
 export interface ActorRetirementRequest {

@@ -1,6 +1,6 @@
 /** Codemode sandbox contract: namespace names, the crafted `tools.*` declaration, and crafted-tool labelling. */
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { asSchema, type ToolSet } from 'ai';
 import { JsonObjectSchema, decodeJsonValue, type JsonValue } from '../utils/json';
@@ -24,6 +24,39 @@ export {
 
 /** A program cannot call `eval` from inside itself, so declarations and bindings skip it. */
 const SANDBOX_TOOL = 'eval';
+
+/**
+ * How a program's console shows a value: a string as written, anything else as JSON (never "[object Object]"), and a
+ * value JSON cannot hold named as such. `SANDBOX_CONSOLE_PRELUDE` is this rule as source for the sandbox; a test holds
+ * the two equal.
+ */
+export function shownConsoleValue(logged: { readonly value: unknown }): string {
+  const { value } = logged;
+
+  return settleSync(Effect.gen(function* () {
+    if (typeof value === 'string') return value;
+    const shown = yield* Effect.result(Effect.try({ try: () => JSON.stringify(value) ?? String(value), catch: (cause) => cause }));
+
+    if (Result.isSuccess(shown)) return shown.success;
+
+    return `[unserializable: ${shown.failure instanceof Error ? shown.failure.message : String(shown.failure)}]`;
+  }));
+}
+
+/** `workspace.createTool` takes a function as itself and sends its source: every function argument is sent so. */
+export function createToolArguments(args: readonly unknown[]): unknown[] {
+  return args.map((arg) => (typeof arg === 'function' ? String(arg) : arg));
+}
+
+/** `shownConsoleValue` as sandbox source, applied to every console level the sandbox captures. */
+export const SANDBOX_CONSOLE_PRELUDE = 'const __kinuShown = (value) => { if (typeof value === "string") return value; '
+  + 'try { return JSON.stringify(value) ?? String(value); } '
+  + 'catch (error) { return `[unserializable: ${error instanceof Error ? error.message : String(error)}]`; } }; '
+  + 'for (const level of ["log", "warn", "error"]) { const write = console[level]; console[level] = (...args) => write(...args.map(__kinuShown)); }';
+
+/** `createToolArguments` as sandbox source, over the program's `workspace` namespace. */
+export const SANDBOX_CREATE_TOOL_PRELUDE = '{ const create = workspace.createTool; workspace.createTool = '
+  + '(...args) => create(...args.map((arg) => (typeof arg === "function" ? String(arg) : arg))); }';
 
 export function craftedToolDescription(name: string, description?: string): string {
   return description === undefined || description === '' ? `Crafted tool: ${name}` : description;

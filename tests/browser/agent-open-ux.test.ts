@@ -109,3 +109,25 @@ describe('opening an agent shows its live chat in the main chat area', () => {
     });
   }
 });
+
+describe("an agent's chat says when its turn waits on the provider, as the workspace's does", () => {
+  test('the wait the server sends its room shows in its composer', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      await page.setViewport(VIEWPORTS.desktop);
+      await page.goto(`${gallery.origin}/gallery.html?frame=workspaceshell&agent=coupon-auditor`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(`${AUDITOR_PANE} [data-composer-root] textarea`);
+
+      const shown = await page.evaluate(async (pane) => {
+        window.dispatchEvent(new CustomEvent('gallery:push-frame', { detail: { type: 'provider_wait', provider: 'anthropic', waitMs: 60_000, attempt: 1, source: 'header' } }));
+        await new Promise((painted) => { requestAnimationFrame(() => { requestAnimationFrame(painted); }); });
+
+        return [...document.querySelectorAll(`${pane} [data-composer-root] [role="status"]`)]
+          .some((notice) => /anthropic/iu.test(notice.textContent ?? ''));
+      }, AUDITOR_PANE);
+
+      expect(shown).toBe(true);
+    });
+  });
+});

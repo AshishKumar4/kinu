@@ -20,9 +20,8 @@ import {
   bootstrappedProfile, cliAccount, staticRouteCliEnv, unreachableAssets, unreachableNamespace, userAccount,
   workerContext,
 } from './helpers/bindings';
-import {
-  authenticateRequest, CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, type AuthIdentity,
-} from '../src/auth/session';
+import { authenticateRequest, type AuthIdentity } from '../src/auth/session';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { pollCliAuth, startCliAuth } from '../src/cli/auth-store';
 import type { CliRoutesEnv } from '../src/cli/routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';

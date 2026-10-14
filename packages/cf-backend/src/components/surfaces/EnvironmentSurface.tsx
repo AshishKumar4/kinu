@@ -11,7 +11,7 @@ import {
   SplitHorizontalIcon, SquaresFourIcon, XIcon, type Icon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
-import type { ExecutorCommandResult, Rpc } from "@kinu.run/core";
+import type { ExecutorCommandResult } from "@kinu.run/core";
 import {
   executorLabel,
   pickDefaultExecutor,
@@ -32,6 +32,7 @@ import {
   AgentMark, NewSessionRow, ONE_SHELL, SessionDetails, SessionTabs, openSession, sessionTone, since, useComputerSessions, type ComputerSessions,
   type SessionTone,
 } from "./EnvironmentSessions";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
 const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
@@ -41,7 +42,7 @@ const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
 });
 
 export interface EnvironmentSurfaceProps {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   executors: ExecutorInfo[];
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
@@ -121,7 +122,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const frame = useRef<HTMLDivElement>(null);
   const wide = useWideColumn(frame);
 
-  const load = useCallback(() => rpc<MountInfo[]>("listMounts"), [rpc]);
+  const load = useCallback(() => rpc("listMounts", []), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   // Empty and unread must stay distinct.
   const loaded = lastValue(resource);
@@ -360,7 +361,7 @@ function RailRow({ tone, icon = false, agent = false, name, detail, ports, curre
 }
 
 function SelectedEnvironment({ rpc, mount, exec, workspace, executorOutputs, onExecute, onOpenFiles, sessions, shown, wide }: {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   mount: MountInfo;
   exec: ExecutorInfo | undefined;
   workspace: string;

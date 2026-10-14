@@ -150,14 +150,18 @@ function makeProject(): string {
   return scratchDir('naming-project');
 }
 
-/** The announcement is the auto-title's own write, so waiting on it waits on the fact, not a delay. */
-function titled(host: LocalAgentHost): Promise<string> {
-  const settled = Promise.withResolvers<string>();
+/** The title the first turn wrote: its terminal effect, read once the turn ended and its detached close settled. */
+function titled(host: LocalAgentHost): Promise<string | undefined> {
+  const settled = Promise.withResolvers<string | undefined>();
 
-  const unsubscribe = host.subscribe((_who, event: SessionEvent) => {
-    if (event.type !== 'broadcast' || event.event.type !== 'workspace_renamed') return;
+  const unsubscribe = host.subscribe((who, event: SessionEvent) => {
+    if (who !== SLUG || event.type !== 'turn-end') return;
     unsubscribe();
-    settled.resolve(event.event.displayName);
+    settled.resolve(host.acquire(SLUG).then(async (session) => {
+      await session.settleBackgroundWork();
+
+      return listKnownAgents().find((agent) => agent.name === SLUG)?.label;
+    }));
   });
 
   return settled.promise;

@@ -629,7 +629,7 @@ async function buildCLIHeadRuntime(
   const physicalName = actorHomeName({ origin: opts.actorBinding.origin, name: actor.name, storageKey: actor.storageKey });
 
   const { stores } = opts;
-  const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
+  const agentStateVfs = parent.agentStateVfs;
   const { cwd: folder } = parent;
   const writeObserver = opts.writeObserver;
 

@@ -2,11 +2,11 @@
 import { useMemo } from "react";
 import type { UIMessage } from "ai";
 import { Loader } from "@cloudflare/kumo";
-import type { Rpc } from "@kinu.run/core";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { KeptTranscript } from "@/components/KeptTranscript";
 import { TranscriptViewport } from "@/components/TranscriptViewport";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** Hoisted, so the thread memos hold. */
 const NO_LIVE: readonly UIMessage[] = [];
@@ -15,7 +15,7 @@ export function KeptChatColumn({ workspace, subName, title, rpc, actorId }: {
   workspace: string;
   subName: string;
   title: string;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   actorId: string | null;
 }) {
   const chat = useChatThread({ rpc, live: NO_LIVE, seeded: true, actor: actorId });

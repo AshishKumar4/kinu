@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { WorkMode } from '../types/turn';
-import { readVersionedScaffoldSource } from '../scaffold/versions';
+import { scaffoldSource } from '../scaffold/versions';
 import { assertScaffoldActive, type ScaffoldRunControl } from '../scaffold/executor';
 import { sha256Hex } from '../safety/argument-digest';
 import { KinuError } from '../obs/error';
@@ -25,7 +25,7 @@ export function prepareActorProgram(input: ScaffoldRunControl & {
     assertScaffoldActive(input);
 
     if (input.mode === 'plan' || input.version <= 0) return BUILTIN_PROGRAM;
-    const source = yield* Effect.promise(() => readVersionedScaffoldSource({ path: input.runtime.identity.scaffold.path, vfs: input.runtime.agentStateVfs ?? input.runtime.storage.vfs }, input.version));
+    const source = yield* Effect.promise(() => scaffoldSource(input.runtime, input.version));
     assertScaffoldActive(input);
 
     if (source === null) return yield* new KinuError('missing', 'scaffold version ' + input.version + ' has no source');

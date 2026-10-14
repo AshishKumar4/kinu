@@ -480,7 +480,7 @@ describe('CloudAgentClient protocol', () => {
 
     const model = child.setModel('openai/gpt-next');
 
-    expect(await answer('setActorModel', { ok: true, spec: 'openai/gpt-next' })).toEqual(['researcher-a1b2c3', 'openai/gpt-next']);
+    expect(await answer('setModel', { ok: true, spec: 'openai/gpt-next' })).toEqual(['openai/gpt-next', 'researcher-a1b2c3']);
     await expect(model).resolves.toEqual({ spec: 'openai/gpt-next' });
 
     const effort = child.setReasoningEffort('low');

@@ -4,12 +4,11 @@ import { startTransition, useCallback, useEffect, useState } from "react";
 import { Button } from "@cloudflare/kumo";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
-import {
-  deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestorePlan, type Rpc,
-} from "@kinu.run/core";
+import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 interface DeviceRestorePlan {
   entries: FileCheckpointEntry[];
@@ -19,7 +18,7 @@ interface DeviceRestorePlan {
 
 function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }: {
   messageId: string;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   onClose: () => void;
   onReverted: () => void;
   /** The plan is handed over, not applied: overwriting device files needs its own confirm. */
@@ -37,7 +36,7 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
 
     startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
-      const listing = yield* Effect.promise(async () => rpc<FileCheckpointListing>("listFileCheckpoints", [200, messageId]));
+      const listing = yield* Effect.promise(async () => rpc("listFileCheckpoints", [200, messageId]));
 
       if (current) {
         setCheckpoints(listing.availability.available ? listing.entries : []);
@@ -82,7 +81,7 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       const plans: FileRestorePlan[] = [];
 
-      for (const entry of checkpoints) plans.push(yield* Effect.promise(async () => rpc<FileRestorePlan>("planFileRestore", [entry.dir, entry.id])));
+      for (const entry of checkpoints) plans.push(yield* Effect.promise(async () => rpc("planFileRestore", [entry.dir, entry.id])));
       onRestorePlan({ entries: [...checkpoints], dirs: plans.map((plan) => plan.dir), files: plans.flatMap((plan) => plan.files) });
       onClose();
     }), showing((chain) => {
@@ -135,7 +134,7 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
  */
 export function TurnRevert({ messageId, rpc, onClose, onReverted, onNotice }: {
   messageId: string | null;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   onClose: () => void;
   onReverted: () => void;
   onNotice: (notice: string) => void;

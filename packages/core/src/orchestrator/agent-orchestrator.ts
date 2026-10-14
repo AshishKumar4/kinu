@@ -67,7 +67,7 @@ export class AgentOrchestrator extends EvolutionLanes {
     },
     prepareStep: (ctx: PrepareStepContext): Promise<ModelMessage[] | undefined> => {
       // The file ledger shows what a codemode program changed, which no tool-call signature can.
-      const steer = this.steering.steerFor(ctx, this.acc.files.progress);
+      const steer = this.steering.steerFor(ctx, this.acc.ledgers.files.progress);
 
       return this.inbox.prepareStep(ctx, steer ? [steer] : []);
     },
@@ -112,7 +112,7 @@ export class AgentOrchestrator extends EvolutionLanes {
     const evolutionEnabled = this.deps.engine.enabled && workMode !== 'plan';
     this.turnEvolutionEnabled = evolutionEnabled;
     // Its `eval` calls are observed where they run (`delegation/actor-tools.ts`), into this turn's record.
-    this.acc.craft.recording = evolutionEnabled;
+    this.acc.ledgers.craft.recording = evolutionEnabled;
     this.turnRecoveries = [];
     this.observeRecoveries = evolutionEnabled;
     this.inbox.beginTurn(tags.signalId);
@@ -128,7 +128,7 @@ export class AgentOrchestrator extends EvolutionLanes {
     if (mode !== 'plan' || this.activeWorkMode === 'plan') return;
     this.activeWorkMode = 'plan';
     this.turnEvolutionEnabled = false;
-    this.acc.craft.recording = false;
+    this.acc.ledgers.craft.recording = false;
     this.observeRecoveries = false;
   }
 

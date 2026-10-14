@@ -3,17 +3,16 @@ import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } fro
 import { useAgent } from "agents/react";
 import { Effect } from "effect";
 import {
-  ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, hostedActorSocketPath, type OpeningList, type PendingAction,
-  type PlanReview, type ReasoningEffort, type RoleId, type SlateSummary, type TierSource,
+  ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, hostedActorSocketPath, type ActorSnapshot, type InlineSteer, type PlanReview,
+  type ReasoningEffort,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import type { PendingConsent, Rpc, TabPresence, SendLanding, SendState } from "@kinu.run/core";
+import type { SendLanding, SendState } from "@kinu.run/core";
+import { workspaceRpc } from "@/lib/workspace-rpc";
+import type { OrchestratorAgent } from "@/orchestrator";
 import { sendLanding } from "@kinu.run/core";
-import type { BackgroundJob } from "@kinu.run/core/protocol";
-import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
-import type { InlineSteer } from "@kinu.run/core";
 import { detach, diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
   createSessionRecovery, fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha, reportChatStreamFailure,
@@ -22,8 +21,6 @@ import {
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
 import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
-import type { InspectedWork } from "@kinu.run/core";
-import type { AsyncResource } from "./use-async-resource";
 import { useSocketFrames, type SocketFrame } from "./socket-frames";
 import {
   createLiveRefreshAdmission, formatWorkspaceError, loadWorkspaceSnapshot, readFailureText, refreshLiveResource,
@@ -59,89 +56,13 @@ export type SendAdmission =
   | { readonly landed: "mid-turn"; readonly settled: Promise<SendLanding> }
   | null;
 
-export interface ForkLineage {
-  sourceWorkspaceId: string;
-  sourceWorkspaceName: string;
-  sourceMessageId: string;
-  sourceMessageCreatedAt: number;
-  forkedAt: number;
-}
-
-export interface AgentStatus {
-  name: string;
-  displayName: string;
-  purpose: string;
-  soul: string;
-  createdAt: number;
-  scaffoldVersion: number;
-  searchNodeCount: number;
-  messageCount: number;
-  model: string;
-  /** The tier source the turn profile resolved. Set on agent panes, where the picker is read-only. */
-  modelSource?: TierSource;
-  /** Own setting, else the workspace's, else the tier's; null before the server resolves one. */
-  reasoningEffort: ReasoningEffort | null;
-  forkLineage: ForkLineage | null;
-}
-
-/** A field the server's literal or the gallery stub omits reads `undefined` and crashes the composer. */
-export interface SubordinateSnapshot {
-  name: string;
-  /** The pane's own identity, compared by {@link admitsActorFrame}. */
-  actorId: string;
-  displayName: string;
-  role: RoleId;
-  mission: string;
-  /** The resolution the turn makes, not the actor's own (unset) pin. */
-  model: { model: string; source: TierSource };
-  reasoningEffort: ReasoningEffort;
-  activePlan: unknown;
-  messageCount: number;
-  /** No live broadcast repeats the queue for a tab that was gone when the steer was taken. */
-  pendingSteers: InlineSteer[];
-}
-
-interface WorkspaceSnapshot {
-  status: AgentStatus;
-  memoryContent: string;
-  slates: SlateSummary[];
-  executors: ExecutorInfo[];
-  executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
-  lastActiveExecutor: string | null;
-  /** On the snapshot so a plan-gated workspace does not paint in build mode and then jump. */
-  activePlan: unknown;
-  /** On the snapshot so the strip is right from first paint. */
-  tabPresence: TabPresence;
-  /** Acknowledged, not yet landed. A reconnecting tab learns queued work no broadcast repeats. */
-  pendingSteers: InlineSteer[];
-  /** Same reason: a branch that started or settled while this tab was gone. */
-  branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
-  /** A turn with no tokens seen yet is still live; a claim nobody executes reads as stuck. */
-  turnClaim: TurnClaimState;
-}
-
-/** The snapshot and the lists the first screen draws, in the one read a workspace tab opens with (`getWorkspaceOpening`). */
-export interface WorkspaceOpening extends WorkspaceSnapshot {
-  pendingActions: PendingAction[];
-  backgroundJobs: BackgroundJob[];
-  inspectedWork: InspectedWork[];
-  subordinates: OpeningList<unknown>;
-  pendingConsents: OpeningList<PendingConsent[]>;
-  workspaceAgents: OpeningList<PanelAgent[]>;
-}
+/** The snapshot and the lists the first screen draws, in the one read a workspace tab opens with: as the server answers it. */
+export type WorkspaceOpening = Awaited<ReturnType<OrchestratorAgent["getWorkspaceOpening"]>>;
 
 /** Doubling from 1s, capped so a long outage keeps a slow heartbeat instead of hammering the DO. */
 const RETRY_BASE_MS = 1_000;
 
 const RETRY_MAX_MS = 30_000;
-
-interface CallableAgent {
-  call<T>(method: string, args: unknown[]): Promise<T>;
-}
-
-function bindRpc(agent: CallableAgent): Rpc {
-  return <T = unknown>(method: string, args: unknown[] = []) => agent.call<T>(method, args);
-}
 
 export function useWorkspaceRpc(agentId: string) {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
@@ -155,9 +76,7 @@ export function useWorkspaceRpc(agentId: string) {
     onError: useCallback(() => setConnectionStatus("error"), []),
   });
 
-  const rpc = useMemo(() => bindRpc(agent), [agent]);
-
-  return { rpc, connectionStatus };
+  return { rpc: useMemo(() => workspaceRpc(agent.call), [agent]), connectionStatus };
 }
 
 export interface WorkspaceExtension {
@@ -228,7 +147,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    */
   const [probeAnswered, setProbeAnswered] = useState(false);
   const answered = useRef(Promise.withResolvers<void>());
-  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  /** Its agent as the pane draws it: set by each completed load, cleared only by a switch to another chat, so it means
+   *  "this chat has last known data". */
+  const [actorSnapshot, setActorSnapshot] = useState<ActorSnapshot | null>(null);
   // Keyed by source so one recovery never erases another's error; none expire on a timer.
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
 
@@ -267,17 +188,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     return () => liveRefreshAdmission.invalidateActor(actorKey);
   }, [actorKey, liveRefreshAdmission]);
 
-  // `agentStatus` is set only by a completed snapshot and cleared only by a workspace switch,
-  // so it means "this workspace has last known data".
-  const loadedStatus: AsyncResource<AgentStatus> = agentStatus === null
-    ? { status: "loading" }
-    : { status: "ready", value: agentStatus };
-
-  const snapshot: AsyncResource<AgentStatus> = errors.snapshot !== undefined
-    ? { status: "error", message: errors.snapshot, last: agentStatus }
-    : loadedStatus;
-
-  const error = formatWorkspaceError(errors, agentStatus !== null);
+  const error = formatWorkspaceError(errors, actorSnapshot !== null);
   /** Read by the socket's reader at each frame; null on the workspace pane, and until the load resolves it. */
   const ownActorIdRef = useRef<string | null>(null);
   const [paneActorId, setPaneActorId] = useState<string | null>(null);
@@ -342,16 +253,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     if (data.type === "cf_agent_stream_resuming" || data.type === "cf_agent_stream_resume_none") {
       setProbeAnswered(true);
       answered.current.resolve();
-    } else if (data.type === "workspace_renamed") {
-      const displayName = data.displayName;
-
-      if (displayName?.trim()) {
-        setAgentStatus((prev) => prev ? { ...prev, displayName } : prev);
-      }
-
-      window.dispatchEvent(new CustomEvent("kinu:workspace-renamed", {
-        detail: { name: actorAddress.workspace, displayName },
-      }));
     } else if (data.type === "provider_wait") {
       // Each wait in a chain replaces the one before.
       setProviderWait({
@@ -365,7 +266,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
       if (failed !== null) setFrameError(failed);
     }
-  }, [actorAddress.workspace, clearProviderWait]);
+  }, [clearProviderWait]);
 
   const {
     messages,
@@ -510,47 +411,30 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [agent, refreshDeployedBuild, sessionRecovery]);
 
   // A reconnect or manual retry changes the transport identity so mounted readers reload too.
-  const rpc = useMemo(() => {
-    const call = bindRpc(agent);
+  const rpc = useMemo(() => workspaceRpc(async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    try {
+      const value = await agent.call<T>(method, args);
 
-    return async <T,>(method: string, args: unknown[] = []): Promise<T> => {
-      try {
-        const value = await call<T>(method, args);
-        sessionRecovery.rpcSucceeded();
+      sessionRecovery.rpcSucceeded();
 
-        return value;
-      } catch (cause) {
-        sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
-        throw cause;
-      }
-    };
-  }, [agent, sessionRecovery, loadGeneration]);
+      return value;
+    } catch (cause) {
+      sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
+      throw cause;
+    }
+  }), [agent, sessionRecovery, loadGeneration]);
 
-  // Subordinate sockets have no live-data polls, so an open corpse produces no RPC evidence
-  // without this acknowledged ping.
+  // Answered by the socket's auto-response, never the object: an idle page wakes nothing (2026-09-26, 180 RPCs a
+  // minute to none). A silently dead socket shows in the next calls' timeouts, the workspace's and an agent's alike.
   useEffect(() => {
     if (connectionStatus !== "connected") return;
 
-    const id = setInterval(() => detach(Effect.promise(async () => {
-      if (agent.readyState !== WebSocket.OPEN) return;
-
-      if (!isSubordinate) {
-        agent.send(PAGE_KEEPALIVE.ping);
-
-        return;
-      }
-
-      try {
-        // The tab's own read, so a corpse fails the ping and the load alike.
-        await rpc("getActorSnapshot", [subordinate]);
-        setSourceError("snapshot", null);
-      } catch (cause) {
-        setSourceError("snapshot", readFailureText({ cause }));
-      }
-    })), 25_000);
+    const id = setInterval(() => {
+      if (agent.readyState === WebSocket.OPEN) agent.send(PAGE_KEEPALIVE.ping);
+    }, 25_000);
 
     return () => clearInterval(id);
-  }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
+  }, [agent, connectionStatus]);
 
   // Speaks only for itself. Re-running admits a newer load, which retires this one. It starts a microtask after the
   // commit, so a load retired in the commit that made it (a remount, StrictMode's included) issues no read: the opening
@@ -564,10 +448,11 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
         if (disposed) return;
 
         const outcome = await loadWorkspaceSnapshot(
-          isSubordinate ? loadSubordinateData : loadAllData,
+          loadChat,
           setSourceError,
           (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
-          isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
+          // A hosted chat's load seeds only its plan; the workspace's seeds every read its opening carries.
+          isSubordinate ? ["plan"] : SNAPSHOT_SEEDED_SOURCES,
         );
 
         if (disposed || outcome === "superseded") return;
@@ -691,20 +576,33 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     return null;
   }, [extension, rpc, setSourceError]);
 
-  // One round trip: a second awaited RPC for the active plan makes a plan-gated composer paint in
-  // build mode and jump, and the lists the first screen draws came back a wave later. The exploration
-  // canvas is not seeded here; its surface fetches its own.
-  async function loadAllData(
+  /**
+   * This chat's agent, the workspace's or a hosted one's, read the same way. The workspace's comes in its opening, one
+   * round trip: a second awaited RPC for the active plan made a plan-gated composer paint in build mode and jump, and
+   * the lists the first screen draws came back a wave later. The exploration canvas is not seeded here; its surface
+   * fetches its own.
+   */
+  async function loadChat(
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
   ): Promise<void> {
-    const snap = await rpc<WorkspaceOpening>("getWorkspaceOpening", []);
+    const opening = isSubordinate ? null : await rpc("getWorkspaceOpening", []);
+    // The root resolves the name through its directory, so a tab cannot ask about a non-child actor.
+    const chat = opening?.chat ?? await rpc("getActorSnapshot", [subordinate]);
 
     if (!isCurrent()) return;
-    // Decoded before anything is published: an opening whose plan does not decode fails whole, never half-loaded
-    // nor read as "no plan".
-    const loadedPlan = parseActivePlanReview({ value: snap.activePlan });
-    setAgentStatus(snap.status);
+    // Decoded before anything is published: a chat whose plan does not decode fails whole, never half-loaded nor read
+    // as "no plan".
+    const loadedPlan = parseActivePlanReview({ value: chat.activePlan });
+
+    // Set before anything is admitted: stamped frames are a hosted chat's only while the id matches, and a page request
+    // without it reads the workspace's rows.
+    if (isSubordinate) {
+      ownActorIdRef.current = chat.actorId;
+      setPaneActorId(chat.actorId);
+    }
+
+    setActorSnapshot(chat);
 
     if (isSourceCurrent("plan")) {
       if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
@@ -713,39 +611,11 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
     // Replace, never merge: durable rows are the authority, so a reconnecting tab learns missed
     // transitions and drops settled chips. A racing broadcast upserts by id afterwards.
-    setSteerRuns(snap.pendingSteers);
-    setTurnClaim(snap.turnClaim);
-    await extension?.current?.snapshot(snap, isSourceCurrent);
-  }
+    setSteerRuns([...chat.pendingSteers]);
 
-  async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
-    // The root resolves the name through its directory, so a tab cannot ask about a non-child actor.
-    const actorSnapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
-
-    if (!isCurrent()) return;
-    // Set before anything is admitted: stamped frames are this chat's only while the id matches,
-    // and a page request without it reads the workspace's rows.
-    ownActorIdRef.current = actorSnapshot.actorId;
-    setPaneActorId(actorSnapshot.actorId);
-    setAgentStatus({
-      name: actorSnapshot.name,
-      displayName: actorSnapshot.displayName,
-      purpose: actorSnapshot.role,
-      soul: actorSnapshot.mission,
-      createdAt: 0,
-      scaffoldVersion: 0,
-      model: actorSnapshot.model.model,
-      modelSource: actorSnapshot.model.source,
-      reasoningEffort: actorSnapshot.reasoningEffort,
-      searchNodeCount: 0,
-      messageCount: actorSnapshot.messageCount,
-      forkLineage: null,
-    });
-    const loadedPlan = parseActivePlanReview({ value: actorSnapshot.activePlan });
-
-    if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
-    setActivePlan(loadedPlan);
-    setSteerRuns(actorSnapshot.pendingSteers);
+    if (opening === null) return;
+    setTurnClaim(opening.turnClaim);
+    await extension?.current?.snapshot(opening, isSourceCurrent);
   }
 
   useEffect(() => {
@@ -755,7 +625,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     // completion cannot open it for the next holder.
     abandonTurn(sendLatch.current);
     setErrors({});
-    setAgentStatus(null);
+    setActorSnapshot(null);
     knownPlans.current.clear();
     setPlanFocus(null);
     setActivePlan(null);
@@ -805,7 +675,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       awaitSend: (sent: string) => agent.call<SendState>("awaitSend", [sent], { timeout: 0 }),
     };
 
-    return { landed: "mid-turn", settled: sendLanding(record, rpc<void>("send", [content, id, attachments, mode]), id) };
+    return { landed: "mid-turn", settled: sendLanding(record, rpc("send", [content, id, attachments, mode]), id) };
   }, [startTurn, sendMessage, isStreaming, rpc, agent]);
 
   /** `regenerate`, not `sendMessage`, which appended a duplicate user message per press. Under the
@@ -820,33 +690,30 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     });
   }, [startTurn, messages.length, regenerate]);
 
+  /** Every per-chat call names a hosted chat's agent last; the workspace's names none. */
+  const actorArgs = useMemo((): [] | [string] => (subordinate === undefined ? [] : [subordinate]), [subordinate]);
+
   /** Resolves null on success or the failure reason, which is also recorded on `error` after the
    *  picker is rolled back. Callers reporting "Saved" must check the result; it never rejects. */
   const setModel = useCallback(async (modelId: string): Promise<string | null> => {
-    setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
+    const showing = (model: string) => setActorSnapshot((prev) => prev ? { ...prev, model: { ...prev.model, model } } : prev);
+
+    showing(modelId);
 
     try {
-      const r = subordinate === undefined
-        ? await rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId])
-        : await rpc<{ ok?: boolean; spec?: string }>("setActorModel", [subordinate, modelId]);
-
       // The server may have normalized the spec.
-      const spec = r?.spec;
+      const { spec } = await rpc("setModel", [modelId, ...actorArgs]);
 
-      if (spec) setAgentStatus((prev) => prev ? { ...prev, model: spec } : prev);
+      if (spec) showing(spec);
       setSourceError("model", null);
 
       return null;
     } catch (err) {
-      // Roll back to the stored spec so the picker never shows an unsaved model.
+      // Roll back to the model the chat runs, so the picker never shows an unsaved one.
       let reason = `Could not switch model: ${readFailureText({ cause: err })}`;
 
       try {
-        const stored = subordinate === undefined
-          ? await rpc<{ spec?: string | null }>("getStoredModelSpec", [])
-          : { spec: (await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate])).model.model };
-
-        setAgentStatus(prev => prev ? { ...prev, model: stored.spec ?? '' } : prev);
+        showing((await rpc("getActorSnapshot", actorArgs)).model.model);
       } catch (rollbackErr) {
         reason += `. Could not re-read the saved model either (${readFailureText({ cause: rollbackErr })}), so the picker may not show the saved model`;
       }
@@ -855,33 +722,26 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
       return reason;
     }
-  }, [rpc, setSourceError, subordinate]);
+  }, [rpc, setSourceError, actorArgs]);
 
   /** Null clears to the tier's. Optimistic, rolled back on refusal. */
   const setReasoningEffort = useCallback(async (effort: ReasoningEffort | null): Promise<void> => {
-    const before = agentStatus?.reasoningEffort ?? null;
-    setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: effort } : prev);
+    const before = actorSnapshot?.reasoningEffort ?? null;
+
+    setActorSnapshot((prev) => prev ? { ...prev, reasoningEffort: effort } : prev);
 
     try {
-      await rpc("setReasoningEffort", subordinate === undefined ? [effort] : [effort, subordinate]);
+      await rpc("setReasoningEffort", [effort, ...actorArgs]);
       setSourceError("model", null);
     } catch (err) {
-      setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
+      setActorSnapshot((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
       setSourceError("model", `Could not set the thinking level: ${readFailureText({ cause: err })}`);
     }
-  }, [rpc, setSourceError, subordinate, agentStatus?.reasoningEffort]);
-
-  const setDisplayName = useCallback(async (displayName: string): Promise<string> => {
-    const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
-    const saved = result.displayName;
-    setAgentStatus((prev) => prev ? { ...prev, displayName: saved } : prev);
-
-    return saved;
-  }, [rpc]);
+  }, [rpc, setSourceError, actorArgs, actorSnapshot?.reasoningEffort]);
 
   const rereadPlan = useCallback(() => refreshCurrentLiveResource(
     "plan",
-    () => rpc<unknown>("getActivePlanReview", []),
+    () => rpc("getActivePlanReview", []),
     (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
   ), [refreshCurrentLiveResource, rpc]);
 
@@ -907,19 +767,15 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       chatError,
       clearChatError,
       retryLastMessage,
-      agentStatus,
-      /** A pane may only report "none" for a read that came back; `agentStatus` alone cannot tell
-       *  loading from failed. */
-      snapshot,
+      actorSnapshot,
       activePlan,
       planFocus,
       sendChat,
       abortChat,
       /** Answered, and refused while a turn runs; the clear frame the server sends ahead of the answer empties every window. */
-      clearConversation: () => rpc<void>("clearConversation", []),
+      clearConversation: () => rpc("clearConversation", []),
       setModel,
       setReasoningEffort,
-      setDisplayName,
       modelFallbacks,
       /** Returned steers are removed by the server's broadcast, not by the surface. */
       steerRuns,
@@ -932,7 +788,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     },
     link: {
       agent, rpc, actorKey, liveRefreshAdmission, refreshCurrentLiveResource, setSourceError, errors,
-      loaded: agentStatus !== null, streaming: isStreaming, rereadPlan,
+      loaded: actorSnapshot !== null, streaming: isStreaming, rereadPlan,
     },
   };
 }

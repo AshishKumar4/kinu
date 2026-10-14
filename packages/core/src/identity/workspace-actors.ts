@@ -70,6 +70,15 @@ export interface WorkspaceActor extends ActorProfile {
   readonly deletedAt: number | null;
 }
 
+/** Live until its retirement starts, retiring while its work winds down, retired once its record is deleted. */
+export type ActorStanding = 'live' | 'retiring' | 'retired';
+
+export function actorStanding(actor: Pick<WorkspaceActor, 'retiringAt' | 'deletedAt'>): ActorStanding {
+  if (actor.deletedAt !== null) return 'retired';
+
+  return actor.retiringAt === null ? 'live' : 'retiring';
+}
+
 export interface CreateWorkspaceActor {
   readonly parent: ActorHandle;
   readonly name: string;
@@ -391,7 +400,7 @@ export class WorkspaceActorDirectory {
 
       if (row.name !== input.name || !sameProfile(row, actorPreset(input.origin, input.lifetime))) throw new KinuError('denied', 'The cancellation does not match the admitted creation.');
 
-      if (row.retiringAt === null && row.deletedAt === null) this.transitionRetirement(row.actorId, 'retire');
+      if (actorStanding(row) === 'live') this.transitionRetirement(row.actorId, 'retire');
       const updated = this.retained(row.actorId);
 
       if (!updated) throw new KinuError('missing', 'The actor creation record disappeared.');
@@ -479,9 +488,9 @@ export class WorkspaceActorDirectory {
         throw new KinuError('denied', 'The child reference does not match its parent and name.');
       }
 
-      if (input.action === 'validate' && (row.retiringAt !== null || row.deletedAt !== null)) throw new KinuError('missing', 'The child actor is retired.');
+      if (input.action === 'validate' && actorStanding(row) !== 'live') throw new KinuError('missing', 'The child actor is retired.');
 
-      if (input.action === 'retire' && row.retiringAt === null && row.deletedAt === null) {
+      if (input.action === 'retire' && actorStanding(row) === 'live') {
         this.transitionRetirement(row.actorId, 'retire');
       }
 

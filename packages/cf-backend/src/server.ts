@@ -13,8 +13,8 @@ import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
   parseEgressParams, workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
-import { APP_ROUTES, ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
-import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
+import { APP_ROUTES, ERROR_STATUS, ORCHESTRATOR_AGENT_SLUG, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
+import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -33,9 +33,9 @@ import { pcRoutes } from "./pc-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
-import { handleNimbusPreviewHostRequest } from "./nimbus-route";
+import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
 import {
-  authenticateRequest, AuthError, crossSiteRejection,
+  crossSiteRejection, sessionGate,
   type AuthIdentity,
 } from "./auth/session";
 import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
@@ -119,24 +119,6 @@ export { SupervisorRPC } from "@nimbus-sh/worker/session/supervisor-rpc";
 // Without it Nimbus records no span: only its own Worker entry adopts.
 adoptTracing(tracing);
 
-function authError(request: Request, e: AuthError): Response {
-  if (e.status === 401 && wantsHtml(request)) {
-    const url = new URL(request.url);
-    const login = new URL('/login', url.origin);
-    login.searchParams.set('return_to', url.pathname + url.search + url.hash);
-
-    return new Response(null, {
-      status: 302,
-      headers: { location: login.toString(), 'cache-control': 'no-store' },
-    });
-  }
-
-  return new Response(JSON.stringify({ error: e.message }), {
-    status: e.status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
 function authenticateCliAgentTicketRequest(
   request: Request,
   env: Env,
@@ -148,19 +130,13 @@ function authenticateCliAgentTicketRequest(
   if (!agentName || !ticket) return Effect.succeed(null);
 
   if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
-    return Effect.succeed(new Response(JSON.stringify({ error: 'CLI agent tickets are only valid for WebSocket connections.' }), {
-      status: 400,
-      headers: { 'content-type': 'application/json' },
-    }));
+    return Effect.succeed(err(400, 'CLI agent tickets are only valid for WebSocket connections.'));
   }
 
   const userId = parseCliAgentConnectTicketUserId(ticket);
 
   if (!userId) {
-    return Effect.succeed(new Response(JSON.stringify({ error: 'Invalid CLI agent connect ticket.' }), {
-      status: 401,
-      headers: { 'content-type': 'application/json' },
-    }));
+    return Effect.succeed(err(401, 'Invalid CLI agent connect ticket.'));
   }
 
   return Effect.catchCause(Effect.gen(function* () {
@@ -174,10 +150,7 @@ function authenticateCliAgentTicketRequest(
     }));
 
     if (!verified.ok || !verified.user) {
-      return new Response(JSON.stringify({ error: verified.error ?? 'Invalid CLI agent connect ticket.' }), {
-        status: 401,
-        headers: { 'content-type': 'application/json' },
-      });
+      return err(401, verified.error ?? 'Invalid CLI agent connect ticket.');
     }
 
     url.searchParams.delete('ticket');
@@ -250,14 +223,6 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function wantsHtml(request: Request): boolean {
-  if (new URL(request.url).pathname.startsWith('/agents/')) return false;
-
-  const accept = request.headers.get('accept') ?? '';
-
-  return request.method === 'GET' && (accept.includes('text/html') || accept.includes('*/*'));
-}
-
 /** Dev hosts (localhost, LAN) match neither and stay on plain HTTP. */
 function isPublishedHost(url: URL, env: Env): boolean {
   if (isPreviewHostRequest(url, env)) return true;
@@ -328,12 +293,6 @@ previewHost.all('*', async (c) => await servePreviewRequest(c.req.raw, c.env));
 
 previewHost.onError(routeError);
 
-/** Every other code is a workspace failure: 500. */
-const HOSTED_ACTOR_ROUTE_STATUS: Partial<Readonly<Record<ErrorCode, number>>> = {
-  missing: 404,
-  denied: 403,
-};
-
 /** `request`: a CLI ticket stripped. */
 interface WorkerVariables extends ApiVariables {
   request: Request;
@@ -401,29 +360,14 @@ for (const prefix of ['/auth', '/assets', '/shared/blueprint']) worker.all(`${pr
 
 worker.use('*', (c, next) => settle(Effect.gen(function* () {
   const request = c.req.raw;
-  let identity: AuthIdentity;
-  let routed = request;
   const cliAgentTicket = yield* authenticateCliAgentTicketRequest(request, c.env);
 
   if (cliAgentTicket instanceof Response) return cliAgentTicket;
+  // A CLI ticket is its own credential; the cross-site rule still holds over it.
+  const identity = cliAgentTicket === null ? yield* sessionGate(request, c.env) : (crossSiteRejection(request) ?? cliAgentTicket.identity);
 
-  if (cliAgentTicket) {
-    identity = cliAgentTicket.identity;
-    routed = cliAgentTicket.request;
-  } else {
-    const authenticated = yield* Effect.catchCause(Effect.promise(() => authenticateRequest(request, c.env)), (failed) => {
-      const e = Cause.squash(failed);
-
-      return e instanceof AuthError ? Effect.succeed(authError(request, e)) : Effect.failCause(failed);
-    });
-
-    if (authenticated instanceof Response) return authenticated;
-    identity = authenticated;
-  }
-
-  const crossSite = crossSiteRejection(request);
-
-  if (crossSite) return crossSite;
+  if (identity instanceof Response) return identity;
+  const routed = cliAgentTicket?.request ?? request;
 
   // After CSRF so cross-site requests never feed the index; workspaces are
   // indexed only after the ownership check below.
@@ -432,6 +376,9 @@ worker.use('*', (c, next) => settle(Effect.gen(function* () {
   c.set('request', routed);
   yield* Effect.promise(() => next());
 })));
+
+// Behind sign-in: a preview's owner is sent on to it with a ticket for its host, anyone else told it is not theirs.
+worker.get(PREVIEW_ENTRY_PATH, async (c) => await previewEntry(c.req.raw, c.env, c.get('identity').userId));
 
 worker.all('/agents/*', async (c, next) => {
   // Refuse any namespace/facet path outside the public actor grammar before SDK routing.
@@ -460,7 +407,7 @@ worker.all('/agents/*', async (c, next) => {
     const target = await root.resolveHostedActorRoute(hosted.name);
 
     if ('reason' in target) {
-      return Response.json(target, { status: HOSTED_ACTOR_ROUTE_STATUS[target.reason] ?? 500 });
+      return Response.json(target, { status: ERROR_STATUS[target.reason] });
     }
 
     headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);

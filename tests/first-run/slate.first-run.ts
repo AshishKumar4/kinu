@@ -54,7 +54,7 @@ describe(SUITE, () => {
           url.pathname = url.pathname.replace(/\/$/, '') + '/ping';
 
           try {
-            const response = await fetch(url);
+            const response = await session.openPreview(url);
             const body = await response.text();
             const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), ExpectedResponse), body);
             answered = response.ok && parsed.success;

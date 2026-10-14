@@ -161,7 +161,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
     this.image = image;
     this.process = await this.resident.launch({
-      owner, root, app, globalOutbound: codemodeEgress({ workspace: null, actor: null }),
+      owner, root, app, globalOutbound: codemodeEgress({ workspace: null, actor: null, asOwner: false }),
       bindings: bindChain ? { __storage: storageStub, workspace: exports.SlateChainProbe({}) } : { __storage: storageStub },
     }, image);
   }

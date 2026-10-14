@@ -3,7 +3,8 @@ import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import { WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
 import * as v from 'valibot';
-import type { ExecutorInfo, Rpc } from '@kinu.run/core';
+import type { ExecutorInfo } from '@kinu.run/core';
+import { workspaceRpc, type SocketCall } from '@/lib/workspace-rpc';
 import { INSPECTOR_DEFAULT_PX } from '@kinu.run/core/web/inspector-layout';
 import { useKinu } from '@/hooks/use-kinu';
 import { WorkspacePlanUpdatedFrameSchema } from '@kinu.run/core';
@@ -91,7 +92,7 @@ export function PreviewTabsGallery() {
   // Real root connection, for the arrival hint only.
   const { workspacePlanArrival } = useKinu('preview-tabs');
 
-  const rpc: Rpc = useCallback(<T,>(method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
+  const rpc: SocketCall = useCallback(<T,>(method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
     const reply = (value: ReplyValue): Effect.Effect<T> => Effect.promise(() => new Response(JSON.stringify(value)).json<T>());
 
     if (method === 'previewSlate') return yield* reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } });
@@ -158,7 +159,7 @@ export function PreviewTabsGallery() {
     return yield* Effect.die(new Error('Unexpected preview gallery RPC: ' + method));
   })), [plan, edited, broken, failHistory, workerPlan]);
 
-  const workerRpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  const workerRpc: SocketCall = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'decidePlanReview') {
       const next: PlanReview = { ...workerPlan, status: 'approved', handoffAccepted: true };
       setWorkerPlan(next);
@@ -192,14 +193,14 @@ export function PreviewTabsGallery() {
       <button data-notify-malformed onClick={() => notify(MALFORMED_REFERENCE)}>Notify malformed plan</button>
     </div>
     <div data-preview-surface className="flex-1 min-h-0" style={narrow ? { width: INSPECTOR_DEFAULT_PX } : undefined}>
-      <WorkSurface planRpc={owner === "main" ? rpc : workerRpc} planOwner={owner} onReviewActor={setOwner} surface={surface} onSurface={setSurface} previewFocus={focus} planFocus={planFocus}
+      <WorkSurface planRpc={workspaceRpc(owner === "main" ? rpc : workerRpc)} planOwner={owner} onReviewActor={setOwner} surface={surface} onSurface={setSurface} previewFocus={focus} planFocus={planFocus}
         workspacePlanArrival={workspacePlanArrival}
         pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'computer', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'device', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
         slates={slates} slateReloads={new Map(slates.map(item => [item.id, reload]))}
         previewError={null} previewStarting={starting ? ['computer'] : []} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}
         executors={[...machine ? [MACHINE] : [], ...idleSandbox ? [IDLE_COMPUTER] : []]} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={NOTHING} pendingActions={[]}
-        tabPresence={{ explorations: false, work: true }} rpc={rpc} />
+        tabPresence={{ explorations: false, work: true }} rpc={workspaceRpc(rpc)} />
     </div>
   </div>;
 }

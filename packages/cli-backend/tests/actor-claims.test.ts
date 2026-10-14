@@ -46,7 +46,7 @@ interface Bound {
 async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRuntime }> {
   const { rt, db } = createTestRuntime();
   rt.executor = createSandboxedExecutor();
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const files = rt.agentStateVfs;
   await files.mkdir('scaffold', { recursive: true });
   await writeText(files, rt.identity.scaffold.path + '.v1', V1);
   await writeText(files, rt.identity.scaffold.path + '.v2', V2);
@@ -186,7 +186,7 @@ test('the claim and its admitted context are durable before the first model call
 test('a source change after admission cannot alter the bytes the turn consumed', async () => {
   const { bind, rt } = await workspace();
   const left = bind('left');
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const files = rt.agentStateVfs;
   let aliasReads = 0;
   rt.identity.scaffold.read = async () => {
     aliasReads++;
@@ -209,7 +209,7 @@ test('a source change after admission cannot alter the bytes the turn consumed',
 
   const recovery = await verifyClaimedProgram(
     claim,
-    readVersionedScaffoldSource.bind(undefined, { path: left.runtime.identity.scaffold.path, vfs: left.runtime.agentStateVfs ?? left.runtime.storage.vfs }),
+    readVersionedScaffoldSource.bind(undefined, { path: left.runtime.identity.scaffold.path, vfs: left.runtime.agentStateVfs }),
     sha256Hex,
     await left.stores.claims.consumedContext('turn-src'),
   );
@@ -243,7 +243,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
 
   const recovery = await verifyClaimedProgram(
     claim,
-    readVersionedScaffoldSource.bind(undefined, { path: left.runtime.identity.scaffold.path, vfs: left.runtime.agentStateVfs ?? left.runtime.storage.vfs }),
+    readVersionedScaffoldSource.bind(undefined, { path: left.runtime.identity.scaffold.path, vfs: left.runtime.agentStateVfs }),
     sha256Hex,
     await cold.claims.consumedContext('turn-cold'),
   );

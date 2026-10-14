@@ -19,7 +19,7 @@ export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
-export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
+export { inspectDescendant, inspectSubordinateStorage, readableActor, type AgentOwnInspection, type ReadableActor, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
@@ -62,7 +62,9 @@ export type {
   ExecutionKey, ExecutionLane, TurnCapability,
 } from './orchestrator/execution';
 
-export { inTurnSurface, scopedTurnSurface, turnLedgers, TurnSurface, type TurnLedgers, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+
+export { turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
@@ -186,7 +188,7 @@ export {
 
 export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
 
-export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
+export { WORKSPACE_TITLE_MAX, workspaceDisplayTitle, workspaceTitleDraft, workspaceTitleProblem } from './read-models/workspace-title';
 
 export { EvolutionEngine } from './evolution/engine';
 
@@ -284,7 +286,7 @@ export { parseSlateProject, slateTitle, type SlateProject } from './slates/proje
 export { slateAuthority } from './slates/authority';
 
 export {
-  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
+  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
   formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
@@ -523,6 +525,7 @@ export {
   renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
   slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
+  shownConsoleValue, createToolArguments, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
@@ -560,7 +563,7 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun, type DeliveredRunPorts } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
@@ -1652,7 +1655,7 @@ export {
 
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema, WORK_TAB_JOBS } from './read-models/workspace-work';
 
-export { agentTitle, nestedAgent, type AgentLinkIds } from './subordinates/nested-agent';
+export { agentTitle, nestedAgent, type AgentLinkIds, type InspectSubordinate } from './subordinates/nested-agent';
 
 export { recognizeGitHubHttp, recognizeGitHubMcp, GitHubFactSchema, GITHUB_MCP_PRESET, type GitHubFact } from './github/recognize';
 
@@ -2075,7 +2078,7 @@ export type {
 } from './read-models/workspace-overview';
 
 export type {
-  AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
+  ActorSnapshot, AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
 } from './read-models/status';
 
 export {
@@ -2177,7 +2180,7 @@ export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-m
 
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
-  type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
+  type MemoryEntry, type PendingConsent, type SubordinateActivityEvent,
   type TabPresence, evolutionHelper, ownerFacingSubordinate,
 } from './protocol';
 
@@ -2241,7 +2244,7 @@ export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressA
 
 export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
-  fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
+  BuildStampSchema, fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
 
 export {

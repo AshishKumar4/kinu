@@ -1,21 +1,14 @@
 /** Staged derivation: a streamed token re-folds only the live window. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import * as v from "valibot";
-import {
-  EMPTY_TRANSCRIPT_FOLD, ChatHistoryEntrySchema, extendTranscript, positionPageSchema,
-  restoredRows, sealTranscript,
-  type ChatHistoryEntry, type InlineSteer, type PositionPageRequest, type Rpc, type Transcript,
-} from "@kinu.run/core";
+import { EMPTY_TRANSCRIPT_FOLD, extendTranscript, restoredRows, sealTranscript, type ChatHistoryEntry, type InlineSteer, type PositionPageRequest, type Transcript } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 
 import { MAX_PAGE, useHistoryPages, type HistorySegment } from "@/hooks/use-paged-scroll";
 import type { ReserveAsk } from "@/hooks/use-growing-scroll";
 import type { ReserveRange } from "@/hooks/use-history-reserve";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const CHAT_PAGE_SIZE = 40;
-
-/** `metadata` must be declared: `v.object` drops undeclared keys, and panes read the author stamp from it. */
-const ChatHistoryPageSchema = positionPageSchema(ChatHistoryEntrySchema);
 
 export interface ChatHistory {
   readonly entries: readonly ChatHistoryEntry[];
@@ -49,7 +42,7 @@ const NO_IDS: ReadonlySet<string> = new Set();
 const NO_STEER_RUNS: readonly InlineSteer[] = [];
 
 export interface ChatThreadInput {
-  readonly rpc: Rpc;
+  readonly rpc: WorkspaceRpc;
   readonly live: readonly UIMessage[];
   /** A delivered empty list still starts the walk; only the store can say the conversation is empty. */
   readonly seeded: boolean;
@@ -102,9 +95,9 @@ export function useChatThread({
     [current.slid, frame]);
 
   const pages = useHistoryPages(useCallback(
-    (request: PositionPageRequest) => rpc<unknown>("getChatHistoryPage", [
+    (request: PositionPageRequest) => rpc("getChatHistoryPage", [
       actor === undefined || actor === null ? request : { ...request, actor },
-    ]).then((page) => v.parse(ChatHistoryPageSchema, page)),
+    ]),
     [rpc, actor],
   ), CHAT_PAGE_SIZE);
 

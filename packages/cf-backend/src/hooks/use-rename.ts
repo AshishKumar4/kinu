@@ -10,8 +10,18 @@ export function useRename(value: string, save: (name: string) => Promise<void>, 
   // A ref, not the state: a blur in the same tick as Enter must see the save already started.
   const inFlight = useRef(false);
 
-  const commit = useCallback((name: string): void => {
+  /** Saves the draft, trimmed; an empty or unchanged one is no rename, and leaves the editor as a cancel does. */
+  const commit = useCallback((draftName: string): void => {
+    const name = draftName.trim();
+
     if (inFlight.current) return;
+
+    if (name === "" || name === value) {
+      done();
+
+      return;
+    }
+
     inFlight.current = true;
     setSaving(true);
     setError(null);
@@ -22,7 +32,7 @@ export function useRename(value: string, save: (name: string) => Promise<void>, 
       inFlight.current = false;
       setSaving(false);
     })));
-  }, [save, done]);
+  }, [value, save, done]);
 
   return { draft, setDraft, saving, error, commit };
 }

@@ -196,6 +196,8 @@ const USER_DO_METHODS = [
   'shareCards_withdraw',
   'sharesReceived_forget',
   'sharesReceived_list',
+  'sharesSeenAt',
+  'sharesSeen',
   'libraryTiles',
   'drive_list',
   'drive_mkdir',
@@ -293,6 +295,8 @@ const ORCHESTRATOR_METHODS = [
   'writeExecutorFileChunk',
   // No file operation gets a uid-bearing forwarding RPC: `NimbusExecOptions.cred` names a uid.
   'routeWorkspacePreview',
+  // The app's preview entry asks it of the signed-in visitor: a read, which never claims the workspace.
+  'previewAccess',
   // Answers a refusal, never a storage key: no physical key appears in a client-visible URL.
   'resolveHostedActorRoute',
   'applyActorDirectory',

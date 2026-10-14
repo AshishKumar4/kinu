@@ -275,9 +275,9 @@ describe('craft observation — what the turn reports as crafted-tool use', () =
     const acc = new TurnAccumulator();
 
     acc.reset(Date.now());
-    acc.craft.recording = enabled;
+    acc.ledgers.craft.recording = enabled;
 
-    for (const code of codes) await block(acc.craft, ledger, code);
+    for (const code of codes) await block(acc.ledgers.craft, ledger, code);
 
     return acc.craftedToolsUsed();
   }
@@ -301,9 +301,9 @@ describe('craft observation — what the turn reports as crafted-tool use', () =
     const kept = new TurnAccumulator();
 
     await block(ran, ledger, 'await tools.sum(1)');
-    kept.craft.note(`call-${String(calls)}`, present(ran.call(`call-${String(calls)}`), 'the observed call'));
+    kept.ledgers.craft.note(`call-${String(calls)}`, present(ran.call(`call-${String(calls)}`), 'the observed call'));
 
     expect(kept.craftedToolsUsed()).toEqual(['sum']);
-    expect(kept.craft.snapshot()).toEqual(ran.snapshot());
+    expect(kept.ledgers.craft.snapshot()).toEqual(ran.snapshot());
   });
 });

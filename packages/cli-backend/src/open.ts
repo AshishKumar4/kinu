@@ -63,7 +63,7 @@ export function openWorkspaceCLI(
 
     const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
     yield* Effect.promise(() => localActorScaffoldSource({ actor: rt.actor, sql: rt.storage.sql,
-      source: { path: rt.identity.scaffold.path, vfs: rt.agentStateVfs ?? rt.storage.vfs } }));
+      source: { path: rt.identity.scaffold.path, vfs: rt.agentStateVfs } }));
 
     return { rt, info: yield* Effect.promise(() => workspaceInfo(rt, identity)) };
   }));
@@ -92,7 +92,7 @@ async function workspaceInfo(rt: CLIRuntime, identity: OpenedWorkspaceIdentity):
     soul,
     scaffoldVersion,
     searchNodeCount,
-    memorySize: await memoryBytes(rt.agentStateVfs ?? rt.storage.vfs),
+    memorySize: await memoryBytes(rt.agentStateVfs),
     createdAt: identity.created_at,
   };
 }

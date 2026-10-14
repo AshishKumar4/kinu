@@ -10,8 +10,8 @@ import { fileErrorContract, runContainerContract } from '../../../devbox/bench/c
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
 import { diskContract } from '../../../devbox/bench/disk-contracts';
 import {
-  JsonValueSchema, createSandboxExecutor, withCodemodeProgram, desktopClientUrl, executorNamespace, gateProviderExec, projectJsonValue, sandboxFiles, withAppSecurityHeaders,
-  type JsonValue, type ShellApprovalPolicy,
+  JsonValueSchema, createSandboxExecutor, withCodemodeProgram, desktopClientUrl, executorNamespace, gateProviderExec, projectJsonValue, sandboxFiles, sha256Hex,
+  timingSafeEqual, withAppSecurityHeaders, type JsonValue, type ShellApprovalPolicy,
 } from '@kinu.run/core';
 import { adaptCloudflareSandbox } from '../../src/sandbox-exec-lane';
 import { terminalRoutes } from '../../src/terminal-route';
@@ -377,9 +377,31 @@ async function lifecycleRoute(url: URL, box: DurableObjectStub<ContractBox>): Pr
  */
 const FIXTURE_ANSWER = 'x-devbox-fixture';
 
+/**
+ * A browser's session here: what `POST /sign-in` answers a bearer with, a digest of the identity rather than the
+ * identity itself, so this stateless fixture checks it and the browser scopes it to this origin, socket handshakes
+ * included (the desktop's client is a WebSocket). A page that sent the bearer as its own header sent it everywhere.
+ */
+const SESSION_COOKIE = '__Host-devbox_fixture_session';
+
+function signedIn(request: Request, identity: string): boolean {
+  const bearer = request.headers.get('authorization') ?? '';
+
+  const session = (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim())
+    .find((part) => part.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1) ?? '';
+
+  return timingSafeEqual(bearer, `Bearer ${identity}`) || timingSafeEqual(session, sha256Hex(`devbox-fixture-session:${identity}`));
+}
+
 async function answer(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  if (env.EVAL_IDENTITY === undefined || request.headers.get('authorization') !== `Bearer ${env.EVAL_IDENTITY}`) return new Response('unauthorized', { status: 401 });
+  if (env.EVAL_IDENTITY === undefined || !signedIn(request, env.EVAL_IDENTITY)) return new Response('unauthorized', { status: 401 });
   const url = new URL(request.url);
+
+  if (url.pathname === '/sign-in' && request.method === 'POST') {
+    const session = sha256Hex(`devbox-fixture-session:${env.EVAL_IDENTITY}`);
+
+    return Response.json({ ok: true }, { headers: { 'set-cookie': `${SESSION_COOKIE}=${session}; Path=/; HttpOnly; Secure; SameSite=Lax` } });
+  }
 
   if (url.pathname === '/health') return Response.json({ ok: true });
 

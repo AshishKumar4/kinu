@@ -23,7 +23,7 @@ import type {
   ToolListEntry,
 } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
-import { AuthError, authenticateRequest } from "./auth/session";
+import { AuthError, authenticateRequest, crossSiteRejection } from "./auth/session";
 import { authenticateCliToken, readBearer, type CliAuthAuthority } from "./cli/auth-store";
 import { claimOwnedWorkspace, type WorkspaceOwnerClaim, type WorkspaceRegistry } from "./user/workspace-ownership";
 import type { SessionAuthority } from "./auth/store";
@@ -112,6 +112,11 @@ function authenticateMcpCaller<Id>(
       return { userId: result.success.userId };
     });
   }
+
+  // A session cookie travels with any same-site request, a preview's included: the Worker's cross-site rule holds here too.
+  const crossSite = crossSiteRejection(request);
+
+  if (crossSite !== null) return Effect.succeed(withCors(crossSite));
 
   return Effect.catchCause(Effect.map(Effect.promise(() => authenticateRequest(request, env)), (identity) => ({ userId: identity.userId })), (failed) => {
     const e = Cause.squash(failed);

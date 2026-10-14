@@ -214,7 +214,7 @@ export class FacetChat {
 
     const tools = facetTurnTools(workspace, prepared, actor, {
       id: turn.id, runId: turn.runId, epoch: turn.epoch, mode: turn.mode, parentDriven: this.parentDriven, driving: this.driving, live, database,
-      craft: actor.session.orchestrator.acc.craft,
+      craft: actor.session.orchestrator.acc.ledgers.craft,
       // Its plans are its own store's, judged by the metadata its turn was admitted under.
       owner: {
         submitPlan: { submit: async (edits) => await this.planned((plans) => plans.submit(edits, this.driving)) },

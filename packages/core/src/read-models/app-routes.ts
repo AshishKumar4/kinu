@@ -20,6 +20,8 @@ export const APP_ROUTES = {
   drive: '/drive',
   /** The Drive below its root: `*` is the folder path, any depth. */
   driveFolder: '/drive/*',
+  /** The Drive's Slates: every slate across the owner's workspaces. */
+  slates: '/slates',
   shared: '/shared',
   sharedBlueprint: '/shared/blueprint/:id',
   /** Where a person a live share names enters it: signed in, they are handed the share's ticket. */

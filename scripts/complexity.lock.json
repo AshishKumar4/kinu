@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3288,
-  "functions": 86126,
+  "files": 3298,
+  "functions": 86341,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -210,10 +210,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 28
-    },
-    {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
       "complexity": 28
     },
@@ -235,10 +231,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
-      "complexity": 27
-    },
-    {
-      "key": "packages/cf-backend/src/pages/DrivePage.tsx#DrivePage",
       "complexity": 27
     },
     {
@@ -371,6 +363,10 @@
     },
     {
       "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage>gen",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 26
     },
     {

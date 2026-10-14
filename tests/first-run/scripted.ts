@@ -32,12 +32,21 @@ function call(name: string, args: JsonObject): ScriptedAnswer {
   return { text: `Calling ${name}.`, toolCall: { name, arguments: args } };
 }
 
-/** The steps of one ask, taken in order: the call its turn has not made yet, then `answer` over their results. */
+/** The steps of one ask, taken in order: the call its turn has not made yet, then `answer` over their results. A
+ *  delivery that lands in the turn restarts none of them. */
 function steps(request: ScriptedRequest, calls: readonly ScriptedAnswer[], answer: (turn: readonly ScriptedCall[]) => string): ScriptedAnswer {
-  return calls[request.turn.length] ?? { text: answer(request.turn) };
+  return calls[request.askTurn.length] ?? { text: answer(request.askTurn) };
 }
 
-const latest = (request: ScriptedRequest): string => request.userTexts.at(-1) ?? '';
+/** The ask the turn answers: never a delivery that landed in it after the ask, as a helper's report can at any step. */
+const latest = (request: ScriptedRequest): string => request.ask;
+
+/** Whether `word` reached the turn at work: in the message that opened it, unless that is `own` (the ask, which names
+ *  the word it asks for), or in a delivery that landed in it. */
+function heard(request: ScriptedRequest, word: string, own: string): boolean {
+  return request.delivered.some((text) => text.includes(word))
+    || (request.ask !== own && request.askTurn.length === 0 && request.ask.includes(word));
+}
 
 /** A result's text on one line, so a one-line reply stays one line. */
 function oneLine(result: string | undefined): string {
@@ -124,7 +133,7 @@ const backgroundWake: Script = (request) => {
   const answer = steps(request, WAKE_STEPS.map((step) => call('shell', { runtime: 'workspace', command: `echo ${step}` })),
     (turn) => turn.map((made) => made.result.trim()).join('\n'));
 
-  return request.turn.length === 0 ? answer : { ...answer, pace: WAKE_STEP_PACE };
+  return request.askTurn.length === 0 ? answer : { ...answer, pace: WAKE_STEP_PACE };
 };
 
 /** capability-isolation: the three paths, in the ask's order. */
@@ -134,15 +143,16 @@ const capabilityIsolation: Script = (request) => latest(request) !== ISOLATION_A
   hire(INTERNAL_FETCH_MISSION),
 ], (turn) => `DONE ${turn.map((made) => `${made.name}: ${oneLine(made.result).slice(0, 160)}`).join(' | ')}`);
 
-/** A hire returns at once; its helper's answer arrives as the message that opens the hirer's next turn. */
+/** A hire returns at once; its helper's answer arrives as the message that opens the hirer's next turn, or lands in the
+ *  hiring turn if that is still at work. */
 const delegation: Script = (request) => {
   const ask = latest(request);
 
-  if (ask === DELEGATION_TASK_ASK) return steps(request, [hire(sayWordMission(DELEGATION_WORD))], () => 'WAITING');
-
-  if (request.userTexts[0] === DELEGATION_TASK_ASK && request.turn.length === 0 && ask.includes(DELEGATION_WORD)) {
+  if (request.userTexts[0] === DELEGATION_TASK_ASK && heard(request, DELEGATION_WORD, DELEGATION_TASK_ASK)) {
     return { text: `HIRED ${DELEGATION_WORD}` };
   }
+
+  if (ask === DELEGATION_TASK_ASK) return steps(request, [hire(sayWordMission(DELEGATION_WORD))], () => 'WAITING');
 
   if (ask === DELEGATION_ROSTER_ASK) {
     return steps(request, [
@@ -161,16 +171,14 @@ const delegation: Script = (request) => {
   ], () => 'RETIRED');
 };
 
-/** The root hires both helpers and ends its turn; each answer opens a turn of its own, answered with the words it carries. */
+/** The root hires both helpers and ends its turn; each answer opens a turn of its own, or lands in one at work, and is
+ *  answered with the words it carries. */
 const delegationTree: Script = (request) => {
-  const ask = latest(request);
+  const words = request.userTexts[0] === TREE_ASK ? [TREE_DEEP_WORD, TREE_SHALLOW_WORD].filter((word) => heard(request, word, TREE_ASK)) : [];
 
-  if (ask === TREE_ASK) return steps(request, [hire(RELAY_MISSION), hire(sayWordMission(TREE_SHALLOW_WORD))], () => 'WAITING');
+  if (words.length > 0) return { text: `TREE ${words.join(' ')}` };
 
-  if (request.userTexts[0] !== TREE_ASK || request.turn.length > 0) return null;
-  const words = [TREE_DEEP_WORD, TREE_SHALLOW_WORD].filter((word) => ask.includes(word));
-
-  return words.length === 0 ? null : { text: `TREE ${words.join(' ')}` };
+  return latest(request) === TREE_ASK ? steps(request, [hire(RELAY_MISSION), hire(sayWordMission(TREE_SHALLOW_WORD))], () => 'WAITING') : null;
 };
 
 const exploration: Script = (request) => latest(request) !== SWARM_ASK ? null : steps(request, [
@@ -305,8 +313,9 @@ const CASE_ASKS: readonly string[] = [
 
 /** What a hired helper or a swarm node does, by the mission it was given. */
 const MISSIONS: readonly (readonly [string, Script])[] = [
-  // The relay hires and ends its turn; the answer its helper sends opens its next turn, which relays the word.
-  [RELAY_MISSION, (request) => request.turn.length === 0 && request.called.includes('agents') && latest(request).includes(TREE_DEEP_WORD)
+  // The relay hires and ends its turn; the answer its helper sends opens its next turn, or lands in this one, and is relayed.
+  [RELAY_MISSION, (request) => request.called.includes('agents')
+    && ((request.askTurn.length === 0 && latest(request).includes(TREE_DEEP_WORD)) || request.delivered.some((text) => text.includes(TREE_DEEP_WORD)))
     ? { text: TREE_DEEP_WORD }
     : steps(request, [hire(sayWordMission(TREE_DEEP_WORD))], () => 'WAITING')],
   [INTERNAL_FETCH_MISSION, (request) => steps(request, [call('web', { op: 'fetch', url: INTERNAL_URL })], ([fetched]) => oneLine(fetched?.result))],

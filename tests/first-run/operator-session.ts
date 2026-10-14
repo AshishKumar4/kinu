@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { AgentClient } from 'agents/client';
-import { JsonValueSchema, RunEventSchema, pageSchema, positionPageSchema, workspaceSlug, type AgentRpcMethod, type JsonValue, type PositionCursor, type RunEvent, type SeekCursor } from '@kinu.run/core';
+import { CLI_PREVIEW_ENTRY_PATH, JsonValueSchema, RunEventSchema, pageSchema, positionPageSchema, workspaceSlug, type AgentRpcMethod, type JsonValue, type PositionCursor, type RunEvent, type SeekCursor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { compareRunEventOrder } from '@kinu.run/test-utils';
 import {
@@ -10,6 +10,7 @@ import {
 import { sessionExpired } from '../../packages/cli/src/config';
 import type { LocalCloudSession } from '@kinu.run/cli-backend';
 import type { FirstRunPlan, FirstRunSession } from './first-run';
+import { openPreviewAsOwner } from '../../evals/src/workspace-roster';
 
 const StoredSession = v.pipe(v.string(), v.parseJson(), v.object({
   origin: v.string(), accessToken: v.pipe(v.string(), v.minLength(1)), tokenExpiresAt: v.optional(v.string()),
@@ -112,6 +113,11 @@ export class OperatorFirstRunSession implements FirstRunSession {
     if (this.client === null) throw new Error('Operator session is not connected');
 
     return v.parse(JsonValueSchema, await this.client.call(method, args));
+  }
+
+  /** One of its workspaces' previews, opened as its owner: the CLI asks the app's entry, by the operator's token. */
+  openPreview(url: string | URL): Promise<Response> {
+    return openPreviewAsOwner({ origin: this.auth.origin, headers: { authorization: `Bearer ${this.auth.token}` }, entry: CLI_PREVIEW_ENTRY_PATH }, url);
   }
 
   rpcAt(workspace: string, method: AgentRpcMethod, args: JsonValue[] = []): Promise<JsonValue> {

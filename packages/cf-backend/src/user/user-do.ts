@@ -43,7 +43,8 @@ import {
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
-import { ShareCardJobs, type ReceivedShare } from './share-cards';
+import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
+import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 import {
@@ -107,6 +108,7 @@ export class UserDO extends Agent<Env> {
     sql: this.ctx.storage.sql,
     owner: () => ({ userId: this.name, email: this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '' }),
     recipient: (userId) => this.env.UserDO.get(this.env.UserDO.idFromName(userId)),
+    accountOf: (email) => accountIdFor(this.env, email),
     caller: () => ownerCaller(this.env),
   });
 
@@ -122,7 +124,7 @@ export class UserDO extends Agent<Env> {
 
   private readonly terminals = new UserTerminals({ ...this.host, devices: this.devices });
 
-  private readonly userDrive = new UserDrive({ ...this.host, driveFor: (tenant) => this.driveFor(tenant) });
+  private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
 
   ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
     return this.profile.ensureProfile(caller, email, displayName);
@@ -184,8 +186,16 @@ export class UserDO extends Agent<Env> {
     return this.profile.libraryTiles(caller);
   }
 
-  sharesReceived_list(caller: UserCaller): Promise<ReceivedShare[]> {
+  sharesReceived_list(caller: UserCaller): Promise<HeldShare[]> {
     return this.profile.sharesReceived_list(caller);
+  }
+
+  sharesSeenAt(caller: UserCaller): Promise<number | null> {
+    return this.profile.sharesSeenAt(caller);
+  }
+
+  sharesSeen(caller: UserCaller, at: number): Promise<void> {
+    return this.profile.sharesSeen(caller, at);
   }
 
   sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
@@ -873,7 +883,8 @@ export class UserDO extends Agent<Env> {
         this.sqlx(`INSERT OR IGNORE INTO user_device_protocol_refusals (device_id) VALUES (?)`, deviceId);
         // The protocol before this one is pushed the build that brings it here, and nothing else.
         const previous = v.safeParse(DeviceUpdateHelloSchema, announced);
-        const update = admitted === 'update' && previous.success ? await this.devices.deviceUpdateFrame(deviceId, previous.output) : null;
+        // Decided and sent in the turn the HELLO arrived, on its socket: nothing is awaited before the send.
+        const update = admitted === 'update' && previous.success ? this.devices.deviceUpdateFrame(deviceId, previous.output) : null;
 
         if (update === null || !previous.success) {
           this.devices._devices.refuse(deviceId);
@@ -888,15 +899,18 @@ export class UserDO extends Agent<Env> {
       }
 
       this.devices.recordDeviceHello(deviceId, hello.output);
-      await this.devices.devicesMoved();
-      const frame = await this.devices.deviceUpdateFrame(deviceId, hello.output);
+      // Sent before the first wait, in the turn the HELLO arrived on its socket.
+      const frame = this.devices.deviceUpdateFrame(deviceId, hello.output);
 
       if (frame !== null) {
         diagnostics.event('device.update_pushed', { device: deviceId, from: hello.output.version ?? '', to: frame.version });
         ws.send(JSON.stringify(frame));
+        await this.devices.devicesMoved();
 
         return;
       }
+
+      await this.devices.devicesMoved();
 
       return settle(this.chatgpt.continueChatGptSignIn(deviceId));
     }
@@ -950,8 +964,8 @@ export class UserDO extends Agent<Env> {
     if (!deviceIdFromSocket(ws) && !isRosterSocket(ws)) return this.lifecycle.webSocketError(...call);
   }
 
-  // The Mossaic tenant id is the owner's user id, derived from the profile row's email as the
-  // edge does, so no caller names a tenant. Every owner workspace mounts it at `/shared`.
+  // The Mossaic tenant id is this account's own id, the name it is addressed by, so no caller names a tenant. Every
+  // owner workspace mounts the same one at `/shared`: its recorded owner is that name too.
 
   /** Seam: the hosted deployment builds the SDK client from bindings; the bun:sqlite harness fakes it. */
   protected driveFor(tenant: string): MossaicVfs | null {

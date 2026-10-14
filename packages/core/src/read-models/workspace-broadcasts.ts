@@ -125,7 +125,6 @@ const BranchStatusFrameSchema = v.variant('status', [
 ]);
 
 export const WorkspaceBroadcastSchema = v.variant('type', [
-  v.object({ type: v.literal('workspace_renamed'), displayName: v.optional(v.string()) }),
   MctsProgressFrameSchema,
   v.object({
     type: v.literal('device_consent'), consentId: v.string(), deviceLabel: v.string(),

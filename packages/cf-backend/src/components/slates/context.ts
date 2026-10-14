@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import type { Rpc } from "@kinu.run/core";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** The chat's inline previews, so each sees a later one of its slate. */
 export class SlatePreviews {
@@ -53,7 +53,7 @@ export class SlatePreviews {
 /** Null where a surface cannot host a frame; `slate://` links then render as code. `chat` is set only around the
  *  chat, whose previews fold. */
 export const SlateInlineContext = createContext<{
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   openSlate?: (id: string) => void;
   chat?: { readonly previews: SlatePreviews; readonly shownInPanel: string | null };
 } | null>(null);

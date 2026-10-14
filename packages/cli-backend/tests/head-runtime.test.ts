@@ -110,7 +110,7 @@ function headDeps(
   return {
     hostHead: headSeatFactory(parent, host, 'fixture-run', { writes, model: resolve }),
     // A seated head's programs account into its own session's turn.
-    ledgers: (actor) => present(host.hosted(actor.reference), 'the hosted head').session.orchestrator.acc,
+    ledgers: (actor) => present(host.hosted(actor.reference), 'the hosted head').session.orchestrator.acc.ledgers,
     profile: async () => mergePolicyProfile(),
     bindMergeModel: (route) => {
       probe?.asked.push({ spec: route.model, effort: route.reasoningEffort });

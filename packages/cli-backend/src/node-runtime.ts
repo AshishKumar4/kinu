@@ -41,7 +41,7 @@ export function localNodeRuntime(source: CLIRuntime, actor: ActorHandle, stores:
     llm: source.llm,
     schedule: source.schedule,
     identity: { id: actor.actorId, name: actor.name,
-      scaffold: createScaffoldSurface({ actor, sql: source.storage.sql, vfs: source.agentStateVfs ?? source.storage.vfs,
+      scaffold: createScaffoldSurface({ actor, sql: source.storage.sql, vfs: source.agentStateVfs,
         path: actorScaffoldPath(binding) }) },
     craftStore: source.craftStore,
     get judgeModel() { return source.judgeModel; },

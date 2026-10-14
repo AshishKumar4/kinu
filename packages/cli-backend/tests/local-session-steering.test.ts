@@ -2196,7 +2196,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
 test('the actual local turn executes its selected version instead of the mutable live alias', async () => {
   const model = scriptedTurnModel({ doGenerate: () => { throw new Error('the custom program must not start the default model'); } });
   const { db, rt, session, events } = setup('unused', model);
-  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  const files = rt.agentStateVfs;
   const selected = 'async function run() { await host.emit({ type: "text_delta", text: "selected version one" }); }';
   const changed = 'async function run() { await host.emit({ type: "text_delta", text: "wrong live alias" }); }';
   await files.mkdir('scaffold', { recursive: true });

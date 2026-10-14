@@ -6,9 +6,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { DesktopIcon, FolderOpenIcon, GitBranchIcon, PlusIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
-import type { Rpc } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** A read is one exec in the box (about 150 ms there, 10 ms of it tmux, staging 2026-10-13); a few seconds keeps the
  *  marks current while the tab is open, and nothing reads while it is closed or hidden. */
@@ -60,13 +60,13 @@ export interface ComputerSessions {
 }
 
 /** The computer's sessions, read while `watching` and the page is visible, and changed by the box's own calls. */
-export function useComputerSessions(rpc: Rpc, watching: boolean): ComputerSessions {
+export function useComputerSessions(rpc: WorkspaceRpc, watching: boolean): ComputerSessions {
   const [sessions, setSessions] = useState<readonly TerminalSession[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const live = useRef(true);
 
   const read = useCallback(() => attempt({ doing: "reading the computer's sessions", otherwise: "io" },
-    () => rpc<readonly TerminalSession[] | null>("listComputerSessions")).pipe(
+    () => rpc("listComputerSessions", [])).pipe(
     Effect.map((next) => { if (live.current) { setSessions(next ?? []); setFailure(null); } }),
     Effect.catch((cause) => Effect.sync(() => { if (live.current) setFailure(renderThrownChain({ cause })); })),
   ), [rpc]);
@@ -100,7 +100,7 @@ export function useComputerSessions(rpc: Rpc, watching: boolean): ComputerSessio
     };
   }, [watching, readSeen]);
 
-  const call = <T,>(doing: string, method: string, args: unknown[]) => attempt({ doing, otherwise: "io" }, () => rpc<T>(method, args)).pipe(
+  const call = <T,>(doing: string, change: () => Promise<T>) => attempt({ doing, otherwise: "io" }, change).pipe(
     Effect.tap(() => read()),
     Effect.catch((cause) => Effect.sync(() => {
       setFailure(renderThrownChain({ cause }));
@@ -112,9 +112,9 @@ export function useComputerSessions(rpc: Rpc, watching: boolean): ComputerSessio
   return {
     sessions,
     failure,
-    open: () => call<SessionRecord | null>("opening a session", "openComputerSession", []),
-    rename: (id, name) => call<SessionRecord | null>("renaming a session", "renameComputerSession", [id, name]).pipe(Effect.asVoid),
-    close: (id) => call<null>("closing a session", "closeComputerSession", [id]).pipe(Effect.asVoid),
+    open: () => call("opening a session", () => rpc("openComputerSession", [])),
+    rename: (id, name) => call("renaming a session", () => rpc("renameComputerSession", [id, name])).pipe(Effect.asVoid),
+    close: (id) => call("closing a session", () => rpc("closeComputerSession", [id])).pipe(Effect.asVoid),
   };
 }
 

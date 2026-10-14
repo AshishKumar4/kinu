@@ -567,7 +567,7 @@ export class LocalAgentSession {
       spend: { report: (report) => this.modelCallSink(report) },
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
-    this.rt.setTurnFileLedgerProvider?.(() => this.actorSession.orchestrator.acc.files);
+    this.rt.setTurnFileLedgerProvider?.(() => this.actorSession.orchestrator.acc.ledgers.files);
     // The runtime's judge/fast/reflection seams predate this session; a runtime holds one sink.
     this.rt.setModelCallSink?.(this.modelCallSink);
     this.rt.setModelOperations?.(this.modelOperations);
@@ -1719,7 +1719,7 @@ export class LocalAgentSession {
       budget: this.budget,
       operations: this.modelOperations,
       scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
-      attachmentBudget: this.actorSession.orchestrator.acc.context,
+      attachmentBudget: this.actorSession.orchestrator.acc.ledgers.context,
       extensions: () => [this.compactionExtension],
       dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.dynamicContextSnapshot(memoryTail, profile, tools, { turn, activeSkills: activeSkills ?? undefined }),
       operation: (profile, inputs) => captureOperationProfile({
@@ -1999,12 +1999,7 @@ export class LocalAgentSession {
 
     if (planWorkspaceTitle(state) === null) return;
     await applyWorkspaceTitle(state, {
-      persist: (name) => {
-        if (!persistAutoTitle(this.config, name)) return false;
-        this.host.broadcast({ type: 'workspace_renamed', displayName: name });
-
-        return true;
-      },
+      persist: (name) => persistAutoTitle(this.config, name),
       suggest: (text) => this.suggestTitle(text),
     });
   }
@@ -2476,7 +2471,7 @@ export class LocalAgentSession {
     // A program here runs in this process, which holds no Browser Run socket client, so no browser sessions.
     return actorNamespaces(hostedSurfaceActor(this.seat, {
       web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
-      conversations: this.ownConversations(), vectorStore: null, ledgers: () => ({ files: acc.files, context: acc.context }),
+      conversations: this.ownConversations(), vectorStore: null, ledgers: () => acc.ledgers,
     }), SURFACE_POLICY.confined, reported);
   }
 
@@ -2491,7 +2486,7 @@ export class LocalAgentSession {
       }),
       files: () => ({
         vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
-        ledger: this.actorSession.orchestrator.acc.files, budget: this.actorSession.orchestrator.acc.context,
+        ledger: this.actorSession.orchestrator.acc.ledgers.files, budget: this.actorSession.orchestrator.acc.ledgers.context,
       }),
       // `this.taskList` is the same TaskListStore the dynamic-context snapshot reads.
       tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
@@ -2538,7 +2533,7 @@ export class LocalAgentSession {
 
     if (hosted === null) return settleSync(Effect.fail(new KinuError('missing', `${actor.record.name} is not hosted, so it runs no program`)));
 
-    return hosted.session.orchestrator.acc;
+    return hosted.session.orchestrator.acc.ledgers;
   }
 
   /**
@@ -2690,7 +2685,7 @@ export class LocalAgentSession {
       conversationKey: () => conversationKey(actorAffinity(actor.record).sessionAffinity, actor.record.actorId),
       operations: compaction.operations,
       scaffoldSpend: { source: 'scaffold', report: compaction.report, operations: compaction.operations },
-      attachmentBudget: actor.session.orchestrator.acc.context,
+      attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
       extensions: () => [compaction.extension],
       dynamic: () => (profile, tools) => this.actorDynamicContext(actor, profile, tools),
       operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId, turnId: null }),
@@ -2755,10 +2750,10 @@ export class LocalAgentSession {
       },
       // Shell approval lives at the execution seam (execution/approval.ts), not per toolset.
       // Budget state lives on the accumulator so this model-lifetime toolset reads the live turn.
-      contextBudget: this.actorSession.orchestrator.acc.context,
-      fileLedger: this.actorSession.orchestrator.acc.files,
-      escalations: this.actorSession.orchestrator.acc.escalations,
-      craft: this.actorSession.orchestrator.acc.craft,
+      contextBudget: this.actorSession.orchestrator.acc.ledgers.context,
+      fileLedger: this.actorSession.orchestrator.acc.ledgers.files,
+      escalations: this.actorSession.orchestrator.acc.ledgers.escalations,
+      craft: this.actorSession.orchestrator.acc.ledgers.craft,
       vectorStore: null,
       ...(this.actorReach.external && { external: () => this.turnExternalTools }),
       codemode: (surface) => {

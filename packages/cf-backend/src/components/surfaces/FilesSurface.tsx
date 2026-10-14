@@ -13,10 +13,9 @@ import {
   WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  formatBytes, joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
+  formatBytes, joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry,
 } from "@kinu.run/core";
 import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
-import type { Rpc } from "@kinu.run/core";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -25,14 +24,11 @@ import { useFileDrop } from "@/hooks/use-file-drop";
 import { useUploads } from "@/hooks/use-uploads";
 import { FileViewer } from "./FileViewer";
 import {
-  PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir, type FileText,
+  PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir,
 } from "@kinu.run/core";
 import type { VfsRevision } from "@nimbus-sh/core/vfs/vfs.js";
 import { composing } from "@/components/ui/form";
-
-interface DirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
-
-type WriteResult = { ok: true } | { error: string };
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** An upload over a file already there: replaced only on the owner's word. */
 function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: () => void; onKeep: () => void }) {
@@ -73,7 +69,7 @@ function fmtWhen(mtimeMs: number | undefined): string {
 }
 
 export interface FilesSurfaceProps {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   executors: ExecutorInfo[];
   jump?: { path: string; file?: string; nonce: number } | null;
   onConnectDevice: () => void;
@@ -104,12 +100,12 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const loadMounts = useCallback(() => rpc<MountInfo[]>("listMounts"), [rpc]);
+  const loadMounts = useCallback(() => rpc("listMounts", []), [rpc]);
   const { resource: mountsResource, reload: reloadMounts } = useAsyncResource(loadMounts);
   const mounts = lastValue(mountsResource) ?? [];
 
   const listDir = useCallback((dir: string): Promise<{ path: string; entries: DirEntry[] }> => settle(Effect.gen(function* () {
-    const r = yield* Effect.promise(async () => rpc<DirectoryResponse>("getExecutorFiles", [PLANE, dir]));
+    const r = yield* Effect.promise(async () => rpc("getExecutorFiles", [PLANE, dir]));
 
     if (r.error) return yield* Effect.die(new Error(r.error));
     const listed = r.entries ?? [];
@@ -174,7 +170,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     return yield* Effect.catchCause(op, showing(setNotice));
   })), []);
 
-  const readPlaneFile = useCallback((full: string) => rpc<FileText>("readExecutorFile", [PLANE, full]), [rpc]);
+  const readPlaneFile = useCallback((full: string) => rpc("readExecutorFile", [PLANE, full]), [rpc]);
 
   const rawUrl = useCallback((full: string, download: boolean) =>
     `/api/workspaces/${encodeURIComponent(agentName)}/files`
@@ -199,7 +195,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     const to = joinDir(parentDir(from), name);
 
     if (to === from) return;
-    const out = yield* Effect.promise(() => rpc<WriteResult>("renameExecutorFile", [PLANE, from, to]));
+    const out = yield* Effect.promise(() => rpc("renameExecutorFile", [PLANE, from, to]));
 
     if ("error" in out) return yield* Effect.die(new Error(out.error));
 
@@ -209,7 +205,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
   const deletePath = useCallback((full: string) => run(Effect.gen(function* () {
     setConfirmDelete(null);
-    const out = yield* Effect.promise(() => rpc<WriteResult>("deleteExecutorFile", [PLANE, full]));
+    const out = yield* Effect.promise(() => rpc("deleteExecutorFile", [PLANE, full]));
 
     if ("error" in out) return yield* Effect.die(new Error(out.error));
 

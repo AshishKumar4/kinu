@@ -10,12 +10,9 @@ import type { ToolSet } from 'ai';
 import type { ActorReference } from '../identity/actor-handle';
 import { captureOperationProfile, type OperationProfile } from '../profiles/operation';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles/resolve';
-import { TurnFileLedger } from '../vfs/file-ledger';
-import { TurnContextBudget } from '../context-budget';
-import { TurnEscalationLedger } from '../execution/escalation';
-import { TurnCraftLedger } from '../craft/turn-ledger';
 import type { TurnContinuity } from './evolution-lanes';
 import type { ExecutionKey } from './execution';
+import { turnLedgers, type TurnLedgers } from './turn-accumulator';
 import type { ChatTurnInput } from './chat-session';
 
 export interface TurnSurfaceOpening {
@@ -26,22 +23,6 @@ export interface TurnSurfaceOpening {
   readonly continuity: TurnContinuity;
   /** Whether the turn records evolution, decided as it opens: a live read could answer a recovering host otherwise. */
   readonly evolutionEnabled: boolean;
-}
-
-/** What a turn's tools account into while they run here: the files it read, its context budget, its escalations, and
- *  the crafted tools its `eval` calls created and called. */
-export interface TurnLedgers {
-  readonly files: TurnFileLedger;
-  readonly context: TurnContextBudget;
-  readonly escalations: TurnEscalationLedger;
-  readonly craft: TurnCraftLedger;
-}
-
-/** Empty ledgers: a turn's own, which observes its crafted tools where `recordsCraft`, or a call's outside any turn. */
-export function turnLedgers(recordsCraft = false): TurnLedgers {
-  return {
-    files: new TurnFileLedger(), context: new TurnContextBudget(), escalations: new TurnEscalationLedger(), craft: new TurnCraftLedger(recordsCraft),
-  };
 }
 
 export class TurnSurface {

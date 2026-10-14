@@ -24,7 +24,7 @@ import {
 
 /** The agent's own tree where it has one, as every other skill reader uses. */
 function planeOf(deps: RefinementDeps): VFS {
-  return deps.control.rt.agentStateVfs ?? deps.control.rt.storage.vfs;
+  return deps.control.rt.agentStateVfs;
 }
 
 async function readText(vfs: VFS, path: string): Promise<string | null> {

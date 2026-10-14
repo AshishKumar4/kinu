@@ -10,7 +10,8 @@ import {
 } from '@kinu.run/core/obs';
 import { exports as workersExports } from 'cloudflare:workers';
 import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
-import { nimbusPreviewUrl } from '../src/nimbus-route';
+import { nimbusPreviewUrl, type PreviewVisit } from '../src/nimbus-route';
+import { PREVIEW_SELF } from '../src/viewer-pass';
 import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -43,7 +44,7 @@ function browserEnv(owned: ReadonlySet<string>) {
 }
 
 /** Its fetch override reads no instance state; `WorkerEntrypoint`'s constructor still takes the platform handle whole. */
-const entry = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1' } }, browserEnv(new Set()).env);
+const entry = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1', asOwner: true } }, browserEnv(new Set()).env);
 
 const egressFetch = (url: string, init?: RequestInit): Promise<Response> =>
   entry.fetch(new Request(url, init));
@@ -168,7 +169,7 @@ const { default: server } = await import('../src/server');
  * server. A preview it serves answers with where it was routed, so a response says whether it came from this
  * Worker or from the network.
  */
-function previewEgress(suffix: string) {
+function previewEgress(suffix: string, asOwner = true) {
   const view: Partial<Env> = {};
   Object.assign(view, {
     PREVIEW_HOST_SUFFIX: suffix,
@@ -176,8 +177,9 @@ function previewEgress(suffix: string) {
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (workspace: string) => ({
-        routeWorkspacePreview: async (port: number, _handle: string, _request: Request, path: string) =>
-          new Response(`preview of ${workspace} port ${String(port)} ${path}`),
+        // A preview opens only for its owner and the workspace itself, which its programs' fetches are.
+        routeWorkspacePreview: async ({ port, pathname, viewer }: PreviewVisit) =>
+          new Response(`preview of ${workspace} port ${String(port)} ${pathname}${viewer === PREVIEW_SELF ? '' : ` as ${String(viewer)}`}`),
       }),
     },
   });
@@ -187,7 +189,7 @@ function previewEgress(suffix: string) {
 
   return {
     env,
-    fetch: (url: string) => new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1' } }, env).fetch(new Request(url)),
+    fetch: (url: string) => new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1', asOwner } }, env).fetch(new Request(url)),
     // The Worker's own fetch, as `enable_ctx_exports` binds it.
     self: { fetch: (request: Request) => server.fetch(request, env, workerContext()) },
   };
@@ -203,6 +205,16 @@ describe("a program reaches its own workspace's previews, and no other's", () =>
 
     expect(await (await egress.fetch(`${String(url)}status`)).text()).toBe('preview of hello port 4321 /status');
     expect(attempted).toEqual([]);
+  });
+
+  // The security review of the owner-only preview: a share's viewer's program fetched the owner's private preview as
+  // the owner, past the grant. Its request reaches the preview as no one's, which the preview refuses.
+  test("a share's viewer's program reaches its preview as no one, never as the owner", async () => {
+    const egress = previewEgress('previews.example', false);
+    Object.assign(workersExports, { default: egress.self });
+    const url = (await nimbusPreviewUrl(egress.env, 'hello', 4321, CAPABILITY)).url;
+
+    expect(await (await egress.fetch(`${String(url)}status`)).text()).toBe('preview of hello port 4321 /status as null');
   });
 
   test('on a loopback preview host too, where every other loopback host stays refused', async () => {
@@ -231,7 +243,7 @@ describe('a program reaches a browser session only through the gate, and only on
 
   const gate = (owned: ReadonlySet<string>, actor: string | null) => {
     const { env, reached } = browserEnv(owned);
-    const egress = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor } }, env);
+    const egress = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor, asOwner: true } }, env);
 
     return { reached, fetch: (session: string, init?: RequestInit) => egress.fetch(new Request(`https://browser.kinu.invalid/v1/devtools/browser/${session}`, init)) };
   };
