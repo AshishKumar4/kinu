@@ -521,7 +521,7 @@ async function main(): Promise<void> {
 
         if (seen === null || !drawn(seen)) {
           // The desktop's own log says why a part did not paint: the wallpaper's and the panel's errors land there.
-          const log = await shell(`tail -n 30 ${DESKTOP_LOG} 2>&1; true`, fresh);
+          const log = await shell(`grep -v 'INFO\\|\\[mi\\]\\|^$' ${DESKTOP_LOG} | tail -n 30 2>&1; true`, fresh);
 
           throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, glow: seen?.glow, panel: seen?.panel })} `
             + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its ground ${DESKTOP_COLOURS.background}, the wallpaper's glow `
