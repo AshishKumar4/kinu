@@ -4,7 +4,7 @@ import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
 import {
-  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
+  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, crossSiteRejection, isFreshAuthTime, readCookie,
   type AuthEnv,
 } from '../auth/session';
 import { publicHtmlHeaders } from '@kinu.run/core';
@@ -587,7 +587,8 @@ function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): Effect
 
     if (identity instanceof Response) return identity;
 
-    if (!isSameOriginPost(request)) {
+    // The one same-origin rule the Worker gate keeps; this page answers ahead of that gate.
+    if (crossSiteRejection(request) !== null) {
       return html('Connect the Kinu CLI', '<p>This approval did not come from the approval page. Open the link from your terminal again.</p>', 403);
     }
 
@@ -1201,12 +1202,3 @@ function clearCsrfCookie(): string {
   return `${CLI_APPROVAL_CSRF_COOKIE_NAME}=; Path=/cli/auth; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
 }
 
-function isSameOriginPost(request: Request): boolean {
-  const url = new URL(request.url);
-  const origin = request.headers.get('origin');
-
-  if (origin) return origin === url.origin;
-  const referer = request.headers.get('referer');
-
-  return !referer || referer.startsWith(`${url.origin}/`);
-}
