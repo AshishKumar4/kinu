@@ -1,7 +1,8 @@
 // grantDeviceAccess names its machine: the consent raise carries the device
 // name as executeInExecutor's third argument, fleet warm-up answers are
-// retried rather than read as refusals, and the listed card is resolved
-// `always` — against a scripted hub, so no credential or deployment.
+// retried rather than read as refusals, the call parks NOT RUN on the card it
+// raised, the listed card is resolved `always`, and the call is re-issued —
+// against a scripted hub, so no credential or deployment.
 //
 // The first-run two-machines case grants each machine through this helper.
 // Its raise named no machine, so with two live the fleet refused it locally,
@@ -24,12 +25,17 @@ const ACCOUNT: DeviceAccount = {
 const RpcCallSchema = v.object({ method: v.string(), args: v.array(v.unknown()) });
 
 /** The hub answers this stub ever sends: an executor error, a tool stdout
- *  refusal, a pending-consent listing, or a resolve acknowledgement. */
+ *  refusal, a parked call's refusal, a run, a pending-consent listing, or a
+ *  resolve acknowledgement. */
 type HubAnswer =
   | { readonly result: { readonly error: string } }
-  | { readonly result: { readonly stdout: string } }
-  | { readonly result: ReadonlyArray<{ readonly consentId: string }> }
+  | { readonly result: { readonly stdout: string; readonly exitCode?: number; readonly refusal?: { readonly success: false; readonly reason: string; readonly error: string } } }
+  | { readonly result: ReadonlyArray<{ readonly consentId: string; readonly deviceId: string }> }
   | { readonly result: { readonly ok: boolean } };
+
+/** What the workspace answers a device call parked on its consent card (`deviceConsentQueued`), as router.ts packs a
+ *  tool refusal: its words on stdout, exit 1, and the refusal. */
+const PARKED = "NOT RUN: using kinu-beta from this workspace waits on the owner's consent. You are woken when they answer; do not re-issue it before then.";
 
 interface SeenCall {
   readonly method: string;
@@ -40,11 +46,9 @@ describe('grantDeviceAccess names its machine', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
 
-  test('the raise carries the device name, retries fleet warm-up, and resolves the card', async () => {
+  test('the raise carries the device name, retries fleet warm-up, resolves the card, and re-issues the call', async () => {
     const seen: SeenCall[] = [];
-    const parked = Promise.withResolvers<{ status: number; text: string }>();
     let raises = 0;
-    let polls = 0;
     let resolvedWith: string[] | null = null;
 
     const answer = (value: HubAnswer): Response =>
@@ -65,22 +69,18 @@ describe('grantDeviceAccess names its machine', () => {
           return answer({ result: { stdout: '{"reason":"unavailable","error":"the device list is not known here yet"}' } });
         }
 
-        // The third raise reaches the hub and parks on the card it raised.
-        return parked.promise.then(({ status, text }) => new Response(text, { status }));
+        // The third reaches the hub and parks NOT RUN on the card it raised; the re-issue after the answer runs.
+        if (resolvedWith === null) return answer({ result: { stdout: PARKED, exitCode: 1, refusal: { success: false, reason: 'unavailable', error: PARKED } } });
+
+        return answer({ result: { stdout: '', exitCode: 0 } });
       }
 
       if (body.method === 'listPendingConsents') {
-        polls += 1;
-
-        if (polls < 3) return answer({ result: [] });
-
-        return answer({ result: [{ consentId: 'cons-1' }] });
+        return answer({ result: [{ consentId: 'cons-0', deviceId: 'dev-alpha' }, { consentId: 'cons-1', deviceId: 'dev-beta' }] });
       }
 
       if (body.method === 'resolveDeviceConsent') {
         resolvedWith = v.parse(v.array(v.string()), body.args);
-        // Settling the card unblocks the parked raise with the command's answer.
-        parked.resolve({ status: 200, text: JSON.stringify({ result: { stdout: '' } }) });
 
         return answer({ result: { ok: true } });
       }
@@ -95,15 +95,16 @@ describe('grantDeviceAccess names its machine', () => {
     // Every raise named the machine — that is what mints beta's card rather
     // than the fleet's unnamed-call refusal.
     const raiseArgs = seen.filter((call) => call.method === 'executeInExecutor').map((call) => call.args);
-    expect(raiseArgs.length).toBeGreaterThanOrEqual(3);
+    expect(raiseArgs).toHaveLength(4);
 
     for (const args of raiseArgs) {
       expect(v.parse(v.array(v.string()), args)).toEqual(['device', 'true', 'kinu-beta']);
     }
 
-    // The card the polls found is the one answered `always`.
+    // The machine's own card is the one answered `always`, before the re-issue that spends it.
     const [consentId = '', decision = ''] = resolvedWith ?? [];
     expect(consentId).toBe('cons-1');
     expect(decision).toBe('always');
+    expect(seen.map((call) => call.method).slice(-3)).toEqual(['listPendingConsents', 'resolveDeviceConsent', 'executeInExecutor']);
   });
 });

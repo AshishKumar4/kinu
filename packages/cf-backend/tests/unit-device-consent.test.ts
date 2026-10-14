@@ -135,7 +135,7 @@ describe('the device Sandbox route', () => {
   test('a binding listing carries no tier of its own', async () => {
     const { harness, consents } = await deviceRoutesSetup();
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(harness.workspace, 'statPath', ['/home/me/a.md'], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'statPath', ['/home/me/a.md'], { agentName: WORKSPACE });
 
     const rows = await consents();
 

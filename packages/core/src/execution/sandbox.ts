@@ -5,9 +5,9 @@ import * as v from 'valibot';
 import { abortedBeforeStart } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
-import { commandTool, ExecutorPortSchema } from './types';
+import { commandTool, ExecutorPortSchema, type ExecutorTool } from './types';
 import { shellCall } from './command-call';
-import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
+import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells, type ShellSession } from './shell-session';
 import { namedShellCall } from '../safety/approval-gate';
 import type { CheckpointFiles, OutputSink, VfsDigestWrite } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
@@ -280,6 +280,343 @@ export interface SandboxExecutorOptions {
   readonly desktop?: { readonly driver: string; readonly screen: DesktopScreen };
 }
 
+/** What every member of the computer's surface works over: its handle (none: not configured), its named shells, whether
+ *  previews are on, and the one way a call through it marks the computer in use. */
+interface Computer {
+  readonly handle: SandboxHandle | undefined;
+  readonly names: ShellSession;
+  readonly shells: MachineShells | undefined;
+  readonly previews: boolean;
+  readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
+  readonly exposeOn: (box: SandboxHandle, port: number, name?: string) => Promise<PortExposureResult>;
+}
+
+/** `computer.exec`. */
+function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
+  return commandTool(
+    'Run a shell command on your computer. '
+      + 'BUN IS THE DEFAULT toolchain here (bun 1.3.12 ships in the image): use `bun install`, '
+      + '`bun run`, `bun x` and `bun test` rather than npm, npx, yarn or pnpm unless a project '
+      + 'genuinely requires one of those. '
+      + 'A workspace restored after the container slept keeps its source and its LOCKFILES but '
+      + 'not its regenerable trees (node_modules, .venv, build output): if an import fails after '
+      + 'a restore, run one `bun install` before concluding anything is missing.',
+    (args) => {
+      if (!handle) return { refused: notConfigured() };
+      const command = parseInput(StringSchema, { value: args[0] });
+
+      if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'computer.exec: command must be a string')) };
+      const exec = shellExecOptions({ value: args[1] });
+      const { signal, job, output } = exec;
+
+      if (exec.name !== undefined && shells === undefined) {
+        return { refused: refusalOf(new KinuError('unsupported', 'computer.exec: this runtime keeps no named shells')) };
+      }
+
+      const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
+      const reportCwd = reportsCwd({ context: args[1] });
+      const { name } = exec;
+
+      // What the named shell restores, read in the container; an approval binds it, and the run checks it again. The
+      // container takes no stdin from a call.
+      const named = namedShellCall(shellCall(command, exec, { stdin: false }), name, shells === undefined ? undefined : async (shell) => (await machineShellCwd({
+        exec: async (read) => {
+          const r = await touch(() => handle.exec(read, { cwd: WORKSPACE_BACKUP_DIR }));
+
+          return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
+        },
+      }, shell, shells))?.state ?? null);
+
+      return { call: named.call, run: async (pinned): Promise<CommandResult> => {
+        try {
+          // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
+          // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
+          return await names.hold(name, callJob(exec), () => named.run(pinned, async () => {
+            const res = await touch(() => {
+              if (signal?.aborted) throw notDispatched();
+              // The signal is added only when given, so an adapter can tell "none" from "already fired".
+              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
+
+              if (signal !== undefined) opts.signal = signal;
+
+              if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
+
+              if (output !== undefined) opts.output = call.output(output);
+
+              return handle.exec(call.command, opts);
+            });
+
+            // The container's answer, as every transport settles a command.
+            const outcome: ExecOutcome = { ...call.settle(res) };
+
+            return commandResultAt(outcome, reportCwd);
+          }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message)));
+        } catch (err) {
+          const own = classifyErrorCode({ cause: err }) === 'cancelled';
+
+          // The caller's cancel wins over what the call it cut short answered.
+          if (own || signal?.aborted === true) throw own ? err : cancelledWhileRunning(command);
+
+          return refusalOf(sandboxFailure({ doing: `computer.exec \`${command}\``, cause: err }));
+        }
+      } };
+    },
+  );
+}
+
+/** `computer.readdir`. */
+function readdirMember({ handle, touch }: Computer): ExecutorTool {
+  return {
+    planAllowed: true,
+    description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      if (!handle) return notConfigured();
+      const listing = parseInput(ListOptionsSchema, { value: args[0] });
+
+      if (listing === undefined) {
+        return refusalOf(new KinuError('bad_input', 'computer.readdir: takes its options as one object, `{ path? }`'));
+      }
+
+      const dir = listing.path === undefined || listing.path === '' ? WORKSPACE_BACKUP_DIR : listing.path;
+
+      try {
+        const r = await withSandboxRetry(() => touch(() => handle.listFiles(dir, { recursive: false })));
+
+        if (!r?.files?.length) return '';
+
+        return r.files
+          .map(f => {
+            return `${f.type === 'directory' ? 'd' : '-'} ${f.name}`;
+          })
+          .join('\n');
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.readdir ${dir}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `computer.deleteFile`. */
+function deleteFileMember({ handle, touch }: Computer): ExecutorTool {
+  return {
+    description: 'Delete a file or directory.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      if (!handle) return notConfigured();
+      const path = parseInput(PathSchema, { value: args[0] });
+
+      if (path === undefined) {
+        return refusalOf(new KinuError('bad_input', 'computer.deleteFile: path must be a non-empty string'));
+      }
+
+      try {
+        await withSandboxRetry(() => touch(() => Promise.resolve(handle.deleteFile(path))));
+
+        return `deleted ${path}`;
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.deleteFile ${path}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `computer.exists`. */
+function existsMember({ handle, touch }: Computer): ExecutorTool {
+  return {
+    planAllowed: true,
+    description: 'Check if a path exists: uses shell test.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      if (!handle) return notConfigured();
+      const path = parseInput(PathSchema, { value: args[0] });
+
+      // Answering 'false' would claim absence when the container could not be asked.
+      if (path === undefined) {
+        return refusalOf(new KinuError('bad_input', 'computer.exists: path must be a non-empty string'));
+      }
+
+      try {
+        const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`)));
+        const out = res.stdout.trim();
+
+        return out.includes('true') ? 'true' : 'false';
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.exists ${path}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `computer.exposePort`. */
+function exposePortMember({ handle, previews, exposeOn }: Computer): ExecutorTool {
+  return {
+    description:
+      'Expose a TCP port from the computer. Returns the public preview URL, then one line: "verified" when a ' +
+      'request to the URL reaches the container port, or "not reached" naming the preview-route gate that ' +
+      'refused; that check never calls your server. PRE-REQUISITE: a SUPERVISED server must already be ' +
+      'listening on the port: start it with computer.startProcess, never a bare `nohup ... &` (unsupervised ' +
+      'children die with the container and do not come back). Nothing listening is refused with the fix.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      if (!handle) return notConfigured();
+
+      if (!previews) return previewsUnconfigured();
+      const p = parseInput(ExecutorPortSchema, { value: args[0] });
+      const name = parseInput(ExposeOptionsSchema, { value: args[1] })?.name;
+
+      if (p === undefined) {
+        return refusalOf(new KinuError('bad_input', `computer.exposePort: invalid port ${String(args[0])}`));
+      }
+
+      try {
+        const exposed = await exposeOn(handle, p, name);
+
+        // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
+        return exposed.supported
+          ? exposedPortText(exposed.url, p, exposed.route)
+          : refusalOf(new KinuError('bad_input', exposed.reason));
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.exposePort ${p}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `computer.unexposePort`. */
+function unexposePortMember({ handle, touch }: Computer): ExecutorTool {
+  return {
+    description: 'Stop exposing a port.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      if (!handle) return notConfigured();
+      const port = parseInput(ExecutorPortSchema, { value: args[0] });
+
+      if (port === undefined) {
+        return refusalOf(new KinuError('bad_input', `computer.unexposePort: invalid port ${String(args[0])}`));
+      }
+
+      try {
+        // The box's revocation removes the port's row and withdraws its preview: nothing more to remove here.
+        await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));
+
+        return `unexposed ${port}`;
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.unexposePort ${port}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `computer.listPorts`. */
+function listPortsMember({ handle, previews }: Computer): ExecutorTool {
+  return {
+    description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
+    execute: async (): Promise<string | Refusal> => {
+      if (!handle) return notConfigured();
+
+      if (!previews) return previewsUnconfigured();
+
+      try {
+        // The tool is listPorts, the verb both executors declare. A read of the box's record, which never starts it,
+        // so no use of the box.
+        const ports = await withSandboxRetry(() => handle.getExposedPorts());
+
+        return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: 'computer.listPorts', cause: err }));
+      }
+    },
+  };
+}
+
+/** `computer.startProcess`. */
+function startProcessMember({ handle, touch }: Computer): ExecutorTool {
+  return commandTool(
+    'Start a SUPERVISED background process in the computer. Supervision records a restart ' +
+      'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
+      'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
+      'long-running server.',
+    (args) => {
+      if (!handle) return { refused: notConfigured() };
+      const command = parseInput(StringSchema, { value: args[0] });
+
+      if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'computer.startProcess: command must be a string')) };
+
+      const rawOpts = parseInput(
+        v.union([v.string(), v.object({ cwd: v.optional(v.string()) })]),
+        { value: args[1] },
+      );
+
+      const cwd = parseInput(
+        OptionalStringSchema,
+        { value: v.is(v.string(), rawOpts) ? rawOpts : rawOpts?.cwd },
+      ) ?? WORKSPACE_BACKUP_DIR;
+
+      return { call: { text: command, cwd, context: {} }, run: async (): Promise<CommandResult> => {
+        try {
+          // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
+          const started = await touch(async () => {
+            await withSandboxRetry(() => handle.ensureReady());
+
+            return handle.startSupervisedProcess(command, { cwd });
+          });
+
+          return JSON.stringify({ ...started, cwd, restartable: true });
+        } catch (err) {
+          return refusalOf(sandboxFailure({ doing: `computer.startProcess \`${command}\``, cause: err }));
+        }
+      } };
+    },
+  );
+}
+
+/** `computer.stopProcess`. */
+function stopProcessMember({ handle, touch }: Computer): ExecutorTool {
+  return {
+    description: 'Stop a supervised process by id and clear its restart spec.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      if (!handle) return notConfigured();
+      const processId = parseInput(StringSchema, { value: args[0] });
+
+      if (processId === undefined) {
+        return refusalOf(new KinuError('bad_input', 'computer.stopProcess: processId must be a string'));
+      }
+
+      try {
+        const result = await withSandboxRetry(() =>
+          touch(() => handle.stopSupervisedProcess(processId)));
+
+        return JSON.stringify({ processId, ...result });
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.stopProcess ${processId}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `computer.listProcesses`. */
+function listProcessesMember({ handle, touch }: Computer): ExecutorTool {
+  return {
+    description:
+      'List sandbox processes as JSON rows {processId,pid,status,restartable,command,session?,waiting?}. ' +
+      '`restartable:true` rows come back after a container restart. Each one runs in a terminal `session` the person ' +
+      'can open and type into. Status "waiting for input" means it stopped at a prompt; `waiting` is its last line. ' +
+      'Ask the person, or answer it yourself when the answer is yours to give, with exec: ' +
+      '`tmux send-keys -t \'=<session>:\' \'<answer>\' Enter`.',
+    execute: async (): Promise<string | Refusal> => {
+      if (!handle) return notConfigured();
+
+      try {
+        const rows = await withSandboxRetry(() => touch(async () => {
+          await handle.ensureReady();
+
+          return handle.listSupervisedProcesses();
+        }));
+
+        return JSON.stringify(rows);
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: 'computer.listProcesses', cause: err }));
+      }
+    },
+  };
+}
+
 /** Pass no handle for a "not configured" stub. */
 export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxExecutorOptions = {}): ExecutorProvider {
   const { previewHostSuffix, activated, sizes, shells, desktop } = options;
@@ -327,270 +664,19 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     return { supported: true, url: exposed.url, port, name, route: exposed.route };
   };
 
+  const computer: Computer = { handle, names, shells, previews, touch, exposeOn };
+
   const tools: ExecutorProvider['tools'] = {
-    exec: commandTool(
-      'Run a shell command on your computer. '
-        + 'BUN IS THE DEFAULT toolchain here (bun 1.3.12 ships in the image): use `bun install`, '
-        + '`bun run`, `bun x` and `bun test` rather than npm, npx, yarn or pnpm unless a project '
-        + 'genuinely requires one of those. '
-        + 'A workspace restored after the container slept keeps its source and its LOCKFILES but '
-        + 'not its regenerable trees (node_modules, .venv, build output): if an import fails after '
-        + 'a restore, run one `bun install` before concluding anything is missing.',
-      (args) => {
-        if (!handle) return { refused: notConfigured() };
-        const command = parseInput(StringSchema, { value: args[0] });
-
-        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'computer.exec: command must be a string')) };
-        const exec = shellExecOptions({ value: args[1] });
-        const { signal, job, output } = exec;
-
-        if (exec.name !== undefined && shells === undefined) {
-          return { refused: refusalOf(new KinuError('unsupported', 'computer.exec: this runtime keeps no named shells')) };
-        }
-
-        const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
-        const reportCwd = reportsCwd({ context: args[1] });
-        const { name } = exec;
-
-        // What the named shell restores, read in the container; an approval binds it, and the run checks it again. The
-        // container takes no stdin from a call.
-        const named = namedShellCall(shellCall(command, exec, { stdin: false }), name, shells === undefined ? undefined : async (shell) => (await machineShellCwd({
-          exec: async (read) => {
-            const r = await touch(() => handle.exec(read, { cwd: WORKSPACE_BACKUP_DIR }));
-
-            return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
-          },
-        }, shell, shells))?.state ?? null);
-
-        return { call: named.call, run: async (pinned): Promise<CommandResult> => {
-          try {
-            // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
-            // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
-            return await names.hold(name, callJob(exec), () => named.run(pinned, async () => {
-              const res = await touch(() => {
-                if (signal?.aborted) throw notDispatched();
-                // The signal is added only when given, so an adapter can tell "none" from "already fired".
-                const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
-
-                if (signal !== undefined) opts.signal = signal;
-
-                if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
-
-                if (output !== undefined) opts.output = call.output(output);
-
-                return handle.exec(call.command, opts);
-              });
-
-              // The container's answer, as every transport settles a command.
-              const outcome: ExecOutcome = { ...call.settle(res) };
-
-              return commandResultAt(outcome, reportCwd);
-            }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message)));
-          } catch (err) {
-            const own = classifyErrorCode({ cause: err }) === 'cancelled';
-
-            // The caller's cancel wins over what the call it cut short answered.
-            if (own || signal?.aborted === true) throw own ? err : cancelledWhileRunning(command);
-
-            return refusalOf(sandboxFailure({ doing: `computer.exec \`${command}\``, cause: err }));
-          }
-        } };
-      },
-    ),
-    readdir: {
-      planAllowed: true,
-      description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const listing = parseInput(ListOptionsSchema, { value: args[0] });
-
-        if (listing === undefined) {
-          return refusalOf(new KinuError('bad_input', 'computer.readdir: takes its options as one object, `{ path? }`'));
-        }
-
-        const dir = listing.path === undefined || listing.path === '' ? WORKSPACE_BACKUP_DIR : listing.path;
-
-        try {
-          const r = await withSandboxRetry(() => touch(() => handle.listFiles(dir, { recursive: false })));
-
-          if (!r?.files?.length) return '';
-
-          return r.files
-            .map(f => {
-              return `${f.type === 'directory' ? 'd' : '-'} ${f.name}`;
-            })
-            .join('\n');
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `computer.readdir ${dir}`, cause: err }));
-        }
-      },
-    },
-    deleteFile: {
-      description: 'Delete a file or directory.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const path = parseInput(PathSchema, { value: args[0] });
-
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'computer.deleteFile: path must be a non-empty string'));
-        }
-
-        try {
-          await withSandboxRetry(() => touch(() => Promise.resolve(handle.deleteFile(path))));
-
-          return `deleted ${path}`;
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `computer.deleteFile ${path}`, cause: err }));
-        }
-      },
-    },
-    exists: {
-      planAllowed: true,
-      description: 'Check if a path exists: uses shell test.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const path = parseInput(PathSchema, { value: args[0] });
-
-        // Answering 'false' would claim absence when the container could not be asked.
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'computer.exists: path must be a non-empty string'));
-        }
-
-        try {
-          const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`)));
-          const out = res.stdout.trim();
-
-          return out.includes('true') ? 'true' : 'false';
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `computer.exists ${path}`, cause: err }));
-        }
-      },
-    },
-    exposePort: {
-      description:
-        'Expose a TCP port from the computer. Returns the public preview URL, then one line: "verified" when a ' +
-        'request to the URL reaches the container port, or "not reached" naming the preview-route gate that ' +
-        'refused; that check never calls your server. PRE-REQUISITE: a SUPERVISED server must already be ' +
-        'listening on the port: start it with computer.startProcess, never a bare `nohup ... &` (unsupervised ' +
-        'children die with the container and do not come back). Nothing listening is refused with the fix.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-
-        if (!previewHostSuffix) return previewsUnconfigured();
-        const p = parseInput(ExecutorPortSchema, { value: args[0] });
-        const name = parseInput(ExposeOptionsSchema, { value: args[1] })?.name;
-
-        if (p === undefined) {
-          return refusalOf(new KinuError('bad_input', `computer.exposePort: invalid port ${String(args[0])}`));
-        }
-
-        try {
-          const exposed = await exposeOn(handle, p, name);
-
-          // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
-          return exposed.supported
-            ? exposedPortText(exposed.url, p, exposed.route)
-            : refusalOf(new KinuError('bad_input', exposed.reason));
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `computer.exposePort ${p}`, cause: err }));
-        }
-      },
-    },
-    unexposePort: {
-      description: 'Stop exposing a port.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const port = parseInput(ExecutorPortSchema, { value: args[0] });
-
-        if (port === undefined) {
-          return refusalOf(new KinuError('bad_input', `computer.unexposePort: invalid port ${String(args[0])}`));
-        }
-
-        try {
-          // The box's revocation removes the port's row and withdraws its preview: nothing more to remove here.
-          await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));
-
-          return `unexposed ${port}`;
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `computer.unexposePort ${port}`, cause: err }));
-        }
-      },
-    },
-    listPorts: {
-      description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
-      execute: async (): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-
-        if (!previewHostSuffix) return previewsUnconfigured();
-
-        try {
-          // The tool is listPorts, the verb both executors declare. A read of the box's record, which never starts it,
-          // so no use of the box.
-          const ports = await withSandboxRetry(() => handle.getExposedPorts());
-
-          return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: 'computer.listPorts', cause: err }));
-        }
-      },
-    },
-    startProcess: commandTool(
-      'Start a SUPERVISED background process in the computer. Supervision records a restart ' +
-        'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
-        'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
-        'long-running server.',
-      (args) => {
-        if (!handle) return { refused: notConfigured() };
-        const command = parseInput(StringSchema, { value: args[0] });
-
-        if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'computer.startProcess: command must be a string')) };
-
-        const rawOpts = parseInput(
-          v.union([v.string(), v.object({ cwd: v.optional(v.string()) })]),
-          { value: args[1] },
-        );
-
-        const cwd = parseInput(
-          OptionalStringSchema,
-          { value: v.is(v.string(), rawOpts) ? rawOpts : rawOpts?.cwd },
-        ) ?? WORKSPACE_BACKUP_DIR;
-
-        return { call: { text: command, cwd, context: {} }, run: async (): Promise<CommandResult> => {
-          try {
-            // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
-            const started = await touch(async () => {
-              await withSandboxRetry(() => handle.ensureReady());
-
-              return handle.startSupervisedProcess(command, { cwd });
-            });
-
-            return JSON.stringify({ ...started, cwd, restartable: true });
-          } catch (err) {
-            return refusalOf(sandboxFailure({ doing: `computer.startProcess \`${command}\``, cause: err }));
-          }
-        } };
-      },
-    ),
-    stopProcess: {
-      description: 'Stop a supervised process by id and clear its restart spec.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-        const processId = parseInput(StringSchema, { value: args[0] });
-
-        if (processId === undefined) {
-          return refusalOf(new KinuError('bad_input', 'computer.stopProcess: processId must be a string'));
-        }
-
-        try {
-          const result = await withSandboxRetry(() =>
-            touch(() => handle.stopSupervisedProcess(processId)));
-
-          return JSON.stringify({ processId, ...result });
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: `computer.stopProcess ${processId}`, cause: err }));
-        }
-      },
-    },
+    exec: execMember(computer),
+    readdir: readdirMember(computer),
+    deleteFile: deleteFileMember(computer),
+    exists: existsMember(computer),
+    exposePort: exposePortMember(computer),
+    unexposePort: unexposePortMember(computer),
+    listPorts: listPortsMember(computer),
+    startProcess: startProcessMember(computer),
+    stopProcess: stopProcessMember(computer),
+    // Inline, as resize is: the effect its answer runs is run at this exported factory, its bridge.
     rest: {
       description:
         'Answer the computer\'s rest ask. When it has gone unused while processes still run in it, it asks you: ' +
@@ -608,29 +694,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         }), { onSuccess: restText, onFailure: refusalOf }));
       },
     },
-    listProcesses: {
-      description:
-        'List sandbox processes as JSON rows {processId,pid,status,restartable,command,session?,waiting?}. ' +
-        '`restartable:true` rows come back after a container restart. Each one runs in a terminal `session` the person ' +
-        'can open and type into. Status "waiting for input" means it stopped at a prompt; `waiting` is its last line. ' +
-        'Ask the person, or answer it yourself when the answer is yours to give, with exec: ' +
-        '`tmux send-keys -t \'=<session>:\' \'<answer>\' Enter`.',
-      execute: async (): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-
-        try {
-          const rows = await withSandboxRetry(() => touch(async () => {
-            await handle.ensureReady();
-
-            return handle.listSupervisedProcesses();
-          }));
-
-          return JSON.stringify(rows);
-        } catch (err) {
-          return refusalOf(sandboxFailure({ doing: 'computer.listProcesses', cause: err }));
-        }
-      },
-    },
+    listProcesses: listProcessesMember(computer),
   };
 
   if (desktop !== undefined) {

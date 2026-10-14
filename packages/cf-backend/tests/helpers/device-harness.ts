@@ -13,6 +13,12 @@ import type { UserCaller } from '@kinu.run/core';
 
 export { CAPABLE_HELLO };
 
+/** What a device call answers once the owner refused its workspace the device. */
+export const CONSENT_REFUSED = 'device use was not approved: the owner declined';
+
+/** What a device call answers while its consent waits on the owner (`deviceConsentQueued`): NOT RUN, parked. */
+export const CONSENT_PARKED = /NOT RUN: using .* waits on the owner's consent/;
+
 export const WORKSPACE = 'workspace-a';
 
 export const OTHER_WORKSPACE = 'workspace-b';

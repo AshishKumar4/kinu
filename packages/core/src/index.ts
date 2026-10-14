@@ -1526,10 +1526,10 @@ export {
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, initDeviceConsentRequestsTable, DEVICE_CONSENT_DENIED,
-  DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
-  type DeviceConsentDecision, type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest,
-  type PendingDeviceConsent, type PendingConsentRow, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, type DeviceConsentOutcome,
+  DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
+  type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
+  type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
 } from './safety/device-consent';
 
 export {

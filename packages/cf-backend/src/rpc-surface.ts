@@ -265,7 +265,7 @@ const ORCHESTRATOR_METHODS = [
   'announceDeviceAvailable',
   'announceDeviceUnavailable',
   'authorizeEmailSender',
-  'awaitDeviceConsent',
+  'askDeviceConsent',
   'beginGenesisTurn',
   'claimOwner',
   'createDurableWebhook',

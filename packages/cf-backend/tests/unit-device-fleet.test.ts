@@ -2,7 +2,7 @@
 // platform-controlled `ctx.getWebSockets()` order can reach different machines within one turn.
 import { describe, expect, test } from 'bun:test';
 import {
-  DEVICE_CONSENT_DENIED, SEVERAL_DEVICES_CONNECTED, NO_DEVICE_CONNECTED,
+  SEVERAL_DEVICES_CONNECTED, NO_DEVICE_CONNECTED,
   DynamicContextLedger, connectedDevices, renderDynamicContextBlock, soleLiveDevice,
   isDeviceAmbiguityError, isDeviceNotConnectedError,
   type DeviceFleetEntry, type DeviceStatus, type DynamicContext, type JsonValue,
@@ -13,6 +13,7 @@ import {
 } from './helpers/user-do';
 import type { UserCaller } from '@kinu.run/core';
 import { createHubDeviceTransport } from '@kinu.run/core';
+import { CONSENT_REFUSED } from './helpers/device-harness';
 
 const WORKSPACE = 'workspace-a';
 
@@ -91,7 +92,7 @@ describe('two daemons connected at once', () => {
     const fleet = await twoDaemons();
     fleet.consentDecision = 'once';
 
-    const answer = await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['uname -a'], {
+    const answer = await fleet.deviceCall(fleet.workspace, 'exec', ['uname -a'], {
       agentName: WORKSPACE, deviceId: fleet.rigId,
     });
 
@@ -114,7 +115,7 @@ describe('two daemons connected at once', () => {
     let refused: unknown;
 
     try {
-      await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['make'], { agentName: WORKSPACE });
+      await fleet.deviceCall(fleet.workspace, 'exec', ['make'], { agentName: WORKSPACE });
     } catch (caught) { refused = caught; }
 
     expect(refused).toBeInstanceOf(Error);
@@ -131,7 +132,7 @@ describe('two daemons connected at once', () => {
     let statusRefused: unknown;
 
     try {
-      await fleet.userDO.deviceRpc(fleet.workspace, 'checkpointStatus', []);
+      await fleet.deviceCall(fleet.workspace, 'checkpointStatus', []);
     } catch (caught) { statusRefused = caught; }
 
     expect(isDeviceAmbiguityError({ cause: statusRefused })).toBe(true);
@@ -142,7 +143,8 @@ describe('two daemons connected at once', () => {
 
   test('through the transport, the ask reaches the executor as the caller\'s bad_input', async () => {
     const fleet = await twoDaemons();
-    fleet.consentDecision = 'once';
+    // Consent is not this test's subject: the workspace was granted the machine it names.
+    fleet.grantDevice(WORKSPACE, fleet.macId);
 
     const transport = createHubDeviceTransport({
       hub: () => fleet.userDO,
@@ -169,8 +171,8 @@ describe('two daemons connected at once', () => {
 
     await fleet.rig.close();
 
-    const named = await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['pwd'], { agentName: WORKSPACE, deviceId: fleet.macId });
-    const unnamed = await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['pwd'], { agentName: WORKSPACE });
+    const named = await fleet.deviceCall(fleet.workspace, 'exec', ['pwd'], { agentName: WORKSPACE, deviceId: fleet.macId });
+    const unnamed = await fleet.deviceCall(fleet.workspace, 'exec', ['pwd'], { agentName: WORKSPACE });
     expect(JSON.parse(named ?? 'null')).toMatchObject({ stdout: `ran on ${fleet.macId}` });
     expect(JSON.parse(unnamed ?? 'null')).toMatchObject({ stdout: `ran on ${fleet.macId}` });
     expect(fleet.rig.frames.filter((f) => f.method === 'exec')).toHaveLength(0);
@@ -180,7 +182,7 @@ describe('two daemons connected at once', () => {
     expect(byName(after.devices, 'ashish@mac')).toMatchObject({ connected: true });
     expect(soleLiveDevice(after.devices)?.consentedRoot).toBe('/Users/ashish/work');
     // A stated absence, not a re-route.
-    await expect(fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['pwd'], { agentName: WORKSPACE, deviceId: fleet.rigId }))
+    await expect(fleet.deviceCall(fleet.workspace, 'exec', ['pwd'], { agentName: WORKSPACE, deviceId: fleet.rigId }))
       .rejects.toThrow(NO_DEVICE_CONNECTED);
     expect(fleet.mac.frames.filter((f) => f.method === 'exec')).toHaveLength(2);
     await fleet.end();
@@ -190,14 +192,14 @@ describe('two daemons connected at once', () => {
     const fleet = await twoDaemons();
 
     fleet.consentDecision = 'always';
-    await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId });
+    await fleet.deviceCall(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId });
     expect(fleet.consentPrompts).toHaveLength(1);
 
     fleet.consentDecision = 'deny';
-    await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId });
+    await fleet.deviceCall(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId });
     expect(fleet.consentPrompts).toHaveLength(1);
-    await expect(fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.rigId }))
-      .rejects.toThrow(DEVICE_CONSENT_DENIED);
+    await expect(fleet.deviceCall(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.rigId }))
+      .rejects.toThrow(CONSENT_REFUSED);
     expect(fleet.consentPrompts).toHaveLength(2);
     expect(fleet.rig.frames.filter((f) => f.method === 'exec')).toHaveLength(0);
     expect(fleet.mac.frames.filter((f) => f.method === 'exec')).toHaveLength(2);
@@ -207,8 +209,8 @@ describe('two daemons connected at once', () => {
     expect(byName(status.devices, 'mrwhite@rig')?.granted).toBe(false);
 
     expect(await fleet.userDO.revokeDeviceConsent(fleet.owner, WORKSPACE, fleet.macId)).toEqual({ ok: true });
-    await expect(fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId }))
-      .rejects.toThrow(DEVICE_CONSENT_DENIED);
+    await expect(fleet.deviceCall(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId }))
+      .rejects.toThrow(CONSENT_REFUSED);
     expect(fleet.consentPrompts).toHaveLength(3);
     expect(await fleet.userDO.listDeviceConsents(fleet.owner)).toEqual([]);
     await fleet.end();
@@ -243,7 +245,7 @@ describe('what the model is told', () => {
   test('the fleet is named once, with platform, liveness, files and grant per machine', async () => {
     const fleet = await twoDaemons();
     fleet.consentDecision = 'always';
-    await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId });
+    await fleet.deviceCall(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId });
 
     const block = render(await fleet.userDO.deviceRuntimeStatus(fleet.workspace));
 
