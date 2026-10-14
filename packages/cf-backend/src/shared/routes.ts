@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
 import {
-  err, json, safeJson,
+  err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareCreatedSchema,
@@ -16,7 +16,6 @@ import type { AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
-import type { ErrorCode } from '@kinu.run/core/obs';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
@@ -160,14 +159,6 @@ function listed(...writes: ReadonlyArray<{ readonly listing?: 'pending' }>): { l
   return writes.some((write) => write.listing === 'pending') ? { listing: 'pending' } : {};
 }
 
-function slateRefusalStatus(reason: ErrorCode): number {
-  if (reason === 'bad_input') return 400;
-
-  if (reason === 'missing') return 404;
-
-  return 409;
-}
-
 async function publish(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, PublishBody);
 
@@ -178,7 +169,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity): Prom
   const owned = workspaceOwner(env, body.workspace);
   const published = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'publish', id: body.slate, version: body.version, include: body.include });
 
-  if (!published.ok) return err(slateRefusalStatus(published.reason), published.error);
+  if (!published.ok) return err(ERROR_STATUS[published.reason], published.error);
 
   const { share } = v.parse(PublishedBlueprintSchema, published.value);
 
@@ -219,7 +210,7 @@ async function fork(request: Request, env: Env, identity: AuthIdentity): Promise
   if (!bundle.ok) return err(404, NOT_FOUND);
   const admitted = await workspaceOwner(env, body.workspace).admitBlueprint(bundle.value);
 
-  if (!admitted.ok) return err(admitted.reason === 'bad_input' ? 400 : 409, admitted.error);
+  if (!admitted.ok) return err(ERROR_STATUS[admitted.reason], admitted.error);
   const result: BlueprintFork = admitted.value;
 
   return json({ body: result }, { status: 201 });
@@ -259,7 +250,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
     op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork,
   });
 
-  if (!created.ok) return err(slateRefusalStatus(created.reason), created.error);
+  if (!created.ok) return err(ERROR_STATUS[created.reason], created.error);
 
   const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
   const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
@@ -289,7 +280,7 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
   const revoked = await workspaceOwner(env, body.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: body.share });
 
-  if (!revoked.ok) return err(revoked.reason === 'missing' ? 404 : 409, revoked.error);
+  if (!revoked.ok) return err(ERROR_STATUS[revoked.reason], revoked.error);
 
   return json({ body: { ...v.parse(v.record(v.string(), v.unknown()), revoked.value), ...listed(revoked) } });
 }

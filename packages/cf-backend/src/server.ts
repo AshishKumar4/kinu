@@ -13,8 +13,8 @@ import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
   parseEgressParams, workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
-import { APP_ROUTES, ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
-import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
+import { APP_ROUTES, ERROR_STATUS, ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
+import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -328,12 +328,6 @@ previewHost.all('*', async (c) => await servePreviewRequest(c.req.raw, c.env));
 
 previewHost.onError(routeError);
 
-/** Every other code is a workspace failure: 500. */
-const HOSTED_ACTOR_ROUTE_STATUS: Partial<Readonly<Record<ErrorCode, number>>> = {
-  missing: 404,
-  denied: 403,
-};
-
 /** `request`: a CLI ticket stripped. */
 interface WorkerVariables extends ApiVariables {
   request: Request;
@@ -460,7 +454,7 @@ worker.all('/agents/*', async (c, next) => {
     const target = await root.resolveHostedActorRoute(hosted.name);
 
     if ('reason' in target) {
-      return Response.json(target, { status: HOSTED_ACTOR_ROUTE_STATUS[target.reason] ?? 500 });
+      return Response.json(target, { status: ERROR_STATUS[target.reason] });
     }
 
     headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);
