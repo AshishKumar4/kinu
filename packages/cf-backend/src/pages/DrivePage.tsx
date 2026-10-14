@@ -626,7 +626,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     }
 
     const meta = mine ? whoCanOpen(row) : [row.kind === "live" ? "Live" : "Blueprint", row.owner, shortAge(row.createdAt)].filter(Boolean).join(" · ");
-    const cover = <Cover title={row.title} seed={row.share} />;
+    const cover = <Cover title={row.title} />;
     // A live share of yours shows the picture of the slate it shares.
     const slate = mine && row.kind === "live" ? shared?.slates.find((each) => each.workspace === row.workspace && each.id === row.slate) : undefined;
 
@@ -642,7 +642,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const slateTile = (slate: OwnedSlate): ReactNode => (
     <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title}
       picture={<SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top"
-        fallback={<Cover title={slate.title} seed={`${slate.workspace}/${slate.id}`} />} />}
+        fallback={<Cover title={slate.title} />} />}
       icon={SLATE_ICON} href={slateHref(slate)}
       meta={<><span className="truncate">{titleOf(slate.workspace)}</span><VisibilityGlyph visibility={slate.visibility} /></>}
       attributes={{ "data-drive-slate": slate.id, "data-drive-workspace": slate.workspace }}

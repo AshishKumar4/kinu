@@ -12,6 +12,7 @@ import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { composing } from "@/components/ui/form";
+import { Status } from "@/components/ui/Status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 
 /** The hub enforces the same `effectiveDeviceMode`, so this line matches what it does. */
@@ -38,9 +39,8 @@ function UpdateBadge({ device }: { device: UserDevice }) {
   if (device.update !== "behind" && device.update !== "off" && device.update !== "unstamped" && device.update !== "refused") return null;
 
   return (
-    <span role="status" data-device-update={device.update} title={device.version === null ? undefined : `${device.version} installed; ${device.servedVersion ?? ""} served`}
-      className={`px-2 py-0.5 ${device.update === "behind" || device.update === "refused" ? "p-badge-warning" : "p-badge-neutral"}`}>
-      {DEVICE_UPDATE_COPY[device.update]}
+    <span role="status" data-device-update={device.update} title={device.version === null ? undefined : `${device.version} installed; ${device.servedVersion ?? ""} served`}>
+      <Status tone={device.update === "behind" || device.update === "refused" ? "warning" : "neutral"}>{DEVICE_UPDATE_COPY[device.update]}</Status>
     </span>
   );
 }
@@ -151,11 +151,11 @@ export function DeviceRow({
 
   return (
     <div className="px-4 py-3">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-        <span className={`size-1.5 rounded-full shrink-0 ${device.connected ? "p-dot-success" : "p-dot-neutral"}`} />
+      <div className="flex items-start gap-x-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
         {editing === null ? (
           <>
-            <span className="p-row-text font-medium p-text">{device.label}</span>
+            <span className="min-w-0 truncate p-row-text font-medium p-text">{device.label}</span>
             <button onClick={() => setEditing(device.label)} title="Rename this device" className="p-text-3 hover:p-text">
               <PencilSimpleIcon size={12} />
             </button>
@@ -181,12 +181,15 @@ export function DeviceRow({
             className="px-1.5 py-0.5 rounded-sm border p-border p-fill p-text text-xs w-44"
           />
         )}
-        {device.hostname && <span className="p-annotation p-text-3">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
-        {device.update === "required"
-          ? <span role="status" data-device-update="required" className="ml-auto px-2 py-0.5 p-badge-warning">{DEVICE_UPDATE_COPY.required}</span>
-          : <span className={`ml-auto px-2 py-0.5 ${device.connected ? "p-badge-success" : "p-badge-neutral"}`}>{device.connected ? "connected" : "offline"}</span>}
-        <UpdateBadge device={device} />
-        <button onClick={onRevoke} title="Revoke device" className="ml-1 border-l p-border pl-3 p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
+        {device.hostname && <span className="min-w-0 truncate p-annotation p-text-3">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2.5">
+          {device.update === "required"
+            ? <span role="status" data-device-update="required"><Status tone="warning">{DEVICE_UPDATE_COPY.required}</Status></span>
+            : <Status tone={device.connected ? "success" : "neutral"}>{device.connected ? "Connected" : "Offline"}</Status>}
+          <UpdateBadge device={device} />
+          <button onClick={onRevoke} title="Revoke device" aria-label="Revoke device" className="p-pill-icon -mr-1.5 hover:!p-danger"><TrashIcon size={13} /></button>
+        </div>
       </div>
       {device.update === "refused" && (
         <p className="mt-1.5 p-meta p-text-3">Update to {device.servedVersion} refused: {device.updateRefusal}</p>
@@ -210,7 +213,7 @@ export function DeviceRow({
           </button>
           <span className="font-medium">Sandbox</span>
         </label>
-        {cannotSandbox && <span className="p-badge-warning px-1.5 py-0.5">Cannot sandbox</span>}
+        {cannotSandbox && <Status tone="warning">Cannot sandbox</Status>}
         {mode === "sandboxed" && <span className="p-text-3">GPU: {describeGpuNodes(sandbox.gpu)}</span>}
       </div>
       <span className="mt-1.5 p-meta p-text-3" data-sandbox-mode={mode} data-whole-machine={device.wholeMachine || undefined}>

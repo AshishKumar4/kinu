@@ -1,40 +1,30 @@
 /** One workspace on the roster, drawn from the tile its entry carries: the card reads nothing of its own. */
 import { Link } from "react-router-dom";
 import { rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type WorkspaceStatus, type RosterEntry } from "@kinu.run/core";
-import { coverBadge, coverLetter, coverWash, hueOf } from "@/components/ui/cover";
+import { WorkspaceLogo } from "@/components/Marks";
 import { SlatePicture } from "@/components/slates/SlatePicture";
-
-interface StatusTone {
-  readonly dot: string;
-  readonly text: string;
-}
+import { Status, type StatusTone } from "@/components/ui/Status";
 
 function workspaceStatusTone(status: WorkspaceStatus): StatusTone {
   switch (status) {
     case "needs":
-      return { dot: "p-dot-warning", text: "p-warning" };
+      return "warning";
     case "working":
-      return { dot: "p-dot-success p-dot-pulse", text: "p-success" };
+      return "live";
     case "failed":
     case "unfinished":
-      return { dot: "p-dot-danger", text: "p-danger" };
+      return "danger";
     case "updated":
     case "idle":
     case "unreported":
-      return { dot: "p-dot-neutral", text: "p-text-3" };
+      return "neutral";
   }
 }
 
 function StatusChip({ workspace }: { workspace: RosterEntry }) {
   const headline = rosterHeadline(workspace.overview, workspace.decisions);
-  const tone = workspaceStatusTone(headline.status);
 
-  return (
-    <span data-overview-chip className={`inline-flex items-center gap-1.5 whitespace-nowrap p-t-status ${tone.text}`}>
-      <span aria-hidden="true" className={`size-1.5 rounded-full ${tone.dot}`} />
-      {headline.label}
-    </span>
-  );
+  return <Status tone={workspaceStatusTone(headline.status)} hooks={{ "data-overview-chip": "" }}>{headline.label}</Status>;
 }
 
 /** The mission is omitted when it only repeats the title, which a first message that became the title always does. */
@@ -72,8 +62,6 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
     );
   }
 
-  const hue = hueOf(workspace.name);
-
   return (
     <Link
       to={`/workspace/${workspace.name}`}
@@ -81,14 +69,8 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
     >
       <SlatePicture workspace={workspace.name} slate={pictured} className="block aspect-[16/10] w-full border-b p-border object-cover object-top"
         fallback={(
-          <span className="flex h-14 items-end px-4 pb-2" style={coverWash(hue)}>
-            <span
-              className="flex size-8 items-center justify-center rounded-lg text-sm font-semibold"
-              style={coverBadge(hue)}
-              aria-hidden="true"
-            >
-              {coverLetter(title)}
-            </span>
+          <span className="flex h-14 items-end border-b p-border p-recessed px-4 pb-2">
+            <WorkspaceLogo title={title} logo={workspace.logo} size={32} />
           </span>
         )} />
       <span className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2.5">

@@ -1,11 +1,11 @@
 /**
- * Agent: what this agent is and whether it is getting better. Evolution holds lineage,
- * GEPA passes and the quality scoreboard together; quality rows are keyed by `scaffoldVersion`.
+ * Agent: who it is, what it knows, how it is doing, and how it is changing. Each answers at the density its data
+ * supports: a first day says so instead of drawing empty charts.
  */
 import { useCallback, useState } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
-  FingerprintIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon, GitBranchIcon,
+  BrainIcon, ChartLineUpIcon, GitBranchIcon, GlobeHemisphereWestIcon, IdentificationCardIcon, MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
 import type { AgentStatus } from "@/hooks/use-chat-owner";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
@@ -13,10 +13,12 @@ import type { JsonValue, MemoryEntry, Rpc } from "@kinu.run/core";
 import { Effect } from "effect";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import { putAccountFact } from "../../lib/user-api";
-import { MarkdownContent, EmptyState, Section } from "./shared";
+import { MarkdownContent, Section } from "./shared";
 import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
+import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
+import { ChatMascot, mascotSeed } from "@/components/Marks";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
@@ -32,7 +34,7 @@ type PromoteState = "idle" | "saving" | "kept" | { readonly failed: string };
 function PromoteFact({ fact, workspace }: { fact: Fact; workspace: string }) {
   const [state, setState] = useState<PromoteState>("idle");
 
-  if (state === "kept") return <span className="p-meta p-success shrink-0" data-world-model-promoted>Kept for every workspace</span>;
+  if (state === "kept") return <span className="shrink-0 p-meta p-success" data-world-model-promoted>Kept for every workspace</span>;
 
   const promote = () => Effect.sync(() => { setState("saving"); }).pipe(
     Effect.andThen(attempt({ doing: "keeping this fact for every workspace", otherwise: "io" }, () => putAccountFact(fact.key, fact.value, workspace))),
@@ -45,9 +47,9 @@ function PromoteFact({ fact, workspace }: { fact: Fact; workspace: string }) {
   if (state === "saving") label = "Keeping…";
 
   return (
-    <button type="button" className="p-meta p-accent-fg hover:underline shrink-0" disabled={state === "saving"} onClick={() => detach(promote())}
-      title={failed ?? "Every workspace and agent of yours will read it alongside its own memory."}>
-      {label}
+    <button type="button" className="p-pill-icon shrink-0 opacity-60 transition-opacity group-hover/fact:opacity-100 focus-visible:opacity-100 disabled:opacity-40"
+      disabled={state === "saving"} onClick={() => detach(promote())} aria-label={label} title={failed === null ? label : `${label}: ${failed}`}>
+      <GlobeHemisphereWestIcon size={14} />
     </button>
   );
 }
@@ -59,140 +61,197 @@ export interface AgentSurfaceProps {
   memoryContent: string;
   onSearchMemory: (q: string) => void;
   onRetryLoad: () => void;
+  /** The changelog was read: what the agent changed in itself stops counting as unseen. */
+  onChangelogSeen?: (() => void) | undefined;
   rpc: Rpc;
   /** `reads_changed` frames per live read, as WorkTab takes them. */
   readMoves?: ReadMoves;
+  /** The workspace's name, which the agent's mascot is drawn from. */
+  workspace?: string | undefined;
+}
+
+function Chip({ children, mono = false }: { children: React.ReactNode; mono?: boolean }) {
+  return <span className={`inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
+}
+
+function Quiet({ children }: { children: React.ReactNode }) {
+  return <p className="p-row-text p-text-3">{children}</p>;
+}
+
+function Who({ as, workspace }: { as: AgentStatus; workspace: string | undefined }) {
+  const title = workspaceDisplayTitle({ name: as.name, displayName: as.displayName });
+  const since = new Date(as.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+  return (
+    <Section id="agent-who" title="Who it is" icon={<IdentificationCardIcon size={14} className="p-text-2" />}>
+      <div className="space-y-3">
+        <div className="flex items-center gap-3.5">
+          <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl border p-border p-fill">
+            <ChatMascot seed={mascotSeed(workspace ?? as.name, "main")} colour={0} activity="idle" size={30} />
+          </span>
+          <div className="min-w-0">
+            <div className="p-title truncate p-text" title={title}>{title}</div>
+            <div className="truncate p-meta p-text-3" title={as.name}>Its own agent · since {since}</div>
+          </div>
+        </div>
+        {as.purpose !== "" && <p className="p-row-text p-text-2">{as.purpose}</p>}
+        <div className="flex flex-wrap gap-1.5">
+          <Chip mono>{as.model}</Chip>
+          <Chip>{as.messageCount} {as.messageCount === 1 ? "message" : "messages"}</Chip>
+          <Chip>Prompt v{as.scaffoldVersion}</Chip>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+/** Whether the workspace's read has come back: "nothing it knows" may only be said of one that did. */
+type Read = { readonly state: "loading" } | { readonly state: "failed"; readonly retry: () => void } | { readonly state: "loaded" };
+
+function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResource, reloadFacts, workspace }: {
+  read: Read;
+  memory: MemoryEntry[];
+  memoryContent: string;
+  onSearchMemory: (q: string) => void;
+  facts: readonly Fact[];
+  factsResource: AsyncResource<Fact[]>;
+  reloadFacts: () => void;
+  workspace: string | null;
+}) {
+  const [search, setSearch] = useState("");
+  const searching = search !== "";
+  const notes = [...memory].reverse();
+
+  const empty = read.state === "loaded" && !searching && notes.length === 0 && memoryContent === "" && facts.length === 0
+    && factsResource.status !== "error";
+
+  return (
+    <Section id="memory" title="What it knows" icon={<BrainIcon size={14} className="p-text-2" />}
+      badge={facts.length + notes.length > 0 ? <Badge variant="secondary">{facts.length + notes.length}</Badge> : undefined}>
+      <div className="space-y-3">
+        <label className="flex h-8 items-center gap-2 rounded-lg border p-border p-elevated px-2.5 focus-within:ring-1 focus-within:ring-[var(--c-accent)]">
+          <MagnifyingGlassIcon size={13} className="shrink-0 p-text-3" aria-hidden />
+          <input value={search} onChange={(event) => { setSearch(event.target.value); onSearchMemory(event.target.value); }}
+            placeholder="Search what it knows" aria-label="Search what it knows"
+            className="min-w-0 flex-1 bg-transparent text-sm p-text placeholder:p-text-3 focus:outline-none" />
+        </label>
+
+        {/* The page's notice gives the reason once; this offers the retry. */}
+        {read.state === "failed" && <LoadFailure what="what it knows" onRetry={read.retry} />}
+        {read.state === "loading" && <div className="flex h-16 items-center justify-center"><Loader size="sm" /></div>}
+        {empty && <p data-empty className="p-row-text p-text-3">Nothing yet. It keeps notes and facts as it works, and you can ask it to remember something.</p>}
+
+        {searching && notes.length === 0 && <Quiet>Nothing it knows matches.</Quiet>}
+
+        {notes.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="p-meta p-text-3">{searching ? "Notes that match" : "Notes"}</p>
+            <div data-learnings className="p-group">
+              {notes.map((entry, index) => (
+                <div key={index} data-learning className="px-3 py-2.5">
+                  <p className="line-clamp-2 p-row-text p-text">{entry.content.split("\n")[0]}</p>
+                  <p className="mt-0.5 p-meta p-text-4">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!searching && memoryContent !== "" && (
+          <details className="group/memory">
+            <summary className="cursor-pointer p-meta p-text-3 hover:p-text">The whole memory file</summary>
+            <div className="mt-2 max-h-[420px] overflow-y-auto p-card px-4 py-3 prose-chat p-text"><MarkdownContent content={memoryContent} /></div>
+          </details>
+        )}
+
+        {factsResource.status === "error" && <LoadFailure what="what it has noticed" message={factsResource.message} onRetry={reloadFacts} />}
+
+        {!searching && facts.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="p-meta p-text-3">Noticed between turns</p>
+            <div className="p-group">
+              {facts.map((fact) => (
+                <div key={fact.key} className="group/fact flex items-start gap-3 px-3 py-2.5" data-world-model-fact={fact.key}>
+                  <div className="min-w-0 flex-1">
+                    <p className="line-clamp-2 p-row-text p-text">{v.is(v.string(), fact.value) ? fact.value : JSON.stringify(fact.value)}</p>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 p-meta p-text-4">
+                      <span className="font-mono">{fact.key}</span>
+                      {fact.confidence < 1 && <span className="tabular-nums">{(fact.confidence * 100).toFixed(0)}% sure</span>}
+                      {fact.source !== "" && <span>from {fact.source}</span>}
+                      <span>{timeAgo(fact.lastObservedAt)}</span>
+                    </p>
+                  </div>
+                  {workspace !== null && <PromoteFact fact={fact} workspace={workspace} />}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function readOf(loaded: boolean, failed: boolean, retry: () => void): Read {
+  if (loaded) return { state: "loaded" };
+
+  return failed ? { state: "failed", retry } : { state: "loading" };
+}
+
+function Changing({ rpc, readMoves, onChangelogSeen, version }: {
+  rpc: Rpc; readMoves: ReadMoves; onChangelogSeen: (() => void) | undefined; version: number | null;
+}) {
+  const { view, seenAt, seenError, resource, reload } = useChangelog(rpc, onChangelogSeen, readMoves.getEvolutionChangelog ?? 0);
+  const entries = view?.entries ?? [];
+
+  return (
+    <Section id="evolution" title="How it's changing" icon={<GitBranchIcon size={14} className="p-text-2" />}
+      badge={version === null ? undefined : <Badge variant="secondary">v{version}</Badge>}>
+      <div className="space-y-5">
+        {(view === null || resource.status === "error") && <ChangelogFailure resource={resource} reload={reload} />}
+        {seenError !== null && <p className="p-meta p-warning">Could not mark these as seen: {seenError}</p>}
+        {view !== null && entries.length === 0 && (
+          <Quiet>No changes yet. As it works it can refine its prompt, make tools and learn facts. Each change shows here, and most can be undone.</Quiet>
+        )}
+        {entries.length > 0 && (
+          <div className="p-group" data-changelog>
+            {entries.map((entry) => <ChangelogEntryCard key={entry.id} grouped entry={entry} seenAt={seenAt} rpc={rpc} onReverted={reload} />)}
+          </div>
+        )}
+        {version !== null && (
+          <section className="space-y-1.5">
+            <p className="p-eyebrow">Prompt versions</p>
+            <ScaffoldLineage rpc={rpc} currentVersion={version} />
+          </section>
+        )}
+        <section className="space-y-1.5">
+          <p className="p-eyebrow">Self-tuning</p>
+          <p className="p-meta p-text-3">Passes that try candidate prompts against its past turns, and keep a better one.</p>
+          <GepaView rpc={rpc} />
+        </section>
+      </div>
+    </Section>
+  );
 }
 
 export function AgentSurface(
-  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, rpc, readMoves = {} }: AgentSurfaceProps,
+  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, onChangelogSeen, rpc, readMoves = {}, workspace }: AgentSurfaceProps,
 ) {
-  const [memorySearch, setMemorySearch] = useState("");
-  // "No world model" may only be claimed about a listing that came back.
+  // "Nothing noticed" may only be claimed about a listing that came back.
   const loadFacts = useCallback(() => rpc<Fact[]>("getFacts", [100]), [rpc]);
   const { resource: factsResource, reload: reloadFacts } = useAsyncResource(loadFacts);
   const facts = lastValue(factsResource) ?? [];
   const as = lastValue(snapshot);
 
-  /** Spinner while the read is coming, retry once it failed; the page banner gives the reason once. */
-  const unloaded = (what: string) => snapshot.status === "error"
-    ? <LoadFailure what={what} onRetry={onRetryLoad} />
-    : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>;
-
-  const noMemories = as === null ? unloaded("memory") : <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" />;
-
   return (
     <div className="space-y-6 animate-fade-in">
-      {as ? (
-        <Section id="identity" title="Identity" icon={<FingerprintIcon size={14} className="p-text-2" />}>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="size-11 rounded-xl flex items-center justify-center p-fill border p-border">
-              <FingerprintIcon size={22} className="p-accent" />
-            </div>
-            {/* The workspace title as shown elsewhere, then the slug. `workspace_identity.id` is
-                `idFromName(slug)`, so it would only restate the slug in hex. */}
-            <div className="min-w-0">
-              <div className="p-title p-text truncate" title={workspaceDisplayTitle({ name: as.name, displayName: as.displayName })}>{workspaceDisplayTitle({ name: as.name, displayName: as.displayName })}</div>
-              <div className="p-meta p-text-3 font-mono truncate" title={as.name}>{as.name}</div>
-            </div>
-          </div>
-          <div className="space-y-0">
-            {([
-              ["Mission", as.purpose],
-              ["Model", as.model],
-              ["Scaffold", `v${as.scaffoldVersion}`],
-              ["Swarm nodes", String(as.searchNodeCount)],
-              ["Messages", String(as.messageCount)],
-              ["Created", new Date(as.createdAt).toLocaleString()],
-            ]).map(([l, value]) => (
-              <div key={l} className={`grid grid-cols-[96px_minmax(0,1fr)] gap-3.5 py-2.5 border-b border-dashed border-[var(--c-dash)] last:border-0 items-baseline ${l === "Model" ? "font-mono" : ""}`}>
-                <span className="text-xs p-text-4">{l}</span>
-                <span className={`p-row-text p-text-2 min-w-0 break-words ${l === "Model" ? "p-annotation p-text-3" : "text-right"}`}>{value}</span>
-              </div>
-            ))}
-          </div>
-        </Section>
-      ) : unloaded("this agent")}
-
-      <Section id="memory" title="Memory" icon={<DatabaseIcon size={14} className="p-text-2" />}>
-        <div className="space-y-3">
-          <div className="relative">
-            <MagnifyingGlassIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 p-text-3" />
-            <input value={memorySearch} onChange={(e) => { setMemorySearch(e.target.value); onSearchMemory(e.target.value); }}
-              placeholder="Search memory…" className="w-full rounded-lg border p-border p-elevated pl-9 pr-3 py-2 text-sm p-text focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)] placeholder:p-text-3 transition-all" />
-          </div>
-          {memorySearch === "" && (memoryContent === "" ? noMemories : (
-            <div className="p-card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <DatabaseIcon size={13} className="p-accent" />
-                <span className="text-xs font-mono p-accent">memory/MEMORY.md</span>
-                <span className="p-meta p-text-3 ml-auto">{memoryContent.length} chars</span>
-              </div>
-              <div className="prose-chat p-text max-h-[500px] overflow-y-auto">
-                <MarkdownContent content={memoryContent} />
-              </div>
-            </div>
-          ))}
-          {memorySearch !== "" && (memory.length === 0 ? (
-            <EmptyState icon={<MagnifyingGlassIcon size={28} />} title="No results" />
-          ) : memory.map((entry, i) => (
-            <div key={i} className="p-card p-3">
-              <span className="p-annotation p-accent">{entry.updatedAt}</span>
-              <p className="text-xs p-text-2 line-clamp-4 whitespace-pre-wrap mt-1 leading-relaxed">{entry.content}</p>
-            </div>
-          )))}
-        </div>
+      {as !== null && <Who as={as} workspace={workspace} />}
+      <Knows read={readOf(as !== null, snapshot.status === "error", onRetryLoad)} memory={memory} memoryContent={memoryContent}
+        onSearchMemory={onSearchMemory} facts={facts} factsResource={factsResource} reloadFacts={reloadFacts} workspace={as?.name ?? null} />
+      <Section id="agent-doing" title="How it's doing" icon={<ChartLineUpIcon size={14} className="p-text-2" />}>
+        <QualityView rpc={rpc} moved={readMoves.getQuality ?? 0} />
       </Section>
-
-      {/* World model: keyed agent_facts the agent remembers across turns. */}
-      {factsResource.status === "error" ? (
-        <Section id="world-model" title="World model" defaultOpen={false}
-          icon={<BrainIcon size={14} className="p-text-2" />}>
-          <LoadFailure what="the world model" message={factsResource.message} onRetry={reloadFacts} />
-        </Section>
-      ) : facts.length > 0 && (
-        <Section id="world-model" title="World model" defaultOpen={false}
-          icon={<BrainIcon size={14} className="p-text-2" />}
-          badge={<Badge variant="secondary">{facts.length}</Badge>}>
-          <div className="rounded-md border p-border overflow-hidden text-xs">
-            {facts.map((f) => (
-              <div key={f.key} className="flex items-start gap-2 px-3 py-1.5 border-b p-border last:border-0" data-world-model-fact={f.key}>
-                <span className="font-mono p-accent shrink-0">{f.key}</span>
-                <span className="p-text-2 truncate flex-1 text-right">{v.is(v.string(), f.value) ? f.value : JSON.stringify(f.value)}</span>
-                {f.confidence < 1 && <span className="p-meta p-text-3 shrink-0">{(f.confidence * 100).toFixed(0)}%</span>}
-                {f.source !== '' && <span className="p-meta p-text-3 shrink-0">via {f.source}</span>}
-                <span className="p-meta p-text-3 shrink-0">{timeAgo(f.lastObservedAt)}</span>
-                {as !== null && <PromoteFact fact={f} workspace={as.name} />}
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      <Section id="evolution" title="Evolution" defaultOpen={false}
-        icon={<GitBranchIcon size={14} className="p-text-2" />}
-        badge={as ? <Badge variant="secondary">v{as.scaffoldVersion}</Badge> : undefined}>
-        <div className="space-y-5">
-          {as && <ScaffoldLineage rpc={rpc} currentVersion={as.scaffoldVersion} />}
-          <EvolutionBlock title="Self-tuning" hint="GEPA passes propose candidates for the next scaffold version.">
-            <GepaView rpc={rpc} />
-          </EvolutionBlock>
-          <EvolutionBlock title="Quality" hint="How satisfied you were with its turns, per day, rated from your replies and thumbs.">
-            <QualityView rpc={rpc} moved={readMoves.getQuality ?? 0} />
-          </EvolutionBlock>
-        </div>
-      </Section>
+      <Changing rpc={rpc} readMoves={readMoves} onChangelogSeen={onChangelogSeen} version={as?.scaffoldVersion ?? null} />
     </div>
-  );
-}
-
-/** Not a Section: nested collapsibles inside one are a fold to fight. */
-function EvolutionBlock({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
-  return (
-    <section className="space-y-1.5">
-      <div className="p-eyebrow">{title}</div>
-      <p className="p-meta p-text-3">{hint}</p>
-      {children}
-    </section>
   );
 }

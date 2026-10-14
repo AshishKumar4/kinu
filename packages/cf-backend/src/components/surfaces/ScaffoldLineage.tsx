@@ -8,17 +8,21 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
 import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
+import { Status, type StatusTone } from "@/components/ui/Status";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
 
-function statusTone(status: string): string {
+/** A version's state in words, and its ink. */
+interface VersionStatus { readonly tone: StatusTone; readonly word: string }
+
+function versionStatus(status: string): VersionStatus {
   switch (status) {
-    case "current": return "p-badge-success";
-    case "pending": return "p-badge-warning";
-    case "rolled_back": return "p-badge-danger";
-    default: return "p-fill p-text-3";
+    case "current": return { tone: "success", word: "current" };
+    case "pending": return { tone: "warning", word: "pending" };
+    case "rolled_back": return { tone: "danger", word: "rolled back" };
+    default: return { tone: "neutral", word: status.replaceAll("_", " ") };
   }
 }
 
@@ -123,7 +127,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
               <button key={v.version} onClick={() => select(v.version)}
                 className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "p-card-hover"}`}>
                 <span className="font-mono text-xs p-text shrink-0">v{v.version}</span>
-                <span className={`p-t-status px-1.5 py-0.5 rounded-full shrink-0 ${statusTone(v.status)}`}>{v.status}</span>
+                <Status tone={versionStatus(v.status).tone}>{versionStatus(v.status).word}</Status>
                 <span className="p-row-text p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
                 <span className="p-meta p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
               </button>

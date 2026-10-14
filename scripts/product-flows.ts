@@ -219,7 +219,7 @@ const DEAD_END = `(() => {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
-  const notice = [...document.querySelectorAll('.p-notice-danger, [data-failure]')]
+  const notice = [...document.querySelectorAll('.p-notice-danger, [data-notice="danger"], [data-failure]')]
     .filter((el) => el.getClientRects().length > 0)
     .map((el) => (el.textContent ?? '').trim())
     .find((text) => text !== '');
@@ -1673,7 +1673,7 @@ const ANSWERS = `[...document.querySelectorAll('#chat .prose-chat')]
   .map((block) => (block.textContent ?? '').trim())
   .filter((text) => text.length > 0)`;
 
-const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning')]
+const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning, [data-notice="warning"]')]
   .map((notice) => (notice.textContent ?? '').trim()).filter((text) => text !== '').join(' | ')`;
 
 /** The mission the first-answer row creates its workspace with: #21's own. */
@@ -1903,6 +1903,37 @@ export async function openInspector(page: Page): Promise<void> {
   if (outcome.reached) return;
 
   throw new Error(`the inspector column stayed at ${String(outcome.value)}px; tried ${JSON.stringify(outcome.attempts)}`);
+}
+
+/** A selector that finds the inspector's page whose title holds `title` among the bar's pages: its tab, or the bar's
+ *  opener of the pages without room, which names them. */
+export function inspectorPageListed(title: string): string {
+  const quoted = JSON.stringify(title);
+
+  return `nav[aria-label="Pages"] :is(li button[aria-label*=${quoted}], button[aria-haspopup="menu"][title*=${quoted}])`;
+}
+
+/** Open the inspector's page whose title holds `title` through its bar: its tab when it has room, else the bar's menu
+ *  of the rest. Settles once that page is the open one. */
+export async function openInspectorPage(page: Page, title: string, wait = { timeout: 10_000 }): Promise<void> {
+  const tab = `nav[aria-label="Pages"] li button[aria-label*=${JSON.stringify(title)}]`;
+
+  await page.waitForSelector(`${tab}, nav[aria-label="Pages"] button[aria-haspopup="menu"]`, wait);
+
+  if (await page.$(tab) === null) {
+    if (await page.$('nav[aria-label="Pages"] button[aria-haspopup="menu"][aria-expanded="true"]') === null) {
+      await page.click('nav[aria-label="Pages"] button[aria-haspopup="menu"]');
+    }
+
+    const item = await page.waitForFunction((wanted: string) => [...document.querySelectorAll('nav[aria-label="Pages"] [role="menuitem"]')]
+      .find((entry) => entry.textContent?.includes(wanted) === true) ?? null, wait, title);
+
+    await item.asElement()?.evaluate((entry) => { if (entry instanceof HTMLElement) entry.click(); });
+  } else {
+    await page.click(tab);
+  }
+
+  await page.waitForSelector(`nav[aria-label="Pages"] button[aria-current="true"][aria-label*=${JSON.stringify(title)}]`, wait);
 }
 
 /** Press the inspector strip's tab named `name`; an absent tab throws. */
@@ -2135,7 +2166,7 @@ export interface SlatePreviewVerdict {
 }
 
 /** The names the inspector's Pages strip shows, one per tab: its links, not the actions beside them ("Share Flow probe"). */
-export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] button.p-bar-link[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
+export const PAGE_TABS = `[...document.querySelectorAll('#inspector nav[aria-label="Pages"] li button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? '')`;
 
 /**
  * Row: a slate the agent builds shows its running preview in its own tab.
@@ -2610,8 +2641,10 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
 
     await until(page, 'the computer in the Environment panel', `[...document.querySelectorAll('#inspector button')].some((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)})`);
     await page.evaluate(`[...document.querySelectorAll('#inspector button')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)}).click()`);
-    await until(page, "the computer's Desktop tab", `document.querySelector('#inspector [role="tab"][data-segment="desktop"]') !== null`);
-    await page.click('#inspector [role="tab"][data-segment="desktop"]');
+    const desktopTab = `[...document.querySelectorAll('#inspector [role="tab"]')].find((tab) => (tab.textContent ?? '').trim() === 'Desktop')`;
+
+    await until(page, "the computer's Desktop tab", `${desktopTab} !== undefined`);
+    await page.evaluate(`${desktopTab}.click()`);
     await until(page, "the computer's desktop", DESKTOP_DRAWN);
 
     const size = await page.waitForSelector(`#inspector [aria-label="${computer} size"]`);
@@ -2640,6 +2673,86 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
     await page.close();
 
     return { workspace, from, to, backAfterS };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface SessionsVerdict {
+  readonly workspace: string;
+  /** What the new session's line said while its server ran: its folder and its ports. */
+  readonly folder: string;
+  readonly ports: readonly string[];
+  /** The tabs' names after the computer restarted at another size, and the renamed session's folder then. */
+  readonly namesAfter: readonly string[];
+  readonly folderAfter: string;
+}
+
+/** The open session's details line in the inspector: its folder and the ports under it. */
+const SESSION_LINE = `(() => ({
+  folder: (document.querySelector('#inspector [data-session-cwd]')?.textContent ?? '').trim(),
+  ports: [...document.querySelectorAll('#inspector [data-session-port]')].map((port) => (port.textContent ?? '').trim()),
+}))()`;
+
+const SESSION_TABS = `[...document.querySelectorAll('#inspector [role="tablist"] [role="tab"]')].map((tab) => (tab.textContent ?? '').trim()).filter((name) => name !== 'Desktop')`;
+
+/**
+ * Row: the computer's terminal sessions are named, report their folder and ports, and come back by name and folder
+ * after the computer restarts (D90).
+ *
+ * The reader opens a second session on the computer, starts a server in a new folder there, and reads the session's
+ * line; renames the session; then picks another size, which restarts the container, and reads the tabs and the
+ * renamed session's folder once its fresh shell opens.
+ */
+export async function computerSessionsComeBackByName(target: FlowTarget): Promise<SessionsVerdict> {
+  const workspace = await createFlowWorkspace(target, 'computer-sessions');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${workspace}`);
+
+    await openInspector(page);
+    await page.evaluate(stripTab('Environment'));
+    const computer = executorLabel('computer');
+
+    await until(page, 'the computer in the Environment panel', `[...document.querySelectorAll('#inspector button')].some((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)})`);
+    await page.evaluate(`[...document.querySelectorAll('#inspector button')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)}).click()`);
+    await until(page, "the computer's first session", `${SESSION_TABS}.length === 1`);
+    await page.click('#inspector button[aria-label="New session"]');
+    await until(page, 'a second session, open', `${SESSION_TABS}.length === 2 && document.querySelector('#inspector [role="tab"][aria-selected="true"]')?.textContent?.trim() === ${SESSION_TABS}[1]`);
+    await until(page, "the new session's shell", `document.querySelector('#inspector .xterm-rows') !== null && (document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('#')`);
+    await page.click('#inspector .xterm-screen');
+    await page.keyboard.type('mkdir -p /workspace/flow-web && cd /workspace/flow-web && python3 -m http.server 8765');
+    await page.keyboard.press('Enter');
+    await until(page, "the session's line naming its folder and port", `(() => { const line = ${SESSION_LINE}; return line.folder === '/workspace/flow-web' && line.ports.includes(':8765'); })()`);
+
+    const running = v.parse(v.object({ folder: v.string(), ports: v.array(v.string()) }), await page.evaluate(SESSION_LINE));
+
+    await page.evaluate(`document.querySelector('#inspector [role="tab"][aria-selected="true"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    const rename = await page.waitForSelector('#inspector input[aria-label^="Rename"]');
+
+    if (rename === null) throw new Error('the session offered no rename');
+    await rename.evaluate((input) => { if (input instanceof HTMLInputElement) input.select(); });
+    await page.keyboard.type('web');
+    await page.keyboard.press('Enter');
+    await until(page, 'the renamed session', `${SESSION_TABS}.includes('web')`);
+
+    const size = await page.waitForSelector(`#inspector [aria-label="${computer} size"]`);
+
+    if (size === null) throw new Error(`no ${computer} size control`);
+    await size.click();
+    await until(page, 'the size choices', `document.querySelector('[role="option"][aria-selected="false"]') !== null`);
+    await (await page.$('[role="option"][aria-selected="false"]'))?.click();
+    await until(page, 'the computer restarting', `document.querySelector('#inspector .xterm-rows') === null`);
+    await until(page, "the restarted computer's sessions", `${SESSION_TABS}.includes('web') && document.querySelector('#inspector .xterm-rows') !== null`);
+    await page.evaluate(`[...document.querySelectorAll('#inspector [role="tab"]')].find((tab) => (tab.textContent ?? '').trim() === 'web').click()`);
+    await until(page, "the renamed session's fresh shell in its folder", `(${SESSION_LINE}).folder === '/workspace/flow-web'`);
+
+    const namesAfter = v.parse(v.array(v.string()), await page.evaluate(SESSION_TABS));
+    const after = v.parse(v.object({ folder: v.string(), ports: v.array(v.string()) }), await page.evaluate(SESSION_LINE));
+
+    await page.close();
+
+    return { workspace, folder: running.folder, ports: running.ports, namesAfter, folderAfter: after.folder };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

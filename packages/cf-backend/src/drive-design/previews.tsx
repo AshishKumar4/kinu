@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { FileIcon } from "@phosphor-icons/react";
-import { tileBadge, tileWash } from "@/components/ui/cover";
+import { WorkspaceLogo } from "@/components/Marks";
 
 type SlateArt = "coupons" | "perf" | "ledger" | "release" | "palette" | "issues" | "inbox" | "game";
 
@@ -280,12 +280,10 @@ const ART: Record<SlateArt, () => ReactNode> = {
   coupons: Coupons, perf: Perf, ledger: Ledger, release: Release, palette: Palette, issues: Issues, inbox: Inbox, game: Game,
 };
 
-function Cover({ hue, letter }: { hue: number; letter: string }) {
+function Cover({ letter }: { letter: string }) {
   return (
-    <span className="absolute inset-0 flex items-center justify-center p-recessed" style={tileWash(hue)}>
-      <span className="flex size-11 items-center justify-center rounded-xl text-lg font-semibold" style={tileBadge(hue)}>
-        {letter}
-      </span>
+    <span className="absolute inset-0 flex items-center justify-center p-recessed">
+      <WorkspaceLogo title={letter} logo={null} size={36} />
     </span>
   );
 }
@@ -404,7 +402,7 @@ export function PreviewPicture({ preview }: { preview: Preview }) {
       return <Art />;
     }
 
-    case "cover": return <Cover hue={preview.hue} letter={preview.letter} />;
+    case "cover": return <Cover letter={preview.letter} />;
     case "doc": return <Page heading={preview.heading} lines={preview.lines} />;
     case "code": return <Code lines={preview.lines} />;
     case "sheet": return <Sheet rows={preview.rows} />;

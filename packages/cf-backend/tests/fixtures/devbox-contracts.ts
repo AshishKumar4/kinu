@@ -4,7 +4,7 @@ import { Devbox, GOLDEN_NAME, type DevboxState } from '../../../devbox/src/index
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { DESKTOP_SIZE, WATCH_SHEET } from '../../../devbox/src/desktop';
-import { settle } from '../../../devbox/src/errors';
+import { DevboxError, settle } from '../../../devbox/src/errors';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../../../devbox/bench/contract-types';
@@ -36,6 +36,9 @@ interface Env {
 
 const Snapshot = v.looseObject({ id: v.string(), lineage: v.optional(v.array(v.string()), []) });
 
+/** The fixture's own keys, beside the box's `devbox:` ones: how often each callback was armed. */
+const ARMED_PREFIX = 'contract:armed:';
+
 export class ContractBox extends Devbox<Env> {
   #remoteCalls = 0;
 
@@ -60,6 +63,33 @@ export class ContractBox extends Devbox<Env> {
   protected override get ambientCheckpoints(): boolean { return false; }
   // As KinuDevbox's (D93), so every start here shows the box's name on the platform's real container.
   protected override async shownName(): Promise<string> { return this.env.BOX_NAME; }
+
+  /**
+   * A box named `-parked` fails every start the way staging 7e411119d's did (D94): its own configure step writes
+   * /etc/hostname, which the platform mounts read-only, and the failure carries no code. Every other box configures as
+   * KinuDevbox does.
+   */
+  protected override async configureContainer(reused?: boolean): Promise<void> {
+    await super.configureContainer(reused);
+    const name: unknown = this.ctx.id.name;
+    const container = this.ctx.container;
+
+    if (typeof name !== 'string' || !name.endsWith('-parked') || container === undefined) return;
+    const wrote = await (await container.exec(['sh', '-c', 'echo parked >/etc/hostname'])).output();
+
+    if (wrote.exitCode !== 0) throw new DevboxError('process', `configuring the parked box: ${new TextDecoder().decode(wrote.stderr).trim()}`);
+  }
+
+  /** Counts every arming by callback, so the tier reads how often a box asked to be woken. */
+  protected override async armAlarm(callback: string, delaySeconds: number): Promise<void> {
+    const key = ARMED_PREFIX + callback;
+    this.ctx.storage.kv.put(key, (this.ctx.storage.kv.get<number>(key) ?? 0) + 1);
+    await super.armAlarm(callback, delaySeconds);
+  }
+
+  armed(): Readonly<Record<string, number>> {
+    return Object.fromEntries([...this.ctx.storage.kv.list<number>({ prefix: ARMED_PREFIX })].map(([key, count]) => [key.slice(ARMED_PREFIX.length), count]));
+  }
 
   /** 2026-10-09, D81: the native exec counter saw 73 calls for a 72-entry listing on df51186a7. */
   async fileContract() {
@@ -281,6 +311,7 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]'))));
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
     case '/state': return Response.json(await box.devboxState());
+    case '/armed': return Response.json(await box.armed());
     case '/checkpoint': return Response.json(await box.checkpointNow(url.searchParams.get('kind') === 'tick' ? 'tick' : 'quiesce'));
     case '/stop': return Response.json(await box.quiesce());
     case '/lose-snapshot': return Response.json({ ok: await box.loseSnapshot() });

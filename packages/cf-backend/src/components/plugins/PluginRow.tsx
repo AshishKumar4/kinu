@@ -1,24 +1,16 @@
 /** An endpoint URL is never the row's second line; the catalog description is. */
 import type { ComponentType, ReactNode } from "react";
-
-type PluginTone = 'success' | 'warning' | 'neutral' | 'danger';
+import { Status, type StatusTone } from "@/components/ui/Status";
 
 export interface PluginStatus {
   readonly label: string;
-  readonly tone: PluginTone;
+  readonly tone: StatusTone;
 }
-
-export const DOT_BY_TONE = {
-  success: 'p-dot-success',
-  warning: 'p-dot-warning',
-  neutral: 'p-dot-neutral',
-  danger: 'bg-[var(--c-danger)]',
-} satisfies Record<PluginTone, string>;
 
 /** 40px matches `BrandMark`'s tile so a mixed list keeps one left edge. */
 export function PluginTile({ icon: Icon }: { icon: ComponentType<{ size?: number; className?: string }> }) {
   return (
-    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[#3b82f6]/15 text-[#60a5fa]">
+    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border p-border bg-[var(--c-elevated)] p-text-3">
       <Icon size={20} />
     </span>
   );
@@ -29,12 +21,7 @@ export const PLUGIN_ACTION = "flex size-8 shrink-0 items-center justify-center r
 export const PLUGIN_PILL = "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 p-t-status p-text-3";
 
 export function PluginStatePill({ status }: { status: PluginStatus }) {
-  return (
-    <span className={PLUGIN_PILL}>
-      <span className={`size-1.5 shrink-0 rounded-full ${DOT_BY_TONE[status.tone]}`} />
-      {status.label}
-    </span>
-  );
+  return <Status tone={status.tone}>{status.label}</Status>;
 }
 
 export function PluginRow({ tile, name, description, trailing, source, state, below }: {

@@ -6,7 +6,7 @@ import {
   FilePdfIcon, FileTextIcon, FileZipIcon, FolderSimpleIcon, GitForkIcon, LinkSimpleIcon, SquaresFourIcon,
 } from "@phosphor-icons/react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
-import { coverLetter, hueOf, tileBadge, tileWash } from "@/components/ui/cover";
+import { WorkspaceLogo } from "@/components/Marks";
 
 export const GRID = "grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))] sm:gap-4";
 
@@ -110,7 +110,7 @@ export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false,
     <li className="relative min-w-0" {...attributes}>
       <Opener href={href} onOpen={onOpen} label={title}
         className="flex h-full flex-col overflow-hidden rounded-[14px] border p-border p-surface p-card-lift focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--c-accent)]">
-        <span className="relative block aspect-[16/10] shrink-0 overflow-hidden border-b p-border">{picture}</span>
+        <span className="relative block aspect-[2/1] shrink-0 overflow-hidden border-b p-border">{picture}</span>
         <span className="flex flex-1 items-start gap-2.5 py-2.5 pl-3 pr-9 sm:pr-10">
           <span className="mt-0.5 hidden size-5 shrink-0 items-center justify-center p-text-3 sm:flex">{icon}</span>
           <span className="min-w-0 flex-1">
@@ -145,15 +145,11 @@ export function FolderTile({ href, name, icon, menu, attributes }: {
   );
 }
 
-/** The picture of a slate or share until it has one of its own. */
-export function Cover({ title, seed = title }: { title: string; seed?: string }) {
-  const hue = hueOf(seed);
-
+/** The picture of a slate or share until it has one of its own: its letter, as the sidebar marks a workspace. */
+export function Cover({ title }: { title: string }) {
   return (
-    <span className="absolute inset-0 flex items-center justify-center p-recessed" style={tileWash(hue)}>
-      <span aria-hidden="true" className="flex size-11 items-center justify-center rounded-xl text-lg font-semibold" style={tileBadge(hue)}>
-        {coverLetter(title)}
-      </span>
+    <span className="absolute inset-0 flex items-center justify-center p-recessed">
+      <WorkspaceLogo title={title} logo={null} size={36} />
     </span>
   );
 }

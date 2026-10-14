@@ -23,8 +23,9 @@ export type Restoration =
    *  `down` names missing workloads; `bootStamp` owns the stamp repair independently of its user-facing words. */
   | { readonly phase: 'repair'; readonly down: readonly string[]; readonly bootStamp: StampOutcome }
   /** Operations refuse. `retry` false is terminal until `attachNow()`; it is a field so a lost
-   *  arming write cannot leave a box refusing on a retry nothing holds. */
-  | { readonly phase: 'unattached'; readonly reason: string; readonly retry: boolean };
+   *  arming write cannot leave a box refusing on a retry nothing holds. Such a park keeps the Worker `version` it was
+   *  made under, and another deploy lifts it (D94). */
+  | { readonly phase: 'unattached'; readonly reason: string; readonly retry: boolean; readonly version?: string | null };
 
 export interface RestoreStatus {
   readonly restoring: boolean;
@@ -36,22 +37,24 @@ export function terminalRefusal(reason: string): string {
 }
 
 /** What a start refusal is keyed by (D52): the base is the one golden, so a size, the internet policy, or a bound store
- *  that differs from the refused start's lifts the refusal (D85). */
+ *  that differs from the refused start's lifts the refusal (D85), as does another deploy of the Worker (D94). */
 export interface StartInputs {
   readonly size: BoxSize;
   readonly internet: boolean;
   readonly store: boolean;
+  /** The Worker version the box runs, null where its host names none. */
+  readonly version: string | null;
 }
 
-const StartRefusalSchema = v.strictObject({ reason: v.string(), size: BoxSizeSchema, internet: v.boolean(), store: v.boolean() });
+const StartRefusalSchema = v.strictObject({ reason: v.string(), size: BoxSizeSchema, internet: v.boolean(), store: v.boolean(), version: v.nullable(v.string()) });
 
 export function refusedStart(stored: StoredValue, inputs: StartInputs): string | undefined {
   const row = v.safeParse(StartRefusalSchema, stored);
 
   if (!row.success) return undefined;
-  const { reason, size, internet, store } = row.output;
+  const { reason, size, internet, store, version } = row.output;
 
-  return size === inputs.size && internet === inputs.internet && store === inputs.store ? reason : undefined;
+  return size === inputs.size && internet === inputs.internet && store === inputs.store && version === inputs.version ? reason : undefined;
 }
 
 /** Adopted only beside a container boot id that still names this instance, so a row never
@@ -89,7 +92,7 @@ export function settledRestoration(down: readonly string[], stamp: StampOutcome)
 const SettledRestorationSchema = v.variant('phase', [
   v.strictObject({ phase: v.literal('attached') }),
   v.strictObject({ phase: v.literal('repair'), down: v.array(v.string()), bootStamp: StampOutcomeSchema }),
-  v.strictObject({ phase: v.literal('unattached'), reason: v.string(), retry: v.boolean() }),
+  v.strictObject({ phase: v.literal('unattached'), reason: v.string(), retry: v.boolean(), version: v.optional(v.nullable(v.string())) }),
 ]);
 
 export function isSettledRestoration(stored: StoredValue): stored is SettledRestoration {

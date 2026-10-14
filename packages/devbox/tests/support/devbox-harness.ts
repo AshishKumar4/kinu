@@ -356,6 +356,8 @@ export class FakeSandbox {
   portAnswer: ((port: number, request: Request) => Response | Promise<Response>) | undefined;
   /** The desktop check's answer: it ends by printing the screen's size. */
   desktopStart: ExecResult = { stdout: '1280 768\n', stderr: '', exitCode: 0 };
+  /** What the box's terminal sessions read answers (D90): tab-separated `P`, `L` and `B` rows. */
+  sessionsRead: ExecResult = { stdout: '', stderr: '', exitCode: 0 };
   /** What keeping the box's shown name answers (D93), or `gone` for an exec the container refuses. */
   showName: ExecResult | 'gone' = { stdout: '', stderr: '', exitCode: 0 };
   readonly fileOperations: FileOperation[] = [];
@@ -1040,6 +1042,18 @@ export class FakeSandbox {
       this.sequence.push('desktop');
 
       return processResult(Promise.resolve(this.desktopStart), pid);
+    }
+
+    if (args[3] === 'terminal-sessions') {
+      this.sequence.push('sessions');
+
+      return processResult(Promise.resolve(this.sessionsRead), pid);
+    }
+
+    if (args[3] === 'devbox-reset') {
+      this.sequence.push(`reset:${args[4] ?? ''}`);
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
 
     if (args[3] === 'devbox-trust') {

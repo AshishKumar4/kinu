@@ -79,6 +79,17 @@ export interface FilesSurfaceProps {
   onConnectDevice: () => void;
 }
 
+/** "3 folders, 2 files", naming only what the folder holds. */
+function folderCount(folders: number, files: number): string {
+  const said = [
+    ...(folders > 0 ? [`${String(folders)} ${folders === 1 ? "folder" : "folders"}`] : []),
+    ...(files > 0 || folders === 0 ? [`${String(files)} ${files === 1 ? "file" : "files"}`] : []),
+  ];
+
+  return said.join(", ");
+}
+
+
 export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSurfaceProps) {
   const agentName = useParams().agentId ?? "";
   const [path, setPath] = useState("/");
@@ -465,9 +476,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           )}
           {!loading && filtered.length > 0 && (
             <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta tabular-nums border-t p-border mt-1">
-              {dirCount > 0 && `${dirCount} ${dirCount === 1 ? "folder" : "folders"}, `}
-              {filtered.length - dirCount} {filtered.length - dirCount === 1 ? "file" : "files"}
-              {filter && ` matching of ${entries.length}`}
+              {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount)}
               <span className="ml-2 hidden @[44rem]:inline p-text-4">↑↓ move · Enter open · Backspace up · F2 rename · Del delete</span>
             </div>
           )}

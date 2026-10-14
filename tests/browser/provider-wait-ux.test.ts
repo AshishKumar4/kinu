@@ -18,10 +18,10 @@ test('a turn sleeping out a provider wait says who it is waiting on, not working
     await page.waitForSelector('.p-workbench');
 
     // The notice names the provider and counts down the time the provider set; a working turn shows none.
-    await page.waitForFunction(() => [...document.querySelectorAll('[data-composer-root] [role="status"]')].some((notice) => notice.textContent?.includes('Waiting on') === true));
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-composer-root] [role="status"]')].some((notice) => notice.textContent?.includes('retrying in') === true));
     const notices = await page.$$('[data-composer-root] [role="status"]');
     const texts = await Promise.all(notices.map((notice) => notice.evaluate((el) => el.textContent ?? '')));
-    const chip = notices[texts.findIndex((text) => text.includes('Waiting on'))];
+    const chip = notices[texts.findIndex((text) => text.includes('retrying in'))];
 
     if (chip === undefined) throw new Error('no provider wait above the composer');
 
@@ -40,7 +40,7 @@ test('a turn sleeping out a provider wait says who it is waiting on, not working
       observer.observe(el, { subtree: true, childList: true, characterData: true });
     }), before);
 
-    expect(before).toContain('anthropic');
+    expect(before).toMatch(/anthropic/iu);
     expect(secondsIn(before)).toBeGreaterThan(0);
     expect(secondsIn(before)).toBeLessThanOrEqual(45);
     expect(secondsIn(after)).toBeLessThan(secondsIn(before));

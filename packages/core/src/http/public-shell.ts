@@ -15,38 +15,28 @@ const THEME_BOOT = `(() => {
   root.style.colorScheme = mode;
 })();`;
 
-/** The mark is the hiragana く on a 24-unit grid; `KINU_MARK` selects the one that ships. */
-export type MarkId = 'kana' | 'node' | 'loom' | 'brush';
+/**
+ * The mark is the Fold: a rounded square of silk cut by one soft wave. Outlines on a 24-unit grid, filled, so a page
+ * can hold any number of copies with no mask or id between them; `WAVE` is the band the cut removes.
+ */
+const FOLD = 'M2.5 13.25V8.1A5.6 5.6 0 0 1 8.1 2.5H15.9A5.6 5.6 0 0 1 21.5 8.1V13.25C20 12.93 18.81 12.17 17.57 11.34C15.96 10.25 14.26 9 12 9C9.74 9 8.04 10.25 6.43 11.34C5.19 12.17 4 12.93 2.5 13.25ZM2.5 14.87V15.9A5.6 5.6 0 0 0 8.1 21.5H15.9A5.6 5.6 0 0 0 21.5 15.9V14.87C19.52 14.53 18 13.56 16.68 12.66C15.04 11.55 13.74 10.6 12 10.6C10.26 10.6 8.96 11.55 7.32 12.66C6 13.56 4.48 14.53 2.5 14.87Z';
 
-export const KINU_MARK: MarkId = 'brush';
+const WAVE = 'M2.5 13.25C4 12.93 5.19 12.17 6.43 11.34C8.04 10.25 9.74 9 12 9C14.26 9 15.96 10.25 17.57 11.34C18.81 12.17 20 12.93 21.5 13.25V14.87C19.52 14.53 18 13.56 16.68 12.66C15.04 11.55 13.74 10.6 12 10.6C10.26 10.6 8.96 11.55 7.32 12.66C6 13.56 4.48 14.53 2.5 14.87Z';
 
-/** Turn above the middle, short entry, long bowed exit, pointed corner: otherwise it reads as a caret. */
-const KU = 'M 10.2 3.6 Q 14.4 6.2 17 9.6 Q 15.2 15 4.8 21';
-
-const STROKE = 'fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="miter"';
-
-const MARK_BODIES = {
-  kana: `<path d="${KU}" ${STROKE} stroke-width="2"/>`,
-  node: `<path d="${KU}" ${STROKE} stroke-width="1.9"/><circle cx="17" cy="9.6" r="2.5" fill="currentColor"/>`,
-  loom: `<path d="M 4.6 3.4 L 4.6 20.6" ${STROKE} stroke-width="1.2" stroke-opacity="0.38"/><path d="M 10.6 3.6 Q 14.8 6.2 17.4 9.6 Q 15.6 15 5.4 21" ${STROKE} stroke-width="2"/>`,
-  // Taper stops at 0.55 units so the tail stays visible at 16px.
-  brush: `<path d="M 11.52 2.1 Q 15.72 4.7 18.65 9.58 Q 16.33 16.2 5.18 21.4 L 4.42 20.6 Q 14.07 13.8 15.35 9.62 Q 13.08 7.7 8.88 5.1 Z" fill="currentColor"/>`,
-} satisfies Readonly<Record<MarkId, string>>;
-
-/** Coloured by `currentColor`. */
-export function mark(size: number, id: MarkId = KINU_MARK): string {
-  return `<svg class="mark" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">${MARK_BODIES[id]}</svg>`;
+/** Coloured by `currentColor`; the wave is a cut, so it shows the ground beneath. */
+export function mark(size: number): string {
+  return `<svg class="mark" width="${String(size)}" height="${String(size)}" viewBox="0 0 24 24" aria-hidden="true"><path d="${FOLD}" fill="currentColor"/></svg>`;
 }
 
-export const MARK_IDS: readonly MarkId[] = ['kana', 'node', 'loom', 'brush'];
-
-function wordmark(size = 21): string {
-  return `<a class="brand" href="/" aria-label="Kinu.run home">${mark(size)}<span>Kinu.run</span></a>`;
+function brand(): string {
+  return `<a class="brand" href="/" aria-label="Kinu home">${mark(22)}<span>Kinu</span></a>`;
 }
 
-/** One declared colour, because a favicon has no cascade to inherit from. */
-export function markDocument(id: MarkId = KINU_MARK): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" color="${THEME_TOKENS.dark['--c-accent']}">${MARK_BODIES[id]}</svg>\n`;
+/** The favicon, in declared colours because a file has no cascade: the brass square, its wave in the dark ground. */
+export function markDocument(): string {
+  const { '--c-accent': brass, '--c-bg': ground } = THEME_TOKENS.dark;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${FOLD}${WAVE}" fill="${brass}"/><path d="${WAVE}" fill="${ground}"/></svg>\n`;
 }
 
 /** Self-hosted latin subsets (OFL in `public/assets/fonts/`). */
@@ -85,8 +75,8 @@ border-bottom:var(--rule);background:color-mix(in srgb,var(--c-bg) 92%,transpare
 backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 .bar-inner{width:min(1200px,100%);height:64px;margin:0 auto;padding:0 var(--gutter);
 display:flex;align-items:center;justify-content:space-between;gap:24px}
-.brand{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-display);
-font-size:20px;font-weight:600;letter-spacing:-.02em;color:var(--c-text)}
+.brand{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-ui);
+font-size:19px;font-weight:500;color:var(--c-text)}
 .brand:hover{color:var(--c-text)}
 .brand .mark{color:var(--c-accent);flex:none}
 .brand .kana,.kana{font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;
@@ -262,7 +252,7 @@ export function publicPage(options: PublicPageOptions): string {
 
   const header = options.nav === undefined
     ? ''
-    : `<header class="bar"><div class="bar-inner">${wordmark()}<nav class="nav">${options.nav}</nav></div></header>\n`;
+    : `<header class="bar"><div class="bar-inner">${brand()}<nav class="nav">${options.nav}</nav></div></header>\n`;
 
   return `<!doctype html>
 <html lang="en">
@@ -289,7 +279,7 @@ export const GITHUB_ICON = '<svg width="17" height="17" viewBox="0 0 16 16" fill
 
 export function publicFooter(): string {
   return `<footer>
-  <span class="lockup">${mark(18)} Kinu.run</span>
+  <span class="lockup">${mark(18)} Kinu</span>
   <nav>
     <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
     <a href="/install">Install</a>

@@ -144,6 +144,9 @@ export interface ProviderWaitInfo {
   readonly waitMs: number;
   /** 1-based refused attempt; 0 for a `cooldown` join. */
   readonly attempt: number;
+  /** Which of the call's `retries` this wait comes before; absent for a `cooldown` join. */
+  readonly retry?: number;
+  readonly retries?: number;
   readonly status?: number;
   readonly source: (typeof PROVIDER_WAIT_SOURCES)[number];
 }

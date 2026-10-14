@@ -18,6 +18,10 @@ import {
 import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
 import { terminalSocket, resetTerminal } from './terminal';
+import {
+  FIRST_SESSION, SESSIONS_KEY, SESSIONS_READ, SessionNameSchema, SessionRecordsSchema, mergeSessions, newSessionId, newSessionName,
+  parseSessionsRead, type SessionRecord, type TerminalSession,
+} from './sessions';
 import { bridgeSockets } from './socket-bridge';
 import { DESKTOP_CHECK, DESKTOP_PORT } from './desktop';
 import {
@@ -39,11 +43,11 @@ import {
   admissionStep,
   classifyRecovery,
   isCapacityRefusal,
-  isTerminalRecovery,
   parseRecoveryRow,
   quiesceStep,
   recoveryStep,
   restartPlan,
+  waitingCanChange,
   type DevboxIncident,
   type DevboxPolicy,
   type IncidentDisposition,
@@ -193,6 +197,9 @@ const DEFAULT_SIZE_KEY = 'devbox:default-size';
 const RUNNING_SIZE_KEY = 'devbox:running-size';
 
 const START_REFUSED_KEY = 'devbox:start-refused';
+
+/** How long the terminal sessions' read may take: it measured 150 ms from the workspace with eight sessions (D90). */
+const SESSIONS_READ_MS = 5_000;
 
 const DISK_STATE_KEY = 'devbox:disk-chain';
 
@@ -411,10 +418,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#activate();
   }
 
-  /** Constructor work is two synchronous storage reads, so no event waits on it; it does not yet
+  /** Constructor work is synchronous storage, so no event waits on it; it does not yet
    *  have control-port proof. */
   #activate(): void {
     if (this.ctx.container?.running !== true) return;
+    const parked = this.ctx.storage.kv.get<SettledRestoration>(SETTLED_KEY);
+
+    // A park made under another deploy is lifted: that deploy may be the change its refusal waits on (D94).
+    if (parked?.phase === 'unattached' && !parked.retry && parked.version !== this.#version()) this.ctx.storage.kv.delete(SETTLED_KEY);
     this.#adoptionPending = this.#durableClaim() !== undefined;
     const settled = this.ctx.storage.kv.get<SettledRestoration>(SETTLED_KEY);
 
@@ -961,7 +972,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const generation = this.#generation;
 
     if (restoration.phase !== 'unstarted') {
-      await this.ctx.storage.put(SETTLED_KEY, restoration);
+      // A park keeps the deploy it was made under (D94).
+      await this.ctx.storage.put(SETTLED_KEY, restoration.phase === 'unattached' && !restoration.retry ? { ...restoration, version: this.#version() } : restoration);
     } else {
       await this.ctx.storage.delete(SETTLED_KEY);
     }
@@ -1260,7 +1272,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #startInputs(): StartInputs {
-    return { size: this.#size(), store: this.#bucket() !== undefined, internet: this.enableInternet };
+    return { size: this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
+  }
+
+  #version(): string | null {
+    return this.workerVersion ?? null;
   }
 
   #refusedStart(): string | undefined {
@@ -1304,7 +1320,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
   }
 
-  /** An admission that did not start: refused once if it would fail the same way again (D47), else retried. */
+  /** An admission that did not start: retried only where waiting can change the answer, else parked once (D94, amending
+   *  D47's terminal classes). */
   async #refuseAdmission(
     { generation, since, startsContainer, inputs }: { readonly generation: number; readonly since: number; readonly startsContainer: boolean; readonly inputs: StartInputs },
     failed: { readonly cause: unknown },
@@ -1323,8 +1340,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     const failure = classifyRecovery(failed);
 
-    // A start that fails the same way every time is refused once, not re-armed each second (D47).
-    if (isTerminalRecovery(failure)) {
+    // A start that fails the same way every time is refused once, not re-armed each second: staging 7e411119d's box
+    // named itself into a read-only /etc/hostname, an unclassified failure, and took 1,873 alarms in 30 minutes (D94).
+    if (!waitingCanChange(failed)) {
       const refusal = `[${failure} -> refuse] ${reason}`;
       this.#adoptionPending = false;
 
@@ -1533,7 +1551,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // The tag leads: `recordIncident` truncates at INCIDENT_REASON_MAX_CHARS, and a long cause
     // chain would cut a trailing tag that the host's prose tells the agent to read.
     const reason = `[${failure} -> ${decision.action}] ${describe(thrown)}`;
-    const restoration = { phase: 'unattached', reason, retry: decision.action !== 'refuse' } as const;
+
+    // A refusal is a park, kept with the deploy it was made under, as `#settle` keeps one (D94).
+    const restoration = decision.action === 'refuse'
+      ? { phase: 'unattached', reason, retry: false, version: this.#version() } as const
+      : { phase: 'unattached', reason, retry: true } as const;
 
     if (!await this.#settleRecovery(claim, generation, decision, restoration)) return;
 
@@ -2964,6 +2986,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** The name a person sees for the box in its prompts, its terminal titles and its desktop, read at each start (D93);
    *  unset, the platform's host name. */
   protected async shownName(): Promise<string | undefined> { return undefined; }
+  /** The Worker version this object runs, read at construction and at each start: a start refused under another is asked
+   *  again (D94). Unset, only a changed input or a caller's explicit ask lifts a refusal. */
+  protected get workerVersion(): string | undefined { return undefined; }
   /** The mark at the centre of the desktop's wallpaper, an SVG document drawn in its own colour (D88); unset, none. */
   protected get desktopMark(): string | undefined { return undefined; }
 
@@ -3207,20 +3232,96 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('WebSocket required', { status: 426 });
 
+      const session = yield* this.#session(url.searchParams.get('session') ?? FIRST_SESSION.id);
+
       return yield* this.#withActiveCaller(attempt('io', async () => {
         const { container } = await this.#ensureReady(this.#teardowns);
 
-        return terminalSocket(container, url.searchParams);
+        return terminalSocket(container, url.searchParams, session);
       }));
     }));
   }
 
-  async resetShell(): Promise<void> {
-    return settle(this.#withActiveCaller(attempt("io", async () => {
-      const { container } = await this.#ensureReady(this.#teardowns);
+  /** A session's shell and screen end; its next attach opens a fresh one under the same name, in its folder. */
+  async resetShell(id: string = FIRST_SESSION.id): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const session = yield* this.#session(id);
 
-      return resetTerminal(container);
-    })));
+      yield* this.#withActiveCaller(attempt("io", async () => {
+        const { container } = await this.#ensureReady(this.#teardowns);
+
+        return resetTerminal(container, session.id);
+      }));
+    }));
+  }
+
+  /** The recorded sessions, the first one when there is none. */
+  #sessionRecords(): SessionRecord[] {
+    const records = parsedOrNull(SessionRecordsSchema, this.ctx.storage.kv.get<StoredValue>(SESSIONS_KEY));
+
+    return records === null || records.length === 0 ? [FIRST_SESSION] : records;
+  }
+
+  #session(id: string): Effect.Effect<SessionRecord, DevboxError> {
+    const record = this.#sessionRecords().find((session) => session.id === id);
+
+    return record === undefined ? Effect.fail(new DevboxError('invalid-input', `no terminal session ${id}`)) : Effect.succeed(record);
+  }
+
+  /**
+   * Every terminal session, as one read of the running box finds it (D90): its folder, the command in its foreground,
+   * how its last command ended, the ports under it, its folder's branch. A box that is not running is not woken: its
+   * sessions read as they were left. A session's folder, read, is kept for the next start.
+   */
+  terminalSessions(): Promise<readonly TerminalSession[]> {
+    return settle(attempt('io', async () => {
+      const records = this.#sessionRecords();
+      const container = this.ctx.container;
+
+      if (container?.running !== true) return mergeSessions(records, null);
+      // Bounded: a pane in a folder git or /proc cannot answer for would otherwise hold every later read behind it.
+      const read = await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS], { signal: AbortSignal.timeout(SESSIONS_READ_MS) })).output();
+      const sessions = mergeSessions(records, parseSessionsRead(new TextDecoder().decode(read.stdout)));
+      const moved = records.map((record) => ({ ...record, cwd: sessions.find((session) => session.id === record.id && session.open)?.cwd ?? record.cwd }));
+
+      if (moved.some((record, at) => record.cwd !== records[at]?.cwd)) this.ctx.storage.kv.put(SESSIONS_KEY, moved);
+
+      return sessions;
+    }));
+  }
+
+  /** A new session, named; its first attach opens its shell in the workspace. */
+  openTerminalSession(name?: string): Promise<SessionRecord> {
+    return settle(attemptSync('invalid-input', () => {
+      const records = this.#sessionRecords();
+      const record = { id: newSessionId(records), name: v.parse(SessionNameSchema, name ?? newSessionName(records)), cwd: FIRST_SESSION.cwd };
+
+      this.ctx.storage.kv.put(SESSIONS_KEY, [...records, record]);
+
+      return record;
+    }));
+  }
+
+  renameTerminalSession(id: string, name: string): Promise<SessionRecord> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const session = yield* this.#session(id);
+      const renamed = { ...session, name: yield* attemptSync('invalid-input', () => v.parse(SessionNameSchema, name)) };
+
+      this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().map((record) => (record.id === id ? renamed : record)));
+
+      return renamed;
+    }));
+  }
+
+  /** Ends a session and forgets it; the box keeps one, so closing the last leaves a fresh first session. */
+  closeTerminalSession(id: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.#session(id);
+      const container = this.ctx.container;
+
+      if (container?.running === true) yield* attempt('io', () => resetTerminal(container, id));
+      this.ctx.storage.kv.put(SESSIONS_KEY, this.#sessionRecords().filter((record) => record.id !== id));
+    }));
   }
 
 

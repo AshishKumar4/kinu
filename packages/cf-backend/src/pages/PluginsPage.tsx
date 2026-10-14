@@ -33,12 +33,12 @@ function InstalledStrip({ servers }: { servers: readonly McpServerSummary[] }) {
           const brand = presetBrand(server.presetId);
 
           return (
-            <span key={server.id} data-installed={server.name} title={server.name}
-              aria-label={server.name}
-              className="flex size-9 items-center justify-center rounded-full border p-border bg-[var(--c-elevated)]">
+            <span key={server.id} data-installed={server.name}
+              className="inline-flex h-8 max-w-[220px] items-center gap-2 rounded-full border p-border bg-[var(--c-elevated)] pl-2 pr-3 p-t-control p-text-2">
               {brand === undefined
-                ? <PlugsConnectedIcon size={16} className="p-text-3" />
-                : <BrandMark brand={brand} size={16} bare />}
+                ? <PlugsConnectedIcon size={15} className="shrink-0 p-text-3" aria-hidden />
+                : <BrandMark brand={brand} size={15} bare />}
+              <span className="truncate">{server.name}</span>
             </span>
           );
         })}

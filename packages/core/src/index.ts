@@ -201,13 +201,13 @@ export {
   type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features';
 
-export { QualityDaySchema, type QualityDay } from './types/quality';
+export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/quality';
 
 // Turn ratings: the one signal evolution decides by.
 export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
   listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
-  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, renderQualitySeries, isTrivialTurn,
+  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, qualityWindow, renderQualitySeries, isTrivialTurn,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating, type RatingQuery,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
@@ -2272,9 +2272,9 @@ export {
 } from './http/device-update';
 
 export {
-  COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
+  COPY_SCRIPT, GITHUB_ICON, REPO_URL,
   mark, markDocument, publicFooter, publicPage,
-  type MarkId, type PublicPageOptions,
+  type PublicPageOptions,
 } from './http/public-shell';
 
 export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
@@ -2300,6 +2300,12 @@ export {
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
 } from './read-models/background-event';
+
+export { turnFailureFacts, type TurnFailureFacts } from './read-models/turn-failure-facts';
+
+export { providerName } from './providers/model-test';
+
+export { namedImages, type ImageMachine, type NamedImage } from './read-models/chat-images';
 
 export { linkProse, promoteSlateLinks, type MarkdownNode } from './read-models/markdown-links';
 

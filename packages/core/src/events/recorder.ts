@@ -93,7 +93,7 @@ export const RunEventSchema = v.variant('type', [
     modelId: v.optional(v.string()), error: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('provider_wait'),
     provider: v.string(), modelId: v.optional(v.string()),
-    waitMs: v.number(), attempt: v.number(),
+    waitMs: v.number(), attempt: v.number(), retry: v.optional(v.number()), retries: v.optional(v.number()),
     status: v.optional(v.number()),
     source: v.picklist(PROVIDER_WAIT_SOURCES) }),
   v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),

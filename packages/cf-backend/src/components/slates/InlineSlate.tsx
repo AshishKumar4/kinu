@@ -367,9 +367,10 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     );
   }
 
+  // In the column, the page sits inset on the column's ground as a card of its own, its address above it.
   if (pane) {
     return (
-      <div className="flex flex-col h-full min-h-0">
+      <div className="p-pane gap-2">
         {notice}
         {refusal !== null && (
           <div className="p-notice-danger rounded-lg px-3 py-2 text-xs">
@@ -380,7 +381,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
           <div className="flex justify-center py-16"><Loader /></div>
         )}
         {content !== null && src !== null && (
-          <div key={reloadKey} className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          <div key={reloadKey} className="p-pane-card">
             <PreviewChrome url={previewUrl ?? src} />
             {content}
           </div>
