@@ -152,7 +152,7 @@ describe('what one deployed version did, as a deploy reports it', () => {
     });
 
     expect(findings).toEqual([
-      { what: 'uncaught exceptions in SupervisorRPC', finding: `18 invocation(s) of SupervisorRPC ended in an uncaught exception: "${HUNG}", in request 8a6c0e1485460f2a of object 8adb8bd8b1db454f` },
+      { key: 'exceptions:SupervisorRPC', count: 18, what: 'uncaught exceptions in SupervisorRPC', finding: `18 invocation(s) of SupervisorRPC ended in an uncaught exception: "${HUNG}", in request 8a6c0e1485460f2a of object 8adb8bd8b1db454f` },
     ]);
   });
 
@@ -165,7 +165,7 @@ describe('what one deployed version did, as a deploy reports it', () => {
       startups: [{ object: 'looping', hour: 0, startups: loop }, { object: 'busiest-measured', hour: 0, startups: 3 }],
     });
 
-    expect(findings).toEqual([{ what: 'a wake loop', finding: `object looping started ${String(loop)} times in an hour, 1 such hour(s)` }]);
+    expect(findings).toEqual([{ key: 'wake-loop:looping', count: 1, what: 'a wake loop', finding: `object looping started ${String(loop)} times in an hour, 1 such hour(s)` }]);
   });
 
   // Staging 36acc5de2 and fb848438c, 2026-10-08: a failed drain re-armed a second ahead after its eval ended (1,816 alarms
@@ -182,8 +182,8 @@ describe('what one deployed version did, as a deploy reports it', () => {
 
     expect(idle).toEqual([{ object: 'storming', hour: HOUR, count: 54 * 30 }, { object: 'turn-ended', hour: HOUR, count: 4 }]);
     expect(versionFindings({ ...quiet, idleWakes: idle })).toEqual([
-      { what: 'idle wakes', finding: 'object storming woke 1620 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
-      { what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
+      { key: `idle:storming:${String(HOUR)}`, count: 1620, what: 'idle wakes', finding: 'object storming woke 1620 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
+      { key: `idle:turn-ended:${String(HOUR)}`, count: 4, what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
     ]);
   });
 

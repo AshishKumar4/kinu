@@ -82,7 +82,9 @@ import { recordStep } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
 import { requireCloudflareAccountId } from './infra-cloudflare';
 import { INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig } from './infra-manifest';
-import { type Reread, type TelemetryWindow, afterRereads, keepWindows, keptWindows } from './telemetry-windows';
+import {
+  type Reread, type WindowSignal, type WindowStore, afterRereads, keepWindows, measuresOf, rereadWindows, windowKey, windowStore,
+} from './telemetry-windows';
 
 /** The account this queries and the default worker, read off the manifest this
  *  inspects rather than restated beside it: a second spelling of the id is how
@@ -1064,8 +1066,8 @@ function versionThrew(deployResets: VersionRead['deployResets'], row: VersionRea
 
 /** Each signal `read` holds that a deploy reports whatever its tests said. A canceled or aborted invocation is the
  *  caller going away, and one a code update reset is the deploy rolling over, not the version failing. */
-export function versionFindings(read: VersionRead): VersionFinding[] {
-  const findings: VersionFinding[] = [];
+export function versionFindings(read: VersionRead): WindowSignal[] {
+  const findings: WindowSignal[] = [];
 
   for (const row of read.ended) {
     const threw = row.outcome === 'exception' ? versionThrew(read.deployResets, row) : 0;
@@ -1074,31 +1076,35 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
       const sample = read.thrown.find((thrown) => thrown.entrypoint === row.entrypoint);
 
       findings.push({
+        key: `exceptions:${row.entrypoint}`,
+        count: threw,
         what: `uncaught exceptions in ${row.entrypoint}`,
         finding: `${String(threw)} invocation(s) of ${row.entrypoint} ended in an uncaught exception${sample === undefined ? ', and none left its text' : `: ${exceptionText(sample)}`}`,
       });
     } else if (row.outcome.startsWith('exceeded')) {
-      findings.push({ what: `${row.entrypoint} ended by the platform (${row.outcome})`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended with ${row.outcome}, resetting ${String(row.objects)} object(s)` });
+      findings.push({ key: `${row.outcome}:${row.entrypoint}`, count: row.count, what: `${row.entrypoint} ended by the platform (${row.outcome})`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended with ${row.outcome}, resetting ${String(row.objects)} object(s)` });
     }
   }
 
   if (read.effects.failed > 0) {
     findings.push({
+      key: 'failed-effects',
+      count: read.effects.failed,
       what: 'failed terminal effects',
       finding: `${String(read.effects.failed)} terminal effect run(s) failed, in ${String(read.effects.failedTurns)} turn(s)${effectText(read.effects.failedSample)}`,
     });
   }
 
   if (read.effects.terminal.owed.length > 0) {
-    findings.push({ what: 'owed terminal effects', finding: `${String(read.effects.terminal.owed.length)} terminal sequence(s) still owed at the window's end${effectText(read.effects.terminal.owed[0])}` });
+    findings.push({ key: 'owed-effects', count: read.effects.terminal.owed.length, what: 'owed terminal effects', finding: `${String(read.effects.terminal.owed.length)} terminal sequence(s) still owed at the window's end${effectText(read.effects.terminal.owed[0])}` });
   }
 
   for (const loop of findWakeLoops(read.startups)) {
-    findings.push({ what: 'a wake loop', finding: `object ${loop.object} started ${String(loop.peakPerHour)} times in an hour, ${String(loop.loopHours)} such hour(s)` });
+    findings.push({ key: `wake-loop:${loop.object}`, count: loop.loopHours, what: 'a wake loop', finding: `object ${loop.object} started ${String(loop.peakPerHour)} times in an hour, ${String(loop.loopHours)} such hour(s)` });
   }
 
   for (const idle of read.idleWakes) {
-    findings.push({ what: 'idle wakes', finding: `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}` });
+    findings.push({ key: `idle:${idle.object}:${String(idle.hour)}`, count: idle.count, what: 'idle wakes', finding: `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}` });
   }
 
   return findings;
@@ -1341,48 +1347,26 @@ export async function settledRead<T>(at: {
   }
 }
 
-/** The windows earlier deploys kept, each read once more (telemetry-windows.ts). Begun before this deploy's own read
- *  and awaited after it, so it adds no wait; a window it cannot read is its finding, and the window stays kept. */
-async function rereadKept(environment: InfraEnvironment): Promise<{ readonly bucket: string; readonly rereads: Reread[] } | { readonly failed: string }> {
+/** The windows earlier deploys kept, each read once more (telemetry-windows.ts), begun before this window's own read
+ *  and awaited after it, so it adds no wait. A store that cannot be reached is the only failure that keeps nothing; a
+ *  token that cannot be read fails each kept window's read, and they and this window are still kept. */
+async function rereadKept(environment: InfraEnvironment): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[] } | { readonly failed: string }> {
   try {
-    const { bucket, windows } = keptWindows(environment);
-    const token = await readToken();
+    const store = windowStore(environment);
+    // Read once, and only when a window is kept: an unread rejection would end the process.
+    let token: Promise<string> | undefined;
 
-    const rereads = await Promise.all(windows.map(async (window): Promise<Reread> => {
-      try {
-        const t = new Telemetry(token, { worker: window.worker, from: Date.parse(window.from), to: Date.parse(window.to) });
+    const rereads = await rereadWindows(store, async (window) => {
+      token ??= readToken();
+      const t = new Telemetry(await token, { worker: window.worker, from: Date.parse(window.from), to: Date.parse(window.to) });
 
-        return { window, found: versionFindings(await versionRead(t, window.version)) };
-      } catch (cause) {
-        return { window, failed: cause instanceof Error ? cause.message : String(cause) };
-      }
-    }));
+      return versionFindings(await versionRead(t, window.version));
+    }, () => Date.now());
 
-    return { bucket, rereads };
+    return { store, rereads };
   } catch (cause) {
     return { failed: cause instanceof Error ? cause.message : String(cause) };
   }
-}
-
-/** What landed late in the kept windows, with this deploy's `current` window kept beside them for the deploys after. */
-async function keepBeside(rereading: ReturnType<typeof rereadKept>, current: TelemetryWindow): Promise<VersionFinding[]> {
-  const reread = await rereading;
-
-  if ('failed' in reread) {
-    return [{ what: 'the kept telemetry windows', finding: `the windows earlier deploys kept could not be read: ${reread.failed}; `
-      + 'none was read again, and this window is not kept, so a row that lands after this read is read by no deploy' }];
-  }
-
-  const { late, kept } = afterRereads(reread.rereads, Date.now());
-
-  try {
-    keepWindows(reread.bucket, [...kept, current]);
-  } catch (cause) {
-    return [...late, { what: 'the kept telemetry windows', finding: `this window could not be kept for later deploys to read again: `
-      + `${cause instanceof Error ? cause.message : String(cause)}` }];
-  }
-
-  return late;
 }
 
 /** `version`: its findings printed and, under a deploy, written into its report, once the window's counts hold still.
@@ -1394,7 +1378,7 @@ async function versionCommand(args: Args): Promise<number> {
   const subject = args.target ?? '';
   const rereading = args.keepWindows === null ? undefined : rereadKept(args.keepWindows);
   let findings: VersionFinding[];
-  let settled: readonly VersionFinding[] | null = null;
+  let settled: readonly WindowSignal[] | null = null;
   let sampling = 1;
   let terminal: TerminalEffectStates | undefined;
   let settledNote = '';
@@ -1414,8 +1398,8 @@ async function versionCommand(args: Args): Promise<number> {
 
     if (read.settled) {
       terminal = read.value.read.effects.terminal;
-      findings = versionFindings(read.value.read);
-      settled = findings;
+      settled = versionFindings(read.value.read);
+      findings = [...settled];
       settledNote = `settled: ${late}`;
     } else {
       findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: no two reads `
@@ -1426,10 +1410,22 @@ async function versionCommand(args: Args): Promise<number> {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
   }
 
-  if (rereading !== undefined) {
-    const current = { worker: args.worker, version: subject, from: iso(args.from), to: iso(args.to), findings: settled?.map((each) => each.finding) ?? null };
+  // Written back only after the report holds what the reads found, so a red is never acknowledged before it is reported.
+  let keep: (() => Promise<void>) | undefined;
 
-    findings = [...findings, ...await keepBeside(rereading, current)];
+  if (rereading !== undefined) {
+    const kept = await rereading;
+
+    if ('failed' in kept) {
+      findings = [...findings, { what: 'the kept telemetry windows', finding: `the windows earlier deploys kept could not be read: ${kept.failed}; `
+        + 'none was read again, and this window is not kept, so a row that lands after this read is read by no deploy' }];
+    } else {
+      const { late, puts, removes } = afterRereads(kept.rereads);
+      const current = { worker: args.worker, version: subject, from: iso(args.from), to: iso(args.to), measures: settled === null ? null : measuresOf(settled) };
+
+      findings = [...findings, ...late];
+      keep = async () => keepWindows(kept.store, [...puts, { key: windowKey(subject), window: current }], removes);
+    }
   }
 
   const dir = process.env['KINU_DEPLOY_REPORT'] ?? '';
@@ -1447,6 +1443,20 @@ async function versionCommand(args: Args): Promise<number> {
         + `${String(terminal.settled.length)} settled after owing, ${String(terminal.parked.length)} parked on the owner, `
         + `${String(terminal.deleted.length)} ended by their workspace's deletion, ${String(terminal.owed.length)} still owed at the window's end`],
       ...sampling > 1 ? [`note: the API sampled this window (level ${String(sampling)}); counts are estimates.`] : []].join('\n'));
+
+  if (keep !== undefined) {
+    try {
+      await keep();
+    } catch (cause) {
+      const unkept = { what: 'the kept telemetry windows', finding: `this window, and what the kept ones were read to hold, could not be written `
+        + `back for later deploys: ${cause instanceof Error ? cause.message : String(cause)}` };
+
+      if (dir !== '') recordStep(dir, { phase: 'telemetry', what: unkept.what, finding: unkept.finding });
+      console.log(`  ${unkept.finding}`);
+
+      return 1;
+    }
+  }
 
   return findings.length === 0 ? 0 : 1;
 }

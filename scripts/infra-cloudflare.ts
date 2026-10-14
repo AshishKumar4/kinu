@@ -163,13 +163,6 @@ export function r2Text(bucket: string, key: string): string | undefined {
   throw new Error(`wrangler r2 object get ${bucket}/${key} failed: ${why(read)}`);
 }
 
-/** `text` as the JSON object at `bucket/key` in R2, piped rather than through a file. */
-export function putR2Json(bucket: string, key: string, text: string): void {
-  const put = wrangler(['r2', 'object', 'put', `${bucket}/${key}`, '--pipe', '--content-type', 'application/json', '--remote'], { timeoutMs: 600_000, stdin: text });
-
-  if (!put.ok) throw new Error(`wrangler r2 object put ${bucket}/${key} failed: ${why(put)}`);
-}
-
 /** Built rather than written as a literal: an escape character inside a regex
  *  literal is a control character, which `no-control-regex` rejects — correctly,
  *  since it is invisible in the source. */
