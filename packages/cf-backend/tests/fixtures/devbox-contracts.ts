@@ -308,6 +308,7 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
 
       return Response.json({ ok: true });
     case '/exec': return Response.json(await box.exec(body.command ?? ''));
+    case '/sessions': return Response.json(await box.terminalSessions());
     case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]'))));
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
     case '/state': return Response.json(await box.devboxState());

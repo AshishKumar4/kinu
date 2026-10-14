@@ -57,6 +57,18 @@ const BOX_NAME_READ = [
 /** How long the tier watches a refused box for another start: the box this contract caught re-armed every second. */
 const PARKED_WATCH_MS = 20_000;
 
+/** A server a session runs in a folder of its own, as the computer-sessions flow does on a deployment. */
+const SESSION_FOLDER = '/workspace/flow-web';
+
+const SESSION_PORT = 8765;
+
+const SESSION_SERVER = `mkdir -p ${SESSION_FOLDER} && cd ${SESSION_FOLDER} && python3 -m http.server ${String(SESSION_PORT)}`;
+
+/** How many times, and how far apart, the sessions are read while the server starts: a person waits seconds. */
+const SESSION_READS = 20;
+
+const SESSION_READ_MS = 500;
+
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
 
@@ -629,6 +641,30 @@ async function main(): Promise<void> {
 
   /** The container's contracts, the desktop through the product routes, and the product's own chain. */
   const productContracts = async () => {
+    /**
+     * A person's terminal session reads as it is on a real box (D90): open, its folder, the port its server listens
+     * on. Staging 7591e6fec read every session closed: tmux printed the read's tab separators as `_`.
+     */
+    await step('terminal-sessions', async () => {
+      const Session = v.looseObject({ id: v.string(), open: v.boolean(), cwd: v.string(), ports: v.array(v.number()) });
+
+      await shell(`tmux new-session -d -s shell -c /workspace && tmux send-keys -t '=shell:' '${SESSION_SERVER}' Enter`, names[1]);
+      let shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
+
+      for (let asked = 0; !(shell$?.cwd === SESSION_FOLDER && shell$.ports.includes(SESSION_PORT)) && asked < SESSION_READS; asked++) {
+        await delay(SESSION_READ_MS);
+        shell$ = (await call('/sessions', v.array(Session), {}, names[1])).find((session) => session.id === 'shell');
+      }
+
+      await shell("tmux kill-session -t '=shell' 2>/dev/null; true", names[1]);
+
+      if (shell$?.open !== true || shell$.cwd !== SESSION_FOLDER || !shell$.ports.includes(SESSION_PORT)) {
+        throw new Error(`a session running a server in ${SESSION_FOLDER} on :${String(SESSION_PORT)} read ${JSON.stringify(shell$)}`);
+      }
+
+      return shell$;
+    });
+
     /**
      * A person sees the box by the name its class gives it, and the kernel keeps the platform's (D93): staging
      * 7e411119d's renaming wrote /etc/hostname, which the platform mounts read-only, and refused every start (D92), and a
