@@ -11,7 +11,7 @@ import * as v from 'valibot';
  * No status line, no prefix key, and the page's terminal keeps its own screen, so what scrolls by lands in its scrollback.
  * A server already running takes the settings at the next attach.
  */
-export const TMUX_CONF = [
+const TMUX_CONF = [
   'set -g status off',
   'set -g prefix None',
   'unbind C-b',
@@ -35,7 +35,7 @@ const PREFILL_KEYS = ['C-x', 'C-]'] as const;
  * ending in `;` as a command separator (measured, tmux 3.6). At its first prompt after a restart the shell offers the
  * line it was running in its edit buffer, through readline (`bind -x`), so nothing runs before the person's Enter.
  */
-export const SESSION_RC = [
+const SESSION_RC = [
   '[ -f /etc/bash.bashrc ] && . /etc/bash.bashrc',
   '[ -f ~/.bashrc ] && . ~/.bashrc',
   '__kinu_entry() { HISTTIMEFORMAT= fc -l -1 2>/dev/null; }',
@@ -110,7 +110,7 @@ export const SESSION_RESUME_FILE = '/etc/devbox-session-resume.sh';
  * The chord waits in the terminal until readline reads it; the terminal echoes what waits, so its control bytes echo
  * raw (\`-echoctl\`), which a terminal draws as nothing, until the prefill turns echoctl back on. Shown once.
  */
-export const SESSION_RESUME = `d=${SAVED_SESSIONS}/$1
+const SESSION_RESUME = `d=${SAVED_SESSIONS}/$1
 stty -echoctl 2>/dev/null
 cat "$d/screen" 2>/dev/null
 printf '\\033[2m-- restarted %s · files kept --\\033[0m\\n' "$(date -d "@$(cat "$d/at" 2>/dev/null || date +%s)" '+%H:%M')"
@@ -121,6 +121,32 @@ else
   stty echoctl 2>/dev/null
 fi
 rm -f "$d/screen" "$d/at"`;
+
+/** Where every session's pane reads tmux's settings and its shell's rc. */
+export const TMUX_CONF_FILE = '/etc/devbox-tmux.conf';
+
+export const SESSION_RC_FILE = '/etc/devbox-session.bashrc';
+
+/**
+ * What a pane needs on the box before it opens: tmux's settings, the session rc and the resume script. A person's attach
+ * and an agent's job both carry them in this environment and run `INSTALL_SESSION_FILES` first.
+ */
+export const SESSION_FILES = { DEVBOX_TMUX_CONF: TMUX_CONF, DEVBOX_SESSION_RC: SESSION_RC, DEVBOX_SESSION_RESUME: SESSION_RESUME } as const;
+
+export const INSTALL_SESSION_FILES = `printf '%s\\n' "$DEVBOX_TMUX_CONF" >${TMUX_CONF_FILE}
+printf '%s\\n' "$DEVBOX_SESSION_RC" >${SESSION_RC_FILE}
+printf '%s\\n' "$DEVBOX_SESSION_RESUME" >${SESSION_RESUME_FILE}
+unset DEVBOX_TMUX_CONF DEVBOX_SESSION_RC DEVBOX_SESSION_RESUME`;
+
+/**
+ * `reads_terminal PID`: PID is in `read(0)` on a pts, as a program waiting at a prompt is; a shell at its own prompt
+ * is in `pselect` (D95, measured). The sessions read asks it of a pane's foreground group, a job's status of its tree.
+ */
+export const READS_TERMINAL = `reads_terminal() {
+  [ "$(cut -d' ' -f1-2 "/proc/$1/syscall" 2>/dev/null)" = '0 0x0' ] || return 1
+  case "$(readlink "/proc/$1/fd/0")" in /dev/pts/*) return 0 ;; esac
+  return 1
+}`;
 
 /** A tmux session name the attach and the read can pass unquoted: tmux reads `.` and `:` as targets. */
 const SessionIdSchema = v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]{0,31}$/u));
@@ -187,7 +213,8 @@ export type SessionsRead = ReadonlyMap<string, Omit<TerminalSession, 'name' | 'o
  * whose foreground reads its terminal (`W`): a program waiting at a prompt is in `read(0)` on the pane's pts; a shell
  * at its own prompt is in `pselect` (D95, measured). `$1` is the box's listener probe (`port pid stamp command`).
  */
-export const SESSIONS_READ = `panes=$(tmux list-panes -a -F '#{pane_pid} #{session_name}' 2>/dev/null) || exit 0
+export const SESSIONS_READ = `${READS_TERMINAL}
+panes=$(tmux list-panes -a -F '#{pane_pid} #{session_name}' 2>/dev/null) || exit 0
 tmux list-panes -a -F 'P #{q:session_name} #{q:pane_current_path} #{q:pane_current_command} #{q:@kinu_exit} #{q:@kinu_at} #{q:@kinu_last}'
 sh -c "$1" port-listeners '' | while IFS='	' read -r port pid _; do
   p=$pid
@@ -205,8 +232,7 @@ printf '%s\\n' "$panes" | while IFS=' ' read -r pane name; do
   group=$(sed 's/.*) //' "/proc/$pane/stat" 2>/dev/null | awk '{ print $6 }')
   [ -n "$group" ] || continue
   for p in $(ps -eo pid=,pgid= | awk -v g="$group" '$2 == g { print $1 }'); do
-    [ "$(cut -d' ' -f1-2 "/proc/$p/syscall" 2>/dev/null)" = '0 0x0' ] || continue
-    case "$(readlink "/proc/$p/fd/0")" in /dev/pts/*) printf 'W %s\\n' "$name"; break ;; esac
+    if reads_terminal "$p"; then printf 'W %s\\n' "$name"; break; fi
   done
 done`;
 
