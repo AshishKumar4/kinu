@@ -43,7 +43,7 @@ import {
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
-import { ShareCardJobs, type ReceivedShare } from './share-cards';
+import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 import {
@@ -184,7 +184,7 @@ export class UserDO extends Agent<Env> {
     return this.profile.libraryTiles(caller);
   }
 
-  sharesReceived_list(caller: UserCaller): Promise<ReceivedShare[]> {
+  sharesReceived_list(caller: UserCaller): Promise<HeldShare[]> {
     return this.profile.sharesReceived_list(caller);
   }
 

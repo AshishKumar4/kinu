@@ -145,12 +145,12 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   const seenAt = await userDO.sharesSeenAt(owner);
 
   // The cards their owners sent: listed without waking a single owner's workspace. A share revoked since is gone
-  // once its removal lands; one opened before then refuses at its owner's object. One made since Shared was last
-  // opened is unseen.
-  for (const { workspace, shareId, card } of await userDO.sharesReceived_list(owner)) {
+  // once its removal lands; one opened before then refuses at its owner's object. One that reached this account
+  // since Shared was last opened is unseen.
+  for (const { workspace, shareId, card, receivedAt } of await userDO.sharesReceived_list(owner)) {
     const row = {
       share: shareId, title: card.title, description: card.description, createdAt: card.createdAt, workspace, owner: card.owner,
-      ...((seenAt === null || card.createdAt > seenAt) && { unseen: true as const }),
+      ...((seenAt === null || receivedAt > seenAt) && { unseen: true as const }),
     };
 
     if (card.kind === 'live') {

@@ -6,7 +6,7 @@ import * as v from 'valibot';
 import { libraryTiles } from './roster';
 import { singletonValue, type UserObjectHost } from './user-host';
 import type { UserWorkspaces } from './workspaces';
-import { ReceivedShareSchema, type ReceivedShare } from './share-cards';
+import { ReceivedShareSchema, type HeldShare, type ReceivedShare } from './share-cards';
 
 /** `user_config`'s key for when this account last opened Shared. */
 const SHARES_SEEN_CONFIG_KEY = 'shares_seen_at';
@@ -314,15 +314,18 @@ export class UserProfileStore {
     return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
   }
 
-  /** Written only by the owner's account, which records what it sent; idempotent per (owner, workspace, share). */
+  /**
+   * Written only by the owner's account, which records what it sent; idempotent per (owner, workspace, share). A card
+   * sent again keeps when it first arrived.
+   */
   async shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<void> {
     await this.host.requireTier(caller, 'shares');
     const held = v.parse(ReceivedShareSchema, row);
 
     this.host.sqlx(
-      `INSERT INTO user_share_cards (owner_user_id, workspace, share_id, card) VALUES (?, ?, ?, ?)
+      `INSERT INTO user_share_cards (owner_user_id, workspace, share_id, card, received_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET card = excluded.card`,
-      held.ownerUserId, held.workspace, held.shareId, JSON.stringify(held.card),
+      held.ownerUserId, held.workspace, held.shareId, JSON.stringify(held.card), Date.now(),
     );
   }
 
@@ -338,12 +341,15 @@ export class UserProfileStore {
   }
 
   /** The cards this account holds, newest first: what their owners last sent, read without asking any of them. */
-  async sharesReceived_list(caller: UserCaller): Promise<ReceivedShare[]> {
+  async sharesReceived_list(caller: UserCaller): Promise<HeldShare[]> {
     await this.host.requireTier(caller, 'shares');
 
-    return this.host.sqlx<{ owner_user_id: string; workspace: string; share_id: string; card: string }>(
-      `SELECT owner_user_id, workspace, share_id, card FROM user_share_cards`,
-    ).map((row) => v.parse(ReceivedShareSchema, { ownerUserId: row.owner_user_id, workspace: row.workspace, shareId: row.share_id, card: JSON.parse(row.card) }))
+    return this.host.sqlx<{ owner_user_id: string; workspace: string; share_id: string; card: string; received_at: number }>(
+      `SELECT owner_user_id, workspace, share_id, card, received_at FROM user_share_cards`,
+    ).map((row) => ({
+      ...v.parse(ReceivedShareSchema, { ownerUserId: row.owner_user_id, workspace: row.workspace, shareId: row.share_id, card: JSON.parse(row.card) }),
+      receivedAt: row.received_at,
+    }))
       .sort((a, b) => b.card.createdAt - a.card.createdAt || a.shareId.localeCompare(b.shareId));
   }
 

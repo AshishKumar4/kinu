@@ -175,11 +175,14 @@ test('naming users on a blueprint records them with the owner and projects the r
     expect(shared.users).toEqual(['pat@example.test']);
     const caller = await testOwner();
     const card = { kind: 'blueprint' as const, title: 'Issue triage', description: '', createdAt: 1, owner: 'owner@example.test' };
-    // The owner's account sends a card again whenever its tile changes; the recipient holds one.
+    // The owner's account sends a card again whenever its tile changes; the recipient holds one, arrived when it first did.
     await recipient.userDO.shareCards_put(caller, { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card });
+    const [arrived] = await recipient.userDO.sharesReceived_list(caller);
+
+    await new Promise((later) => { setTimeout(later, 5); });
     await recipient.userDO.shareCards_put(caller, { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' } });
     expect(await recipient.userDO.sharesReceived_list(caller)).toEqual([
-      { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' } },
+      { ownerUserId, workspace: 'issues-owner', shareId: published.share.id, card: { ...card, title: 'Renamed' }, receivedAt: arrived?.receivedAt },
     ]);
     await expect(recipient.userDO.sharesReceived_list({ workspaceToken: 'not-an-owner' })).rejects.toThrow();
     answered(await owner.agent.slate({ op: 'unshare', share: published.share.id }), SlateShareRecordSchema);
