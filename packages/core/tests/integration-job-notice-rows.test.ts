@@ -8,12 +8,14 @@ import { initEventsHubTables } from '../src/events/hub/index';
 import { getChatHistoryPage } from '../src/read-models/status';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
-import { PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY } from '../src/utils/ui-message';
+import { PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../src/utils/ui-message';
+import { TURN_AUTHOR_METADATA_KEY } from '../src/types/turn-metadata';
 import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
 import { createTestWorkspace, createWorkspaceBundle, makeSql, makeSqlExec } from './helpers';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { hostDeliveries, seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
@@ -25,6 +27,7 @@ function chatStore(db: Database) {
   const history = new SessionHistory({
     sql, actor, transactionSync: (write) => db.transaction(write)(),
     files: async () => ({ vfs: createWorkspaceBundle(db).vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(sql, actor),
   });
 
   const transcript = history.transcript(CHAT_SESSION_ID);

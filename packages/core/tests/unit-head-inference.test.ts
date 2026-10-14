@@ -27,6 +27,7 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/utils/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { getRunEvents } from '../src/read-models/runs';
 import { profileCatalogDigest } from '../src/profiles/catalog';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 /** One text step, finishReason 'stop', so the head ends in a single step. */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
@@ -629,6 +630,7 @@ async function seededTranscript(count: number, extra?: (history: SessionHistory)
   const history = new SessionHistory({
     sql, actor, transactionSync: (write) => db.transaction(write)(),
     files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(sql, actor),
   });
 
   for (let i = 0; i < count; i++) {

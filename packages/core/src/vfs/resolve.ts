@@ -171,6 +171,24 @@ export function shellReference(word: string, planes: PathPlanes): string | null 
   }));
 }
 
+/**
+ * What a model whose path named nothing is told, from this backend's planes alone: where `written` landed, where a
+ * relative path starts and what `~` is, and the references that name each plane. So it holds wherever the planes do:
+ * on the CLI a path is the machine's own file, on the cloud the workspace's.
+ */
+export function addressingHint(planes: PathPlanes, written?: string): string {
+  const references = referencePrefixes(planes).map((prefix) => `\`${prefix}://\``);
+  const named = references.length < 2 ? references.join('') : `${references.slice(0, -1).join(', ')} and ${references.at(-1) ?? ''}`;
+  const reading = [`a relative path starts at \`${planes.cwd}\` and \`~\` is \`${planes.home}\``, `${named} name this workspace's planes`];
+
+  const landed = written === undefined ? Effect.succeed('') : Effect.match(resolvedPath(written, planes), {
+    onFailure: (refused) => refused.message,
+    onSuccess: (at) => `\`${written}\` is \`${at.absolute}\` here`,
+  });
+
+  return settleSync(Effect.map(landed, (where) => [...(where === '' ? [] : [where]), ...reading].join('; ')));
+}
+
 /** The prefixes a reference in prose starts with here: every row's name, and each given machine's where machines mount. */
 export function referencePrefixes(planes: PathPlanes, machines: readonly string[] = []): string[] {
   const named = planes.prefixes.filter((row) => row.prefix !== DEVICE_PREFIX).map((row) => row.prefix);

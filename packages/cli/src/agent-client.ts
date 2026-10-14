@@ -12,7 +12,7 @@ import type {
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest, PositionCursor, PositionPageRequest,
   DeferredApproval, DeferredApprovalAnswer,
-  PlanReview, ReviewAnnotation, PlanDecisionOutcome, PlanReviewDecision, PlanReviewResult, WorkMode, AskingAgent, OwnerAnswer, OwedIntent,
+  PlanReview, ReviewAnnotation, PlanDecisionOutcome, PlanReviewDecision, PlanReviewResult, SendMetadata, WorkMode, AskingAgent, OwnerAnswer, OwedIntent,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
   ModelTestResult, ContextFill,
 } from '@kinu.run/core';
@@ -392,8 +392,8 @@ interface AgentUiMessage {
   id: string;
   role: 'system' | 'user' | 'assistant';
   parts: AgentUiMessagePart[];
-  /** The same fact the web composer sets; it is what makes the turn a Plan turn. */
-  metadata?: { kinuMode: WorkMode };
+  /** What the send carries beside its words, as the web composer writes it too. */
+  metadata?: SendMetadata;
 }
 
 type AgentUiMessagePart =
@@ -404,7 +404,7 @@ export function createUserUiMessage(
   id: string,
   text: string,
   files: ReadonlyArray<PromptFile> = [],
-  mode?: WorkMode,
+  metadata: SendMetadata = {},
 ): AgentUiMessage {
   const parts: AgentUiMessagePart[] = files.map((file) => ({
     type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.url,
@@ -416,6 +416,6 @@ export function createUserUiMessage(
     id,
     role: 'user',
     parts,
-    ...(mode !== undefined && { metadata: { kinuMode: mode } }),
+    ...(Object.keys(metadata).length > 0 && { metadata }),
   };
 }

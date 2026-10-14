@@ -1,11 +1,9 @@
 /** Governs Agent initialization/recovery and Durable Object constructors. Native container
  *  restore has no SDK callOnStart path; its gate and deadline are measured in DEVBOX-DECISIONS. */
 
-import { readFileSync } from 'node:fs';
-import * as v from 'valibot';
 
 import { readSources } from './sources';
-import { parseJsonc } from './jsonc';
+import { deployedConfig } from './infra-manifest';
 import {
   blockBodyOf, classMembers, declaredName, functionOf, identifierCalleeName,
   isAsync, isFunctionLike, memberCalleeName, methodKind, parse, returnTypeOf, superClassName,
@@ -68,8 +66,6 @@ export const MODEL_SINKS: readonly string[] = [
   'resumeAll', 'replayOwedAndRearm', 'owedDeliveryWork',
 ];
 
-const root = new URL('..', import.meta.url).pathname;
-
 /** The deployment's own list of Durable Object classes. Read from
  *  `wrangler.jsonc` rather than restated here: Cloudflare requires every DO
  *  class to appear there, so it cannot drift, and a hand-kept list is the thing
@@ -77,18 +73,10 @@ const root = new URL('..', import.meta.url).pathname;
  *  to every governed hook in the backend; which of the three rules applies is
  *  decided by the member name and the base class the hook belongs to. */
 function declaredDurableObjects(): string[] {
-  const config = parseJsonc(
-    readFileSync(`${root}packages/cf-backend/wrangler.jsonc`, 'utf8'), WranglerDurableObjects, 'wrangler.jsonc',
-  );
-
-  return [...new Set(config.durable_objects.bindings.map((binding) => binding.class_name))].sort();
+  // `durable_objects.bindings[].class_name`: the one place a class is bound, so the `exports` map that names each
+  // class again is not read.
+  return [...new Set((deployedConfig('production').durable_objects?.bindings ?? []).map((binding) => binding.class_name))].sort();
 }
-
-/** `durable_objects.bindings[].class_name`: the one place a class is bound, so
- *  the `exports` map that names each class again is not read. */
-const WranglerDurableObjects = v.object({
-  durable_objects: v.object({ bindings: v.array(v.object({ class_name: v.string() })) }),
-});
 
 export interface Violation {
   readonly file: string;

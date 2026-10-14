@@ -9,6 +9,7 @@ import { createTestActorsOver, seedTranscriptEntry } from '@kinu.run/test-utils'
 import { CHAT_SESSION_ID, PLATFORM_CATALOG, SessionHistory, WORKSPACE_ROOT, actorReferenceOf, type NimbusSandboxFiles, type StoredRow } from '@kinu.run/core';
 import { AgentDatabase } from '../src/agent-facet/agent-database';
 import { makeCtx } from './helpers/platform-context';
+import { claimFences } from '@kinu.run/core';
 
 function retainedDatabase() {
   const created = createTestWorkspace();
@@ -45,7 +46,8 @@ function retainedDatabase() {
   });
 
   const history = new SessionHistory({ sql: created.sql, actor: child, transactionSync: write => created.db.transaction(write)(),
-    files: async () => ({ vfs: created.vfs, artifactDirectory: `${WORKSPACE_ROOT}/.kinu/retained` }) });
+    files: async () => ({ vfs: created.vfs, artifactDirectory: `${WORKSPACE_ROOT}/.kinu/retained` }),
+    claims: claimFences(created.sql, child), });
 
   return { ...created, actors, child, database, history, indexInitializations: () => indexInitializations };
 }

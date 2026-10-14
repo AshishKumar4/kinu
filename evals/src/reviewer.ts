@@ -5,7 +5,7 @@
  * tool's writes. Nothing else is offered, so a reviewer told to fetch, remember, hire, run or write has no tool to do it.
  */
 import type { RoleDefinition, TierAssignment } from '@kinu.run/core';
-import type { CatalogNeed } from './session';
+import type { CatalogNeed } from './workspace-roster';
 
 export const REVIEWER_ROLE_ID = 'eval-reviewer';
 

@@ -7,7 +7,7 @@ import { TurnAccumulator, type TurnSinks } from './turn-accumulator';
 import type { RunEndReason } from './turn-lifecycle';
 import { TurnSteering } from './turn-steering';
 import { DrainScheduler } from './drain-scheduler';
-import { Inbox, readSignalId, type UserSteerDeps } from './inbox';
+import { Inbox, type UserSteerDeps } from './inbox';
 import { EvolutionLanes, improvementLanesOpen, type EvolutionLanesDeps } from './evolution-lanes';
 import type { EventLog } from '../events/hub/log';
 import type { ExecutionRecoveryRecord } from '../events/types';
@@ -17,8 +17,7 @@ import type { AgentInbox } from '../types/signals';
 import { pendingEventsDelivery, type Delivery } from '../subordinates/deliveries';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { RecoveryFinding } from '../evolution/recovery';
-import { readMissionLabels } from '../mission-budget';
-import { workModeForTurnMetadata } from '../prompting/surface';
+import { turnTags } from '../types/turn-metadata';
 import { type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { Effect } from 'effect';
@@ -106,16 +105,17 @@ export class AgentOrchestrator extends EvolutionLanes {
     this.acc.reset(now);
     this.steering.reset();
     // Decided once per turn: with evolution off, crafted-tool scoring is off too.
-    const workMode = workModeForTurnMetadata(metadata);
+    const tags = turnTags({ metadata });
+    const workMode = tags.mode;
     this.activeWorkMode = workMode;
-    this.activeMissions = readMissionLabels(metadata);
+    this.activeMissions = [...tags.missionLabels];
     const evolutionEnabled = this.deps.engine.enabled && workMode !== 'plan';
     this.turnEvolutionEnabled = evolutionEnabled;
     // Its `eval` calls are observed where they run (`delegation/actor-tools.ts`), into this turn's record.
     this.acc.craft.recording = evolutionEnabled;
     this.turnRecoveries = [];
     this.observeRecoveries = evolutionEnabled;
-    this.inbox.beginTurn(readSignalId(metadata));
+    this.inbox.beginTurn(tags.signalId);
     this.deps.budget?.activate(this.activeMissions);
   }
 

@@ -5,8 +5,8 @@
 
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import type { JsonObject } from './json';
 import type { ChatHistoryEntry } from '../types/chat';
+import { turnTags } from '../types/turn-metadata';
 
 /** A UI message by its shape: what Kinu projects from its own rows is walked no deeper. */
 export const UIMessageSchema = v.custom<UIMessage>((value) =>
@@ -20,41 +20,6 @@ export function announcementOf(turnId: string): string {
   return turnId.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? turnId.slice(PROGRAMMATIC_MESSAGE_ID_PREFIX.length) : turnId;
 }
 
-/** Who wrote a turn's words, stamped at enqueue. Defaults to harness, so a new event kind never renders as the operator's. */
-export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
-
-export type TurnAuthor = 'harness' | 'operator';
-
-const TurnAuthorSchema = v.looseObject({
-  [TURN_AUTHOR_METADATA_KEY]: v.optional(v.picklist(['harness', 'operator'])),
-  kinuEvent: v.optional(v.string()),
-});
-
-/** Stamp at the row-writing seam. Idempotent; a producer's declared author wins. */
-export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
-  const parsed = v.safeParse(TurnAuthorSchema, metadata ?? {});
-  const declared = parsed.success ? parsed.output[TURN_AUTHOR_METADATA_KEY] : undefined;
-
-  return { ...metadata, [TURN_AUTHOR_METADATA_KEY]: declared ?? 'harness' };
-}
-
-export function authoredTurnMetadata(item: { readonly kind: 'user' | 'programmatic'; readonly metadata?: JsonObject }): JsonObject {
-  return item.kind === 'user' ? { ...item.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator' } : stampTurnAuthor(item.metadata);
-}
-
-/**
- * Author from the markers the row was written with, never prose: the stamp every machine writer puts at the row-writing
- * seam ({@link stampTurnAuthor}, `harness` unless declared), or the event a machine turn names; a fork carries each row's
- * metadata. Words with neither are a person's own, as their composer shows them before any row is written.
- */
-export function turnAuthor(row: { metadata?: unknown }): TurnAuthor {
-  const parsed = v.safeParse(TurnAuthorSchema, row.metadata ?? {});
-
-  if (!parsed.success) return 'operator';
-
-  return parsed.output[TURN_AUTHOR_METADATA_KEY] ?? (parsed.output.kinuEvent === undefined ? 'operator' : 'harness');
-}
-
 /** What a row says: an answer's last text (its earlier texts are narration), anything else's text whole. */
 export function rowText(row: { readonly role: string; readonly parts: readonly { readonly type?: unknown; readonly text?: unknown }[] }): string {
   const texts = row.parts.flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []);
@@ -66,7 +31,7 @@ export function rowText(row: { readonly role: string; readonly parts: readonly {
 export function transcriptRole(
   row: { id: string; role: 'user' | 'assistant' | 'system'; metadata?: unknown },
 ): 'user' | 'assistant' | 'system' {
-  return row.role === 'user' && turnAuthor(row) === 'harness' ? 'system' : row.role;
+  return row.role === 'user' && turnTags(row).author === 'harness' ? 'system' : row.role;
 }
 
 /**

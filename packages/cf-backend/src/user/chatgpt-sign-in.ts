@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  accountCredentialKey, DEVICE_CHATGPT, DeviceChatGptStatusSchema, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, MAIN_ACCOUNT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type DeviceChatGptStatus, type DisconnectOutcome, nanoid, type UserCaller,
+  accountCredentialKey, DeviceChatGptStatusSchema, CHATGPT_CRED_KEY, CHATGPT_PASTE_REDIRECT, MAIN_ACCOUNT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId, chatgptRegistrationOf, finishChatGptPasteSignIn, startChatGptPasteSignIn, type ChatGptPasteOutcome, type DeviceChatGptStatus, type DisconnectOutcome, nanoid, type UserCaller, DEVICE_METHOD,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, KinuError, logged, renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -66,7 +66,7 @@ export class UserChatGptSignIn {
     const live = this.host.devices._devices.connectedDeviceIds().filter((id) => this.host.devices.isActiveDevice(id));
 
     return Promise.all(live.map(async (id) => {
-      const answer = v.safeParse(DeviceChatGptStatusSchema, await this.host.devices._devices.chatgpt(id, DEVICE_CHATGPT.status));
+      const answer = v.safeParse(DeviceChatGptStatusSchema, await this.host.devices._devices.chatgpt(id, DEVICE_METHOD.chatgptStatus));
 
       return { id, label: this.host.devices.deviceLabel(id), status: answer.success ? answer.output : null };
     }));
@@ -129,7 +129,7 @@ export class UserChatGptSignIn {
   /** Its caller claims `signIn` first. */
   private openChatGptSignIn(machine: { readonly id: string; readonly label: string }, signIn: string): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const answer = yield* attemptInItsWords('unavailable', () => this.host.devices._devices.chatgpt(machine.id, DEVICE_CHATGPT.signIn));
+      const answer = yield* attemptInItsWords('unavailable', () => this.host.devices._devices.chatgpt(machine.id, DEVICE_METHOD.chatgptSignIn));
       const started = v.safeParse(v.object({ authorizeUrl: v.string() }), answer);
 
       if (!started.success) return yield* Effect.fail(new KinuError('io', `${machine.label} answered the ChatGPT sign-in without a URL`));
@@ -249,7 +249,7 @@ export class UserChatGptSignIn {
     const holding = (await this.chatgptSignIns()).filter(({ status }) => status !== null);
 
     const answers = await Promise.allSettled(holding.map(async (machine) => {
-      const answer = v.safeParse(v.object({ unconfirmed: v.nullable(v.string()) }), await this.host.devices._devices.chatgpt(machine.id, DEVICE_CHATGPT.signOut, [{ revoke }]));
+      const answer = v.safeParse(v.object({ unconfirmed: v.nullable(v.string()) }), await this.host.devices._devices.chatgpt(machine.id, DEVICE_METHOD.chatgptSignOut, [{ revoke }]));
 
       return answer.success ? answer.output.unconfirmed : 'it did not say whether OpenAI revoked the sign-in';
     }));

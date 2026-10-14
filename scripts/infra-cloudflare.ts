@@ -24,16 +24,14 @@
 
 import { spawnSync } from 'node:child_process';
 import { resolve as resolveHostname } from 'node:dns/promises';
-import { existsSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
-import { join } from 'node:path';
 import { connect } from 'node:tls';
 import * as v from 'valibot';
-import { parseJsonc } from './jsonc';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
-import type { InfraEnvironment } from './infra-manifest';
-import { restApiToken } from './cloudflare-rest';
+import { classifyErrorCode, tolerate } from '@kinu.run/core/obs';
+import { deployedConfig, type InfraEnvironment } from './infra-manifest';
+import { deleteApplicationByRest, deletedByRest, restCall } from './cloudflare-rest';
+import { restApiToken } from './cloudflare-token';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
 export function environmentArgs(environment: InfraEnvironment): readonly string[] {
@@ -91,17 +89,9 @@ export interface Run {
  *  runs only inside one script is a gate nobody checks. An ambient
  *  CLOUDFLARE_ACCOUNT_ID still wins, because that is how a second account is
  *  addressed deliberately. */
-const DeclaredAccount = v.object({ account_id: v.optional(v.string()) });
-
 function declaredAccountId(): string | undefined {
-  const config = join(CF_BACKEND, 'wrangler.jsonc');
-
-  if (!existsSync(config)) return undefined;
-  // Bun decodes JSONC natively on `require` — structural, where the regex this
-  // replaces read the raw text and would have matched a commented-out id. The
-  // hex pin is the same contract the regex carried: an account id is 32 hex
-  // digits, and a placeholder must lose to the ambient variable, not win.
-  const declared = parseJsonc(readFileSync(config, 'utf8'), DeclaredAccount, 'wrangler.jsonc').account_id;
+  // The hex pin: an account id is 32 hex digits, and a placeholder must lose to the ambient variable, not win.
+  const declared = deployedConfig('production').account_id;
 
   return declared !== undefined && /^[0-9a-f]+$/.test(declared) ? declared : undefined;
 }
@@ -257,6 +247,39 @@ const vectorizeCatalog = new Catalog('Vectorize', ['vectorize', 'list', '--json'
 
 const containerCatalog = new Catalog('Containers', ['containers', 'list', '--json'], ContainerRows);
 
+/** The account's container applications named in `names`, read now. A list this cannot read throws: it must not read
+ *  as "nothing to clean up", since a leaked application keeps a live instance and blocks the next deploy on its name. */
+export function containerApplicationsNamed(names: readonly string[]): { readonly id: string; readonly name: string }[] {
+  const listed = containerCatalog.refresh();
+
+  if ('failure' in listed) throw new Error(`${listed.failure}; whether ${names.join(', ')} exist is unproved`);
+
+  return listed.rows.filter((row) => names.includes(row.name)).map(({ id, name }) => ({ id, name }));
+}
+
+/**
+ * Deletes a container application: a 32-hex id through the REST API, which alone deletes one, a UUID with
+ * `wrangler containers delete` (`deletedByRest`). A delete that fails is proved done only by a listing that no
+ * longer names the application: an absence is never read from an error's wording.
+ */
+export async function deleteContainerApplication(application: { readonly id: string; readonly name: string }): Promise<void> {
+  try {
+    if (deletedByRest(application.id)) {
+      await deleteApplicationByRest(requireCloudflareAccountId(), application.id);
+
+      return;
+    }
+
+    const run = wrangler(['containers', 'delete', application.id]);
+
+    if (!run.ok) throw new Error(`\`wrangler containers delete ${application.id}\` failed: ${why(run)}`);
+  } catch (cause) {
+    if (containerApplicationsNamed([application.name]).some((listed) => listed.id === application.id)) {
+      throw new Error(`container application ${application.name} (${application.id}) was not deleted`, { cause });
+    }
+  }
+}
+
 /** `wrangler containers info <id> --json`: the one command that says which namespace an application holds. The list
  *  above does not carry it. */
 const ContainerInfo = v.object({
@@ -334,6 +357,13 @@ export interface ContainerApplication {
   readonly namespace: string | undefined;
 }
 
+/** How an application is deleted by hand. Wrangler 4.145's `containers delete` takes only a UUID and refuses a 32-hex
+ *  application id ("Expected a container ID but got …", staging, 2026-10-14), which the REST API deletes, as a reset
+ *  does (`deleteApplicationByRest`). A reset whose record names the application deletes it itself. */
+export const APPLICATION_DELETE = 'a 32-hex id through the REST API, `DELETE /client/v4/accounts/<account>/containers/applications/<id>`, '
+  + 'a UUID with `npx wrangler containers delete <id>`; when a reset record names it, `bun run deploy --reset` finishes '
+  + 'that reset, which deletes it';
+
 /**
  * Whether a container class's Durable Object namespace and `application`, the one the deploy names, are bound to
  * each other or to nothing else. `namespace` undefined is a class with no namespace yet: the Worker was never
@@ -367,8 +397,7 @@ export function namespaceBinding(
     return {
       state: 'absent',
       detail: `${blocking.join('; ')}: \`wrangler deploy\` uploads the Worker, then refuses the application. Delete `
-        + 'each one named here (`npx wrangler containers delete <id>`) and deploy again; a namespace and its storage stay '
-        + 'with their Worker.',
+        + `each one named here and deploy again: ${APPLICATION_DELETE}. A namespace and its storage stay with their Worker.`,
     };
   }
 
@@ -972,47 +1001,21 @@ async function accessGet<TSchema extends v.GenericSchema>(
   const token = restApiToken();
 
   if (token.length === 0) return { failure: ACCESS_TOKEN_HELP };
-  const account = process.env['CLOUDFLARE_ACCOUNT_ID'] ?? declaredAccountId();
+  const account = cloudflareAccountId();
 
   if (account === undefined) {
     return { failure: 'no account id: neither CLOUDFLARE_ACCOUNT_ID nor `account_id` in wrangler.jsonc' };
   }
 
-  let response: Response;
-
   try {
-    response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}${path}`, {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(20_000),
-    });
-  } catch (error) {
-    // A network failure and a timeout are both "nobody asked", which is `unknown`
-    // upstream. Neither may be read as "the application does not exist".
-    return { failure: `GET ${path} did not complete: ${error instanceof Error ? error.message : String(error)}` };
+    return { body: await restCall({ method: 'GET', path: `/accounts/${account}${path}`, token, timeoutMs: 20_000 }, schema) };
+  } catch (cause) {
+    // A refusal, a network failure, a timeout and a body this cannot read are all "nobody answered", which is `unknown`
+    // upstream. None may be read as "the application does not exist".
+    const failure = cause instanceof Error ? cause.message : String(cause);
+
+    return { failure: classifyErrorCode({ cause }) === 'denied' ? `${failure}. ${ACCESS_TOKEN_HELP}` : `GET ${path} gave no answer to read: ${failure}` };
   }
-
-  const text = await response.text();
-
-  if (response.status === 403 || response.status === 401) {
-    return { failure: `GET ${path} answered ${String(response.status)}. ${ACCESS_TOKEN_HELP}` };
-  }
-
-  if (!response.ok) return { failure: `GET ${path} answered ${String(response.status)}: ${text.slice(0, 200)}` };
-  let raw: unknown;
-
-  try {
-    raw = JSON.parse(text);
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error; // JSON.parse's only throw
-
-    return { failure: `GET ${path} answered 200 with a body that is not JSON` };
-  }
-
-  const parsed = v.safeParse(schema, raw);
-
-  return parsed.success
-    ? { body: parsed.output }
-    : { failure: `GET ${path} answered a body this cannot read: ${parsed.issues[0]?.message ?? 'unknown shape'}` };
 }
 
 /** Every Access application on the account, or the reason none could be read.

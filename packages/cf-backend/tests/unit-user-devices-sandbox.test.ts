@@ -7,8 +7,8 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  DEVICE_SANDBOX_REASONS, SANDBOX_UNAVAILABLE, parseSandboxReason, sandboxReasonFix,
-  type JsonValue,
+  DEVICE_SANDBOX_REASONS, parseSandboxReason, sandboxReasonFix,
+  type JsonValue, DEVICE_ERRORS,
 } from '@kinu.run/core';
 import { testOwner, type DeviceFrame } from './helpers/user-do';
 import { WORKSPACE, OTHER_WORKSPACE, daemon, deviceHarness } from './helpers/device-harness';
@@ -93,7 +93,7 @@ describe('a machine that cannot sandbox runs no command', () => {
       agentName: WORKSPACE,
     });
 
-    await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
+    await expect(refusal).rejects.toThrow(DEVICE_ERRORS.sandboxUnavailable);
     // A refusal must carry the machine's reason and the owner's fix.
     await expect(refusal).rejects.toThrow('no_userns');
     await expect(refusal).rejects.toThrow(sandboxReasonFix('no_userns'));
@@ -121,7 +121,7 @@ describe('a machine that cannot sandbox runs no command', () => {
     await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', sandbox: CAPABLE, agentRoot: '.kinu/agents' });
 
     const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
-    await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
+    await expect(refusal).rejects.toThrow(DEVICE_ERRORS.sandboxUnavailable);
     await expect(refusal).rejects.toThrow('daemon_outdated: the daemon proved a sandbox but did not say where agent homes live');
     await expect(refusal).rejects.toThrow(sandboxReasonFix('daemon_outdated'));
     await expect(refusal).rejects.not.toThrow(NO_REASON);
@@ -315,7 +315,7 @@ describe('the refusal carries what the daemon actually said', () => {
     await harness.sendDeviceHello(hello(daemonHello(daemonStatus('PROBE_FAILED'), PROBE_FAILED_DETAIL)));
 
     const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['rm -r doomed'], { agentName: WORKSPACE });
-    await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
+    await expect(refusal).rejects.toThrow(DEVICE_ERRORS.sandboxUnavailable);
     await expect(refusal).rejects.toThrow(`probe_failed: ${PROBE_FAILED_DETAIL}`);
     await expect(refusal).rejects.toThrow(sandboxReasonFix('probe_failed'));
     await expect(refusal).rejects.not.toThrow(NO_REASON);

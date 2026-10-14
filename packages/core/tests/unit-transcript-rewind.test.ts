@@ -8,6 +8,7 @@ import { SessionHistory } from '../src/session/history';
 import type { SessionTranscript } from '../src/session/transcript';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { createTestActor, createTestWorkspace, type TestWorkspace } from './helpers';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 let restore: (() => void) | null = null;
 
@@ -29,6 +30,7 @@ async function seeded(): Promise<Fixture> {
   const history = new SessionHistory({
     sql: ws.sql, actor, transactionSync: write => ws.db.transaction(write)(),
     files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(ws.sql, actor),
   });
 
   await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'u1', origin: 'input',

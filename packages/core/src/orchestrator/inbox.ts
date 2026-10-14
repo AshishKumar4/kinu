@@ -22,8 +22,8 @@ import { metadataBroadcastEvent, type SeenSplice } from '../read-models/backgrou
 import type { WorkMode } from '../types/turn';
 import { narrowestMode } from '../execution/work-mode';
 import { parseJsonObject, type JsonObject } from '../utils/json';
-import type { SessionPayload } from '../session/payload';
-import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
+import { payloadReference, type SessionPayload } from '../session/payload';
+import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../types/turn-metadata';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
@@ -270,10 +270,12 @@ export class PendingSendStore {
     return this.sql<{ id: string; metadata_json: string | null; run_end_json: string | null; run_end_path: string | null; run_end_digest: string | null }>`
       SELECT id, metadata_json, run_end_json, run_end_path, run_end_digest FROM queued_turns
       WHERE actor_id = ${this.actorId} AND (run_end_json IS NOT NULL OR run_end_path IS NOT NULL) ORDER BY seq ASC`
-      .map((row) => ({
-        id: row.id, metadata: row.metadata_json === null ? null : parseJsonObject(row.metadata_json),
-        end: row.run_end_json === null ? { json: null, path: row.run_end_path ?? '', digest: row.run_end_digest ?? '' } : { json: row.run_end_json, path: null, digest: null },
-      }));
+      .flatMap((row) => {
+        // The WHERE above and the table's CHECK leave only references.
+        const end = payloadReference(row.run_end_json, row.run_end_path, row.run_end_digest);
+
+        return end === null ? [] : [{ id: row.id, metadata: row.metadata_json === null ? null : parseJsonObject(row.metadata_json), end }];
+      });
   }
 
   /** Its turn settled, ran or not: nothing of it is owed to a later process. */
@@ -369,10 +371,6 @@ export interface UserSteerDeps {
   readonly skills?: (text: string) => Promise<string | null>;
 }
 
-const SignalIdMetadataSchema = v.object({
-  [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
-});
-
 /** A person's words as the chat sends them: what the Inbox alone admits (a delivery reaches it through {@link Inbox.landMidTurn}). */
 export interface UserWords extends AgentSignal {
   readonly user: UserSignalIdentity;
@@ -387,13 +385,6 @@ interface DeliveredUserSignal extends DeliveredSignal {
   readonly user: UserSignalIdentity;
 }
 
-/** Card id a turn carries when a signal started it; pairs with {@link Inbox.queue}. */
-export function readSignalId(metadata: JsonObject | undefined): string | undefined {
-  const parsed = v.safeParse(SignalIdMetadataSchema, metadata);
-  const id = parsed.success ? parsed.output[SIGNAL_ID_METADATA_KEY] : undefined;
-
-  return id === '' ? undefined : id;
-}
 
 const isUserSignal = (signal: DeliveredSignal): signal is DeliveredUserSignal =>
   signal.user !== undefined;

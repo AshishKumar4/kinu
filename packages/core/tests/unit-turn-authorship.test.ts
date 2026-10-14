@@ -1,8 +1,10 @@
 /** Whom a turn answers: stored by the path that admitted it, read by every host (design v2 §1.6, v3 D). */
 import { describe, expect, test } from 'bun:test';
-import { OWNER_ANSWER_SIGNAL, stampAuthorship, turnAuthorship } from '../src/index';
+import { OWNER_ANSWER_SIGNAL, stampAuthorship, turnTags, type TurnAuthorship } from '../src/index';
 
-describe('turnAuthorship', () => {
+const turnAuthorship = (turn: Parameters<typeof turnTags>[0]): TurnAuthorship => turnTags(turn).authorship;
+
+describe("a turn's authorship", () => {
   test("a person's words are the owner's, whatever their metadata says", () => {
     expect(turnAuthorship({ kind: 'user' })).toBe('owner');
     expect(turnAuthorship({ kind: 'user', metadata: stampAuthorship({}, 'hirer') })).toBe('owner');

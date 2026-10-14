@@ -468,8 +468,8 @@ describe('declared resource limits', () => {
   });
 });
 
-/** `workspace.*` is not the container: a bare ENOENT for '/app' must teach why. */
-describe('workspace.* VFS errors carry the addressing correction', () => {
+/** A path `workspace.*` finds nothing at says how paths are read on this backend's planes. */
+describe('workspace.* VFS errors carry how paths are read here', () => {
   function buildPlane() {
     const { rt } = createTestRuntime();
     const vfs = rt.storage.vfs;
@@ -482,30 +482,19 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
     });
   }
 
-  test('readdir of a container path explains what workspace.* is and where to go instead', async () => {
+  test('a missing path keeps its errno and names where a relative path starts', async () => {
     const exec = buildPlane();
-    let raised: unknown;
+    const raised: unknown[] = [];
 
-    try { await exec.tools.readdir.execute('/app'); } catch (err) { raised = err; }
+    for (const call of [() => exec.tools.readdir.execute('/app'), () => exec.tools.readFile.execute('app/gblock.txt')]) {
+      try { await call(); } catch (err) { raised.push(err); }
+    }
 
-    const err = v.parse(VfsMessageSchema, raised);
-    expect(err.code).toBe('ENOENT');
-    expect(err.message).toContain('ENOENT');
-    expect(err.message).toContain('own virtual filesystem');
-    expect(err.message).toContain('NOT the machine or container');
-    expect(err.message).toContain('`shell` tool');
-    expect(err.message).toContain('roots are: ');
-  });
+    expect(raised.map((err) => {
+      const { code, message } = v.parse(VfsMessageSchema, err);
 
-  test('a missing file anywhere gets the same correction', async () => {
-    const exec = buildPlane();
-    let raised: unknown;
-
-    try { await exec.tools.readFile.execute('app/gblock.txt'); } catch (err) { raised = err; }
-
-    const err = v.parse(VfsMessageSchema, raised);
-    expect(err.code).toBe('ENOENT');
-    expect(err.message).toContain('own virtual filesystem');
+      return { code, names: message.includes(cloudPlanes(WORKSPACE_ROOT).cwd) };
+    })).toEqual([{ code: 'ENOENT', names: true }, { code: 'ENOENT', names: true }]);
   });
 
   test('a successful call is untouched by the guidance wrapper', async () => {

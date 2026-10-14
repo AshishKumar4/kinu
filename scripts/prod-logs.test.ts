@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
 import { KinuError } from '@kinu.run/core/obs';
 import { canaryActivations } from './durability-canary-telemetry';
-import { alarmsThatRan, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
+import { alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
 
 const HOUR = 3_600_000;
 
@@ -71,6 +71,44 @@ describe('what one deployed version did, as a deploy reports it', () => {
 
     expect(read.deleted.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['deleted-workspace/reminder']);
     expect(read.owed.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['live-workspace/reminder']);
+  });
+
+  // Staging f9c17ac7b, 2026-10-14: an eval workspace's agent owed its turn's task reminder at 16:43:52.770 (relayed), the
+  // reminder turn ran by 53.146, and the owner's object destroyed the workspace at 54.578, before the reminder's 5 s
+  // re-check would settle it. None of the destroyed object's own rows of the destroy were stored, and the workspace's own
+  // ledger had settled the same sequence at 52.157.
+  test("a workspace's own settle stands for none of its agent's owed effects, and a destroy its owner logged ends them", () => {
+    const row = (timestamp: number, event: string, fields: Record<string, string>, object = '') => ({
+      timestamp, $workers: object === '' ? {} : { durableObjectId: object },
+      source: { event, code: '', cause: '', fields: { sequence: 'turn-3/96e9', ...fields } },
+    });
+
+    const agent = { owed: 'v1:task_reminder:96e9', workspace: 'eval-first-run', actor: 'agent-1' };
+
+    const events = [
+      row(52_157, 'turn.terminal_effects_settled', {}, 'workspace-a'),
+      row(52_770, 'turn.terminal_effects_owed', { ...agent, object: 'workspace-a' }),
+      row(52_770, 'turn.terminal_effects_owed', { ...agent, object: 'workspace-b' }),
+      row(52_800, 'turn.terminal_effects_settled', {}, 'workspace-b'),
+    ];
+
+    const destroyedAt = deletionTimes([], [row(55_811, 'workspace.destroyed', { workspace: 'eval-first-run', object: 'workspace-a' })]);
+    const read = terminalEffectStates(events, destroyedAt);
+
+    expect(read.deleted.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['workspace-a/turn-3/96e9']);
+    expect(read.owed.map((sample) => `${sample.object}/${sample.sequence}`)).toEqual(['workspace-b/turn-3/96e9']);
+    expect(read.settled).toEqual([]);
+  });
+
+  test("an object's deletion is the earliest of its own abort and the destroy its owner logged", () => {
+    const aborted = [{ timestamp: 30, $workers: { durableObjectId: 'a' } }, { timestamp: 20, $workers: { durableObjectId: 'a' } }];
+
+    const tornDown = [
+      { timestamp: 25, source: { event: 'workspace.destroyed', code: '', cause: '', fields: { object: 'a' } } },
+      { timestamp: 40, source: { event: 'workspace.destroyed', code: '', cause: '', fields: { object: 'b' } } },
+    ];
+
+    expect([...deletionTimes(aborted, tornDown)]).toEqual([['a', 20], ['b', 40]]);
   });
 
   // Staging's versions f62dfcb9 and b39035fc, 2026-09-30: 19 hung SupervisorRPC calls made by one orchestrator, and a

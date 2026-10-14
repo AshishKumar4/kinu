@@ -4,7 +4,6 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./vfs": "./src/vfs/index.ts",
     "./memory": "./src/memory/index.ts",
     "./stores": "./src/stores/index.ts"
   },

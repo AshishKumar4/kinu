@@ -26,7 +26,7 @@ import {
   TOOLCHAIN_PROBED_CAPABILITIES, TOOLCHAIN_UNPROBEABLE,
 } from './toolchain';
 import {
-  DEVICE_CANCEL_METHOD, parseDeviceCancelAnswer,
+  parseDeviceCancelAnswer,
   isDeviceNotConnectedError, isSandboxUnavailableError,
   nextDeviceRequestId,
 } from './device-tunnel';
@@ -95,7 +95,7 @@ function terminateDeviceExec(
 ): Effect.Effect<string> {
   return Effect.match(Effect.tryPromise({
     try: async () => parseDeviceCancelAnswer(requestId, await rpc(
-      DEVICE_CANCEL_METHOD, [requestId], deviceId === undefined ? undefined : { deviceId },
+      DEVICE_METHOD.cancel, [requestId], deviceId === undefined ? undefined : { deviceId },
     )),
     catch: (cause) => ({ cause }),
   }), {

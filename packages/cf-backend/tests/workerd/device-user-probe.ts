@@ -8,8 +8,8 @@
 import { getAgentByName, type AgentContext } from 'agents';
 import * as v from 'valibot';
 import {
-  DEVICE_CANCEL_METHOD, commitWorkspaceCapability, freshWorkspaceCapability, ownerCaller,
-  type DeviceConsentAnswer, type SqlExec, type SqlValue, type UserCaller,
+  commitWorkspaceCapability, freshWorkspaceCapability, ownerCaller,
+  type DeviceConsentAnswer, type SqlExec, type SqlValue, type UserCaller, DEVICE_METHOD,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../../src/orchestrator';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -166,7 +166,7 @@ export class DeviceUserProbeDO extends UserDO {
 
   /** The tool's own abort path: the workspace cancels one of its requests itself. */
   cancelOwn(workspace: string, requestId: string): Promise<string | undefined> {
-    return this.deviceRpc(this.callerOf(workspace), DEVICE_CANCEL_METHOD, [requestId], { agentName: workspace });
+    return this.deviceRpc(this.callerOf(workspace), DEVICE_METHOD.cancel, [requestId], { agentName: workspace });
   }
 
   /** An agent's Stop, as the workspace sweeps its commands. */

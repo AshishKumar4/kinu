@@ -10,6 +10,7 @@ import {
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 import { listTurnRatings } from '../src/evolution/ratings';
 import { conversationTurnPair } from '../src/identity/conversation-store';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 /** Production schema: the eval split reconstructs evidence from the message and run-event ledgers. */
 function setup() {
@@ -21,6 +22,7 @@ function setup() {
   const history = new SessionHistory({
     sql, actor, transactionSync: write => db.transaction(write)(),
     files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
+    claims: claimFences(sql, actor),
   });
 
   return { db, sql, execRaw, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };

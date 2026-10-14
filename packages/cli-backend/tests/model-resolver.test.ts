@@ -345,7 +345,6 @@ describe('createLocalModelResolver', () => {
         headers: { Authorization: 'Bearer cf-test' },
         model: '@cf/moonshotai/kimi-k2.6',
       },
-      credentials: {},
       fetch: asFetchFunction(async () => Response.json({
         'cloudflare-workers-ai': {
           models: {
@@ -382,7 +381,6 @@ describe('createLocalModelResolver', () => {
         headers: { Authorization: 'Bearer cf-test' },
         model: '@cf/zai-org/glm-5.2',
       },
-      credentials: {},
       fetch: asFetchFunction(async () => Response.json({
         'cloudflare-workers-ai': {
           models: {
@@ -413,14 +411,14 @@ describe('createLocalModelResolver', () => {
         headers: { Authorization: 'Bearer compat-test' },
         model: 'default-model',
       },
-      credentials: {
+      credentials: () => ({
         openaiApiKey: 'sk-openai',
         anthropicApiKey: 'sk-ant',
         openrouterApiKey: 'sk-or',
         openaiCompat: {
           groq: { kind: 'openai-compat', baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk' },
         },
-      },
+      }),
       fetch: asFetchFunction(async () => new Response(JSON.stringify({ data: [] }))),
     });
 
@@ -439,7 +437,7 @@ describe('createLocalModelResolver', () => {
 
     const resolver = createLocalModelResolver({
       llm: null,
-      credentials: { anthropicApiKey: 'sk-ant-main', apiKeyAccounts: { 'anthropic.bearer@work': 'sk-ant-work' } },
+      credentials: () => ({ anthropicApiKey: 'sk-ant-main', apiKeyAccounts: { 'anthropic.bearer@work': 'sk-ant-work' } }),
       fetch: asFetchFunction(async (_input, init) => {
         sent.push(new Headers(init?.headers).get('x-api-key') ?? '');
 
@@ -465,7 +463,7 @@ describe('createLocalModelResolver', () => {
 
     const resolver = createLocalModelResolver({
       llm: null,
-      credentials: { openaiApiKey: 'sk-openai', openaiCompat: { groq: compat } },
+      credentials: () => ({ openaiApiKey: 'sk-openai', openaiCompat: { groq: compat } }),
       fetch: asFetchFunction(async (input, init) => {
         const request = new Request(input, init);
         sent.push({ host: new URL(request.url).host, auth: request.headers.get('authorization') });
@@ -490,7 +488,7 @@ describe('createLocalModelResolver', () => {
         headers: { 'x-api-key': 'sk-ant', 'anthropic-version': '2023-06-01' },
         model: 'claude-sonnet-4-5',
       },
-      credentials: { anthropicApiKey: 'sk-ant' },
+      credentials: () => ({ anthropicApiKey: 'sk-ant' }),
       fetch: asFetchFunction(async () => new Response('{}')),
     });
 
@@ -507,7 +505,6 @@ describe('createLocalModelResolver', () => {
         headers: { Authorization: 'Bearer sk-openai' },
         model: 'gpt-4o-mini',
       },
-      credentials: {},
       fetch: asFetchFunction(async () => new Response('{}')),
     });
 
@@ -584,7 +581,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
   test('shares menu row admission, capability union and provider failure preservation', async () => {
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(),
-      credentials: {},
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
       fetch: asFetchFunction(async (input) => (input instanceof Request ? input.url : input.toString()).endsWith('/api/cli/models')
         ? Response.json({
@@ -612,7 +608,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(),
-      credentials: {},
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
       fetch: asFetchFunction(async (input) => {
         if (!(input instanceof Request ? input.url : input.toString()).endsWith('/api/cli/models')) return Response.json({ credentials: [] });
@@ -631,7 +626,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
   test('a credential the account holds and cannot read fails its provider, and only that one', async () => {
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(),
-      credentials: {},
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
       fetch: asFetchFunction(async (input) => {
         const url = input instanceof Request ? input.url : input.toString();
@@ -657,7 +651,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
   test('lists workers-ai and my-gateway models from the server menu with metadata', async () => {
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(),
-      credentials: {},
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
       fetch: cloudMenuFetch(),
     });
@@ -715,7 +708,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       // A gateway OpenAI model speaks OpenAI's Responses API, as models.dev's SDK for it says.
       const resolver = createLocalModelResolver({
         llm: proxyLLMConfig(origin),
-        credentials: {},
         cloud: { origin, token: CLOUD_TOKEN },
         fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => (requestUrl(input).startsWith('https://models.dev/')
           ? Response.json({ openai: { id: 'openai', npm: '@ai-sdk/openai', models: { 'gpt-4.1': { id: 'gpt-4.1', tool_call: true } } } })
@@ -755,7 +747,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
     const resolver = createLocalModelResolver({
       llm: direct,
-      credentials: {},
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
       fetch: cloudMenuFetch(),
     });
@@ -790,13 +781,13 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       });
 
       const pinned = createLocalModelResolver({
-        llm: endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'), credentials: {},
+        llm: endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'),
       });
 
       await generateText({ model: pinned.resolveModel(null, { sessionAffinity: 'kinu-harbor', workspaceAffinity: 'kinu-harbor' }), prompt: 'ping', maxRetries: 0 });
 
       const elsewhere = createLocalModelResolver({
-        llm: endpoint('openai-compat', 'gpt-4o-mini'), credentials: {},
+        llm: endpoint('openai-compat', 'gpt-4o-mini'),
       });
 
       await generateText({ model: elsewhere.resolveModel(null, { sessionAffinity: 'kinu-harbor', workspaceAffinity: 'kinu-harbor' }), prompt: 'ping', maxRetries: 0 });
@@ -837,7 +828,6 @@ describe('createLocalModelResolver — claude subscription provider', () => {
 
     const resolver = createLocalModelResolver({
       llm: null,
-      credentials: {},
       oauthStore: createFileOAuthStore(configPath),
       fetch: asFetchFunction(async (input, init) => {
         const url = input instanceof Request ? input.url : input.toString();
@@ -861,7 +851,6 @@ describe('createLocalModelResolver — claude subscription provider', () => {
   test('without a login it stays listed, unavailable, naming the command that signs in', async () => {
     const resolver = createLocalModelResolver({
       llm: null,
-      credentials: {},
       oauthStore: createFileOAuthStore(join(scratchDir('claude-logins'), 'config.json')),
       fetch: asFetchFunction(async () => new Response('{}')),
     });
@@ -881,7 +870,7 @@ describe('createLocalModelResolver — signed out', () => {
         headers: { Authorization: 'Bearer sk-openai' },
         model: 'gpt-4o-mini',
       },
-      credentials: { openaiApiKey: 'sk-openai' },
+      credentials: () => ({ openaiApiKey: 'sk-openai' }),
       fetch: asFetchFunction(async () => new Response('{}')),
     });
 

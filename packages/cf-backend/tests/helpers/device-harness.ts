@@ -2,7 +2,7 @@
 // like the daemon; without one every call hangs and consent outcomes are indistinguishable.
 import * as v from 'valibot';
 import {
-  DEVICE_CANCEL_METHOD, type JsonValue,
+  type JsonValue, DEVICE_METHOD,
 } from '@kinu.run/core';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner,
@@ -22,7 +22,7 @@ export const OTHER_WORKSPACE = 'workspace-b';
 export function daemon(frame: DeviceFrame): JsonValue {
   if (frame.method === 'which') return { present: [] };
 
-  if (frame.method === DEVICE_CANCEL_METHOD) {
+  if (frame.method === DEVICE_METHOD.cancel) {
     return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'terminated' };
   }
 

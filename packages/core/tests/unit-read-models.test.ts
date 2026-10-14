@@ -25,7 +25,7 @@ import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from '../src/read-models/status';
 import { SessionHistory } from '../src/session/history';
-import { stampTurnAuthor } from '../src/utils/ui-message';
+import { stampTurnAuthor } from '../src/types/turn-metadata';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
@@ -44,6 +44,7 @@ import {
 } from '../src/read-models/config-plane';
 import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views';
 import type { JsonValue } from '../src/utils/json';
+import { claimFences } from '../src/orchestrator/actor-claims';
 
 function workspace() {
   const db = new Database(':memory:');
@@ -69,6 +70,7 @@ function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs:
   const history = new SessionHistory({
     sql: w.sql, actor: w.actor, transactionSync: (write) => w.db.transaction(write)(),
     files: async () => ({ vfs: w.vfs, artifactDirectory: '/home/main/.kinu/context' }),
+    claims: claimFences(w.sql, w.actor),
   });
 
   return { history, transcript: history.transcript(CHAT_SESSION_ID) };

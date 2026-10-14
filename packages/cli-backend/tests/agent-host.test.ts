@@ -28,7 +28,9 @@ import {
   HeadCapture,
   bindActorHandle,
   READS_CHANGED_EVENT,
+  JsonValueSchema,
   type ActorHandle,
+  type JsonValue,
   type HostedAgentRef,
   type LLMProviderConfig,
   type SqlExecutor,
@@ -52,8 +54,8 @@ import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
-import { hireDeathModel } from './hire-death-model';
-import { swarmsOn, toolSequenceModel } from './helpers/local-session';
+import { ANSWERING_HIRE_ANSWER, answeringHireModel, hireDeathModel } from './hire-death-model';
+import { swarmsOn, toolCallStream, toolSequenceModel } from './helpers/local-session';
 import { staticModelPlane } from '../src/profile-authority';
 
 /** A roster row's lifetime is its actor's. */
@@ -1127,6 +1129,49 @@ describe('LocalAgentHost', () => {
     }
   });
 
+  test("a hire's programs reach its own planes only, as on the cloud; the workspace's own agent reaches the whole surface", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    // What a program reaches of the workspace's own planes: delegation, the agent's own lifecycle, its tasks and memory.
+    const probe = 'return [typeof agents, typeof agent, typeof tasks, typeof memory];';
+
+    // Every turn runs the probe once, then answers.
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => ({
+        stream: options.prompt.at(-1)?.role === 'tool' ? textStream('done', usage) : toolCallStream('eval', { code: probe }, usage),
+        response: { headers: {} },
+      }),
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const reached = new Map<string, string>();
+
+    host.subscribe((agent, event) => {
+      if (event.type === 'tool-result' && event.toolName === 'eval') reached.set(agent, String(event.result));
+    });
+
+    try {
+      const root = await host.acquire('root');
+      await root.send('Look around.', { id: crypto.randomUUID() });
+
+      const team = await host.team('root');
+      await team.create({ name: 'auditor', role: 'researcher', mission: 'Watch the ledger.' });
+      const answered = awaitTurns(host, 'root/auditor', 1);
+      await team.assign({ name: 'auditor', task: 'Look around.', mode: 'build' });
+      await answered;
+
+      const seen = (agent: string): JsonValue => v.parse(v.object({ result: JsonValueSchema }), JSON.parse(present(reached.get(agent), `${agent}'s program`))).result;
+
+      expect({ root: seen('root'), hire: seen('root/auditor') })
+        .toEqual({ root: ['object', 'object', 'object', 'object'], hire: ['undefined', 'undefined', 'undefined', 'undefined'] });
+    } finally {
+      await host.close();
+    }
+  });
+
   test("a hire's shell answers to its root's standing approval mode, never its own", async () => {
     const brief = 'Check the env file.';
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -1343,6 +1388,40 @@ describe('LocalAgentHost', () => {
     expect(childCalls()).toBe(0);
     expect(claims).toEqual([{ settled: 1 }]);
     await next.host.close();
+  });
+
+  // What a hire's turn end owes its hirer is reported after its answer commits (#75), by a row the commit owes: a
+  // process killed past the commit leaves the row, and the next process reports it once, asking the hire nothing.
+  test('a hire killed after its answer committed is reported to its hirer exactly once by the next process', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+
+    const child = spawnTest(['bun', new URL('./hire-end-death-probe.ts', import.meta.url).pathname, state, project],
+      { cwd: new URL('../../..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' });
+
+    const marker = (await new Response(child.stdout).text()).trim().split('\n').at(-1);
+
+    await child.exited;
+    expect(marker).toMatch(/^KILLED after-commit (heard|unheard)$/u);
+
+    const { model, childCalls } = answeringHireModel();
+    const next = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    // The report opens the hirer's next turn, or the turn it opened before the kill runs again.
+    const hirerTurn = awaitTurns(next.host, 'root', 1);
+
+    await next.host.team('root');
+    await hirerTurn;
+    await next.host.close();
+
+    const view = new Database(dbPath, { readonly: true });
+
+    const reports = view.query<{ payload: string }, []>(
+      "SELECT payload FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+    ).all();
+
+    view.close();
+    expect(childCalls()).toBe(0);
+    expect(reports.map(({ payload }) => payload.includes(ANSWERING_HIRE_ANSWER))).toEqual([true]);
   });
 
   /** Temporary rung end to end: a role-targeted `ask` births a real local actor, admits its task, and archives it in the same roster. */
@@ -2591,7 +2670,7 @@ describe('LocalAgentHost — the driver lease', () => {
 
     const claim = await admitTestClaim(rt.stores.claims, {
       runId: 'live-run', turnId: 'live-turn', workMode: 'build',
-      context: rt.stores.history.context.selected() ?? rt.stores.history.context.initialize(),
+      context: rt.stores.history.context.current(),
       program: { kind: 'builtin', version: 0, digest: null, build: null },
     });
 

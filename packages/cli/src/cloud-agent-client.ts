@@ -47,7 +47,7 @@ import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import { cloudFileLinks, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, WorkspaceBroadcastSchema, type WorkspaceBroadcast, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
-import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
+import type { AlternateTakeSet, BranchStatusEvent, SendMetadata, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
   findForkPivot,
@@ -493,16 +493,18 @@ export class CloudAgentClient implements AgentClient {
       this.activeTurns.set(requestId, turn);
 
       try {
-        const body: JsonObject = {
-          messages: [decodeJsonValue({ value: createUserUiMessage(requestId, text, files, opts.mode) })],
-          trigger: 'submit-message',
+        // A turn this send opens is a one-shot run's own task, run where the CLI is; a send into a running turn steers it.
+        const opened: JsonObject = { ...(this.oneShot && { oneShot: true }), ...(opts.cwd !== undefined && opts.cwd !== '' && { cwd: opts.cwd }) };
+
+        const metadata: SendMetadata = {
+          ...(opts.mode !== undefined && { kinuMode: opts.mode }), ...(opts.tier !== undefined && { kinuTier: opts.tier }),
+          ...(!steered && Object.keys(opened).length > 0 && { kinuTurn: opened }),
         };
 
-        if (opts.cwd) body.cwd = opts.cwd;
-
-        if (opts.tier) body.tier = opts.tier;
-
-        if (this.oneShot) body.oneShot = true;
+        const body: JsonObject = {
+          messages: [decodeJsonValue({ value: createUserUiMessage(requestId, text, files, metadata) })],
+          trigger: 'submit-message',
+        };
 
         const request: JsonObject = {
           id: requestId,

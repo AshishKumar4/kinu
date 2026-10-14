@@ -28,9 +28,9 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { beatWorkspace } from '../evals/src/session';
-import { webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
+import { signedInPage } from '../evals/src/browser';
+import { createWorkspace, deleteWorkspace, listWorkspaces, webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
-import { DESKTOP } from './live-app-harness';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
@@ -41,60 +41,13 @@ import {
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
-  documentScriptFailures, explained, FAILED_APP_SCRIPT, recordScriptFailures, SCRIPT_FAILED, type ScriptFailure,
+  documentScriptFailures, explained, FAILED_APP_SCRIPT, SCRIPT_FAILED, type ScriptFailure,
 } from './script-failures';
 
 export interface FlowTarget {
   readonly browser: Browser;
   readonly origin: string;
   readonly identity: PublicWebIdentity;
-}
-
-/** A page at the desktop viewport with no clock of its own, acting as
- *  `identity` on every request it makes, the socket upgrades included. */
-export async function signedInPage(browser: Browser, identity: PublicWebIdentity): Promise<Page> {
-  const page = await browser.newPage();
-  const headers = webHeaders(identity);
-
-  page.setDefaultTimeout(0);
-  page.setDefaultNavigationTimeout(0);
-  await page.setViewport(DESKTOP);
-
-  if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
-
-  await recordDeadEnds(page);
-
-  return page;
-}
-
-/** Records, on `window`, every turn the workspace's socket reports ended in
- *  error (the frame the chat renders its error from), which ends a page's
- *  chances for good. Installed before each document's scripts run, so the
- *  socket the app opens is the recorded one. Each socket is a plain WebSocket:
- *  the desktop's client refuses one whose prototype is not WebSocket's
- *  ("Raw channel missing property: send", staging 2026-10-13). */
-const RECORD_TURN_ERRORS = `(() => {
-  window.__turnErrors = [];
-  window.WebSocket = new Proxy(window.WebSocket, {
-    construct(Socket, args) {
-      const socket = Reflect.construct(Socket, args);
-      socket.addEventListener('message', (event) => {
-        if (typeof event.data !== 'string' || !event.data.includes('"error":true')) return;
-        try {
-          const frame = JSON.parse(event.data);
-          if (frame.type === 'cf_agent_use_chat_response' && frame.error === true) window.__turnErrors.push(String(frame.body).slice(0, 300));
-        } catch {}
-      });
-      return socket;
-    },
-  });
-})()`;
-
-/** Records what ends `page`'s chances for good on every document it loads: each app script that failed to load
- *  (script-failures.ts), and each turn its socket reports ended in error. */
-export async function recordDeadEnds(page: Page): Promise<void> {
-  await recordScriptFailures(page);
-  await page.evaluateOnNewDocument(RECORD_TURN_ERRORS);
 }
 
 /** The error text Chrome fails the requests in flight with when a host network interface comes or goes: not the
@@ -132,24 +85,13 @@ async function reloadedAfterNetworkChange(page: Page, what: string, deadEnd: str
   return true;
 }
 
-const CreatedSchema = v.object({ name: v.string() });
-
 /** A workspace made for one row through the app's own create route, with no
  *  mission, so no turn runs before the row's own. */
 /** The beat each row's workspace keeps until it is removed, so no eval run's sweep takes it mid-row. */
 const beats = new Map<string, () => void>();
 
 export async function createFlowWorkspace(target: FlowTarget, subject: string): Promise<string> {
-  const response = await fetch(`${target.origin}/api/user/workspaces`, {
-    method: 'POST',
-    headers: { ...webHeaders(target.identity), 'content-type': 'application/json' },
-    body: JSON.stringify({ name: evalWorkspaceName(`browser-${subject}`) }),
-  });
-
-  const text = await response.text();
-
-  if (!response.ok) throw new Error(`creating a workspace answered ${String(response.status)}: ${text.slice(0, 400)}`);
-  const { name } = v.parse(CreatedSchema, JSON.parse(text));
+  const name = await createWorkspace(target.origin, target.identity, { name: evalWorkspaceName(`browser-${subject}`) });
 
   beats.set(name, beatWorkspace(target.origin, target.identity, name));
 
@@ -162,14 +104,10 @@ export async function removeFlowWorkspace(target: FlowTarget, workspace: string)
   beats.get(workspace)?.();
   beats.delete(workspace);
 
-  const response = await fetch(`${target.origin}/api/user/workspaces/${encodeURIComponent(workspace)}`, {
-    method: 'DELETE',
-    headers: webHeaders(target.identity),
-  });
-
-  if (!response.ok) {
-    console.warn(`product-flows: removing ${workspace} answered ${String(response.status)}: `
-      + `${(await response.text()).slice(0, 200)}`);
+  try {
+    await deleteWorkspace(target.origin, target.identity, workspace);
+  } catch (error) {
+    console.warn(`product-flows: removing ${workspace} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -926,27 +864,6 @@ export interface WorkspaceProposalVerdict {
 
 const PROPOSAL_CARD = '#inspector [data-workspace-proposal]';
 
-const ListedSchema = v.object({
-  entries: v.array(v.object({ name: v.string(), displayName: v.optional(v.string()) })),
-  nextCursor: v.nullable(v.string()),
-});
-
-/** Every workspace on the account with its title, page by page, as the sidebar's roster lists them. */
-async function listedWorkspaces(target: FlowTarget): Promise<Array<{ name: string; displayName: string }>> {
-  const rows: Array<{ name: string; displayName: string }> = [];
-  let cursor: string | null = null;
-
-  do {
-    const url = `${target.origin}/api/user/workspaces${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`;
-    const page: v.InferOutput<typeof ListedSchema> = v.parse(ListedSchema, await (await fetch(url, { headers: webHeaders(target.identity) })).json());
-
-    rows.push(...page.entries.map((entry) => ({ name: entry.name, displayName: entry.displayName ?? '' })));
-    cursor = page.nextCursor;
-  } while (cursor !== null);
-
-  return rows;
-}
-
 /** A button in the proposal card, by its words. */
 function proposalButton(words: string): string {
   return `[...document.querySelectorAll(${JSON.stringify(`${PROPOSAL_CARD} button`)})].find((button) => ${words}.test(button.textContent ?? ''))?.click()`;
@@ -972,7 +889,7 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
     await page.evaluate(proposalButton('/show its soul/iu'));
     await until(page, 'the soul approving writes', `document.querySelector('[data-workspace-proposal-soul]') !== null`);
     const cardSoul = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-workspace-proposal-soul]')?.textContent ?? ''`));
-    const before = new Set((await listedWorkspaces(target)).map((row) => row.name));
+    const before = new Set((await listWorkspaces(target.origin, target.identity)).map((row) => row.name));
 
     await page.evaluate(proposalButton('/create workspace/iu'));
     await until(page, "the agent's reply with the new workspace's link",
@@ -981,9 +898,12 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
     const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(PROPOSAL_LINK_REPLY)))?.[0] ?? '';
 
     created = /\/workspace\/([a-z0-9-]+)$/u.exec(link)?.[1] ?? null;
-    const row = (await listedWorkspaces(target)).find((entry) => entry.name === created);
+    const row = (await listWorkspaces(target.origin, target.identity)).find((entry) => entry.name === created);
 
-    return { cardTitle, cardSoul, link, existedBeforeApproval: created !== null && before.has(created), created: row ?? null };
+    return {
+      cardTitle, cardSoul, link, existedBeforeApproval: created !== null && before.has(created),
+      created: row === undefined ? null : { name: row.name, displayName: row.displayName ?? '' },
+    };
   } finally {
     await removeFlowWorkspace(target, workspace);
 
