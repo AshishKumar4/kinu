@@ -295,12 +295,13 @@ describe('agents tool — delegation depth', () => {
       .toEqual({ below: ['hire', 'assign', 'message', 'list', 'dismiss'], atCap: [] });
   });
 
-  // A tool with no operation to take is no tool: a capped agent with searches off has no `agents` at all.
-  test('a capped agent has the agents tool only while a search is offered to it', () => {
+  // A tool with nothing to take and nothing to explain is no tool: a capped agent with no search has no `agents` at all.
+  test('a capped agent has the agents tool only for a search: offered, or withheld by the beta it names', () => {
     expect({
+      noSearch: agentsWired(depthDeps(4).deps),
       searchesOff: agentsWired(depthDeps(4, { swarm: swarmDeps(), swarms: false }).deps),
       searchesOn: agentsWired(depthDeps(4, { swarm: swarmDeps() }).deps),
-    }).toEqual({ searchesOff: false, searchesOn: true });
+    }).toEqual({ noSearch: false, searchesOff: true, searchesOn: true });
   });
 
   // A toolset is cached across turns, and a facet's identity is seeded after it is built: one served below the cap

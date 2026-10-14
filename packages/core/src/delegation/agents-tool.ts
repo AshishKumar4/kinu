@@ -328,9 +328,10 @@ function teamOffered(deps: AgentsWiring): boolean {
   return deps.team !== undefined && !delegationExhausted(deps.team.delegation);
 }
 
-/** Whether an actor has an `agents` tool at all: whether it is offered any operation. */
+/** Whether an actor has an `agents` tool at all: an operation to take, or a search the account's beta withholds, which
+ *  a call is told how to turn on. */
 export function agentsWired(deps: AgentsToolDeps): boolean {
-  return agentsActionsFor(offered(deps)).length > 0;
+  return agentsActionsFor(offered(deps)).length > 0 || withheldBeta(deps, 'swarm') !== null;
 }
 
 /** What wires each operation; a search needs exactly the exploration substrate, so it has no deps group of its own. */
