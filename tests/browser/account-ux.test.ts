@@ -845,7 +845,7 @@ describe('account panels', () => {
             const place = viewport === 'desktop' ? 'data-drive-place' : 'data-drive-tab';
 
             expect(await shared.$$eval(`[${place}]`, (tabs, name) => tabs.map((tab) => [tab.getAttribute(name), tab.getAttribute('aria-current')]), place))
-              .toEqual([['mine', null], ['shared', 'page']]);
+              .toEqual([['slates', null], ['mine', null], ['shared', 'page']]);
             expect(body.indexOf('Shared with you')).toBeLessThan(body.indexOf('Shared by you'));
 
             // The Drive row stays lit on /shared: it is the Drive, not another page.

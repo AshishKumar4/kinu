@@ -2481,7 +2481,7 @@ async function workspaceWithSlate(target: FlowTarget, subject: string): Promise<
   return workspace;
 }
 
-/** The slate's tile in My stuff, found by the slate and the workspace it lives in. */
+/** The slate's tile in the Drive's Slates, found by the slate and the workspace it lives in. */
 function slateTile(workspace: string): string {
   return `[data-drive-slate="${DRIVE_SLATE.id}"][data-drive-workspace="${workspace}"]`;
 }
@@ -2489,8 +2489,9 @@ function slateTile(workspace: string): string {
 async function driveWithSlate(target: FlowTarget, workspace: string): Promise<Page> {
   const page = await signedInPage(target.browser, target.identity);
 
+  // A first visit to the Drive lands on Slates when the owner has one.
   await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
-  await until(page, 'the slate\'s tile in My stuff', `document.querySelector(${JSON.stringify(slateTile(workspace))}) !== null`);
+  await until(page, 'the slate\'s tile in Slates', `document.querySelector(${JSON.stringify(slateTile(workspace))}) !== null`);
   await painted(page);
 
   return page;
@@ -2507,13 +2508,13 @@ export interface SlateOpensVerdict {
 }
 
 /**
- * Row: a slate opens from My stuff into its workspace, on its own tab.
+ * Row: a slate opens from the Drive's Slates into its workspace, on its own tab.
  *
  * A workspace gets a slate through the Files route; the Drive's tile for it is
  * pressed, and the workspace page it opens must have made the slate's tab the
  * current one. The preview frame is not read: `vite dev` serves no slate.
  */
-export async function slateOpensFromMyStuff(target: FlowTarget): Promise<SlateOpensVerdict> {
+export async function slateOpensFromSlates(target: FlowTarget): Promise<SlateOpensVerdict> {
   const workspace = await workspaceWithSlate(target, 'drive-open');
 
   try {

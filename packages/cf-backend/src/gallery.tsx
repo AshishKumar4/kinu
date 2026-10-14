@@ -7044,6 +7044,7 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
           <Route path="/workspace/:agentId" element={<div className="h-full" data-gallery-blank />} />
           <Route path={APP_ROUTES.drive} element={<DriveRoute tab="mine" />} />
           <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine" />} />
+          <Route path={APP_ROUTES.slates} element={<DriveRoute tab="slates" />} />
           <Route path={APP_ROUTES.shared} element={<DriveRoute tab="shared" />} />
         </Route>
       </Routes>
@@ -7477,6 +7478,7 @@ async function mount() {
     ["jobstreaming", { node: <JobStreamingFrame />, entries: ["/"] }],
     // `&path=/projects/ops` opens a folder; `shared` is the other tab; `drive-recipient` holds only what others shared.
     ["drive", { node: <DrivePageFrame />, entries: [`${APP_ROUTES.drive}${new URLSearchParams(location.search).get("path") ?? ""}`] }],
+    ["slates", { node: <DrivePageFrame />, entries: [APP_ROUTES.slates] }],
     ["shared", { node: <DrivePageFrame />, entries: [APP_ROUTES.shared] }],
     ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
     ["drive-recipient", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],

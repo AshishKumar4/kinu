@@ -47,16 +47,28 @@ export async function deleteEntry(path: string): Promise<void> {
   return settle(Effect.asVoid(api(Ok, 'DELETE', `?path=${encodeURIComponent(path)}`)));
 }
 
-export async function uploadFile(path: string, file: Blob, signal?: AbortSignal): Promise<void> {
-  return settle(Effect.asVoid(api(Ok, 'PUT', `/files?path=${encodeURIComponent(path)}`, { body: file, signal })));
+/** How an upload is ended and told of its progress: the share of its body that has gone, 0 to 1. */
+export interface UploadWatch {
+  readonly signal: AbortSignal;
+  readonly progress: (share: number) => void;
 }
 
-export async function uploadZip(folder: string, archive: Blob, signal?: AbortSignal): Promise<void> {
-  return settle(Effect.asVoid(api(Ok, 'PUT', `/files?folder=${encodeURIComponent(folder)}&unpack=zip`, { body: archive, signal })));
+function upload(query: string, body: Blob, watch: UploadWatch): Promise<void> {
+  const sent = (bytes: number): void => { watch.progress(body.size === 0 ? 1 : Math.min(1, bytes / body.size)); };
+
+  return settle(Effect.asVoid(api(Ok, 'PUT', `/files?${query}`, { body, signal: watch.signal, sent })));
 }
 
-export async function uploadFolder(folder: string, files: readonly PickedFile[], signal?: AbortSignal): Promise<void> {
-  await uploadZip(folder, await zipped(files), signal);
+export async function uploadFile(path: string, file: Blob, watch: UploadWatch): Promise<void> {
+  await upload(`path=${encodeURIComponent(path)}`, file, watch);
+}
+
+export async function uploadZip(folder: string, archive: Blob, watch: UploadWatch): Promise<void> {
+  await upload(`folder=${encodeURIComponent(folder)}&unpack=zip`, archive, watch);
+}
+
+export async function uploadFolder(folder: string, files: readonly PickedFile[], watch: UploadWatch): Promise<void> {
+  await uploadZip(folder, await zipped(files), watch);
 }
 
 export function markAsSkill(path: string): Promise<MarkedSkill> {

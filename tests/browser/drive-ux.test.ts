@@ -52,6 +52,17 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
   return page;
 }
 
+/** The Drive at My stuff's root, chosen from the column: a first visit lands on Slates when there is a slate. */
+async function myStuff(gallery: Gallery, theme: 'dark' | 'light'): Promise<Page> {
+  const page = await freshPage(gallery, 'drive', theme, 'desktop');
+
+  await page.click('[data-drive-place="mine"]');
+  await page.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+  await page.waitForSelector('[data-drive-section="Folders"]');
+
+  return page;
+}
+
 async function shoot(page: Page, name: string): Promise<string> {
   const path = join(SHOTS, `${name}.png`);
   await page.screenshot({ path, fullPage: true });
@@ -147,23 +158,28 @@ async function pressNew(page: Page, item: string): Promise<void> {
 }
 
 describe('the Drive', () => {
-  test('My stuff tiles slates, blueprints, folders and files, and a folder link, an upload and New folder work', async () => {
+  test('Slates tiles every slate by its workspace; My stuff tiles folders and files, and a folder link, an upload and New folder work', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
 
       try {
-        // The owner's own things, in one grid, in this order; Skills leads the folders.
-        expect(await sections(page)).toEqual([
-          { title: 'Slates', tiles: ['Issue triage', 'Landing perf report', 'Standup notes'] },
-          { title: 'Blueprints', tiles: ['Issue triage'] },
-          { title: 'Folders', tiles: ['Skills', 'data', 'notes', 'projects'] },
-          { title: 'Files', tiles: ['README.md'] },
-        ]);
+        // A first visit lands on Slates: every slate across the workspaces, each labelled with its workspace.
+        await page.waitForSelector('[data-drive-place="slates"][aria-current="page"]');
+        expect(await sections(page)).toEqual([{ title: 'Slates', tiles: ['Issue triage', 'Landing perf report', 'Standup notes'] }]);
         // A slate opens in its workspace, on its own tab.
         expect(await page.$eval('[data-drive-slate="issue-triage"] a', (a) => a.getAttribute('href')))
           .toBe('/workspace/checkout-fixes?slate=issue-triage');
-        // The column places My stuff, its folders, then Shared with something new in it.
-        expect(await places(page)).toEqual([['mine', 'page', false], ['shared', null, true]]);
+        // The column places Slates, My stuff, then Shared with something new in it.
+        expect(await places(page)).toEqual([['slates', 'page', false], ['mine', null, false], ['shared', null, true]]);
+        await shoot(page, 'drive-slates-dark');
+
+        // My stuff holds files and folders; Skills leads the folders, and the tree lists them.
+        await page.click('[data-drive-place="mine"]');
+        await page.waitForSelector('[data-drive-section="Folders"]');
+        expect(await sections(page)).toEqual([
+          { title: 'Folders', tiles: ['Skills', 'data', 'notes', 'projects'] },
+          { title: 'Files', tiles: ['README.md'] },
+        ]);
         expect(await tree(page)).toEqual(['/skills', '/data', '/notes', '/projects']);
         await shoot(page, 'drive-mine-dark');
 
@@ -171,7 +187,6 @@ describe('the Drive', () => {
         await page.click('[data-drive-entry="projects"] a');
         await waitForEntry(page, 'ops');
         expect(await crumbs(page)).toEqual(['/drive', '/drive/projects']);
-        // Below the root the owner's slates and blueprints are not repeated.
         expect((await sections(page)).map((section) => section.title)).toEqual(['Folders']);
         await page.click('[data-drive-entry="ops"] a');
         await waitForEntry(page, 'deploy');
@@ -274,12 +289,13 @@ describe('the Drive', () => {
           await input.uploadFile(join(import.meta.dir, 'drive-ux.test.ts'));
           await page.waitForSelector('[data-drive-transfer="uploading"]');
 
-          const [sweep, ground] = await page.$eval('[data-drive-transfer="uploading"] [role="progressbar"]', (bar) => [
-            getComputedStyle(bar, '::after').backgroundColor,
+          // The share sent fills the bar; the fill is read against the tile's picture it sits on.
+          const [fill, ground] = await page.$eval('[data-drive-transfer="uploading"] [role="progressbar"]', (bar) => [
+            getComputedStyle(bar.firstElementChild ?? bar).backgroundColor,
             getComputedStyle(bar.parentElement ?? bar).backgroundColor,
           ]);
 
-          expect(contrast(rgba(sweep), rgba(ground))).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum);
+          expect(contrast(rgba(fill), rgba(ground))).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum);
         } finally {
           await page.close();
         }
@@ -289,7 +305,7 @@ describe('the Drive', () => {
 
   test('an upload is a tile in its folder until it lands; Cancel stops it, and a refusal stays with its reason', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+      const page = await myStuff(gallery, 'dark');
 
       try {
         // An empty folder to upload into.
@@ -402,7 +418,7 @@ describe('the Drive', () => {
 
   test("an IME's own Escape in a dialog's field leaves the dialog open; a plain Escape closes it", async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+      const page = await myStuff(gallery, 'dark');
 
       try {
         await pressNew(page, 'data-drive-new-folder');
@@ -575,7 +591,7 @@ describe('the Drive', () => {
 
   test('a file opens in the viewer, and the Shared tab holds both directions', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+      const page = await myStuff(gallery, 'dark');
 
       try {
         await page.click('[data-drive-entry="README.md"] button');

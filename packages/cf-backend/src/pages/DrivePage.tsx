@@ -1,13 +1,14 @@
 /**
- * The Drive: My stuff (`/drive`, `/drive/<path>`) and Shared (`/shared`), placed in a column with My stuff's folder
- * tree, or below `lg` in a switch at the top. Nothing empty is drawn: Shared is placed once it holds something.
+ * The Drive's places: Slates (`/slates`), My stuff (`/drive`, `/drive/<path>`) and Shared (`/shared`), in a column
+ * with My stuff's folder tree, or below `lg` in a switch at the top. Nothing empty is drawn: Slates and Shared are
+ * placed once they hold something, and one place alone takes no column.
  */
 import { Effect, Result } from 'effect';
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
-  ArrowSquareOutIcon, BookOpenIcon, CaretDownIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
+  AppWindowIcon, ArrowSquareOutIcon, BookOpenIcon, CaretDownIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
   PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -19,7 +20,7 @@ import {
 } from "@kinu.run/core";
 import { diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import {
-  downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip,
+  downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
 import { getSharedLibrary, markSharedSeen } from "@/lib/shared-api";
 import { useAsyncResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
@@ -34,7 +35,7 @@ import { DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } f
 import { FileViewer } from "@/components/surfaces/FileViewer";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 
-export type DriveTab = "mine" | "shared";
+export type DriveTab = "slates" | "mine" | "shared";
 
 function folderHref(path: string): string {
   return path === "/" ? APP_ROUTES.drive : `${APP_ROUTES.drive}${path}`;
@@ -50,19 +51,29 @@ const IMAGE = /\.(?:png|jpe?g|gif|webp|svg)$/iu;
 const ChosenState = v.object({ chosen: v.literal(true) });
 
 const PLACES: readonly { id: DriveTab; label: string; to: string; icon: ReactNode }[] = [
+  { id: "slates", label: "Slates", to: APP_ROUTES.slates, icon: <AppWindowIcon size={16} /> },
   { id: "mine", label: "My stuff", to: APP_ROUTES.drive, icon: <FolderSimpleIcon size={16} /> },
   { id: "shared", label: "Shared", to: APP_ROUTES.shared, icon: <UsersThreeIcon size={16} /> },
 ];
+
+/** The places that hold something: My stuff always, Slates once there is a slate, Shared once there is a share. */
+function placesOf(library: SharedLibrary | null): DriveTab[] {
+  return PLACES.map((each) => each.id).filter((id) => {
+    if (id === "slates") return (library?.slates.length ?? 0) > 0;
+
+    return id === "mine" || (library !== null && !isEmptyLibrary(library));
+  });
+}
 
 function NewDot() {
   return <span data-drive-unseen className="size-1.5 shrink-0 rounded-full p-dot-accent" title="Something new" />;
 }
 
 /** Below `lg`, the places as a switch at the top. */
-function PlaceSwitch({ tab, unseen }: { tab: DriveTab; unseen: boolean }) {
+function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
   return (
     <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-lg p-recessed p-0.5">
-      {PLACES.map((each) => (
+      {PLACES.filter((each) => places.includes(each.id)).map((each) => (
         <Link key={each.id} to={each.to} state={{ chosen: true }} aria-current={each.id === tab ? "page" : undefined} data-drive-tab={each.id}
           className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3.5 py-1.5 p-t-control ${each.id === tab ? "p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : "p-text-3 hover:p-text"}`}>
           {each.label}
@@ -86,10 +97,7 @@ function subfolders(entries: readonly DriveEntry[] | undefined, parent: string):
   return (entries ?? []).filter((entry) => entry.kind === "folder").sort((a, b) => Number(isSkills(b)) - Number(isSkills(a)));
 }
 
-/**
- * My stuff's folders, opened along the way to `current`. A folder off that way shows it can be opened, since its
- * listing is not read until it is; one on the way shows whether it holds more.
- */
+/** My stuff's folders, opened along the way to `current`; a folder that holds folders has a caret. */
 function FolderTree({ listings, parent, current, depth }: {
   listings: ReadonlyMap<string, readonly DriveEntry[]>; parent: string; current: string; depth: number;
 }) {
@@ -104,9 +112,9 @@ function FolderTree({ listings, parent, current, depth }: {
         const open = current === path || current.startsWith(`${path}/`);
         const inner = subfolders(listings.get(path), path);
         const skills = path === DRIVE_SKILLS_DIR || child.skill;
-        let caret: ReactNode = <CaretRightIcon size={10} weight="bold" />;
+        let caret: ReactNode = null;
 
-        if (open) caret = inner.length > 0 ? <CaretDownIcon size={10} weight="bold" /> : null;
+        if (inner.length > 0) caret = open ? <CaretDownIcon size={10} weight="bold" /> : <CaretRightIcon size={10} weight="bold" />;
 
         return (
           <li key={path}>
@@ -127,10 +135,12 @@ function FolderTree({ listings, parent, current, depth }: {
   );
 }
 
-/** From `lg`, the Drive's places in a column: My stuff with its folder tree, then Shared once it holds something. */
-function DriveColumn({ tab, path, listings, shares, unseen }: {
-  tab: DriveTab; path: string; listings: ReadonlyMap<string, readonly DriveEntry[]>; shares: boolean; unseen: boolean;
+/** From `lg`, the Drive's places in a column: Slates, My stuff with its folder tree, then Shared. */
+function DriveColumn({ tab, path, listings, places, unseen }: {
+  tab: DriveTab; path: string; listings: ReadonlyMap<string, readonly DriveEntry[]>; places: readonly DriveTab[]; unseen: boolean;
 }) {
+  if (places.length < 2) return null;
+
   return (
     <aside aria-label="Drive" className="hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 pt-8 lg:flex">
       <div className="flex h-8 items-center gap-2.5 px-2.5">
@@ -138,9 +148,9 @@ function DriveColumn({ tab, path, listings, shares, unseen }: {
         <h1 className="p-display text-2xl">Drive</h1>
       </div>
       <nav aria-label="Drive places" className="mt-6 space-y-0.5">
-        {PLACES.filter((each) => each.id === "mine" || shares).map((each) => {
+        {PLACES.filter((each) => places.includes(each.id)).map((each) => {
           const active = each.id === tab;
-          const here = active && path === "/";
+          const here = active && (each.id !== "mine" || path === "/");
           let tone = `p-text-2 ${ROW_HOVER}`;
 
           if (here) tone = `${ROW_ON} p-text`;
@@ -169,27 +179,29 @@ function DriveColumn({ tab, path, listings, shares, unseen }: {
  * The page's head, one tree laid out twice: below `lg` the title, the switch, the search and the crumbs stack; from
  * `lg` the title and the places are the column's, and the crumbs share a row with New or the search.
  */
-function DriveHead({ tab, path, subtitle, shares, unseen, search, action }: {
-  tab: DriveTab; path: string; subtitle: ReactNode; shares: boolean; unseen: boolean;
+function DriveHead({ tab, path, subtitle, places, unseen, search, action }: {
+  tab: DriveTab; path: string; subtitle: ReactNode; places: readonly DriveTab[]; unseen: boolean;
   search: { readonly query: string; readonly set: (query: string) => void }; action: ReactNode;
 }) {
   const isRoot = path === "/";
-  const areas = "[grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] lg:[grid-template-areas:'crumbs_action_search']";
+  const column = places.length > 1;
+  // With one place there is no column, and the title stays above the crumbs at every width.
+  const wide = column ? "lg:[grid-template-areas:'crumbs_action_search']" : "lg:[grid-template-areas:'title_action_search'_'crumbs_crumbs_crumbs']";
 
   return (
-    <div className={`grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] ${areas}`}>
-      <header className="flex items-center gap-3 [grid-area:title] lg:hidden">
+    <div className={`grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] ${wide}`}>
+      <header className={`flex items-center gap-3 [grid-area:title] ${column ? "lg:hidden" : ""}`}>
         <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
         <h1 className="p-display text-2xl">Drive</h1>
       </header>
       {action && <div className="ml-3 [grid-area:action]">{action}</div>}
-      {shares && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} unseen={unseen} /></div>}
+      {column && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}
       {tab === "shared" && (
         <input value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared"
           data-drive-search className={`${inputCls} mt-3 w-full [grid-area:search] sm:w-60 lg:mt-0`} />
       )}
       {(!isRoot || subtitle !== null) && (
-        <div className={`min-w-0 [grid-area:crumbs] lg:mt-0 ${isRoot ? "mt-4" : "mt-6"}`}>
+        <div className={`min-w-0 [grid-area:crumbs] ${column ? "lg:mt-0" : ""} ${isRoot ? "mt-4" : "mt-6"}`}>
           {tab === "mine" && !isRoot && <Crumbs path={path} />}
           {subtitle !== null && <p className={`p-meta p-text-3 lg:leading-8 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
         </div>
@@ -209,14 +221,23 @@ function useSeeingShared(seeing: boolean, reread: () => void, fail: (chain: stri
   }, [seeing, reread, fail]);
 }
 
-/** The folders on the way to `path` above it, each read once per visit; `path` itself is the page's own listing. */
+/**
+ * What the folder tree draws, read once per visit: each folder on the way to `path` above it, and each folder those
+ * and `path` hold, so the tree knows which have folders of their own. `path` itself is the page's own listing.
+ */
 function useFolderWay(tab: DriveTab, path: string, here: DriveListing | null): ReadonlyMap<string, readonly DriveEntry[]> {
   const load = useCallback(async () => {
-    const parts = path.split("/").filter(Boolean);
-    const above = tab === "mine" ? parts.map((_, index) => `/${parts.slice(0, index).join("/")}`) : [];
+    if (tab !== "mine") return [];
 
-    return await Promise.all(above.map(listDrive));
-  }, [tab, path]);
+    const parts = path.split("/").filter(Boolean);
+    const above = await Promise.all(parts.map((_, index) => listDrive(`/${parts.slice(0, index).join("/")}`)));
+    const opened = [...above.map((listing) => listing.path), path];
+
+    const shown = [...above, ...(here === null ? [] : [here])].flatMap((listing) => subfolders(listing.entries, listing.path)
+      .map((entry) => joinDir(listing.path, entry.name)).filter((child) => !opened.includes(child)));
+
+    return [...above, ...await Promise.all(shown.map(listDrive))];
+  }, [tab, path, here]);
 
   const way = lastValue(useAsyncResource(load, undefined, `${tab}:${path}`).resource) ?? [];
 
@@ -242,10 +263,15 @@ function Crumbs({ path }: { path: string }) {
   );
 }
 
-function Section({ label, titled = true, children }: { label: string; titled?: boolean; children: ReactNode }) {
+/** A heading that names a kind of thing in a place is quiet; one that names who a share came from or went to leads. */
+const SECTION_HEADING = { quiet: "mb-2.5 p-meta font-medium p-text-3", lead: "mb-3 p-heading text-[15px] p-text" } as const;
+
+function Section({ label, titled = true, heading = "quiet", children }: {
+  label: string; titled?: boolean; heading?: keyof typeof SECTION_HEADING; children: ReactNode;
+}) {
   return (
     <section aria-label={label} data-drive-section={label}>
-      {titled && <h2 className="mb-2.5 p-row-text font-medium p-text-2">{label}</h2>}
+      {titled && <h2 className={SECTION_HEADING[heading]}>{label}</h2>}
       <ul className={GRID}>{children}</ul>
     </section>
   );
@@ -403,20 +429,38 @@ function TextCover({ path, name }: { path: string; name: string }) {
   return <span ref={holder} className="absolute inset-0"><TextPage text={text} name={name} /></span>;
 }
 
-interface Transfer {
-  readonly id: number;
+/** What is sent: into which folder, under which name, how many bytes, and the entry it lands as. */
+interface Sending {
   readonly folder: string;
   readonly name: string;
   readonly size: number;
+  /** A file lands as itself, a folder as its name, a .zip as the folder it unpacks into. */
+  readonly lands: string;
+}
+
+interface Transfer extends Sending {
+  readonly id: number;
   readonly status: "uploading" | "landed" | "failed";
+  /** The share of the upload that has gone, 0 to 1. */
+  readonly progress: number;
   readonly error?: string;
   readonly stop: () => void;
 }
 
-function TransferPicture({ status }: { status: Transfer["status"] }) {
+function TransferPicture({ status, progress }: { status: Transfer["status"]; progress: number }) {
+  if (status === "failed") {
+    return <span className="absolute inset-0 flex items-center justify-center p-recessed"><WarningIcon size={24} className="p-danger" /></span>;
+  }
+
+  const percent = Math.round(progress * 100);
+
   return (
-    <span className="absolute inset-0 flex items-center justify-center p-recessed">
-      {status === "failed" ? <WarningIcon size={24} className="p-danger" /> : <span role="progressbar" aria-label="Uploading" className="h-1 w-1/2 p-busy-bar" />}
+    <span className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 p-recessed">
+      <span className="p-meta tabular-nums p-text-2">{percent}%</span>
+      <span role="progressbar" aria-label="Uploading" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
+        className="h-1 w-1/2 overflow-hidden rounded-full bg-[var(--c-border-strong)]">
+        <span className="block h-full rounded-full bg-[var(--c-accent-mark)] transition-[width]" style={{ width: `${String(percent)}%` }} />
+      </span>
     </span>
   );
 }
@@ -462,8 +506,6 @@ function isEmptyLibrary(library: SharedLibrary): boolean {
 }
 
 interface MineContents {
-  readonly slates: readonly OwnedSlate[];
-  readonly blueprints: readonly SharedRow[];
   readonly folders: readonly DriveEntry[];
   readonly files: readonly DriveEntry[];
   readonly builtins: readonly string[];
@@ -471,13 +513,10 @@ interface MineContents {
 
 const SKILLS_FOLDER = DRIVE_SKILLS_DIR.slice(1);
 
-function mineContents(path: string, entries: readonly DriveEntry[], library: SharedLibrary | null): MineContents {
-  const isRoot = path === "/";
-  const isSkills = (entry: DriveEntry): boolean => isRoot && entry.name === SKILLS_FOLDER;
+function mineContents(path: string, entries: readonly DriveEntry[]): MineContents {
+  const isSkills = (entry: DriveEntry): boolean => path === "/" && entry.name === SKILLS_FOLDER;
 
   return {
-    slates: isRoot && library !== null ? library.slates : [],
-    blueprints: isRoot && library !== null ? library.mine.filter((row) => row.kind === "blueprint") : [],
     folders: entries.filter((entry) => entry.kind !== "file").sort((a, b) => Number(isSkills(b)) - Number(isSkills(a))),
     files: entries.filter((entry) => entry.kind === "file"),
     builtins: path === DRIVE_SKILLS_DIR ? Object.keys(BUILTIN_SKILL_FILES) : [],
@@ -485,23 +524,28 @@ function mineContents(path: string, entries: readonly DriveEntry[], library: Sha
 }
 
 function isEmptyMine(contents: MineContents): boolean {
-  return contents.slates.length + contents.blueprints.length + contents.folders.length + contents.files.length + contents.builtins.length === 0;
+  return contents.folders.length + contents.files.length + contents.builtins.length === 0;
 }
 
 function ownsNothing(contents: MineContents): boolean {
-  return contents.slates.length + contents.blueprints.length + contents.files.length === 0
-    && contents.folders.every((entry) => entry.name === SKILLS_FOLDER);
+  return contents.files.length === 0 && contents.folders.every((entry) => entry.name === SKILLS_FOLDER);
 }
 
-/** Shared with nothing in it goes back to My stuff; a first visit to an empty My stuff goes to what is shared. */
+/**
+ * A place with nothing in it goes back to My stuff. A first visit to the Drive lands on Slates when there is one, else
+ * on what is shared when My stuff holds nothing of its own.
+ */
 function landing(tab: DriveTab, firstVisit: boolean, nothingOwned: boolean, library: SharedLibrary | null): ReactNode {
-  const sharesAnything = library !== null && !isEmptyLibrary(library);
+  if (library === null) return null;
+  const places = placesOf(library);
 
-  if (tab === "shared" && library !== null && !sharesAnything) return <Navigate to={APP_ROUTES.drive} replace state={{ chosen: true }} />;
+  if (!places.includes(tab)) return <Navigate to={APP_ROUTES.drive} replace state={{ chosen: true }} />;
 
-  if (tab === "mine" && firstVisit && nothingOwned && sharesAnything) return <Navigate to={APP_ROUTES.shared} replace />;
+  if (tab !== "mine" || !firstVisit) return null;
 
-  return null;
+  if (places.includes("slates")) return <Navigate to={APP_ROUTES.slates} replace />;
+
+  return nothingOwned && places.includes("shared") ? <Navigate to={APP_ROUTES.shared} replace /> : null;
 }
 
 function subtitleOf(tab: DriveTab, path: string): ReactNode {
@@ -514,12 +558,14 @@ function subtitleOf(tab: DriveTab, path: string): ReactNode {
   return <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
 }
 
-function SectionList({ groups, titled = false }: { groups: readonly { label: string; tiles: readonly ReactNode[] }[]; titled?: boolean }) {
+function SectionList({ groups, titled = false, heading = "quiet" }: {
+  groups: readonly { label: string; tiles: readonly ReactNode[] }[]; titled?: boolean; heading?: keyof typeof SECTION_HEADING;
+}) {
   const shown = groups.filter((group) => group.tiles.length > 0);
 
   return (
-    <div className="space-y-8">
-      {shown.map((group) => <Section key={group.label} label={group.label} titled={titled || shown.length > 1}>{group.tiles}</Section>)}
+    <div className={heading === "lead" ? "space-y-10" : "space-y-7"}>
+      {shown.map((group) => <Section key={group.label} label={group.label} titled={titled || shown.length > 1} heading={heading}>{group.tiles}</Section>)}
     </div>
   );
 }
@@ -542,11 +588,18 @@ function SharedBody({ shared, query, tile }: { shared: SharedLibrary | null; que
   }
 
   return (
-    <SectionList titled groups={[
+    <SectionList titled heading="lead" groups={[
       { label: "Shared with you", tiles: received.map((row) => tile(row, false)) },
       { label: "Shared by you", tiles: mine.map((row) => tile(row, true)) },
     ]} />
   );
+}
+
+/** Every slate across the owner's workspaces, each labelled with its workspace. */
+function SlatesBody({ slates, tile }: { slates: readonly OwnedSlate[] | null; tile: (slate: OwnedSlate) => ReactNode }) {
+  if (slates === null) return <div className="flex justify-center py-16"><Loader size="base" /></div>;
+
+  return <section aria-label="Slates" data-drive-section="Slates"><ul className={GRID}>{slates.map(tile)}</ul></section>;
 }
 
 function MineBody({ resource, onRetry, empty, children }: {
@@ -657,7 +710,7 @@ function BuiltinSkillDrawer({ name, onClose }: { name: string; onClose: () => vo
 
 export default function DrivePage({ tab }: { tab: DriveTab }) {
   const splat = useParams()["*"] ?? "";
-  const path = tab === "shared" || splat === "" ? "/" : `/${splat.replace(/\/+$/u, "")}`;
+  const path = tab !== "mine" || splat === "" ? "/" : `/${splat.replace(/\/+$/u, "")}`;
   const isRoot = path === "/";
   const navigate = useNavigate();
   const location = useLocation();
@@ -672,7 +725,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [listingPending, setListingPending] = useState(false);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
-  const [listedAt, setListedAt] = useState(listing.resource);
+  // The listing last pruned against: its value, which keeps its identity, not the resource, a new object per render
+  // while a path loads.
+  const [prunedFor, setPrunedFor] = useState<DriveListing | null>(null);
   const [query, setQuery] = useState("");
   const nextTransfer = useRef(0);
 
@@ -682,14 +737,15 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     return entry === undefined ? workspace : workspaceDisplayTitle(entry);
   };
 
-  const transfer = useCallback((folder: string, name: string, size: number, work: (signal: AbortSignal) => Promise<void>): void => {
+  const transfer = useCallback((sending: Sending, work: (watch: UploadWatch) => Promise<void>): void => {
     const id = ++nextTransfer.current;
     const abort = new AbortController();
     const drop = (): void => setTransfers((rows) => rows.filter((row) => row.id !== id));
+    const progress = (share: number): void => setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, progress: share } : row));
 
-    setTransfers((rows) => [...rows, { id, folder, name, size, status: "uploading", stop: () => abort.abort() }]);
+    setTransfers((rows) => [...rows, { ...sending, id, status: "uploading", progress: 0, stop: () => abort.abort() }]);
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => work(abort.signal));
+      yield* Effect.promise(async () => work({ signal: abort.signal, progress }));
       setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "landed" } : row));
       listing.reload();
     }), showing((chain) => {
@@ -699,7 +755,16 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   }, [listing]);
 
   const uploadFiles = (files: File[]): void => {
-    for (const file of files) transfer(path, file.name, file.size, (signal) => uploadFile(joinDir(path, file.name), file, signal));
+    for (const file of files) {
+      transfer({ folder: path, name: file.name, size: file.size, lands: file.name }, (watch) => uploadFile(joinDir(path, file.name), file, watch));
+    }
+  };
+
+  const uploadPicked = (picks: readonly PickedFile[]): void => {
+    const name = pickedFolderName(picks) ?? "folder";
+    const size = picks.reduce((sum, pick) => sum + pick.file.size, 0);
+
+    transfer({ folder: path, name, size, lands: name }, (watch) => uploadFolder(path, picks, watch));
   };
 
   const background = (work: () => Promise<void>): void => {
@@ -717,21 +782,22 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     if (path !== DRIVE_SKILLS_DIR) await navigate(folderHref(DRIVE_SKILLS_DIR));
   };
 
+  // Kept with the place it was chosen from, so opening a file at My stuff's root is not a first visit to the Drive.
   const show = (key: "file" | "skill", name: string | null): void => {
     const next = new URLSearchParams(search);
 
     if (name === null) next.delete(key);
     else next.set(key, name);
-    setSearch(next);
+    setSearch(next, { state: location.state });
   };
 
   const shared = lastValue(library.resource);
-  const sharesAnything = shared !== null && !isEmptyLibrary(shared);
+  const places = placesOf(shared);
   const unseen = shared?.received.some((row) => row.unseen === true) ?? false;
   const listings = useFolderWay(tab, path, lastValue(listing.resource));
 
   useSeeingShared(tab === "shared" && unseen, library.reload, setNotice);
-  const contents = mineContents(path, lastValue(listing.resource)?.entries ?? [], shared);
+  const contents = mineContents(path, lastValue(listing.resource)?.entries ?? []);
   const settled = [listing.resource, library.resource].every((resource) => resource.status !== "loading");
   const inSkills = path === DRIVE_SKILLS_DIR;
   const redirect = landing(tab, isRoot && !v.safeParse(ChosenState, location.state).success, settled && ownsNothing(contents), shared);
@@ -864,18 +930,20 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     );
   };
 
-  // Landed: leaves with the next listing.
-  const published = listing.resource.status === "loading" ? listedAt : listing.resource;
+  // Landed: leaves once the listing holds what it landed as, and is forgotten then, so a later delete cannot bring it back.
+  const shownListing = lastValue(listing.resource);
+  const listed = new Set((shownListing?.entries ?? []).map((entry) => entry.name));
+  const arrived = (row: Transfer): boolean => row.status === "landed" && row.folder === path && listed.has(row.lands);
 
-  if (published !== listedAt) {
-    setListedAt(published);
-    setTransfers((rows) => rows.some((row) => row.status === "landed") ? rows.filter((row) => row.status !== "landed") : rows);
+  if (prunedFor !== shownListing) {
+    setPrunedFor(shownListing);
+    setTransfers((rows) => rows.some(arrived) ? rows.filter((row) => !arrived(row)) : rows);
   }
 
-  const uploads = transfers.filter((row) => row.folder === path);
+  const uploads = transfers.filter((row) => row.folder === path && !arrived(row));
 
   const uploadTile = (row: Transfer): ReactNode => (
-    <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferPicture status={row.status} />}
+    <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferPicture status={row.status} progress={row.progress} />}
       meta={row.status === "failed"
         ? <span className="truncate p-danger" title={row.error}>{row.error}</span>
         : <span className="truncate">{row.size > 0 ? `Uploading · ${formatBytes(row.size)}` : "Uploading"}</span>}
@@ -891,34 +959,37 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   return (
     <div className="flex h-full min-h-0">
-      <DriveColumn tab={tab} path={path} listings={listings} shares={sharesAnything} unseen={unseen} />
+      <DriveColumn tab={tab} path={path} listings={listings} places={places} unseen={unseen} />
       <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="max-w-5xl px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
-        <DriveHead tab={tab} path={path} subtitle={subtitle} shares={sharesAnything} unseen={unseen} search={{ query, set: setQuery }}
+        <DriveHead tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }}
           action={tab === "mine" && (
             <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
-              onFolder={(picks) => { if (picks.length > 0) transfer(path, pickedFolderName(picks) ?? "folder", picks.reduce((sum, pick) => sum + pick.file.size, 0), (signal) => uploadFolder(path, picks, signal)); }}
-              onZip={(file) => transfer(path, file.name, file.size, (signal) => uploadZip(joinDir(path, file.name.replace(/\.zip$/iu, "")), file, signal))}
+              onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
+              onZip={(file) => {
+                const unpacked = file.name.replace(/\.zip$/iu, "");
+
+                transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
+              }}
               onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
           )} />
 
         <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
           copyStatus={copier.status} />
 
-        {tab === "mine" ? (
+        {tab === "mine" && (
           <DropZone label={isRoot ? "My stuff" : path.slice(path.lastIndexOf("/") + 1)} onFiles={uploadFiles}>
             <MineBody resource={listing.resource} onRetry={listing.reload} empty={isEmptyMine(contents) && uploads.length === 0}>
               <SectionList groups={[
-                { label: "Slates", tiles: contents.slates.map(slateTile) },
-                { label: "Blueprints", tiles: contents.blueprints.map((row) => shareTile(row, true)) },
                 { label: inSkills ? "Skills" : "Folders", tiles: inSkills ? skillTiles() : contents.folders.map(folderTile) },
                 { label: "Files", tiles: [...contents.files.map(fileTile), ...uploads.map(uploadTile)] },
               ]} />
             </MineBody>
           </DropZone>
-        ) : (
-          <div className="mt-6"><SharedBody shared={shared} query={query} tile={shareTile} /></div>
         )}
+        {/* From `lg` Slates has no head of its own: the column names the place. */}
+        {tab === "slates" && <div className="mt-6 lg:mt-0"><SlatesBody slates={shared?.slates ?? null} tile={slateTile} /></div>}
+        {tab === "shared" && <div className="mt-6"><SharedBody shared={shared} query={query} tile={shareTile} /></div>}
       </div>
 
       </div>

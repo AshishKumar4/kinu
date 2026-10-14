@@ -10,7 +10,8 @@ import {
   renameDriveEntry, SKILL_FOLDER_FILE, type DriveUploadTarget,
   type MossaicVfs, type SharedLibrary,
 } from "@kinu.run/core";
-import { KinuError, renderThrownChain, type ErrorCode } from "@kinu.run/core/obs";
+import { Effect } from "effect";
+import { detach, KinuError, renderThrownChain, showing, type ErrorCode } from "@kinu.run/core/obs";
 import { fakeMossaic } from "@kinu.run/test-utils/mossaic";
 
 const DrivePage = lazy(() => import("@/pages/DrivePage"));
@@ -183,11 +184,49 @@ const EMPTY_LIBRARY: SharedLibrary = { slates: [], mine: [], received: [] };
 
 const FIXTURES = {
   drive: { seeded: true, library: LIBRARY },
+  slates: { seeded: true, library: LIBRARY },
   shared: { seeded: true, library: LIBRARY },
   app: { seeded: true, library: LIBRARY },
   "drive-empty": { seeded: false, library: EMPTY_LIBRARY },
   "drive-recipient": { seeded: false, library: { ...EMPTY_LIBRARY, received: LIBRARY.received } },
 } satisfies Record<string, { seeded: boolean; library: SharedLibrary }>;
+
+/**
+ * An upload as the page sends it, through XMLHttpRequest for its progress, answered by the page's own fetch as every
+ * other Drive call is: the whole body has gone once it is handed over, then the answer comes. `abort` ends the fetch.
+ */
+class FixtureUpload extends EventTarget {
+  readonly upload = new EventTarget();
+  status = 0;
+  response: Blob | null = null;
+  responseType = "";
+  #method = "GET";
+  #url = "";
+  readonly #stop = new AbortController();
+
+  open(method: string, url: string): void {
+    this.#method = method;
+    this.#url = url;
+  }
+
+  send(body: Blob | null): void {
+    this.upload.dispatchEvent(new ProgressEvent("progress", { loaded: body?.size ?? 0, total: body?.size ?? 0 }));
+    // A fetch that fails, stopped or dropped, is told to the page as XMLHttpRequest tells it: by its event.
+    detach(Effect.catchCause(Effect.promise(async () => {
+      const answer = await window.fetch(this.#url, { method: this.#method, body, signal: this.#stop.signal });
+
+      this.status = answer.status;
+      this.response = await answer.blob();
+      this.dispatchEvent(new Event("load"));
+    }), showing((chain) => {
+      this.dispatchEvent(this.#stop.signal.aborted ? new Event("abort") : new ErrorEvent("error", { message: chain }));
+    })));
+  }
+
+  abort(): void {
+    this.#stop.abort();
+  }
+}
 
 export function installDriveFixture(frame: string): void {
   const fixture = Object.entries(FIXTURES).find(([name]) => name === frame)?.[1];
@@ -218,6 +257,7 @@ export function installDriveFixture(frame: string): void {
 
     return next(input, init);
   }, { preconnect: next.preconnect });
+  Object.defineProperty(window, "XMLHttpRequest", { value: FixtureUpload, configurable: true });
 }
 
 const FALLBACK = <div className="flex h-full items-center justify-center"><Loader size="base" /></div>;
@@ -231,6 +271,7 @@ export function DrivePageFrame() {
           <Routes>
             <Route path={APP_ROUTES.drive} element={<DrivePage tab="mine" />} />
             <Route path={APP_ROUTES.driveFolder} element={<DrivePage tab="mine" />} />
+            <Route path={APP_ROUTES.slates} element={<DrivePage tab="slates" />} />
             <Route path={APP_ROUTES.shared} element={<DrivePage tab="shared" />} />
           </Routes>
         </Suspense>
@@ -239,6 +280,6 @@ export function DrivePageFrame() {
   );
 }
 
-export function DriveRoute({ tab }: { tab: "mine" | "shared" }) {
+export function DriveRoute({ tab }: { tab: "slates" | "mine" | "shared" }) {
   return <Suspense fallback={FALLBACK}><DrivePage tab={tab} /></Suspense>;
 }
