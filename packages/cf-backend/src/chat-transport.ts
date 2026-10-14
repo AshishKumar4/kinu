@@ -50,12 +50,17 @@ export interface ChatWire {
   readonly replies?: Pick<TurnReplies, 'card' | 'feed' | 'ended'>;
   /** The open turn's first answer text reached the room: told once a turn, as the text streams in. */
   firstText?(): void;
-  /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
-  send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
+  /** Rejects when the loop refuses the message: nothing was written and no turn ran. `admitted` is told once the words
+   *  are owed to the agent, where a Stop reaches them, ahead of where they land. */
+  send(
+    input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode },
+    admitted: () => void,
+  ): Promise<SendLanding>;
   /** The owner's Retry of the newest turn, whose newest message they saw is `messageId`, as an intent (D6): the turn its
    *  agent reopened, which tells its end; owed when the crossing did not reach the agent, whose wake delivers it. */
   retry(messageId: string): Promise<{ readonly turnId: string } | OwedIntent>;
-  interrupt(): void;
+  /** Settles once the Stop has reached the agent: what was sent before it is stopped. */
+  interrupt(): Promise<void>;
   /** Where a send stands, from its durable facts; `awaitSend` once it is settled or none. */
   sendState(id: string): Promise<SendState>;
   awaitSend(id: string): Promise<SendState>;
@@ -271,7 +276,30 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** Turns this room has opened, so an answer awaited across one knows a turn came and went. */
   private opened = 0;
 
+  /**
+   * Sends and Stops in the order their tabs sent them: a Stop stops what was sent before it, and what is sent after it is
+   * taken once the Stop has reached the agent. A send holds the order until its words are owed to the agent, never to
+   * its landing. Staging, 2026-10-14: a Stop 113 ms after a new chat's opening reached the agent first, so the opening
+   * ran and took the next send as a steer.
+   */
+  private intake: Promise<void> = Promise.resolve();
+
   constructor(readonly wire: ChatWire) {}
+
+  /** Runs `step` after every step before it has released the order; it releases on its `release`, or on its end. */
+  private inOrder(step: (release: () => void) => Promise<void>): Promise<void> {
+    const held = Promise.withResolvers<void>();
+    const before = this.intake;
+
+    this.intake = before.then(() => held.promise);
+
+    return before.then(() => step(held.resolve)).finally(held.resolve);
+  }
+
+  /** The owner's Stop in its place in the order: `stop`, the wire's whole interrupt unless the caller stops the rest itself. */
+  interrupt(stop: () => Promise<void> = () => this.wire.interrupt()): Promise<void> {
+    return this.inOrder(stop);
+  }
 
   /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
   async onConnect(connection: ChatSocket): Promise<void> {
@@ -425,13 +453,13 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         return;
 
       case 'chat-request': {
-        if (event.init.method === 'POST') await this.admitChatRequest(event.id, event.init.body);
+        if (event.init.method === 'POST') await this.inOrder((admitted) => this.admitChatRequest(event.id, event.init.body, admitted));
 
         return;
       }
 
       case 'cancel':
-        this.wire.interrupt();
+        await this.interrupt();
 
         return;
 
@@ -446,7 +474,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /** One send per message the loop does not hold (`reconcileMessages`); answered only once the landing is decided.
    *  Every request ends in exactly one terminal frame: its turn's, or this method's, whatever failed. */
-  private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
+  private async admitChatRequest(requestId: string, body: string | undefined, admitted: () => void): Promise<void> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
 
     if (parsed === null || !parsed.success) {
@@ -456,6 +484,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
 
     if (parsed.output.trigger === 'regenerate-message') {
+      admitted();
       await this.retryRequest(requestId, parsed.output.messages);
 
       return;
@@ -478,7 +507,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         this.requests.set(message.id, requestId);
         taken.push(message.id);
 
-        if (await this.wire.send({ ...chatInput(message), id: message.id }) === 'turn') opener = message.id;
+        if (await this.wire.send({ ...chatInput(message), id: message.id }, admitted) === 'turn') opener = message.id;
       }
     } catch (cause) {
       release();

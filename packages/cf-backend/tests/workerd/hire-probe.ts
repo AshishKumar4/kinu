@@ -267,7 +267,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
     const wire = 'reason' in resolved ? null : this.hostedChatWire(resolved.actorId);
 
     if (wire === null) throw new Error(`no hosted chat wire for ${name}`);
-    wire.interrupt();
+    await wire.interrupt();
   }
 
   /** Every delegated turn ended and every task agent its answer retired: a hirer no longer waits on either. Each agent's

@@ -16,12 +16,16 @@ import { RunEventRecorder } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
-function scriptedAnswer(text: string): LanguageModel {
-  return scriptedTurnModel({ doGenerate: () => ({
-    content: [{ type: 'text', text }], finishReason: { unified: 'stop', raw: undefined },
+function scriptedAnswerResult(text: string) {
+  return {
+    content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined },
     usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
       outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-  }) });
+  };
+}
+
+function scriptedAnswer(text: string): LanguageModel {
+  return scriptedTurnModel({ doGenerate: () => scriptedAnswerResult(text) });
 }
 
 interface AdmissionSocket {
@@ -153,4 +157,49 @@ describe('a chat request through the production gate', () => {
     expect(fleetRowKinds(agent)).not.toContain('turn');
   });
 
+  // Staging, 2026-10-14 (titled-chat): the owner stopped a new chat's opening turn 113 ms after sending it and said
+  // "Continue". The Stop reached the agent before the opening's words did, so the opening ran anyway, and Continue
+  // steered it or was handed back ("was handed back before a turn took it"), never answered.
+  test('a Stop right after a send stops that turn, and the next send is answered as a turn of its own', async () => {
+    const harness = orchestratorHarness();
+    const { agent } = harness;
+    const { wire, sent, frame } = connection(agent);
+    const asked: string[] = [];
+
+    await agent.activateActor();
+    const gate = agent.harnessChatGate();
+
+    agent.harnessSupplyTurnModel(scriptedTurnModel({
+      doGenerate: (options) => {
+        const prompt = JSON.stringify(options.prompt);
+
+        if (prompt.includes('Continue')) {
+          asked.push('continue');
+
+          return scriptedAnswerResult('CONTINUED');
+        }
+
+        asked.push('opening');
+
+        // The opening turn waits until it is stopped.
+        return new Promise((_resolve, reject) => {
+          options.abortSignal?.addEventListener('abort', () => { reject(options.abortSignal?.reason); });
+        });
+      },
+    }));
+
+    // As one tab sends them, in this order on one socket, each frame handed in as it arrives.
+    const handled = [
+      gate(wire, chatRequest('req-opening', 'Log every lamp tonight.')),
+      gate(wire, JSON.stringify({ type: 'cf_agent_chat_request_cancel', id: 'req-opening' })),
+      gate(wire, chatRequest('req-continue', 'Continue')),
+    ];
+
+    await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-continue'));
+    await Promise.all(handled);
+
+    expect(doneFrames(sent).find((done) => done.id === 'req-continue')).toEqual({ id: 'req-continue' });
+    expect(asked).toEqual(['continue']);
+    expect((await storedChat(harness)).filter((message) => message.role === 'assistant').map((message) => JSON.stringify(message.parts)).join(' ')).toContain('CONTINUED');
+  });
 });

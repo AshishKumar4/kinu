@@ -1286,9 +1286,18 @@ const SendSiteSchema = v.object({ path: v.string(), tabIndex: v.number(), compos
  *  reaches whatever else is mounted, so the site returned is the honest answer
  *  to which pane the words went into. */
 export async function sendInChat(page: Page, text: string): Promise<SendSite> {
+  const site = await pressSend(page, text);
+
+  await until(page, 'the sent words in the chat column', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`);
+
+  return site;
+}
+
+/** As {@link sendInChat}, without the wait for the pane to echo the words: for a send the page may hold back. */
+export async function pressSend(page: Page, text: string): Promise<SendSite> {
   await typeIntoComposer(page, text);
 
-  const site = v.parse(SendSiteSchema, await page.evaluate(`(() => {
+  return v.parse(SendSiteSchema, await page.evaluate(`(() => {
     const send = [...document.querySelectorAll('#chat button')]
       .find((el) => el.getClientRects().length > 0
         && /send$|steer the running turn/iu.test((el.getAttribute('aria-label') ?? '').trim()));
@@ -1300,10 +1309,6 @@ export async function sendInChat(page: Page, text: string): Promise<SendSite> {
       composerInChat: ${CHAT_COMPOSER_LIVE},
     };
   })()`));
-
-  await until(page, 'the sent words in the chat column', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`);
-
-  return site;
 }
 
 /** RPC method counts over the socket via CDP, split by direction, beside what
