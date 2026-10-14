@@ -14,6 +14,8 @@ declare global {
     __kinuTerminalWindow?: { cols: number; rows: number };
     /** Opens the terminal sockets a `terminalopen=held` frame is holding. */
     __kinuOpenTerminals?: () => void;
+    /** Answers the resize a `resize=held` frame is holding. */
+    __kinuEndResize?: () => void;
   }
 }
 
@@ -195,6 +197,26 @@ describe('the Environment panel', () => {
 
           expect(await page.evaluate(sessionLine('body'))).toMatchObject({ folder: '/workspace/storefront' });
         }
+      } finally { await page.close(); }
+    });
+  });
+
+  // Staging f1f0b451b: a page that read its computer asleep kept the terminal through a resize, then showed it closed.
+  test('a computer its terminal woke restarts at a new size: the terminal gives way, then opens fresh', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await page.setViewport({ width: 1280, height: 1000 });
+        await page.goto(`${origin}/gallery.html?frame=environment&computer=asleep&resize=held`, { waitUntil: 'networkidle0' });
+        await (await required(page, '[data-env-card]', 'button', COMPUTER)).click();
+        await page.waitForSelector('.xterm-rows', SOON);
+
+        await (await page.waitForSelector(`[aria-label="${COMPUTER} size"]`, SOON))?.click();
+        await (await page.waitForSelector('[role="option"][aria-selected="false"]', SOON))?.click();
+        await page.waitForFunction(() => document.querySelector('.xterm-rows') === null, SOON);
+        await page.evaluate(() => { window.__kinuEndResize?.(); });
+        await page.waitForSelector('.xterm-rows', SOON);
       } finally { await page.close(); }
     });
   });
