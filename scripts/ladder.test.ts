@@ -27,7 +27,7 @@ import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, onArmada, secretGroup,
+  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, onArmada, secretGroup,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -42,6 +42,7 @@ import { armadaVerdict, ciVerdictRow, readFileTimings, readHostedCosts, withRunn
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
+import { cliStages } from './test-cli';
 
 const root = resolve(import.meta.dir, '..');
 
@@ -564,9 +565,9 @@ describe('the ladder measures something', () => {
     // monotonicity- and reachability-checked like every bun suite.
     expect(claims('bun run test:workerd', tracked).length).toBeGreaterThan(0);
 
-    // The four rows partition the script's set: no workerd file is in two
+    // The five rows partition the script's set: no workerd file is in two
     // rows or in none.
-    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
+    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-wide', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox', 'bun run test:workerd:cf-complexity']
       .map((run) => claims(run, tracked));
 
     expect(rows.every((files) => files.length > 0)).toBe(true);
@@ -1352,16 +1353,28 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(reportCIVerdicts({ sha, part: 'all', rows }, 'armada verdict', '')).toBe(false);
   });
 
-  test('CI runs the hammer six times, each a unit of its own, and leaves no CI source work in the deploy', () => {
-    const hammer = ciUnits().filter((unit) => unit.gate.phase === 'hammer').map((unit) => unit.gate.run);
+  test('CI runs the hammer six times, each run in parts that cover the suite once, and leaves no CI source work in the deploy', () => {
+    const hammer = ciUnits().filter((unit) => unit.gate.phase === 'hammer').map((unit) => unit.gate.run.split(' '));
+    const suite = claims(LADDER.find((gate) => gate.label === HAMMER_ROW_LABEL)?.run ?? '', tracked);
+    const runs = Array.from({ length: HAMMER_REPEATS }, (_, index) => hammer.filter((argv) => argv[2] === '--run=' + String(index + 1)));
 
-    expect(hammer).toEqual(Array.from({ length: HAMMER_REPEATS }, (_, index) => 'bun scripts/hammer.ts --run=' + String(index + 1)));
+    expect(runs.map((parts) => ({ parts: parts.length, files: parts.flatMap((argv) => argv.slice(3)).sort() })))
+      .toEqual(Array.from({ length: HAMMER_REPEATS }, () => ({ parts: HAMMER_PARTS, files: [...suite].sort() })));
     const local = localDeployGates(deployOrder());
     const canonical = new Set(tierRun('ci').map((gate) => gate.run));
 
     expect(local.filter((gate) => gate.phase !== 'preflight').some((gate) => canonical.has(gate.run))).toBe(false);
     expect(local.some((gate) => gate.run === 'bun run gate:first-run')).toBe(true);
     expect(local.some((gate) => gate.run === 'bash scripts/eval-pass-tier.sh')).toBe(true);
+  });
+
+  test('CI runs the CLI suite as its two parts, which between them hold every file it claims once', () => {
+    const { isolated, subprocessHeavy, parallel } = cliStages(tracked);
+    const units = ciUnits().filter((unit) => unit.gate.label.startsWith('Full production CLI suite')).map((unit) => unit.gate.run);
+    const files = [...isolated, ...subprocessHeavy, ...parallel];
+
+    expect({ units, files: [...files].sort(), once: new Set(files).size === files.length })
+      .toEqual({ units: ['bun scripts/test-cli.ts --part=serial', 'bun scripts/test-cli.ts --part=parallel'], files: claims('bun run test:cli', tracked).sort(), once: true });
   });
 
   test('a red live run provides resource admission but remains a red correctness verdict', () => {
