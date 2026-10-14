@@ -261,6 +261,24 @@ const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and
   + 'in a container of its own. The boot is offline (KINU_DEV_OFFLINE) and mints its own keys, '
   + 'so it needs no credential (measured 2026-10-08 with none passed: every row booted).';
 
+/** What a live-app row reads: a booted dev server, Chrome, and this box's credentials, which no tree hash stands for. */
+const LIVE_APP_INPUTS: Inputs = { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' };
+
+/** How every live-app row that drives the workspace page at 1440x900 opens its `catches`. */
+const LIVE_APP_CATCHES = 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. ';
+
+/** What those rows cannot see: one workspace, viewport and model, on a LOCAL dev server. */
+const LIVE_APP_BLIND = 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
+  + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
+  + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
+  + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
+  + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
+  + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
+  + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
+  + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
+  + 'the right one. The deployed build\'s browser rows are the product flows\' '
+  + '(`scripts/product-flows.ts`), which run against the deployment alone.';
+
 /** Gates that run before the deploy tier. The deploy tier is parsed from
  *  deploy.sh — see the header. Cheapest first inside each tier, so the first
  *  failure is also the fastest to reproduce. */
@@ -2287,7 +2305,7 @@ export const LADDER: readonly Gate[] = [
       + 'mid-turn, a page opened mid-turn, plans, layout and the own-server rows. One viewport and a local scripted model; '
       + 'a LOCAL dev server whose workerd and Durable Objects are not production\'s, so the edge, the deployed assets and '
       + 'the real identity belong to `gate:first-run` after the publish.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
@@ -2299,7 +2317,7 @@ export const LADDER: readonly Gate[] = [
     // their own, 220 s with the watched turn run in the answered row's workspace (as now), all 14 green.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 220,
-    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+    catches: LIVE_APP_CATCHES
       + 'Its rows: a running turn draws exactly one live state through the paced turn\'s four silences, and '
       + 'Stop never stands over a pane drawing nothing; a page opened mid-turn offers Stop while it runs and stops '
       + 'showing it once it ends, its header never disagreeing with its composer; a page whose socket drops mid-turn '
@@ -2307,17 +2325,8 @@ export const LADDER: readonly Gate[] = [
       + 'after a reload, the model\'s next request carrying it, and so does a turn another tab sent, on the page that '
       + 'watched it, and the workspace\'s own first turn, which no page sent; and a marker sent in each pane stays out of the '
       + 'other, the transcript leak a shared store shows as green.',
-    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
-      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
-      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
-      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
-      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
-      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
-      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts',
@@ -2335,7 +2344,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'one workspace per scenario, one viewport, one scripted model sending Workers AI\'s recorded refusal body; '
       + 'a real provider\'s limits, a header-stated wait, and a refusal that outlasts every retry are the unit rows\' '
       + '(`packages/core/tests/unit-model-retry.test.ts`). A LOCAL dev server, not production.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
@@ -2345,22 +2354,13 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-26 alone in a quiet window: 133.1 s at load 3.7, its four scenarios 20-33 s each beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 133,
-    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+    catches: LIVE_APP_CATCHES
       + 'Its rows: a page that only watched a turn another tab sent replays it as it stood after its socket drops; '
       + 'a page asleep while its turn ends wakes to the finished answer with nothing left running, a page that only '
       + 'watched included; and a page joining a reasoning turn part-way, on a dropped socket or a slow link, reads '
       + 'it whole.',
-    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
-      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
-      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
-      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
-      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
-      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
-      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
@@ -2370,23 +2370,14 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-26 alone in a quiet window: 167.9 s at load 2.7, its four scenarios 10-104 s each, chat-scroll the long one beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 168,
-    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+    catches: LIVE_APP_CATCHES
       + 'Its rows: a long chat opens at its newest message and pages older history only when the reader scrolls '
       + 'for it, one page per scroll; the plan review flow runs from submission to the turn that implements it; at '
       + 'most one plan-bearing tab or filter stands in the inspector, so plans have one owner; the inspector '
       + 'never moves its selection on its own; and an answer\'s <slate-ui> blocks are drawn in place, read a file '
       + 'and reach the agent as their author, are drawn again after a reload, and a block a browser forges is not.',
-    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
-      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
-      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
-      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
-      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
-      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
-      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
@@ -2403,7 +2394,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'one slate, one viewport, one model: a scripted SSE server, so a real model\'s turn is unmeasured. A '
       + 'LOCAL dev server: `vite dev`\'s workerd is not the production isolate, and the deployed build is the '
       + 'product flows\' subject. No pixel is compared: the row reads heights and computed colours.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
@@ -2413,23 +2404,14 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-26 alone in a quiet window: 120.3 s at load 3.1, its three scenarios 14-38 s each beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 120,
-    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+    catches: LIVE_APP_CATCHES
       + 'Its rows: the tab strip\'s rule continuous to the column\'s right edge with the active underline on it '
       + 'and the chat rule on the same line, in dark and in light; and a column the reader collapsed reopening '
       + 'through the product\'s own control, found by role and accessible name, and the rail collapsing. The '
       + 'right panel\'s state across a switch to a new agent\'s tab runs in the product flows on the deployment: '
       + 'that tab\'s pane needs its agent facet, which `vite dev` never loads.',
-    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
-      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
-      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
-      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
-      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
-      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
-      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun run gate:infra',
