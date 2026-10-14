@@ -43,7 +43,7 @@ export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, chatTerminalEffects, turnRecordingEffects, actorTerminalEffects, branchesTerminalEffect,
   terminalEffectKey, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
-  RunEndReasonSchema, TurnReportSchema, type TurnReportFacts,
+  RunEndReasonSchema, type TurnReportFacts,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
   type TerminalEffectOutcome, type TerminalEffectStatus, type TerminalEffectPhase,
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,

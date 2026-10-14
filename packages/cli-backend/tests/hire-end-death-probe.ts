@@ -27,10 +27,16 @@ const host = new LocalAgentHost({
 
 let heard = false;
 
+// The hirer's turn the report opens ending here means the kill point was missed: a fixture defect, so it fails instead of
+// exiting 0.
+const missed = Promise.withResolvers<void>();
+
 host.subscribe((agent, event) => {
   if (agent === 'root') {
     // The report opens the hirer's next turn.
     if (event.type === 'turn-start') heard = true;
+
+    if (event.type === 'turn-end' && heard) missed.resolve();
 
     return;
   }
@@ -45,7 +51,7 @@ const team = await host.team('root');
 
 await team.temporary?.start({ role: 'researcher', roleLabel: 'researcher', task: ANSWERING_HIRE_TASK, mode: 'build' });
 
-await new Promise((resolve) => setTimeout(resolve, 60_000));
+await missed.promise;
 
 process.stdout.write('MISSED\n');
 

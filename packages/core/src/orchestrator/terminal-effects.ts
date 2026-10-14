@@ -237,7 +237,7 @@ export function chatTerminalEffects(deps: {
 
 /** A settled turn's end as its hirer is told it, recorded with the turn's commit: what the report is, and whether one
  *  is owed at all, is decided where the hirer's roster is, once the answer committed (#75). */
-export const TurnReportSchema = v.object({
+const TurnReportSchema = v.object({
   turnId: v.string(), ending: v.picklist(TASK_TURN_ENDINGS), assistantText: v.string(), narration: v.array(v.string()),
   ownerDriven: v.boolean(),
   /** The assignment this turn answers, if one opened it. */
