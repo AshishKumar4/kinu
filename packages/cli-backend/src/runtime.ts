@@ -23,25 +23,25 @@ import {
   WORKSPACE_IDENTITY_DDL,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite,
-  DefaultExecutionRouter, createInlineExecutor,
+  DefaultExecutionRouter,
   adaptMemory,
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, createBashShell, holdsGrant, createInheritedApprovalPolicy,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
-  createAgentStores, contextMount, localContextTree, skillsMount,
+  createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
-  type AgentStores, type ChildContextResolver, type ContextTree,
+  type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { localNodeRuntime } from './node-runtime';
+import { actorFilePlane, ownContextTree } from './actor-plane';
 import { MemoryStore } from '@kinu.run/agent-utils';
 import { CraftStore } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { kinuHome } from './home';
-import { hostResourceLimits } from './cgroup-limits';
-import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
+import { hostWorkspaceExecutor } from './host-toolchain';
 import { agentHomeFiles, localFilePlane, localFileReach, spaceFiles, type LocalPlane } from './host-mount';
 import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, localPlanes, SOUL_PATH } from '@kinu.run/core';
@@ -90,16 +90,7 @@ interface CLIRuntimeOptions {
 
 
 /** An actor's own `/context` tree over its own stores in this process. */
-function ownContextTree(actor: ActorHandle, stores: AgentStores): () => ContextTree {
-  const tree = localContextTree(() => ({ claims: stores.claims, events: stores.eventRecorder }), { author: actor.actorId, child: false });
-
-  return () => tree;
-}
-
 export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
-
-/** The runtime a node plane is joined for, with the policy its gates answer to. */
-export type NodeSource = AgentRuntime & Pick<CLIRuntime, 'approvalPolicy'>;
 
 /**
  * The local runtime plus late-bound session channels: model seams are built before
@@ -137,8 +128,8 @@ export interface CLIRuntime extends AgentRuntime {
   setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
   /** The issued operation's profile, or current authority for new work. */
   ensureProfile?: () => Promise<ResolvedTurnProfile>;
-  /** A swarm node's runtime over this one's plane, with its own `/context`. */
-  nodeRuntime: (actor: ActorHandle, source: NodeSource) => AgentRuntime;
+  /** The agent's own gated, checkpointed host shell; a swarm node it seats runs in it too. */
+  shell: Shell;
   /** A facet's gated, checkpointed host shell with its own `HOME`/`TMPDIR`. */
   facetShell: (facet: string) => Shell;
   /** Shared rather than rebuilt per consumer: two instances over one actor are two memos of one truth. */
@@ -453,26 +444,10 @@ function buildCLIRuntime(
   // Only the agent's tools: the shell and the owner's views keep `agentVfs`.
   const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', localFileReach({ folder: cwd, space }, planes, agentVfs), approvalPolicy);
 
-  const limits = hostResourceLimits();
-
-  const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: toolFiles,
-    files: agentVfs,
-    home: ownHome,
-    planes,
-    memory,
-    craftStore,
-    shell,
-    filesOwner,
-    sql,
+  executionRouter.register(hostWorkspaceExecutor({
+    vfs: toolFiles, files: agentVfs, home: ownHome, planes, memory, craftStore, shell, sql, actor,
     ledger: () => turnFileLedgerProvider?.(),
-    // The shell declares what this machine's PATH proves.
-    toolchain: hostToolchainCapabilities(),
-    unmeasured: HOST_UNMEASURED_CAPABILITIES,
-  };
-
-  if (limits) inlineOptions.resourceLimits = limits;
-  executionRouter.register(createInlineExecutor(inlineOptions));
+  }));
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => writeTransaction(db, write),
@@ -505,8 +480,8 @@ function buildCLIRuntime(
     ownFiles,
     plane: agentVfs,
     memoryStore,
+    shell,
     facetShell,
-    nodeRuntime: (node: ActorHandle, source: NodeSource) => localNodeRuntime(runtime, node, source),
     setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
     setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
     profiles,
@@ -613,7 +588,7 @@ export async function buildLocalActorRuntime(
 
   const run = binding.origin === 'swarm';
 
-  if (run && seat === 'node') return parent.nodeRuntime(bound.handle, parent);
+  if (run && seat === 'node') return localNodeRuntime(parent, bound.handle);
 
   if (run) {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
@@ -654,20 +629,11 @@ async function buildCLIHeadRuntime(
   const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), () => parent.filesForActor(actor));
 
   const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
-  const { cwd: folder, space, ownFiles } = parent;
+  const { cwd: folder } = parent;
   const writeObserver = opts.writeObserver;
 
   // `vfs://context` is this head's own history, not the parent's.
-  const views: VfsMount[] = [
-    skillsMount((): VFS => ownFiles),
-    contextMount({
-      actorId: actor.actorId,
-      own: ownContextTree(actor, stores),
-    }),
-  ];
-
-  const agentVfs = localFilePlane({ folder, space, views, checkpoints: parent.checkpoints, ...(writeObserver !== undefined && { observer: writeObserver }) });
-  const reach = localFileReach({ folder, space }, parent.planes, agentVfs);
+  const { plane: agentVfs, toolFiles } = actorFilePlane({ source: parent, actor, stores, ...(writeObserver !== undefined && { observer: writeObserver }) });
 
   // Heard on its own plane, and on its parent's under its own actor.
   const unobserved = writeObserver === undefined ? [] : [
@@ -680,17 +646,11 @@ async function buildCLIHeadRuntime(
 
   const executionRouter = new DefaultExecutionRouter();
 
-  const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: withApprovalGatedFiles(agentVfs, 'workspace', reach, parent.approvalPolicy), files: agentVfs, home: parent.storage.home,
-    planes: parent.planes,
-    memory: parent.memory, craftStore: parent.craftStore, shell, sql,
-    // The same machine the parent's shell runs on.
-    filesOwner: 'user',
-    toolchain: hostToolchainCapabilities(),
-    unmeasured: HOST_UNMEASURED_CAPABILITIES,
-  };
-
-  executionRouter.register(createInlineExecutor(inlineOptions));
+  // The same machine the parent's shell runs on.
+  executionRouter.register(hostWorkspaceExecutor({
+    vfs: toolFiles, files: agentVfs, home: parent.storage.home, planes: parent.planes,
+    memory: parent.memory, craftStore: parent.craftStore, shell, sql, actor,
+  }));
 
   const parentVfs = withMountTable({ namespace: async () => parent.plane.composite.as(CRED_SESSION_USER, actor.actorId), home: folder }, parent.plane.mounts());
 
@@ -731,7 +691,7 @@ async function buildCLIHeadRuntime(
     // programs; with the default, the parent would execute its head's source.
     scaffoldPath: actorScaffoldPath(opts.actorBinding),
     actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, home: parent.storage.home, agentStateVfs,
-    toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', reach, parent.approvalPolicy),
+    toolFiles,
     planes: parent.planes,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
