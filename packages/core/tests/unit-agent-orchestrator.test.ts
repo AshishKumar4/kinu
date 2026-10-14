@@ -864,15 +864,15 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
 
     on.beginTurn(Date.now());
     off.beginTurn(Date.now());
-    const build = on.acc.craft.recording;
+    const build = on.acc.ledgers.craft.recording;
 
     on.beginTurn(Date.now(), { kinuMode: 'plan' });
-    const plan = on.acc.craft.recording;
+    const plan = on.acc.ledgers.craft.recording;
 
     on.beginTurn(Date.now());
     on.restrictTurnWorkMode('plan');
 
-    expect({ build, off: off.acc.craft.recording, plan, restricted: on.acc.craft.recording }).toEqual({ build: true, off: false, plan: false, restricted: false });
+    expect({ build, off: off.acc.ledgers.craft.recording, plan, restricted: on.acc.ledgers.craft.recording }).toEqual({ build: true, off: false, plan: false, restricted: false });
   });
 
   test('beginTurn clears the previous turn\'s craft record', () => {
@@ -880,13 +880,13 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     const { host } = fakeHost();
     const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
     orch.beginTurn(Date.now());
-    orch.acc.craft.note('eval_0', SCORED);
-    expect(orch.acc.craft.snapshot()).toEqual({
+    orch.acc.ledgers.craft.note('eval_0', SCORED);
+    expect(orch.acc.ledgers.craft.snapshot()).toEqual({
       crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, dropped: [],
     });
 
     orch.beginTurn(Date.now());
-    expect(orch.acc.craft.snapshot()).toBeNull();
+    expect(orch.acc.ledgers.craft.snapshot()).toBeNull();
   });
 
   test('turn steering still observes the same calls through the shared seam', async () => {

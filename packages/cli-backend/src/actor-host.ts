@@ -16,7 +16,7 @@ export function createLocalActorHost(deps: LocalActorHostDeps): ActorHost {
     const parent = deps.parentRuntimeFor(bound);
 
     return await localActorScaffoldSource({ actor: bound.handle, sql: parent.storage.sql,
-      source: { path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs ?? parent.storage.vfs } });
+      source: { path: actorScaffoldPath(bound.record), vfs: parent.agentStateVfs } });
   };
 
   return createActorHost({

@@ -36,7 +36,7 @@ test("a swarm node's program reads its own context, as its file tool does, not i
     const node = seat.actor.runtime;
 
     const nodeEval = present(toolsInWorkMode('build', {
-      eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB, () => seat.actor.session.orchestrator.acc)(codemodeSurface(node, {}), narrowToolSurface(undefined)),
+      eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB, () => seat.actor.session.orchestrator.acc.ledgers)(codemodeSurface(node, {}), narrowToolSurface(undefined)),
     }).eval, "the node's eval");
 
     const program = await toolExecute<{ code: string }, { result: JsonValue }>(nodeEval)({ code: `return await workspace.readFile(${JSON.stringify(WORKING)});` });

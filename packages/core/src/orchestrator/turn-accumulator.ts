@@ -56,6 +56,22 @@ export interface TurnSinks {
   onStepEvent?(e: Omit<Extract<RunEventInput, { type: 'step_finish' }>, 'type'>): void;
 }
 
+/** What a turn's tools account into while they run here: the files it read, its context budget, its escalations, and
+ *  the crafted tools its `eval` calls created and called. */
+export interface TurnLedgers {
+  readonly files: TurnFileLedger;
+  readonly context: TurnContextBudget;
+  readonly escalations: TurnEscalationLedger;
+  readonly craft: TurnCraftLedger;
+}
+
+/** Empty ledgers: a turn's own, which observes its crafted tools where `recordsCraft`, or a call's outside any turn. */
+export function turnLedgers(recordsCraft = false): TurnLedgers {
+  return {
+    files: new TurnFileLedger(), context: new TurnContextBudget(), escalations: new TurnEscalationLedger(), craft: new TurnCraftLedger(recordsCraft),
+  };
+}
+
 /** Never empty: the ledger's failure discriminator is a non-empty string. */
 function describeToolFailure(input: { error: unknown }): string {
   const { error } = input;
@@ -84,11 +100,9 @@ export class TurnAccumulator {
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
-  readonly context = new TurnContextBudget();
-  readonly files = new TurnFileLedger();
-  readonly escalations = new TurnEscalationLedger();
-  /** Crafted tools run inside `eval`, never as `toolCalls` names: each call's, as the isolate that ran it observed it. */
-  readonly craft = new TurnCraftLedger();
+  /** Crafted tools run inside `eval`, never as `toolCalls` names: its craft ledger holds each call's, as the isolate
+   *  that ran it observed it. */
+  readonly ledgers: TurnLedgers = turnLedgers();
   /** The tool lessons a step listed, id to the revision shown. */
   private readonly lessons = new Map<string, number>();
   private gate: SpendGate | undefined;
@@ -119,10 +133,10 @@ export class TurnAccumulator {
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;
-    this.context.reset();
-    this.files.reset();
-    this.escalations.reset();
-    this.craft.reset();
+    this.ledgers.context.reset();
+    this.ledgers.files.reset();
+    this.ledgers.escalations.reset();
+    this.ledgers.craft.reset();
     this.lessons.clear();
   }
 
@@ -133,7 +147,7 @@ export class TurnAccumulator {
   }
 
   craftedToolsUsed(): string[] {
-    return this.craft.used();
+    return this.ledgers.craft.used();
   }
 
   noteLessonsShown(lessons: readonly { readonly id: string; readonly revision: number }[]): void {
@@ -223,7 +237,7 @@ export class TurnAccumulator {
     return () => {
       if (failed) this.hadError = true;
 
-      if (followUp) this.context.noteFollowUp();
+      if (followUp) this.ledgers.context.noteFollowUp();
       this.sinks.logActivity?.('tool_call_end', `${call.name}${dur}`);
       this.toolCalls.push(call);
     };

@@ -1709,15 +1709,17 @@ export class ChatSession {
 
     if (!runId) return () => { claimClosed?.(); };
 
+    const { ledgers } = this.actorSession.orchestrator.acc;
+
     const outcome: Parameters<typeof closeTurnRun>[2] = {
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
       usage: this.actorSession.orchestrator.acc.reportedUsage(),
-      context: this.actorSession.orchestrator.acc.context,
-      files: this.actorSession.orchestrator.acc.files,
-      escalations: this.actorSession.orchestrator.acc.escalations,
+      context: ledgers.context,
+      files: ledgers.files,
+      escalations: ledgers.escalations,
       steering: this.actorSession.orchestrator.steering.snapshot(),
       completionGate: this.completionGate.pending,
-      craft: this.actorSession.orchestrator.acc.craft.snapshot(),
+      craft: ledgers.craft.snapshot(),
       recoveries: this.actorSession.orchestrator.recoverySnapshot(),
       reason: end.reason,
     };

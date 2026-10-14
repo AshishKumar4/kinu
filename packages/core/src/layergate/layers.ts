@@ -1552,10 +1552,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           ): Promise<string[]> => {
             const acc = new TurnAccumulator();
 
-            acc.craft.recording = enabled;
+            acc.ledgers.craft.recording = enabled;
 
             const program: ((input: { readonly code: string | undefined }, options: ToolExecutionOptions<unknown>) => PromiseLike<JsonValue>) | undefined = observingCrafts(
-              tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => ({ result: 'ok' }) }), ledger, acc.craft,
+              tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => ({ result: 'ok' }) }), ledger, acc.ledgers.craft,
             ).execute;
 
             for (const [index, call] of calls.entries()) {

@@ -1517,12 +1517,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const parentId = actor.record.parentActorId;
 
     return new ActorAdvisor({
-      actor: actor.handle, vfs: () => actor.runtime.agentStateVfs ?? actor.runtime.storage.vfs,
+      actor: actor.handle, vfs: () => actor.runtime.agentStateVfs,
       notes: () => new EvolutionEngine(actor.runtime, historyTurnPairs(actor.stores.history), { transaction: (body) => { this.ctx.storage.transactionSync(body); } }),
       port: () => this.temporaryAgentPort(actor.reference), reviewed: actor.record.input,
       // A hire shares the workspace's priorities, and its notes reach its hirer.
       ...(parentId !== null && {
-        context: { config: this.config, workspace: async () => this.rt.agentStateVfs ?? this.rt.storage.vfs, parent: (signal) => this.agentDeliveries(parentId).signals.send(signal) },
+        context: { config: this.config, workspace: async () => this.rt.agentStateVfs, parent: (signal) => this.agentDeliveries(parentId).signals.send(signal) },
       }),
       send: (signal) => this.agentDeliveries(actor.handle.actorId).signals.send(signal),
       profile: () => null, scoped: (turn) => turn,

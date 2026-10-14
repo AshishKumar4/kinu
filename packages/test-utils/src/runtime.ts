@@ -135,6 +135,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     planes: cloudPlanes(WORKSPACE_ROOT),
     // A test plane holds nothing of the user's.
     get toolFiles() { return rt.storage.vfs; },
+    agentStateVfs: workspace.vfs,
     storage: {
       vfs: workspace.vfs,
       home: WORKSPACE_ROOT,

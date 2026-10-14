@@ -31,6 +31,7 @@ function createScaffoldTestRuntime(llm: LLM) {
     planes: cloudPlanes(WORKSPACE_ROOT),
     actor,
     toolFiles: vfs,
+    agentStateVfs: vfs,
     storage: { vfs, home: WORKSPACE_ROOT, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),
     executor: createMockExecutor(),

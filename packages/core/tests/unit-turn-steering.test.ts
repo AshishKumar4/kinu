@@ -30,7 +30,7 @@ async function fileProgressTurn(opts: { readonly readAt: number; readonly editAt
 
   const file = createFileTool({
     vfs: memory.vfs, home: '/', planes: cloudPlanes('/'),
-    ledger: orch.acc.files, budget: new TurnContextBudget(),
+    ledger: orch.acc.ledgers.files, budget: new TurnContextBudget(),
   });
 
   const executeFile = toolExecute<JsonObject, unknown>(file);

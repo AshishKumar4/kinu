@@ -62,7 +62,9 @@ export type {
   ExecutionKey, ExecutionLane, TurnCapability,
 } from './orchestrator/execution';
 
-export { inTurnSurface, scopedTurnSurface, turnLedgers, TurnSurface, type TurnLedgers, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+export { inTurnSurface, scopedTurnSurface, TurnSurface, type TurnSurfaceOpening } from './orchestrator/main-turn-surface';
+
+export { turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
