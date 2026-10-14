@@ -4,16 +4,19 @@
  * A deploy reads its own version's window once the counts hold still past `SETTLE_HOLD_MS` (prod-logs.ts), which
  * covers 99.96% of rows. The rest land later, measured up to 151 min after their event. So each deploy keeps its
  * window with the count of every signal it found, and every later deploy reads each kept window once more beside its
- * own: a signal the window did not hold before, or one whose count grew, landed late and is that deploy's red, named
- * for the version that served it. A count that fell (a reset row that landed late takes back an exception) is no red.
- * A window stays kept until a read that began `LATE_HORIZON_MS` past its end, so a late red is reported by a later
- * deploy, never lost; one no deploy read again within the logs' retention is reported as lost, never dropped silently.
+ * own. Every signal is a counter late rows can only raise (prod-logs.ts `versionSignals`): one the window did not hold
+ * before, or one that grew by more than its offset grew (a reset row that landed late takes back an exception, not a
+ * red), landed late and is that deploy's red, named for the version that served it. A window stays kept until a read
+ * that began `LATE_HORIZON_MS` past its end, so a late red is reported by a later deploy, never lost; one no deploy
+ * read again within the logs' retention is reported as lost, never dropped silently.
  *
- * Each window is an object of its own, so two deploys never rewrite one another's: a deploy adds its own window and
- * updates or retires only the windows it read. Two that read one window both report what landed in it.
+ * Each window is an object of its own, keyed by its version and start, so two deploys never rewrite one another's: a
+ * deploy adds its own window and updates or retires only the windows it read, merging counts by their maximum, which
+ * is the newest of a counter. Two that read one window at once may both report what landed in it; neither loses it.
  */
 
 import * as v from 'valibot';
+import { KinuError } from '@kinu.run/core/obs';
 import { restAnswer, restCall } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
 import { requireCloudflareAccountId } from './infra-cloudflare';
@@ -34,8 +37,8 @@ export const TelemetryWindowSchema = v.object({
   version: v.string(),
   from: v.string(),
   to: v.string(),
-  /** Each signal's count at its reads so far, the highest, by its key; null for a window never read to a settled answer. */
-  measures: v.nullable(v.record(v.string(), v.number())),
+  /** Each signal's counters at its reads so far, by its key; null for a window never read to a settled answer. */
+  measures: v.nullable(v.record(v.string(), v.object({ count: v.number(), offset: v.number() }))),
 });
 
 export type TelemetryWindow = v.InferOutput<typeof TelemetryWindowSchema>;
@@ -46,10 +49,13 @@ export interface WindowFinding {
   readonly finding: string;
 }
 
-/** A finding a window's rows make: a key that names the signal whatever its words, and the count of what it saw. */
+/** What a window's rows count, as a later read compares it: a key that names the signal whatever its words, a count
+ *  late rows can only raise, and an offset that takes some of it back (the invocations a deploy reset, of those that
+ *  threw), which late rows can only raise too. */
 export interface WindowSignal extends WindowFinding {
   readonly key: string;
   readonly count: number;
+  readonly offset?: number;
 }
 
 export interface KeptWindow {
@@ -58,11 +64,12 @@ export interface KeptWindow {
 }
 
 /** A kept window read again, stamped with the time its read began: what it holds now, why it could not be read, or
- *  that the logs no longer hold it. */
-export type Reread = KeptWindow & { readonly readAt: number } & (
-  | { readonly found: readonly WindowSignal[] }
-  | { readonly failed: string }
-  | { readonly expired: true });
+ *  that the logs no longer hold it. A key whose object another deploy retired since the listing is `gone`; one whose
+ *  object could not be read at all is `unreadable`. */
+export type Reread =
+  | (KeptWindow & { readonly readAt: number } & ({ readonly found: readonly WindowSignal[] } | { readonly failed: string } | { readonly expired: true }))
+  | { readonly key: string; readonly gone: true }
+  | { readonly key: string; readonly unreadable: string };
 
 /** Where the windows are kept. */
 export interface WindowStore {
@@ -72,7 +79,8 @@ export interface WindowStore {
   readonly remove: (keys: readonly string[]) => Promise<void>;
 }
 
-export const windowKey = (version: string): string => `${WINDOWS_PREFIX}${version}.json`;
+/** A window's object, by its version and its start: one version read twice is two windows. */
+export const windowKey = (window: Pick<TelemetryWindow, 'version' | 'from'>): string => `${WINDOWS_PREFIX}${window.version}-${String(Date.parse(window.from))}.json`;
 
 const ListSchema = v.object({
   success: v.literal(true),
@@ -116,7 +124,16 @@ export async function rereadWindows(store: WindowStore, read: (window: Telemetry
   const keys = await store.list();
 
   return Promise.all(keys.map(async (key): Promise<Reread> => {
-    const window = v.parse(TelemetryWindowSchema, JSON.parse(await store.get(key)));
+    let window: TelemetryWindow;
+
+    try {
+      window = v.parse(TelemetryWindowSchema, JSON.parse(await store.get(key)));
+    } catch (cause) {
+      if (cause instanceof KinuError && cause.code === 'missing') return { key, gone: true };
+
+      return { key, unreadable: cause instanceof Error ? cause.message : String(cause) };
+    }
+
     const readAt = now();
 
     if (readAt - Date.parse(window.from) >= LOGS_RETENTION_MS) return { key, window, readAt, expired: true };
@@ -129,11 +146,26 @@ export async function rereadWindows(store: WindowStore, read: (window: Telemetry
   }));
 }
 
-/** A finding whose window's earlier reads did not hold its signal, or held a lower count of it. */
+/** A signal its window's earlier reads did not hold, or whose count grew by more than its offset did. */
 function landedLate(window: TelemetryWindow, signal: WindowSignal): boolean {
   const before = window.measures?.[signal.key];
 
-  return before === undefined || signal.count > before;
+  return before === undefined || signal.count - before.count > (signal.offset ?? 0) - before.offset;
+}
+
+type Measures = NonNullable<TelemetryWindow['measures']>;
+
+/** Two reads' counters, each the larger: a counter only rises, so the larger is the newer. */
+export function mergeMeasures(left: Measures | null, right: Measures | null): Measures {
+  const merged: Measures = { ...left };
+
+  for (const [key, counters] of Object.entries(right ?? {})) {
+    const held = merged[key];
+
+    merged[key] = held === undefined ? counters : { count: Math.max(held.count, counters.count), offset: Math.max(held.offset, counters.offset) };
+  }
+
+  return merged;
 }
 
 /**
@@ -147,6 +179,13 @@ export function afterRereads(rereads: readonly Reread[]) {
   const removes: string[] = [];
 
   for (const reread of rereads) {
+    if ('gone' in reread) continue;
+
+    if ('unreadable' in reread) {
+      late.push({ what: 'a kept telemetry window', finding: `the kept window ${reread.key} could not be read: ${reread.unreadable}; it stays for the next deploy` });
+      continue;
+    }
+
     const { key, window } = reread;
     const span = `${window.from} .. ${window.to}`;
 
@@ -173,21 +212,35 @@ export function afterRereads(rereads: readonly Reread[]) {
       continue;
     }
 
-    const measures = { ...window.measures };
-
-    for (const signal of reread.found) measures[signal.key] = Math.max(measures[signal.key] ?? 0, signal.count);
-    puts.push({ key, window: { ...window, measures } });
+    puts.push({ key, window: { ...window, measures: mergeMeasures(window.measures, measuresOf(reread.found)) } });
   }
 
   return { late, puts, removes };
 }
 
-/** Each signal's count, by its key: what a later read of the window compares with. */
-export function measuresOf(signals: readonly WindowSignal[]): Record<string, number> {
-  return Object.fromEntries(signals.map((signal) => [signal.key, signal.count]));
+/** Each signal's counters, by its key: what a later read of the window compares with. */
+export function measuresOf(signals: readonly WindowSignal[]): Measures {
+  return Object.fromEntries(signals.map((signal) => [signal.key, { count: signal.count, offset: signal.offset ?? 0 }]));
 }
 
-/** The windows `afterRereads` kept, this deploy's own among them, written back; the retired ones removed. */
+/** The windows `afterRereads` kept, this deploy's own among them, written back, each merged with what another deploy
+ *  may have written since it was read; the retired ones removed, never one being written. */
 export async function keepWindows(store: WindowStore, puts: readonly KeptWindow[], removes: readonly string[]): Promise<void> {
-  await Promise.all([...puts.map(async (kept) => store.put(kept)), store.remove(removes)]);
+  const writing = new Set(puts.map((kept) => kept.key));
+
+  await Promise.all([
+    ...puts.map(async ({ key, window }) => {
+      let stored: Measures | null = null;
+
+      try {
+        stored = v.parse(TelemetryWindowSchema, JSON.parse(await store.get(key))).measures;
+      } catch (cause) {
+        // A window first written now has no object yet; any other failure is no answer.
+        if (!(cause instanceof KinuError && cause.code === 'missing')) throw cause;
+      }
+
+      await store.put({ key, window: { ...window, measures: window.measures === null && stored === null ? null : mergeMeasures(stored, window.measures) } });
+    }),
+    store.remove(removes.filter((key) => !writing.has(key))),
+  ]);
 }

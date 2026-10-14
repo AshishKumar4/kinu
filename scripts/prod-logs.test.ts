@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
 import { KinuError } from '@kinu.run/core/obs';
 import { canaryActivations } from './durability-canary-telemetry';
-import { alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
+import {
+  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings, versionSignals,
+} from './prod-logs';
 
 const HOUR = 3_600_000;
 
@@ -152,11 +154,31 @@ describe('what one deployed version did, as a deploy reports it', () => {
     });
 
     expect(findings).toEqual([
-      { key: 'exceptions:SupervisorRPC', count: 18, what: 'uncaught exceptions in SupervisorRPC', finding: `18 invocation(s) of SupervisorRPC ended in an uncaught exception: "${HUNG}", in request 8a6c0e1485460f2a of object 8adb8bd8b1db454f` },
+      { what: 'uncaught exceptions in SupervisorRPC', finding: `18 invocation(s) of SupervisorRPC ended in an uncaught exception: "${HUNG}", in request 8a6c0e1485460f2a of object 8adb8bd8b1db454f` },
     ]);
   });
 
   // Staging under the tiers and the evals, 2026-09-30: at most 3 startups in an object-hour.
+  // What a later deploy compares when it reads this window again (telemetry-windows.ts): counters late rows only raise.
+  test('a later read compares counters late rows only raise: throws beside resets, owed sequences by name, a loop by its hour', () => {
+    const loop = ALERT_THRESHOLDS.startupsPerHour;
+
+    const signals = versionSignals({
+      ...quiet,
+      ended: [{ outcome: 'exception', entrypoint: 'KinuDevbox', count: 3, objects: 1 }, { outcome: 'canceled', entrypoint: 'KinuSandbox', count: 9, objects: 2 }],
+      deployResets: [{ entrypoint: 'KinuDevbox', count: 3 }],
+      effects: { ...quiet.effects, terminal: { ...quiet.effects.terminal, owed: [{ object: 'o', sequence: 'a/1', detail: 'owed' }, { object: 'o', sequence: 'b/2', detail: 'owed' }] } },
+      startups: [{ object: 'looping', hour: HOUR + 60_000, startups: loop }, { object: 'looping', hour: HOUR + 120_000, startups: 1 }, { object: 'quiet', hour: HOUR, startups: 3 }],
+    });
+
+    expect(signals.map(({ key, count, offset }) => ({ key, count, offset }))).toEqual([
+      { key: 'exceptions:KinuDevbox', count: 3, offset: 3 },
+      { key: 'owed:a/1', count: 1, offset: undefined },
+      { key: 'owed:b/2', count: 1, offset: undefined },
+      { key: `startups:looping:${String(HOUR)}`, count: loop + 1, offset: undefined },
+    ]);
+  });
+
   test('an object started as often as the product calls a wake loop is a finding, and the measured busiest is none', () => {
     const loop = ALERT_THRESHOLDS.startupsPerHour;
 
@@ -165,7 +187,7 @@ describe('what one deployed version did, as a deploy reports it', () => {
       startups: [{ object: 'looping', hour: 0, startups: loop }, { object: 'busiest-measured', hour: 0, startups: 3 }],
     });
 
-    expect(findings).toEqual([{ key: 'wake-loop:looping', count: 1, what: 'a wake loop', finding: `object looping started ${String(loop)} times in an hour, 1 such hour(s)` }]);
+    expect(findings).toEqual([{ what: 'a wake loop', finding: `object looping started ${String(loop)} times in an hour, 1 such hour(s)` }]);
   });
 
   // Staging 36acc5de2 and fb848438c, 2026-10-08: a failed drain re-armed a second ahead after its eval ended (1,816 alarms
@@ -182,8 +204,8 @@ describe('what one deployed version did, as a deploy reports it', () => {
 
     expect(idle).toEqual([{ object: 'storming', hour: HOUR, count: 54 * 30 }, { object: 'turn-ended', hour: HOUR, count: 4 }]);
     expect(versionFindings({ ...quiet, idleWakes: idle })).toEqual([
-      { key: `idle:storming:${String(HOUR)}`, count: 1620, what: 'idle wakes', finding: 'object storming woke 1620 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
-      { key: `idle:turn-ended:${String(HOUR)}`, count: 4, what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
+      { what: 'idle wakes', finding: 'object storming woke 1620 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
+      { what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
     ]);
   });
 

@@ -1066,8 +1066,8 @@ function versionThrew(deployResets: VersionRead['deployResets'], row: VersionRea
 
 /** Each signal `read` holds that a deploy reports whatever its tests said. A canceled or aborted invocation is the
  *  caller going away, and one a code update reset is the deploy rolling over, not the version failing. */
-export function versionFindings(read: VersionRead): WindowSignal[] {
-  const findings: WindowSignal[] = [];
+export function versionFindings(read: VersionRead): VersionFinding[] {
+  const findings: VersionFinding[] = [];
 
   for (const row of read.ended) {
     const threw = row.outcome === 'exception' ? versionThrew(read.deployResets, row) : 0;
@@ -1076,38 +1076,86 @@ export function versionFindings(read: VersionRead): WindowSignal[] {
       const sample = read.thrown.find((thrown) => thrown.entrypoint === row.entrypoint);
 
       findings.push({
-        key: `exceptions:${row.entrypoint}`,
-        count: threw,
         what: `uncaught exceptions in ${row.entrypoint}`,
         finding: `${String(threw)} invocation(s) of ${row.entrypoint} ended in an uncaught exception${sample === undefined ? ', and none left its text' : `: ${exceptionText(sample)}`}`,
       });
     } else if (row.outcome.startsWith('exceeded')) {
-      findings.push({ key: `${row.outcome}:${row.entrypoint}`, count: row.count, what: `${row.entrypoint} ended by the platform (${row.outcome})`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended with ${row.outcome}, resetting ${String(row.objects)} object(s)` });
+      findings.push({ what: `${row.entrypoint} ended by the platform (${row.outcome})`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended with ${row.outcome}, resetting ${String(row.objects)} object(s)` });
     }
   }
 
   if (read.effects.failed > 0) {
     findings.push({
-      key: 'failed-effects',
-      count: read.effects.failed,
       what: 'failed terminal effects',
       finding: `${String(read.effects.failed)} terminal effect run(s) failed, in ${String(read.effects.failedTurns)} turn(s)${effectText(read.effects.failedSample)}`,
     });
   }
 
   if (read.effects.terminal.owed.length > 0) {
-    findings.push({ key: 'owed-effects', count: read.effects.terminal.owed.length, what: 'owed terminal effects', finding: `${String(read.effects.terminal.owed.length)} terminal sequence(s) still owed at the window's end${effectText(read.effects.terminal.owed[0])}` });
+    findings.push({ what: 'owed terminal effects', finding: `${String(read.effects.terminal.owed.length)} terminal sequence(s) still owed at the window's end${effectText(read.effects.terminal.owed[0])}` });
   }
 
   for (const loop of findWakeLoops(read.startups)) {
-    findings.push({ key: `wake-loop:${loop.object}`, count: loop.loopHours, what: 'a wake loop', finding: `object ${loop.object} started ${String(loop.peakPerHour)} times in an hour, ${String(loop.loopHours)} such hour(s)` });
+    findings.push({ what: 'a wake loop', finding: `object ${loop.object} started ${String(loop.peakPerHour)} times in an hour, ${String(loop.loopHours)} such hour(s)` });
   }
 
   for (const idle of read.idleWakes) {
-    findings.push({ key: `idle:${idle.object}:${String(idle.hour)}`, count: idle.count, what: 'idle wakes', finding: `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}` });
+    findings.push({ what: 'idle wakes', finding: `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}` });
   }
 
   return findings;
+}
+
+/**
+ * What a later read of the version's window compares (telemetry-windows.ts), each a counter late rows can only raise:
+ * the invocations that threw, with those a deploy reset as their offset, since a reset row that lands late takes an
+ * exception back; the platform's kills; the failed effect runs; each owed sequence by its name, so one that settles
+ * cannot hide one that lands late; and each object-hour of a wake loop or an idle wake by its count.
+ */
+export function versionSignals(read: VersionRead): WindowSignal[] {
+  const signals: WindowSignal[] = [];
+
+  for (const row of read.ended) {
+    if (row.outcome === 'exception') {
+      const offset = read.deployResets.find((reset) => reset.entrypoint === row.entrypoint)?.count ?? 0;
+
+      signals.push({ key: `exceptions:${row.entrypoint}`, count: row.count, offset, what: `uncaught exceptions in ${row.entrypoint}`,
+        finding: `${String(row.count - offset)} invocation(s) of ${row.entrypoint} ended in an uncaught exception` });
+    } else if (row.outcome.startsWith('exceeded')) {
+      signals.push({ key: `${row.outcome}:${row.entrypoint}`, count: row.count, what: `${row.entrypoint} ended by the platform (${row.outcome})`,
+        finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended with ${row.outcome}` });
+    }
+  }
+
+  if (read.effects.failed > 0) {
+    signals.push({ key: 'failed-effects', count: read.effects.failed, what: 'failed terminal effects', finding: `${String(read.effects.failed)} terminal effect run(s) failed` });
+  }
+
+  for (const owed of read.effects.terminal.owed) {
+    signals.push({ key: `owed:${owed.sequence}`, count: 1, what: 'owed terminal effects', finding: `sequence ${owed.sequence} of object ${owed.object} still owed at the window's end` });
+  }
+
+  // As `findWakeLoops` counts them: each object's startups by the hour, a loop at the threshold or above.
+  const hours = new Map<string, { readonly object: string; readonly hour: number; count: number }>();
+
+  for (const row of read.startups) {
+    const hour = Math.floor(row.hour / HOUR_MS) * HOUR_MS;
+    const key = `startups:${row.object}:${String(hour)}`;
+    const held = hours.get(key) ?? { object: row.object, hour, count: 0 };
+
+    held.count += row.startups;
+    hours.set(key, held);
+  }
+
+  for (const [key, { object, hour, count }] of hours) {
+    if (count >= ALERT_THRESHOLDS.startupsPerHour) signals.push({ key, count, what: 'a wake loop', finding: `object ${object} started ${String(count)} times in the hour from ${iso(hour)}` });
+  }
+
+  for (const idle of read.idleWakes) {
+    signals.push({ key: `idle:${idle.object}:${String(idle.hour)}`, count: idle.count, what: 'idle wakes', finding: `object ${idle.object} woke ${String(idle.count)} time(s) with nothing to watch in the hour from ${iso(idle.hour)}` });
+  }
+
+  return signals;
 }
 
 /** One exception per entrypoint in `entrypoints`, each sampled from that entrypoint's own: one sample of all of them
@@ -1360,7 +1408,7 @@ async function rereadKept(environment: InfraEnvironment): Promise<{ readonly sto
       token ??= readToken();
       const t = new Telemetry(await token, { worker: window.worker, from: Date.parse(window.from), to: Date.parse(window.to) });
 
-      return versionFindings(await versionRead(t, window.version));
+      return versionSignals(await versionRead(t, window.version));
     }, () => Date.now());
 
     return { store, rereads };
@@ -1398,8 +1446,8 @@ async function versionCommand(args: Args): Promise<number> {
 
     if (read.settled) {
       terminal = read.value.read.effects.terminal;
-      settled = versionFindings(read.value.read);
-      findings = [...settled];
+      findings = versionFindings(read.value.read);
+      settled = versionSignals(read.value.read);
       settledNote = `settled: ${late}`;
     } else {
       findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: no two reads `
@@ -1424,7 +1472,7 @@ async function versionCommand(args: Args): Promise<number> {
       const current = { worker: args.worker, version: subject, from: iso(args.from), to: iso(args.to), measures: settled === null ? null : measuresOf(settled) };
 
       findings = [...findings, ...late];
-      keep = async () => keepWindows(kept.store, [...puts, { key: windowKey(subject), window: current }], removes);
+      keep = async () => keepWindows(kept.store, [...puts, { key: windowKey(current), window: current }], removes);
     }
   }
 
@@ -1452,7 +1500,8 @@ async function versionCommand(args: Args): Promise<number> {
         + `back for later deploys: ${cause instanceof Error ? cause.message : String(cause)}` };
 
       if (dir !== '') recordStep(dir, { phase: 'telemetry', what: unkept.what, finding: unkept.finding });
-      console.log(`  ${unkept.finding}`);
+      // Beside, not inside, the answer `--json` printed above.
+      (args.json ? console.error : console.log)(`  ${unkept.finding}`);
 
       return 1;
     }
