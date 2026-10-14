@@ -2,7 +2,7 @@
 
 import { escapeHtml } from './http';
 import {
-  COPY_SCRIPT, GITHUB_ICON, REPO_URL, publicFooter, publicPage, wordmark,
+  COPY_SCRIPT, GITHUB_ICON, REPO_URL, mark, publicFooter, publicPage,
 } from './public-shell';
 
 
@@ -23,7 +23,7 @@ export interface BuiltinSignIn {
 }
 
 export function loginDocument(providers: readonly LoginProvider[], builtin: BuiltinSignIn | null = null): string {
-  if (builtin !== null) return authDocument('Sign in to Kinu.run', builtinBody(builtin), builtin.mode === 'setup' ? undefined : BUILTIN_SCRIPT);
+  if (builtin !== null) return authDocument('Sign in to Kinu', builtinBody(builtin), builtin.mode === 'setup' ? undefined : BUILTIN_SCRIPT);
 
   const body = providers.length === 0
     ? '<p class="lede">Sign-in is unavailable.</p><p>This deployment declares an OAuth provider whose client id or secret is missing, so no one can sign in until it is fixed. Built-in sign-in stays off while any provider is declared.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
@@ -31,7 +31,7 @@ export function loginDocument(providers: readonly LoginProvider[], builtin: Buil
       `<a class="provider" href="${provider.href}">Continue with ${escapeHtml(provider.label)}</a>`
     )).join('')}</div>`;
 
-  return authDocument('Sign in to Kinu.run', body);
+  return authDocument('Sign in to Kinu', body);
 }
 
 const BUILTIN_COPY = {
@@ -183,7 +183,7 @@ export function approvalDocument(title: string, body: string): string {
     title: `${title} - Kinu.run`,
     styles: CARD_CSS,
     body: `<main class="gate"><div class="card">
-  <span class="lockup">${wordmark(24)}</span>
+  <span class="lockup">${mark(18)} Kinu.run</span>
   <h1 class="small">${escapeHtml(title)}</h1>
   ${body}
 </div></main>\n`,
