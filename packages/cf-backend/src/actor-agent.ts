@@ -114,7 +114,7 @@ import {
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
   resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
-  cancelCurrentWork, getStoredModelSpec, setModel,
+  cancelCurrentWork, getStoredModelSpec,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
@@ -132,7 +132,7 @@ import {
   // One minting rule for every subordinate, on either backend
   agentNamer,
   // Subordinate tree depth cap: derived per child, never stated by one
-  delegationExhausted, type DelegationBudget,
+  type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, specModelInfo, assembleActorTurn,
@@ -157,7 +157,7 @@ import {
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
-  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
+  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission,
   type ResolvedTurnProfile, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   childContextResolver,
@@ -706,7 +706,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The owner's answer: the asking call's result, and the turn that continues from it, in the agent that asked
    *  (`actor`; null for the workspace agent). */
   @callable()
-  async answerOwnerQuestions(id: string, answers: JsonValue, actor: JsonValue = null): Promise<OwedIntent | null> {
+  async answerOwnerQuestions(id: string, answers: readonly OwnerAnswer[], actor: string | null = null): Promise<OwedIntent | null> {
+    // Typed as a page sends them; read as the wire may carry anything.
     const parsed = v.safeParse(v.tuple([OwnerAnswersSchema, v.nullable(v.string())]), [answers, actor]);
 
     return settle(Effect.suspend(() => {
@@ -730,7 +731,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Closed unanswered; the agent reads that at its next turn, and what waited behind the questions runs. */
   @callable()
-  async dismissOwnerQuestions(id: string, actor: JsonValue = null): Promise<{ readonly closed: number }> {
+  async dismissOwnerQuestions(id: string, actor: string | null = null): Promise<{ readonly closed: number }> {
     const asker = v.safeParse(v.nullable(v.string()), actor);
 
     if (!asker.success) return settle(Effect.fail(new KinuError('bad_input', 'actor: an agent id, or null for the workspace agent')));
@@ -760,14 +761,6 @@ export abstract class ActorAgent extends Agent<Env> {
    * Each actor's home is provisioned in this isolate by the host (`actor-hosting.ts` →
    * `hostedHomeName`); its identity is its `workspace_actors` row, so there is no facet port.
    */
-
-  /**
-   * At the depth cap the team deps are absent, so the tools cannot be attempted. Core's classified
-   * refusal covers a cached ToolSet built before a facet's identity was seeded.
-   */
-  protected teamProfile(): { readonly team?: TeamToolDeps } {
-    return delegationExhausted(this.delegationBudget()) ? {} : { team: this.getTeamToolDeps() };
-  }
 
   private _subordinateRoster: SubordinateRosterStore | null = null;
 
@@ -917,6 +910,7 @@ export abstract class ActorAgent extends Agent<Env> {
     env: this.env,
     agentName: () => this.actorHandle().name,
     workspaceId: () => this.actorHandle().workspaceId,
+    workspaceName: () => this.workspaceName(),
     appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
@@ -1965,11 +1959,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
           this.noteGitHubCall(d, args, rawResult, this.actorHandle().actorId);
 
-          const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
-
-          if (v.is(McpProtocolFailureSchema, response)) throw new McpToolError(response);
-
-          return response;
+          return v.parse(JsonValueSchema, JSON.parse(rawResult));
         },
         effectClaims: {
           actor: this.actorHandle(),
@@ -2726,7 +2716,7 @@ export abstract class ActorAgent extends Agent<Env> {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
 
           return yield* Effect.promise(async () => this.callSlateTool({
-            rt: this.rt, actor: this.surfaceActor(mode), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
+            rt: this.rt, actor: this.surfaceActor(mode, context.viewer ? 'viewer' : 'owner'), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
         }
 
@@ -2869,11 +2859,14 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  /** `actor` is whose browser sessions the program's egress reaches; null reaches only a new Kitesurf browser. */
-  protected codemodeLaunch(actor: string | null): (online: boolean) => ProgramLaunch {
+  /**
+   * `actor` is whose browser sessions the program's egress reaches; null reaches only a new Kitesurf browser. `as` is
+   * whose authority the program runs with: a share's viewer's program opens none of the owner's previews.
+   */
+  protected codemodeLaunch(actor: string | null, as: 'owner' | 'viewer'): (online: boolean) => ProgramLaunch {
     const workspace = this.workspaceName();
 
-    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor } : null });
+    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor, asOwner: as === 'owner' } : null });
   }
 
   /**
@@ -2890,7 +2883,7 @@ export abstract class ActorAgent extends Agent<Env> {
     let factory = this._slateToolFactories.get(launch);
 
     if (factory === undefined) {
-      factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(launch), workspace: this.workspaceName() });
+      factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(launch, context.viewer ? 'viewer' : 'owner'), workspace: this.workspaceName() });
       this._slateToolFactories.set(launch, factory);
     }
 
@@ -3002,15 +2995,18 @@ export abstract class ActorAgent extends Agent<Env> {
    * only the agent does. Read per call: executors attach and detach while this object lives.
    */
   protected slateNamespaces(mode: WorkMode, owner = false): CodemodeProvider[] {
-    return actorNamespaces(this.surfaceActor(mode), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
+    return actorNamespaces(this.surfaceActor(mode, owner ? 'owner' : 'viewer'), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
   }
 
-  /** This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */
-  protected surfaceActor(mode: WorkMode): SurfaceActor {
+  /**
+   * This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. A share's
+   * viewer's calls reach the web without the pass the owner's carry to the workspace's own previews.
+   */
+  protected surfaceActor(mode: WorkMode, as: 'owner' | 'viewer' = 'owner'): SurfaceActor {
     return {
       executors: () => this.rt.executionRouter?.getProviders() ?? [],
       web: {
-        search: this.ownedModelServices.getWebSearchProvider(), files: this.rt.storage,
+        search: as === 'owner' ? this.ownedModelServices.getWebSearchProvider() : this.ownedModelServices.getViewerWebSearchProvider(), files: this.rt.storage,
         browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
       },
       memory: () => ({
@@ -3039,7 +3035,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace agent's eval programs: crafted tools saved mid-turn still work because craftStore is re-read per call. */
   protected workspaceCodemode(): CodemodeFactory {
     this._codemodeFactory ??= createCodemodeToolFactory({
-      launch: this.codemodeLaunch(this.rt.actor.actorId),
+      launch: this.codemodeLaunch(this.rt.actor.actorId, 'owner'),
       workspace: this.workspaceName(),
       // Drives the UI's default executor; one upsert per executor per turn (reset as its turn opens).
       onExecutorUsed: (name) => {
@@ -3315,16 +3311,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return changed;
   }
-  @callable()
-  async setModel(spec: string) {
-    const set = setModel(this.modelSetting(this.config, () => {}), spec);
-
-    // Main's isolate measures its next request on the new model, as every agent's does.
-    await this.modelSettingsChanged();
-
-    return set;
-  }
-
   /** How a model pin is set on `config`: this workspace's registry normalizes the spec. */
   protected modelSetting(config: AgentConfigStore, onChanged: () => void): SetModelDeps {
     return { config, normalize: (s) => this.providerRegistry().normalizeSpecSync(s), onChanged };

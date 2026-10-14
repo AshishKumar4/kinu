@@ -81,6 +81,20 @@ export interface PendingDeviceConsent extends DeviceConsentRequest {
   readonly createdAt: number;
 }
 
+/** A pending consent as a client reads it over the wire. */
+export const PendingDeviceConsentSchema: v.GenericSchema<PendingDeviceConsent> = v.object({
+  consentId: v.string(),
+  deviceId: v.string(),
+  deviceLabel: v.string(),
+  method: v.string(),
+  command: v.string(),
+  workspaceName: v.optional(v.string()),
+  createdAt: v.number(),
+});
+
+/** An owner's answer to a consent, as a client reads its receipt: false when nothing waited on it. */
+export const ResolvedDeviceConsentSchema = v.object({ ok: v.boolean() });
+
 export type DeviceConsentNotice =
   | { readonly kind: 'raised'; readonly consent: PendingDeviceConsent }
   | { readonly kind: 'settled'; readonly consentId: string };

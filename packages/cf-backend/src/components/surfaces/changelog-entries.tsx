@@ -9,30 +9,19 @@ import {
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
 import type { ChangelogEntryKind } from "@kinu.run/core";
-import * as v from "valibot";
-import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { diagnostics, showing, toKinuError, detach, settle } from "@kinu.run/core/obs";
-import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
+import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import { ScaffoldVersionDiff } from "./ScaffoldLineage";
 import {
   CodeBlock,
   changelogFactKey, changelogToolName, withToolDetails,
   type ChangelogEntryView, type CraftedToolDetail,
 } from "./shared";
-import { timeAgo } from "@kinu.run/core";
+import { timeAgo, type StagedSkillView } from "@kinu.run/core";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export interface ChangelogView { entries: ChangelogEntryView[]; unseenCount: number; seenAt: number }
-
-const CraftedToolListSchema = v.looseObject({
-  crafted: v.optional(v.array(v.looseObject({
-    name: v.string(),
-    description: v.optional(v.string()),
-    qualityScore: v.optional(v.number()),
-    usageCount: v.optional(v.number()),
-  }))),
-});
-
 
 const KIND_ICON = {
   scaffold: GitBranchIcon,
@@ -45,21 +34,16 @@ const KIND_ICON = {
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
 /** Showing the digest marks it seen; `onSeen` zeroes the tab badge upstream. */
-export function useChangelog(rpc: Rpc, onSeen?: () => void, moved = 0) {
+export function useChangelog(rpc: WorkspaceRpc, onSeen?: () => void, moved = 0) {
   const load = useCallback((): Promise<ChangelogView> => settle(Effect.gen(function* () {
-    const view = yield* Effect.promise(async () => rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]));
-    // Enrichment only: a failed or misshapen tool list leaves the entries as their rows hold them.
+    const view = yield* Effect.promise(async () => rpc("getEvolutionChangelog", [{ limit: 30 }]));
+    // Enrichment only: a failed tool list leaves the entries as their rows hold them.
     let tools: CraftedToolDetail[] = [];
 
     yield* Effect.catchCause(Effect.gen(function* () {
-      const parsed = v.safeParse(CraftedToolListSchema, yield* Effect.promise(async () => rpc<unknown>("getToolDescriptions", [])));
+      const { crafted } = yield* Effect.promise(async () => rpc("getToolDescriptions", []));
 
-      if (parsed.success) {
-        tools = (parsed.output.crafted ?? []).map((tool) => ({
-          name: tool.name, description: tool.description ?? '',
-          qualityScore: tool.qualityScore ?? 0.5, usageCount: tool.usageCount ?? 0,
-        }));
-      }
+      tools = crafted.map(({ name, description, qualityScore, usageCount }) => ({ name, description, qualityScore, usageCount }));
     }), (failed) => Effect.sync(() => {
       const cause = Cause.squash(failed);
       diagnostics.failure('changelog.tool_list_unavailable', toKinuError({
@@ -74,13 +58,8 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void, moved = 0) {
 
   const { resource, reload } = useAsyncResource(load);
   const view = lastValue(resource);
-  const readMoved = useRef(moved);
 
-  useEffect(() => {
-    if (readMoved.current === moved) return;
-    readMoved.current = moved;
-    reload();
-  }, [moved, reload]);
+  useReloadWhenMoved(moved, reload);
 
   // Freshness is judged against the marker pinned on first read; later reads return a marker newer than every entry.
   const openedSeenAt = useRef<number | null>(null);
@@ -176,7 +155,7 @@ function EntryFacts({ entry }: { entry: ChangelogEntryView }) {
   return null;
 }
 
-function useEntryRevert(entryId: string, rpc: Rpc, onReverted: () => void) {
+function useEntryRevert(entryId: string, rpc: WorkspaceRpc, onReverted: () => void) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -185,7 +164,7 @@ function useEntryRevert(entryId: string, rpc: Rpc, onReverted: () => void) {
     setNotice(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const r = yield* Effect.promise(async () => rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entryId]));
+      const r = yield* Effect.promise(async () => rpc("revertChangelogEntry", [entryId]));
       setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
 
       if (r.ok) onReverted();
@@ -205,7 +184,7 @@ function entryHasDetails(entry: ChangelogEntryView): boolean {
 }
 
 /** The scaffold version an entry changed, as a diff below it while shown. */
-function EntryScaffoldDiff({ rpc, version, shown }: { rpc: Rpc; version: number | null | undefined; shown: boolean }) {
+function EntryScaffoldDiff({ rpc, version, shown }: { rpc: WorkspaceRpc; version: number | null | undefined; shown: boolean }) {
   if (!shown || version == null) return null;
 
   return <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={version} readAgain={0} /></div>;
@@ -215,7 +194,7 @@ export interface ChangelogEntryCardProps {
   entry: ChangelogEntryView;
   grouped?: boolean;
   seenAt: number;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   onReverted: () => void;
 }
 
@@ -313,13 +292,6 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   );
 }
 
-interface StagedSkillView {
-  requestId: string; routeIndex: number; target: string;
-  digest: string; source: string; intact: boolean;
-}
-
-type StagedSkillResult = { ok: true; view: StagedSkillView } | { ok: false; error: string };
-
 /**
  * Opens the whole file, never an excerpt, and sends back the digest it displayed; the backend
  * refuses any other digest, so a proposal changed after reading cannot be approved.
@@ -327,7 +299,7 @@ type StagedSkillResult = { ok: true; view: StagedSkillView } | { ok: false; erro
 function StagedSkillDecision(
   { decision, rpc, onDecided }: {
     decision: { requestId: string; routeIndex: number };
-    rpc: Rpc;
+    rpc: WorkspaceRpc;
     onDecided: () => void;
   },
 ) {
@@ -345,7 +317,7 @@ function StagedSkillDecision(
     setStaged({ status: "loading" });
 
     return yield* Effect.catchCause(Effect.gen(function* () {
-      const result = yield* Effect.promise(async () => rpc<StagedSkillResult>("showRefinement", [decision.requestId, decision.routeIndex]));
+      const result = yield* Effect.promise(async () => rpc("showRefinement", [decision.requestId, decision.routeIndex]));
       setStaged((previous) => result.ok
         ? loadSucceeded(result.view)
         : loadFailed(previous ?? { status: "loading" }, { cause: new Error(result.error) }));
@@ -360,7 +332,7 @@ function StagedSkillDecision(
     setNotice(null);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const result = yield* Effect.promise(async () => rpc<{ ok: boolean; detail?: string; error?: string }>(
+      const result = yield* Effect.promise(async () => rpc(
         "decideRefinement",
         [{
           requestId: decision.requestId,
@@ -422,7 +394,7 @@ function StagedSkillDecision(
   );
 }
 
-function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: Rpc; onReverted: () => void }) {
+function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: WorkspaceRpc; onReverted: () => void }) {
   const [kept, setKept] = useState(false);
   const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
 
@@ -467,7 +439,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: 
 function SubEntryList({ items, className, rpc, onReverted }: {
   items: readonly ChangelogEntryView[];
   className: string;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   onReverted: () => void;
 }) {
   return (

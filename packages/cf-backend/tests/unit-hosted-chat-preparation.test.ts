@@ -30,12 +30,12 @@ test("an agent whose bad model pin failed its turn answers once the owner correc
 
   const asking = () => gateway.runs.filter((run) => JSON.stringify(requestOf(run).messages).includes(ASK));
 
-  await workspace.agent.setActorModel(name, UNSERVED);
+  await workspace.agent.setModel(UNSERVED, name);
   await say();
   await workspace.agent.harnessAgentsIdle();
   expect(asking()).toEqual([]);
 
-  await workspace.agent.setActorModel(name, GATEWAY_MODEL);
+  await workspace.agent.setModel(GATEWAY_MODEL, name);
   await say();
 
   await driveUntil(workspace, 'the agent never asked its model', () => asking().length > 0);

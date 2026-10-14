@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, use
 import { Loader } from "@cloudflare/kumo/components/loader";
 import { ArrowSquareOutIcon, CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import type { Rpc, SlateCallResult } from "@kinu.run/core";
+import type { SlateCallResult } from "@kinu.run/core";
 import {
   buildSlateHostContext, isPreviewUrl, isSlateFrameMessage, PREVIEW_SANDBOX, slateFrameSrc,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_THEME_TOKENS,
@@ -14,6 +14,7 @@ import { PreviewChrome } from "@/components/PreviewFrame";
 import { SlateInlineContext, SlatePreviews } from "./context";
 import { Effect } from "effect";
 import { detach, showing } from "@kinu.run/core/obs";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 
 /** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
@@ -264,7 +265,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   id: string;
   /** The `<slate-ui>` block's name when the slate is an answer's own. */
   block?: string;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   display: 'inline' | 'pane';
   reloadKey?: number;
   onReady?: () => void;
@@ -294,7 +295,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     setPreview(null);
     setRefusal(null);
 
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc<SlateCallResult>("previewSlate", [id])), (result) => {
+    detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc("previewSlate", [id])), (result) => {
       if (!live) return;
 
       if (!result.ok) {
@@ -341,7 +342,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   const pane = display === 'pane';
   const previewUrl = preview?.url;
   const { style: frameStyle, waiting, known } = useInlineHeight({ id, inline: !pane, sized: preview?.sized === true, frame, previewOrigin, loaded, drawn: src });
-  const save = useMemo(() => (block === undefined ? undefined : async () => rpc<SlateCallResult>("slate", [{ op: 'save', page: id }])), [block, rpc, id]);
+  const save = useMemo(() => (block === undefined ? undefined : async () => rpc("slate", [{ op: 'save', page: id }])), [block, rpc, id]);
 
   const notice = preview?.broken === undefined ? null : <BrokenNotice title={preview.title ?? id} />;
   let content: ReactNode = null;

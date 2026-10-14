@@ -1,8 +1,8 @@
 /** @kinu.run/compaction: the better-compact ladder, Kinu codec, extension, archive manifest and storage ports. */
 
-export { COMPACTION_PRESETS, type Logger } from '@better-compact/core';
+export { type Logger } from '@better-compact/core';
 
-export { kinuCodec, kinuConventions, kinuSpec, type ToolPairHandle } from './codec';
+export { kinuCodec, kinuConventions, kinuSpec } from './codec';
 
 export { type AttachmentDeps } from './attachments';
 

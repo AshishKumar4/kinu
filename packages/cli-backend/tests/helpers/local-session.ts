@@ -12,7 +12,8 @@ import {
   CHAT_SESSION_ID, profileCatalogDigest, EventLog, TriggerRegistry, listTriggers, type JsonObject, type ProfileCatalogEnvelope, type EventVariant, openWorkspaceMainActor, workspaceSkillPath, WORKSPACE_SKILLS_DIR,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeSqlExec, type CLIRuntime, makeWorkspaceSchemaSql } from '../../src/runtime';
-import { LocalAgentSession, type LocalAgentSessionOpts, type SessionEvent } from '../../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession, type LocalAgentSessionOpts } from '../../src/local-session';
 import { type LocalModelResolver } from '../../src/model-resolver';
 import {
   createLocalProfileAuthority, resolverModelPlane, staticModelPlane, type LocalProfileModelPlane, type ProfileEnvelopeSource,

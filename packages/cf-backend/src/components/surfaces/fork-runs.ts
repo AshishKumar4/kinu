@@ -10,8 +10,9 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { explorationForkTree } from "@kinu.run/core";
 import { swarmResolutionOf } from "@kinu.run/core/swarm-view";
-import type { ForkNode, Rpc } from "@kinu.run/core";
+import type { ForkNode } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export type ExplorationFrontier = NonNullable<ExplorationCanvasRun["frontier"]>;
 
@@ -88,14 +89,14 @@ function forkRunsRevalidateMs(
 }
 
 export function useLiveForkRuns(
-  rpc: Rpc,
+  rpc: WorkspaceRpc,
   isStreaming: boolean,
   backgroundJobs: readonly BackgroundJob[],
 ) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
 
   const load = useCallback(
-    () => rpc<Page<ForkRunSummary>>("listForkRuns", [{ limit: FORK_RUN_LIMIT }]),
+    () => rpc("listForkRuns", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
 
@@ -111,7 +112,7 @@ export function useLiveForkRuns(
 }
 
 export interface ExplorationCanvasInput {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   isStreaming: boolean;
   backgroundJobs: readonly BackgroundJob[];
   liveTrees: ReadonlyMap<string, ForkNode>;
@@ -131,7 +132,7 @@ export function useExplorationCanvas({
   // `readExplorationCanvas` carries both halves per page; fetching the journal
   // separately leaves page two's merged forks outside the window.
   const load = useCallback(
-    () => rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ limit: FORK_RUN_LIMIT }]),
+    () => rpc("getExplorationCanvas", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
 
@@ -146,7 +147,7 @@ export function useExplorationCanvas({
 
   const fetchPage = useCallback(
     (cursor: SeekCursor) =>
-      rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ cursor, limit: FORK_RUN_LIMIT }]),
+      rpc("getExplorationCanvas", [{ cursor, limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
 
@@ -244,14 +245,14 @@ export function useExplorationCanvas({
 }
 
 export function useExactForkRun(
-  rpc: Rpc,
+  rpc: WorkspaceRpc,
   requestedId: string | null,
   hasActiveWork: boolean,
 ) {
   const load = useCallback(
     () => requestedId === null
       ? Promise.resolve<ExplorationCanvasRun | null>(null)
-      : rpc<ExplorationCanvasRun | null>("getForkRun", [requestedId]),
+      : rpc("getForkRun", [requestedId]),
     [requestedId, rpc],
   );
 

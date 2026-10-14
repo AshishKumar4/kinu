@@ -26,7 +26,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase, type FirstRunSession,
 } from './first-run';
 import { SWARM_ASK as ASK } from './asks';
-import { openBrowser, signedInPage } from '../../evals/src/browser';
+import { openBrowser, signedInPage, type SignIn } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 
@@ -55,8 +55,8 @@ interface OpenedWorker {
   readonly stop: boolean;
 }
 
-async function openWorkerFromPanel(browser: TestChrome, plan: { origin: string; identity: Parameters<typeof signedInPage>[1] }, workspace: string, key: string): Promise<OpenedWorker> {
-  const page = await signedInPage(browser.browser, plan.identity);
+async function openWorkerFromPanel(browser: TestChrome, plan: SignIn, workspace: string, key: string): Promise<OpenedWorker> {
+  const page = await signedInPage(browser.browser, plan);
   await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
   // Each click is a locator's: it waits until its target stands still. The Agents pane slides in over 280 ms, and a
   // Swarms click 61 ms after the counter's landed on the page behind it, so the group stayed folded and the wait for it

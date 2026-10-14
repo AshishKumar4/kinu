@@ -458,7 +458,7 @@ describe(SUITE, () => {
           // ── The page, loaded from nothing, draws both agents with no new
           //    event: a tab in the strip and a row in the Agents panel. ─────
           browser = await openBrowser();
-          const drawn = await drawnRoster(await signedInPage(browser.browser, plan.identity), plan, session.workspace, budget);
+          const drawn = await drawnRoster(await signedInPage(browser.browser, plan), plan, session.workspace, budget);
           const undrawn = names.filter((name, index) => !drawn.tabs.includes(name) || !drawn.rows.includes(actorIds[index] ?? ''));
 
           subgoals.push({

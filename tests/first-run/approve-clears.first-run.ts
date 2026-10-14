@@ -246,7 +246,7 @@ async function approveThroughTheButton(
   browser: Browser, plan: PublicSessionPlan, workspace: string, command: string,
 ): Promise<ButtonRun> {
   const empty = { boxesBefore: 0, checkedBefore: 0, boxesAfter: 0, checkedAfter: 0 };
-  const page = await signedInPage(browser, plan.identity);
+  const page = await signedInPage(browser, plan);
 
   try {
     return await drive({ page, origin: plan.origin, workspace, command, empty });

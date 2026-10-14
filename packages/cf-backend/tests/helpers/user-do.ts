@@ -124,6 +124,7 @@ export interface TestUserDO {
   pendingConsents(workspace: string): Array<{ consentId: string }>;
   /** The owner's click, as `resolveDeviceConsent` runs it over RPC. */
   resolveConsent(workspace: string, consentId: string, answer: 'once' | 'always' | 'deny'): { ok: boolean };
+  /** A device socket open, as its connect leaves it: with the served build that connect read. */
   attachDevice(deviceId: string | null): void;
   /** Deliver a HELLO through the real socket handler, unvalidated so unknown fields can be tested.
    *  `deviceId` targets an `attachDaemon` socket; absent, the harness's own. */
@@ -235,15 +236,18 @@ export interface DevicePush extends v.InferOutput<typeof DevicePushSchema> {
   device: string | null;
 }
 
+/** The stamp the deploy publishes for `build`. */
+function servedStamp(build: NonNullable<TestUserDOOptions['servedBuild']>): JsonValue {
+  return {
+    version: build.version, sha: 'sha', builtAt: '2026-09-15T00:00:00Z',
+    ...(build.checksums !== undefined && { checksums: build.checksums }),
+    ...(build.signature !== undefined && { signature: build.signature }),
+  };
+}
+
 /** The `ASSETS` binding: build stamp and checksums, else the SPA shell (what an unpublished file returns). */
 function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']): Response {
-  if (build && pathname === '/downloads/kinu-version.json') {
-    return Response.json({
-      version: build.version, sha: 'sha', builtAt: '2026-09-15T00:00:00Z',
-      ...(build.checksums !== undefined && { checksums: build.checksums }),
-      ...(build.signature !== undefined && { signature: build.signature }),
-    });
-  }
+  if (build && pathname === '/downloads/kinu-version.json') return Response.json(servedStamp(build));
 
   const checksum = build?.checksums?.[pathname.replace(/\.sha256$/, '')];
 
@@ -624,6 +628,13 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   rememberMcpManager(inheritedMcpManager(userDO));
   hub.current = userDO;
 
+  // The harness's sockets skip the connect, which keeps the served build its HELLO is pushed against (the
+  // `devices.served_stamp` key in src/user/devices.ts); this does it. A renamed key stops every update push test.
+  const connectRead = (): void => {
+    if (options.servedBuild === undefined) kv.delete('devices.served_stamp');
+    else kv.set('devices.served_stamp', servedStamp(options.servedBuild));
+  };
+
   return {
     userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
@@ -649,11 +660,13 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       return userDO.webSocketMessage(target, JSON.stringify(frame));
     },
     attachDevice: (deviceId) => {
+      connectRead();
       attached = deviceId;
       socketBody.readyState = deviceId === null ? 3 : 1;
       socketAttachment = { protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES] };
     },
     attachDaemon: (deviceId) => {
+      connectRead();
       const frames: DeviceFrame[] = [];
       // Bound to one machine via a fixed attachment. A real attachment, because the hub
       // caches the toolchain probe there; a no-op store would re-probe on every status read.

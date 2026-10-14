@@ -1,16 +1,14 @@
 import { Effect, Cause } from 'effect';
 import { detach } from '@kinu.run/core/obs';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor,
-  workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo, type ChangeNote, type Rpc,
-} from "@kinu.run/core";
+import { executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor, workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Loader } from "@cloudflare/kumo";
 import { lazyRoute } from "@/lazy-route";
 import type { NotesStore } from "./changes/notes-provider";
 import type { ChangesViewProps } from "./changes/ChangesView";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const ChangesView = lazyRoute<ChangesViewProps>(async () => {
   const { ChangesView: view } = await import("./changes/ChangesView");
@@ -31,16 +29,16 @@ function answered(call: () => Promise<ChangeNotesResult>): Effect.Effect<ChangeN
   return Effect.catchCause(Effect.promise(call), (failed) => Effect.succeed({ ok: false, error: describeError({ cause: Cause.squash(failed) }) }));
 }
 
-function notesStore(rpc: Rpc, source: string, current: () => ChangeSet | undefined): NotesStore {
+function notesStore(rpc: WorkspaceRpc, source: string, current: () => ChangeSet | undefined): NotesStore {
   return {
-    load: () => answered(async () => ({ ok: true, notes: await rpc<ChangeNote[]>("getChangeNotes", [source]) })),
-    save: (notes) => answered(() => rpc<ChangeNotesResult>("saveChangeNotes", [source, notes])),
+    load: () => answered(async () => ({ ok: true, notes: await rpc("getChangeNotes", [source]) })),
+    save: (notes) => answered(() => rpc("saveChangeNotes", [source, notes])),
     send: () => answered(() => {
       const set = current();
 
       if (set === undefined) return Promise.resolve({ ok: false, error: "the change-set is no longer listed" });
 
-      return rpc<ChangeNotesResult>("sendChangeNotes", [{ source, label: set.label, mode: set.mode, ...(set.trackedSince !== undefined && { trackedSince: set.trackedSince }) }]);
+      return rpc("sendChangeNotes", [{ source, label: set.label, mode: set.mode, ...(set.trackedSince !== undefined && { trackedSince: set.trackedSince }) }]);
     }),
   };
 }
@@ -89,8 +87,6 @@ function reviewedAtOf(reviewed: Reviewed | null, sets: readonly ChangeSet[] | nu
   return reviewed.on === null || reviewed.on === sets || shown === 0 ? reviewed.at : null;
 }
 
-type Restored = { readonly ok: true } | { readonly ok: false; readonly error: string };
-
 function useDocumentVisible(): boolean {
   // A render with no document (the static renderer) is as seen as a visible page.
   const [visible, setVisible] = useState(() => !("document" in globalThis) || document.visibilityState === "visible");
@@ -110,7 +106,7 @@ const UNDO_MS = 10_000;
 export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = null, active, moved, turnLive, onOpenFile, onCount }: {
   executors: ExecutorInfo[];
   lastActiveExecutor?: string | null;
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   focus?: ChangesFocus | null;
   /** Whether Changes is the surface shown: only then does it poll. */
   active: boolean;
@@ -142,7 +138,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
 
   const load = useCallback(async (): Promise<Read> => {
     const results = await Promise.all(sourceKey.split("\n").map(async (name) =>
-      [name, await rpc<ExecutorDiffResult>("getExecutorDiff", [name])] as const));
+      [name, await rpc("getExecutorDiff", [name])] as const));
 
     const held = live.current.sets;
 
@@ -237,7 +233,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
     setFailure(null);
 
     const refusal = yield* Effect.catchCause(
-      Effect.map(Effect.promise(() => rpc<Restored>("restoreWorkspaceBaseline", [])), (restored) => (restored.ok ? null : restored.error)),
+      Effect.map(Effect.promise(() => rpc("restoreWorkspaceBaseline", [])), (restored) => (restored.ok ? null : restored.error)),
       (failed) => Effect.succeed(describeError({ cause: Cause.squash(failed) })),
     );
 

@@ -6,7 +6,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { OwedIntent, PlanDecisionOutcome, PlanReview, Rpc } from '@kinu.run/core';
+import type { OwedIntent, PlanDecisionOutcome, PlanReview } from '@kinu.run/core';
+import { workspaceRpc } from '../src/lib/workspace-rpc';
 import { usePlanDecision, type PlanDecision, type PlanDecisionInput } from '../src/hooks/use-plan-decision';
 
 const PLAN: PlanReview = {
@@ -68,11 +69,11 @@ function recorder(saves: boolean, decided: () => Promise<PlanDecisionOutcome | O
   const done: string[] = [];
 
   // Sent as JSON, as the socket does.
-  const rpc: Rpc = async (method, args) => {
+  const rpc = workspaceRpc(async (method, args) => {
     done.push(`${method} ${JSON.stringify(args)}`);
 
     return JSON.parse(JSON.stringify(method === 'decidePlanReview' ? await decided() : { ok: true, plan: PLAN }));
-  };
+  });
 
   const input: PlanDecisionInput = {
     plan: PLAN, editable: true, handoffPending: false, rpc,

@@ -188,7 +188,7 @@ export {
 
 export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
 
-export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
+export { WORKSPACE_TITLE_MAX, workspaceDisplayTitle, workspaceTitleDraft, workspaceTitleProblem } from './read-models/workspace-title';
 
 export { EvolutionEngine } from './evolution/engine';
 
@@ -234,8 +234,8 @@ export {
 } from './evolution/session-window';
 
 export {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog, CHANGELOG_ENTRY_KINDS,
-  revertChangelogEntryById,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog,
+  revertChangelogEntryById, ChangelogEntrySchema, ChangelogRevertResultSchema,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
   type ChangelogRevertContext, type ChangelogRevertResult,
@@ -286,7 +286,7 @@ export { parseSlateProject, slateTitle, type SlateProject } from './slates/proje
 export { slateAuthority } from './slates/authority';
 
 export {
-  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH,
+  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
   formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
@@ -740,7 +740,7 @@ export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemo
 
 export { repairToolCall } from './tools/repair-tool-call';
 
-export { McpToolError, McpProtocolFailureSchema } from './tools/mcp-error';
+export { McpToolError, McpProtocolFailureSchema, mcpCallResult } from './tools/mcp-error';
 
 export {
   clampToolResult,
@@ -913,7 +913,8 @@ export type { EvaluationGrounding } from './types/evaluation';
 export {
   initAlternateTakesTable,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
-  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeCandidateSchema,
+  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeSetSchema,
+  TakePickOutcomeSchema,
   type AlternateTakeCandidate, type AlternateTakeSet,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
@@ -924,7 +925,7 @@ export {
   newBranchId, isSteerBranchRunId, branchHeadId, admitBranch,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch,
   branchOutcomeFromJournal,
-  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle, type BranchTurnResult,
+  type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle, type BranchTurnResult, BranchTurnResultSchema,
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
 
@@ -1101,10 +1102,6 @@ export {
 } from './execution/bounded-output';
 
 export {
-  unsandboxedCommandEnvironment,
-} from './execution/command-env';
-
-export {
   TurnEscalationLedger, ESCALATION_OUTCOMES, type EscalationDecision, type EscalationOutcome,
   type EscalationSnapshot,
 } from './execution/escalation';
@@ -1193,7 +1190,7 @@ export {
 export {
   CHECKPOINTS_NO_DEVICE, summarizeRestorePlan,
   checkpointAvailability, deviceHistoryNote, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
-  CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema, FileRestoreResultSchema,
+  CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileCheckpointListingSchema, FileRestorePlanSchema, FileRestoreResultSchema,
   type FileCheckpoints, type FileCheckpointReads, type CheckpointTurnMeta, type CheckpointAvailability,
   type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult, type DeviceCheckpointHint,
@@ -1532,7 +1529,7 @@ export {
   DeviceConsentRegistry, DeviceConsentStore, initDeviceConsentRequestsTable, DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest,
-  type PendingDeviceConsent, type PendingConsentRow, type DeviceConsentNotice,
+  type PendingDeviceConsent, type PendingConsentRow, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
 } from './safety/device-consent';
 
 export {
@@ -1657,7 +1654,7 @@ export {
 
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema, WORK_TAB_JOBS } from './read-models/workspace-work';
 
-export { agentTitle, nestedAgent, type AgentLinkIds } from './subordinates/nested-agent';
+export { agentTitle, nestedAgent, type AgentLinkIds, type InspectSubordinate } from './subordinates/nested-agent';
 
 export { recognizeGitHubHttp, recognizeGitHubMcp, GitHubFactSchema, GITHUB_MCP_PRESET, type GitHubFact } from './github/recognize';
 
@@ -1838,10 +1835,9 @@ export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 
 // Continual refinement: each proposed edit routes to the authority that owns the artifact.
 export {
-  REFINEMENT_DISPOSITIONS, REFINEMENT_EDIT_KINDS, REFINEMENT_SCOPES,
-  REFINEMENT_STAGES, REFINEMENT_TRIGGERS, RefinementProposalSchema,
+  REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
   createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementRequestView,
-  refinementStagingPath,
+  refinementStagingPath, RefinementRequestViewSchema,
   type EvolutionDebt, type OpenRefinementInput, type RefinementDeps,
   type RefinementDisposition, type RefinementEdit, type RefinementEditKind,
   type RefinementProposal, type RefinementRequest,
@@ -1852,10 +1848,12 @@ export {
 
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
-export { listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement } from './evolution/refinement-host';
+export {
+  listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
+} from './evolution/refinement-host';
 
 export {
-  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute,
+  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute, RefinementDecisionResultSchema, StagedSkillResultSchema,
   type RefinementDecision, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult, type StagedSkillView,
 } from './evolution/refinement-skill';
@@ -2079,7 +2077,7 @@ export type {
 } from './read-models/workspace-overview';
 
 export type {
-  AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
+  ActorSnapshot, AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
 } from './read-models/status';
 
 export {
@@ -2096,6 +2094,8 @@ export {
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
+  EvolutionConfigViewSchema, ProviderAccountsSchema, ReasoningEffortViewSchema, ReasoningEffortWriteSchema, SetModelResultSchema,
+  StoredModelSpecSchema,
 } from './read-models/config-plane';
 
 export type {
@@ -2139,7 +2139,7 @@ export {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
 
-export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views';
+export { EvolutionChangelogViewSchema, type EvolutionChangelogView, type TakePickDeps } from './read-models/evolution-views';
 
 // Profile catalogs
 export {
@@ -2179,7 +2179,7 @@ export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-m
 
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
-  type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
+  type MemoryEntry, type PendingConsent, type SubordinateActivityEvent,
   type TabPresence, evolutionHelper, ownerFacingSubordinate,
 } from './protocol';
 
@@ -2243,17 +2243,17 @@ export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressA
 
 export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
-  fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
+  BuildStampSchema, fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
 
 export {
   releaseArtifact, releaseArtifactHead, type ReleaseArtifactObject, type ReleaseArtifactStore,
 } from './http/release-artifact';
 
-export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV } from './http/release-message';
+export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, verifyRelease } from './http/release-message';
 
 export {
-  SignedReleaseSchema, signRelease, verifyRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
+  SignedReleaseSchema, signRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
 } from './http/release-signing';
 
 export {
@@ -2428,6 +2428,10 @@ export {
   type AgentRpcMethod,
   type HostedWindowActor,
 } from './cli/agent-rpc-access';
+
+export {
+  launchDotenv, launchDotenvFiles, PROVIDER_KEY_ENV, SESSION_CREDENTIAL_ENV, unsandboxedCommandEnvironment, type LaunchDotenv,
+} from './cli/command-env';
 
 export {
   bunResolutionShell,

@@ -23,7 +23,7 @@ import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
 import { present } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
-import { deriveUserId } from '../src/auth/store';
+import { accountIdFor } from '../src/auth/store';
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
@@ -33,7 +33,9 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
 
 const OWNER_ID = '0123456789abcdef0123456789abcdef';
 
-const VIEWER_ID = 'fedcba9876543210fedcba9876543210';
+/** The account pat@example.test is on the harness's deployment, which declares no sign-in provider: a share naming
+ *  pat reaches the account pat signs in to. */
+const VIEWER_ID = await accountIdFor({}, 'pat@example.test');
 
 const APP_ORIGIN = 'https://app.test';
 
@@ -119,8 +121,7 @@ async function twoUserWorld(): Promise<World> {
     ['viewer-home', viewerSide.agent.agent],
   ]);
 
-  // pat@example.test is the viewer: a card sent to the account that email names lands in the viewer's.
-  for (const [id, side] of [[OWNER_ID, ownerSide], [VIEWER_ID, viewerSide], [await deriveUserId('pat@example.test'), viewerSide]] as const) users.set(id, side.user);
+  for (const [id, side] of [[OWNER_ID, ownerSide], [VIEWER_ID, viewerSide]] as const) users.set(id, side.user);
   const acquired: string[] = [];
 
   const partialEnv: Partial<Env> = {};
@@ -519,6 +520,37 @@ async function shareWithPat(world: World, owner: AuthIdentity) {
 
   return await jsonBody(shared, LiveShareCreatedSchema);
 }
+
+test("a share is unseen until its person opens Shared, on any device, and one made after that is unseen again", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const viewer = identityOf(VIEWER_ID, 'pat@example.test');
+  const unseen = async () => (await heldBy(world, viewer)).map((row) => row.unseen === true);
+
+  await shareWithPat(world, owner);
+  await world.ownerUser.userDO.alarm();
+  expect(await unseen()).toEqual([true]);
+
+  expect(present(await sharedRequest(world.env, viewer, post('/api/shared/seen', {})), 'the seen answer').status).toBe(200);
+  expect(await unseen()).toEqual([false]);
+
+  // Reaching pat a minute after Shared was opened.
+  setSystemTime(new Date(Date.now() + 60_000));
+
+  try {
+    const again = present(await sharedRequest(world.env, owner, post('/api/shared/live', {
+      workspace: 'issues-owner', slate: 'issues', visibility: 'users', emails: ['pat@example.test'], fork: false,
+    })), 'the second share answer');
+
+    expect(again.status).toBe(201);
+    await world.ownerUser.userDO.alarm();
+    expect((await unseen()).filter(Boolean)).toHaveLength(1);
+    expect(await unseen()).toHaveLength(2);
+  } finally {
+    setSystemTime();
+  }
+});
 
 /** The account delete as its route runs it: the typed email, then the forget sweep, then the object's teardown. */
 async function deleteAccount(world: World, owner: AuthIdentity): Promise<number> {

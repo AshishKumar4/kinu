@@ -11,8 +11,9 @@ import { SlateInlineContext } from '../src/components/slates/context';
 import { MarkdownContent } from '../src/components/surfaces/shared';
 import { MessageView } from '../src/components/MessageView';
 import { SLATES_CHANGED_METADATA_KEY, slatesToPreview } from '@kinu.run/core';
+import { workspaceRpc } from '../src/lib/workspace-rpc';
 
-const noopRpc = async (): Promise<never> => { throw new Error('no rpc in the static renderer'); };
+const noopRpc = workspaceRpc(async (): Promise<never> => { throw new Error('no rpc in the static renderer'); });
 
 describe('the inline slate card', () => {
   // 2026-09-26: an address that names no slate (`slate://..`) left the pass re-reading it forever, hanging the page.

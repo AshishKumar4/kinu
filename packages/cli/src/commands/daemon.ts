@@ -4,13 +4,12 @@ import { basename, join } from 'node:path';
 import { spawnKinuScript } from '../self-spawn';
 import type { Database } from 'bun:sqlite';
 import { renderThrownChain, tolerate, settle, settleSync, type KinuError } from '@kinu.run/core/obs';
-import type { HostedAgentRef } from '@kinu.run/core';
+import type { HostedAgentRef, SessionEvent } from '@kinu.run/core';
 import {
   LocalAgentHost,
   openWorkspaceCLI,
   writeSecretFile,
   type LocalHostedAgent,
-  type SessionEvent,
 } from '@kinu.run/cli-backend';
 import {
   AGENT_HOME,

@@ -37,9 +37,21 @@ export interface EvolutionConfigView {
   advisorMinSeverity: AdvisorSeverity;
 }
 
-export function getStoredModelSpec(config: AgentConfigStore) {
+export const EvolutionConfigViewSchema: v.GenericSchema<EvolutionConfigView> = v.object({
+  learning: v.boolean(),
+  liveTrials: v.boolean(),
+  advisorEnabled: v.boolean(),
+  advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
+});
+
+/** The workspace's stored model, as each surface reads it over the wire. */
+export const StoredModelSpecSchema = v.object({ spec: v.nullable(v.string()) });
+
+export function getStoredModelSpec(config: AgentConfigStore): v.InferOutput<typeof StoredModelSpecSchema> {
   return { spec: config.getModel() };
 }
+
+export const SetModelResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
 
 export function setModel(deps: SetModelDeps, spec: string) {
   const normalized = deps.normalize(spec);
@@ -49,11 +61,17 @@ export function setModel(deps: SetModelDeps, spec: string) {
   return { ok: true, spec: normalized };
 }
 
-export function getReasoningEffort(config: AgentConfigStore) {
+/** The reasoning effort a workspace holds; null where its tier decides. */
+export const ReasoningEffortViewSchema = v.object({ effort: v.nullable(ReasoningEffortSchema) });
+
+export function getReasoningEffort(config: AgentConfigStore): v.InferOutput<typeof ReasoningEffortViewSchema> {
   return { effort: config.getReasoningEffort() };
 }
 
-export function getProviderAccounts(config: AgentConfigStore) {
+/** The account each provider's calls use, by provider. */
+export const ProviderAccountsSchema = v.object({ accounts: v.record(v.string(), v.string()) });
+
+export function getProviderAccounts(config: AgentConfigStore): v.InferOutput<typeof ProviderAccountsSchema> {
   return { accounts: config.getProviderAccounts() };
 }
 
@@ -69,6 +87,9 @@ export function setProviderAccount(config: AgentConfigStore, provider: JsonValue
 }
 
 export interface ReasoningEffortWrite<Effort extends ReasoningEffort | null> { ok: true; effort: Effort }
+
+/** A reasoning-effort write as a client reads it: null when the write cleared it. */
+export const ReasoningEffortWriteSchema = v.object({ ok: v.literal(true), effort: v.nullable(ReasoningEffortSchema) });
 
 /** Null clears the setting: the tier's level applies again. */
 export function setReasoningEffort(config: AgentConfigStore, effort: null): ReasoningEffortWrite<null>;

@@ -11,12 +11,13 @@ import { Loader } from "@cloudflare/kumo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
 import { fmtTokens, fmtUsd, fmtPct, quotaWindowText, timeAgo } from "@kinu.run/core";
-import type { ActivitySnapshot, CacheHitStats, Rpc } from "@kinu.run/core";
+import type { ActivitySnapshot, CacheHitStats } from "@kinu.run/core";
 import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu.run/core";
 import type {
   AccountSpend, ActivityLogEntry, ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,
 } from "@kinu.run/core";
 import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "@kinu.run/core";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const STREAMING_POLL_MS = 1500;
 
@@ -38,12 +39,12 @@ const planeFill = (plane: ContextPlane): string =>
   `color-mix(in srgb, var(--c-accent) ${Math.round(PLANE_ALPHA[plane] * 100)}%, transparent)`;
 
 export interface ActivitySurfaceProps {
-  rpc: Rpc;
+  rpc: WorkspaceRpc;
   isStreaming: boolean;
 }
 
 export function ActivitySurface({ rpc, isStreaming }: ActivitySurfaceProps) {
-  const load = useCallback(() => rpc<ActivitySnapshot>("getActivitySnapshot", []), [rpc]);
+  const load = useCallback(() => rpc("getActivitySnapshot", []), [rpc]);
   const revalidate = useCallback(() => (isStreaming ? STREAMING_POLL_MS : IDLE_POLL_MS), [isStreaming]);
   const { resource, reload } = useAsyncResource(load, revalidate);
   const snap = lastValue(resource);

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { ShareNetworkIcon } from "@phosphor-icons/react";
-import type { Rpc, SlateSummary } from "@kinu.run/core";
+import type { SlateSummary } from "@kinu.run/core";
 import { ShareSlateDialog } from "./ShareSlateDialog";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
-export function ShareSlateControl({ workspace, slate, rpc }: { workspace: string; slate: SlateSummary; rpc: Rpc }) {
+export function ShareSlateControl({ workspace, slate, rpc }: { workspace: string; slate: SlateSummary; rpc: WorkspaceRpc }) {
   const [sharing, setSharing] = useState(false);
 
   return (

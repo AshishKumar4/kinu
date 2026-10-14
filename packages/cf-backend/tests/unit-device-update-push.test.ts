@@ -139,7 +139,9 @@ describe('a daemon reports why it cannot take a served build', () => {
     await harness.sendDeviceHello(behind);
     expect(harness.devicePushes).toHaveLength(1);
 
+    // A deploy publishes the newer build and ends every socket; the daemon's next connect reads it.
     servedBuild.version = '0.3.1+newer';
+    harness.attachDevice(deviceId);
     await harness.sendDeviceHello(behind);
     expect(harness.devicePushes).toHaveLength(2);
     expect(harness.devicePushes[1]).toMatchObject({ type: DEVICE_UPDATE, version: servedBuild.version });

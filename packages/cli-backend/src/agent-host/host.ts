@@ -32,7 +32,6 @@ import {
   createTeamToolDeps,
   createTemporaryAgentPort,
   delegationBudgetOf,
-  delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromTranscript,
   actorHomeName,
@@ -95,12 +94,12 @@ import { OS_LEASE_PROCESS } from './lease-process';
 import {
   DriverLeaseHold, REAL_CLOCK,
   type DriverKind, type DriverLeaseHolder,
+  type SessionEvent,
 } from '@kinu.run/core';
 import {
   LocalAgentSession,
   type LocalAgentSessionOpts,
   type LocalParentRelay,
-  type SessionEvent,
 } from '../local-session';
 import { createLocalActorHost } from '../actor-host';
 import type { LocalOrchestration } from '../orchestration';
@@ -1086,13 +1085,8 @@ export class LocalAgentHost {
       )),
     };
 
-    // At the depth cap, drop the temporary port: a role-targeted `ask` births a child and would
-    // otherwise recurse past `DELEGATION_MAX_DEPTH`. `hire` is caught by core's dispatch refusal.
-    if (!delegationExhausted(delegation)) {
-      Object.assign(input, { temporary: parent.temporary });
-    }
-
-    return createTeamToolDeps(input);
+    // What a capped agent is offered is core's (`offered`): no team at all.
+    return createTeamToolDeps({ ...input, temporary: parent.temporary });
   }
 
   /**
@@ -1135,7 +1129,6 @@ export class LocalAgentHost {
       rename: async (name, displayName, nameOrigin) => {
         const child = await this.openChildEntry(parentOf(), name);
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
-        child.session.host.broadcast({ type: 'workspace_renamed', displayName });
       },
       dismiss: (name, dismissal, reference) => this.dismissChild(parentOf(), name, dismissal, reference),
     };

@@ -10,7 +10,7 @@ server.registerTool(
   { description: 'Echo the input text back.', inputSchema: { text: z.string(), fail: z.boolean().optional() } },
   async ({ text, fail }) => fail
     ? { isError: true, content: [{ type: 'text', text: 'remote failure: ' + text }], structuredContent: { error: text, reason: 'remote evidence' } }
-    : { content: [{ type: 'text', text: `echo: ${text}` }] },
+    : { content: [{ type: 'text', text: `echo: ${text}` }], structuredContent: { echoed: text } },
 );
 
 server.registerTool(

@@ -17,7 +17,8 @@ import {
   type AgentProviderRegistry, type UserCredentialClient,
 } from './providers/agent-registry';
 import type { ActorReference, ModelCallSink, UserCaller } from '@kinu.run/core';
-import type { ObjectNamespace } from '@kinu.run/core';
+import type { LabelSignerEnv, ObjectNamespace, PreviewSuffixEnv } from '@kinu.run/core';
+import { selfPreviewPass } from './viewer-pass';
 
 type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider>[0]['AI']>['toMarkdown'];
 
@@ -26,7 +27,7 @@ interface OwnedAiBinding extends WorkersAIBinding {
   toMarkdown?: MarkdownConversion;
 }
 
-export interface OwnedModelEnv<Id> extends ProviderEnv {
+export interface OwnedModelEnv<Id> extends ProviderEnv, PreviewSuffixEnv, LabelSignerEnv {
   AI?: OwnedAiBinding;
   BROWSER: BrowserRunQuickActions;
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
@@ -38,6 +39,8 @@ export interface OwnedModelServicesOptions<Id> {
   readonly agentName: () => string;
   /** The workspace whose conversations share a prompt cache (`actorAffinity`). */
   readonly workspaceId: () => string;
+  /** The workspace's name, which its previews' hosts carry. */
+  readonly workspaceName: () => string;
   readonly appTitle: string;
   readonly ownerRequired: boolean;
   readonly getOwnerUserId: () => string | null;
@@ -56,6 +59,8 @@ export interface OwnedModelServicesOptions<Id> {
 export class OwnedModelServices<Id = DurableObjectId> {
   private providerRegistryCache: AgentProviderRegistry | null = null;
   private webSearchProviderCache: WebSearchProvider | null = null;
+
+  private viewerWebSearchProviderCache: WebSearchProvider | null = null;
   private modelCache: { spec: string; model: LanguageModel } | null = null;
   /** Revision the listing was swept under; a differing live revision invalidates it without a clock. */
   private cachedCredentialsRevision: number | null = null;
@@ -179,9 +184,21 @@ export class OwnedModelServices<Id = DurableObjectId> {
       this.options.env,
       () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
       this.options.reportModelCall,
+      (url) => selfPreviewPass(this.options.env, this.options.workspaceName(), url),
     );
 
     return this.webSearchProviderCache;
+  }
+
+  /** The same web for a share's viewer, whose calls carry no pass to the workspace's own previews. */
+  getViewerWebSearchProvider(): WebSearchProvider {
+    this.viewerWebSearchProviderCache ??= buildCfWebSearchProvider(
+      this.options.env,
+      () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
+      this.options.reportModelCall,
+    );
+
+    return this.viewerWebSearchProviderCache;
   }
 
   /** Drop owner-bound provider/auth state; the provider listing's only expiry (in-flight sweep included, per core). */

@@ -3,11 +3,10 @@ import { Cause, Effect, Result } from 'effect';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
-import {
-  AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
-  type AuthEnv,
-} from '../auth/session';
-import { publicHtmlHeaders } from '@kinu.run/core';
+import { AuthError, authenticateRequest, isFreshAuthTime, type AuthEnv } from '../auth/session';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, readCookie } from '../auth/cookies';
+import { CLI_PREVIEW_ENTRY_PATH, publicHtmlHeaders, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
+import { previewEntry } from '../nimbus-route';
 import { approvalDocument, installDocument } from '@kinu.run/core';
 import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
@@ -60,10 +59,10 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
 >;
 
 export type CliAgentTarget = CloudWorkspaceBirth & ModelSettingsFanoutTarget & AccountLedgerTarget
-  & Pick<OrchestratorAgent, 'createDurableWebhook' | 'requestOverviewPush'> & AgentRpcDispatch;
+  & Pick<OrchestratorAgent, 'createDurableWebhook' | 'requestOverviewPush' | 'previewAccess'> & AgentRpcDispatch;
 
 export interface CliRoutesEnv<Id>
-  extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv {
+  extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv, PreviewSuffixEnv, LabelSignerEnv {
   AUTH_KV: KvStore;
   ASSETS: AssetFetcher;
   UserDO: ObjectNamespace<Id, CliRoutesAuthority>;
@@ -167,6 +166,9 @@ cliRoutes.use('/api/cli/*', async (c, next) => {
   if (denied) return denied;
   await next();
 });
+
+// A preview opens only for its owner (`nimbus-route.ts`): the CLI's way in, as the app's page is a browser's.
+cliRoutes.get(CLI_PREVIEW_ENTRY_PATH, async (c) => await previewEntry(c.req.raw, c.env, c.get('cli').userId));
 
 cliRoutes.get('/api/cli/me', async (c) => {
   const cli = c.get('cli');
@@ -508,6 +510,9 @@ function accessTokenDenial(
 
 function requiredAccessScope(method: string, path: string): AccessTokenScope | null {
   if (method === 'GET' && (path === '/workspaces' || path === '/models' || path === '/usage')) return 'workspace.read';
+
+  // Opening a preview runs its slate as the owner, as an executor command does.
+  if (method === 'GET' && path === '/preview') return 'workspace.exec';
 
   if (method === 'POST' && /^\/workspaces\/[^/]+\/connect-ticket$/.test(path)) return 'workspace.exec';
 

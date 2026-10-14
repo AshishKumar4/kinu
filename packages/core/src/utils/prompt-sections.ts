@@ -18,6 +18,9 @@ export const SYSTEM_REMINDER_TAG = 'system-reminder';
 /** A skill activation spliced after a person's message, in the same user role. */
 export const STEER_SKILLS_HEADING = 'The message above activates these skills; they apply for the rest of this turn.';
 
+/** What a drain spliced into a running turn says after its count ("1 event"): it lands after the ask that turn works on. */
+export const MID_TURN_DELIVERY_OPENING = 'arrived while you were working. Before finishing this response, also act on each as appropriate:';
+
 /** A turn's own `/name` activations, spliced just before its input, for that turn only. */
 export const TURN_SKILLS_HEADING = 'The next message activates these skills; they apply for this turn only.';
 

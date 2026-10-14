@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-14",
-  "files": 3288,
-  "functions": 86079,
+  "files": 3287,
+  "functions": 86076,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -246,10 +246,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/cf-backend/src/pages/DrivePage.tsx#DrivePage",
-      "complexity": 27
-    },
-    {
       "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
       "complexity": 27
     },
@@ -363,10 +359,6 @@
     },
     {
       "key": "packages/cli/src/slash-commands.ts#instructionsCommand",
-      "complexity": 26
-    },
-    {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#30",
       "complexity": 26
     },
     {

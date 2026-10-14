@@ -68,12 +68,13 @@ async function galleryOpening(rpc: GalleryRpc): Promise<string> {
 		list("listSubordinates"), list("listPendingConsents"), list("listWorkspaceAgents"),
 	]);
 
+	const opening = v.parse(v.looseObject({ chat: v.looseObject({}) }), snapshot);
 	// `&opening=bad-plan`: an opening whose plan this page cannot read, as a newer or broken server might send.
-	const badPlan = new URLSearchParams(location.search).get("opening") === "bad-plan" ? { activePlan: { id: 3 } } : {};
+	const chat = new URLSearchParams(location.search).get("opening") === "bad-plan" ? { ...opening.chat, activePlan: { id: 3 } } : opening.chat;
 
 	return JSON.stringify({
-		...v.parse(v.looseObject({}), snapshot),
-		pendingActions, backgroundJobs, inspectedWork, subordinates, pendingConsents, workspaceAgents, ...badPlan,
+		...opening, chat,
+		pendingActions, backgroundJobs, inspectedWork, subordinates, pendingConsents, workspaceAgents,
 	});
 }
 

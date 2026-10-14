@@ -21,7 +21,7 @@ import { UserDO } from '../../src/user/user-do';
 export * from '../../src/server';
 
 const PROBE_METHODS = [
-  'pair', 'bindWorkspace', 'admit', 'run', 'cancelOwn', 'stopAgent', 'acknowledge', 'withdrawConsent', 'answerConsent', 'revoke', 'requests',
+  'pair', 'reconnecting', 'bindWorkspace', 'admit', 'run', 'cancelOwn', 'stopAgent', 'acknowledge', 'withdrawConsent', 'answerConsent', 'revoke', 'requests',
   'unstoppedSince', 'hostWorkspace', 'startParkedTurn', 'runOnMachine', 'stopWork', 'pendingConsents', 'releaseTurn',
 ];
 
@@ -80,6 +80,24 @@ export class DeviceUserProbeDO extends UserDO {
     if (!issued.ok || issued.ticket === undefined) throw new Error('the paired machine was issued no connect ticket');
 
     return { deviceId, ticket: issued.ticket };
+  }
+
+  /**
+   * A machine whose daemon holds two connect tickets at once, as one that dials again before the first answer, on an
+   * account where a workspace watches its machines: each connect then tells that workspace, a real call that lets the
+   * other connect run in between.
+   */
+  async reconnecting(label: string): Promise<{ deviceId: string; tickets: [string, string] }> {
+    const owner = await ownerCaller(this.env);
+    const { deviceId, token } = await this.registerDevice(owner, label);
+
+    this.ctx.storage.sql.exec(`INSERT OR IGNORE INTO device_status_watchers (agent_name) VALUES (?)`, 'devices-page-open');
+    const tickets = await Promise.all([this.issueDeviceConnectTicket(owner, token), this.issueDeviceConnectTicket(owner, token)]);
+    const [first, second] = tickets.map((issued) => issued.ticket);
+
+    if (first === undefined || second === undefined) throw new Error('the paired machine was issued no connect ticket');
+
+    return { deviceId, tickets: [first, second] };
   }
 
   /** A workspace this account owns, holding its identity, whose owner let it use `deviceId` always. */

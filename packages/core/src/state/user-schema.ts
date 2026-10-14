@@ -392,6 +392,8 @@ export function initUserTables(sql: SqlExec): void {
       workspace     TEXT NOT NULL,
       share_id      TEXT NOT NULL,
       card          TEXT NOT NULL,
+      -- When the card first reached this account: what Shared's unseen dot is read against.
+      received_at   INTEGER NOT NULL,
       PRIMARY KEY (owner_user_id, workspace, share_id)
     )
   `);

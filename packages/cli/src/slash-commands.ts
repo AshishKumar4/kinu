@@ -1,8 +1,8 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
 import { fmtUsd, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, specWithoutAccount, usageTotal, type CompactOutcome } from '@kinu.run/core';
-import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
-import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type StagedSkillView, type RefinementListing, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import type { AgentChangelogView, AgentClient, AgentClientStatus } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
@@ -1020,7 +1020,7 @@ type LocatedRefinementEdit =
 
 /** By listing index, against a re-fetched listing. */
 function resolveRefinementEdit(
-  view: AgentRefinementView,
+  view: RefinementListing,
   requestRef: string | undefined,
   editRef: string | undefined,
 ): LocatedRefinementEdit {
@@ -1079,7 +1079,7 @@ function renderRefinementRequest(request: RefinementRequestView): string {
   return lines.join('\n');
 }
 
-function renderRefinementsText(view: AgentRefinementView): string {
+function renderRefinementsText(view: RefinementListing): string {
   const lines = [view.debt.summary];
 
   if (view.debt.owed) {

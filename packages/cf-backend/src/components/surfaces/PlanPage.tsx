@@ -1,11 +1,12 @@
 /** A plan's own page in the inspector: its newest revision, reviewed where it is read. */
 import { lazy, Suspense } from "react";
 import { Loader } from "@cloudflare/kumo";
-import type { OwedOwnerIntent, OwnedPlan, Rpc, WorkspaceWork } from "@kinu.run/core";
+import type { OwedOwnerIntent, OwnedPlan, WorkspaceWork } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { PlanPages } from "./use-plan-pages";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const PlanReviewView = lazy(() => import("./PlanReviewView"));
 
@@ -15,8 +16,8 @@ const PlanReviewView = lazy(() => import("./PlanReviewView"));
  */
 export function PlanPageList({ pages, rpc, planRpc, onReviewActor, owedIntents }: {
   pages: PlanPages;
-  rpc: Rpc;
-  planRpc: Rpc | undefined;
+  rpc: WorkspaceRpc;
+  planRpc: WorkspaceRpc | undefined;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   owedIntents?: readonly OwedOwnerIntent[];
 }) {
@@ -47,8 +48,8 @@ export function PlanPageList({ pages, rpc, planRpc, onReviewActor, owedIntents }
 function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry, owedIntents }: {
   item: OwnedPlan;
   owner: string;
-  rpc: Rpc;
-  planRpc: Rpc;
+  rpc: WorkspaceRpc;
+  planRpc: WorkspaceRpc;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
