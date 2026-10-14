@@ -27,23 +27,14 @@
  * preflight that refused every dirty tree would refuse every developer.
  */
 import { spawnSync } from 'node:child_process';
-import * as v from 'valibot';
 
 import { evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
+import { servedHealth, type ServedHealth } from '../packages/test-utils/src/served-health';
 
-/** `/api/health`'s build stamp, as this reads it off the wire. Only the fields
- *  the comparison uses — the feature counts and endpoint map are the health
- *  route's own contract and parsing them here would be a mirror with no reader. */
-const HealthSchema = v.object({
-  ok: v.boolean(),
-  build: v.nullable(v.object({
-    version: v.string(),
-    sha: v.string(),
-    builtAt: v.string(),
-  })),
-});
-
-export type DeployedHealth = v.InferOutput<typeof HealthSchema>;
+/** `/api/health`'s build stamp ({@link servedHealth}): null for a Worker no full deploy has stamped. */
+export interface DeployedHealth {
+  readonly build: NonNullable<ServedHealth['build']> | null;
+}
 
 export type DeploymentVerdict =
   /** The deployment runs this checkout's HEAD. */
@@ -109,16 +100,9 @@ export async function readDeployedHealth(origin: string): Promise<{
   health: DeployedHealth | null; failure?: string;
 }> {
   try {
-    const response = await fetch(`${origin}/api/health`, {
-      headers: { 'cache-control': 'no-cache' },
-      signal: AbortSignal.timeout(20_000),
-    });
+    const { status, build } = await servedHealth(origin, { timeoutMs: 20_000 });
 
-    if (!response.ok) {
-      return { health: null, failure: `HTTP ${String(response.status)}` };
-    }
-
-    return { health: v.parse(HealthSchema, await response.json()) };
+    return build === undefined ? { health: null, failure: `HTTP ${String(status)} with no health answer` } : { health: { build } };
   } catch (error) {
     return { health: null, failure: String(error) };
   }

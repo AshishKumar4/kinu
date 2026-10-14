@@ -40,6 +40,7 @@ import { parsePlatformReport } from '../evals/src/platform';
 import { parseResults, trials } from '../evals/src/results';
 import { EvalRunSchema, readEvalRun } from './evals-artifacts';
 import { isEvalTask, trackedFiles } from './sources';
+import { servedHealth } from '../packages/test-utils/src/served-health';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -340,11 +341,6 @@ export function planRollback(
   return { target, history: history.map((entry, index) => index === position ? { ...entry, withdrawnAt: at } : entry) };
 }
 
-const HealthSchema = v.looseObject({ build: v.looseObject({ sha: v.string() }) });
-
-/** A health answer's body, which is the SPA shell rather than JSON while a route serves nothing yet. */
-const HealthBodySchema = v.pipe(v.string(), v.parseJson(), HealthSchema);
-
 /**
  * Proof that `origin` serves `promotion`: its health names the commit, asked again until the edge converges, and every
  * download, the worker release tarball among them, is byte for byte the one that build served.
@@ -358,10 +354,9 @@ export async function verifyServing(
   let served = '';
 
   for (let attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt += 1) {
-    const answer = await fetcher(`${origin}/api/health?rollback=${String(attempt)}`);
-    const health = v.safeParse(HealthBodySchema, await answer.text());
+    const { status, build } = await servedHealth(origin, { query: `?rollback=${String(attempt)}`, fetcher });
 
-    served = answer.ok && health.success ? health.output.build.sha : `an answer ${String(answer.status)} without a build`;
+    served = build?.sha ?? `an answer ${String(status)} without a build`;
 
     if (served === promotion.sha) break;
 
@@ -476,9 +471,9 @@ function promotions(bucket: string): Promotion[] {
 /** Refused unless `origin` serves `sha` with this very signed stamp: a record or a history entry names what a
  *  deployment serves, never a build that exists only on this machine. */
 async function servedAs(origin: string, sha: string, downloads: Downloads): Promise<void> {
-  const health = v.parse(HealthBodySchema, await (await fetch(`${origin}/api/health`)).text());
+  const served = (await servedHealth(origin)).build?.sha ?? 'no build';
 
-  if (health.build.sha !== sha) throw new Error(`${origin} serves ${health.build.sha}, not ${sha}`);
+  if (served !== sha) throw new Error(`${origin} serves ${served}, not ${sha}`);
   const stamp = downloads[STAMP];
 
   if (stamp === undefined) throw new Error(`the downloads hold no ${STAMP}`);

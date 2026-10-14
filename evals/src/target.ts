@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { USER_AI_PROXY_PATH, type RunEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
-import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary } from '@kinu.run/test-utils';
+import { DeploymentAnswer, evalTargetVerdict, evalWorkspaceName, infraBoundary, servedHealth } from '@kinu.run/test-utils';
 import { openPublicSession, type KinuPublicSession } from './session';
 import type { CatalogNeed } from './workspace-roster';
 import { resolveWebIdentity, webHeaders, type EvalTarget } from './workspace-roster';
@@ -41,10 +41,6 @@ export function resolveEvalTarget(env: Env): EvalTarget {
   return { origin: verdict.origin, identity: web.identity };
 }
 
-const HealthSchema = v.object({
-  build: v.object({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{7,40}$/)) }),
-});
-
 /** What the deployment serves now, the product a trial measures: the build's sha. */
 export interface Served {
   readonly sha: string;
@@ -52,12 +48,11 @@ export interface Served {
 
 export function deployedBuild(target: Pick<EvalTarget, 'origin'>): Promise<Served> {
   return infraBoundary(`GET ${target.origin}/api/health`, async () => {
-    const response = await fetch(`${target.origin}/api/health`);
+    const { status, build } = await servedHealth(target.origin);
 
-    if (!response.ok) throw new DeploymentAnswer(`/api/health answered ${String(response.status)}`, response.status);
-    const health = v.parse(HealthSchema, await response.json());
+    if (build === undefined || build === null) throw new DeploymentAnswer(`/api/health answered ${String(status)} with no build stamp`, status);
 
-    return { sha: health.build.sha };
+    return { sha: build.sha };
   });
 }
 

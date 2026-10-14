@@ -27,8 +27,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import * as v from 'valibot';
 import { gitIn } from '../packages/test-utils/src/git-env';
+import { servedHealth } from '../packages/test-utils/src/served-health';
 
 /** The dedicated checkout continuous staging deploys from, and no one edits. */
 export const WORKTREE = '/mnt/local/kinu/wt/staging-loop';
@@ -286,17 +286,9 @@ function stateOf(loop: 'staging-loop' | 'promote-loop', branch: string): string 
   return join(process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state'), 'kinu', loop, instanceOf(branch));
 }
 
-/** What /api/health says of the build: a reset placeholder's names none. */
-const HealthSchema = v.looseObject({ build: v.nullish(v.looseObject({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{7,40}$/u)) })) });
-
-/** The build sha `origin` serves, as its /api/health names it, or empty. */
+/** The build sha `origin` serves, as its /api/health names it, or empty: a reset placeholder's names none. */
 async function servedBuild(origin: string): Promise<string> {
-  const answer = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(30_000) });
-
-  if (!answer.ok) return '';
-  const health = v.safeParse(HealthSchema, await answer.json());
-
-  return health.success ? health.output.build?.sha ?? '' : '';
+  return (await servedHealth(origin)).build?.sha ?? '';
 }
 
 /** A command in `worktree`, its output passed on, and its exit status. */

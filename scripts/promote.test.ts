@@ -97,7 +97,8 @@ describe('a deployment\'s downloads', () => {
         if (path === '/api/health') {
           const sha = health.length > 1 ? health.shift() : health[0];
 
-          return sha === undefined ? new Response('<html></html>') : Response.json({ ok: true, build: { sha } });
+          return sha === undefined ? new Response('<html></html>')
+            : Response.json({ ok: true, build: { version: `0.2.0+${sha}`, sha, builtAt: '2026-10-14T00:00:00.000Z' } });
         }
 
         const name = path.replace('/downloads/', '');
