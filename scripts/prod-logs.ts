@@ -1223,16 +1223,15 @@ async function perMinute(t: Telemetry, filters: readonly Filter[]): Promise<Obje
 }
 
 /**
- * A read is settled when it has held still this long: every read across it agrees. Measured on staging 2026-10-14,
- * 03:15-04:34Z, a fixed window's per-minute counts read every minute across deploy 7591e6fec's wave: of 58,950 rows
- * that landed after the first read, 98.4% were in the first read after their minute ended, 99.96% within 3 min and all
- * but 2 within 8.5 min; those 2 landed 37 to 41 min late, past any hold a deploy waits out, as 2026-10-08's 22 to 151
- * min rows did (see `SETTLE_CAP_MS`). Ten minutes covers every other row.
+ * How long after a window's end every row of its events has landed. Measured on staging 2026-10-14, 03:15-04:34Z, a
+ * fixed window's per-minute counts read every minute across deploy 7591e6fec's wave: of 58,950 rows that landed after
+ * the first read, 98.4% were in the first read after their minute ended, 99.96% within 3 min and all but 2 within
+ * 8.5 min, so within 9.5 min of their event; those 2 landed 37 to 41 min late, past any hold a deploy waits out, as
+ * 2026-10-08's 22 to 151 min rows did (see `SETTLE_CAP_MS`). Ten minutes covers every other row.
  */
 export const SETTLE_HOLD_MS = 10 * MINUTE_MS;
 
-/** How often a settling read is taken: the hold starts again at the first read after the counts stop moving, rather
- *  than at the next ten-minute mark. */
+/** The grid settling reads are taken on, from the window's end, so a read's own time never delays the next. */
 export const SETTLE_POLL_MS = 2 * MINUTE_MS;
 
 /**
@@ -1250,20 +1249,31 @@ export type SettledRead<T> =
   | { readonly settled: false; readonly last: T; readonly reads: number; readonly lateRows: number };
 
 /**
- * Reads every `pollMs` until the `fingerprint` has held still for `holdMs`, every read across it agreeing, or until
- * `capMs` has passed since the first. `rows` counts what the window held at each read, so the answer names how many
- * rows landed after the first read. A read the API refuses as `unavailable` says nothing of the window, so the next
- * poll reads again: the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no
- * answer at all fails on it; any other failure, a refused token, a query the API rejects or an answer that does not
- * parse, fails at once.
+ * Reads a window whose events end at `windowEnd` until it is settled: a read started `holdMs` or more after the
+ * window's end, when every row of its events has landed (`SETTLE_HOLD_MS`), whose `fingerprint` agrees with the read
+ * before it. Reads are taken at once and then on a `pollMs` grid from the window's end; past `capMs` from the first, the
+ * answer is "unsettled". `rows` counts what the window held at each read, so the answer names how many rows landed
+ * after the first read. A read the API refuses as `unavailable` says nothing of the window, so the next tick reads
+ * again: the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no answer at all
+ * fails on it; any other failure, a refused token, a query the API rejects or an answer that does not parse, fails at
+ * once.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
   readonly now: () => number; readonly sleep: (ms: number) => Promise<void>;
-  readonly pollMs: number; readonly holdMs: number; readonly capMs: number;
+  readonly windowEnd: number; readonly pollMs: number; readonly holdMs: number; readonly capMs: number;
 }): Promise<SettledRead<T>> {
   const started = at.now();
   const capped = (): boolean => at.now() - started + at.pollMs > at.capMs;
+  let readAt = started;
+
+  // The next tick of the grid after the last read began.
+  const tick = async (): Promise<void> => {
+    const next = at.windowEnd + (Math.floor((readAt - at.windowEnd) / at.pollMs) + 1) * at.pollMs;
+
+    await at.sleep(Math.max(0, next - at.now()));
+    readAt = at.now();
+  };
 
   const answer = async (): Promise<{ readonly value: T } | { readonly cause: unknown }> => {
     try {
@@ -1279,27 +1289,25 @@ export async function settledRead<T>(at: {
 
   while (!('value' in first)) {
     if (capped()) throw first.cause;
-    await at.sleep(at.pollMs);
+    await tick();
     first = await answer();
   }
 
   let last = first.value;
   const firstRows = at.rows(last);
   let reads = 1;
-  let stillSince = at.now();
 
   for (;;) {
     if (capped()) return { settled: false, last, reads, lateRows: at.rows(last) - firstRows };
-    await at.sleep(at.pollMs);
+    await tick();
     const next = await answer();
 
     if (!('value' in next)) continue;
     reads += 1;
-
-    if (at.fingerprint(next.value) !== at.fingerprint(last)) stillSince = at.now();
+    const agrees = at.fingerprint(next.value) === at.fingerprint(last);
     last = next.value;
 
-    if (at.now() - stillSince >= at.holdMs) return { settled: true, value: last, reads, lateRows: at.rows(last) - firstRows };
+    if (agrees && readAt - at.windowEnd >= at.holdMs) return { settled: true, value: last, reads, lateRows: at.rows(last) - firstRows };
   }
 }
 
@@ -1320,7 +1328,7 @@ async function versionCommand(args: Args): Promise<number> {
       read: async () => ({ read: await versionRead(t, subject), rows: await windowRows(t, subject) }),
       fingerprint: ({ read: value }) => JSON.stringify([versionFindings(value), value.effects.terminal]),
       rows: ({ rows }) => rows,
-      now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
+      now: () => Date.now(), sleep: (ms) => Bun.sleep(ms), windowEnd: args.to, pollMs: SETTLE_POLL_MS, holdMs: SETTLE_HOLD_MS, capMs: SETTLE_CAP_MS,
     });
 
     sampling = t.sampling;
@@ -1331,9 +1339,9 @@ async function versionCommand(args: Args): Promise<number> {
       findings = versionFindings(read.value.read);
       settledNote = `settled: ${late}`;
     } else {
-      findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: its counts still moved after `
-        + `${String(SETTLE_CAP_MS / MINUTE_MS)} min of reads ${String(SETTLE_POLL_MS / MINUTE_MS)} min apart, never still for `
-        + `${String(SETTLE_HOLD_MS / MINUTE_MS)} min (${late}), so it gives no verdict` }];
+      findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} is unsettled: no two reads `
+        + `${String(SETTLE_POLL_MS / MINUTE_MS)} min apart agreed in ${String(SETTLE_CAP_MS / MINUTE_MS)} min of reads, the later `
+        + `${String(SETTLE_HOLD_MS / MINUTE_MS)} min past the window's end (${late}), so it gives no verdict` }];
     }
   } catch (cause) {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
