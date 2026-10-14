@@ -48,7 +48,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { trackedTestFiles, bunWouldSkip } from './ladder';
-import { isAntiSlopRuleSuite, isBunDiscoverableSuite, isPythonSuite, isVitestEvalSuite } from './sources';
+import { isAntiSlopRuleSuite, isBunDiscoverableSuite, isPythonSuite, isVitestEvalSuite, packageOf } from './sources';
 import { parseLcov, mergeLcov } from './coverage-lcov';
 import type { LcovRecord } from './coverage-lcov';
 
@@ -103,10 +103,7 @@ function bunGroups(): SuiteGroup[] {
   const buckets = new Map<string, string[]>();
 
   for (const suite of allBunSuites()) {
-    let owner = 'tests';
-
-    if (suite.startsWith('packages/')) owner = suite.split('/')[1] ?? 'packages';
-    else if (suite.startsWith('scripts/')) owner = 'scripts';
+    const owner = packageOf(suite);
 
     // ONE exception to owner-grouping, and it is measured rather than stylistic.
     // `bun test --coverage` over all 62 `packages/cli` suites dies with
@@ -241,16 +238,6 @@ function reanchor(record: LcovRecord, vitestRoot: string): LcovRecord {
   if (record.file.startsWith('/') || record.file.includes('..')) return record;
 
   return { ...record, file: `${vitestRoot}/${record.file}` };
-}
-
-/** Per-record package attribution: the first path segment under packages/, or
- *  `scripts` / `tests` for the root suites. */
-function packageOf(file: string): string {
-  if (file.startsWith('packages/')) return file.split('/')[1] ?? 'packages';
-
-  if (file.startsWith('scripts/')) return 'scripts';
-
-  return 'tests';
 }
 
 interface FileCoverage {

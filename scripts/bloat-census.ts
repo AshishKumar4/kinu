@@ -20,14 +20,12 @@ import { canonical, commentCharacters } from './comment-only';
 import { measureFile } from './complexity';
 import { exportedDeclarations, inScope } from './dead-code';
 import { assertMeasured } from './gate-ratchet';
-import { readMatching, readSources, readTests } from './sources';
+import { packageOf, readMatching, readSources, readTests } from './sources';
 import {
   classMembers, declarationOf, declaredBindings, declaredName, identifierText, memberCalleeName, ownerName,
   parse, referencedNames, type SyntaxNode, walk,
 } from './syntax';
 import { buildGraph, builtinToolNames, findEntrypoints, findUnreached, isReacher, measureReach } from './wired';
-
-const packageOf = (file: string): string => file.split('/')[1] ?? file;
 
 const root = new URL('..', import.meta.url).pathname;
 
