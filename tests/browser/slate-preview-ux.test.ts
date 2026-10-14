@@ -4,7 +4,7 @@ import { detach } from '@kinu.run/core/obs';
 import { executorLabel } from '@kinu.run/core';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
-import { openInspectorPage } from '../../scripts/product-flows';
+import { inspectorPageListed, openInspectorPage } from '../../scripts/product-flows';
 import type { Frame, Page } from 'puppeteer';
 
 async function serveSlate(page: Page): Promise<void> {
@@ -353,10 +353,10 @@ test('preview tabs deduplicate live slates, fill the surface, and give each open
         await page.click('[data-notify-plan]');
         await readCycleElapsed(page);
         expect(await page.$eval(':not([hidden]) > [data-plan-page] [data-plan-title]', el => el.textContent)).toContain('Nested');
-        await page.click('[aria-label="Sandbox app"]');
+        await openInspectorPage(page, 'Sandbox app');
         await page.click('[data-worker-plan]');
-        // Another conversation's pending plan takes nobody anywhere: it waits as a page tab of its own.
-        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label*="Worker revision two"]');
+        // Another conversation's pending plan takes nobody anywhere: it waits as a page of its own in the bar.
+        await page.waitForSelector(inspectorPageListed('Worker revision two'));
         expect(await currentPage(page)).toBe('Sandbox app');
         await openWork(page);
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Worker revision two'));

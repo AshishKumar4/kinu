@@ -50,18 +50,18 @@ async function required(page: Page, scope: string, role: string, name: string): 
 
 /**
  * Each of the bar's tools by name: `reachable` when its centre is on screen and a press there lands on it, `hidden`
- * when it is drawn but clipped or covered. The bar is found from a page tab (`Tally`), as whatever holds both it and
- * the Activity tool, so the reading does not depend on how the bar is built.
+ * when it is drawn but clipped or covered. The bar is found from its pages, as whatever holds both them and the
+ * Activity tool, so the reading does not depend on how the bar is built.
  */
 function toolsInReach(page: Page): Promise<Record<string, string>> {
   return page.evaluate((names) => {
-    let bar = document.querySelector('button[aria-label="Tally"]');
+    let bar = document.querySelector('nav[aria-label="Pages"]');
 
     while (bar !== null && bar.querySelector('button[aria-label="Activity"]') === null) bar = bar.parentElement;
 
     const found = bar;
 
-    if (found === null) throw new Error('no bar holds both a page tab and Activity');
+    if (found === null) throw new Error('no bar holds both the pages and Activity');
 
     return Object.fromEntries(names.flatMap((name) => {
       const tool = found.querySelector(`button[aria-label="${name}"]`);

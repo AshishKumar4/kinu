@@ -56,6 +56,9 @@ function fitting(widths: readonly number[], open: number, room: number): Readonl
   return shown;
 }
 
+/** What a pointer resting on the bar's opener reads: the pages behind it, by name. */
+const titles = (pages: readonly PageTab[]): string => pages.map((page) => page.title).join(", ");
+
 function PagesMenu({ pages, open, choose }: { readonly pages: readonly PageTab[]; readonly open: SurfaceKind | null; readonly choose: (key: SurfaceKind) => void }) {
   return (
     <div className="p-pages-menu p-overlay border p-border animate-fade-in" role="menu">
@@ -110,18 +113,20 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
         {pages.map((page) => (
           <span key={page.key} className="p-page" data-open={page.key === surface ? "" : undefined}>
             <span className="p-page-link"><page.Icon size={14} />{page.title}</span>
-            {page.key === surface && page.action}
+            {/* The action's room, not the action: a measure mounts no second control. */}
+            {page.key === surface && page.action !== undefined && <span className="w-[23px] shrink-0" />}
           </span>
         ))}
       </span>
       {picked ? (
         <span className="relative flex min-w-0">
-          <button type="button" aria-expanded={menu} aria-haspopup="menu" aria-label={current.title} title={`${current.title}, one of ${String(pages.length)} pages`}
+          <button type="button" aria-expanded={menu} aria-haspopup="menu" aria-label={current.title} title={titles(pages)}
             className="p-page p-page-picker" data-open="" aria-current="true" onClick={() => setMenu(!menu)}>
             <current.Icon size={14} weight="fill" className="shrink-0" aria-hidden />
             <span className="truncate">{current.title}</span>
             <CaretDownIcon size={10} weight="bold" className="shrink-0 p-text-3" aria-hidden />
           </button>
+          {current.action}
           {menu && <PagesMenu pages={pages} open={surface} choose={choose} />}
         </span>
       ) : (
@@ -141,7 +146,7 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
       {!picked && hidden.length > 0 && (
         <span className="relative flex shrink-0">
           {/* With none beside the tools, the count says what it counts. */}
-          <button type="button" aria-expanded={menu} aria-haspopup="menu" aria-label={`${String(hidden.length)} more pages`}
+          <button type="button" aria-expanded={menu} aria-haspopup="menu" aria-label={`${String(hidden.length)} more pages`} title={titles(hidden)}
             className="p-bar-more" onClick={() => setMenu(!menu)}>
             {shown.size === 0 ? <>{hidden.length} {hidden.length === 1 ? "page" : "pages"}<CaretDownIcon size={10} weight="bold" aria-hidden /></> : `+${String(hidden.length)}`}
           </button>

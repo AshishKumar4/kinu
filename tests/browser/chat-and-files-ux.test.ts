@@ -2800,45 +2800,6 @@ test('code retains syntax colors through streaming and long sidebar titles stay 
   });
 });
 
-test('page tabs past the edge stay reachable by scrolling the strip sideways', async () => {
-  await withGallery(async ({ newPage, origin }) => {
-    const page = await newPage();
-    // The default inspector width with three slates: their tabs share the bar with the workspace's pinned tools.
-    await page.setViewport({ width: 1440, height: 900 });
-    await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('[aria-label="Tally"]');
-
-    // The tabs' own scroller: the nearest container around the first page that scrolls sideways.
-    const reach = await page.$eval('[aria-label="Board"]', (tab) => {
-      let scroller = tab.parentElement;
-
-      while (scroller !== null && getComputedStyle(scroller).overflowX !== 'auto') scroller = scroller.parentElement;
-
-      if (scroller === null) throw new Error('the page tabs have no scrolling container');
-      const row = scroller;
-      const last = row.querySelector<HTMLElement>('button[aria-label="Tally"]');
-
-      if (last === null) throw new Error('the strip has no Tally tab');
-
-      const inView = (): boolean => {
-        const box = last.getBoundingClientRect();
-        const frame = row.getBoundingClientRect();
-
-        return box.left >= frame.left && box.right <= frame.right;
-      };
-
-      const before = inView();
-      last.focus();
-
-      return { before, after: inView() };
-    });
-
-    expect(reach.before).toBe(false);
-    expect(reach.after).toBe(true);
-    await page.close();
-  });
-});
-
 /** Where the agent tab strip's photographs land, outside the worktree. */
 const TAB_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'chat-and-files-ux');
 

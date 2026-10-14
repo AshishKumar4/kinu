@@ -1905,6 +1905,14 @@ export async function openInspector(page: Page): Promise<void> {
   throw new Error(`the inspector column stayed at ${String(outcome.value)}px; tried ${JSON.stringify(outcome.attempts)}`);
 }
 
+/** A selector that finds the inspector's page whose title holds `title` among the bar's pages: its tab, or the bar's
+ *  opener of the pages without room, which names them. */
+export function inspectorPageListed(title: string): string {
+  const quoted = JSON.stringify(title);
+
+  return `nav[aria-label="Pages"] :is(li button[aria-label*=${quoted}], button[aria-haspopup="menu"][title*=${quoted}])`;
+}
+
 /** Open the inspector's page whose title holds `title` through its bar: its tab when it has room, else the bar's menu
  *  of the rest. Settles once that page is the open one. */
 export async function openInspectorPage(page: Page, title: string, wait = { timeout: 10_000 }): Promise<void> {
