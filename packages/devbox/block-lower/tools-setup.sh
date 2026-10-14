@@ -31,7 +31,7 @@ for part in rustc cargo std-gnu std-musl; do
 done
 fetch squashfuse.tar.gz https://github.com/vasi/squashfuse/releases/download/0.1.103/squashfuse-0.1.103.tar.gz 42d4dfd17ed186745117cfd427023eb81effff3832bab09067823492b6b982e7
 
-fetch bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913
+fetch bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64.zip 3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18
 unzip -p bun.zip bun-linux-x64/bun > "$out/usr/local/bin/bun"
 # The one layer of docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06 (1.0.0): the shim.
 token=$(curl -fsS 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:cloudflare/sandbox:pull' | jq -r .token)

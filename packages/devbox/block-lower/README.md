@@ -29,7 +29,7 @@ bun scripts/devbox-tools.ts build
 ```
 
 The golden installs that tarball into a real `cloudflare/debian-trixie`
-container and snapshots it. The tarball separately pins Bun 1.4.2; the host's
+container and snapshots it. The tarball separately pins Bun 1.4.3; the host's
 test runtime does not change a container's tools.
 
 ## Format and reads
