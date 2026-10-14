@@ -2864,6 +2864,16 @@ const MIXED_ASKS: PendingAction[] = [
 
 const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS]]);
 
+/** A command parked after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
+const LATE_ASK: PendingAction = {
+  id: "park-late", kind: "deferred_action", title: "Approve: a command the agent wants to run on workspace", detail: "rm -rf dist", at: NOW,
+};
+
+window.addEventListener("gallery:arrive-ask", () => {
+  document.documentElement.dataset.galleryArrived = "1";
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listPendingActions"] }));
+});
+
 /** `&asksHold=1`: a read of the queue after the first decision waits for `gallery:release-asks`, as a slow one would. */
 const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
 
@@ -2871,7 +2881,8 @@ const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
 async function galleryPendingActions(): Promise<JsonValue> {
   const asked = new URLSearchParams(location.search).get("asks");
   const decided = (document.documentElement.dataset.galleryDecided ?? "").split(",");
-  const asks = ASK_SETS.get(asked ?? "") ?? [];
+  const arrived = document.documentElement.dataset.galleryArrived === "1" ? [LATE_ASK] : [];
+  const asks = [...(ASK_SETS.get(asked ?? "") ?? []), ...arrived];
 
   if (ASKS_HELD && decided.some((id) => id !== "")) {
     const released = Promise.withResolvers<void>();

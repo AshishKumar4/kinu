@@ -753,14 +753,39 @@ const STACK_KEYS = `(() => {
   return [...open, ...behind];
 })()`;
 
-/** Presses the open card's answer named `words`. */
-function stackAnswer(words: string, key: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}] button`)})].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+/**
+ * Opens the flow's own card, then presses its answer named `words`, in one page task: the account's other runs raise
+ * cards too (account memory reaches every workspace), and one created meanwhile takes the front of a stack no pointer
+ * is on, so a card opened in one step can be behind by the next.
+ */
+function answerOwnCard(key: string, words: string): string {
+  return `(() => {
+    const open = () => document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)});
+
+    if (open() === null) document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
+    const button = [...(open()?.querySelectorAll('button') ?? [])].find((each) => each.textContent?.trim() === ${JSON.stringify(words)});
+
+    button?.click();
+
+    return button !== undefined;
+  })()`;
 }
 
-async function openStackCard(page: Page, key: string): Promise<void> {
-  await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click()`);
-  await until(page, 'the flow\'s own card open', `document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null`);
+/** Presses `words` on the flow's own card, opening it first if another took the front, until the press lands. */
+async function answerStackCard(page: Page, key: string, words: string): Promise<void> {
+  await until(page, `the flow's own card answered ${words}`, answerOwnCard(key, words));
+}
+
+/** What the flow's own card shows, opening it first if another took the front. */
+async function ownCardWords(page: Page, key: string): Promise<string> {
+  await until(page, "the flow's own card open", `(() => {
+    if (document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null) return true;
+    document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
+
+    return false;
+  })()`);
+
+  return v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)})?.textContent ?? ''`));
 }
 
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
@@ -783,16 +808,14 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     await until(page, 'both of the flow\'s parked commands stacked', `${actions}.length === 2`);
     const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(actions));
 
-    await openStackCard(page, stacked[0]);
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(stacked[0])}]`)})?.textContent ?? ''`));
+    const openWords = await ownCardWords(page, stacked[0]);
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
-    await page.evaluate(stackAnswer('Approve', stacked[0]));
+    await answerStackCard(page, stacked[0], 'Approve');
     await until(page, 'the flow\'s other card remains', `${remaining}.length === 1`);
     const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
 
-    await openStackCard(page, stacked[1]);
-    await page.evaluate(stackAnswer('Deny', stacked[1]));
+    await answerStackCard(page, stacked[1], 'Deny');
     await until(page, 'the flow\'s own stack cleared', `${remaining}.length === 0`);
     await until(page, 'both answers in the chat and heard by the agent', `${CHAT_TEXT}.includes('You approved') && ${CHAT_TEXT}.includes('You denied')`
       + ` && /${DECISION_HEARD}[^]*approved/u.test(${CHAT_TEXT}) && /${DECISION_HEARD}[^]*denied/u.test(${CHAT_TEXT})`);
