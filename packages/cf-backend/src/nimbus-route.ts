@@ -133,18 +133,22 @@ function sameHostTarget(next: string | null, origin: string): string {
  * owner's cookie. Every preview and share host is a sibling under one site, and a same-site request carries the cookie,
  * so the cookie alone cannot tell them apart; the browser's fetch metadata can. A page load opens the page, as any link
  * opens any site's. A browser too old to send fetch metadata marks its page loads alone with
- * `Upgrade-Insecure-Requests` (a script cannot add it without a preflight that names its origin), so its script and
- * image requests are not page loads. A socket, a script's request or a form post must come from the preview itself, by
- * its metadata or else its exact `Origin`. Only the workspace's own server-side fetch (`self`) may send neither.
+ * `Upgrade-Insecure-Requests` (a script cannot add it without a preflight that names its origin), and names the page
+ * behind its script, style and image loads in `Referer`, which the preview's `same-origin` policy keeps for its own
+ * requests and no page can set: those of its own page are its, another site's are not. A socket, a script's request or
+ * a form post must come from the preview itself, by its metadata or else its exact `Origin`. Only the workspace's own
+ * server-side fetch (`self`) may send neither.
  */
 function ownRequest(request: Request, origin: string, self: boolean): boolean {
   const mode = request.headers.get('sec-fetch-mode');
   const site = request.headers.get('sec-fetch-site');
   const stated = request.headers.get('origin');
   const read = request.method === 'GET' || request.method === 'HEAD';
-  const legacyPageLoad = site === null && stated === null && request.headers.get('upgrade-insecure-requests') === '1';
+  const referer = request.headers.get('referer');
+  const ownPage = referer !== null && URL.canParse(referer) && new URL(referer).origin === origin;
+  const legacyLoad = site === null && stated === null && (request.headers.get('upgrade-insecure-requests') === '1' || ownPage);
 
-  if (read && (mode === 'navigate' || legacyPageLoad)) return true;
+  if (read && (mode === 'navigate' || legacyLoad)) return true;
 
   if (site !== null) return site === 'same-origin' || site === 'none';
 

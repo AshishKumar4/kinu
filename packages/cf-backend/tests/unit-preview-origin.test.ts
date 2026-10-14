@@ -820,13 +820,15 @@ describe("signing a preview's owner in on its own host", () => {
     await asked({ headers: { cookie: owned, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' } });
     await asked({ headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors' } });
     await asked({ method: 'POST', body: 'x', headers: { cookie: owned, origin: new URL(NIMBUS_URL).origin } });
-    // An old browser's script or image request, then its page load.
+    // An old browser's script or image request a sibling's page makes, one its own page makes, then its page load.
     await asked({ headers: { cookie: owned } });
+    await asked({ headers: { cookie: owned, referer: `${sibling}/` } });
+    await asked({ headers: { cookie: owned, referer: `${new URL(NIMBUS_URL).origin}/board` } });
     await asked({ headers: { cookie: owned, 'upgrade-insecure-requests': '1' } });
 
     // A sibling's socket, script and form name no one, nor does a form post that names no origin of this one, nor an
-    // old browser's script; a page load and the preview's own requests name the owner.
-    expect(visits).toEqual([null, null, null, null, null, null, null, OWNER_ID, OWNER_ID, OWNER_ID, null, OWNER_ID]);
+    // old browser's script a sibling's page makes; a page load and the preview's own requests name the owner.
+    expect(visits).toEqual([null, null, null, null, null, null, null, OWNER_ID, OWNER_ID, OWNER_ID, null, null, OWNER_ID, OWNER_ID]);
   });
 
   test("a cookie the host did not set, or a live share's, names no one to the workspace", async () => {
