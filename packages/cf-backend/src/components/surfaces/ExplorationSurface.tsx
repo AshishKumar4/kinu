@@ -9,7 +9,7 @@ import {
   GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon, CaretDownIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { isRateLimitedTurnError, shownHeadStatus } from "@kinu.run/core";
+import { shownHeadStatus } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusTone } from "@/components/NodeTranscript";
@@ -487,14 +487,11 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   onOpen: () => void;
 }) {
   const live = node.status === "running";
-  // A provider-paced empty turn is capacity, not a fault. Classified via `chat.ts`'s
-  // classifier, never a regex here, so rewording cannot reclassify.
-  const rateLimited = node.errorMessage !== null && isRateLimitedTurnError(node.errorMessage);
 
   return (
     <button type="button" onClick={onOpen} data-run-node={node.id}
       className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
-      <StatusDot className="mt-1" tone={rateLimited ? "warning" : statusTone(shownHeadStatus(node.status, node.errorMessage))}
+      <StatusDot className="mt-1" tone={statusTone(shownHeadStatus(node.status, node.errorMessage))}
         {...(moving && { title: "Working now" })} />
       <div className="min-w-0 flex-1">
         <div className="p-row-text p-text-2 truncate" title={node.task}>
@@ -511,9 +508,7 @@ function RunNodeRow({ node, score, moving, onOpen }: {
           <div className="mt-0.5 p-row-text p-text-2 line-clamp-2">{node.summary}</div>
         )}
         {node.errorMessage !== null && (
-          <div data-node-reason={rateLimited ? "rate-limited" : "failed"}
-            className={`mt-0.5 p-row-text line-clamp-2 ${rateLimited ? "p-warning" : "p-danger"}`}>
-            {rateLimited && <span className="font-medium">Rate limited · </span>}
+          <div data-node-reason="failed" className="mt-0.5 p-row-text line-clamp-2 p-danger">
             {node.errorMessage}
           </div>
         )}

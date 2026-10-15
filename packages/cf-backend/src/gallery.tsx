@@ -6,9 +6,9 @@ import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { mainPanelAgent, restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
@@ -20,7 +20,7 @@ import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  TrashIcon, BrainIcon, GearIcon, ListIcon, UsersThreeIcon,
+  TrashIcon, BrainIcon, ListIcon,
 } from "@phosphor-icons/react";
 import "virtual:kinu-theme.css";
 import "./index.css";
@@ -38,7 +38,7 @@ import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
 import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import type { WorkMode } from "@kinu.run/core";
-import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
+import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
@@ -77,7 +77,6 @@ import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFr
 import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
-import { driveDesignFrame } from "@/gallery-drive-design";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
@@ -91,7 +90,7 @@ import {
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory, ownerAsks,
-  parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
+  FILES_PAGE_ENTRIES, parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
@@ -106,8 +105,8 @@ import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
-  FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
-  ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
+  FileCheckpointEntry, FileCheckpointListing, ForkRunParams, GepaRunSummary,
+  ForkRunSummary, HeadRunView, EnvironmentInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { ModelTestResult, UserDevice } from "@/lib/user-api";
@@ -801,7 +800,13 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
+/** Built-in sign-in off, as on an account with an OAuth app: the invite card stays away. */
+function builtinAuthFixture(path: string): Response | null {
+  return path === "/api/user/builtin-auth" ? fixtureJson({ enabled: false, owner: false }) : null;
+}
+
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  builtinAuthFixture,
   accountMemoryFixture,
   accountProfileFixture,
   settingsSectionsFixture,
@@ -2832,8 +2837,7 @@ const GALLERY_GITHUB: WorkspaceGitHubView = {
 };
 
 const GALLERY_AGENTS: PanelAgent[] = [
-  { colour: 0, key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
-    actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },
+  mainPanelAgent({ activity: "working", actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } }),
   { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
     figures: { tokens: 12_400, usd: 0.03, activeMs: 3 * 60_000, cacheEma: 0.88 } },
   { colour: 2, key: galleryActorId("perf"), label: "Should checkout support gift cards?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
@@ -2870,7 +2874,7 @@ function galleryWorkspaceAgents(): PanelAgent[] {
     open: { kind: "chat", path: sub.name }, tab: true, input: true, actorId: sub.actorId, figures: NO_GALLERY_FIGURES,
   }));
 
-  const main: PanelAgent = { colour: 0, key: "main", label: GALLERY_MAIN_TITLE.value, category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: NO_GALLERY_FIGURES };
+  const main = mainPanelAgent({ label: GALLERY_MAIN_TITLE.value, activity: "idle", figures: NO_GALLERY_FIGURES });
 
   return AGENTS_PANEL ? [...GALLERY_AGENTS, ...created.filter((agent) => !GALLERY_AGENTS.some((fixed) => fixed.key === agent.key))] : [main, ...created];
 }
@@ -3527,8 +3531,8 @@ const RUNNING_RUN: HeadRunView = {
     swarmNode("lv008", "Check whether inferKind belongs at the edge", "expansion 3 of 3", {
       status: "errored", depth: 2, parentId: "lv002", wallClockMs: 7_400,
       spawnedAt: NOW - 18e4, lastStepAt: NOW - 15e4,
-      errorMessage: "Turn ended by provider rate limiting: the provider asked this turn to "
-        + "wait 61s against a 45s budget, that wait was taken, and still nothing flowed.",
+      errorMessage: "Turn stalled: the provider asked this turn to wait 61s against a 45s budget, "
+        + "that wait was taken, and still nothing flowed.",
     }),
     swarmNode("lv009", "Fan the two guarded readers in", "fan-in over 2 parents of depth 1", {
       status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
@@ -3929,10 +3933,17 @@ const QUALITY_WINDOW = {
   rated: 26, thumbs: 6, turns: 35,
 };
 
+/** Typed so the fixtures track `GepaRunSummary`, its stop reasons included. */
 const GEPA_RUNS = [
-  { runId: "gepa_2", target: "scaffold", startedAt: NOW - 3 * 864e5, status: "completed", winnerId: "cand_2b", iterations: 6, metricCalls: 48 },
-  { runId: "gepa_1", target: "scaffold", startedAt: NOW - 12 * 864e5, status: "completed", winnerId: "cand_1c", iterations: 4, metricCalls: 32 },
-];
+  {
+    runId: "gepa_2", target: "scaffold", targetRef: null, startedAt: NOW - 3 * 864e5, endedAt: NOW - 3 * 864e5 + 6e5,
+    status: "completed", stopReason: "no_improvement_possible", winnerId: "cand_2b", iterations: 6, metricCalls: 48,
+  },
+  {
+    runId: "gepa_1", target: "scaffold", targetRef: null, startedAt: NOW - 12 * 864e5, endedAt: NOW - 12 * 864e5 + 9e5,
+    status: "completed", stopReason: "iterations_exhausted", winnerId: "cand_1c", iterations: 4, metricCalls: 32,
+  },
+] satisfies GepaRunSummary[];
 
 const GEPA_DETAIL = {
   run: GEPA_RUNS[0],
@@ -3959,6 +3970,9 @@ const evolutionRpc: SocketCall = async <T,>(method: string, args?: unknown[]): P
   if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
 
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
+
+  // A record: the blanket `[]` reads as a changelog that failed to load.
+  if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
 
   if (method === "getGepaRun") {
     const [runId] = v.parse(v.tuple([v.string()]), args);
@@ -4251,7 +4265,7 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 
 /** The bar over fixture chats: working, waiting, failed. */
 const GALLERY_CHATS: readonly PanelAgent[] = [
-  { colour: 0, key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  mainPanelAgent({ activity: "working" }),
   { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
   { colour: 2, key: galleryActorId("agent-4f2c"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
   { colour: 3, key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
@@ -4266,10 +4280,7 @@ function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {
         : { agent, to: "/workspace/checkout-fixes", rename: async () => {}, remove: () => {} }))}
       active={active}
       newChat="/workspace/checkout-fixes/new"
-      trailing={<>
-        <button type="button" className="p-bar-icon" aria-label="All agents" title="All agents"><UsersThreeIcon size={16} /></button>
-        <Link to="/workspace/checkout-fixes/settings" className="p-bar-icon" aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
-      </>}
+      trailing={<WorkspaceBarActions workspace="checkout-fixes" working={0} view={undefined} inspector={null} onAgents={() => {}} />}
     />
   );
 }
@@ -5441,20 +5452,24 @@ const WORKSPACE_WORK = {
   ],
 };
 
-const BACKGROUND_JOBS = [
+/** A first drive: never interrupted, never retried, serving nothing. */
+const FIRST_DRIVE = { epoch: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
+
+const BACKGROUND_JOBS: BackgroundJob[] = [
   {
     id: "bgjob-7c1e4a92", kind: "fork", label: "explore three coupon-lookup fixes",
-    workMode: "build" as const, status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
+    workMode: "build", status: "running", result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null,
+    ...FIRST_DRIVE,
   },
   {
     id: "bgjob-2f8b1d04", kind: "eval", label: "bun test packages/core",
-    workMode: "build" as const, status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
-    createdAt: NOW - 42e5, settledAt: NOW - 33e5,
+    workMode: "build", status: "completed", result: "2,633 pass · 0 fail · 187 files", error: null,
+    createdAt: NOW - 42e5, attemptStartedAt: NOW - 42e5, settledAt: NOW - 33e5, ...FIRST_DRIVE,
   },
   {
     id: "bgjob-9d3c6e11", kind: "shell", label: "wrangler deploy --dry-run",
-    workMode: "build" as const, status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
-    createdAt: NOW - 61e5, settledAt: NOW - 58e5,
+    workMode: "build", status: "failed", result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
+    createdAt: NOW - 61e5, attemptStartedAt: NOW - 61e5, settledAt: NOW - 58e5, ...FIRST_DRIVE,
   },
 ];
 
@@ -5705,7 +5720,7 @@ function buildTail(lines: number, lost: readonly number[]): JobOutputTail {
 function buildingJob(output: JobOutputTail): BackgroundJob {
   return {
     id: BUILD_JOB_ID, kind: "shell", label: "workspace: bun run build", workMode: "build", status: "running",
-    result: null, error: null, createdAt: NOW - 95e3, settledAt: null, output,
+    result: null, error: null, createdAt: NOW - 95e3, attemptStartedAt: NOW - 95e3, settledAt: null, ...FIRST_DRIVE, output,
   };
 }
 
@@ -5886,13 +5901,30 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
 /** Mutable so the gate can prove rename and delete; `binary-weights.bin` exercises the binary refusal. */
 function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   const tree = new Map<string, DirEntry[]>([
+    // The workspace's places, as `read-models/files.ts` lists `/`: home's, `/slates` and each mount point.
     ["/", [
+      { name: "computer", type: "dir", mtimeMs: NOW - 30 * 60e3 },
+      { name: "context", type: "dir" },
       { name: "home", type: "dir", mtimeMs: NOW - 4 * 36e5 },
       ...(offlineDevice ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
-      { name: "computer", type: "dir", mtimeMs: NOW - 30 * 60e3 },
+      { name: "shared", type: "dir" },
+      { name: "skills", type: "dir" },
+      { name: "slates", type: "dir", mtimeMs: NOW - 2 * 864e5 },
     ]],
+    ["/context", [{ name: "main", type: "dir" }]],
+    ["/context/main", [{ name: "transcript.md", type: "file", size: 48_310, mtimeMs: NOW - 60e3 }]],
+    ["/shared", [
+      { name: "Reports", type: "dir", mtimeMs: NOW - 5 * 864e5 },
+      { name: "brand-guidelines.pdf", type: "file", size: 2_401_118, mtimeMs: NOW - 12 * 864e5 },
+    ]],
+    ["/shared/Reports", [{ name: "q3-revenue.csv", type: "file", size: 12_904, mtimeMs: NOW - 5 * 864e5 }]],
+    ["/skills", [{ name: "sql-triage", type: "dir", mtimeMs: NOW - 20 * 864e5 }]],
+    ["/skills/sql-triage", [{ name: "SKILL.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
+    ["/slates", [{ name: "checkout-dashboard", type: "dir", mtimeMs: NOW - 2 * 864e5 }]],
+    ["/slates/checkout-dashboard", [{ name: "index.html", type: "file", size: 6_120, mtimeMs: NOW - 2 * 864e5 }]],
     ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
     ["/home/main", [
+      { name: "logs", type: "dir", mtimeMs: NOW - 60e3 },
       { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
       { name: "skills", type: "dir", mtimeMs: NOW - 20 * 864e5 },
       { name: "AGENTS.md", type: "file", size: 2_148, mtimeMs: NOW - 3 * 864e5 },
@@ -5901,6 +5933,10 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       { name: "binary-weights.bin", type: "file", size: 4_089_446, mtimeMs: NOW - 6 * 864e5 },
     ]],
     ["/home/main/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
+    // More than two pages: the folder lists its first, and Load more the rest.
+    ["/home/main/logs", Array.from({ length: 1_234 }, (_, at) => ({
+      name: `run-${String(at).padStart(4, "0")}.log`, type: "file" as const, size: 2_048 + at, mtimeMs: NOW - at * 60e3,
+    }))],
     ["/home/main/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
     ["/computer", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
     ["/computer/workspace", [
@@ -5921,6 +5957,13 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   }
 
   return tree;
+}
+
+/** A page of `entries` from `from`, as `getExecutorFiles` answers one: `next` while more follow. */
+function filesPage(dir: string, entries: readonly DirEntry[], from = 0) {
+  const end = from + FILES_PAGE_ENTRIES;
+
+  return { path: dir, entries: entries.slice(from, end), ...(end < entries.length && { next: end }) };
 }
 
 /** As `deviceMountSegment` keys a fleet of one. */
@@ -5972,7 +6015,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
   const heldPreviewContent = useRef("");
   const previewReads = useRef(0);
 
-  const mounts: MountInfo[] = [
+  const mounts: EnvironmentInfo[] = [
     { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
     offlineDevice
       ? { name: "device", prefix: "device.*", live: false, policy: { readOnly: false, consistency: "live-shared" }, reason: "no device connected" }
@@ -5987,7 +6030,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
     if (method === "listMounts") return rpcResult(v.parse(JsonValueSchema, mounts)).json<T>();
 
     if (method === "getExecutorFiles") {
-      const [execName, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      const [execName, path, from] = v.parse(v.tuple([v.string(), v.string(), v.optional(v.number())]), args ?? []);
 
       noteListing(path);
 
@@ -5997,7 +6040,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
       const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
-      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, { path: dir, entries })).json<T>();
+      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, filesPage(dir, entries, from))).json<T>();
 
       // In the words of `deviceFiles`' path guard.
       const error = dir.startsWith(PC_MOUNT)
@@ -6102,7 +6145,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
-      <div className={`${width} h-screen border-x p-border`}>
+      <div data-gallery-column className={`${width} h-screen border-x p-border`}>
         {deferPreview && (
           <div className="absolute z-20 flex gap-2 p-2">
             <button data-files-fixture-mutate type="button" onClick={() => {
@@ -7244,11 +7287,17 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
 }
 
 /** Routed: FilesSurface reads `agentId` for the raw-bytes route. `&offline=device` shows the disconnected row, `&wide=1` the ≥64rem side-panel preview,
- *  `&narrow=1` the column at whatever width the viewport gives it, as a phone does. */
+ *  `&narrow=1` the column at whatever width the viewport gives it, as a phone does, `&inspector=340|480` the inspector's
+ *  default width and one dragged wider. */
 interface MountedFrame { node: React.ReactNode; entries: string[] }
+
+const INSPECTOR_COLUMNS = new Map([["340", "w-[340px]"], ["480", "w-[480px]"]]);
 
 function driveColumn(params: URLSearchParams, column: string): string {
   if (params.get("wide") !== null) return "w-[1240px]";
+  const inspector = INSPECTOR_COLUMNS.get(params.get("inspector") ?? "");
+
+  if (inspector !== undefined) return inspector;
 
   return params.get("narrow") === null ? column : "w-full";
 }
@@ -7624,7 +7673,6 @@ async function mount() {
 
       return diffDesignFrame();
     }],
-    ["drive-design", () => Promise.resolve(driveDesignFrame())],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
     ["qualitylive", () => {
       serveGalleryRpc(workspacePageRpc);

@@ -12,7 +12,7 @@
 import type { HTTPRequest } from 'puppeteer';
 import { withBrowser } from './live-app-harness';
 import { recordDeadEnds } from '../evals/src/browser';
-import { until } from './product-flows';
+import { until } from './browser-page';
 
 const MODULES = 10;
 

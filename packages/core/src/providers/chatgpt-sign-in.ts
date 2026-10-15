@@ -10,7 +10,8 @@ import { createPkcePair, hmacSha256Hex, randomToken, timingSafeEqual } from '../
 import { parseJsonValue } from '../utils/json';
 import {
   DYNAMIC_AGENT_CLIENT, ISSUER, JWKS_URL, RESOURCE, REVOKE_URL, SCOPES, TOKEN_URL,
-  authorizeUrl, expiring, grantsPlan, idTokenIdentity, idTokenKeyId, idTokenSignatureVerifies, refreshedTokens, scopesOf, signedInTokens, tokenRefusal,
+  authorizeUrl, expiring, grantsPlan, idTokenIdentity, idTokenKeyId, idTokenSignatureVerifies, jwtSegmentText, refreshedTokens, scopesOf,
+  signedInTokens, tokenRefusal,
   type IdToken, type IdTokenIdentity, type TokenAnswer,
 } from './chatgpt-protocol';
 
@@ -160,15 +161,9 @@ function signingKey(kid: string, fetchFn: typeof fetch): Effect.Effect<CryptoKey
   });
 }
 
-function base64UrlText(segment: string): string {
-  const padded = segment.replaceAll('-', '+').replaceAll('_', '/');
-
-  return new TextDecoder().decode(Uint8Array.from(atob(padded + '='.repeat((4 - (padded.length % 4)) % 4)), (char) => char.charCodeAt(0)));
-}
-
 function jwtPart<T extends v.GenericSchema>(schema: T, segment: string): Effect.Effect<v.InferOutput<T>, KinuError> {
   return Effect.try({
-    try: () => v.parse(schema, parseJsonValue(base64UrlText(segment))),
+    try: () => v.parse(schema, parseJsonValue(jwtSegmentText(segment) ?? '')),
     catch: (cause) => new KinuError('denied', 'the ID token is not a JWT this sign-in can read', { cause }),
   });
 }

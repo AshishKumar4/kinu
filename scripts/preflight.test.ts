@@ -20,8 +20,8 @@ import { declaredName, literalString, parse, walk } from './syntax';
 import {
   PROJECT_MARKERS, engineBoundsTempWalk, judge, measuredCounts, orphanTestBrowsers, type Environment, type ProcessRow,
 } from './preflight';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = new URL('..', import.meta.url).pathname;
 
 const ENGINE = 'packages/core/src/checkpoints/engine.ts';
 

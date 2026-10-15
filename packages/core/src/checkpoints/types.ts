@@ -29,8 +29,6 @@ export interface FileCheckpointListing {
 
 const FILE_RESTORE_KINDS = ['modify', 'create', 'delete'] as const;
 
-export type FileRestoreKind = (typeof FILE_RESTORE_KINDS)[number];
-
 /** In restore direction: `create` re-creates a file deleted since the checkpoint, `delete` the reverse. */
 const FileRestoreChangeSchema = v.object({ path: v.string(), kind: v.picklist(FILE_RESTORE_KINDS) });
 

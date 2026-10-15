@@ -11,7 +11,7 @@ import {
   createAppDataStore, createDbCodemodeProvider, initAgentDataTables,
   type AppDataStore, type AppOp,
 } from '../src/tools/db-codemode';
-import { RunEventRecorder, parseStoredRunEvent } from '../src/events/recorder';
+import { RunEventRecorder, parseStoredRunEvent, type StoredRunEventRow } from '../src/events/recorder';
 import { codemodeCapabilitiesFor, narrowToolSurface } from '../src/tools/registry';
 import { inWorkMode, providersInWorkMode } from '../src/execution/work-mode';
 import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/index';
@@ -601,8 +601,8 @@ describe('batch atomicity and evidence', () => {
       ]);
 
       // Through the durable parser: the evidence must read back off the row.
-      const stored = w.sql<{ payload: string }>`SELECT payload FROM run_events WHERE type = 'db_op' ORDER BY event_index`
-        .map((row) => parseStoredRunEvent(row.payload));
+      const stored = w.sql<StoredRunEventRow>`SELECT run_id, event_index, type, ts, payload FROM run_events WHERE type = 'db_op' ORDER BY event_index`
+        .map((row) => parseStoredRunEvent(row));
 
       expect(stored.flatMap((event) => (event.type === 'db_op' ? [event.batch] : []))).toEqual([null, 3, 3, 3]);
     }

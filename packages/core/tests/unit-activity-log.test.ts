@@ -2,8 +2,8 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initActivationTable, initAllTables, listActivations, readActivityLog, recordActivation, writeActivityLog } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { createTestActors, createRecordingLogger } from '@kinu.run/test-utils';
+import { setDiagnosticsSink } from '../src/obs/index';
 
 function setup() {
   const db = new Database(':memory:');

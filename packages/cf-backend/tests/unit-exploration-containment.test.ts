@@ -160,17 +160,6 @@ describe('head tool surface — containment', () => {
     expect(calls.splits).toBe(1);
   });
 
-  test('builtin tool calls land in the HeadCapture so the report keeps them', async () => {
-    const { tools, capture } = buildSurface();
-    const execute = toolExecute<{ code: string }, string>(tools.eval);
-    await execute({ code: 'return 1' });
-    expect(capture.toolCalls).toEqual([{
-      toolCallId: 'test-tool-call', name: 'eval', argsWindow: '{"code":"return 1"}', resultWindow: '"ran"',
-      target: 'return 1', program: 'return 1', op: null, argsDigest: expect.any(String),
-      writtenPaths: [], revisitedPaths: [], outcome: { success: true },
-    }]);
-  });
-
 });
 
 /** Where an exploration actor's trace lands and what a rollout branch may touch (C2: one journal per subtree). */

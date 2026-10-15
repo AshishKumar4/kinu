@@ -39,8 +39,8 @@
  */
 import { benchPatchFiles, corpusMembership, stalePatches } from './bench-corpus';
 import { assertMeasured, finding } from './gate-ratchet';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = new URL('..', import.meta.url).pathname;
 
 function main(): number {
   const files = benchPatchFiles(REPO_ROOT);

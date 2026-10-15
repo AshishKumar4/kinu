@@ -12,9 +12,7 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import { DESKTOP_ASK as ASK, DESKTOP_PROBE_TITLE } from './asks';
 import type { RunEvent } from '../../packages/core/src/index';
@@ -22,9 +20,24 @@ import { ImageCarrierSchema } from '../../packages/core/src/types/tool-images';
 
 const SUITE = 'First-run · computer-desktop';
 
-const CASE = 'computer-desktop' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The owner (2026-10-13, issue #100) asked the agent to use the computer while its desktop was open in the Env '
+    + 'panel. The agent took a web.screenshot of a remote browser, found no DISPLAY, installed Xvfb and started a '
+    + 'second screen nobody could see, and could not read the PNG it took of it.',
+  missedBecause: 'nothing returned the screen to a model, no process on the computer was told where the screen was, '
+    + 'and the desktop started only when a person opened it: every gate exercised the desktop through a person\'s '
+    + 'client, never through an agent.',
+  provedRedAt: null,
+  redDirection: 'Not yet run on a deployment: the scripted model learns this ask with the deploy that ships the desktop. '
+    + 'The red direction is fd76708a1, where the program stops at its first line: the same program through the eval '
+    + 'tool (packages/cli-backend/tests/computer-desktop-eval.test.ts) fails on that build with "computer.screenshot is '
+    + 'not a function", so no image comes back, and a window opened from its shell has no display to open on.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'desktop');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -51,6 +64,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A terse assistant that runs the program it is given and reports what it returns.',
       // A fresh box starts, then its desktop, then a browser.
@@ -88,5 +102,3 @@ describe(SUITE, () => {
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

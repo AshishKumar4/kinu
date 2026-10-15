@@ -78,7 +78,7 @@ export {
 
 export {
   HeadCapture, runHeadInference, preparedHeadRun, type HeadRun, buildHeadAccumulatorTools,
-  buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
+  buildHeadSystemPrompt, buildHeadMessages,
   type HeadInferenceDeps, type RunInference,
 } from './head-inference';
 

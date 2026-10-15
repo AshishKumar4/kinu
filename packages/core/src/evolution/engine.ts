@@ -615,7 +615,7 @@ export class EvolutionEngine {
     if (settled.corroborated.length === 0 && settled.discarded.length === 0) return;
 
     const describe = (rows: ImportedExperienceRow[]) =>
-      rows.map((r) => `${r.kind} "${r.key}" from ${r.sourceWorkspace}`).join(', ');
+      rows.map((r) => `${r.payload.kind} "${r.key}" from ${r.sourceWorkspace}`).join(', ');
 
     this.emit({
       type: 'experience_import',

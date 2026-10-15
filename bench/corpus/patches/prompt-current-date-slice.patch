@@ -5,7 +5,7 @@ diff --git a/packages/core/src/prompt.ts b/packages/core/src/prompt.ts
  
  /** Date-only, never time: the dynamic block's runtime section changes at most once a day. */
  export function currentDateForPrompt(now: Date = new Date()): string {
--  return now.toISOString().slice(0, 10);
+-  return isoDate(now.getTime());
 +  return now.toISOString().slice(0, 16);
  }
  

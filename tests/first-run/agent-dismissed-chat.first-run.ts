@@ -23,20 +23,34 @@ import {
   ChatHistoryEntrySchema, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, type JsonValue,
 } from '../../packages/core/src/index';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 import { webHeaders } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · agent-dismissed-chat';
 
-const CASE = 'agent-dismissed-chat' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A subagent dismissed with its conversation kept, the Dismiss dialog\'s default, kept '
+    + 'its tab but its chat never loaded: the pager refused the dismissed agent with "The actor '
+    + 'is not registered in this workspace.", while the dialog promises "Its conversation is '
+    + 'kept, not deleted".',
+  missedBecause: '`agent-chats-persist` proves EMPLOYED agents keep their chats and never '
+    + 'dismisses one, so it passes with the fix (e21207492) reverted. The pre-deploy half '
+    + 'arrived with the fix, in packages/cf-backend/tests/workerd/wide/public-surface.test.ts; no '
+    + 'deployed row read a dismissed agent\'s kept chat the way its pane reads it.',
+  provedRedAt: '2eba2c1e5',
+  redDirection: 'Run against 2eba2c1e5, the parent of e21207492, served by `vite dev` on '
+    + 'loopback (the Worker the deploy ships, with local state): `kept-chat-reads` misses on '
+    + 'the refusal above. Green on e21207492 served the same way.',
+};
 
 /** What the subagent is told, one word so the readback is unambiguous. */
 const SAID = 'Reply with only the word CHARLIE.';
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'kept');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -91,6 +105,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A dismissed subagent whose kept conversation still reads.',
       budgetMs: 10 * 60_000,
@@ -241,4 +256,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

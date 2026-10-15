@@ -8,7 +8,7 @@ import {
 import {
   closeMcpTransport, holdMcpRestore, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
-  recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
+  recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedConfiguredMcpServer, seedSdkMcpServer, seedUndiscoveredMcpTools,
 } from './helpers/agents-sdk';
 import { classifyMcpFailure } from '../src/user/mcp';
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
@@ -69,21 +69,14 @@ async function seedServer(
   const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   // Sealed as the add seals them, for this object and this server.
   const headers = fields.headers === undefined ? null : await cipher.seal(`test-user-do:mcp:${id}`, JSON.stringify(fields.headers));
-  sqlExec(h.db).exec(
-    `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-     VALUES (?, ?, ?, 'auto', ?, NULL)`,
-    id, fields.name ?? id, fields.url ?? `https://${id}.example/sse`, headers,
-  );
+  seedConfiguredMcpServer(sqlExec(h.db), id, { name: fields.name ?? id, url: fields.url ?? `https://${id}.example/sse`, transport: 'auto', headers });
 
   // A read over a non-empty table hydrates the manager.
   await h.userDO.userMcp_list(await testOwner());
 }
 
-function storedName(h: TestUserDO, id: string): string | undefined {
-  const row = sqlExec(h.db).exec('SELECT name FROM user_mcp_servers WHERE id = ?', id).toArray()[0];
-  const parsed = v.safeParse(v.string(), row?.name);
-
-  return parsed.success ? parsed.output : undefined;
+function storedName(id: string): string | undefined {
+  return recordedMcpServers().find((server) => server.id === id)?.name;
 }
 
 /** The `authorization` header of every request made while `body` runs, in order; restores the global. */
@@ -109,7 +102,7 @@ async function authorizationsSeenDuring(body: () => Promise<void>): Promise<stri
   return seen;
 }
 
-describe('a server name is one identity, enforced by the database', () => {
+describe('a server name is one identity, claimed one add at a time', () => {
   test('a second server under the same name, in any case, is refused and adds no row', async () => {
     const h = harness();
     await seedServer(h, 'srv1', { name: 'GitHub' });
@@ -130,12 +123,28 @@ describe('a server name is one identity, enforced by the database', () => {
     h.close();
   });
 
+  test('two adds of one name at once: one stands, the other is refused, whichever claims second', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await h.userDO.userMcp_list(owner);
+
+    const adds = await Promise.allSettled([
+      h.userDO.userMcp_add(owner, { name: 'github', serverUrl: 'https://a.example/sse' }, 'https://kinu.example'),
+      h.userDO.userMcp_add(owner, { name: 'GitHub', serverUrl: 'https://b.example/sse' }, 'https://kinu.example'),
+    ]);
+
+    expect(adds.map((add) => add.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(recordedMcpServers().filter((server) => server.name.toLowerCase() === 'github')).toHaveLength(1);
+    expect(sqlExec(h.db).exec('SELECT id FROM user_mcp_servers').toArray()).toHaveLength(1);
+    h.close();
+  });
+
   test('two servers may share one endpoint under different names', async () => {
     // Identity is the name; uniqueness must not be pinned to the URL.
     const h = harness();
     await seedServer(h, 'srv1', { name: 'work', url: 'https://mcp.example/sse' });
     await seedServer(h, 'srv2', { name: 'personal', url: 'https://mcp.example/sse' });
-    expect(storedName(h, 'srv2')).toBe('personal');
+    expect(storedName('srv2')).toBe('personal');
     h.close();
   });
 });
@@ -153,7 +162,7 @@ describe('the management surface completes a round trip', () => {
 
     await h.userDO.userMcp_remove(owner, 'srv2');
     expect((await h.userDO.userMcp_list(owner)).map((s) => s.id)).toEqual(['srv1']);
-    expect(storedName(h, 'srv2')).toBeUndefined();
+    expect(storedName('srv2')).toBeUndefined();
     h.close();
   });
 
@@ -212,10 +221,7 @@ describe('the descriptor read is off the connection critical path', () => {
     const h = harness();
     const owner = await testOwner();
     await h.userDO.userMcp_list(owner);
-    sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-       VALUES ('srv1', 'slow', 'https://srv1.example/sse', 'auto', NULL, NULL)`,
-    );
+    seedConfiguredMcpServer(sqlExec(h.db), 'srv1', { name: 'slow', url: 'https://srv1.example/sse', transport: 'auto' });
     const before = recordedMcpLifecycle();
     const establishedBefore = before.established.length;
     const restoredBefore = before.restored;
@@ -236,10 +242,7 @@ describe('the descriptor read is off the connection critical path', () => {
     const first = harness();
     const owner = await testOwner();
     await seedServer(first, 'srv1', { name: 'fast' });
-    sqlExec(first.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-       VALUES ('srv2', 'stuck', 'https://srv2.example/sse', 'auto', 'sealed', NULL)`,
-    );
+    seedConfiguredMcpServer(sqlExec(first.db), 'srv2', { name: 'stuck', url: 'https://srv2.example/sse', transport: 'auto', headers: 'sealed' });
     const gate = hangMcpEstablish();
     // The activation registers the credentialed server and starts its dial; the warmup waits on it.
     const h = createTestUserDO({ storage: first.db });
@@ -264,10 +267,7 @@ describe('the descriptor read is off the connection critical path', () => {
     const h = harness();
     const owner = await testOwner();
     await h.userDO.userMcp_list(owner);
-    sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-       VALUES ('srv1', 'later', 'https://srv1.example/sse', 'auto', NULL, NULL)`,
-    );
+    seedConfiguredMcpServer(sqlExec(h.db), 'srv1', { name: 'later', url: 'https://srv1.example/sse', transport: 'auto' });
 
     const first = await readSurface(h, owner);
     expect(first.descriptors).toEqual([]);
@@ -289,10 +289,7 @@ describe('the descriptor read is off the connection critical path', () => {
     const owner = await testOwner();
     await seedServer(h, 'srv1', { name: 'ready' });
     seedMcpTools('srv1', [{ name: 'go', inputSchema: { type: 'object' } }]);
-    sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-       VALUES ('srv2', 'pending', 'https://srv2.example/sse', 'auto', NULL, NULL)`,
-    );
+    seedConfiguredMcpServer(sqlExec(h.db), 'srv2', { name: 'pending', url: 'https://srv2.example/sse', transport: 'auto' });
 
     const surface = await readSurface(h, owner);
 
@@ -306,7 +303,7 @@ describe('the descriptor read is off the connection critical path', () => {
   });
 });
 
-describe('the SDK server rows are derived from the config table', () => {
+describe('a server is its config row and its catalog row, under one id', () => {
   test('an SDK row no config row owns is removed at activation', async () => {
     const h = harness();
     await seedServer(h, 'srv1');
@@ -318,6 +315,26 @@ describe('the SDK server rows are derived from the config table', () => {
 
     expect(recordedMcpServers().map((s) => s.id)).not.toContain('ghost');
     woken.close();
+    h.close();
+  });
+
+  test('a config row whose catalog row is gone has no endpoint to dial: it is removed at activation, and says so', async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    // As an add that died between its catalog write and its config write never leaves, but a lost catalog row would.
+    sqlExec(h.db).exec(`INSERT INTO user_mcp_servers (id) VALUES ('lost')`);
+
+    // Built first: the harness installs its own sink as it is made.
+    const woken = createTestUserDO({ storage: h.db });
+
+    const lines = await diagnosticsDuring(async () => {
+      expect((await woken.userDO.userMcp_list(await testOwner())).map((server) => server.id)).toEqual(['srv1']);
+    });
+
+    woken.close();
+
+    expect(sqlExec(h.db).exec('SELECT id FROM user_mcp_servers').toArray()).toEqual([{ id: 'srv1' }]);
+    expect(lines.filter((line) => line.name === 'mcp.uncatalogued_server_removed').map((line) => line.fields)).toEqual([{ serverId: 'lost' }]);
     h.close();
   });
 
@@ -786,7 +803,7 @@ describe('a call finds its server usable, or says why not before sending', () =>
     const first = harness();
     const owner = await testOwner();
     await seedServer(first, 'srv1', { name: 'Cloudflare' });
-    seedSdkMcpServer('srv1');
+    seedSdkMcpServer('srv1', {}, { name: 'Cloudflare' });
     const dial = holdMcpRestore();
     const h = createTestUserDO({ storage: first.db });
 

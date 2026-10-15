@@ -18,7 +18,7 @@ import { DYNAMIC_CONTEXT_OPEN_TAG, WORKSPACE_INSTRUCTIONS_TAG } from '@kinu.run/
 import { scratchDir } from '../packages/test-utils/src/scratch';
 
 import { VIEWPORT, concatManifest, filmScript, muxGif, probeGif } from './plan-demo-film';
-import { KEPT_TAB_NOTE, PLAN_MISSION, keptTabProbe, planWalkthrough } from './scripted-model';
+import { KEPT_TAB_NOTE, PLAN_MISSION, keptTabProbe, planWalkthrough } from './live-app-scripts';
 import { FALLBACK_ANSWER, readScriptedRequest } from './scripted-protocol';
 import { runOk } from '../packages/test-utils/src/spawn';
 

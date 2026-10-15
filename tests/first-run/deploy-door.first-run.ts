@@ -23,13 +23,31 @@ import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   CLOUDFLARE_DEPLOY_SCOPES, DeployOptionsSchema, DeployTicketSchema,
 } from '@kinu.run/core/deploy';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · deploy-door';
 
-const CASE = 'deploy-door' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The Cloudflare door is new surface, so no owner has driven it by hand yet. What the '
+    + 'row exists for is the failure it would hide: a deployed door whose authorize URL is '
+    + 'missing `code_challenge_method`, or carries an empty `client_id`, renders a working '
+    + 'sign-in button and dies on Cloudflare\'s own page, where nothing of ours can see it.',
+  missedBecause: 'the authorize URL is built from a deployment VAR. Every pre-deploy proof '
+    + 'supplies that var itself — the unit rows call `authorizeUrl` with a literal, and the '
+    + 'workerd rows bind a fake authorization server — so no gate reads the URL the deployed '
+    + 'build actually mints, nor what it answers when the var is unset.',
+  provedRedAt: null,
+  redDirection: 'Not proved red against a deployed sha: the door has never been deployed. The '
+    + 'red direction is the URL, parameter by parameter — drop `code_challenge_method` from '
+    + '`authorizeUrl`, or leave `CLOUDFLARE_DEPLOY_CLIENT_ID` set to a blank string, and the '
+    + 'row fails on the shape while the page still renders. The first deployed run of this '
+    + 'tier is what turns that into a measurement.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'door');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -44,7 +62,7 @@ describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
       purpose: 'Disposable deploy-door reachability and authorize-shape probe; no model task.',
       async run({ plan }) {
         const goals: EvalSubgoal[] = [];
@@ -148,5 +166,3 @@ function authorizeHandoff(handoff: Response, body: string, origin: string, clien
     detail: JSON.stringify(carried),
   };
 }
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

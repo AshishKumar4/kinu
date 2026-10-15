@@ -338,7 +338,7 @@ describe('LocalAgentClient', () => {
     ).get();
 
     expect(sessions).toEqual([{ session_id: 'default' }]);
-    expect(conversation?.value).toBe('default');
+    expect(conversation).toBeNull();
     db.close();
   });
 

@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { WRANGLER_FAILED, runWrangler } from './ephemeral-deployment';
 import { snapshotRegistry, type ApplicationSweep } from '../packages/devbox/src/snapshot-registry';
 import { registryToken } from './cloudflare-token';
@@ -17,8 +17,8 @@ import {
   type TeardownManifest, type TeardownStep,
 } from './bench-teardown';
 import { trackedFiles } from './sources';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
 
 const FIXTURE_BASE = 'kinu-devbox-bench';
 

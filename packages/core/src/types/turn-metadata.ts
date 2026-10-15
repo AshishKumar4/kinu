@@ -4,8 +4,8 @@
  *
  * Two axes say who a turn is from, and both stamps live here. `kinuAuthor` is display: whose words the row shows (the
  * operator's, or the harness's card). `kinuAuthorship` is authority: whose reach the turn runs under (the owner's, or
- * the hirer's). They differ on purpose: an owner's answer to a question resumes as a harness-written row under the
- * owner's authority.
+ * the hirer's). They differ on purpose: `ChatSession.resumeAnswered` resumes an owner's answer as a harness-written row
+ * (its summary of the answers) under the owner's authority.
  */
 import * as v from 'valibot';
 import type { JsonObject } from '../utils/json';
@@ -17,7 +17,7 @@ import { TurnReasonSchema, type TurnAuthorship, type TurnReason, type WorkMode }
 /** Who wrote a turn's words, stamped at enqueue. Defaults to harness, so a new event kind never renders as the operator's. */
 export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
 
-export type TurnAuthor = 'harness' | 'operator';
+type TurnAuthor = 'harness' | 'operator';
 
 /** Where the admitting path stores whom a turn answers: written there by the path, never taken from a caller. */
 const TURN_AUTHORSHIP_METADATA_KEY = 'kinuAuthorship';

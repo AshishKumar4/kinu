@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText, type LanguageModel } from 'ai';
 import * as v from 'valibot';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, createRecordingLogger } from '@kinu.run/test-utils';
 import {
   initTerminalEffectTable, TERMINAL_EFFECT_RETRY_CEILING_MS, terminalEffect, TerminalEffectLedger,
   type OwedEffect, type TerminalEffectTable,
@@ -19,7 +19,7 @@ import { TerminalTransitions } from '../src/orchestrator/terminal-transition';
 import { initToolEffectClaimTable } from '../src/tools/effect-claim';
 import { initActorDdl } from '../src/identity/schema';
 import { readActivityLog } from '../src/identity/activity-log';
-import { createRecordingLogger, setDiagnosticsSink, toKinuError } from '../src/obs/index';
+import { setDiagnosticsSink, toKinuError } from '../src/obs/index';
 import { asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider } from '../src/index';
 import { makeExecRaw, makeSql } from './helpers';
 

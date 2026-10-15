@@ -42,7 +42,7 @@ export interface TurnContextInput {
   lostToolCall?: ((call: LostCallQuery) => LostToolCall | null) | undefined;
 }
 
-export interface AssembledTurn {
+export interface AssembledTurnMessages {
   readonly messages: ModelMessage[];
   readonly turnStart: number;
   readonly admittedTokens?: number;
@@ -52,7 +52,7 @@ export interface AssembledTurn {
  * Without `count` (or on `unsupported`) the gate still applies via the estimate, its media priced ({@link messageTokens}).
  * An unknown window leaves the limit unbounded, so only a known one refuses.
  */
-export interface TurnAdmission {
+interface TurnAdmission {
   count?(request: CountableRequest): Promise<InputTokenCount>;
   /** Part of what the provider prices, so part of what is measured. */
   tools?: ToolSet | undefined;
@@ -87,12 +87,12 @@ export interface CompactionTriggerReader {
   takeTrigger(sessionKey: string, historyLength: number): MeasuredCompactionTrigger;
 }
 
-export interface MeasuredCompactionTrigger {
+interface MeasuredCompactionTrigger {
   providerReportedTokens?: number;
   trigger: CompactionTrigger;
 }
 
-export function assembleTurnMessages(input: TurnContextInput): Promise<AssembledTurn> {
+export function assembleTurnMessages(input: TurnContextInput): Promise<AssembledTurnMessages> {
   return settle(Effect.gen(function* () {
     const attachments = input.attachments;
 
@@ -103,7 +103,7 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
     // Sanitizing keeps indices and a transform keeps untouched messages, so the input is found by reference.
     const opening = input.turnStart === undefined ? undefined : history[input.turnStart];
 
-    const located = (messages: ModelMessage[]): AssembledTurn => {
+    const located = (messages: ModelMessage[]): AssembledTurnMessages => {
       const at = opening === undefined ? -1 : messages.indexOf(opening);
 
       return { messages, turnStart: at < 0 ? turnInputStart(messages) : at };
@@ -112,7 +112,7 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
     yield* Effect.promise(async () => input.extensions?.emitTurnStart({ system: input.system, history }));
 
     // One closure: admission may re-run it with trigger:'force' and the ordering must match.
-    const assemble = async (trigger: CompactionTrigger): Promise<AssembledTurn> => {
+    const assemble = async (trigger: CompactionTrigger): Promise<AssembledTurnMessages> => {
       // Paired before compaction reads them too, so a summary folding an asked call keeps the owner's answer.
       const paired = settleUnpairedToolCalls(history, input.lostToolCall) ?? history;
 
@@ -139,7 +139,7 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
 
     const limit = stepContextLimit(admission.limits);
 
-    const measure = async (turn: AssembledTurn): Promise<number> => {
+    const measure = async (turn: AssembledTurnMessages): Promise<number> => {
       const extra = [admission.instructions, admission.activated].flatMap((content) => content === null || content === undefined ? [] : [{ role: 'user' as const, content }]);
       const messages = [...turn.messages, ...extra];
 

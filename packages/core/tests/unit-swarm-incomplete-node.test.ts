@@ -5,11 +5,10 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV4 } from 'ai/test';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend, createRecordingLogger } from '@kinu.run/test-utils';
 import type { LanguageModelV4Prompt } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
-import { createRecordingLogger } from '../src/obs/index';
 import { MissionGovernor, localMissionScope, type MissionScope } from '../src/mission-budget';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { runSwarm } from '../src/strategy/swarm-run';

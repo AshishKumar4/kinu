@@ -5,17 +5,18 @@
  * seen. A state names the one window it shows in (`data-design-width`), else it shows at desktop and phone width; the
  * widest Changes panes need the 1920-pixel `wide` window to leave the chat its share.
  *
- *   bun scripts/design-shots.ts drive-design                   # through the gallery harness (a frozen build)
+ *   bun scripts/design-shots.ts diff-design                    # through the gallery harness (a frozen build)
  *   bun scripts/design-shots.ts diff-design --dev http://127.0.0.1:5272 --only changes,file --vp desktop --theme dark
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseArgs } from 'node:util';
 import type { Page } from 'puppeteer';
 import { withGallery } from './gallery-harness';
 import { withTestChrome } from './test-chrome';
 import { evidenceDir } from '@kinu.run/test-utils';
 
-const FRAMES = ['drive-design', 'diff-design'] as const;
+const FRAMES = ['diff-design'] as const;
 
 const VIEWPORTS = [
   { name: 'desktop', width: 1280, height: 860 },
@@ -38,21 +39,20 @@ interface Shot {
   readonly theme: (typeof THEMES)[number];
 }
 
-const frame = FRAMES.find((name) => name === process.argv[2]);
+const { values: options, positionals } = parseArgs({
+  options: { dev: { type: 'string' }, only: { type: 'string' }, vp: { type: 'string' }, theme: { type: 'string' } },
+  allowPositionals: true,
+});
+
+const frame = FRAMES.find((name) => name === positionals[0]);
 
 if (frame === undefined) throw new Error(`usage: bun scripts/design-shots.ts <${FRAMES.join('|')}> [--dev <origin>] [--only <ids>] [--vp <names>] [--theme <names>]`);
 
 const OUT = evidenceDir(frame);
 
-function flag(name: string): string[] | undefined {
-  const at = process.argv.indexOf(`--${name}`);
-
-  return at < 0 ? undefined : process.argv[at + 1]?.split(',');
-}
-
-/** A filter flag keeps what it names; an absent flag keeps everything. */
-function kept(name: string, value: string): boolean {
-  return flag(name)?.includes(value) ?? true;
+/** A filter flag keeps what it names, comma-separated; an absent flag keeps everything. */
+function kept(name: 'only' | 'vp' | 'theme', value: string): boolean {
+  return options[name]?.split(',').includes(value) ?? true;
 }
 
 async function designViews(page: Page, origin: string): Promise<DesignView[]> {
@@ -153,7 +153,7 @@ async function shoot(newPage: () => Promise<Page>, origin: string): Promise<stri
 
 mkdirSync(OUT, { recursive: true });
 
-const dev = flag('dev')?.[0];
+const dev = options.dev;
 
 const written = dev === undefined
   ? await withGallery((gallery) => shoot(gallery.newPage, gallery.origin))

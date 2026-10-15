@@ -2,29 +2,7 @@
  *  workerd bounds connections awaiting headers and cancels one parked on another's release as hung (HTTP 500 1101
  *  on kinu.run, 2026-09-23). */
 
-import { Effect } from 'effect';
-import { settle } from '../obs/effect';
-import { abortCause } from '../utils/abort';
-
-/** Sleep that an abort ends, rejecting with the signal's reason. */
-export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return settle(Effect.die(abortCause(signal)));
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
-
-  const timer = setTimeout(() => {
-    signal?.removeEventListener('abort', onAbort);
-    resolve();
-  }, ms);
-
-  const onAbort = () => {
-    clearTimeout(timer);
-    reject(abortCause(signal));
-  };
-
-  signal?.addEventListener('abort', onAbort, { once: true });
-
-  return promise;
-}
+import { abortableSleep } from '../utils/abort';
 
 export interface ProviderPacerOptions {
   readonly now?: () => number;
@@ -40,7 +18,7 @@ export class ProviderPacer {
 
   constructor(opts: ProviderPacerOptions = {}) {
     this.now = opts.now ?? Date.now;
-    this.sleep = opts.sleep ?? abortableSleep;
+    this.sleep = opts.sleep ?? ((ms, signal) => abortableSleep(ms, signal, 'reject'));
   }
 
   /** The lane's cooldown still to wait, or null: what a caller decides on before it waits. */

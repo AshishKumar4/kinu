@@ -20,10 +20,10 @@ import { initSearchTables } from '../mcts/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { JsonValueSchema } from '../utils/json';
 import {
-  FloorBreachSchema, MeasuredValueSchema,
-  type FloorBreach, type MeasuredValue, type ParetoAxis, type ParetoEvidence, type PublicationState,
+  FloorBreachSchema, MeasuredValueSchema, isBetter,
+  type FloorBreach, type MeasuredValue, type ObjectiveDirection, type ParetoAxis, type ParetoEvidence, type PublicationState,
 } from './objective';
 import type { SwarmProfileSnapshot } from '../profiles';
 import type { SwarmCandidate } from './swarm';
@@ -95,6 +95,34 @@ export function outcomeFacts(outcome: SettledChildOutcome | null): Omit<SwarmCan
     rank: outcome?.kind === 'scored' ? outcome.measurement.value : score,
     ensemble: outcome?.kind === 'judged' ? outcome.ensemble : 0,
   };
+}
+
+/** A search's running verdict over its candidates: the seal, the winner and the rank it won on, the judge ensembles. */
+export interface CandidateFold {
+  publication: PublicationState;
+  best: { readonly candidate: SwarmCandidate; readonly rank: number } | null;
+  readonly ensembles: number[];
+}
+
+/** Folds one candidate's facts in: replay and live scoring both call it, so a re-entry continues the same verdict. */
+export function foldCandidate(
+  fold: CandidateFold,
+  candidate: SwarmCandidate,
+  facts: Pick<ReturnType<typeof outcomeFacts>, 'breach' | 'rank' | 'ensemble'>,
+  direction: ObjectiveDirection,
+): void {
+  if (facts.breach !== null) fold.publication = { kind: 'sealed', breach: facts.breach };
+
+  if (facts.ensemble > 0) fold.ensembles.push(facts.ensemble);
+
+  if (facts.rank !== null && (fold.best === null || isBetter(facts.rank, fold.best.rank, direction))) {
+    fold.best = { candidate, rank: facts.rank };
+  }
+}
+
+/** The fold's winning candidate, or null while none has ranked. */
+export function foldWinner(fold: CandidateFold): SwarmCandidate | null {
+  return fold.best === null ? null : fold.best.candidate;
 }
 
 /**
@@ -402,25 +430,6 @@ export function readStartedSwarmProfile(storage: {
   return newest ? ledger.readSwarmProfile(newest.rootId) : null;
 }
 
-/** One reader per envelope version; each parses the whole envelope under its own schema. */
-const RECORD_READERS = {
-  1(nodeId: string, decoded: JsonValue): Effect.Effect<SwarmNodeRecord, KinuError> {
-    const parsed = v.safeParse(StoredSwarmNodeRecordSchema, decoded);
-
-    if (!parsed.success) {
-      return Effect.fail(new KinuError('io',
-        `the durable record for node ${nodeId} of this search will not read back under its own `
-        + 'schema version 1: '
-        + `${parsed.issues.map((issue) => issue.message).join('; ')}. This engine writes that `
-        + 'version itself, so it is corruption rather than an old shape.'));
-    }
-
-    const { v: _version, ...record } = parsed.output;
-
-    return Effect.succeed(record);
-  },
-} satisfies Record<number, (nodeId: string, decoded: JsonValue) => Effect.Effect<SwarmNodeRecord, KinuError>>;
-
 /**
  * A stored record, or a throw naming the node. Never a default: this row ranks the winner and
  * holds the seal. A missing stamp is corruption.
@@ -437,7 +446,19 @@ function parseRecord(nodeId: string, json: string): Effect.Effect<SwarmNodeRecor
         + 'engine, and continuing would rank candidates against rows this build cannot read.');
     }
 
-    return yield* RECORD_READERS[RECORD_SCHEMA_VERSION](nodeId, decoded);
+    const parsed = v.safeParse(StoredSwarmNodeRecordSchema, decoded);
+
+    if (!parsed.success) {
+      return yield* new KinuError('io',
+        `the durable record for node ${nodeId} of this search will not read back under its own `
+        + `schema version ${String(RECORD_SCHEMA_VERSION)}: `
+        + `${parsed.issues.map((issue) => issue.message).join('; ')}. This engine writes that `
+        + 'version itself, so it is corruption rather than an old shape.');
+    }
+
+    const { v: _version, ...record } = parsed.output;
+
+    return record;
   });
 }
 

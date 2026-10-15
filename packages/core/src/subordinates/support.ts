@@ -15,7 +15,7 @@ import { requireSubordinateActorName } from '../identity/actor-key';
 import { codenameFor, mintAgentName, type NameOrigin } from '../identity/naming';
 import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorReference } from '../identity/actor-handle';
-import { finishSubordinateBirth, type SubordinateBirth, type SubordinateSeed } from './birth';
+import { admitSubordinateBirth, type SubordinateSeed } from './birth';
 import type { WorkMode } from '../types/turn';
 import type { AgentConfigStore } from '../config/store';
 import type { RoleId, TierId } from '../profiles/catalog';
@@ -27,7 +27,7 @@ import type {
 } from '../delegation/agents-tool';
 import { TEMPORARY_LIFETIME, terminalTaskReport, type OwedReport, type SubordinateLifetime, type TaskTurnEnding, type TemporaryAgentPort } from './temporary';
 import { KinuError, renderThrownChain } from '../obs/index';
-import { subordinateBirthContext, type SubordinateInheritedContext } from '../types/subordinates';
+import type { SubordinateInheritedContext } from '../types/subordinates';
 import type { ModelMessage } from 'ai';
 import { inheritedContextFromHistory } from '../orchestrator/heads-support';
 
@@ -83,7 +83,7 @@ export function readSubordinateLiveStatus(
 }
 
 /** Read from the child's own `actor_config`, the single authority; never persisted elsewhere. */
-export interface SubordinateDescriptor {
+interface SubordinateDescriptor {
   displayName: string;
   nameOrigin: NameOrigin;
   role: RoleId;
@@ -479,24 +479,10 @@ export function createTeamToolDeps(deps: {
 
     if (input.tier !== undefined) seed.tier = input.tier;
     const createdAt = deps.now();
-    let assignment: SubordinateBirth['assignment'] = null;
 
-    if (!ownerCreated) {
-      if (mode === null) return yield* new KinuError('bad_input', 'A subordinate task requires a work mode.');
-      assignment = { body: mission, mode };
-
-      const inheritedContext = subordinateBirthContext(input.inheritedContext);
-
-      if (inheritedContext) assignment.inheritedContext = inheritedContext;
-    }
-
-    const creationId = crypto.randomUUID();
-    deps.roster.create({
-      name, actorReference: null, birth: { creationId, seed, assignment }, deleteRequested: false,
-      status: ownerCreated ? 'idle' : 'working', currentTask: ownerCreated ? null : mission,
-      createdAt, dismissedAt: null, taskEventId: null,
-    });
-    yield* Effect.promise(() => finishSubordinateBirth(deps.roster, deps.runtime, name));
+    if (!ownerCreated && mode === null) return yield* new KinuError('bad_input', 'A subordinate task requires a work mode.');
+    const assignment = ownerCreated || mode === null ? null : { body: mission, mode, ...(input.inheritedContext !== undefined && { inheritedContext: input.inheritedContext }) };
+    yield* Effect.promise(() => admitSubordinateBirth(deps.roster, deps.runtime, { seed, assignment, createdAt }));
 
     return {
       name,

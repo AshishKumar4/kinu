@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
 import { SLATES_ROOT } from '../vfs/workspace-path';
 import { SlateDirectoryName } from './rpc';
-import type { WorkspaceSlateContentStore } from './content';
+import { readRetainedTree, retainTree, type RetainedTree, type RetainedTreeEntry, type WorkspaceSlateContentStore } from './content';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
@@ -13,17 +13,6 @@ import { unmovedSince } from '../vfs/unmoved';
 
 export { SlateDirectoryName };
 
-const TreePath = v.pipe(v.string(), v.check((path) => path.split('/').every((part) => part !== '' && part !== '.' && part !== '..')));
-
-const TreeEntry = v.variant('kind', [
-  v.object({ path: TreePath, kind: v.literal('directory'), mode: v.number() }),
-  v.object({ path: TreePath, kind: v.literal('file'), mode: v.number(), content: v.string() }),
-  v.object({ path: TreePath, kind: v.literal('symlink'), target: v.string() }),
-]);
-
-const Tree = v.object({ mode: v.number(), entries: v.array(TreeEntry) });
-
-type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
 export function slateDirectory(id: SlateId): string {
   return settleSync(slateRoot(id));
@@ -121,7 +110,7 @@ export class SlateFiles {
   private captureAt(id: SlateId, root: string): Effect.Effect<ContentRef, KinuError> {
     const manifest = new SlateManifest(this.sql, id.value);
     const known = new Map(manifest.known);
-    const entries: TreeEntry[] = [];
+    const entries: RetainedTreeEntry[] = [];
 
     const walk = (directory: string, relative: string): string | null => {
       // Never locale order: the walk order is part of the content-addressed ref.
@@ -156,11 +145,11 @@ export class SlateFiles {
 
     for (const path of known.keys()) manifest.forget(path);
 
-    return Effect.succeed(this.content.retain(new TextEncoder().encode(JSON.stringify({ mode: this.vfs.stat(root).mode & 0o7777, entries }))).ref);
+    return Effect.succeed(retainTree(this.content, { mode: this.vfs.stat(root).mode & 0o7777, entries }));
   }
 
-  readTree(source: ContentRef) {
-    return v.parse(Tree, JSON.parse(new TextDecoder().decode(this.content.read(source))));
+  readTree(source: ContentRef): RetainedTree {
+    return readRetainedTree(this.content, source);
   }
 
   restore(id: SlateId, source: ContentRef): void {
@@ -222,7 +211,7 @@ export class SlateFiles {
     }
   }
 
-  private prune(directory: string, relative: string, target: ReadonlyMap<string, TreeEntry>): void {
+  private prune(directory: string, relative: string, target: ReadonlyMap<string, RetainedTreeEntry>): void {
     for (const entry of this.vfs.readdir(directory)) {
       const path = relative === '' ? entry.name : `${relative}/${entry.name}`;
       const absolute = `${directory}/${entry.name}`;

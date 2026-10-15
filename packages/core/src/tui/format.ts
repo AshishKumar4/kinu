@@ -1,6 +1,7 @@
 import { agentTitle } from '../subordinates/nested-agent';
 import { revealMisrepresenting } from '../safety/untrusted-text';
 import { ELAPSED_COUNTER } from '../tui-presentation';
+import { estimateTokens } from '../token-estimate';
 
 export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -11,7 +12,7 @@ export interface TurnMeter {
 
 export function meterText(meter: TurnMeter, now: number): string {
   const seconds = Math.max(0, Math.floor((now - meter.startedAt) / 1000));
-  const tokens = Math.ceil(meter.streamedChars / 4);
+  const tokens = estimateTokens(meter.streamedChars);
   const elapsed = `${ELAPSED_COUNTER.prefix}${String(seconds)}${ELAPSED_COUNTER.suffix}`;
 
   return tokens === 0 ? elapsed : `${elapsed} · ~${String(tokens)} tokens`;

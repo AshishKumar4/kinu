@@ -13,10 +13,10 @@ import { runName } from './fork-runs';
 import type { Page, PageRequest } from '../session/page';
 import type { ActorHandle } from '../identity/actor-handle';
 
-export type NodeTranscriptOrigin = 'head' | 'rollout';
+type NodeTranscriptOrigin = 'head' | 'rollout';
 
 /** One step of the search path, root first. */
-export interface NodeTranscriptCrumb {
+interface NodeTranscriptCrumb {
   readonly id: string;
   /** Unpolished; the tree's `cleanNodeLabel` decides display trimming. */
   readonly label: string;

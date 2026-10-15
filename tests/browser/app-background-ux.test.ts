@@ -1,14 +1,15 @@
 /**
  * The living background behind the signed-in shell, in a real browser.
  *
- * The shipped `Layout` mounts it under `?frame=app&path=…`: a connectome on a
- * fixed canvas behind the rail and the page, invisible to the pointer, still
+ * The shipped `Layout` mounts it under `?frame=app&path=…`: a neural mesh on
+ * a fixed canvas behind the rail and the page, invisible to the pointer, still
  * for a reduced-motion visitor and for a phone, absent where a transcript
  * would be, and following the overview read model through idle, working and
  * the attention a waiting decision earns.
  *
  * What it cannot see, it leaves to the unit tier: the tissue's own numbers
- * (packages/core/tests/unit-connectome.test.ts).
+ * (packages/core/tests/unit-neural-mesh.test.ts) and the renderer keeping its
+ * rest (packages/core/tests/unit-hero-canvas.test.ts).
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';

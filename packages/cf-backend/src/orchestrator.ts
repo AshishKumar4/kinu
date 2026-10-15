@@ -40,6 +40,7 @@ import {
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
+import { censusOf, requireOps, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -97,7 +98,7 @@ import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
-import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import type { SubordinateView } from "@kinu.run/core/protocol";
 import { markStoreChanged, nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, armedWarms, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
@@ -140,7 +141,7 @@ import {
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, aggregateScore, type GepaRunSummary,
   qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -193,9 +194,9 @@ import {
   type ChangeNote, type ChangeNotesResult, type NotedChanges,
   diffLines, type DiffLine,
   listEnvironments,
-  type DirEntry, type ExecutorTextFile, type ExecutorWriteResult,
+  type ExecutorTextFile, type FilesPage, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
-  jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
+  listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
@@ -234,7 +235,7 @@ import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
-  type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal,
+  type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal, bearWorkspaceIdentity,
   type DeviceConsentRequest, type PendingDeviceConsent,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, performBoundWrite, ParkedWriteFiles,
   reviewParkedWrite, type ParkedWriteReview,
@@ -339,9 +340,7 @@ export type RecentEventRow = Pick<
 >;
 
 function clampLimit(requested: number | undefined, max: number): number {
-  if (requested === undefined || !Number.isFinite(requested)) return max;
-
-  return Math.min(Math.max(Math.floor(requested), 1), max);
+  return boundedInt(requested, max, 1, max);
 }
 
 /** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
@@ -432,6 +431,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.addressedName = name;
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
 
+    // Storage a release left behind is brought to this build first, by the root's whole init: the webhook secrets too,
+    // which a workspace makes at its first trigger.
+    const secrets = tableExists(this.boundSql, 'webhook_secrets');
+
+    this.repairStorage(() => {
+      this.initBaseTables();
+
+      if (this.nimbusSibling) return;
+      this.initTables();
+
+      if (secrets) createWebhookSecretStore(this.ctx.storage.sql);
+    });
+
     // Tables only, so a call after `destroyAgent` makes no workspace. Native RPC runs no `onStart`.
     if (!this.nimbusSibling && this.storageRefusal === undefined) {
       this.initTables();
@@ -440,7 +452,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     this.installClientMessageGate();
-    const gate = new ActivationGate();
+    const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     startBeforeRpc(this, ORCHESTRATOR_STARTED_RPC, () => (this.nimbusSibling ? Promise.resolve() : gate.ready()));
   }
@@ -2533,12 +2545,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return await stub.receivePeerMessage(msg);
       },
       isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
-      // A failed lookup is not a refusal: it rejects the delivery, and the sender's outbox retries it.
-      hasGrant: async (senderAgentName, senderUserId) => {
-        const { stub, caller } = await this.userHub();
-
-        return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
-      },
       scheduleDispatch: (at) => this.wakes.arm(KINU_TIMER_JOB, at),
       onAdmitted: () => { this.armDurableWake(); },
     });
@@ -3783,7 +3789,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobAuthorities.owning(jobId)?.store ?? this.jobs, jobId);
+    return (this.jobAuthorities.owning(jobId)?.store ?? this.jobs).get(jobId);
   }
 
   @callable()
@@ -3941,7 +3947,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */
   async recordGitHubEgress(facts: readonly GitHubFact[], actorId: string | null): Promise<void> {
-    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, source: 'egress', at: Date.now() });
+    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, at: Date.now() });
   }
 
   @callable() getWorkspaceGitHub(refresh = false): Promise<WorkspaceGitHubView> {
@@ -4195,7 +4201,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Device connection is user-level: UserDO owns the tunnel socket and tokens; nothing
   // per-agent verifies, attaches, issues or lists a device token.
 
-  /** DDL only; no persisted schema version. */
+  /**
+   * The deploy's walk (`scripts/reset.ts tables`): this workspace's tables and their rows and what its repair did, and,
+   * once it is born, each agent whose database it keeps (a retired one's too), opened so it repairs itself, with the
+   * same. A wiped or unborn workspace answers for itself alone: it has no agents. Only `/ops/tables` holds the
+   * capability. A Nimbus sibling holds no workspace table.
+   */
+  async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
+    await requireOps(this.env, caller);
+    const reached = !this.nimbusSibling && this.storageRefusal === undefined && this.workspaceBorn() ? this.keptAgents() : [];
+    const agents = await Promise.all(reached.map(async ({ name, placement }) => ({ name, ...await (await agentFacet(this.ctx, this.env, placement)).opsTables() })));
+
+    return {
+      name: this.addressedName, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
+      workspaces: [], accounts: [], agents,
+    };
+  }
+
   private initTables(): void {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
@@ -4208,7 +4230,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
-    // Planes only this root carries (declared in core/conformance/manifest.ts).
+    // Planes only this root carries (declared in test-utils/src/conformance/manifest.ts).
     initWebhookIngressTables(this.ctx.storage.sql);
 
     initSleepTimeUpdatesTable(execRaw);
@@ -4234,9 +4256,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The first claim or fork. */
   protected bearWorkspace(identityName: string, ownerUserId: string): void {
     this.ctx.storage.transactionSync(() => {
-      void this.sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
-        VALUES (${this.ctx.id.toString()}, ${identityName}, ${ownerUserId}, ${Date.now()})`;
-      this.workspaceActors().createMain({ name: this.name });
+      // Through the bound handle, as the roster's own writes go: a read held on the actors sees main arrive.
+      bearWorkspaceIdentity(this.boundSql, { id: this.ctx.id.toString(), name: identityName, ownerUserId, createdAt: Date.now() });
     });
     this.registerCompactionExtension();
   }
@@ -5104,7 +5125,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
           id: c.id, parentId: c.parentId, source: c.source,
           scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
-          aggregateScore: c.aggregateScore, createdAt: c.createdAt,
+          aggregateScore: aggregateScore(c), createdAt: c.createdAt,
         }));
 
         // The membership table is core's; no raw SELECT across the package boundary.
@@ -5257,6 +5278,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         store: workspaceArchiveStore(workspace),
         agents: this.agentArchiveSource(),
       }));
+    }));
+  }
+
+  /** The agents whose databases this workspace keeps, by name, and where each lives. */
+  private keptAgents(): Array<{ readonly name: string; readonly placement: AgentFacetPlacement }> {
+    return this.agentsWithStores().map((actorId) => ({
+      name: this.actorDirectoryStore().retained(actorId)?.name ?? actorId, placement: this.agentPlacement(actorId),
     }));
   }
 
@@ -6140,7 +6168,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Browser-only; delegates to the same orchestration policy as the model's agents tool. */
-  @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
+  @callable() async listSubordinates(): Promise<SubordinateView[]> {
     return this.subordinateViews();
   }
 
@@ -6152,7 +6180,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable() async createSubordinateAgent(opening?: string): Promise<{
     name: string;
     displayName: string;
-    subordinate: SubordinateRosterEntry;
+    subordinate: SubordinateView;
   }> {
     const result = await this.getTeamToolDeps().create({ ...(opening !== undefined && { brief: opening }) });
 
@@ -6168,7 +6196,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ok: true;
     name: string;
     displayName: string;
-    subordinate: SubordinateRosterEntry;
+    subordinate: SubordinateView;
   }> {
     const result = await this.getTeamToolDeps().rename({ name, displayName });
 
@@ -6575,8 +6603,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.executors.execute(executorId, command, device);
   }
 
-  @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
-    return await this.executors.files(executorId, path);
+  /** A page of the folder from `from`, read off the executor's own raw handle; its answer names where the next starts. */
+  @callable() async getExecutorFiles(executorId: string, path: string, from?: number): Promise<FilesPage> {
+    return await this.executors.files(executorId, path, from);
   }
 
   @callable() async readExecutorFile(executorId: string, path: string): Promise<ExecutorTextFile> {

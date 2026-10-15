@@ -47,7 +47,7 @@ struct Varying {
   let glow = look.y;
   let rgb = recede(palette, mix(tone_color(palette, look.z, glow), palette.bright.rgb, glow * 0.6)) * glow_scale(palette, glow);
   // Pulses share the paper lift, so the whole mesh steps up as one.
-  let lifted = look.w * mix(1.0, 2.4, palette.mode);
+  let lifted = look.w * mix(palette.dark_lift, palette.light_lift, palette.mode);
 
   var out: Varying;
   out.position = to_clip(view, pixel);

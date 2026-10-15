@@ -2,7 +2,7 @@
  *  Nothing here is served; only the install command comes from the deployment. */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { JsonValueSchema, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
+import { JsonValueSchema, mainPanelAgent, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
 import type { UserProfile } from '@/lib/user-api';
 import { workspaceRpc, type SocketCall, type WorkspaceRpc } from '@/lib/workspace-rpc';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
@@ -43,7 +43,7 @@ const NO_FIGURES = { activeMs: 0, cacheEma: null };
 
 /** A project's day-to-day chats. */
 export const LANDING_CHATS: readonly PanelAgent[] = [
-  { colour: 0, key: 'main', label: 'Main', category: 'main', activity: 'working', parent: null, open: { kind: 'chat', path: null }, tab: true, input: true, figures: NO_FIGURES },
+  mainPanelAgent({ activity: 'working' }),
   { colour: 1, key: 'actor-gift-cards', label: 'Should checkout support gift cards?', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'gift-cards' }, tab: true, input: true, figures: NO_FIGURES },
   { colour: 2, key: 'actor-cart', label: 'Speed up cart render', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'cart-render' }, tab: true, input: true, figures: NO_FIGURES },
 ];
@@ -123,9 +123,12 @@ const CHECKOUT_CHANGELOG = {
   ],
 };
 
+/** A first drive: never interrupted, never retried, serving nothing. */
+const FIRST_DRIVE = { epoch: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
+
 const CHECKOUT_JOBS: BackgroundJob[] = [
-  { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, settledAt: null },
-  { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
+  { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null, ...FIRST_DRIVE },
+  { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, attemptStartedAt: NOW - 61e5, settledAt: NOW - 58e5, ...FIRST_DRIVE },
 ];
 
 const CHECKOUT_PENDING: PendingAction[] = [
@@ -166,7 +169,10 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
       jobs = method === 'retryBackgroundJob'
         ? [
           ...jobs.map((job) => (job.id === id ? { ...job, retriedBy: retryId } : job)),
-          { id: retryId, kind: 'shell', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null, createdAt: Date.now(), settledAt: null },
+          {
+            id: retryId, kind: 'shell', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null,
+            createdAt: Date.now(), attemptStartedAt: Date.now(), settledAt: null, ...FIRST_DRIVE,
+          },
         ]
         : jobs.filter((job) => job.id !== id);
       pending = pending.filter((action) => action.id !== id);

@@ -13,7 +13,7 @@ import { settle, settleSync } from '../obs/effect';
 import { secretSightings, type SecretSighting } from '../safety/secret-scan';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { nanoid } from '../utils/nanoid';
-import type { WorkspaceSlateContentStore } from './content';
+import { readRetainedTree, RetainedTreeSchema, retainTree, type RetainedTree, type WorkspaceSlateContentStore } from './content';
 import { slateProject, slateTitle, type SlateProject } from './project';
 import { namespaceHead, type SlateUsage } from './capability-graph';
 import type { WorkspaceSlates } from './runtime';
@@ -23,20 +23,6 @@ import {
   type BlueprintView, type PublishedBlueprint, type SlateShareRecord,
 } from './sharing';
 
-const TreePath = v.pipe(v.string(), v.check((path) => path.split('/').every((part) => part !== '' && part !== '.' && part !== '..')));
-
-const TreeEntry = v.variant('kind', [
-  v.object({ path: TreePath, kind: v.literal('directory'), mode: v.number() }),
-  v.object({ path: TreePath, kind: v.literal('file'), mode: v.number(), content: v.string() }),
-  v.object({ path: TreePath, kind: v.literal('symlink'), target: v.string() }),
-]);
-
-/** The retained manifest shape; blueprint operations never read live source. */
-const Tree = v.object({ mode: v.number(), entries: v.array(TreeEntry) });
-
-type Tree = v.InferOutput<typeof Tree>;
-
-type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
 /** One lowercase segment: `mcp.my_files` becomes `mcp.my-files`. */
 const BLUEPRINT_FACET_PREFIX = 'kinu.slate.';
@@ -76,14 +62,14 @@ function blueprintRequirements(reaches: readonly string[]): Effect.Effect<Bindin
 }
 
 /** `package.json` always, plus every entry under an included top-level name. */
-function includeTree(tree: Tree, included: readonly string[] | undefined): Tree {
+function includeTree(tree: RetainedTree, included: readonly string[] | undefined): RetainedTree {
   if (included === undefined) return tree;
   const names = new Set([...included, 'package.json']);
 
   return { mode: tree.mode, entries: tree.entries.filter((entry) => names.has(entry.path.split('/')[0])) };
 }
 
-function topLevelNames(tree: Tree): string[] {
+function topLevelNames(tree: RetainedTree): string[] {
   const names: string[] = [];
 
   for (const entry of tree.entries) {
@@ -131,7 +117,7 @@ export class WorkspaceBlueprints {
       const record = this.deps.slates.version(new SlateVersionId(version));
 
       if (!record.slateId.equals(new SlateId(slate))) return yield* new KinuError('missing', 'That version belongs to another slate');
-      const tree = this.tree(record.source);
+      const tree = readRetainedTree(this.deps.content, record.source);
       const chosen = includeTree(tree, included);
       const project = yield* this.project(chosen);
 
@@ -151,9 +137,9 @@ export class WorkspaceBlueprints {
     return settle(Effect.gen({ self: this }, function* () {
       const inspection = yield* this.inspection(slate, version, included);
       const record = this.deps.slates.version(new SlateVersionId(version));
-      const tree = includeTree(this.tree(record.source), included);
+      const tree = includeTree(readRetainedTree(this.deps.content, record.source), included);
       // A subset is retained as its own bundle, so the skeleton names what ships.
-      const bundle = included === undefined ? record.source : this.retainTree(tree);
+      const bundle = included === undefined ? record.source : retainTree(this.deps.content, tree);
       const requirements = yield* blueprintRequirements(inspection.reaches);
       const publication = yield* Effect.promise(() => this.deps.slates.publish(record.id, requirements, bundle));
 
@@ -197,11 +183,11 @@ export class WorkspaceBlueprints {
   }
 
   /** `reaches` is what the publication requires, fixed when it was published. */
-  private published(share: string): Effect.Effect<{ record: SlateShareRecord; tree: Tree; project: SlateProject; reaches: string[] }, KinuError> {
+  private published(share: string): Effect.Effect<{ record: SlateShareRecord; tree: RetainedTree; project: SlateProject; reaches: string[] }, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const record = this.deps.shares.live(share);
       const publication = this.deps.slates.publication(new SlatePublicationId(record.publication));
-      const tree = this.tree(publication.materialization);
+      const tree = readRetainedTree(this.deps.content, publication.materialization);
       const reaches = this.deps.slates.skeleton(publication.id).bindings.map((requirement) => requirementNamespace(requirement.name.value));
 
       return { record, tree, project: yield* this.project(tree), reaches };
@@ -213,7 +199,7 @@ export class WorkspaceBlueprints {
     const record = this.deps.shares.live(share);
     const publication = this.deps.slates.publication(new SlatePublicationId(record.publication));
     const skeleton = this.deps.slates.skeleton(publication.id);
-    const tree = this.tree(publication.materialization);
+    const tree = readRetainedTree(this.deps.content, publication.materialization);
     const blobs: Record<string, string> = {};
 
     for (const entry of tree.entries) {
@@ -232,7 +218,7 @@ export class WorkspaceBlueprints {
   async liveBundle(slateId: string): Promise<BlueprintBundle> {
     return settle(Effect.gen({ self: this }, function* () {
       const slate = yield* Effect.promise(() => this.deps.slates.synchronize(new SlateId(slateId)));
-      const tree = this.tree(slate.source);
+      const tree = readRetainedTree(this.deps.content, slate.source);
       const skeleton = new SlateSkeleton(slate.source.digest, yield* blueprintRequirements(reachOf(this.deps.usage(slateId))));
       const blobs: Record<string, string> = {};
 
@@ -255,7 +241,7 @@ export class WorkspaceBlueprints {
     return settle(Effect.gen({ self: this }, function* () {
       const bundle = v.parse(BlueprintBundleSchema, input);
       const skeleton = SlateSkeleton.fromData(bundle.skeleton);
-      const tree = v.parse(Tree, JSON.parse(bundle.tree));
+      const tree = v.parse(RetainedTreeSchema, JSON.parse(bundle.tree));
 
       for (const entry of tree.entries) {
         if (entry.kind !== 'file') continue;
@@ -282,15 +268,7 @@ export class WorkspaceBlueprints {
     }));
   }
 
-  private tree(source: ContentRef): Tree {
-    return v.parse(Tree, JSON.parse(new TextDecoder().decode(this.deps.content.read(source))));
-  }
-
-  private retainTree(tree: Tree): ContentRef {
-    return this.deps.content.retain(new TextEncoder().encode(JSON.stringify(tree))).ref;
-  }
-
-  private project(tree: Tree): Effect.Effect<SlateProject, KinuError> {
+  private project(tree: RetainedTree): Effect.Effect<SlateProject, KinuError> {
     const manifest = tree.entries.find((entry) => entry.path === 'package.json');
 
     if (manifest === undefined || manifest.kind !== 'file') return Effect.fail(new KinuError('bad_input', 'This version has no package.json'));
@@ -298,14 +276,14 @@ export class WorkspaceBlueprints {
     return Effect.suspend(() => slateProject(JSON.parse(new TextDecoder().decode(this.deps.content.read(new ContentRef(manifest.content))))));
   }
 
-  private entries(whole: Tree, chosen: Tree): BlueprintEntry[] {
+  private entries(whole: RetainedTree, chosen: RetainedTree): BlueprintEntry[] {
     const included = new Set(chosen.entries.map((entry) => entry.path));
 
     return whole.entries.map((entry) => ({ path: entry.path, kind: entry.kind, included: included.has(entry.path) }));
   }
 
   /** Binary files (a NUL byte) are not decoded. */
-  private warnings(tree: Tree): SecretSighting[] {
+  private warnings(tree: RetainedTree): SecretSighting[] {
     const warnings: SecretSighting[] = [];
 
     for (const entry of tree.entries) {
@@ -320,4 +298,3 @@ export class WorkspaceBlueprints {
   }
 }
 
-export type { TreeEntry as BlueprintTreeEntry };

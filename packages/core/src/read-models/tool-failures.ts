@@ -37,7 +37,7 @@ const EXEC_REASON_BY_EXIT = new Map([
 const RUNTIME_ABSENT_REASON = 'command_not_found';
 
 /** Disjoint census parts; only `broke` is a candidate defect. */
-export type ToolFailurePart = 'refused' | 'work-failed' | 'runtime-absent' | 'broke';
+type ToolFailurePart = 'refused' | 'work-failed' | 'runtime-absent' | 'broke';
 
 /** The one place a reason's part is decided, shared by live census and persisted keys. Unknown
  *  reasons read as `broke`. */

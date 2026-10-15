@@ -14,14 +14,14 @@ import {
   inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
-  resetGuardedExec, StoragePredatesResetError, LiveWorkers,
+  durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
-import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
+import type { SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType } from "agents/chat";
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,
@@ -140,7 +140,7 @@ import {
   type InstructionSourceRow, type InstructionSourceView,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
+  resolveTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   activeOperationProfile, captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
   inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
@@ -556,33 +556,53 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Created in the constructor: the only point guaranteed to precede every access on both cf roots
-   * (`onStart` may follow an RPC). Per-root by design; `core/conformance/manifest.ts` marks it
-   * absent for cli.
+   * (`onStart` may follow an RPC). Per-root by design; `test-utils/src/conformance/manifest.ts` marks it
+   * absent for cli. The storage is asked its stamp first (identity/schema-stamp.ts): storage a release left behind gets
+   * no init here, and the subclass's constructor repairs it with the whole root's init ({@link repairStorage}).
    */
   private initCapabilitySchema(): void {
-    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_capability (
+    const stamps = durableStamps(this.ctx.storage.kv);
+    const stamp = readStamp(stamps, this.ctx.storage.sql, 'workspace');
+
+    if (stamp === 'behind') return;
+
+    this.initBaseTables();
+
+    if (stamp === 'unmade') writeStamp(stamps, 'workspace');
+  }
+
+  /** Storage a release left behind brought to this build by `init`, the root's whole init, before any event reads it
+   *  (core state/schema-repair.ts); one its repair cannot bring up answers every call with why. */
+  protected repairStorage(init: () => void): void {
+    const { storage } = this.ctx;
+
+    this.schemaRepair = repairSchema(storage.sql, {
+      schema: 'workspace', tables: SCHEMA_TABLES.workspace, stamps: durableStamps(storage.kv),
+      transactionSync: (write) => storage.transactionSync(write), init,
+    }, `workspace ${this.name}`);
+
+    if (this.schemaRepair?.refused == null) return;
+    this.storageRefusal = new StoragePredatesReleaseError('workspace', this.schemaRepair.refused);
+    diagnostics.failure('workspace.storage_refused', this.storageRefusal);
+  }
+
+  /** The tables a root makes before anything reads it; a repair runs this again once it rebuilt the storage. */
+  protected initBaseTables(): void {
+    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
+
+    execRaw(`CREATE TABLE IF NOT EXISTS workspace_capability (
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       token TEXT NOT NULL
     )`);
     // Pending-send ledger is declared once in core (`initPendingSendTables`) because the CLI
     // backend shares the table names with a nullable `turn_id`; one writer keeps creation order
     // from picking the shape.
-    initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
-
+    initPendingSendTables(execRaw);
     // Per-actor admission ledger (one workspace-wide pointer cannot distinguish concurrent actors).
     // In the base constructor: the SDK's fiber recovery reads it before any subclass constructor body.
-    try {
-      initActorClaimTables(resetGuardedExec((ddl: string) => this.ctx.storage.sql.exec(ddl), this.ctx.storage.sql));
-    } catch (cause) {
-      if (!(cause instanceof StoragePredatesResetError)) throw cause;
-      this.storageRefusal = cause;
-      diagnostics.failure('workspace.storage_predates_reset', cause, { table: cause.table });
-
-      return;
-    }
-
+    initActorClaimTables(execRaw);
     // Same reason.
-    initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
+    initTerminalEffectTable(execRaw);
   }
 
   /** Spliced between `agents` and `web` so provider order (and the LLM-visible type description)
@@ -866,7 +886,10 @@ export abstract class ActorAgent extends Agent<Env> {
   });
 
   // The bare prototype must read as sound.
-  protected storageRefusal?: StoragePredatesResetError;
+  protected storageRefusal?: StoragePredatesReleaseError;
+
+  /** What this activation's repair did, for the deploy's walk; null where the storage was at this build. */
+  protected schemaRepair: Repair | null = null;
 
   /** Kinu's two durable wakes; see wake-jobs.ts. */
   protected readonly wakes = new WakeJobs({
@@ -1672,7 +1695,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private noteGitHubCall(descriptor: Pick<SerializableToolDescriptor, 'presetId' | 'name'>, args: JsonObject, result: string, actorId: string | null): void {
     if (descriptor.presetId !== GITHUB_MCP_PRESET) return;
-    recordGitHubActivity(this.boundSql, recognizeGitHubMcp(descriptor.name, args, result), { actorId, source: 'mcp', at: Date.now() });
+    recordGitHubActivity(this.boundSql, recognizeGitHubMcp(descriptor.name, args, result), { actorId, at: Date.now() });
   }
 
   private get mcpToolsCache(): McpToolSurfaceCache<ToolSet> {
@@ -3629,7 +3652,7 @@ export abstract class ActorAgent extends Agent<Env> {
       resolve: async () => {
         const inputs = await this.profileInputs();
 
-        return resolveAgentTurnProfile({
+        return resolveTurnProfile({
           ...inputs,
           ...ownProfileChoices(this.config, inputs),
           workMode: preparedMode ?? await this.preparedWorkMode(),
@@ -3650,7 +3673,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const inputs = await this.profileInputs();
 
     return {
-      profile: resolveAgentTurnProfile({
+      profile: resolveTurnProfile({
         ...inputs,
         ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), {
           explicitTier: input.explicitTier,

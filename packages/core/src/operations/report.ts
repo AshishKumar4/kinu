@@ -2,9 +2,7 @@
 import * as v from 'valibot';
 import { SUBORDINATE_REPORT_HANDOFF_MAX_CHARS, SUBORDINATE_REPORT_STATUSES, type SubordinateReportHandoffField } from '../events/hub/types';
 import { JsonValueSchema } from '../utils/json';
-import { defineOperation } from './operation';
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
+import { defineOperation, described } from './operation';
 
 const handoffField = (purpose: string) => v.optional(described(v.array(v.pipe(v.string(), v.trim())),
   `${purpose} One short entry each; the four lists share ${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS} characters.`));

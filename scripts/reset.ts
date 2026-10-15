@@ -18,8 +18,20 @@
  *   bun scripts/reset.ts pending <environment> <record>  the tag of a reset whose build never uploaded, or `none`;
  *                                                     the newest reset of the Worker, if any, written to <record> for
  *                                                     the pre-upload gate, which defers exactly the rows it deleted
+ *   bun scripts/reset.ts served <environment>         the build the deployment serves, which a tables plan diffs from
+ *   bun scripts/reset.ts stamps <environment>         the classes whose stamp the candidate moves; exit 3 if any
+ *   bun scripts/reset.ts census <environment> <out>   every table's rows on every object, for a diff
+ *   bun scripts/reset.ts tables-plan <environment> <record> [--from <sha>]
+ *                                                     before the upload: what each object's repair of the tables
+ *                                                     the release changed will do, and what refuses
+ *   bun scripts/reset.ts tables-record <environment> <record>
+ *                                                     just before the upload: the plan's record published as the
+ *                                                     rollback barrier
+ *   bun scripts/reset.ts tables <environment> <record>
+ *                                                     after it: every object opened, so each repairs itself, and
+ *                                                     its census (scripts/tables-reset.ts)
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
@@ -36,6 +48,11 @@ import {
   type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, bucketOf, deployedConfig, liveClasses,
 } from './infra-manifest';
 import { servedHealth } from './served-health';
+import { readGenesisLockText } from './schema-drift';
+import {
+  censusLines, changedTables, confirmation, listedObjects, planLines, regenerableIn, verdictOf, walk, walkLines, writeLines, type TablesTarget,
+} from './tables-reset';
+import { OPS_PASS_PREFIX } from '@kinu.run/core';
 
 /** What one reset deleted, or is deleting. */
 export const ResetSchema = v.object({
@@ -53,6 +70,14 @@ export const ResetSchema = v.object({
    *  2026-10-01, written only once complete. Either way the record is a barrier no rollback crosses: from the
    *  placeholder on, the storage it names is gone. */
   state: v.optional(v.picklist(['started', 'done'])),
+  /** `tables`: a release whose objects repair their tables at first contact (scripts/tables-reset.ts), which deletes
+   *  no class. Absent in a full reset's record. Either is a barrier: no build older than the candidate runs the new
+   *  shape. */
+  kind: v.optional(v.picklist(['objects', 'tables'])),
+  tables: v.optional(v.array(v.object({ table: v.string(), change: v.picklist(['removed', 'reshaped']), classes: v.array(v.string()) }))),
+  /** A tables release's builds: the one the deployment served before, and the candidate. */
+  from: v.optional(v.string()),
+  candidate: v.optional(v.string()),
 });
 
 export type Reset = v.InferOutput<typeof ResetSchema>;
@@ -263,7 +288,7 @@ function credentialRefusal(applications: Reset['applications'], chains: Reset['c
 }
 
 /** The record at `file`, at `resets/<tag>.json` and at the barrier, in that order. */
-function record(target: ResetTarget, file: string, reset: Reset): void {
+function record(target: Pick<ResetTarget, 'putRecord'>, file: string, reset: Reset): void {
   writeFileSync(file, JSON.stringify(reset));
 
   for (const key of [`resets/${reset.tag}.json`, LATEST_RESET_KEY]) target.putRecord(key, file);
@@ -272,7 +297,7 @@ function record(target: ResetTarget, file: string, reset: Reset): void {
 /** The reset `worker` is still in: it serves a placeholder, binding no class, that the newest record names. Its build
  *  never uploaded, so its classes are gone and the next deploy creates them. */
 export function pendingReset(worker: string, live: Serving, latest: Reset | undefined): Reset | undefined {
-  if (live.bound.size !== 0 || latest === undefined || latest.worker !== worker) return undefined;
+  if (live.bound.size !== 0 || latest === undefined || latest.worker !== worker || latest.kind === 'tables') return undefined;
 
   return latest.placeholderVersion === '' || latest.placeholderVersion === live.versionId ? latest : undefined;
 }
@@ -428,13 +453,246 @@ export async function wipe(input: WipeInput): Promise<Reset> {
 }
 
 /** Asks on the terminal, and only there: piped input is no person's answer. */
-async function confirmedAtTerminal(): Promise<boolean> {
+async function confirmedAtTerminal(words = PRODUCTION_CONFIRMATION, what = 'delete every Durable Object of production'): Promise<boolean> {
   if (process.stdin.isTTY !== true) return false;
-  process.stderr.write(`Type '${PRODUCTION_CONFIRMATION}' to delete every Durable Object of production: `);
+  process.stderr.write(`Type '${words}' to ${what}: `);
 
-  for await (const line of console) return line.trim() === PRODUCTION_CONFIRMATION;
+  for await (const line of console) return line.trim() === words;
 
   return false;
+}
+
+/** A tables release's commands (scripts/tables-reset.ts). */
+const TABLES_COMMANDS = ['served', 'stamps', 'census', 'tables-plan', 'tables-record', 'tables'] as const;
+
+/** `served`, `stamps`, `census`, `tables-plan`, `tables-record` and `tables`: a tables release's commands. */
+async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environment: InfraEnvironment, args: readonly string[]): Promise<number> {
+  const [recordFile, flag, from] = args;
+
+  if (command === 'served' && recordFile === undefined) {
+    const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
+
+    if (sha === undefined) throw new Error(`${environment} serves no build stamp, so a tables release cannot tell what it changed from`);
+    console.log(sha);
+
+    return 0;
+  }
+
+  // Exit 3 when the candidate moves a class's stamp: every database of that class repairs itself at first contact.
+  if (command === 'stamps' && recordFile === undefined) {
+    const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
+    const served = sha === undefined ? undefined : stampsAt(sha);
+    const candidate = stampsAt('HEAD') ?? {};
+    const moved = Object.keys(candidate).filter((schema) => served?.[schema] !== candidate[schema]);
+
+    console.log(moved.length === 0 ? 'none' : moved.join(','));
+
+    return moved.length === 0 ? 0 : 3;
+  }
+
+  if (command === 'census' && recordFile !== undefined) {
+    const { reached } = await walk(tablesTarget(environment, plan(environment).config));
+
+    writeLines(recordFile, censusLines(reached));
+    console.log(`census: ${String(reached.length)} object(s); every table's rows in ${recordFile}`);
+
+    return 0;
+  }
+
+  if (command === 'tables-plan' && recordFile !== undefined && (flag === undefined || (flag === '--from' && from !== undefined))) {
+    return await planTables({ environment, recordFile, from });
+  }
+
+  if (command === 'tables-record' && recordFile !== undefined && flag === undefined) return publishTables(environment, recordFile);
+
+  if (command === 'tables' && recordFile !== undefined && flag === undefined) return await walkTables(environment, recordFile);
+
+  console.error('usage: bun scripts/reset.ts served <environment> | stamps <environment> | census <environment> <out> '
+    + '| tables-plan <environment> <record> [--from <sha>] | tables-record <environment> <record> | tables <environment> <record>');
+
+  return 2;
+}
+
+/** How long a pass lives if this process dies before it deletes it: past the longest sweep, short of a day. */
+const PASS_TTL_SECONDS = 6 * 60 * 60;
+
+/** The deployment as the walk reaches it: Cloudflare's object lists, its AUTH_KV, and its `/ops` routes. The version
+ *  the deploy uploaded, and how long an older one may still answer, come from deploy.sh (`KINU_VERSION`,
+ *  `KINU_PROPAGATION_SECONDS`), so the walk waits on the version as its smoke test does; run by hand, any answers. */
+function tablesTarget(environment: InfraEnvironment, config: DeployedConfig): TablesTarget {
+  const site = origin(config);
+  const account = requireCloudflareAccountId();
+  const kv = config.kv_namespaces?.find((namespace) => namespace.binding === 'AUTH_KV')?.id;
+  const token = restApiToken();
+  const version = process.env.KINU_VERSION ?? '';
+
+  if (kv === undefined) throw new Error(`${config.name ?? 'the Worker'} binds no AUTH_KV, where the walk's pass is written`);
+
+  if (token === '') throw new Error('the walk lists objects through the REST API, and no REST token is set (KINU_CLOUDFLARE_API_TOKEN)');
+  const live = deployment(environment);
+
+  if (live.state !== 'deployed') throw new Error(`${config.name ?? 'the Worker'} serves no version: ${live.state === 'unknown' ? live.reason : 'it has no deployment'}`);
+  const { bound } = servingOf(live.versionId, live.bindings);
+
+  return {
+    objects: async (className) => {
+      const namespace = bound.get(className);
+
+      if (namespace === undefined) throw new Error(`${config.name ?? 'the Worker'} binds no ${className}`);
+
+      return await listedObjects(account, namespace, token);
+    },
+    admit: (digest) => { run(['kv', 'key', 'put', `${OPS_PASS_PREFIX}${digest}`, '1', '--namespace-id', kv, '--ttl', String(PASS_TTL_SECONDS), '--remote']); },
+    forget: (digest) => { run(['kv', 'key', 'delete', `${OPS_PASS_PREFIX}${digest}`, '--namespace-id', kv, '--remote']); },
+    ops: async (pass, path, body) => {
+      const answer = await fetch(`${site}/ops/${path}`, {
+        method: 'POST', headers: { authorization: `Bearer ${pass}`, 'content-type': 'application/json' }, body: body === null ? null : JSON.stringify(body),
+        signal: AbortSignal.timeout(300_000),
+      });
+
+      return { status: answer.status, text: await answer.text(), version: answer.headers.get('x-kinu-version') };
+    },
+    candidate: version === '' ? null : { version, propagationMs: Number(process.env.KINU_PROPAGATION_SECONDS ?? '120') * 1000 },
+    pause: (ms) => Bun.sleep(ms),
+  };
+}
+
+/** The short sha a build is named by, as `/api/health` serves it. */
+function shortSha(ref: string): string {
+  return Bun.spawnSync(['git', 'rev-parse', '--short=9', ref]).stdout.toString().trim();
+}
+
+/** A file as the candidate commit holds it: the worktree's may say what no uploaded build does. */
+function atCandidate(path: string): string {
+  const shown = Bun.spawnSync(['git', 'show', `HEAD:${path}`]);
+
+  if (shown.exitCode !== 0) throw new Error(`HEAD carries no ${path}: ${shown.stderr.toString().trim()}`);
+
+  return shown.stdout.toString();
+}
+
+/** What each repair does to each table that changed since `from`: the plan's verdicts. */
+function releaseVerdicts(from: string) {
+  const fromLock = Bun.spawnSync(['git', 'show', `${from}:scripts/schema-genesis.lock.json`]);
+
+  if (fromLock.exitCode !== 0) throw new Error(`${from} carries no scripts/schema-genesis.lock.json in this checkout: ${fromLock.stderr.toString().trim()}`);
+  const before = readGenesisLockText(fromLock.stdout.toString());
+  const after = readGenesisLockText(atCandidate('scripts/schema-genesis.lock.json'));
+  const classes = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(atCandidate('scripts/schema-classes.json')));
+  const lockDiff = changedTables(before, after);
+  // The lock keeps every genesis it held, so a table retired since `from` may still be in both: its retired list says so.
+  const retiredAt = (text: string) => v.parse(v.array(v.string()), JSON.parse(text));
+  const servedRetired = Bun.spawnSync(['git', 'show', `${from}:scripts/schema-retired.json`]);
+  const wasRetired = servedRetired.exitCode === 0 ? retiredAt(servedRetired.stdout.toString()) : [];
+
+  const retired = retiredAt(atCandidate('scripts/schema-retired.json'))
+    .filter((table) => !wasRetired.includes(table) && !lockDiff.changed.some((entry) => entry.table === table))
+    .map((table) => ({ table, change: 'removed' as const }));
+
+  const changed = [...lockDiff.changed, ...retired].sort((a, b) => a.table.localeCompare(b.table));
+  const { added } = lockDiff;
+  const declared = (table: string) => Object.keys(after).find((key) => key.startsWith(`${table}@`))?.slice(table.length + 1);
+
+  const verdicts = changed.map((table) => {
+    const file = declared(table.table);
+
+    return verdictOf(table, { from: before, to: after, classes, regenerable: file === undefined ? null : regenerableIn(atCandidate(file), table.table) });
+  });
+
+  return { changed, added, verdicts };
+}
+
+/** The class stamps a commit's build carries, or none for a build before stamps were per class. */
+export function stampsAt(commit: string): Record<string, string> | undefined {
+  const shown = Bun.spawnSync(['git', 'show', `${commit}:packages/core/src/identity/schema-genesis.ts`]);
+  const stamps = [...shown.stdout.toString().matchAll(/^\s+(\w+): 0x([0-9a-f]+),$/gmu)].map((match) => [match[1] ?? '', match[2] ?? ''] as const);
+
+  return shown.exitCode !== 0 || stamps.length === 0 ? undefined : Object.fromEntries(stamps);
+}
+
+/** Before the upload: the plan, its refusals, production's confirmation, and the record `started`, which from the
+ *  upload on is a barrier no rollback crosses. `tables-plan <environment> <record>`. */
+async function planTables(input: { environment: InfraEnvironment; recordFile: string; from: string | undefined }): Promise<number> {
+  const { environment, recordFile } = input;
+  const { config } = plan(environment);
+  const candidate = shortSha('HEAD');
+  const from = input.from ?? (await servedHealth(origin(config))).build?.sha;
+
+  if (from === undefined) throw new Error(`${origin(config)} serves no build stamp, so the build it serves is unknown: name it with --from <sha>`);
+
+  if (candidate.startsWith(from.slice(0, 7))) throw new Error(`${origin(config)} already serves ${candidate}: name the build it served before with --from <sha>`);
+  const { changed, added, verdicts } = releaseVerdicts(from);
+
+  console.log(`tables: ${from} → ${candidate} on ${config.name ?? ''}; each database repairs itself the first time the candidate opens it`);
+
+  for (const line of planLines(verdicts, added)) console.log(`tables: ${line}`);
+
+  if (verdicts.some((verdict) => verdict.does === 'refuse')) {
+    console.error('tables: REFUSED before the upload: the repairs above would leave databases refused. Nothing was uploaded.');
+
+    return 1;
+  }
+
+  const words = confirmation(verdicts);
+
+  if (environment === 'production' && words !== null && !await confirmedAtTerminal(words, 'repair production\'s databases, losing the rows of exactly these tables where they are held')) {
+    console.error(`tables: not confirmed at a terminal with '${words}'; nothing was uploaded.`);
+
+    return 1;
+  }
+
+  const tag = `tables-${new Date().toISOString().replace(/[-:]|\.\d+/gu, '')}`;
+
+  const planned: Reset = {
+    environment, worker: config.name ?? '', tag, at: new Date().toISOString(), placeholderVersion: '', classes: [], applications: [], state: 'started',
+    kind: 'tables', from, candidate, tables: changed.map((table) => ({ ...table, classes: [...verdicts.find((verdict) => verdict.table === table.table)?.classes ?? []] })),
+  };
+
+  // Kept here until `tables-record` publishes it just before the upload: a deploy that stops before then changed nothing,
+  // and must leave no barrier a rollback would refuse to cross.
+  writeFileSync(recordFile, JSON.stringify(planned));
+
+  return 0;
+}
+
+/** Just before the upload, the first moment any object repairs: the plan's record published as the barrier no rollback
+ *  crosses. `tables-record <environment> <record>`. */
+function publishTables(environment: InfraEnvironment, recordFile: string): number {
+  const { config } = plan(environment);
+
+  record({ putRecord: tablesRecordPut(config) }, recordFile, v.parse(ResetSchema, JSON.parse(readFileSync(recordFile, 'utf8'))));
+  console.log(`tables: the plan's record published as the rollback barrier`);
+
+  return 0;
+}
+
+/** After the upload: every object opened once under the candidate, what each repair did, and the record `done`.
+ *  `tables <environment> <record>`. */
+async function walkTables(environment: InfraEnvironment, recordFile: string): Promise<number> {
+  const { config } = plan(environment);
+  const started = v.parse(ResetSchema, JSON.parse(readFileSync(recordFile, 'utf8')));
+  const { reached, listed } = await walk(tablesTarget(environment, config));
+  const { lines, failed } = walkLines(reached, listed);
+
+  for (const line of lines) console.log(`tables: ${line}`);
+  writeLines(`${recordFile}.census.tsv`, censusLines(reached));
+  console.log(`tables: every database's tables and rows in ${recordFile}.census.tsv`);
+
+  if (failed.length > 0) throw new Error(`${String(failed.length)} database(s) refused, or moved rows in a rebuild (above); the record stays started`);
+
+  record({ putRecord: tablesRecordPut(config) }, recordFile, { ...started, state: 'done' });
+  console.log(`tables: done; recorded at resets/${started.tag}.json`);
+
+  return 0;
+}
+
+/** Puts a record into the releases bucket, as a full reset's are. */
+function tablesRecordPut(config: DeployedConfig): ResetTarget['putRecord'] {
+  const releases = bucketOf(config, 'RELEASES_BUCKET');
+
+  if (releases === undefined) throw new Error(`${config.name ?? 'the Worker'} binds no RELEASES_BUCKET to keep the reset's record in`);
+
+  return (key, file) => { run(['r2', 'object', 'put', `${releases}/${key}`, '--file', file, '--content-type', 'application/json', '--remote']); };
 }
 
 async function main(argv: readonly string[], scratch: string): Promise<number> {
@@ -483,7 +741,13 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record> | pending <environment> <record>');
+  const tables = TABLES_COMMANDS.find((name) => name === command);
+
+  if (known && tables !== undefined) return await tablesCommand(tables, environment, argv.slice(2));
+
+  console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record> | pending <environment> <record> '
+    + '| served <environment> | stamps <environment> | census <environment> <out> | tables-plan <environment> <record> [--from <sha>] '
+    + '| tables-record <environment> <record> | tables <environment> <record>');
 
   return 2;
 }

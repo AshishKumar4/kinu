@@ -35,10 +35,6 @@ export interface BackgroundJobPlaneDeps {
 
 export type RetryOutcome = { ok: boolean; jobId?: string; error?: string };
 
-export function jobResult(jobs: BackgroundJobStore, jobId: string): BackgroundJob | null {
-  return jobs.get(jobId);
-}
-
 export type ListedBackgroundJob = BackgroundJob & { readonly output?: JobOutputTail };
 
 export function listBackgroundJobs(

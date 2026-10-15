@@ -52,12 +52,12 @@
 
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
 import { readSources, readTests } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   classMembers, declaredName, decoratorNames, identifierCalleeName, literalString, memberCalleeName, parse, stringArguments,
   walk, type SyntaxNode,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/reachability.lock.json`;
 

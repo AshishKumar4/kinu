@@ -17,7 +17,8 @@
  * Do not "fix" anything below the declarations.
  */
 
-import { createRecordingLogger, type LogFieldValue } from '../../../src/obs/log';
+import { type LogFieldValue } from '../../../src/obs/log';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const log = createRecordingLogger();
 

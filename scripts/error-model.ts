@@ -26,12 +26,12 @@ import { FAILURE_SURFACES, failureSurface } from '../tools/oxlint/anti-slop/rule
 
 import { assertMeasured, finding, refuseLock, shrinkOnly, type LockRefusal, type LockedNumber } from './gate-ratchet';
 import { readSources } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   declaredName, functionOwner, identifierCalleeName, isFunctionLike, literalString, memberCalleeName, parse, superClassName, walk,
   type SyntaxNode,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/error-model.lock.json`;
 
@@ -62,7 +62,7 @@ export const DECLARED = byFile([
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
     mechanisms: MECHANISMS, reason: `${surface.type}'s one runner rethrows its typed failure or a defect`,
   }] as const),
-  ...['packages/core/src/obs/tracer.ts', 'packages/core/src/obs/agent-tracing.ts', 'packages/cf-backend/src/obs/cf-tracer.ts'].map(file => [file, {
+  ...['packages/test-utils/src/recording.ts', 'packages/core/src/obs/agent-tracing.ts', 'packages/cf-backend/src/obs/cf-tracer.ts'].map(file => [file, {
     mechanisms: ['promise-rejection'],
     reason: 'a span hands its caller\'s promise back unchanged, so a pipelined RPC stub keeps pipelining; '
       + '`then(close, close)` observes it settle without deriving an unhandled rejection',
@@ -170,11 +170,6 @@ export const DECLARED = byFile([
     reason: 'a span wraps its caller\'s synchronous call: a throw is recorded on the span and rethrown unchanged, so the '
       + 'caller sees its own failure',
   }],
-  ['packages/core/src/layergate/layers.ts', {
-    mechanisms: ['throw', 'catch'],
-    reason: 'the Layergate\'s literal fixtures stand in for collaborators: each throws or rejects as that collaborator does, '
-      + 'so a layer\'s answer to it is observed byte for byte',
-  }],
   ['packages/cf-backend/src/gallery-drive.tsx', {
     mechanisms: ['throw', 'catch'],
     reason: 'the gallery\'s drive stub over mock data: it refuses as the drive route does, so a frame can photograph that state',
@@ -228,7 +223,7 @@ export const DECLARED = byFile([
     ['packages/cf-backend/src/cli/auth-store.ts', ['RateLimitError', 'CliAuthCodeError']],
     ['packages/core/src/mission-budget.ts', ['MissionBudgetExhausted']],
     ['packages/core/src/providers/util.ts', ['StaleModelList']],
-    ['packages/core/src/state/store-reset.ts', ['StoragePredatesResetError']],
+    ['packages/core/src/identity/schema-stamp.ts', ['StoragePredatesReleaseError']],
     ['packages/core/src/tools/db-codemode.ts', ['AppBatchError']],
     ['packages/core/src/types/file-edits.ts', ['FileRefusalError']],
 
@@ -405,8 +400,6 @@ export const DECLARED = byFile([
       'the tool ledger\'s stored success flag for one call'],
     ['packages/core/src/heads/head-inference.ts', ['execute'],
       'a head tool call\'s stored outcome record'],
-    ['packages/core/src/layergate/layers.ts', ['probes', 'observe', 'small'],
-      'layer-gate fixtures: tool answers and stored records the probes observe and hash'],
     ['packages/core/src/bench/split.ts', ['validateWithRetries'],
       'a seeded task\'s validation report: whether its oracle passed, and on which attempt'],
     ['packages/core/src/vfs/context-plane.ts', ['write'],

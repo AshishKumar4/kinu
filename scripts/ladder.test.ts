@@ -29,10 +29,8 @@ import {
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
   HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, jobDrove, onArmada, secretGroup,
 } from './ladder';
-import {
-  ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
-  isVitestEvalSuite, readMatching,
-} from './sources';
+import { ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite, isVitestEvalSuite, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { parseJUnit, SKIP_RATCHET_TARGETS } from './skip-ratchet';
 import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
@@ -45,7 +43,6 @@ import { costTableFaults } from './cost-table';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
 import { cliStages } from './test-cli';
 
-const root = resolve(import.meta.dir, '..');
 
 const tracked = trackedTestFiles();
 
@@ -739,11 +736,11 @@ describe('a deploy row with secrets of its own', () => {
     const own = rows.filter((gate) => secretGroup(gate) !== '');
     const sha = 'a'.repeat(40);
     const shared = armadaPhaseRun('post-publish', rows.filter((gate) => secretGroup(gate) === '' && gate.phase === 'post-publish'), sha, 'https://staging.kinu.run');
-    const devbox = armadaPhaseRun('source', own, sha, 'https://staging.kinu.run');
+    const devbox = armadaPhaseRun('source', own.filter((gate) => gate.phase === undefined), sha, 'https://staging.kinu.run');
     const secretsOf = (argv: readonly string[]) => argv.find((arg) => arg.startsWith('--secrets='))?.slice('--secrets='.length).split(',').sort((a, b) => a.localeCompare(b));
 
     expect({ own: own.map((gate) => gate.run), shared: secretsOf(shared), devbox: secretsOf(devbox), json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'), plan: devbox.slice(devbox.indexOf('--') + 1) }).toEqual({
-      own: ['bun run gate:devbox-e2e'],
+      own: ['bun run gate:devbox-e2e', 'bun scripts/upgrade-fixtures.ts'],
       shared: ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY'],
       devbox: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'KINU_EVAL_STAGING_WEB_IDENTITY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
       json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'),
@@ -753,6 +750,17 @@ describe('a deploy row with secrets of its own', () => {
       ],
     });
     expect(() => armadaPhaseRun('source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
+  });
+
+  // The upgrade fixtures' two builtin passwords are its own, beside the deployment's identity it drives.
+  test('the upgrade fixtures drive the deployment in a job of their own, given their two passwords', () => {
+    const fixtures = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bun scripts/upgrade-fixtures.ts');
+    const argv = armadaPhaseRun('post-publish', fixtures, 'a'.repeat(40), 'https://staging.kinu.run');
+
+    expect(argv.filter((arg) => arg.startsWith('--secrets=') || arg.startsWith('--deploy-'))).toEqual([
+      '--secrets=KINU_SCRIPTED_MODEL_KEY,KINU_EVAL_STAGING_WEB_IDENTITY,KINU_UPGRADE_FIXTURE_PASSWORD,KINU_UPGRADE_SENDER_PASSWORD',
+      '--deploy-phase=post-publish', '--deploy-origin=https://staging.kinu.run', '--deploy-secrets=KINU_UPGRADE_FIXTURE_PASSWORD,KINU_UPGRADE_SENDER_PASSWORD',
+    ]);
   });
 });
 
@@ -1251,7 +1259,7 @@ describe('the deadline wrapper reads only what its closure holds', () => {
   test('a wrapped command, traced, opens no tracked file its closure lacks', () => {
     // The wrapped command is a module that reads nothing, so every tracked file the trace holds is the wrapper's.
     const run = 'bun scripts/ladder.ts --run bun scripts/jsonc.ts';
-    const closure = deriveClosure(run, { kind: 'derived' }, repoAt(`${root}/`, (command, files) => claims(command, files)));
+    const closure = deriveClosure(run, { kind: 'derived' }, repoAt(root, (command, files) => claims(command, files)));
 
     if (closure.kind !== 'derived') throw new Error(`${run} has no derived closure: ${closure.why}`);
 

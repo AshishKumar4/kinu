@@ -36,8 +36,8 @@ import { R2_OPERATION_NAMES as R2_OP_VOCABULARY } from '../packages/devbox/bench
 import {
   checkCleanup, createManifest, recoverAbandonedRuns, replayTeardown, writeManifest, type CleanupReport,
 } from './bench-teardown';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = join(import.meta.dir, '..');
 
 const EXAMPLE_DIR = join(REPO, 'packages/devbox/example');
 

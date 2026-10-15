@@ -14,8 +14,6 @@ import {
   type InstructionSourceRow, type InstructionSourceView, type SeekCursor, type ShellApprovalMode, WORKSPACE_TITLE_MAX,
 } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { StatusDot } from "@/components/ui/Status";
-import { GEPA_TONE } from "@/components/surfaces/evolution-panels";
 import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
 import type { AgentStatus, WorkspaceNotice } from "@kinu.run/core";
@@ -663,15 +661,6 @@ function GepaOptimizationCard({
   const [running, setRunning] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // "No optimisation runs yet" may only be claimed about a listing that actually came back.
-  const load = useCallback(
-    () => rpc('getGepaRuns', [10]),
-    [rpc],
-  );
-
-  const { resource, reload } = useAsyncResource(load);
-  const runs = lastValue(resource) ?? [];
-
   const run = useCallback(() => detach(Effect.gen(function* () {
     setRunning(true);
     setMsg('Searching for a better agent loop. This can take a few minutes.');
@@ -680,40 +669,24 @@ function GepaOptimizationCard({
       const r = yield* Effect.promise(() => rpc('runOptimization', []));
 
       if (r.kind === 'idle') setMsg('No low-rated turns in the last 14 days to learn from.');
-      else if (r.version !== null) setMsg(`Proposed scaffold v${r.version} (${r.detail}). Promote it under Agent → Evolution.`);
+      else if (r.version !== null) setMsg(`Proposed scaffold v${r.version} (${r.detail}). Promote it in the Agent tab, under How it's changing.`);
       else setMsg(`No edit passed: ${r.detail}.`);
-
-      reload();
     }), showing((chain) => {
       setMsg(`Optimisation failed: ${chain}`);
     })), Effect.sync(() => {
       setRunning(false);
     }));
-  })), [rpc, reload]);
+  })), [rpc]);
 
   return (
     <Card title="Scaffold self-tuning" icon={SparkleIcon}>
       <p className="p-meta p-text-3">
         Searches for a better agent loop, judged against your recent low-rated and satisfied turns without
-        running it, and may propose one for you to promote. Each run makes several model calls.
+        running it, and may propose one for you to promote. Each run makes several model calls. Past runs and what
+        each found are in a workspace's Agent tab, under How it's changing.
       </p>
       <FilledButton onClick={run} disabled={running}>{running ? 'Optimising…' : 'Run optimisation'}</FilledButton>
       {msg && <div className="p-meta p-text-2 mt-1">{msg}</div>}
-      {resource.status === "error" && (
-        <LoadFailure what="the optimisation history" message={resource.message} onRetry={reload} className="mt-2" />
-      )}
-      {runs.length > 0 && (
-        <div className="mt-2 space-y-1">
-          {runs.slice(0, 5).map(r => (
-            <div key={r.runId} className="p-meta p-text-3 flex items-center gap-2">
-              <StatusDot tone={GEPA_TONE[r.status]} />
-              <span className="font-mono">{r.iterations} iters</span>
-              <span>· {r.metricCalls} evals</span>
-              <span className="ml-auto">{r.stopReason ?? r.status}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </Card>
   );
 }

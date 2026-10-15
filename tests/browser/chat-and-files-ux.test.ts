@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { executorLabel, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
+import { executorLabel, FILES_PAGE_ENTRIES, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { evidenceDir, present } from '@kinu.run/test-utils';
 
 
@@ -113,7 +113,7 @@ interface Observed {
   /** Rows visible while the filter says "credo". */
   readonly filesFiltered: string[];
   /** The stated-absence row a disconnected device leaves on the drive. */
-  readonly filesOfflineRow: string;
+  readonly filesOfflineRow: { text: string; reason: string; connects: boolean };
   /** Each environment's name as its chip says it, and its files' root as its head says it once chosen. */
   readonly envNames: Record<string, string>;
   readonly envMounts: Record<string, string>;
@@ -170,8 +170,8 @@ const TYPED_ROW = 'u1';
 const DRAIN_ROW = 'd1';
 
 /** The two endings the node rows are read for (gallery.tsx RUNNING_RUN): one
- *  turn the provider rate-limited, one the operator stopped. */
-const RATE_LIMITED_NODE = 'lv008';
+ *  turn that stalled, one the operator stopped. */
+const STALLED_NODE = 'lv008';
 
 const ABORTED_NODE = 'lv005';
 
@@ -503,8 +503,8 @@ async function run(): Promise<Observed> {
       () => document.querySelector('[data-files-preview]') === null,
     );
 
-    // Rename rides the real RPC against the frame's stateful fixture.
-    await files.hover(rowSelector('SOUL.md'));
+    // Rename rides the real RPC against the frame's stateful fixture, from the row's menu.
+    await files.click(`${rowSelector('SOUL.md')} [data-drive-menu]`);
     await files.click(`${rowSelector('SOUL.md')} [data-files-rename]`);
     await files.waitForSelector('[data-files-rename-input]');
     const renameInput = present(await files.$('[data-files-rename-input]'), 'the rename input');
@@ -516,7 +516,7 @@ async function run(): Promise<Observed> {
     const filesAfterRename = await rowNames();
 
     // Delete asks inline, then the row is gone.
-    await files.hover(rowSelector('AGENTS.md'));
+    await files.click(`${rowSelector('AGENTS.md')} [data-drive-menu]`);
     await files.click(`${rowSelector('AGENTS.md')} [data-files-delete]`);
     await files.click(`${rowSelector('AGENTS.md')} [data-files-delete-confirm]`);
     await waitForRowGone('AGENTS.md');
@@ -534,7 +534,11 @@ async function run(): Promise<Observed> {
     await offline.goto(`${origin}/gallery.html?frame=files&offline=device`, { waitUntil: 'networkidle0' });
     await offline.reload({ waitUntil: 'networkidle0' });
     await offline.waitForSelector('[data-files-offline-mount]');
-    const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => el.textContent ?? '');
+
+    const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => ({
+      text: el.textContent ?? '', reason: el.getAttribute('title') ?? '', connects: el.querySelector('[data-files-connect]') !== null,
+    }));
+
     await offline.close();
 
     // The Environment tab: each environment by its name, no capability
@@ -587,7 +591,7 @@ async function run(): Promise<Observed> {
     await explore.setViewport({ width: 1280, height: 1100 });
     await explore.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
     await explore.reload({ waitUntil: 'networkidle0' });
-    await explore.waitForSelector(`[data-run-node="${RATE_LIMITED_NODE}"]`);
+    await explore.waitForSelector(`[data-run-node="${STALLED_NODE}"]`);
     const runNodes = await readRunNodes(explore);
     await explore.close();
 
@@ -858,8 +862,9 @@ describe('the drive, browsing the one composite plane', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'computer']));
     // The origin badge names the machine, not the executor id: the device wears the user's own device name, per the
-    // consent naming contract, and the agent's computer wears its product label.
-    expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", executorLabel('computer')]));
+    // consent naming contract. The agent's computer has none, as its product label only repeats the folder's name.
+    expect(executorLabel('computer').toLowerCase()).toBe('computer');
+    expect(observed.filesRoot.badges).toEqual(["Ashish's MacBook"]);
   });
 
   test('crossing into /pc lists the machines; a machine lands inside its consented directory', () => {
@@ -903,8 +908,9 @@ describe('the drive, browsing the one composite plane', () => {
   });
 
   test('a disconnected device is a stated absence with its reason, not a missing row', () => {
-    expect(observed.filesOfflineRow).toContain('pc');
-    expect(observed.filesOfflineRow).toContain('no device connected');
+    expect(observed.filesOfflineRow.text).toContain('pc');
+    expect(observed.filesOfflineRow.reason).toBe('no device connected');
+    expect(observed.filesOfflineRow.connects).toBe(true);
   });
 });
 
@@ -926,20 +932,9 @@ describe('the Environment tab, as a user reads it', () => {
   });
 });
 
-describe('a node the provider rate-limited, as the run list reads it', () => {
-  test('the row says rate limit, not fault', () => {
-    // The seam this reads through is `isRateLimitedTurnError`. Rendering
-    // `errorMessage` verbatim in the failure tone makes a node the provider
-    // told us to wait for indistinguishable from a wedged one — the
-    // distinction the classifier exists for.
-    expect(observed.runNodes[RATE_LIMITED_NODE]?.reason).toBe('rate-limited');
-  });
-
-  test('a turn that ended some other way is still a fault', () => {
-    // The guard on the classification: the operator stopped this one, nothing
-    // declared a wait, and a refactor that blames the provider for every ending
-    // fails here rather than passing quietly.
-    expect(observed.runNodes[ABORTED_NODE]?.reason).toBe('failed');
+describe('an errored node, as the run list reads it', () => {
+  test('a stalled node and a stopped one both read as failures, each with its own reason', () => {
+    expect([observed.runNodes[STALLED_NODE]?.reason, observed.runNodes[ABORTED_NODE]?.reason]).toEqual(['failed', 'failed']);
   });
 });
 
@@ -1869,7 +1864,7 @@ describe('a rename while an IME composes', () => {
       await page.waitForSelector(row('main'));
       await page.click(row('main'));
       await page.waitForSelector(row('SOUL.md'));
-      await page.hover(row('SOUL.md'));
+      await page.click(`${row('SOUL.md')} [data-drive-menu]`);
       await page.click(`${row('SOUL.md')} [data-files-rename]`);
       await page.waitForSelector('[data-files-rename-input]');
       await page.$eval('[data-files-rename-input]', (el) => { if (el instanceof HTMLInputElement) el.value = ''; });
@@ -2168,6 +2163,38 @@ describe('a revoked device whose command may still run', () => {
  * the string the server fixture handed over, because a client that rebuilt it
  * from `location.origin` would render something that looks right.
  */
+// A folder of any size is sent a page at a time: the owner's 56,762-entry /tmp, sent whole, reset the workspace.
+describe('a large folder in Files', () => {
+  test('lists its first page, and Load more the rest', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
+
+      for (const folder of ['home', 'main', 'logs']) {
+        await page.waitForSelector(`[data-files-entry][title="${folder}"]`);
+        await page.click(`[data-files-entry][title="${folder}"]`);
+      }
+
+      await page.waitForSelector('[data-files-entry][title="run-0000.log"]');
+      const rows = () => page.$$eval('[data-files-entry]', (shown) => shown.length);
+
+      expect(await rows()).toBe(FILES_PAGE_ENTRIES);
+
+      while (await page.$('[data-files-more]') !== null) {
+        const before = await rows();
+
+        await page.click('[data-files-more]');
+        await page.waitForFunction((had: number) => document.querySelectorAll('[data-files-entry]').length > had, {}, before);
+      }
+
+      // The fixture's whole folder, once each.
+      expect(await rows()).toBe(1_234);
+      await page.close();
+    });
+  });
+});
+
 describe('linking a machine happens on the surface that asked for it', () => {
   test('the Environment card opens the panel in place, and the arriving machine closes it', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -2274,6 +2301,76 @@ describe('linking a machine happens on the surface that asked for it', () => {
       // Still the drive underneath: the row it was opened from is right there.
       expect(await page.$('[data-files-offline-mount]')).not.toBeNull();
       await page.close();
+    });
+  });
+});
+
+describe('Files at every width it is drawn', () => {
+  /** Each entry's left edge and top, in the order drawn. */
+  const rowEdges = (page: Page) => page.$$eval('[data-files-entry], [data-files-offline-mount]', (rows) => rows.map((row) => {
+    const box = row.getBoundingClientRect();
+
+    return { left: Math.round(box.left), top: Math.round(box.top) };
+  }));
+
+  test('a folder is a list, one entry under another, in the inspector and beside the tree', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      for (const width of ['inspector=340', 'inspector=480', 'wide=1']) {
+        const page = await newPage();
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=files&offline=device&${width}`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-files-offline-mount]');
+
+        // The owner's report was a grid of tiles in a narrow column; the machine that is away is a row of the same list.
+        const edges = await rowEdges(page);
+
+        expect(new Set(edges.map((edge) => edge.left)).size).toBe(1);
+        expect(edges.every((edge, index) => index === 0 || edge.top > (edges[index - 1]?.top ?? 0))).toBe(true);
+        await page.close();
+      }
+    });
+  });
+
+  test('a machine that is away reads the same in the tree as in the list, and connects from either', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=files&offline=device&connect=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-files-offline-mount]');
+      // The tree has drawn the root's listing, and the machines that are away with it.
+      await page.waitForSelector('[data-files-tree-node="/home"]');
+
+      // No way in: a folder there would only answer with the machine's refusal.
+      expect(await page.$('[data-files-tree-node="/pc"]')).toBeNull();
+      expect(await page.$('[data-files-tree-offline="pc"]')).not.toBeNull();
+      await page.hover('[data-files-tree-offline="pc"]');
+      await page.click('[data-files-tree-offline="pc"] [data-files-tree-connect]');
+      await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
+      await page.close();
+    });
+  });
+
+  test("a row's menu waits for the pointer, and a touch screen shows it on every row", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const menuShown = (page: Page, name: string) => page.$eval(
+        `[data-files-entry][title="${name}"] [data-drive-menu]`, (button) => button.checkVisibility({ opacityProperty: true }),
+      );
+
+      const pointer = await newPage();
+      await pointer.setViewport({ width: 1280, height: 900 });
+      await pointer.goto(`${origin}/gallery.html?frame=files&inspector=340`, { waitUntil: 'networkidle0' });
+      await pointer.waitForSelector('[data-files-entry][title="home"]');
+      expect(await menuShown(pointer, 'home')).toBe(false);
+      await pointer.hover('[data-files-entry][title="home"]');
+      expect(await menuShown(pointer, 'home')).toBe(true);
+      await pointer.close();
+
+      const touch = await newPage();
+      await touch.setViewport({ width: 390, height: 844, hasTouch: true, isMobile: true });
+      await touch.goto(`${origin}/gallery.html?frame=files&narrow=1`, { waitUntil: 'networkidle0' });
+      await touch.waitForSelector('[data-files-entry][title="home"]');
+      expect(await menuShown(touch, 'home')).toBe(true);
+      await touch.close();
     });
   });
 });
@@ -3033,6 +3130,8 @@ describe('Now lists what is still owed, by the phase its store records', () => {
       expect(await owedRows(page)).toEqual(['turn blocked', ...owed]);
 
       await claimIs(page, { kind: 'stranded', turnId: 'turn-stranded', claimedAt: 1 });
+      // The pushed claim renders on the page's next commit, not within the dispatch.
+      await page.waitForSelector('[data-composer-root] button[aria-label="Recover this turn"]');
       await page.click('[data-composer-root] button[aria-label="Recover this turn"]');
       await page.waitForFunction((left) => document.querySelectorAll('[data-inspected]').length === left, {}, owed.length);
 
@@ -3576,6 +3675,54 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       const state = await readInspectorState(page);
 
       expect(state.width).toBe(Number(state.stored['kinu.inspector.ashish@example.com']));
+
+      await page.close();
+    });
+  });
+
+  test("a drag's end leaves no rule down the inspector's edge; reaching the handle by keyboard shows it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '340');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]');
+      await waitForInspectorWidth(page, 340);
+
+      // What the reader sees down the column's edge: the handle's own pixels, once its transition has run.
+      const edge = async (): Promise<Uint8Array> => {
+        await page.waitForFunction(() => document.querySelector('[data-separator] > span')?.getAnimations().length === 0);
+
+        return present(await page.$('[data-separator]'), 'the inspector separator').screenshot();
+      };
+
+      const same = (left: Uint8Array, right: Uint8Array): boolean => Buffer.from(left).equals(Buffer.from(right));
+
+      await page.mouse.move(200, 450);
+      const untouched = await edge();
+      const { x, y } = await separatorCentre(page);
+
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x - 40, y, { steps: 4 });
+      await page.mouse.up();
+      await page.mouse.move(200, 450);
+
+      // The handle keeps the focus the press gave it; the owner saw that as an accent line standing down the column.
+      expect(await page.evaluate(() => document.activeElement?.hasAttribute('data-separator'))).toBe(true);
+      expect(same(await edge(), untouched)).toBe(true);
+
+      await page.keyboard.press('Tab');
+      await page.keyboard.down('Shift');
+      await page.keyboard.press('Tab');
+      await page.keyboard.up('Shift');
+      expect(await page.evaluate(() => document.activeElement?.hasAttribute('data-separator'))).toBe(true);
+      expect(same(await edge(), untouched)).toBe(false);
 
       await page.close();
     });

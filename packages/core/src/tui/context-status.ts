@@ -1,4 +1,5 @@
 import { parseModelSpec, specWithoutAccount } from '../providers/types';
+import { fmtTokens } from '../utils/format';
 
 export function modelDisplayName(spec: string | null | undefined): string {
   const raw = (spec ?? '').trim();
@@ -18,19 +19,8 @@ export function modelDisplayName(spec: string | null | undefined): string {
 
 /** An unknown window shows the tokens alone. */
 export function formatContextUsage(usedTokens: number | null, contextWindow: number | null | undefined): string {
-  const used = `ctx ${usedTokens === null ? '—' : `~${formatTokenCount(usedTokens)}`}`;
+  const used = `ctx ${usedTokens === null ? '—' : `~${fmtTokens(usedTokens)}`}`;
 
-  return contextWindow === null || contextWindow === undefined ? used : `${used}/${formatTokenCount(contextWindow)}`;
+  return contextWindow === null || contextWindow === undefined ? used : `${used}/${fmtTokens(contextWindow)}`;
 }
 
-function formatTokenCount(tokens: number): string {
-  if (tokens >= 1_000_000) return `${trimFixed(tokens / 1_000_000)}M`;
-
-  if (tokens >= 1_000) return `${trimFixed(tokens / 1_000)}k`;
-
-  return String(tokens);
-}
-
-function trimFixed(value: number): string {
-  return value >= 10 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, '');
-}

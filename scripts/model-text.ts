@@ -18,10 +18,10 @@ import { assertMeasured } from './gate-ratchet';
 import { moduleEdges } from './module-edges';
 import { deployedConfig } from './infra-manifest';
 import { isClientDocument, isManifest, readMatching, readRepositoryFile, readSources, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { collapsePath, parse, walk } from './syntax';
 import * as v from 'valibot';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const GATE = 'model-text';
 

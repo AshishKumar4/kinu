@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS } from '../src/tools/task-store';
+import { TaskListStore, initTaskListTable } from '../src/tools/task-store';
 import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
@@ -55,11 +55,10 @@ describe('TaskListStore', () => {
 
   test('empty and oversized titles are rejected by name, others still land', () => {
     const s = newStore();
-    const result = s.add(['  ', 'a real step', 'x'.repeat(MAX_TASK_TITLE_CHARS + 1)], null, 1);
+    const essay = 'x'.repeat(10_000);
+    const result = s.add(['  ', 'a real step', essay], null, 1);
     expect(result.added.map((t) => t.title)).toEqual(['a real step']);
-    expect(result.rejected.map((r) => r.title)).toEqual([
-      '  ', 'x'.repeat(MAX_TASK_TITLE_CHARS + 1),
-    ]);
+    expect(result.rejected.map((r) => r.title)).toEqual(['  ', essay]);
   });
 
   test('setStatus moves an item and reports an unknown id as null', () => {

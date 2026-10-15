@@ -105,7 +105,7 @@ import { ActorSession, type ActorTurnLease,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
-  changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
+  changeRoleAsOwner, agentsProfileContext,
   resolveModelRoute, completeOnRoute,
   resolveRoutingProfile, currentOperationProfile, captureOperationProfile, ancestorPins,
   type PinnedProfile,
@@ -117,7 +117,7 @@ import { ActorSession, type ActorTurnLease,
   type ResolvedTurnProfile,
   decodeJsonValue, projectJsonValue,
   agentSelfHost,
-  cancelBackgroundJob, jobResult, listBackgroundJobs,
+  cancelBackgroundJob, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, type ApprovalGrant,
   setAlwaysActiveSkills, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
@@ -467,7 +467,7 @@ export class LocalAgentSession {
     this.headJournal = new LiveHeadJournal(this.rt.storage.sql, this.rt.actor, this.headActivity);
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
-    this.sessionId = canonicalConversationId(this.config);
+    this.sessionId = CHAT_SESSION_ID;
 
     // Refine the runtime's profile authority rather than install a second resolver, so lanes and turns agree.
     const refinement: ProfileAuthorityRefinement = {
@@ -610,7 +610,7 @@ export class LocalAgentSession {
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
     // The next turn awaits this before admitting input.
-    this.chat.measureSessionStart({ restored: this.chat.restoreHistory(), measure: !this.oneShot });
+    this.chat.measureSessionStart({ restored: this.chat.restoreWorkingHistory(), measure: !this.oneShot });
     this.ensureModelState();
     this.rearmLocalAlarm();
   }
@@ -901,7 +901,7 @@ export class LocalAgentSession {
   }
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobs, jobId);
+    return this.jobs.get(jobId);
   }
 
   /** `actor`: a `/`-joined path of names below this one, as the cloud names a hosted child; absent, this actor's own. */

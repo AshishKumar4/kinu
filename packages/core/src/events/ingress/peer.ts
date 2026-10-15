@@ -77,7 +77,6 @@ export interface ReceiverDeps {
   log: EventLog;
   vfs: VFS;
   isSameOwner(sender_user_id: string): Promise<boolean>;
-  hasGrant(sender_agent_name: string, sender_user_id: string): Promise<boolean>;
   openPeerBackChannel?(event_id: string, msg: PeerMessage): void;
 }
 
@@ -88,11 +87,6 @@ export async function receivePeerMessage(
   now: number,
 ): Promise<ReceiveResult> {
   const same_owner = await deps.isSameOwner(msg.sender_user_id);
-
-  const receiver_grant_present = same_owner
-    ? true
-    : await deps.hasGrant(msg.sender_agent_name, msg.sender_user_id);
-
   const serialized = JSON.stringify(msg.body);
 
   const counted = (admitted: boolean): void => countMsgReceived({
@@ -103,10 +97,10 @@ export async function receivePeerMessage(
     admitted,
   });
 
-  if (!same_owner && !receiver_grant_present) {
+  if (!same_owner) {
     counted(false);
 
-    return { admitted: false, reason: 'no grant from receiver for cross-owner sender' };
+    return { admitted: false, reason: 'a workspace admits peers of its own owner only' };
   }
 
   const spilled = await spillEventContent(deps.vfs, serialized);
@@ -132,7 +126,6 @@ export async function receivePeerMessage(
         variant: 'peer_agent',
         payload,
         same_owner,
-        receiver_grant_present,
       },
       now,
     }),
@@ -156,12 +149,7 @@ const MAX_DELIVERY_ATTEMPTS = 8;
 
 const RETRY_BASE_MS = 5_000;
 
-interface PeerBackHolder {
-  agent_name: string;
-  user_id: string;
-  ask_id: string;
-  mode: WorkMode;
-}
+type PeerBackHolder = v.InferOutput<typeof PeerBackHolderSchema>;
 
 interface OutboundPeerMessage {
   readonly receiverAgent: string;
@@ -183,7 +171,6 @@ export interface PeerHubDeps {
   selfUserId(): string;
   deliver(receiver_agent_name: string, msg: PeerMessage): Promise<ReceiveResult>;
   isSameOwner(sender_user_id: string): Promise<boolean>;
-  hasGrant(sender_agent_name: string, sender_user_id: string): Promise<boolean>;
   /** Awaited: on a Durable Object an unawaited storage write is not retained
    *  (`do.wait_until.no_op`). */
   scheduleDispatch(at: number): Promise<void>;
@@ -218,9 +205,6 @@ export class PeerHub {
       log: this.deps.log,
       vfs: this.deps.vfs(),
       isSameOwner: (uid) => this.deps.isSameOwner(uid),
-      // Asking is consenting to the answer; otherwise a cross-owner ask could never complete.
-      hasGrant: async (agent, uid) =>
-        (await this.deps.hasGrant(agent, uid)) || this.isReplyToMyAsk(msg),
       openPeerBackChannel: (event_id, m) => {
         const holder: PeerBackHolder = {
           agent_name: m.sender_agent_name,
@@ -249,24 +233,6 @@ export class PeerHub {
     }
 
     return result;
-  }
-
-  /** Unforgeable: only that receiver knows the outbox row id. */
-  private isReplyToMyAsk(msg: PeerMessage): boolean {
-    if (msg.topic !== PEER_REPLY_TOPIC) return false;
-    const body = v.safeParse(ReplyBodySchema, msg.body);
-
-    if (!body.success) return false;
-    const record = this.outbox.status(body.output.in_reply_to);
-
-    if (record?.state !== 'sent') return false;
-    const ask = v.safeParse(PeerOutboxMessageSchema, record.message);
-
-    if (!ask.success) return false;
-
-    return ask.output.receiver_agent_name === msg.sender_agent_name
-      && ask.output.receiver_user_id === msg.sender_user_id
-      && ask.output.reply_expected;
   }
 
   private resolveAskWaiter(msg: PeerMessage): string | null {

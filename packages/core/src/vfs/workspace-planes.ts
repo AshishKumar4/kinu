@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { settle } from '../obs/effect';
 import type { ForkFileSink } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork';
-import type { ArchiveFileSource, ArchiveFileTarget, ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from '../identity/archive';
+import type { ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from '../identity/archive';
 import { readSoul } from '../identity/soul';
 import { provisionWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
@@ -156,12 +156,10 @@ export function workspaceArchiveStore(bundle: FileSessionSource): ArchiveStoreSo
 }
 
 /** Store trees import as the kernel with owners unchanged: the archive's rows bring the actors they name. */
-export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarget & ArchiveStoreTarget {
+export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveStoreTarget {
   const store = async (): Promise<SqliteVFS> => (await bundle.session()).vfs;
 
   return {
-    writeFile: async (path, data) => { await bundle.vfs.writeFile(path, data); },
-    mkdir: async (path, opts) => { await bundle.vfs.mkdir(path, opts); },
     async importPage(page) {
       const vfs = await store();
       const kernel = vfs.as(CRED_KERNEL);
@@ -180,42 +178,3 @@ export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarg
   };
 }
 
-export function archiveFileTree(source: {
-  readdir(path: string): Promise<readonly { name: string; type: string }[]>;
-  readFile(path: string): Promise<Uint8Array>;
-}): ArchiveFileSource {
-  return {
-    listEntries() {
-      return settle(Effect.gen(function* () {
-        const entries: Array<{ path: string; type: 'file' | 'directory' }> = [];
-
-        const walk = (relative: string): Effect.Effect<void> => Effect.gen(function* () {
-          const children = [...yield* Effect.promise(() => source.readdir(relative))].sort((a, b) => a.name.localeCompare(b.name));
-
-          for (const child of children) {
-            if (!child.name || child.name === '.' || child.name === '..' || child.name.includes('/')) {
-              return yield* Effect.die(new Error(
-                `Workspace archive encountered an invalid entry name: ${JSON.stringify(child.name)}.`,
-              ));
-            }
-
-            const path = relative ? `${relative}/${child.name}` : child.name;
-
-            if (child.type !== 'file' && child.type !== 'directory') {
-              return yield* Effect.die(new Error(`Workspace archive cannot preserve ${child.type} entry ${JSON.stringify(path)}.`));
-            }
-
-            entries.push({ path, type: child.type });
-
-            if (child.type === 'directory') yield* walk(path);
-          }
-        });
-
-        yield* walk('');
-
-        return entries;
-      }));
-    },
-    readFile: (path) => source.readFile(path),
-  };
-}

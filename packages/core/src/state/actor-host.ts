@@ -56,7 +56,7 @@ export interface ResumableActorTurn {
   readonly claim: StoredActorClaim;
 }
 
-export interface LoopSeed {
+interface LoopSeed {
   readonly origin: LoopOrigin;
   readonly parent: AgentRuntime | null;
 }

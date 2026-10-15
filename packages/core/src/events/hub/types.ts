@@ -86,9 +86,7 @@ export interface ReplyChannelRow {
   holder_addr: string;
   ttl_expires_at: number;
   state: ReplyChannelState;
-  reply_payload: JsonValue | null;
   created_at: number;
-  updated_at: number;
 }
 
 export interface ChatPayload {
@@ -319,7 +317,6 @@ export type IngressDescriptor =
       variant: 'peer_agent';
       payload: PeerAgentPayload;
       same_owner: boolean;
-      receiver_grant_present: boolean;
     }
   | {
       // One trust domain: possession of the worker-side stub is the authorization.

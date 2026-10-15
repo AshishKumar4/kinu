@@ -74,7 +74,7 @@ describe('the unit axis names what a node produces, and nothing else', () => {
 
 });
 
-describe('the surface has SIX axes, and each cut value is refused by its own name', () => {
+describe('the surface has SIX axes, and a retired value is refused', () => {
   interface CutSpelling {
     readonly unit?: { readonly kind: string };
     readonly observe?: string;
@@ -84,7 +84,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     readonly advance?: { readonly kind: string; readonly novelty?: number };
   }
 
-  /** The message a composition comes back with, or '' when it was accepted. */
+  /** Whether the composition is refused. */
   function refusal(config: CutSpelling): boolean {
     const parsed = v.safeParse(SwarmConfigSchema, config);
 
@@ -99,49 +99,17 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     expect(resolved.reason).toBe('bad_input');
   });
 
-  test('unit:"generator" is refused by name and sent to the value it always was', () => {
-    const error = refusal({ unit: { kind: 'generator' } });
-    expect(error).toBe(true);
-    expect(v.parse(SwarmConfigSchema, { unit: { kind: 'answer' } }))
-      .toMatchObject({ unit: { kind: 'answer' } });
-    expect(v.parse(SwarmConfigSchema, { unit: { kind: 'thought' } }))
-      .toMatchObject({ unit: { kind: 'thought' } });
-  });
+  test('a retired spelling is refused, and the values that replaced it parse', () => {
+    const retired: readonly CutSpelling[] = [
+      { unit: { kind: 'generator' } }, { observe: 'ancestors' }, { decorrelate: 'blind' }, { expand: 'mutate' },
+      { score: { kind: 'agree' } }, { score: { kind: 'novelty' } }, { advance: { kind: 'beam' } },
+    ];
 
-  test('`observe` is refused by name, and told where each of its values went', () => {
-    const error = refusal({ observe: 'ancestors' });
-    expect(error).toBe(true);
-  });
-
-  test('`decorrelate` is refused by name, and says what turning angles off cost', () => {
-    const error = refusal({ decorrelate: 'blind' });
-    expect(error).toBe(true);
-  });
-
-  test('expand:"mutate" is refused by name and points at the axis that took its question', () => {
-    const error = refusal({ expand: 'mutate' });
-    expect(error).toBe(true);
+    expect(retired.filter((config) => !refusal(config))).toEqual([]);
+    expect(v.parse(SwarmConfigSchema, { unit: { kind: 'answer' } })).toMatchObject({ unit: { kind: 'answer' } });
+    expect(v.parse(SwarmConfigSchema, { unit: { kind: 'thought' } })).toMatchObject({ unit: { kind: 'thought' } });
     expect(v.parse(SwarmConfigSchema, { expand: 'sample' })).toMatchObject({ expand: 'sample' });
     expect(v.parse(SwarmConfigSchema, { expand: 'aggregate' })).toMatchObject({ expand: 'aggregate' });
-  });
-
-  // A retired score is refused by name and says where its behaviour went.
-  const retiredScores = [
-    { name: 'score:"agree" is refused by name as the judge it always was', kind: 'agree', points_at: 'samples' },
-    { name: 'score:"novelty" is refused by name and says it MOVED rather than went', kind: 'novelty', points_at: 'advance:{kind:"archive", novelty:' },
-  ] as const;
-
-  for (const c of retiredScores) {
-    test(c.name, () => {
-      const error = refusal({ score: { kind: c.kind } });
-      expect(error).toBe(true);
-      expect(error).toBe(true);
-    });
-  }
-
-  test('advance:"beam" is refused by name and does NOT claim an equivalent', () => {
-    const error = refusal({ advance: { kind: 'beam' } });
-    expect(error).toBe(true);
   });
 
   test("an archive with no rejection test is UNCONSTRUCTIBLE, not refused", () => {

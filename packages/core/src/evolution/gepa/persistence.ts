@@ -10,10 +10,15 @@ import {
   computeParetoFront,
 } from './pareto';
 import type {
-  GepaCandidate, GepaResult, GepaProgressHooks,
+  GepaCandidate, GepaProgressHooks,
 } from './types';
 
 const GepaRunStatusSchema = v.picklist(['running', 'completed', 'aborted']);
+
+/** Why a run ended: the engine's reasons (`GepaResult['stopReason']`, which a finish is typed against), and `aborted`. */
+const GepaStopReasonSchema = v.picklist(['iterations_exhausted', 'metric_budget_exhausted', 'no_improvement_possible', 'aborted']);
+
+export type GepaStopReason = v.InferOutput<typeof GepaStopReasonSchema>;
 
 const ScoreMapSchema = v.record(v.string(), v.number());
 
@@ -47,15 +52,12 @@ export function initGepaTables(execRaw: RawSqlExec): void {
     source         TEXT NOT NULL,
     scores_json    TEXT NOT NULL,
     feedback_json  TEXT NOT NULL,
-    aggregate      REAL NOT NULL,
     created_at     INTEGER NOT NULL,
     iteration      INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_iter
            ON gepa_candidates(actor_id, run_id, iteration)`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_aggregate
-           ON gepa_candidates(actor_id, run_id, aggregate DESC)`);
 
 }
 
@@ -95,15 +97,15 @@ export function persistGepaCandidate(
   const feedbackJson = JSON.stringify(Object.fromEntries(args.candidate.feedback));
   void sql`INSERT INTO gepa_candidates
         (actor_id, id, run_id, parent_id, source, scores_json, feedback_json,
-         aggregate, created_at, iteration)
+         created_at, iteration)
         VALUES (${actor.actorId}, ${args.candidate.id}, ${args.runId}, ${args.candidate.parentId},
                 ${args.candidate.source}, ${scoresJson}, ${feedbackJson},
-                ${args.candidate.aggregateScore}, ${args.candidate.createdAt},
+                ${args.candidate.createdAt},
                 ${args.iteration})`;
 }
 
 
-/** Mid-run, so a hibernating DO can resume. */
+/** Mid-run, so the runs list shows a run's progress while it runs. */
 function updateGepaRunCounters(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -122,7 +124,7 @@ export function finishGepaRun(
   args: {
     runId: string;
     status: 'completed' | 'aborted';
-    stopReason: GepaResult['stopReason'] | 'aborted';
+    stopReason: GepaStopReason;
     winnerId: string | null;
     metricCalls: number;
     iterations: number;
@@ -147,7 +149,8 @@ export interface GepaRunSummary {
   startedAt: number;
   endedAt: number | null;
   status: 'running' | 'completed' | 'aborted';
-  stopReason: string | null;
+  /** Null while it runs. */
+  stopReason: GepaStopReason | null;
   winnerId: string | null;
   metricCalls: number;
   iterations: number;
@@ -177,7 +180,7 @@ export function listGepaRuns(sql: SqlExecutor, actor: ActorHandle, limit = 20): 
     startedAt: r.started_at,
     endedAt: r.ended_at,
     status: v.parse(GepaRunStatusSchema, r.status),
-    stopReason: r.stop_reason,
+    stopReason: r.stop_reason === null ? null : v.parse(GepaStopReasonSchema, r.stop_reason),
     winnerId: r.winner_id,
     metricCalls: r.metric_calls,
     iterations: r.iterations,
@@ -195,11 +198,11 @@ export function loadGepaCandidates(
   type Row = {
     id: string; parent_id: string | null; source: string;
     scores_json: string; feedback_json: string;
-    aggregate: number; created_at: number;
+    created_at: number;
   };
 
   const rows = sql<Row>`SELECT id, parent_id, source, scores_json, feedback_json,
-                               aggregate, created_at
+                               created_at
                           FROM gepa_candidates
                           WHERE actor_id = ${actor.actorId} AND run_id = ${runId}
                           ORDER BY iteration ASC, created_at ASC`;
@@ -214,7 +217,6 @@ export function loadGepaCandidates(
       source: r.source,
       scores: new Map(Object.entries(scoresObj)),
       feedback: new Map(Object.entries(feedbackObj)),
-      aggregateScore: r.aggregate,
       createdAt: r.created_at,
     };
   });
@@ -267,7 +269,6 @@ export function loadGepaParetoFront(
       source: '',
       scores: new Map(Object.entries(scoresObj)),
       feedback: new Map(),
-      aggregateScore: 0,
       createdAt: 0,
     };
   });

@@ -411,8 +411,8 @@ function listRuntimesMember({ box, touch }: NimbusReach): ExecutorTool {
   };
 }
 
-/** The live session's members, declared inside the workspace namespace. */
-/** The live Nimbus session's process, port and runtime members, and the lifecycle the workspace executor reports. */
+/** The live Nimbus session's process, port and runtime members, declared inside the workspace namespace, and the
+ *  lifecycle the workspace executor reports. */
 export function nimbusSession(opts: NimbusSessionOpts) {
   const box = opts.box;
   let active = false;

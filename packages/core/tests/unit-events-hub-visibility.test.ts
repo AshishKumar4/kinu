@@ -355,7 +355,6 @@ describe('renderForLLM', () => {
         log,
         vfs: { ...vfs, async writeFile() { throw new Error('the disk is full'); } },
         isSameOwner: async () => true,
-        hasGrant: async () => true,
       }, {
         sender_event_id: 'ox-spill', sender_agent_name: 'scout', sender_user_id: 'u1',
         topic: 'research', body, mode: 'build',

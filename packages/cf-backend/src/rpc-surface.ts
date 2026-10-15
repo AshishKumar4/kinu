@@ -107,13 +107,13 @@ const USER_DO_METHODS = [
   'getProfile',
   'getProfileCatalog',
   'getWorkspaceProfileCatalog',
-  'hasPeerGrant',
   'hasWorkspace',
   'heldRows',
   'issueCliAgentConnectTicket',
   'issueDeviceConnectTicket',
   'issueDeviceJoin',
   'joinDevice',
+  'opsTables',
   'listAIGateways',
   'listAccessTokens',
   'listActiveWorkspaces',
@@ -219,7 +219,10 @@ export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
 /** `deleteAccount` must work when start throws. */
-export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => name !== 'deleteAccount');
+/** Never gated: a deletion must work when start throws, and the deploy's tables walk reads tables alone. */
+const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables']);
+
+export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => !USER_DO_STARTLESS.has(name));
 
 /** Members every actor exposes; entries a facet reaches on its parent stub must be listed or nested
  * trees fail closed at depth 2. `protected` members stay unreachable. */
@@ -249,6 +252,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
 /** Beyond `AGENT_RPC_ACCESS` (reachable by construction); `destroyAgent` is called DO-to-DO by UserDO. */
 const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
+  'opsTables',
   'abortExecutorFileWrite',
   'acceptContainerEvent',
   'egressGrants',
@@ -336,8 +340,9 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...ORCHESTRATOR_METHODS,
 ];
 
-/** Never gated: a deletion must work when start throws, and must not start a workspace to delete it. */
-const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'quietForDeletion', 'evalAbortActivation']);
+/** Never gated: a deletion must work when start throws, and must not start a workspace to delete it; the deploy's
+ *  tables walk reads tables alone, and must not start every workspace to reach them. */
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'quietForDeletion', 'evalAbortActivation', 'opsTables']);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
   ...ACTOR_AGENT_RPC_SURFACE,

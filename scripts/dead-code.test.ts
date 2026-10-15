@@ -32,9 +32,9 @@ import {
   referencesPackage, servedBy, typedRuntime, unusedDependencies,
 } from './dead-code';
 import { isManifest, isVendoredSource, readRepositoryFile, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { runToExit } from '../packages/test-utils/src/spawn';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const read = (file: string): string => readRepositoryFile(root, file);
 

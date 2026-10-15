@@ -219,7 +219,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register', async (c) => {
 
   if (!verified.verified) return refuse('The passkey could not be verified. Try again.', 403);
   const { credential } = verified.registrationInfo;
-  const passkey = { credentialId: credential.id, publicKey: base64Url(credential.publicKey), counter: credential.counter, transports: credential.transports ?? [] };
+  const passkey = { credentialId: credential.id, publicKey: base64Url(credential.publicKey), counter: credential.counter };
 
   if (pending.purpose === 'reset') return resetTo(c.env, c.req.raw, { grant: pending.grant, passkey }, input.returnTo);
 

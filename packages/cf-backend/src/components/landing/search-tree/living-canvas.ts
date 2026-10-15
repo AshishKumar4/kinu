@@ -52,12 +52,26 @@ function afterFirstPaint(): Promise<void> {
   return promise;
 }
 
+/** A picture's resting strokes are drawn onto a second canvas, sized only once a frame names a rest, and stamped each frame. */
 function canvasRenderer(canvas: HTMLCanvasElement, palette: ArtPalette): ArtRenderer {
   const context = canvas.getContext('2d');
+  const layer = document.createElement('canvas');
+  const surface = layer.getContext('2d');
 
-  if (context === null) throw new Error('the art canvas has no 2d context');
+  if (context === null || surface === null) throw new Error('the art canvas has no 2d context');
 
-  return createCanvasRenderer(context, palette);
+  return createCanvasRenderer(context, palette, {
+    surface,
+    resize(width, height) {
+      if (layer.width !== width) layer.width = width;
+
+      if (layer.height !== height) layer.height = height;
+    },
+    stamp() {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.drawImage(layer, 0, 0);
+    },
+  });
 }
 
 /** The adapter probe runs before any download, so a browser with `navigator.gpu` but no adapter never fetches the chunk. */
@@ -244,7 +258,7 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
   const resize = new ResizeObserver(refit);
   const theme = new MutationObserver(onTheme);
   resize.observe(host);
-  theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode'] });
+  theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-theme'] });
   reduced.addEventListener('change', start);
   start();
 

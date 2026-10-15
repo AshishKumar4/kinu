@@ -5,10 +5,11 @@
  * quiet before the revoke joins the root's close, so nothing it owes is refused.
  */
 import { expect, test } from 'bun:test';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import { gatewayWorkspace, type StartedHarness } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding } from './helpers/platform-gateway';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const OWNER = 'abcdef0123456789abcdef0123456789';
 

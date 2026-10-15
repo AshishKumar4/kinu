@@ -62,6 +62,8 @@ function env(assets: string[]): Env {
       async ensureWorkspaceCapability() {},
       // No OAuth app is configured, so /login asks whether the deployment has its first account.
       async builtinHasOwner() { return false; },
+      // A signed-in page's shell names the account's theme; this account chose none.
+      async getConfig() { return null; },
     }),
     OrchestratorAgent: objects({
       async claimOwner() { return { owner: 'owner', capabilityHash: null }; },
@@ -153,6 +155,10 @@ const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   ['signed-in', 'GET', '/mcp/v1', shell('/mcp/v1')],
   ['anon', 'GET', '/pc/connect', door(426)],
   ['anon', 'GET', '/pc/connect-ticket', door(405)],
+  // A tables reset's own rail: its pass, never a session, and nothing past it without one.
+  ['anon', 'POST', '/ops/tables', door(401)],
+  ['signed-in', 'POST', '/ops/tables', door(401)],
+  ['anon', 'GET', '/ops/anything', door(404)],
   ['anon', 'GET', '/pc/', door(404)],
   ['anon', 'GET', '/pc/daemon.js', door(404)],
   ['anon', 'GET', '/pc', door(401)],

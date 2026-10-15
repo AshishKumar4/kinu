@@ -16,7 +16,7 @@ export {
 export { fetchReleaseArtifact, fetchReleaseManifest } from './channel';
 
 export {
-  LOCAL_PORT, LocalConfigSchema, localLayout, releaseDir, renderLocalConfig,
+  LOCAL_PORT, LocalConfigSchema, localAddress, localLayout, releaseDir, renderLocalConfig,
   renderWorkerdConfig, unhostedBindings, workerdDirectories,
   type LocalConfig, type LocalLayout,
 } from './local';
@@ -56,7 +56,7 @@ export { deployPlan, type DeployStep } from './steps';
 
 export {
   deployDoor, deployOptions, mintRun,
-  type DeployChoice, type DeployDoor, type DeployRunAddress, type DeployTokenPair,
+  type DeployChoice, type DeployDoor, type DeployRunAddress,
 } from './door';
 
 export {

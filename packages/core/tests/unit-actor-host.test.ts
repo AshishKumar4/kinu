@@ -4,7 +4,7 @@ import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.j
 // only their own rows, through the production binder and directory.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createMemoryVfs, createTestRuntime, withHostDeliveries, admitTestClaim } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestRuntime, withHostDeliveries, admitTestClaim, createRecordingLogger } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { actorScaffoldPath, WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
@@ -27,7 +27,7 @@ import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/a
 import type { ContextSelection } from '../src/session/context';
 import { agentArtifactDirectory } from '../src/vfs/agent-home';
 import { sha256Hex } from '../src/safety/argument-digest';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 import { wrapDatabase } from '../src/identity/inline-primitives';

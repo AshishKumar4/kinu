@@ -33,13 +33,13 @@ import { deployedConfig, type InfraEnvironment } from './infra-manifest';
 import { deleteApplicationByRest, deletedByRest, restCall } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
 import { HealthSchema } from './served-health';
+import { REPO_ROOT as REPO } from './repo-root';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
 export function environmentArgs(environment: InfraEnvironment): readonly string[] {
   return environment === 'production' ? [] : ['--env', environment];
 }
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 /** wrangler resolves `wrangler.jsonc`, `.dev.vars` and the account from its cwd. */
 const CF_BACKEND = `${REPO}packages/cf-backend`;

@@ -29,8 +29,8 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { arch, cpus, homedir, platform as osPlatform } from 'node:os';
 import * as v from 'valibot';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 export const COST_TABLE = `${root}scripts/gate-cost.json`;
 

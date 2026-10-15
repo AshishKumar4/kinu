@@ -4,8 +4,7 @@
 // failure on the panel it hit, the next read recovering with nothing held over.
 import { afterEach, expect, test } from 'bun:test';
 import { controlPlaneMetrics, type AnalyticsResult, type AnalyticsRow } from '@kinu.run/core/control-plane';
-import { createRecordingLogger } from '@kinu.run/core/obs';
-import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { scriptedTurnModel, type ScriptedTurnResult, createRecordingLogger } from '@kinu.run/test-utils';
 import { catalogTurn, gatewayWorkspace, tapDiagnostics } from './helpers/actor-harness';
 import { analyticsEngine } from './helpers/analytics-engine';
 import { chatCompletion, stubAiBinding } from './helpers/platform-gateway';

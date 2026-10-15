@@ -92,7 +92,7 @@ export async function driveExecution<A extends AssembledRound>(session: ActorSes
 /** One round under `lease`, finished whatever it ends on: whether the execution stops after it. */
 function driveRound<A extends AssembledRound>(session: ActorSession, execution: DrivenExecution<A>, lease: ActorTurnLease, index: number): Effect.Effect<boolean, KinuError> {
   // A round its projection left open is settled on the outcome it answered: a run's rounds commit no close of their own.
-  const close = (outcome: ClaimOutcome): void => { if (session.claimOpen(lease)) session.settleTurnClaim(lease, outcome); };
+  const close = (outcome: ClaimOutcome): void => { if (session.claimOpen(lease)) session.closeTurnClaim(lease, outcome)(); };
 
   const reserved = index === 0 ? execution.reserved : undefined;
 

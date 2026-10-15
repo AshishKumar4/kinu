@@ -15,7 +15,8 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
-import { AgentDatabase } from './agent-database';
+import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
+import { censusOf, type Repair, type StoreCensus } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -51,6 +52,8 @@ class AgentContextTree extends RpcTarget implements ContextTreeRemote {
 }
 
 export interface AgentFacetCalls {
+  /** The deploy's walk of this agent's database (`OrchestratorAgent.opsTables`). */
+  opsTables(): Promise<StoreCensus>;
   /** Resolves once its chat holds the delivery in its own store, with the report its admission makes. */
   admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<AdmittedDelivery>;
   landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding>;
@@ -200,8 +203,25 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
 
+  /** The deploy's walk, from its workspace (reached only through the workspace's `ctx.facets`, which checked the walk's
+   *  capability): this agent's database opened so it repairs itself, its tables and their rows, and what that did. */
+  opsTables(): Promise<StoreCensus> {
+    const repair = this.repaired();
+
+    return Promise.resolve({ census: censusOf(this.ctx.storage.sql), repair, refused: repair?.refused ?? null });
+  }
+
+  /** This activation's repair of its database, run once, at its first open. */
+  private repair: { readonly done: Repair | null } | undefined;
+
+  private repaired(): Repair | null {
+    this.repair ??= { done: repairAgentDatabase(this.ctx.storage, `agent of ${this.env.WORKSPACE_NAME}`) };
+
+    return this.repair.done;
+  }
+
   private open(snapshot: AgentSnapshot): AgentDatabase {
-    this.database ??= new AgentDatabase(this.ctx.storage, {
+    this.database ??= openAgentDatabase(this.ctx.storage, this.repaired(), {
       agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
       enqueueTurn: (input) => this.enqueue(snapshot, input),
       admitDelivery: async (delivery) => (await this.admit(snapshot, delivery, 'self')).answer,
@@ -229,7 +249,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     const actor = await database.acquire();
     const chat = new FacetChat({ actor, database, workspace: this.workspaceCalls, models: (deps) => this.models(deps), storage: this.ctx.storage, pacer: this.pacer });
 
-    chat.session.measureSessionStart({ restored: chat.session.restoreHistory() });
+    chat.session.measureSessionStart({ restored: chat.session.restoreWorkingHistory() });
     this.held = chat;
 
     return chat;
@@ -264,7 +284,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private admission(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer): Effect.Effect<{ readonly chat: FacetChat; readonly answer: DeliveryAnswer }, KinuError> {
     const parsed = v.parse(DeliverySchema, delivery);
 
-    return Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closing
+    return Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closed
       // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
       ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
       : attemptInItsWords('io', () => chat.session.admitDelivery(parsed, producer)).pipe(

@@ -6,7 +6,7 @@
 import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
-import type { Page, PageRequest } from '@kinu.run/core';
+import { requireOps, type OpsCaller, type Page, type PageRequest } from '@kinu.run/core';
 import type { FeedbackRecord } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
@@ -94,6 +94,13 @@ export class ControlPlaneDO extends DurableObject<Env> {
     await this.gate(caller, 'overview.read');
 
     return cpStore.overview(this.store);
+  }
+
+  /** Every user the index has seen, by id: the deploy's walk opens each one's account (`/ops/tables`). */
+  async opsUsers(caller: OpsCaller): Promise<string[]> {
+    await requireOps(this.env, caller);
+
+    return cpStore.userIds(this.store);
   }
 
   async listUsers(caller: PresentedCaller, request: PageRequest = {}): Promise<Page<ControlUserRow>> {

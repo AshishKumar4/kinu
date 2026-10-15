@@ -2,7 +2,7 @@
 import { expect } from 'bun:test';
 import * as v from 'valibot';
 import {
-  CHAT_SESSION_ID, PlanReviewStore, bundledArtifact, drawArm, recordBranchTakeSet, sectionArtifact, startTrial, writeCandidate,
+  CHAT_SESSION_ID, PlanReviewStore, bundledArtifact, recordBranchTakeSet, sectionArtifact, startTrial, writeCandidate,
 } from '@kinu.run/core';
 import type { SharedBackend } from '../backend';
 import type { SharedCase } from '../cases';
@@ -41,13 +41,12 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       if (trial === null) throw new Error('the waiting candidate did not start a trial');
       expect((await surface.getEvolutionStatus()).trial).toMatchObject({ trialId: trial.trialId, artifactId, version: 1 });
 
-      const rows = () => sql<{ turn_id: string; segment_id: string; arm: string }>`SELECT turn_id, segment_id, arm FROM trial_turns
+      const rows = () => sql<{ turn_id: string; segment_id: string }>`SELECT turn_id, segment_id FROM trial_turns
         WHERE actor_id = ${actor.actorId} AND trial_id = ${trial.trialId} ORDER BY at`;
 
       await surface.send('first');
-      expect(rows()).toHaveLength(1);
-
-      for (const row of rows()) expect(row.arm).toBe(drawArm(trial.trialId, row.segment_id));
+      // The turn is recorded under its segment, whose draw is its arm.
+      expect(rows()).toMatchObject([{ segment_id: expect.stringMatching(/^seg-/) }]);
     },
   },
   {

@@ -72,7 +72,6 @@ export interface SwarmPresetPoint {
 }
 
 /** Every row is fully declared: *Presets* requires a named preset to be unrefusable. */
-export type SwarmPresetRow = SwarmPresetPoint;
 
 /**
  * `resolve(preset) → SwarmConfig` (*Presets*). No `custom` row: `config` is the override.
@@ -155,7 +154,7 @@ export const SWARM_PRESET_POINTS = {
     branches: 3,
     doctrine: 'drives a checker that accepts or rejects a candidate.',
   },
-} as const satisfies Record<NamedSwarmPreset, SwarmPresetRow>;
+} as const satisfies Record<NamedSwarmPreset, SwarmPresetPoint>;
 
 /**
  * Read from `DEFAULT_CONFIG.mcts.judgeSamples`, not transcribed. The marginalisation floor

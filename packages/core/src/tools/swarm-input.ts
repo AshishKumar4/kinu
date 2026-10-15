@@ -67,80 +67,17 @@ const ObjectiveSchema = v.variant('kind', [
   }),
 ]);
 
-/** Cut spellings keep a refusing arm so the caller gets prose instead of `Expected never`. */
-const CUT_OBSERVE = '`observe` was cut entirely, because all three of its values were '
-  + 'already something else: observe:"none" is what a unit:{kind:"thought"} node IS, '
-  + 'observe:"own" is what holding tools MEANS now that every other unit is a real '
-  + 'agent, and observe:"ancestors" is what context:"inherit" supplies by construction. '
-  + 'Drop it, and set `context` if what you wanted was the ancestor chain.';
-
-const CUT_GENERATOR = 'unit:"generator" was cut. It was documented as the generator '
-  + 'that produces candidates, against unit:"answer"\'s one candidate, but NOTHING EVER '
-  + 'READ THE DIFFERENCE: the surface branches on this axis once, on '
-  + 'unit:{kind:"thought"}, so every generator run was an answer run with a different '
-  + 'word in its argument digest. Use unit:{kind:"answer"}: the same agent node, now '
-  + 'under its only spelling. The `prove` preset moved with it.';
-
-const CUT_DECORRELATE = '`decorrelate` was cut entirely. It shipped with all three of its '
-  + 'values behaving identically: sibling angles were handed out under every one of '
-  + 'them including decorrelate:"blind", which names the opposite, so no call was ever '
-  + 'choosing anything. Diversification is now unconditional and there is nothing to '
-  + 'set. NOTE WHAT THAT COSTS: angles can no longer be turned OFF. Detecting that '
-  + 'siblings have converged is a separate instrument and this axis never was one.';
-
-const CUT_MUTATE = 'expand:"mutate" was cut. It asked what a child starts from: the '
-  + "parent's own answer rather than the workspace as found, and that is the `context` "
-  + 'axis, which asks it once for the caller-to-root edge and every branch edge '
-  + 'together. Use context:"inherit" for the parent\'s conversation, context:"fresh" for '
-  + 'its results alone.';
-
-const CUT_FORK_CONTEXT = 'context:"fork" was renamed context:"inherit": the value names context '
-  + 'INHERITANCE, the child starts from the parent\'s conversation verbatim, and `fork` is the '
-  + 'removed `agents` action, a different referent sharing one spelling. Use context:"inherit" '
-  + 'for the parent\'s conversation, context:"fresh" for its results alone.';
-
-const CUT_AGREE = 'score:"agree" was cut: it is score:"judge" with the population as the '
-  + 'judge, and the ensemble it needed is already the judge arm\'s `samples`. Use '
-  + 'score:{kind:"judge", samples: n}.';
-
-const CUT_NOVELTY = 'score:"novelty" was cut FROM THIS AXIS and re-homed rather than '
-  + 'removed: it never graded a node, it decided whether a candidate is admitted to an '
-  + "archive cell. It is now advance:{kind:\"archive\", novelty: tau}, where it cannot be "
-  + 'omitted. Move the rejection test onto the archive.';
-
-const CUT_BEAM = 'advance:"beam" was cut, and this one COSTS SOMETHING rather than having '
-  + 'an equivalent: best-first plus a level barrier is a schedule and not a selector, so '
-  + 'the selection rule survives as advance:{kind:"best-first"} but the '
-  + 'LEVEL-SYNCHRONISED ORDER and its `beamWidth` do not. No composition reproduces '
-  + 'them. Use advance:{kind:"best-first"} and expect frontier order.';
-
-/** A cut axis: present only so writing it is refused with prose. */
-function cutAxis(why: string) {
-  return v.optional(v.pipe(v.unknown(), v.check(() => false, why)));
-}
-
 const SwarmConfigWireSchema = v.strictObject({
   unit: v.optional(v.variant('kind', [
     v.strictObject({ kind: v.literal('answer') }),
     v.strictObject({ kind: v.literal('thought') }),
-    v.pipe(v.strictObject({ kind: v.literal('generator') }), v.check(() => false, CUT_GENERATOR)),
   ])),
-  context: v.optional(v.union([
-    v.picklist(SWARM_CONTEXTS),
-    v.pipe(v.literal('fork'), v.check(() => false, CUT_FORK_CONTEXT)),
-  ])),
-  observe: cutAxis(CUT_OBSERVE),
-  expand: v.optional(v.union([
-    v.picklist(SWARM_EXPANDS),
-    v.pipe(v.literal('mutate'), v.check(() => false, CUT_MUTATE)),
-  ])),
-  decorrelate: cutAxis(CUT_DECORRELATE),
+  context: v.optional(v.picklist(SWARM_CONTEXTS)),
+  expand: v.optional(v.picklist(SWARM_EXPANDS)),
   score: v.optional(v.variant('kind', [
     v.strictObject({ kind: v.literal('verify') }),
     v.strictObject({ kind: v.literal('none') }),
     v.strictObject({ kind: v.literal('judge'), samples: v.pipe(v.number(), v.integer(), v.minValue(1)) }),
-    v.pipe(v.strictObject({ kind: v.literal('agree') }), v.check(() => false, CUT_AGREE)),
-    v.pipe(v.strictObject({ kind: v.literal('novelty') }), v.check(() => false, CUT_NOVELTY)),
   ])),
   advance: v.optional(v.variant('kind', [
     v.strictObject({ kind: v.literal('uct') }),
@@ -148,7 +85,6 @@ const SwarmConfigWireSchema = v.strictObject({
     v.strictObject({ kind: v.literal('pareto') }),
     v.strictObject({ kind: v.literal('none') }),
     v.strictObject({ kind: v.literal('archive'), novelty: v.pipe(v.number(), v.finite()) }),
-    v.pipe(v.strictObject({ kind: v.literal('beam') }), v.check(() => false, CUT_BEAM)),
   ])),
   carry: v.optional(v.variant('kind', [
     v.strictObject({ kind: v.literal('none') }),

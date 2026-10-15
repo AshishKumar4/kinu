@@ -56,6 +56,7 @@ import { SKILLS_VIEW, WORKSPACE_SKILLS_DIR } from './skills/types';
 import { PLATFORM_CATALOG } from './platform-catalog';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
+import { isoDate } from './utils/date';
 
 export type { TurnReason, WorkMode } from './types/turn';
 
@@ -66,7 +67,6 @@ export type {
 } from './prompting/surface';
 
 export type {
-  PromptModelCapability,
   PromptModelContext,
   PromptModelFamily,
   PromptModelProfile,
@@ -87,7 +87,7 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
 
 /** Date-only, never time: the dynamic block's runtime section changes at most once a day. */
 export function currentDateForPrompt(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
+  return isoDate(now.getTime());
 }
 
 const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
@@ -185,7 +185,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, se
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
-  const executors = surface.configuredExecutors;
+  const executors = surface.executors;
 
   if (executors.length === 0) return '';
 

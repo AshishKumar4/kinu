@@ -12,7 +12,7 @@ import {
 import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, openingOf, requestOf, stubAiBinding, textThenToolCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
-import { recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
+import { recordedMcpToolCalls, resetRecordedMcp, seedConfiguredMcpServer, seedMcpTools, seedMcpAnswer, seedSdkMcpServer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 import { SlateId } from '@agent-core/core/slates';
 import { slateDirectory } from '@kinu.run/core/slates';
@@ -65,9 +65,7 @@ test('an MCP tool called through eval answers its data whole, fails on a protoco
     await actor.agent.installWorkspaceCapability(capability);
     const owner = await testOwner();
     await user.userDO.userMcp_list(owner);
-    user.sql.exec(`INSERT INTO user_mcp_servers
-      (id, name, server_url, transport, headers, allowed_tools)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL)`);
+    seedConfiguredMcpServer(user.sql, 'connection-id', { name: 'github', url: 'https://github.example/sse', transport: 'auto' });
     await user.userDO.userMcp_list(owner);
     seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
@@ -103,9 +101,7 @@ test("a server whose stored allowlist is corrupt offers none of its tools, and a
     const owner = await testOwner();
     await user.userDO.userMcp_list(owner);
     // Written, but not a list of names: the owner set an allowlist, and nothing may read it as "allow all".
-    user.sql.exec(`INSERT INTO user_mcp_servers
-      (id, name, server_url, transport, headers, allowed_tools)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, '[1,2]')`);
+    seedConfiguredMcpServer(user.sql, 'connection-id', { name: 'github', url: 'https://github.example/sse', transport: 'auto', allowedTools: '[1,2]' });
     await user.userDO.userMcp_list(owner);
     seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     seedMcpAnswer({ isError: false, content: [{ type: 'text', text: 'issue body' }] });
@@ -133,9 +129,7 @@ test('a slate\'s MCP call follows connection identity and the owner allowlist', 
     await actor.agent.installWorkspaceCapability(capability);
     const owner = await testOwner();
     await user.userDO.userMcp_list(owner);
-    user.sql.exec(`INSERT INTO user_mcp_servers
-      (id, name, server_url, transport, headers, allowed_tools)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, '["read_issue"]')`);
+    seedConfiguredMcpServer(user.sql, 'connection-id', { name: 'github', url: 'https://github.example/sse', transport: 'auto', allowedTools: '["read_issue"]' });
     await user.userDO.userMcp_list(owner);
     seedMcpTools('connection-id', [
       { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
@@ -151,7 +145,8 @@ test('a slate\'s MCP call follows connection identity and the owner allowlist', 
     // A server is named as the actor's programs name it, by its name, never by its connection id.
     expect(await on('connection-id', 'read_issue')).toMatchObject({ ok: false, reason: 'missing' });
     expect(await on('github', 'read_issue')).toEqual({ ok: true, value: { content: [] } });
-    user.sql.exec(`UPDATE user_mcp_servers SET name = 'renamed-github' WHERE id = 'connection-id'`);
+    // The catalog holds the server's name: a rename there renames its tools.
+    seedSdkMcpServer('connection-id', { type: 'auto' }, { name: 'renamed-github', url: 'https://github.example/sse' });
     expect(await on('github', 'read_issue')).toMatchObject({ ok: false, reason: 'missing' });
     expect(await call('read_issue')).toEqual({ ok: true, value: { content: [] } });
     const incident = { content: [], isError: false, reason: 'denied', error: 'historical incident' };

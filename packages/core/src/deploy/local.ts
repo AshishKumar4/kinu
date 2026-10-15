@@ -1,14 +1,14 @@
 // Local door layout and workerd config, rendered from `release.json` (docs/SELF-DEPLOY.md).
 // DO storage and KV map to disk directories; R2 (own protocol), Vectorize, AI, containers,
 // Worker loader, Analytics Engine and email are left out by name. Paths are relative to the config.
-import type { ReleaseBinding, ReleaseManifest } from './manifest';
+import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
 import * as v from 'valibot';
 
 /** Wrangler's default; 3000 is reserved for the repo dev server (AGENTS.md). */
 export const LOCAL_PORT = 8787;
 
 // Loopback keeps an unauthenticated first run off the network.
-function localAddress(port: number): string {
+export function localAddress(port: number): string {
   return `http://127.0.0.1:${String(port)}`;
 }
 
@@ -51,14 +51,12 @@ export function releaseDir(layout: LocalLayout, version: string): string {
 export interface LocalConfig {
   readonly version: string;
   readonly port: number;
-  readonly address: string;
   readonly renderedAt: string;
 }
 
 export const LocalConfigSchema: v.GenericSchema<LocalConfig> = v.object({
   version: v.string(),
   port: v.number(),
-  address: v.string(),
   renderedAt: v.string(),
 });
 
@@ -66,7 +64,6 @@ export function renderLocalConfig(input: { version: string; port: number; at: Da
   const config: LocalConfig = {
     version: input.version,
     port: input.port,
-    address: localAddress(input.port),
     renderedAt: input.at.toISOString(),
   };
 
@@ -123,9 +120,8 @@ export function renderWorkerdConfig(input: {
       `    (name = ${quoted(serviceName(binding))}, disk = (path = ${quoted(storePath(binding))}, writable = true)),`),
   ];
 
-  // Same rule as `steps.ts`: `.wasm` is a WebAssembly module, everything else an ES module.
   const modules = manifest.worker.modules.map((name) =>
-    `    (name = ${quoted(name)}, ${name.endsWith('.wasm') ? 'wasm' : 'esModule'} = embed ${quoted(`${release}/${manifest.worker.modulesPath}/${name}`)}),`);
+    `    (name = ${quoted(name)}, ${releaseModuleKind(name)} = embed ${quoted(`${release}/${manifest.worker.modulesPath}/${name}`)}),`);
 
   const bindings = [
     ...(assets === undefined ? [] : [`    (name = ${quoted(assets.binding)}, service = "assets"),`]),

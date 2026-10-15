@@ -133,6 +133,19 @@ export interface HeadReport {
 }
 
 /**
+ * The report of a head that produced none: no findings and no steps, its usage `{}` (unknown, never zeros: it may have
+ * spent unreported tokens), the reason in `errorMessage`.
+ */
+export function unreportedHead(report: Pick<HeadReport, 'id' | 'summary' | 'wallClockMs'> & {
+  readonly status: 'errored' | 'aborted';
+  readonly errorMessage: string;
+}): HeadReport {
+  return {
+    ...report, evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0, usage: {},
+  };
+}
+
+/**
  * One head as the Exploration surface renders it (HeadJournal.assembleRun). The trace is deliberately
  * absent to keep run views small; one branch's trace is read via {@link HeadJournal.readSteps}.
  */

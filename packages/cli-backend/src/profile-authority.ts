@@ -11,7 +11,7 @@ import type {
 import {
   BUILTIN_PROFILE_CATALOG, ProviderListingCache,
   loadProfileAuthorityInputs, ownProfileChoices, providerListingOf, providerSnapshotOf,
-  profileCatalogDigest, resolveAgentTurnProfile,
+  profileCatalogDigest, resolveTurnProfile,
 } from '@kinu.run/core';
 import type { LocalModelResolver } from './model-resolver';
 import { diagnostics, settleSync } from '@kinu.run/core/obs';
@@ -173,7 +173,7 @@ export function createLocalProfileAuthority(deps: {
     async resolvePreTurn(availableTools = []) {
       const authority = await inputs();
 
-      return resolveAgentTurnProfile({
+      return resolveTurnProfile({
         ...authority,
         ...ownProfileChoices(deps.config, authority),
         workMode: 'build',
@@ -184,7 +184,7 @@ export function createLocalProfileAuthority(deps: {
     async nextTurnTier({ workMode, ancestors }) {
       const authority = await inputs();
 
-      return resolveAgentTurnProfile({
+      return resolveTurnProfile({
         ...authority,
         ...ownProfileChoices(deps.config, authority, ancestors),
         workMode,

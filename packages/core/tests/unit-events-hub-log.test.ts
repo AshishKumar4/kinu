@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  boundEventQuery, buildDrainBatch, initEventsHubTables, EventLog,
+  boundEventQuery, initEventsHubTables, EventLog,
   type IngressDescriptor,
 } from '../src/events/hub/index';
 import type { SqlExec } from '../src/index';
@@ -12,9 +12,9 @@ const DEFAULT_PAGE = boundEventQuery().limit;
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
 
 import type { JsonValue } from '../src/utils/json';
-import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
+import { setDiagnosticsSink, KinuError } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActorsOver, createRecordingLogger } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
 /** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */
@@ -135,33 +135,6 @@ describe('EventLog.pending', () => {
 
     expect(new Set(log.unbindStale(500, 2_000))).toEqual(new Set([first, second]));
     expect(new Set(log.pending().map((event) => event.id))).toEqual(new Set([first, second]));
-  });
-
-  test('protected cross-owner peer payloads retain delegated Plan mode', () => {
-    const { sql, actor } = makeSql();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
-    log.publish({
-      descriptor: {
-        ingress: 'peer_async',
-        variant: 'peer_agent',
-        payload: {
-          from_agent_name: 'planner',
-          from_user_id: 'another-owner',
-          topic: 'research',
-          body: { task: 'inspect only' },
-          sender_event_id: 'outbox-1',
-          kinu_mode: 'plan',
-        },
-        same_owner: false,
-        receiver_grant_present: true,
-      },
-      now: 2_000,
-    });
-
-    const pending = log.pending();
-    expect(pending[0]?.payload_visibility).toBe('hash');
-    expect(buildDrainBatch(pending)?.mode).toBe('plan');
   });
 });
 

@@ -26,21 +26,37 @@ import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { ORCHESTRATOR_AGENT_SLUG, type JsonValue, type RunEvent } from '../../packages/core/src/index';
 import { INTERNAL_URL as INTERNAL, ISOLATION_ASK as ASK } from './asks';
 import { delivered, taskHires } from './delegation-observation';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { hirerHeard } from './hires';
 import { openPublicSocket } from './public-socket';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 
 const SUITE = 'First-run · capability-isolation';
 
-const CASE = 'capability-isolation' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The owner asked for an object-capability model and a security verdict on it: one forbidden '
+    + 'operation, tried through native tools, codemode, a child agent and a slate, refused on all four '
+    + 'paths. No run had tried the same operation through all four on the product.',
+  missedBecause: 'each path is proved on its own tier: bun drives the web tool and a hired child\'s, '
+    + 'workerd drives `eval` and a slate\'s global fetch. A deployment whose eval sandbox or slate '
+    + 'loader was composed without the egress binding would pass every one of them.',
+  provedRedAt: null,
+  redDirection: 'A build carrying a planted hole fails the deploy\'s own source gates, so it reaches neither staging nor '
+    + 'production. The red direction is proved at each enforcement point on the tier that hosts it: `assertSafeUrl` skipped in '
+    + '`web/provider.ts` turns tests/first-run/capability-isolation.first-run.ts red on '
+    + 'both web paths, and `refusedHostname` skipped in `codemode-egress.ts` turns the workerd '
+    + 'codemode-sandbox and slate-egress rows red.',
+};
 
 /** Kinu's destination rule, in its own words (`packages/core/src/safety/egress-destination.ts`). */
 const REFUSED = 'blocked private/internal address: 10.0.0.1';
 
 const SLATE = 'isolation';
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'isolation');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -89,6 +105,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A terse assistant that uses the tool it is asked to use and reports the result in one line.',
       async run({ session, plan, budget }) {
@@ -170,4 +187,3 @@ export class Slate extends SlateObject {
 });
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` holds the corpus and the register equal. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

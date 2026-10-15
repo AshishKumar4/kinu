@@ -166,7 +166,6 @@ function credentialOf(token: CloudflareTokenPayload, accessToken: string, accoun
   if (accounts.length > 0) {
     metadata.accounts = accounts.map((account) => ({ id: account.id, name: account.name }));
     metadata.accountId = accounts[0].id;
-    metadata.accountName = accounts[0].name;
   }
 
   const scopes = scopeList({ value: token.scope });
@@ -320,7 +319,7 @@ export function withCloudflareAccount(credential: OAuthCredential, accountId: st
   const account = cloudflareAccountsFromCredential(credential).find((row) => row.id === accountId);
 
   return settleSync(account
-    ? Effect.succeed({ ...credential, metadata: { ...credential.metadata, accountId: account.id, accountName: account.name } })
+    ? Effect.succeed({ ...credential, metadata: { ...credential.metadata, accountId: account.id } })
     : Effect.fail(new KinuError('bad_input', 'That Cloudflare account is not one this login can see. Reconnect Cloudflare and try again.')));
 }
 

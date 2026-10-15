@@ -35,8 +35,8 @@ import { BLANK_PAGE, explained, recordScriptFailures } from './script-failures';
 import { launchTestChrome } from './test-chrome';
 import { recordOwner } from './process-owner';
 import { evidenceDir } from '@kinu.run/test-utils';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = join(import.meta.dir, '..');
 
 const CF = join(REPO, 'packages', 'cf-backend');
 

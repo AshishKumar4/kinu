@@ -1,7 +1,7 @@
 /**
  * What a client's socket and requests pass before an actor's handlers see them: its authority, re-checked per frame;
- * a terminal's frames, sent to its shell; an RPC a window may not make; an actor no longer hosted; and a store that
- * predates a reset. Each actor installs it over its Agent base's handlers.
+ * a terminal's frames, sent to its shell; an RPC a window may not make; an actor no longer hosted; and a store its
+ * repair could not bring to this build. Each actor installs it over its Agent base's handlers.
  */
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import type { Connection, ConnectionContext, WSMessage } from 'agents';
@@ -11,7 +11,7 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
   actorFromConnectionTags, ERROR_STATUS, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, hostedWindowMay, JsonValueSchema, requiredRpcAccess,
-  rpcMovesOverview, WorkspaceTerminalInputSchema, type StoragePredatesResetError, type UserCaller,
+  rpcMovesOverview, WorkspaceTerminalInputSchema, type StoragePredatesReleaseError, type UserCaller,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { attempt, diagnostics, refusalOf, settle, tolerate, type KinuError, type Refusal } from '@kinu.run/core/obs';
@@ -34,8 +34,8 @@ export interface ClientHandlers {
 }
 
 export interface ClientSocketGateHost {
-  /** Set once the store is found to predate a reset: nothing past the gate reads it then. */
-  storageRefusal(): StoragePredatesResetError | undefined;
+  /** Set once the store's repair refused: nothing past the gate reads it then. */
+  storageRefusal(): StoragePredatesReleaseError | undefined;
   /** Why this actor cannot be acted on now, or null; inspections pass it. */
   runtimeRefusal(): Refusal | null;
   terminalFor(connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null>;

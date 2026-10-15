@@ -13,7 +13,7 @@ import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
   parseEgressParams, workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
-import { APP_ROUTES, ERROR_STATUS, ORCHESTRATOR_AGENT_SLUG, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
+import { APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
@@ -30,6 +30,7 @@ import { deployCallbackRoutes } from "./deploy/routes";
 import { authPageRoutes } from "./auth/routes";
 import { landingRoutes } from "./landing-route";
 import { pcRoutes } from "./pc-routes";
+import { opsRoutes } from "./ops-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
@@ -40,7 +41,7 @@ import {
 } from "./auth/session";
 import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
-import { ownerCaller } from "@kinu.run/core";
+import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { ownedWorkspace } from "./api/workspace";
 import { err } from "@kinu.run/core";
@@ -144,9 +145,7 @@ function authenticateCliAgentTicketRequest(
 
     const verified = yield* Effect.promise(async () => userDO.verifyCliAgentConnectTicket(await ownerCaller(env), ticket, {
       userId,
-      agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,
-      capability: 'agent.websocket',
     }));
 
     if (!verified.ok || !verified.user) {
@@ -311,6 +310,24 @@ function mount<Bindings extends object, Variables extends object>(
 
 const appShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env);
 
+/**
+ * Behind sign-in: the page names the account's theme, so it paints in it on any device it opens on. The theme is only
+ * a look: a read that fails is logged and the page is served in the default, never refused.
+ */
+const accountShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env, {
+  theme: async () => {
+    let theme: ThemeName = DEFAULT_THEME;
+
+    await settleLogged('app.theme_read_failed', { doing: "reading the account's theme for its page", otherwise: 'unavailable' }, async () => {
+      const account = c.env.UserDO.get(c.env.UserDO.idFromName(c.get('identity').userId));
+
+      theme = accountTheme(await account.getConfig(await ownerCaller(c.env), THEME_CONFIG_KEY));
+    });
+
+    return theme;
+  },
+});
+
 worker.use('*', async (c, next) => (isPreviewHostRequest(new URL(c.req.url), c.env)
   ? await previewHost.fetch(c.req.raw, c.env, c.executionCtx)
   : await next()));
@@ -318,6 +335,9 @@ worker.use('*', async (c, next) => (isPreviewHostRequest(new URL(c.req.url), c.e
 worker.all('/api/*', beneath<WorkerEnv>('/api', async (c) => api.fetch(c.req.raw, c.env, c.executionCtx)));
 
 mount(pcRoutes);
+
+// Before any session: its own pass (ops-routes.ts).
+mount(opsRoutes);
 
 // Access before every bypass.
 worker.use(CONTROL_PLANE_UI_ROUTE, controlPlaneAccess);
@@ -419,13 +439,13 @@ const workspacePage = async (c: Context<WorkerEnv>): Promise<Response> => {
       async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace); }));
   }
 
-  return await appShell(c);
+  return await accountShell(c);
 };
 
 worker.get(APP_ROUTES.workspace, workspacePage);
 
 worker.get(`${APP_ROUTES.workspace}/*`, workspacePage);
 
-worker.notFound(appShell);
+worker.notFound(accountShell);
 
 worker.onError(routeError);

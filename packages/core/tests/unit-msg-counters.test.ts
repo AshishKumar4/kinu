@@ -13,7 +13,7 @@
 // would be worse than no instrument.
 import { describe, test, expect, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestRuntime, toolExecute, createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestRuntime, toolExecute, createTestActorsOver, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
 import {
   createAgentsTool,
   type AgentsToolDeps,
@@ -21,7 +21,7 @@ import {
   ROOT_DELEGATION_BUDGET,
   type SubordinateDelivery, type SubordinateRosterEntry,
 } from '../src/index';
-import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { receivePeerMessage } from '../src/events/ingress/peer';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
@@ -278,7 +278,7 @@ describe('agents.msg.received', () => {
   // before delivery is unobservable: the sender's own line stops at `queued`.
   test('an admitted message is counted, carrying the sender id both lines join on', async () => {
     const logger = recording();
-    const deps = { ...receiver(), isSameOwner: async () => true, hasGrant: async () => true };
+    const deps = { ...receiver(), isSameOwner: async () => true };
 
     const result = await receivePeerMessage(deps, inbound('ox-join'), 1_000);
 
@@ -294,9 +294,9 @@ describe('agents.msg.received', () => {
   // A refused message is traffic that arrived and was turned away — the exact
   // shape a cross-owner fan-out produces, and a counter that dropped it would
   // report a rejected flood as an idle transport.
-  test('a message refused for want of a grant is still counted, as not admitted', async () => {
+  test('a cross-owner message refused is still counted, as not admitted', async () => {
     const logger = recording();
-    const deps = { ...receiver(), isSameOwner: async () => false, hasGrant: async () => false };
+    const deps = { ...receiver(), isSameOwner: async () => false };
 
     const result = await receivePeerMessage(deps, inbound('ox-denied'), 1_000);
 

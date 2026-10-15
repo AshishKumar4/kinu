@@ -30,8 +30,6 @@ export const OwnerAnswersSchema = v.pipe(v.array(OwnerAnswerSchema), v.minLength
 export type OwnerAnswer = v.InferOutput<typeof OwnerAnswerSchema>;
 
 /** `in_chat`: the owner wrote in the chat while the questions were open, which answers them there. */
-export type QuestionStatus = 'open' | 'answered' | 'dismissed' | 'in_chat';
-
 const StatusSchema = v.picklist(['open', 'answered', 'dismissed', 'in_chat']);
 
 /** One call's questions, as the store keeps them. `id` is the store's, so a provider reusing call ids names no other. */

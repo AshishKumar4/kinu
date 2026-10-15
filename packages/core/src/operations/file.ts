@@ -1,10 +1,8 @@
 /** The workspace's files: read, edit, write, list, stat and search. */
 import * as v from 'valibot';
 import { ImageCarrierSchema } from '../types/tool-images';
-import { defineOperation, type Operation } from './operation';
+import { described, namespace } from './operation';
 import { FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS } from '../types/file-edits';
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
 
 const Path = described(v.pipe(v.string(), v.trim(), v.nonEmpty()), 'Relative paths resolve at the workspace root.');
 
@@ -32,9 +30,7 @@ const FileEditSchema = v.strictObject({
 /** Interpolated, so the help states the window the executor shows. */
 const READ_WINDOW = `${String(FILE_READ_LINES)} lines or ${String(FILE_READ_MAX_CHARS)} characters, whichever ends first`;
 
-const fileOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
-  op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>,
-) => defineOperation({ ns: 'file', slate: true, ...op });
+const fileOp = namespace('file', { slate: true });
 
 export const FILE = {
   read: fileOp({

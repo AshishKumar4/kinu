@@ -11,7 +11,6 @@ export {
 export {
   withBackgroundThreshold,
   withSpawnDetach,
-  isBackgroundHandle,
   BACKGROUND_POLICY,
   invocationBackgroundPolicy,
   SPAWN_STARTED_OPTION,
@@ -40,7 +39,7 @@ export {
   type WorkspaceJobPorts,
 } from './runner';
 
-export { processJobHolder } from './process-holder';
+export { initJobHoldersTable, processJobHolder } from './process-holder';
 
 export { AgentWakeQueue } from './wake-queue';
 

@@ -74,7 +74,7 @@ const ParsedObjectSchema = v.custom<JsonObject>((value) => !Array.isArray(value)
 
 const ParsedArraySchema = v.custom<JsonValue[]>(Array.isArray, 'Invalid type: Expected Array');
 
-/** Text that is not JSON reads back as itself; any other failure throws. */
+/** JSON text as a value; text that is not JSON dies with `unreadable`, its parse failure the cause. */
 export function jsonText(text: string, unreadable: string): Effect.Effect<JsonValue> {
   return Effect.try({ try: () => v.parse(JsonValueSchema, JSON.parse(text)), catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => Effect.die(new Error(unreadable, { cause: failed.cause }))),

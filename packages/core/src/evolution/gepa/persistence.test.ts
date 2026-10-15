@@ -5,6 +5,7 @@ import { Database } from 'bun:sqlite';
 import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from '../../../tests/helpers';
 import {
+  aggregateScore,
   initGepaTables, startGepaRun, persistGepaCandidate, finishGepaRun,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
   runGepa,
@@ -22,13 +23,9 @@ function setup() {
 }
 
 function mkCandidate(id: string, source: string, scores: Record<string, number>): GepaCandidate {
-  const m = new Map(Object.entries(scores));
-  const total = Array.from(m.values()).reduce((a, b) => a + b, 0);
-
   return {
     id, parentId: null, source,
-    scores: m, feedback: new Map([['i1', 'fb']]),
-    aggregateScore: m.size === 0 ? 0 : total / m.size,
+    scores: new Map(Object.entries(scores)), feedback: new Map([['i1', 'fb']]),
     createdAt: Date.now(),
   };
 }
@@ -99,7 +96,7 @@ describe('persistGepaCandidate + loadGepaCandidates', () => {
     expect(loaded[0].scores.get('i1')).toBe(0.7);
     expect(loaded[0].scores.get('i2')).toBe(0.3);
     expect(loaded[0].feedback.get('i1')).toBe('fb');
-    expect(loaded[0].aggregateScore).toBeCloseTo(0.5, 5);
+    expect(aggregateScore(loaded[0])).toBeCloseTo(0.5, 5);
   });
 
   test('orders by iteration then created_at', () => {
@@ -225,6 +222,6 @@ test('a fully measured seed is retained before the first reflection measurement 
   })).rejects.toBe(failure);
   expect(iterations).toEqual([]);
   const candidates = loadGepaCandidates(sql, actor, runId);
-  expect(candidates.map(candidate => ({ source: candidate.source, score: candidate.aggregateScore,
+  expect(candidates.map(candidate => ({ source: candidate.source, score: aggregateScore(candidate),
     measured: Object.fromEntries(candidate.scores) }))).toEqual([{ source: 'seed', score: 0.7, measured: { one: 0.7 } }]);
 });

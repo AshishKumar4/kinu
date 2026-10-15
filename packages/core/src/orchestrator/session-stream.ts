@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ChatEvent, StepRecord } from '../chat';
 import { SessionHistory } from '../session/history';
-import type { ClaimFence, MessageReference, MessagePartReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
+import { admissionRequestId, type ClaimFence, type MessageReference, type MessagePartReference, type StoredPart, type StreamPartInput, type PreparedContent } from '../session/messages';
 import type { SessionPayload } from '../session/payload';
 import { isParsedJsonObject, jsonObjectElements, projectJsonValue, type JsonObject } from '../utils/json';
 import { encodeModelMessage } from '../session/message-codec';
@@ -147,7 +147,7 @@ export class SessionStream {
   private ui: StreamContainer;
 
   constructor(private readonly history: SessionHistory, private readonly turnId: string, private readonly epoch: number) {
-    this.requestId = `${turnId}:${epoch}:admission`;
+    this.requestId = admissionRequestId(turnId, epoch);
     this.claim = { turnId, epoch, assert: () => this.history.assertEpoch(turnId, epoch) };
     this.assistant = this.container('assistant');
     this.tool = this.container('tool');

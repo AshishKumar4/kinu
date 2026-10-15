@@ -6,12 +6,12 @@
  */
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
-import { scriptedTurnModel, type ScriptedTurnResult, admitTestClaim } from '@kinu.run/test-utils';
+import { scriptedTurnModel, type ScriptedTurnResult, admitTestClaim, createRecordingTracer } from '@kinu.run/test-utils';
 import { sessionFixture } from './helpers-session';
 import { recoverActorTurns } from '../src/state/actor-host';
 import { createAgentsTool, ROOT_DELEGATION_BUDGET, type SubordinateHandoff, type SubordinateRosterEntry, type TeamToolDeps } from '../src/index';
 import {
-  createAgentTracing, createRecordingTracer,
+  createAgentTracing,
 } from '../src/obs/index';
 
 const TASK = 'Write the secret plan to plan.txt, then tell the researcher about it.';

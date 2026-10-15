@@ -8,7 +8,6 @@ import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { adaptMemory } from './memory/vector-sync';
 import { MEMORY_PATH } from './memory/note';
 import { bootstrapScaffold } from './scaffold/bootstrap';
-import { nanoid } from './utils/nanoid';
 import { nowMs } from './utils/date';
 import { KinuError } from './obs/index';
 import { initRunEventTables } from './events/recorder';
@@ -17,8 +16,8 @@ import { createSqlFiber } from './execution/fiber';
 import { cloudPlanes } from './vfs/resolve';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import type { ActorHandle } from './identity/actor-handle';
-import { initWorkspaceActorTable, WorkspaceActorDirectory } from './identity/workspace-actors';
-import { SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
+import { bearWorkspaceIdentity, initWorkspaceActorTable } from './identity/workspace-actors';
+import { stampSchemaGenesis } from './identity/schema-stamp';
 
 export interface WorkspaceBirthConfig {
   /** The address slug (`workspaceSlug`), held by `workspace_identity.name` for life. */
@@ -26,7 +25,6 @@ export interface WorkspaceBirthConfig {
   /** The human name heading SOUL.md and MEMORY.md; never the slug. Set later by `planWorkspaceTitle` if absent. */
   title?: string;
   purpose: string;
-  scaffold?: string;
   /** Main's home, where the seeds land as files: SOUL.md, the first memory note and the scaffold. */
   home: VFS & Required<Pick<VFS, 'readRange'>>;
 }
@@ -83,13 +81,10 @@ export async function createWorkspace(
 
   const actor = transactionSync(() => {
     initAllTables(execRaw, sql);
-    execRaw(`PRAGMA user_version = ${String(SCHEMA_GENESIS_STAMP)}`);
-
-    const workspaceId = nanoid();
-    void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
+    stampSchemaGenesis(execRaw);
     initWorkspaceActorTable(execRaw);
 
-    return new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name: config.name });
+    return bearWorkspaceIdentity(sql, { name: config.name, createdAt: nowMs() });
   });
 
   const titled = config.title?.trim();
@@ -102,7 +97,7 @@ export async function createWorkspace(
   const rt = buildComponents({ db, sql, execRaw, transactionSync, home, actor });
 
   // The loop's versioned source, its pointer and its live view, through the one writer every reopen heals with.
-  await bootstrapScaffold(rt, config.scaffold);
+  await bootstrapScaffold(rt);
 
   return rt;
 }

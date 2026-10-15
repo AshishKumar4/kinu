@@ -10,7 +10,7 @@ import {
 } from '../src/execution/device-tunnel-executor';
 import { deviceFleetAsk, type DeviceFleetEntry, type DeviceStatus } from '../src/execution/device-status';
 import { answeredRefusal } from '../src/execution/exec-result';
-import { getExecutorFiles } from '../src/read-models/files';
+import { FILES_PAGE_ENTRIES, getExecutorFiles } from '../src/read-models/files';
 import { withMountTable, standardMounts } from '../src/vfs/mounts';
 import { setDiagnosticsSink } from '../src/obs/log';
 import { DefaultExecutionRouter } from '../src/execution/router';
@@ -70,6 +70,25 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
 
       return { content: Buffer.from(`bytes of ${opts?.deviceId}`).toString('base64'), encoding: 'base64' };
     },
+  };
+}
+
+/** A machine whose every folder holds `count` entries, which `listFiles` answers a window at a time, each entry with its
+ *  size and age (as the daemon's own entries carry them); other calls go to `rpc`. */
+function folderOf(count: number, sent: Sent[], rpc: DeviceTransport['rpc']): DeviceTransport['rpc'] {
+  const names = Array.from({ length: count }, (_, index) => `entry-${String(index).padStart(5, '0')}`);
+
+  return async (method, params, opts) => {
+    if (method !== 'listFiles') return rpc(method, params, opts);
+    const window = v.parse(v.object({ offset: v.number(), limit: v.number() }), params[1]);
+    const end = Math.min(names.length, window.offset + window.limit);
+
+    sent.push({ method, params, deviceId: opts?.deviceId });
+
+    return {
+      entries: names.slice(window.offset, end).map((name, at) => ({ name, type: (window.offset + at) % 3 === 0 ? 'dir' : 'file', size: 10, mtimeMs: 1_000 })),
+      next: end < names.length ? end : null,
+    };
   };
 }
 
@@ -251,8 +270,10 @@ describe('the composite file plane', () => {
 
 describe('where the file browser lands on a mount', () => {
   /** `getExecutorFiles` over the standard mount table with the real device provider at `/pc`. */
-  function browser(fleet: readonly DeviceFleetEntry[], opts: { consented?: Record<string, string | null>; unconfined?: boolean } = {}) {
+  function browser(fleet: readonly DeviceFleetEntry[], opts: { consented?: Record<string, string | null>; unconfined?: boolean; folder?: number } = {}) {
     const t = fleetTransport(fleet);
+
+    if (opts.folder !== undefined) t.rpc = folderOf(opts.folder, t.sent, t.rpc.bind(t));
     const consented = opts.consented ?? { 'dev-studio': '/home/studio', 'dev-rig': '/home/rig' };
 
     const provider = createDeviceTunnelExecutor(t, {
@@ -271,8 +292,37 @@ describe('where the file browser lands on a mount', () => {
         : router.getProvider(name),
     };
 
-    return { t, list: (path: string) => getExecutorFiles(lookup, 'workspace', path) };
+    return { t, list: (path: string, from?: number) => getExecutorFiles(lookup, 'workspace', path, from) };
   }
+
+  test("a machine's folder is read a page at a time, each entry's size and age from the listing, and no entry statted", async () => {
+    // The owner's /tmp (production, 2026-10-14): answered whole, with an entry statted each, it reset the workspace.
+    const owners = 56_762;
+    const { t, list } = browser([STUDIO, RIG], { folder: owners });
+    const first = await list('/pc/mrwhite@rig');
+
+    expect(first.error).toBeUndefined();
+    expect(first.entries?.length).toBe(FILES_PAGE_ENTRIES);
+    expect(first.entries?.every((entry) => entry.size === 10 && entry.mtimeMs === 1_000)).toBe(true);
+    // One window of the folder, asked of the machine once: its size never sits whole in the workspace.
+    expect(t.sent.filter((frame) => frame.method === 'listFiles').length).toBe(1);
+
+    const pages = [first];
+
+    for (let from = first.next; from !== undefined;) {
+      const page = await list(present(first.path, 'the landed path'), from);
+
+      pages.push(page);
+      from = page.next;
+    }
+
+    const names = pages.flatMap((page) => page.entries?.map((entry) => entry.name) ?? []);
+
+    expect(pages.every((page) => (page.entries?.length ?? 0) <= FILES_PAGE_ENTRIES)).toBe(true);
+    expect(new Set(names).size).toBe(owners);
+    expect(t.sent.filter((frame) => frame.method === 'listFiles').length).toBe(pages.length);
+    expect(t.sent.filter((frame) => frame.method === 'statPath')).toEqual([]);
+  });
 
   test('bare /pc is the roster: it lists the machines and lands on itself', async () => {
     const { t, list } = browser([STUDIO, RIG, SPARE]);

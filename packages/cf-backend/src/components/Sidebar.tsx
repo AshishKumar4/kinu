@@ -282,7 +282,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           onClick={() => setShowUserMenu((shown) => !shown)}
           className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
         >
-          <div className="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">
+          <div className="flex size-[26px] shrink-0 items-center justify-center rounded-full p-accent-subtle text-[12px] font-semibold p-accent-mark">
             {profile?.email?.[0]?.toUpperCase() ?? '?'}
           </div>
           <span className="min-w-0 flex-1 truncate p-t-control p-text-4">

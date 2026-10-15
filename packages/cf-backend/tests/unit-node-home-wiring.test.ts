@@ -11,8 +11,7 @@ import { Nimbus } from '@nimbus-sh/sdk/sandbox';
 import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  facetHomeProvisioner, AGENT_HOME_MODE,
-  AGENT_TMP_MODE,
+  facetHomeProvisioner,
   AGENT_UID_FLOOR,
   SESSION_UID,
   type NodeIdentity,
@@ -119,7 +118,7 @@ describe('a provisioned node gets a real home', () => {
     // gid equals uid, so group membership is never a second way into a sibling.
     expect(cred.gid).toBe(cred.uid);
     expect(statOf(f.workspace, '/home/head-aX9')).toEqual({
-      uid: cred.uid, gid: cred.uid, mode: AGENT_HOME_MODE,
+      uid: cred.uid, gid: cred.uid, mode: 0o755,
     });
   });
 
@@ -145,7 +144,7 @@ describe('a provisioned node gets a real home', () => {
     f.workspace.vfs.as(credA).writeFile('/tmp/scratch', 'a');
 
     expect(f.workspace.vfs.as(credB).readdir('/tmp').map((entry) => entry.name)).toEqual([]);
-    expect(statOf(f.workspace, 'tmp/head-aX9').mode).toBe(AGENT_TMP_MODE);
+    expect(statOf(f.workspace, 'tmp/head-aX9').mode).toBe(0o700);
   });
 
   test('two readers who are not the node can read it — which is what 0o755 is for', async () => {
@@ -154,7 +153,7 @@ describe('a provisioned node gets a real home', () => {
     f.workspace.vfs.as(credOf(provisioned)).writeFile(`${provisioned.home}/candidate.md`, 'my answer\n');
 
     // Grader and merge-back run as the origin and need traverse plus read. Asserted as a read, not against
-    // `AGENT_HOME_MODE`: a home narrowed to 0o700 would satisfy that equality and lock both out.
+    // A home's 0o755: a home narrowed to 0o700 would satisfy that equality and lock both out.
     const origin = f.workspace.vfs.as(ORIGIN);
     expect(origin.readdir(provisioned.home).map((entry) => entry.name)).toEqual(['.kinu', 'candidate.md']);
     expect(origin.readFileString(`${provisioned.home}/candidate.md`)).toBe('my answer\n');
@@ -293,7 +292,7 @@ describe('a node cannot widen its own home nor chown it away', () => {
     // `confineAgentTmp` registers the uid, and registration is what applies the chmod ceiling.
     expect(() => f.workspace.vfs.as(cred).chmod(provisioned.home, 0o777))
       .toThrow(expect.objectContaining({ code: 'EPERM' }));
-    expect(statOf(f.workspace, provisioned.home).mode).toBe(AGENT_HOME_MODE);
+    expect(statOf(f.workspace, provisioned.home).mode).toBe(0o755);
   });
 
   test('a sibling still cannot write it after the attempt', async () => {
@@ -319,7 +318,7 @@ describe('a node cannot widen its own home nor chown it away', () => {
     expect(() => f.workspace.vfs.as(cred).chown(provisioned.home, SESSION_UID, SESSION_UID))
       .toThrow(expect.objectContaining({ code: 'EPERM' }));
     expect(statOf(f.workspace, provisioned.home)).toEqual({
-      uid: cred.uid, gid: cred.uid, mode: AGENT_HOME_MODE,
+      uid: cred.uid, gid: cred.uid, mode: 0o755,
     });
   });
 });

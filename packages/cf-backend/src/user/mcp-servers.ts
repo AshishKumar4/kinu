@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerInput, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
+  nanoid, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -71,16 +71,31 @@ const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
  *  must use the same name. */
 export const USER_MCP_CLIENT_NAME = 'kinu-user-mcp';
 
-/**
- * Rethrow a failed server write, naming only the `lower(name)` UNIQUE violation as a taken name.
- * Any other failure is rethrown untouched so storage errors are not reported as duplicates.
- */
-function rethrowMcpNameCollision(input: { cause: unknown; name: string }): never {
-  if (/UNIQUE constraint failed/i.test(renderThrownChain({ cause: input.cause }))) {
-    throw new KinuError('bad_input', `An MCP server named '${input.name}' already exists.`, { cause: input.cause });
-  }
+/** A server as the SDK's catalog (`cf_agents_mcp_servers`) keeps it: the one place its name, endpoint and transport live. */
+interface McpCatalogEntry {
+  readonly name: string;
+  readonly serverUrl: string;
+  readonly transport: McpTransport;
+}
 
-  throw input.cause;
+const CatalogOptionsSchema = v.pipe(v.string(), v.parseJson(), v.object({
+  transport: v.optional(v.object({ type: v.optional(McpTransportSchema) })),
+}));
+
+/** Each of `rows` whose server the catalog holds, with its catalog half; one it does not hold has no endpoint. */
+function withCatalog<Row extends { readonly id: string }>(rows: readonly Row[], catalog: ReadonlyMap<string, McpCatalogEntry>): Array<Row & McpCatalogEntry> {
+  return rows.flatMap((row) => {
+    const entry = catalog.get(row.id);
+
+    return entry === undefined ? [] : [{ ...row, ...entry }];
+  });
+}
+
+/** The transport a catalog row's stored options name; none named is `auto`, as the SDK's restore reads it. */
+function catalogTransport(serverOptions: string | null): McpTransport {
+  const parsed = serverOptions === null ? null : v.safeParse(CatalogOptionsSchema, serverOptions);
+
+  return parsed?.success === true ? parsed.output.transport?.type ?? 'auto' : 'auto';
 }
 
 export interface McpToolSurface {
@@ -88,15 +103,15 @@ export interface McpToolSurface {
   unavailable: McpServerUnavailable[];
 }
 
-/** `headers` stays sealed here; it is opened per request inside the transport closure. */
-interface McpHydrationRow extends SqlRow {
+/** Kinu's half of a configured server; `headers` stays sealed here, opened per request inside the transport closure. */
+interface McpConfigRow extends SqlRow {
   id: string;
-  name: string;
-  server_url: string;
-  transport: McpTransport;
   headers: string | null;
   preset_id: string | null;
 }
+
+/** A configured server whole: Kinu's half joined with the catalog's. */
+interface McpHydrationRow extends McpConfigRow, McpCatalogEntry {}
 
 /**
  * `MCPClientManager.onStart` restores connections on every activation before credential closures
@@ -171,6 +186,10 @@ export class UserMcpServers {
   /** MCP tool calls in flight, by the id each caller sent: `userMcp_cancelCall` stops one. */
   private readonly _mcpCalls = new Map<string, McpCallInFlight>();
 
+  /** Adds claim their name one at a time: the check and the catalog write it guards straddle the SDK's registration
+   *  await, so two adds of one name would both pass the check. */
+  private naming: Promise<readonly PromiseSettledResult<void>[]> = Promise.allSettled([]);
+
   /**
    * Wake-time init, from `UserDO.onStart`, which may not await (`scripts/do-init-gate.ts`); a failure is
    * logged here and rethrown to every MCP request of this activation.
@@ -198,20 +217,30 @@ export class UserMcpServers {
   }
 
   /**
-   * `user_mcp_servers` is the truth. Order matters: remove orphan SDK rows, re-register rows this plane owns,
-   * then let the SDK restore the rest. Every dial starts here and none is awaited; restore skips the CONNECTING
-   * connections registration made (`agents/dist/client-zqKcsyFa.js:1541-1549`), so those are dialled here.
+   * `user_mcp_servers` says which servers are configured; the SDK's catalog says where each is. Order matters: remove
+   * catalog rows no configuration claims, re-register rows this plane owns, then let the SDK restore the rest. Every
+   * dial starts here and none is awaited; restore skips the CONNECTING connections registration made
+   * (`agents/dist/client-zqKcsyFa.js:1541-1549`), so those are dialled here.
    */
   private async reconcile(): Promise<void> {
     const mgr = this.host.mcp;
-    const rows = this.configuredRows();
-    const configured = new Set(rows.map((row) => row.id));
-    const sdkRows = mgr.listServers();
+    const configs = this.host.sqlx<McpConfigRow>(`SELECT id, headers, preset_id FROM user_mcp_servers`);
+    const configured = new Set(configs.map((row) => row.id));
+    const catalog = this.catalog();
 
     // A removal that fails ends the activation's reconciliation, and `mcp.start_failed` says why.
-    for (const stored of sdkRows) {
-      if (!configured.has(stored.id)) await mgr.removeServer(stored.id);
+    for (const id of catalog.keys()) {
+      if (!configured.has(id)) await mgr.removeServer(id);
     }
+
+    // An add writes the catalog before the configuration, so only a lost catalog row leaves a configuration with no
+    // endpoint, which nothing can dial again: it goes, and says so.
+    for (const row of configs.filter((config) => !catalog.has(config.id))) {
+      this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, row.id);
+      diagnostics.failure('mcp.uncatalogued_server_removed', new KinuError('missing', 'a configured MCP server has no catalog entry, so no endpoint to dial'), { serverId: row.id });
+    }
+
+    const rows: McpHydrationRow[] = withCatalog(configs, catalog);
 
     const registered: string[] = [];
 
@@ -227,10 +256,11 @@ export class UserMcpServers {
     this.transitions.observe('activation');
   }
 
-  private configuredRows(): McpHydrationRow[] {
-    return this.host.sqlx<McpHydrationRow>(
-      `SELECT id, name, server_url, transport, headers, preset_id FROM user_mcp_servers`,
-    );
+  /** The SDK's catalog by server id, through its public listing. */
+  private catalog(): Map<string, McpCatalogEntry> {
+    return new Map(this.host.mcp.listServers().map((row) => [row.id, {
+      name: row.name, serverUrl: row.server_url, transport: catalogTransport(row.server_options),
+    }]));
   }
 
   /** A sealed credential must run on the seam, which the SDK cannot persist and so never restores. */
@@ -274,7 +304,7 @@ export class UserMcpServers {
       row.headers === null
         ? { type: row.transport }
         : {
-            ...mcpCredentialTransport(row.server_url, () => this.openMcpHeaderMap(row.id)),
+            ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id)),
             type: row.transport,
           };
 
@@ -306,7 +336,7 @@ export class UserMcpServers {
     }
 
     const options: Parameters<MCPClientManager['registerServer']>[1] = {
-      url: row.server_url, name: row.name, callbackUrl, transport,
+      url: row.serverUrl, name: row.name, callbackUrl, transport,
     };
 
     // The env's client id wins over a stale stored id, which would key tokens under an unused client.
@@ -352,15 +382,14 @@ export class UserMcpServers {
   async userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
     await this.host.requireTier(caller, 'mcp.manage');
 
-    const rows = this.host.sqlx<{
-      id: string; name: string; server_url: string; transport: McpTransport;
-      allowed_tools: string | null; preset_id: McpPresetId | null;
-    }>(
-      `SELECT id, name, server_url, transport, allowed_tools, preset_id FROM user_mcp_servers ORDER BY name`,
-    );
-
     // A failed activation is a storage failure, not per-server; it must not report every server disconnected.
     await this.joinActivation();
+    const catalog = this.catalog();
+
+    const rows = withCatalog(this.host.sqlx<{ id: string; allowed_tools: string | null; preset_id: McpPresetId | null }>(
+      `SELECT id, allowed_tools, preset_id FROM user_mcp_servers`,
+    ), catalog).sort((a, b) => compareCodeUnits(a.name, b.name));
+
     await this.readMcpToolLists();
     const connections = this.host.mcp.mcpConnections;
 
@@ -395,7 +424,7 @@ export class UserMcpServers {
       return {
         id: r.id,
         name: r.name,
-        serverUrl: r.server_url,
+        serverUrl: r.serverUrl,
         transport: r.transport,
         status,
         error: conn?.connectionError ?? (problems.length === 0 ? null : problems.join('; ')),
@@ -449,7 +478,7 @@ export class UserMcpServers {
     const id = nanoid(8);
     const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
     const allowedJson = cfg.allowedTools ? JSON.stringify(cfg.allowedTools) : null;
-    this.insertMcpServer(id, cfg, await this.host.vault.sealMcpHeaders(id, headersJson), allowedJson);
+    const sealedHeaders = await this.host.vault.sealMcpHeaders(id, headersJson);
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
 
@@ -474,21 +503,28 @@ export class UserMcpServers {
       : {};
 
     let authUrl: string | null = null;
+    const mgr = this.host.mcp;
+
+    // The catalog row first, under the name it claims; the configuration after it, so a death between the two leaves
+    // only a catalog row, which the next activation's reconcile removes.
+    await this.claimName(cfg.name, () => mgr.registerServer(id, {
+      url: cfg.serverUrl,
+      name: cfg.name,
+      callbackUrl,
+      // Persisted on the SDK row so a restore after eviction keys token storage under the same client.
+      clientId: appCredentials?.clientId,
+      transport: {
+        ...credential,
+        authProvider,
+        type: cfg.transport ?? 'auto',
+      },
+    }));
 
     try {
-      const mgr = this.host.mcp;
-      await mgr.registerServer(id, {
-        url: cfg.serverUrl,
-        name: cfg.name,
-        callbackUrl,
-        // Persisted on the SDK row so a restore after eviction keys token storage under the same client.
-        clientId: appCredentials?.clientId,
-        transport: {
-          ...credential,
-          authProvider,
-          type: cfg.transport ?? 'auto',
-        },
-      });
+      this.host.sqlx(
+        `INSERT INTO user_mcp_servers (id, headers, allowed_tools, preset_id) VALUES (?, ?, ?, ?)`,
+        id, sealedHeaders, allowedJson, cfg.presetId ?? null,
+      );
       const result = await mgr.connectToServer(id);
 
       if (result.state === 'failed') {
@@ -504,9 +540,9 @@ export class UserMcpServers {
         await this.readMcpToolList(id);
       }
     } catch (err) {
-      // Roll back both our row and the SDK's storage entry so the user can retry cleanly.
+      // Roll back both our row and the SDK's catalog entry so the user can retry cleanly.
       this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
-      await this.host.mcp.removeServer(id);
+      await mgr.removeServer(id);
       throw new KinuError('unavailable', 'Could not connect to the MCP server. Check its URL and credentials, then add it again.', { cause: err });
     }
 
@@ -532,19 +568,22 @@ export class UserMcpServers {
     this._mcpToolLists.delete(id);
   }
 
-  /** One statement: the `lower(name)` UNIQUE index refuses a taken name, and nothing else is written. */
-  private insertMcpServer(id: string, cfg: McpServerInput, sealedHeaders: string | null, allowedJson: string | null): void {
-    try {
-      this.host.ctx.storage.sql.exec(
-        `INSERT INTO user_mcp_servers
-           (id, name, server_url, transport, headers, allowed_tools, preset_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-        sealedHeaders, allowedJson, cfg.presetId ?? null,
-      );
-    } catch (err) {
-      rethrowMcpNameCollision({ cause: err, name: cfg.name });
-    }
+  /**
+   * Names address tools (`mcp_<server>_<tool>`), so one name, in any case, is one server: `write` runs only while no
+   * catalog entry holds `name`, and no other add's claim is between its check and its write.
+   */
+  private claimName(name: string, write: () => Promise<string>): Promise<void> {
+    const turn = this.naming.then(async () => {
+      const taken = [...this.catalog().values()].some((entry) => entry.name.toLowerCase() === name.toLowerCase());
+
+      if (taken) throw new KinuError('bad_input', `An MCP server named '${name}' already exists.`);
+      await write();
+    });
+
+    // The next claim waits on this one's end, whichever it is; this one's caller hears its outcome.
+    this.naming = Promise.allSettled([turn]);
+
+    return turn;
   }
 
   private async readMcpToolList(id: string): Promise<void> {
@@ -556,7 +595,7 @@ export class UserMcpServers {
       return;
     }
 
-    const name = this.host.sqlx<{ name: string }>(`SELECT name FROM user_mcp_servers WHERE id = ?`, id)[0]?.name ?? id;
+    const name = this.catalog().get(id)?.name ?? id;
     const { readUndiscoveredToolList } = await import('./mcp');
     const listing = await readUndiscoveredToolList({ name }, conn.client);
     this._mcpToolLists.set(id, listing);
@@ -577,9 +616,11 @@ export class UserMcpServers {
   async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
     await this.host.requireTier(caller, 'mcp.tools');
 
-    const rows = this.host.sqlx<{ id: string; name: string; allowed_tools: string | null; preset_id: string | null }>(
-      `SELECT id, name, allowed_tools, preset_id FROM user_mcp_servers`,
-    );
+    const catalog = this.catalog();
+
+    const rows = withCatalog(this.host.sqlx<{ id: string; allowed_tools: string | null; preset_id: string | null }>(
+      `SELECT id, allowed_tools, preset_id FROM user_mcp_servers`,
+    ), catalog);
 
     if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
 
@@ -729,8 +770,8 @@ export class UserMcpServers {
     await this.joinActivation();
 
     // Check server membership in SQL so a stale orchestrator closure can't dispatch to a deleted server.
-    const row = this.host.sqlx<{ name: string; allowed_tools: string | null }>(
-      `SELECT name, allowed_tools FROM user_mcp_servers WHERE id = ?`, serverId,
+    const row = this.host.sqlx<{ allowed_tools: string | null }>(
+      `SELECT allowed_tools FROM user_mcp_servers WHERE id = ?`, serverId,
     )[0];
 
     if (!row) throw new KinuError('missing', `Unknown MCP server: ${serverId}`);
@@ -745,7 +786,7 @@ export class UserMcpServers {
 
     if (refusal !== null) throw refusal;
     // Before the schema read: a connection still dialling has no tools yet.
-    await this.makeCallable(serverId, row.name);
+    await this.makeCallable(serverId, this.catalog().get(serverId)?.name ?? serverId);
 
     const parsedParams = v.safeParse(JsonObjectSchema, args);
     const params = parsedParams.success ? parsedParams.output : {};

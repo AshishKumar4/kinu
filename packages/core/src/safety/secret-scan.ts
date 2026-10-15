@@ -10,21 +10,22 @@ export interface SecretFinding {
   text: string;
 }
 
-export function scanText(file: string, text: string, patterns: readonly SecretPattern[] = SECRET_PATTERNS): SecretFinding[] {
-  const findings: SecretFinding[] = [];
+/** Every secret shape in `text`, pattern by pattern, line by line: the pattern, the line (1-based) and the match. A line
+ *  its pattern reads as benign is skipped. */
+function* secretMatches(text: string, patterns: readonly SecretPattern[]): Generator<{ readonly pattern: SecretPattern; readonly line: number; readonly text: string; readonly match: string }> {
   const lines = text.split('\n');
 
-  for (const p of patterns) {
-    for (const [i, line] of lines.entries()) {
-      if (p.benign?.test(line)) continue;
+  for (const pattern of patterns) {
+    for (const [index, line] of lines.entries()) {
+      if (pattern.benign?.test(line)) continue;
 
-      for (const m of line.matchAll(p.regex)) {
-        findings.push({ pattern: p.id, file, line: i + 1, match: m[0], text: line.trim() });
-      }
+      for (const m of line.matchAll(pattern.regex)) yield { pattern, line: index + 1, text: line, match: m[0] };
     }
   }
+}
 
-  return findings;
+export function scanText(file: string, text: string, patterns: readonly SecretPattern[] = SECRET_PATTERNS): SecretFinding[] {
+  return [...secretMatches(text, patterns)].map((m) => ({ pattern: m.pattern.id, file, line: m.line, match: m.match, text: m.text.trim() }));
 }
 
 /** Detector counts only; never retains a matched value. */
@@ -33,19 +34,8 @@ export function countDetections(
   patterns: readonly SecretPattern[] = SECRET_PATTERNS,
 ): Map<string, number> {
   const counts = new Map<string, number>();
-  const lines = text.split('\n');
 
-  for (const pattern of patterns) {
-    let count = 0;
-
-    for (const line of lines) {
-      if (pattern.benign?.test(line)) continue;
-
-      for (const _ of line.matchAll(pattern.regex)) count += 1;
-    }
-
-    if (count > 0) counts.set(pattern.id, count);
-  }
+  for (const { pattern } of secretMatches(text, patterns)) counts.set(pattern.id, (counts.get(pattern.id) ?? 0) + 1);
 
   return counts;
 }
@@ -59,18 +49,5 @@ export interface SecretSighting {
 }
 
 export function secretSightings(path: string, text: string, patterns: readonly SecretPattern[] = SECRET_PATTERNS): SecretSighting[] {
-  const sightings: SecretSighting[] = [];
-  const lines = text.split('\n');
-
-  for (const pattern of patterns) {
-    for (const [index, line] of lines.entries()) {
-      if (pattern.benign?.test(line)) continue;
-
-      for (const _ of line.matchAll(pattern.regex)) {
-        sightings.push({ path, line: index + 1, pattern: pattern.id, message: pattern.message });
-      }
-    }
-  }
-
-  return sightings;
+  return [...secretMatches(text, patterns)].map(({ pattern, line }) => ({ path, line, pattern: pattern.id, message: pattern.message }));
 }

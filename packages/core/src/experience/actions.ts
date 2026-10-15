@@ -52,7 +52,7 @@ const ExperienceActionInputSchema: v.GenericSchema<ExperienceActionInput> = v.ob
 function summarize(entry: ExperienceEntry) {
   return {
     id: entry.id,
-    kind: entry.kind,
+    kind: entry.payload.kind,
     key: entry.key,
     title: entry.title,
     evidence: entry.evidence,
@@ -63,7 +63,7 @@ function summarize(entry: ExperienceEntry) {
 
 function summarizeCandidate(candidate: PublishableCandidate) {
   return {
-    kind: candidate.kind,
+    kind: candidate.payload.kind,
     key: candidate.key,
     title: candidate.title,
     evidence: candidate.evidence,
@@ -135,7 +135,7 @@ export async function runExperienceAction(
           imported: summarize(entry),
           status: 'provisional',
           payload: entry.payload,
-          note: entry.kind === 'scaffold'
+          note: entry.payload.kind === 'scaffold'
             ? 'Staged provisionally: once this turn is accepted it is PROPOSED as a pending scaffold version here, and it runs only once the owner promotes it.'
             : 'Staged provisionally: it becomes part of this workspace once this turn is accepted.',
         };

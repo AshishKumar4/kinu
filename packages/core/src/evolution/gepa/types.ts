@@ -41,8 +41,6 @@ export interface GepaCandidate {
   /** Keyed by `EvalInstance.id`. */
   scores: Map<string, number>;
   feedback: Map<string, string>;
-  /** Mean of per-instance scores. */
-  aggregateScore: number;
   createdAt: number;
 }
 

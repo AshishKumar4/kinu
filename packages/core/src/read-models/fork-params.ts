@@ -9,7 +9,7 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 
 /** A search's dispatch parameters; remaining budget is progress, not a parameter. */
-export interface SearchRunParams {
+interface SearchRunParams {
   readonly budget: number;
   readonly branches: number;
   readonly maxDepth: number | null;

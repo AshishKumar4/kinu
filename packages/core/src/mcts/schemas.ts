@@ -15,7 +15,8 @@ export function initSearchTables(execRaw: RawSqlExec): void {
       id               TEXT NOT NULL,
       parent_id        TEXT,
       root_id          TEXT NOT NULL,
-      task             TEXT NOT NULL,
+      -- The search's task, on its root; a child's is its root's, read through search_node_scores.
+      task             TEXT,
       action           TEXT NOT NULL DEFAULT '',
       observation      TEXT NOT NULL DEFAULT '',
       visits           INTEGER NOT NULL DEFAULT 0,
@@ -24,18 +25,21 @@ export function initSearchTables(execRaw: RawSqlExec): void {
       status           TEXT NOT NULL DEFAULT 'open'
                        CHECK(status IN ('open','terminal','failed','pruned')),
       created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      PRIMARY KEY (actor_id, id)
+      PRIMARY KEY (actor_id, id),
+      CHECK(parent_id IS NOT NULL OR task IS NOT NULL)
     )
   `);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_parent ON search_nodes(actor_id, parent_id)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_status_value ON search_nodes(actor_id, status, value DESC)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_root_status ON search_nodes(actor_id, root_id, status)`);
-  // A node's own score; every reader of a score reads it here.
+  // Each node with its search's task and its own score; every reader of either reads it here.
   execRaw(`CREATE VIEW IF NOT EXISTS search_node_scores AS
-    SELECT n.*, CASE
+    SELECT n.actor_id, n.id, n.parent_id, n.root_id, t.task, n.action, n.observation, n.visits, n.value, n.depth,
+      n.status, n.created_at, CASE
       WHEN n.parent_id IS NULL THEN n.value
       WHEN r.record_json IS NOT NULL THEN json_extract(r.record_json, '$.outcome.score')
       ELSE 0 END AS own_score
     FROM search_nodes n
+    LEFT JOIN search_nodes t ON t.actor_id = n.actor_id AND t.id = n.root_id
     LEFT JOIN swarm_node_records r ON r.actor_id = n.actor_id AND r.node_id = n.id`);
 }

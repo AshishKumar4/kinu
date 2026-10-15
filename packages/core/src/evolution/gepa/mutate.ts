@@ -5,6 +5,7 @@ import { MetricOutcomeSchema } from './types';
 import type {
   EvalInstance, GepaCandidate, GepaMetric, MetricOutcome, ReflectionLM,
 } from './types';
+import { aggregateScore } from './pareto';
 import { renderInput, truncate } from './text';
 import { stripMarkdownFences } from '../../providers/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../../utils/evidence-window';
@@ -39,8 +40,8 @@ export async function rolloutMinibatch<I, E>(
   return { outcomes, metricCalls: minibatch.length };
 }
 
-/** The full per-instance trace is never shortened: GEPA's result is that natural-language
- *  feedback over whole trajectories beats a scalar reward (arXiv:2507.19457). */
+/** Each per-instance trace is windowed to its evidence budget, never dropped: GEPA's result is that
+ *  natural-language feedback over trajectories beats a scalar reward (arXiv:2507.19457). */
 export function renderReflectionPrompt<I, E>(opts: {
   parent: GepaCandidate;
   minibatch: ReadonlyArray<EvalInstance<I, E>>;
@@ -83,7 +84,7 @@ Current ${desc}:
 ${truncate(opts.parent.source, EVIDENCE_BUDGETS.gepaParentSource)}
 \`\`\`
 
-Aggregate score on the full eval set: ${opts.parent.aggregateScore.toFixed(3)}
+Aggregate score on the full eval set: ${aggregateScore(opts.parent).toFixed(3)}
 
 Recent rollouts on minibatch:
 ${traceLines.join('\n')}

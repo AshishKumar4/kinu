@@ -48,8 +48,9 @@ export const BackgroundJobRowSchema = v.object({
   error: v.nullable(v.string()),
   createdAt: v.number(),
   settledAt: v.nullable(v.number()),
-  // Optional by contract: this page parses answers from orchestrators it does not deploy with.
-  resumeAttempts: v.optional(v.number()),
+  // Optional by contract: this page parses answers from orchestrators it does not deploy with. The lease epoch is the
+  // times the job was interrupted and re-driven.
+  epoch: v.optional(v.number()),
   resumeAfter: v.optional(v.nullable(v.number())),
 });
 

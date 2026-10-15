@@ -112,10 +112,6 @@ export interface ResolveTurnProfileInput {
   activeSkills: readonly string[];
 }
 
-export type ResolveAgentTurnProfileInput = Omit<ResolveTurnProfileInput, 'roleId'> & {
-  activeRoleId: string;
-};
-
 export interface TierFallback {
   readonly model: string;
   readonly reasoningEffort: ReasoningEffort | null;
@@ -448,14 +444,6 @@ function modelPins(input: Pick<ResolveTurnProfileInput, 'roleId' | 'workspaceMod
   ];
 }
 
-export function resolveAgentTurnProfile(
-  input: ResolveAgentTurnProfileInput,
-): ResolvedTurnProfile {
-  const { activeRoleId, ...turn } = input;
-
-  return resolveTurnProfile({ ...turn, roleId: activeRoleId });
-}
-
 /** What an actor's own configuration pins, which its turn resolves from. */
 export type PinnedProfile = Pick<AgentConfigStore, 'getRoleSelection' | 'getAssignedTier' | 'getModel' | 'getReasoningEffort'>;
 
@@ -513,11 +501,11 @@ export function ownProfileChoices(
   authority: ProfileAuthorityInputs,
   ancestors?: readonly PinnedProfile[],
   request: Pick<ResolveTurnProfileInput, 'explicitTier' | 'explicitEffort'> = {},
-): Pick<ResolveAgentTurnProfileInput, 'activeRoleId' | 'explicitTier' | 'workspaceModel' | 'actorModel' | 'explicitEffort' | 'inheritedEffort'> {
+): Pick<ResolveTurnProfileInput, 'roleId' | 'explicitTier' | 'workspaceModel' | 'actorModel' | 'explicitEffort' | 'inheritedEffort'> {
   const root = ancestors?.at(-1);
 
   return {
-    activeRoleId: config.getRoleSelection(),
+    roleId: config.getRoleSelection(),
     explicitTier: request.explicitTier ?? config.getAssignedTier() ?? undefined,
     workspaceModel: root === undefined ? config.getModel() : root.getModel(),
     actorModel: root === undefined ? null : config.getModel(),

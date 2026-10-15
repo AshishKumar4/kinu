@@ -8,7 +8,7 @@ import { diagnostics } from '../obs/log';
 import { attempt, settle } from '../obs/effect';
 import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
-import { DeviceTunnel, NO_DEVICE_CONNECTED, type TunnelSocket } from './device-tunnel';
+import { DeviceTunnel, NO_DEVICE_CONNECTED, WS_OPEN, type TunnelSocket } from './device-tunnel';
 import { DEVICE_ERRORS, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure } from './device-protocol';
 import { DeviceRelays, parseDeviceRelayFrame, type DeviceRelayRequest } from './device-relay';
 import { REAL_CLOCK } from '../types/clock';
@@ -19,8 +19,6 @@ import { connections, type Connections, type ConnectionSocket, type ConnectionsC
 import { z } from 'zod/v4';
 import * as v from 'valibot';
 
-/** WebSocket.OPEN; also used by the roster's multi-subscriber lane. */
-export const WS_OPEN = 1;
 
 const DEVICE_WS_TAG_PREFIX = 'device:';
 

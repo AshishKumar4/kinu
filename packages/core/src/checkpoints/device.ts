@@ -11,7 +11,7 @@ import {
   type CheckpointAvailability, type FileCheckpointReads,
 } from './types';
 
-export interface DeviceRpcHub {
+interface DeviceRpcHub {
   deviceRpc(caller: UserCaller, method: string, params: JsonValue[]): Promise<string | undefined>;
 }
 

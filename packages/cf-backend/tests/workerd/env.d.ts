@@ -288,11 +288,13 @@ interface AttributionProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
-  plantRefusedWorkspace(workspace: string): Promise<string>;
+  plantOlderWorkspace(workspace: string, planted: 'stale' | 'refusing'): Promise<string>;
   seed(workspace: string): Promise<SeedAnswer>;
   chat(workspace: string): Promise<ChatAnswers>;
   wake(workspace: string): Promise<string>;
-  exportedLines(workspace: string): Promise<number>;
+  exported(workspace: string): Promise<string>;
+  walked(workspace: string): Promise<{ readonly rebuilt: readonly string[]; readonly refused: string | null; readonly agents: readonly unknown[] }>;
+  rebuilt(): Promise<{ readonly repair: { readonly rebuilt: readonly string[]; readonly refused: string | null } | null; readonly notes: unknown[]; readonly children: unknown[] }>;
 }
 
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
@@ -332,6 +334,8 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
     | { ok: true; frames: string[]; output: string }
     | { ok: false; error: string }
   >;
+  /** Types `line` on a fresh terminal socket; answers once `token` is printed and a prompt follows it. */
+  typeToPrompt(workspace: string, line: string, token: string): Promise<string>;
   reattachTerminal(workspace: string): Promise<{ frames: string[]; output: string }>;
   shellCalls(workspace: string, owner: string, calls: Array<{ command: string; cwd?: string; name?: string }>): Promise<string[]>;
   refusedTerminalFrame(workspace: string, frame: string): Promise<{ code: number; reason: string }>;

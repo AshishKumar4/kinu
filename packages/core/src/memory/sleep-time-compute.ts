@@ -6,7 +6,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { LLM } from '../types/primitives';
 import type { FactsStore, Veracity } from './facts';
-import { normalizeFactKey, VERACITIES } from './facts';
+import { normalizeFactKey, renderFactValue, VERACITIES } from './facts';
 import type { AccountProposal } from './account';
 import { turnTags } from '../types/turn-metadata';
 import type { ConversationProjection } from '../session/transcript';
@@ -135,11 +135,7 @@ const renderTurn = (turn: SleepTimeTurn, index: number): string => `Turn ${index
 - Output: ${evidenceWindow(turn.output, EVIDENCE_BUDGETS.outcomeAssistantResponse)}
 - Tools used: ${turn.toolCalls.join(', ') || '(none)'}`;
 
-const renderFactLine = (fact: { key: string; value: JsonValue }): string => {
-  const text = v.safeParse(v.string(), fact.value);
-
-  return `  ${fact.key} = ${text.success ? text.output : JSON.stringify(fact.value)}`;
-};
+const renderFactLine = (fact: { key: string; value: JsonValue }): string => `  ${fact.key} = ${renderFactValue(fact.value)}`;
 
 /** The account section, only where an account is wired. */
 const ACCOUNT_PROMPT = (i: SleepTimeInput): string => (i.accountFacts === undefined ? '' : `
@@ -175,11 +171,7 @@ Recent turns (oldest first):
 ${i.turns.map(renderTurn).join('\n\n') || '(none)'}
 
 Current facts in agent's world model:
-${i.currentFacts.slice(0, 30).map((fact) => {
-  const text = v.safeParse(v.string(), fact.value);
-
-  return `  ${fact.key} = ${text.success ? text.output : JSON.stringify(fact.value)} (conf ${fact.confidence.toFixed(2)})`;
-}).join('\n') || '  (none)'}
+${i.currentFacts.slice(0, 30).map((fact) => `${renderFactLine(fact)} (conf ${fact.confidence.toFixed(2)})`).join('\n') || '  (none)'}
 
 Existing fact keys (reuse these exact keys when updating the same subject; do not mint variants):
 ${i.currentFacts.map(f => `  ${f.key}`).join('\n') || '  (none)'}

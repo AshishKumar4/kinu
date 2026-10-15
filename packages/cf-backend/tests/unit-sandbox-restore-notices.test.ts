@@ -4,8 +4,9 @@
  * still on the wire; the settle must not land first, or the page is left showing a box as starting that is ready.
  */
 import { expect, test } from 'bun:test';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { restoreNotices } from '../src/sandbox-lifecycle';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 test("a quick restore's settle waits for its open, and each tells the state as it is when it goes out", async () => {
   let restoring = true;

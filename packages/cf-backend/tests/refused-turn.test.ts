@@ -6,10 +6,11 @@ import { expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { turnFailure } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { MessageView } from '../src/components/MessageView';
 import { catalogTurn, gatewayWorkspace, storedChat } from './helpers/actor-harness';
 import { stubAiBinding } from './helpers/platform-gateway';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 test.each([0, 8 * 24 * 3600])('a refused turn keeps the provider words in the reloaded UI and logs (Retry-After %i)', async (retryAfter) => {
   const providerText = 'Go usage limit exceeded';

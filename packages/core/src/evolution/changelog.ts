@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { FactsStore } from '../memory/facts';
+import { renderFactValue, type FactsStore } from '../memory/facts';
 import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/versions';
 import { rollbackScaffold } from '../scaffold/rollback';
@@ -25,7 +25,7 @@ import {
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
-import { KinuError, renderThrownChain, settle, settleSync, tolerate } from '../obs/index';
+import { KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.number(),
@@ -220,17 +220,6 @@ type FactChangelogEntry = ChangelogEntry & {
   revert: Extract<ChangelogRevertAction, { type: 'fact_forget' }>;
 };
 
-/** Facts predating JSON encoding are raw text. */
-function factValueText(valueJson: string): string {
-  const decoded = tolerate(() => parseJsonValue(valueJson), 'malformed-input');
-  const text = v.safeParse(v.string(), decoded);
-
-  if (text.success) return text.output;
-
-  if (decoded === undefined) return valueJson;
-
-  return JSON.stringify(decoded);
-}
 
 function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactChangelogEntry[] {
   actor.assertCurrent();
@@ -244,7 +233,8 @@ function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactC
     ORDER BY last_observed_at DESC LIMIT ${limit}`;
 
   return rows.map((r) => {
-    const value = factValueText(r.value_json);
+    // FactsStore writes every value as JSON: a row that does not parse is corruption, and says so.
+    const value = renderFactValue(parseJsonValue(r.value_json));
 
     return {
       id: `fact:${r.key}`,

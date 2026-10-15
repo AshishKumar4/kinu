@@ -2,6 +2,7 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The one note-save primitive: appends a dated `### Note` heading to `memory/MEMORY.md`, then indexes it. */
 
 import type { Memory } from '../types/primitives';
+import { isoDate } from '../utils/date';
 
 export const MEMORY_PATH = 'memory/MEMORY.md';
 
@@ -32,7 +33,7 @@ export async function appendMemoryNote(
   content: string,
   options?: { heading?: string; date?: string; by?: string },
 ): Promise<string> {
-  const date = options?.date ?? new Date().toISOString().split('T')[0];
+  const date = options?.date ?? isoDate();
   const heading = options?.heading ?? 'Note';
   const stamp = options?.by === undefined ? date : `${date} · ${options.by}`;
   await memory.append(MEMORY_PATH, `\n### ${heading} (${stamp})\n${content}\n`);

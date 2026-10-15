@@ -71,12 +71,12 @@ import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ra
 import { aliasFor, readAliases, resolveSpecifier } from './import-graph';
 import { parseJsonc } from './jsonc';
 import { readMatching, readSources, trackedFiles, workspaceScope } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   declarationOf, declaredName, identifierText, isOptionalMember, moduleSpecifiers, parse,
   type SyntaxNode, walk,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/capability-parity.lock.json`;
 

@@ -783,17 +783,17 @@
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
-    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts": {
-      "wallSeconds": 126.3,
-      "cpuSeconds": 186.46,
-      "peakRssMb": 4145.05,
-      "peakRunnable": 11,
-      "peakCpuThreads": 4.16,
-      "meanThreads": 1.48,
-      "samples": 506,
-      "loadAtStart": 0.31,
+    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/pre-commit-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts": {
+      "wallSeconds": 156.84,
+      "cpuSeconds": 226.99,
+      "peakRssMb": 4451.78,
+      "peakRunnable": 7,
+      "peakCpuThreads": 3.86,
+      "meanThreads": 1.45,
+      "samples": 613,
+      "loadAtStart": 0.15,
       "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "machine": "linux x64, AMD EPYC (4 threads)"
     },
     "bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts scripts/mutation-sweep.test.ts": {
       "wallSeconds": 29.59,
@@ -1094,7 +1094,7 @@
       "loadAtStart": 0.38,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
+    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
       "wallSeconds": 88.51,
       "cpuSeconds": 81.6,
       "peakRssMb": 637.73,

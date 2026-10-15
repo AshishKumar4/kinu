@@ -11,7 +11,7 @@ import { isTreeAdvance, judgeCallPool, JUDGE_MARGINALISATION_MIN } from './swarm
 import type { ChildOutcome } from './swarm-resume';
 import { breaches, type PreparedParetoMeasurement } from './swarm-setup';
 import {
-  floorMargin, isBetter, normalisedScore, validateParetoEvidence,
+  floorMargin, normalisedScore, validateParetoEvidence,
   type Measurement, type MeasurementContext, type MeasuredObjective,
 } from './objective';
 import type { ResolvedVerifier } from './verifier-registry';
@@ -24,11 +24,11 @@ import { insertSearchNode } from '../mcts/record-node';
 import { backpropagate } from '../mcts/backpropagation';
 import { readProposalCode } from '../execution/code-fence';
 import type { MctsSearchStore } from '../mcts/search-store';
-import { outcomeFacts, recordSwarmNode } from './swarm-resume';
+import { foldCandidate, outcomeFacts, recordSwarmNode, type CandidateFold } from './swarm-resume';
 import { unavailable } from './swarm-setup';
 import type { Refusal } from '../obs/error';
 import type { Expansion, TreeNode } from './swarm-tree';
-import type { ObjectiveDirection, ObjectiveIdentity, PublicationState } from './objective';
+import type { ObjectiveDirection, ObjectiveIdentity } from './objective';
 import { sealRecords } from './records';
 import type { ResolvedSwarm, SwarmCandidate } from './swarm';
 
@@ -307,12 +307,7 @@ interface ScoreExpansionInput {
   readonly searchLedger: MctsSearchStore;
   readonly ledgerEpoch: number;
   readonly rankDirection: ObjectiveDirection;
-  readonly state: {
-    publication: PublicationState;
-    best: SwarmCandidate | null;
-    bestValue: number | null;
-    readonly ensembles: number[];
-  };
+  readonly state: CandidateFold;
 }
 
 /** Scoring paths in eligibility order: unfinished (unscored), Pareto, measured, judged.
@@ -357,8 +352,6 @@ export function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | nu
       nodes, log, searchLedger, ledgerEpoch, rankDirection, state,
     } = input;
 
-    let { publication, best, bestValue } = state;
-
     const outcome = yield* scoreOutcome(input);
 
     if (outcome?.kind === 'instrument-faulted') {
@@ -373,8 +366,6 @@ export function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | nu
 
     // Seal first, so a sealed record always has its seal.
     if (breach !== null) {
-      publication = { kind: 'sealed', breach };
-
       if (identity !== null) sealRecords(sql, rt.actor, { identity, breach });
       log.event('exploration.floor_breach', {
         preset: resolved.preset,
@@ -398,8 +389,7 @@ export function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | nu
       },
     });
     insertSearchNode(sql, rt.actor, {
-      nodeId: expansion.id, parentNodeId: expansion.parentId, rootId,
-      task: resolved.task, action: '', observation: expansion.artifact,
+      nodeId: expansion.id, parentNodeId: expansion.parentId, rootId, action: '', observation: expansion.artifact,
       depth: expansion.depth,
     });
     nodes.set(expansion.id, {
@@ -424,10 +414,7 @@ export function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | nu
       });
     }
 
-    if (ensemble > 0) {
-      state.ensembles.push(ensemble);
-      searchLedger.observeJudgeEnsemble(rootId, ensemble);
-    }
+    if (ensemble > 0) searchLedger.observeJudgeEnsemble(rootId, ensemble);
 
     if (facts.score !== null) {
       backpropagate(sql, rt.actor, expansion.id, facts.score);
@@ -437,14 +424,7 @@ export function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | nu
       WHERE actor_id = ${rt.actor.actorId} AND id = ${expansion.id}`;
     }
 
-    if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
-      best = candidate;
-      bestValue = rank;
-    }
-
-    state.publication = publication;
-    state.best = best;
-    state.bestValue = bestValue;
+    foldCandidate(state, candidate, { breach, rank, ensemble }, rankDirection);
 
     return null;
   }));

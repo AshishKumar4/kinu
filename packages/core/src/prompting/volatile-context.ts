@@ -31,21 +31,22 @@ import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
-import { compareCodeUnits } from '../utils/text';
+import { compareCodeUnits, oneLineClip } from '../utils/text';
 import type { ActiveRoster, DelegationChoices, DynamicApproval, MissingCapability, ShownLesson } from '../types/dynamic-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration, type ExternalToolDeclaration } from '../tools/sandbox-contract';
+import { formatByteCap } from '../utils/format';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
 /** One row of the background-job registry (jobs/store.ts). */
-export interface DynamicJob {
+interface DynamicJob {
   readonly id: string;
   readonly kind: string;
   readonly label: string | null;
 }
 
 /** One agent_tasks row (tools/task-store.ts), flattened: a subtask follows its parent and names it. */
-export interface DynamicTask {
+interface DynamicTask {
   readonly id: string;
   readonly title: string;
   readonly status: string;
@@ -279,7 +280,7 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
 
   if (cpus !== undefined) parts.push(`cpus=${cpus}`);
 
-  if (memBytes !== undefined) parts.push(`mem=${formatBytes(memBytes)}`);
+  if (memBytes !== undefined) parts.push(`mem=${formatByteCap(memBytes)}`);
 
   return parts.length > 0 ? ` (${parts.join(' ')})` : '';
 }
@@ -325,19 +326,6 @@ function executorUnmeasuredSuffix(exec: PromptExecutorInfo): string {
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability));
 
   return ordered.length > 0 ? `, ${NOT_MEASURED_LABEL}: ${ordered.join(', ')}` : '';
-}
-
-/** At most one decimal, never rounded up: a cap must not read as more than it is. */
-function formatBytes(bytes: number): string {
-  for (const [unit, scale] of [['G', 1024 ** 3], ['M', 1024 ** 2], ['K', 1024]] as const) {
-    if (bytes >= scale) return `${trimZero(Math.floor((bytes / scale) * 10) / 10)}${unit}`;
-  }
-
-  return `${bytes}B`;
-}
-
-function trimZero(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 /** What a command on the user's machine gets (sandboxing, persistent directory):
@@ -408,9 +396,7 @@ const RECOVERY_ENTRY_CHARS = 480;
 const ENTRY_CHARS = 120;
 
 function clip(text: string, max = ENTRY_CHARS): string {
-  const oneLine = text.replace(/\s+/g, ' ').trim();
-
-  return oneLine.length > max ? `${oneLine.slice(0, max - 3).trimEnd()}...` : oneLine;
+  return oneLineClip(text, max);
 }
 
 interface SectionRow {

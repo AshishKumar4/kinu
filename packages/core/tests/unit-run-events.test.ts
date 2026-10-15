@@ -7,8 +7,7 @@ import {
   USAGE_FIELDS, WORKSPACE_RUN_ID,
   type HeadFileChange, type RunEvent, type Usage,
 } from '../src/index';
-import { present, testActorHandle } from '@kinu.run/test-utils';
-import { isBackgroundHandle } from '../src/jobs/threshold';
+import { present, testActorHandle, isBackgroundHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
 /** The page a read gets when it states no limit. */
@@ -68,6 +67,20 @@ describe('RunEventRecorder.emit', () => {
     expect(rows.length).toBe(2);
     expect(rows[0].type).toBe('run_start');
     expect(rows[1].type).toBe('error');
+  });
+
+  // schema audit: the payload repeated the row's run, index, type and time; the wire still carries them.
+  test('stores the envelope once, in its columns, and the wire event still carries it', () => {
+    const { recorder, sql, actor } = setup();
+    const emitted = recorder.emit('run-1', { type: 'error', message: 'x' });
+
+    const [stored] = sql<{ payload: string; ts: string }>`
+      SELECT payload, ts FROM run_events WHERE actor_id = ${actor.actorId} AND run_id = 'run-1'`;
+
+    expect(JSON.parse(present(stored, 'the stored event').payload)).toEqual({ message: 'x' });
+    expect(JSON.parse(present(recorder.readText('run-1', boundRunEventQuery({}))[0], 'the wire event').payload))
+      .toEqual({ message: 'x', runId: 'run-1', eventIndex: emitted.eventIndex, type: 'error', timestamp: stored?.ts });
+    expect(recorder.read('run-1')).toEqual([emitted]);
   });
 });
 
@@ -773,6 +786,21 @@ describe('RunEventRecorder.openTurn — the continuation ledger', () => {
     expect(sql`INSERT INTO open_turns (actor_id, run_id, opened_at) VALUES (${actor.actorId}, ${'run-unreadable'}, ${at})`).toEqual([]);
 
     expect(() => recorder.openTurn()).toThrow();
+  });
+
+  // Main, 2026-10-15: the open row was a second autocommitted statement after the append, so the two could disagree.
+  test('a turn opens and closes in the ledger append\'s own statement', () => {
+    const { recorder, sql, actor } = setup();
+    const at = new Date().toISOString();
+    const start = JSON.stringify({ agentId: 'a', turn });
+
+    expect(sql`INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
+        VALUES (${actor.actorId}, ${'run-raw'}, ${0}, ${'run_start'}, ${at}, ${start})`).toEqual([]);
+    expect(recorder.openTurn()?.runId).toBe('run-raw');
+
+    expect(sql`INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
+        VALUES (${actor.actorId}, ${'run-raw'}, ${1}, ${'run_end'}, ${at}, ${'{}'})`).toEqual([]);
+    expect(recorder.openTurn()).toBeNull();
   });
 
   test('a side lane opened after a turn does not hide the open turn', () => {

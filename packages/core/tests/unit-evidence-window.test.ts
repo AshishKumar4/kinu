@@ -11,8 +11,7 @@ import { rateTurn } from '../src/evolution/ratings';
 /** A seed candidate carrying `source`, the only field these prompts read. */
 function candidate(source: string): GepaCandidate {
   return {
-    id: 'p', parentId: null, source, scores: new Map(), feedback: new Map(),
-    aggregateScore: 0.5, createdAt: 0,
+    id: 'p', parentId: null, source, scores: new Map(), feedback: new Map(), createdAt: 0,
   };
 }
 

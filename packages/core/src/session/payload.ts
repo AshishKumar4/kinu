@@ -11,25 +11,31 @@ import { SPILL_DIRS } from '../context-budget';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { BinaryEnvelopeSchema } from './message-codec';
 
+/** Inline JSON, or the file it spilled to; a spilled file is named by its bytes' digest, so the path is its whole address. */
 export type SessionPayload =
-  | { readonly json: string; readonly path: null; readonly digest: null }
-  | { readonly json: null; readonly path: string; readonly digest: string };
+  | { readonly json: string; readonly path: null }
+  | { readonly json: null; readonly path: string };
 
 export interface SessionFilePlane { readonly vfs: VFS; readonly artifactDirectory: string }
 
-/** A stored payload's columns as the reference they hold: its JSON inline, or its file and digest; null for any other
- *  triple, which every table that holds one refuses by its CHECK save for all three empty, an absent payload. */
-export function payloadReference(json: string | null, path: string | null, digest: string | null): SessionPayload | null {
-  if (json !== null && path === null && digest === null) return { json, path: null, digest: null };
+/** A stored payload's columns as the reference they hold: its JSON inline, or its file; null for both or neither, which
+ *  every table that holds one refuses by its CHECK save for both empty, an absent payload. */
+export function payloadReference(json: string | null, path: string | null): SessionPayload | null {
+  if (json !== null && path === null) return { json, path: null };
 
-  if (json === null && path !== null && digest !== null) return { json: null, path, digest };
+  if (json === null && path !== null) return { json: null, path };
 
   return null;
 }
 
+/** The digest a spilled payload's file is named by, which its bytes must still have. */
+export function spilledDigest(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1).replace(/\.json$/u, '');
+}
+
 /** A payload that must be there: one its columns do not reference fails. */
-export function storedPayload(json: string | null, path: string | null, digest: string | null): Effect.Effect<SessionPayload, KinuError> {
-  const payload = payloadReference(json, path, digest);
+export function storedPayload(json: string | null, path: string | null): Effect.Effect<SessionPayload, KinuError> {
+  const payload = payloadReference(json, path);
 
   return payload === null ? Effect.fail(new KinuError('io', 'invalid session payload reference')) : Effect.succeed(payload);
 }
@@ -66,14 +72,18 @@ export class SessionPayloadReader {
     return settle(this.readJson(payload));
   }
 
-  readStored(json: string | null, path: string | null, digest: string | null): Promise<JsonValue> {
-    return settle(Effect.flatMap(storedPayload(json, path, digest), (payload) => this.readJson(payload)));
+  readStored(json: string | null, path: string | null): Promise<JsonValue> {
+    return settle(Effect.flatMap(storedPayload(json, path), (payload) => this.readJson(payload)));
   }
 
   private readJson(payload: SessionPayload): Effect.Effect<JsonValue, KinuError> {
     if (payload.json !== null) return Effect.suspend(() => storedJson(payload.json ?? ''));
 
-    return Effect.flatMap(this.readBytes(payload.path, payload.digest), (bytes) => storedJson(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+    return this.readJsonFile(payload.path, spilledDigest(payload.path));
+  }
+
+  private readJsonFile(path: string, digest: string): Effect.Effect<JsonValue, KinuError> {
+    return Effect.flatMap(this.readBytes(path, digest), (bytes) => storedJson(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
   }
 
   resolveMedia(descriptor: JsonObject): Promise<JsonObject> {
@@ -85,7 +95,7 @@ export class SessionPayloadReader {
 
         if (text.success) {
           const ref = text.output.$sessionStringAttachment;
-          result[field] = v.parse(v.string(), yield* this.readJson({ json: null, path: ref.path, digest: ref.digest }));
+          result[field] = v.parse(v.string(), yield* this.readJsonFile(ref.path, ref.digest));
           continue;
         }
 
@@ -129,10 +139,10 @@ export class SessionPayloads extends SessionPayloadReader {
     const json = JSON.stringify(value);
 
     // Most payloads are inline: they need no file and no runner, nor an encoding, as a UTF-16 unit is three bytes at most.
-    if (json.length * 3 <= INLINE_BYTES) return Promise.resolve({ json, path: null, digest: null });
+    if (json.length * 3 <= INLINE_BYTES) return Promise.resolve({ json, path: null });
     const bytes = new TextEncoder().encode(json);
 
-    if (bytes.byteLength <= INLINE_BYTES) return Promise.resolve({ json, path: null, digest: null });
+    if (bytes.byteLength <= INLINE_BYTES) return Promise.resolve({ json, path: null });
 
     return settle(Effect.gen({ self: this }, function* () {
       const digest = sha256Hex(bytes);
@@ -140,7 +150,7 @@ export class SessionPayloads extends SessionPayloadReader {
       const path = `${directory}/${digest}.json`;
       yield* this.publish(path, bytes, directory);
 
-      return { json: null, path, digest };
+      return { json: null, path };
     }));
   }
 

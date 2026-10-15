@@ -3,8 +3,6 @@ import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { GitHubFact, GitHubSubjectFact } from './recognize';
 
-export type GitHubSource = 'egress' | 'mcp' | 'refresh';
-
 export function initGitHubActivityTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS github_items (
     repo         TEXT NOT NULL,
@@ -32,7 +30,6 @@ export function initGitHubActivityTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS github_nodes (
     node_id TEXT PRIMARY KEY,
     repo    TEXT NOT NULL,
-    subject TEXT NOT NULL,
     number  INTEGER NOT NULL,
     at      INTEGER NOT NULL
   )`);
@@ -78,12 +75,12 @@ function recordItem(sql: SqlExecutor, fact: GitHubSubjectFact & { readonly numbe
 export function recordGitHubActivity(
   sql: SqlExecutor,
   facts: readonly GitHubFact[],
-  origin: { readonly actorId: string | null; readonly source: GitHubSource; readonly at: number },
+  origin: { readonly actorId: string | null; readonly at: number },
 ): void {
   for (const each of facts) {
     if (each.action === 'identified') {
       if ('repo' in each && each.node !== undefined && each.number !== undefined && each.subject !== 'repo') {
-        void sql`INSERT OR REPLACE INTO github_nodes (node_id, repo, subject, number, at) VALUES (${each.node}, ${each.repo}, ${each.subject}, ${each.number}, ${origin.at})`;
+        void sql`INSERT OR REPLACE INTO github_nodes (node_id, repo, number, at) VALUES (${each.node}, ${each.repo}, ${each.number}, ${origin.at})`;
         void sql`DELETE FROM github_nodes WHERE node_id NOT IN (SELECT node_id FROM github_nodes ORDER BY at DESC LIMIT ${NODE_LIMIT})`;
       }
 
@@ -136,7 +133,7 @@ export function recordGitHubObservations(sql: SqlExecutor, observed: readonly Gi
   }
 }
 
-export interface GitHubItem {
+interface GitHubItem {
   readonly subject: 'issue' | 'pr';
   readonly repo: string;
   readonly number: number;
@@ -151,7 +148,7 @@ export interface GitHubItem {
   readonly lastAt: number;
 }
 
-export interface GitHubRepo {
+interface GitHubRepo {
   readonly repo: string;
   /** One of the workspace's git remotes. */
   readonly remote: boolean;

@@ -57,9 +57,9 @@ export const FactRevisionSchema = v.object({
   at: v.number(),
 });
 
-export type FactRevision = Readonly<v.InferOutput<typeof FactRevisionSchema>>;
+type FactRevision = Readonly<v.InferOutput<typeof FactRevisionSchema>>;
 
-export type FactUpsertResult = 'created' | 'changed' | 'unchanged';
+type FactUpsertResult = 'created' | 'changed' | 'unchanged';
 
 /** Revisions kept per key; older ones go as a new one lands. */
 const HISTORY_KEPT = 20;
@@ -97,7 +97,7 @@ export function initFactsTable(execRaw: (ddl: string) => void): void {
   `);
 }
 
-export interface FactWrite {
+interface FactWrite {
   confidence?: number;
   source?: string;
   importance?: number;
@@ -271,8 +271,8 @@ export function createFactsStore(sql: SqlExecutor, actor: Pick<ActorHandle, 'act
   };
 }
 
-/** String verbatim, anything else as JSON; shared by the prompt block and search hits. */
-function renderFactValue(value: JsonValue): string {
+/** String verbatim, anything else as JSON: the one way a fact's value is shown, to a prompt, a search hit or a page. */
+export function renderFactValue(value: JsonValue): string {
   const text = v.safeParse(v.string(), value);
 
   return text.success ? text.output : JSON.stringify(value);

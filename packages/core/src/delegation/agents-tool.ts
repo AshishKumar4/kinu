@@ -83,7 +83,9 @@ export {
 // Team deps: spawn is `ActorHost.acquire` over the shared workspace database; tasks go out as
 // `subordinate_task` events and reports return as `subordinate_report` events on the parent.
 
-export type SubordinateStatus = 'idle' | 'working' | 'awaiting_input' | 'dismissed';
+export const SUBORDINATE_STATUSES = ['idle', 'working', 'awaiting_input', 'dismissed'] as const;
+
+export type SubordinateStatus = (typeof SUBORDINATE_STATUSES)[number];
 
 /** One actor_subordinates row; title and role live in the child's actor_config. */
 export interface SubordinateRosterEntry {
@@ -291,7 +293,7 @@ export function agentsProfileContext(
   };
 }
 
-export interface DelegatedProfile {
+interface DelegatedProfile {
   readonly resolved: ResolvedTurnProfile;
   readonly sources: ProfileProvenance;
 }

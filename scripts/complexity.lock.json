@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-15",
-  "files": 3320,
-  "functions": 86886,
+  "files": 3338,
+  "functions": 87390,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -54,10 +54,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
-      "complexity": 36
-    },
-    {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
       "complexity": 36
     },
@@ -68,6 +64,10 @@
     {
       "key": "scripts/infra-manifest.ts#draftsFor",
       "complexity": 35
+    },
+    {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
+      "complexity": 34
     },
     {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
@@ -104,10 +104,6 @@
     {
       "key": "tests/first-run/deploy-door.first-run.ts#authorizeHandoff",
       "complexity": 32
-    },
-    {
-      "key": "packages/cf-backend/src/drive-design/DriveDesignPage.tsx#DriveDesignPage",
-      "complexity": 31
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
@@ -170,10 +166,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/core/src/web/hero-canvas.ts#createCanvasRenderer>render",
-      "complexity": 29
-    },
-    {
       "key": "scripts/ladder.ts#claims",
       "complexity": 29
     },
@@ -191,10 +183,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
-      "complexity": 28
-    },
-    {
-      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
       "complexity": 28
     },
     {
@@ -222,10 +210,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
-      "complexity": 27
-    },
-    {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 27
     },
@@ -247,10 +231,6 @@
     },
     {
       "key": "packages/core/src/orchestrator/session-stream.ts#SessionStream.writePart",
-      "complexity": 27
-    },
-    {
-      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
       "complexity": 27
     },
     {
@@ -318,11 +298,19 @@
       "complexity": 26
     },
     {
+      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
+      "complexity": 26
+    },
+    {
       "key": "packages/cf-backend/src/gallery-preview-tabs.tsx#PreviewTabsGallery>useCallback>gen",
       "complexity": 26
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#settingsSectionsFixture",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
       "complexity": 26
     },
     {
@@ -346,15 +334,15 @@
       "complexity": 26
     },
     {
-      "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage>gen",
-      "complexity": 26
-    },
-    {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 26
     },
     {
       "key": "packages/core/src/orchestrator/terminal-effects.ts#TerminalEffectLedger.attempt",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
       "complexity": 26
     },
     {
@@ -379,10 +367,6 @@
     },
     {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
-      "complexity": 26
-    },
-    {
-      "key": "packages/core/tests/unit-deploy-flow.test.ts#FakeCloudflare.answer",
       "complexity": 26
     },
     {

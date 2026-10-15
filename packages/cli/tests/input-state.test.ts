@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  ESC_ESC_BEAT_MS,
   initialInputState,
   reduceInput,
   type InputMachineEvent,
@@ -30,7 +29,7 @@ describe('Esc / Esc-Esc state machine', () => {
     expect(first.effects).toEqual([{ kind: 'interrupt' }]);
     expect(first.state.walkbackOpen).toBe(false);
 
-    const second = reduceInput(first.state, esc(1_000 + ESC_ESC_BEAT_MS - 1));
+    const second = reduceInput(first.state, esc(1_100));
     expect(second.state.walkbackOpen).toBe(false);
     expect(second.state.walkbackPending).toBe(true);
     const settled = reduceInput(second.state, { type: 'turn-settled' });
@@ -41,7 +40,7 @@ describe('Esc / Esc-Esc state machine', () => {
   test('a second Esc after the beat re-interrupts instead of opening walk-back', () => {
     const busy = run(initialInputState, { type: 'turn-start' });
     const first = reduceInput(busy.state, esc(1_000));
-    const late = reduceInput(first.state, esc(1_000 + ESC_ESC_BEAT_MS + 1));
+    const late = reduceInput(first.state, esc(6_000));
     expect(late.effects).toEqual([{ kind: 'interrupt' }]);
     expect(late.state.walkbackOpen).toBe(false);
   });

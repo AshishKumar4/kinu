@@ -44,8 +44,8 @@ import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { assertMeasured, finding } from './gate-ratchet';
 import { isPythonSuite, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** The interpreter, overridable for a pinned toolchain and nothing else. */
 const PYTHON = process.env.KINU_PYTHON ?? 'python3';

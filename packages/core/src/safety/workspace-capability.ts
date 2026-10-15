@@ -14,7 +14,7 @@ import { sha256Hex } from './argument-digest';
 
 /** `workspace` admits the owner and any registered workspace token; `owner_only` admits no workspace
  *  (account authorities). Owner-only methods inside a workspace capability stay checked in the method. */
-export type CapabilityFloor = 'workspace' | 'owner_only';
+type CapabilityFloor = 'workspace' | 'owner_only';
 
 /** The attenuation matrix; every privileged UserDO method names one entry. */
 const WORKSPACE_CAPABILITY_TIERS = {
@@ -47,7 +47,6 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'workspaces.rename_self': 'workspace',
   /** The calling workspace's own tile only. */
   'workspaces.overview_self': 'workspace',
-  'peers.grants': 'workspace',
   /** Reading the owner's experience library published by other workspaces. */
   'experience.read': 'workspace',
   'experience.write': 'workspace',
@@ -136,7 +135,7 @@ export class CapabilityDeniedError extends Data.TaggedError('CapabilityDeniedErr
 }
 
 /** Closed denial reason for counting; the message names the workspace and is not a telemetry field. */
-export type CapabilityDenialReason =
+type CapabilityDenialReason =
   | 'no_caller_identity'
   | 'unrecognized_owner'
   | 'no_workspace_identity'

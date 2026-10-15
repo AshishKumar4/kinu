@@ -8,7 +8,7 @@ import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   connectedDevices, deleteExecutorPathOp, ExecutorFileDownload, ExecutorFileUpload, getExecutorFiles, readExecutorFile, renameExecutorPathOp,
   runOnExecutor,
-  type DirEntry, type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList,
+  type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage,
 } from '@kinu.run/core';
 import type { HeldSlatePorts } from '@kinu.run/core/slates';
 import { authoredRefusal, diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
@@ -114,13 +114,13 @@ export class WorkspaceExecutors {
     }));
   }
 
-  /** Directory listing read off each executor's own raw handle, in that environment's paths. */
-  async files(executorId: string, path: string): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
+  /** A page of the folder from `from`, read off the executor's own raw handle; its answer names where the next starts. */
+  async files(executorId: string, path: string, from?: number): Promise<FilesPage> {
     const { router } = this;
 
     if (!router) return { error: 'no execution router' };
 
-    return getExecutorFiles(router, executorId, path);
+    return getExecutorFiles(router, executorId, path, from);
   }
 
   async readFile(executorId: string, path: string): Promise<ExecutorTextFile> {

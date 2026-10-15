@@ -1,7 +1,7 @@
 import { Hono, type Context, type Next } from 'hono';
 import { Cause, Effect, Result } from 'effect';
 import {
-  JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
+  JsonValueSchema, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
 import { isFreshAuthTime, sessionGate, type AuthEnv } from '../auth/session';
 import { CLI_APPROVAL_CSRF_COOKIE_NAME, readCookie } from '../auth/cookies';
@@ -273,10 +273,8 @@ cliRoutes.post('/api/cli/workspaces/:name/connect-ticket', async (c) => {
 
   const issued = await cli.userDO.issueCliAgentConnectTicket(c.get('owner'), {
     userId: cli.userId,
-    agentClass: ORCHESTRATOR_AGENT_SLUG,
     agentName: name,
     cliTokenHash: cli.tokenHash,
-    capabilities: ['agent.websocket'],
   });
 
   if (!issued.ok || !issued.ticket || !issued.expiresAt) return err(403, issued.error ?? 'Could not issue connect ticket.');

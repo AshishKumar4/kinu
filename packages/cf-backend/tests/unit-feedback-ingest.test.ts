@@ -3,7 +3,7 @@
 import { describe, test, expect, afterEach } from 'bun:test';
 import * as v from 'valibot';
 import { deflateSync } from 'node:zlib';
-import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../src/auth/session';
 import { answerFeedback, type FeedbackDeps } from '../src/feedback/submit';
 import { feedbackRoutes, type FeedbackEnv, type FeedbackRegistry } from '../src/feedback/routes';
@@ -18,7 +18,7 @@ import {
   FEEDBACK_MAX_SCREENSHOT_BYTES,
   type FeedbackRecord,
 } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
+import { present, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
 
 const ME: AuthIdentity = { userId: 'user-7', email: 'me@example.com', sub: 'sub-7' };
 
@@ -498,7 +498,6 @@ describe('what the endpoint stores', () => {
       note: 'the exploration tab is blank',
       route: '/workspace/checkout-fixes',
       workspace: 'checkout-fixes',
-      objectKey: null,
       bytes: null,
     }]);
   });
@@ -512,7 +511,6 @@ describe('what the endpoint stores', () => {
     const key = 'feedback/user-7/id-1.png';
     expect([...rec.objects.keys()]).toEqual([key]);
     expect(rec.rows[0]).toMatchObject({
-      objectKey: key,
       bytes: rec.objects.get(key)?.length,
       workspace: 'checkout-fixes',
     });

@@ -12,7 +12,7 @@ import { appFontFile, SLATE_FONTS_PATH, SLATE_PAGE_PREAMBLE } from '@kinu.run/co
 import { SLATE_CLIENT_MODULE } from '@kinu.run/core/slates';
 import { detach } from '@kinu.run/core/obs';
 import { contrast, rgba, withGallery, type Rgba } from '../../scripts/gallery-harness';
-import { inspectorPageListed } from '../../scripts/product-flows';
+import { inspectorPageListed } from '../../scripts/browser-page';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
 /** The answer's page as its author wrote it: a title, a heading, rows, and a paragraph that sets no colour. */
