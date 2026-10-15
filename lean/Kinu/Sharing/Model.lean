@@ -290,7 +290,7 @@ def Cap.observers (k : Cap) : Aud :=
 def Slate.codeOf (sl : Slate) (f : Fn) : Rev := ((sl.code.find? (·.1 == f)).map (·.2)).getD 0
 
 def Slate.hasAccess (sl : Slate) (q : Pid) : Bool :=
-  q == sl.owner || sl.members.any (·.who == q) || sl.link
+  q == sl.owner || sl.members.any (·.who == q) || (sl.link && !sl.removed.contains q)
 
 def Slate.canEdit (sl : Slate) (q : Pid) : Bool :=
   q == sl.owner || sl.members.any (fun m => m.who == q && m.role == .edit)
@@ -386,9 +386,11 @@ def apply (P : Policy) (c : Core) : Ev → Core
                  { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩],
                            removed := sl.removed.filter (· != q) }) c.slates,
                next := c.next + 1 }
-  | .remove _ s q =>
-      { c with slates := mapSlate s (fun sl => { sl with members := sl.members.filter (·.who != q),
-                                                         linkGen := c.next, removed := sl.removed ++ [q] }) c.slates,
+  | .remove a s q =>
+      { c with slates := mapSlate s (fun sl =>
+                 if a == sl.owner then
+                   { sl with members := sl.members.filter (·.who != q), linkGen := c.next, removed := sl.removed ++ [q] }
+                 else { sl with members := sl.members.filter (·.who != q) }) c.slates,
                next := c.next + 1 }
   | .mint a s personal src f dom effect sink =>
       { c with caps := c.caps ++ [⟨c.next, s, a, personal, src, f, ((c.slate s).map (·.codeOf f)).getD 0, dom, effect,
@@ -442,7 +444,7 @@ def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α := fun x =>
 
 /-- Whether a tool step's effect goes ahead: no effect, the holder's own request, or the holder approved exactly this
     run, generation, argument and step (`n`, the steps the run had taken). Without an approval the holder is shown the
-    request (the tool step's observation) and the run gets nothing back. -/
+    request (the tool step's observation) and the run waits at the same step until the holder approves it. -/
 def effectOk (P : Policy) (c : Core) (run : Run) (i : Nat) (k : Cap) (a n : Nat) : Bool :=
   !k.effect || run.requester.map (·.1) == some k.holder ||
     c.approvals.any fun ap =>
@@ -454,8 +456,8 @@ def contents (P : Policy) (E : Env) (w : World) (s : St) : Ev → (Nat → List 
       match s.core.run r, s.core.cap i with
       | some run, some k =>
           let a := E.argOf run.fn run.rev run.arg (s.reads r)
-          (upd s.reads r (s.reads r ++ [if effectOk P s.core run i k a (s.reads r).length then w ⟨k.holder, k.src⟩ a
-                                        else 0]), s.val,
+          (upd s.reads r (if effectOk P s.core run i k a (s.reads r).length then s.reads r ++ [w ⟨k.holder, k.src⟩ a]
+                          else s.reads r), s.val,
            s.log ++ [⟨k.observers, some a⟩])
       | _, _ => (s.reads, s.val, s.log)
   | .observe r i => (upd s.reads r (s.reads r ++ [s.val i]), s.val, s.log)

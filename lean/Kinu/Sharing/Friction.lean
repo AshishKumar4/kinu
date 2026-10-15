@@ -205,8 +205,9 @@ theorem connecting_admits_a_personal_part (E : Env) (c : Core) (q : Pid) (a : Ac
       simp only [Slate.hasAccess, Bool.or_eq_true, beq_iff_eq, List.any_eq_true]
       exact Or.inl (Or.inr ⟨m, hm, by simp [hw]⟩)
     | link g =>
-      simp only [Slate.current, Bool.and_eq_true, beq_iff_eq] at hcur
-      simp [Slate.hasAccess, hcur.1.1]
+      simp only [Slate.current, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at hcur
+      simp only [Slate.hasAccess, hcur.1.1, Bool.true_and, Bool.or_eq_true, Bool.not_eq_true']
+      exact Or.inr hcur.2
   refine ⟨by simp [permits, hsl, hsig, hacc], ?_⟩
   have hnone : c.caps.find? (fun x => x.id == c.next) = none := by
     rw [List.find?_eq_none]

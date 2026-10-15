@@ -215,7 +215,7 @@ private theorem slate_persists (P : Policy) (c : Core) (e : Ev) (x : Nat) (h : �
   cases e with
   | share a s on => exact viaMap s _ (fun _ => rfl)
   | collaborate a s q role => exact viaMap s _ (fun _ => rfl)
-  | remove a s q => exact viaMap s _ (fun _ => rfl)
+  | remove a s q => exact viaMap s _ (fun y => by split <;> rfl)
   | editCode a s f rev => exact viaMap s _ (fun _ => rfl)
   | publish a s => exact viaMap s _ (fun _ => rfl)
   | fork a s => exact ⟨sl, List.mem_append_left _ hsl, hid⟩

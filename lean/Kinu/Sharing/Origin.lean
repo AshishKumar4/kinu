@@ -57,11 +57,20 @@ structure LowEq (t : Tag) (q : Pid) (s1 s2 : St) : Prop where
   val : ∀ i cl, s1.core.cell i = some cl → TFree t cl.label → s1.val i = s2.val i
   seen : seen q s1 = seen q s2
 
-/-- **What reaches `q` carries no source closed to `q`.** In any state where `q` reads `t` by no reader check and no
-    declassification of `t` covers `q`, every label that may reach `q` is free of `t`. A reader who lost access, and
-    a declassification withdrawn, take effect at the next release. -/
+/-- `t` is closed to `q` now: no reader check records `q` reading it, and no live declassification of `t` by its holder
+    covers `q`. Withdrawn declassifications do not count. -/
+def ClosedNow (t : Tag) (q : Pid) (c : Core) : Prop :=
+  c.readers.contains (q, t) = false ∧
+    ∀ d ∈ c.decls, d.live = true → d.tag = t → d.minter = t.holder → d.aud.covers q = false
+
+private theorem closedNow_of_shut {t : Tag} {q : Pid} {c : Core} (h : Shut t q c) : ClosedNow t q c :=
+  ⟨h.1, fun d hd _ htag _ => h.2 d hd htag⟩
+
+/-- **What reaches `q` carries no source closed to `q`.** In any state where `t` is closed to `q` now, every label
+    that may reach `q` is free of `t`. A reader who lost access, and a declassification withdrawn, take effect at the
+    next release. -/
 theorem what_reaches_q_carries_no_closed_source (c : Core) (s : SlateId) (L : List Elem) (q : Pid) (t : Tag)
-    (hq : q ≠ t.holder) (hs : Shut t q c) (h : flows Policy.full c s L q = true) : TFree t L := by
+    (hq : q ≠ t.holder) (hs : ClosedNow t q c) (h : flows Policy.full c s L q = true) : TFree t L := by
   intro e he heq
   have hm := (List.all_eq_true.mp h) e he
   simp only [mayRead, Bool.or_eq_true, List.any_eq_true] at hm
@@ -70,14 +79,14 @@ theorem what_reaches_q_carries_no_closed_source (c : Core) (s : SlateId) (L : Li
     rcases hr with hr | hr
     · exact hq hr
     · cases hr
-  · simp only [Decl.covers, Decl.shows, Bool.and_eq_true] at hcov
-    obtain ⟨⟨⟨⟨⟨_, _⟩, htag⟩, _⟩, _⟩, haud⟩ := hcov
-    have htag' : d.tag = t := by rw [← heq]; simpa using htag
-    rw [hs.2 d hd htag'] at haud; cases haud
+  · simp only [Decl.covers, Decl.shows, Policy.full, Bool.not_true, Bool.false_or, Bool.and_eq_true, beq_iff_eq] at hcov
+    obtain ⟨⟨⟨⟨⟨hlive, _⟩, htag⟩, hmint⟩, _⟩, haud⟩ := hcov
+    have htag' : d.tag = t := by rw [← heq]; exact htag
+    rw [hs.2 d hd hlive htag' (by rw [hmint, heq])] at haud; cases haud
 
 /-- What a tool step sends reaches only audiences its label may reach. -/
 private theorem audFlows_free (c : Core) (s : SlateId) (L : List Elem) (q : Pid) (t : Tag) (aud : Aud)
-    (hq : q ≠ t.holder) (hs : Shut t q c) (h : audFlows Policy.full c s L aud = true) (hc : aud.covers q = true) :
+    (hq : q ≠ t.holder) (hs : ClosedNow t q c) (h : audFlows Policy.full c s L aud = true) (hc : aud.covers q = true) :
     TFree t L := by
   cases aud with
   | only ps =>
@@ -88,9 +97,10 @@ private theorem audFlows_free (c : Core) (s : SlateId) (L : List Elem) (q : Pid)
     intro e he heq
     simp only [audFlows, List.all_eq_true, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at h
     obtain ⟨d, hd, hshows, haud⟩ := h e he
-    simp only [Decl.shows, Bool.and_eq_true, beq_iff_eq] at hshows
-    have htag : d.tag = t := by rw [← heq]; exact hshows.1.1.2
-    have := hs.2 d hd htag
+    simp only [Decl.shows, Policy.full, Bool.not_true, Bool.false_or, Bool.and_eq_true, beq_iff_eq] at hshows
+    obtain ⟨⟨⟨⟨hlive, _⟩, htag0⟩, hmint⟩, _⟩ := hshows
+    have htag : d.tag = t := by rw [← heq]; exact htag0
+    have := hs.2 d hd hlive htag (by rw [hmint, heq])
     rw [haud] at this; cases this
 
 private theorem seen_snoc (q : Pid) (l : List Obs) (o : Obs) :
@@ -464,7 +474,7 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
       · simp only [permits, hrun, hk, Option.any_some, Bool.and_eq_true] at hp
         have hflow : audFlows Policy.full s1.core run.slate run.label k.observers = true := by
           simpa [Policy.full] using hp.2
-        have hfree := audFlows_free s1.core run.slate run.label q t _ hq hs hflow hcov
+        have hfree := audFlows_free s1.core run.slate run.label q t _ hq (closedNow_of_shut hs) hflow hcov
         simp only [hreads j run hrun hfree]
       · simp [hcov]
     | release j q' acc =>
@@ -479,7 +489,7 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
       by_cases hqq : q' = q
       · subst hqq
         simp only [permits, hrun, Option.any_some, Bool.and_eq_true] at hp
-        have hfree := what_reaches_q_carries_no_closed_source s1.core run.slate run.label q' t hq hs hp.2
+        have hfree := what_reaches_q_carries_no_closed_source s1.core run.slate run.label q' t hq (closedNow_of_shut hs) hp.2
         simp only [hreads j run hrun hfree]
       · have hc : (Aud.only [q']).covers q = false := by
           simp only [Aud.covers, List.contains_cons, List.contains_nil, Bool.or_false, beq_eq_false_iff_ne]
@@ -497,7 +507,7 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
       by_cases hqq : q' = q
       · subst hqq
         by_cases hflow : flows Policy.full s1.core cl.slate cl.label q' = true
-        · have hfree := what_reaches_q_carries_no_closed_source s1.core cl.slate cl.label q' t hq hs hflow
+        · have hfree := what_reaches_q_carries_no_closed_source s1.core cl.slate cl.label q' t hq (closedNow_of_shut hs) hflow
           simp only [hflow, if_true, hval i cl hcl hfree]
         · simp [hflow]
       · have hc : (Aud.only [q']).covers q = false := by
@@ -634,7 +644,7 @@ theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : 
         · simp only [permits, hrun, hk, Option.any_some, Bool.and_eq_true] at hp
           have hflow : audFlows Policy.full s.core run.slate run.label k.observers = true := by
             simpa [Policy.full] using hp.2
-          exact absurd (audFlows_free s.core run.slate run.label q t _ hq hs hflow hc) hnf
+          exact absurd (audFlows_free s.core run.slate run.label q t _ hq (closedNow_of_shut hs) hflow hc) hnf
       simp only [hcov, Bool.false_eq_true, ite_false, List.append_nil]
     | release j q' a =>
       obtain ⟨run, hrun, hnf⟩ := hh
@@ -644,7 +654,7 @@ theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : 
         intro hqq
         simp only [permits, hrun, Option.any_some, Bool.and_eq_true] at hp
         rw [hqq] at hp
-        exact hnf (what_reaches_q_carries_no_closed_source s.core run.slate run.label q t hq hs hp.2)
+        exact hnf (what_reaches_q_carries_no_closed_source s.core run.slate run.label q t hq (closedNow_of_shut hs) hp.2)
       have hc : (Aud.only [q']).covers q = false := by
         simp only [Aud.covers, List.contains_cons, List.contains_nil, Bool.or_false, beq_eq_false_iff_ne]
         exact fun h => hqq h.symm

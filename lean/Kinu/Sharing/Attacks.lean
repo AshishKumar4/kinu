@@ -263,12 +263,14 @@ def envConst : Env where
   code _ _ _ rs := rs.foldl (· + ·) 0
   argOf _ _ a _ := a
 
-/-- Sam lends an effect and shows what it returns; Bob's call is approved once, at its first step, and takes two. -/
+/-- Sam lends an effect and shows what it returns. Bob's call asks for the effect (Sam is shown the request and the
+    call waits at its first step), Sam approves that step, the call resumes, and its code tries the effect again. -/
 def repeatedEffect : List Ev :=
   [.collaborate sam 0 bob .use,
    .mint sam 0 false 8 12 [0] true (.only []),
    .declassify sam 0 ⟨sam, 8⟩ (some (12, [0])) .anyone,
    .admit (some (bob, .member 1)) 0 12 0 [2] [],
+   .toolStep 4 2,
    .approve sam 2 4 0 0,
    .toolStep 4 2, .toolStep 4 2, .release 4 bob (.member 1)]
 

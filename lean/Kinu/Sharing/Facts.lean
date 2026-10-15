@@ -263,7 +263,9 @@ theorem every_id_is_below_the_counter (P : Policy) (c : Core) (e : Ev) (h : Fres
     obtain ⟨sl, hsl, rfl⟩ := mem_mapSlate hsl'
     obtain ⟨b1, b2, b3⟩ := hs1 sl hsl
     split
-    · exact ⟨b1, by simp, fun g hg => b3 g (List.mem_filter.mp hg).1⟩
+    · split
+      · exact ⟨b1, by simp, fun g hg => b3 g (List.mem_filter.mp hg).1⟩
+      · exact ⟨b1, b2, fun g hg => b3 g (List.mem_filter.mp hg).1⟩
     · exact ⟨b1, b2, b3⟩
   | mint a s personal src f dom effect sink =>
     simp only [apply]

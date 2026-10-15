@@ -141,7 +141,7 @@ private theorem slate_after (P : Policy) (c : Core) (e : Ev) (s : SlateId) (sl' 
     (h : (apply P c e).slate s = some sl') :
     (∃ sl, c.slate s = some sl ∧
       ((sl'.members = sl.members ∧ (sl'.linkGen = sl.linkGen ∨ sl'.linkGen = c.next)) ∨
-       (∃ q, sl'.members = sl.members.filter (·.who != q) ∧ sl'.linkGen = c.next) ∨
+       (∃ q, sl'.members = sl.members.filter (·.who != q) ∧ (sl'.linkGen = c.next ∨ sl'.linkGen = sl.linkGen)) ∨
        (∃ q role, sl'.members = sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩] ∧ sl'.linkGen = sl.linkGen))) ∨
     (sl'.members = [] ∧ sl'.linkGen = c.next) := by
   unfold Core.slate at h ⊢
@@ -166,10 +166,14 @@ private theorem slate_after (P : Policy) (c : Core) (e : Ev) (s : SlateId) (sl' 
     · exact Or.inr (Or.inr ⟨q, role, rfl, rfl⟩)
     · exact Or.inl ⟨rfl, Or.inl rfl⟩
   | remove a s0 q =>
-    obtain ⟨sl, hsl, rfl⟩ := viaMap s0 (fun sl => { sl with members := sl.members.filter (·.who != q), linkGen := c.next, removed := sl.removed ++ [q] }) (fun _ => rfl) h
+    obtain ⟨sl, hsl, rfl⟩ := viaMap s0 (fun sl => if a == sl.owner then
+      { sl with members := sl.members.filter (·.who != q), linkGen := c.next, removed := sl.removed ++ [q] }
+      else { sl with members := sl.members.filter (·.who != q) }) (fun x => by by_cases hx : (a == x.owner) = true <;> simp [hx]) h
     refine Or.inl ⟨sl, hsl, ?_⟩
     split
-    · exact Or.inr (Or.inl ⟨q, rfl, rfl⟩)
+    · split
+      · exact Or.inr (Or.inl ⟨q, rfl, Or.inl rfl⟩)
+      · exact Or.inr (Or.inl ⟨q, rfl, Or.inr rfl⟩)
     · exact Or.inl ⟨rfl, Or.inl rfl⟩
   | editCode a s0 f rev =>
     obtain ⟨sl, hsl, rfl⟩ := viaMap s0 (fun sl => { sl with code := sl.code.filter (·.1 != f) ++ [(f, rev)] }) (fun _ => rfl) h
@@ -213,7 +217,7 @@ private theorem linkFrom_kept (P : Policy) (E : Env) (s : SlateId) (g : Nat) (c 
     refine ⟨Nat.le_trans hn (the_counter_never_falls P c e), fun sl' hsl' => ?_⟩
     rcases slate_after P c e s sl' hsl' with ⟨sl, hsl, hcase⟩ | ⟨_, hlg⟩
     · have := hl sl hsl
-      rcases hcase with ⟨_, hlg | hlg⟩ | ⟨_, _, hlg⟩ | ⟨_, _, _, hlg⟩ <;> omega
+      rcases hcase with ⟨_, hlg | hlg⟩ | ⟨_, _, hlg | hlg⟩ | ⟨_, _, _, hlg⟩ <;> omega
     · omega
   · exact h
 
@@ -244,29 +248,30 @@ private theorem stays (Q : Core → Prop) (P : Policy) (E : Env)
   | nil => intro c h; exact h
   | cons e evs ih => intro c h; exact ih _ (keep c e h)
 
-/-- **A removed person's sessions stay ended.** Removing `q` from slate `s` at state `c` is the linearization point:
-    in every later state no session `q` held before it is current, through membership or through the link, so no
-    render or release reaches it and no run requested under it acts. Removal re-keys the link, so other link visitors
-    reopen. Adding `q` back opens a membership at a newer generation. -/
+/-- **A removed person's sessions stay ended.** The owner removing `q` from slate `s` at state `c` is the
+    linearization point: in every later state no session `q` held before it is current, through membership or
+    through the link, so no render or release reaches it and no run requested under it acts. Removal re-keys the
+    link, so other link visitors reopen. Adding `q` back opens a membership at a newer generation. (A person leaving
+    on their own ends only their membership.) -/
 theorem a_removed_persons_sessions_stay_ended (E : Env) (c : Core) (a s q : Nat) (evs : List Ev) (g : Nat)
-    (hgen : g < c.next) :
+    (hgen : g < c.next) (sl0 : Slate) (hsl0 : c.slate s = some sl0) (ha : a = sl0.owner) :
     let c2 := coreRun Policy.full E (apply Policy.full c (.remove a s q)) evs
     c2.sessionOk s q (.member g) = false ∧ c2.sessionOk s q (.link g) = false := by
   have h1 : SessionsFrom s q c.next (apply Policy.full c (.remove a s q)) := by
     refine ⟨by simp [apply], fun sl' hsl' => ?_⟩
     unfold Core.slate at hsl'; simp only [apply] at hsl'
-    rw [slate_lookup_through_a_map s s
-      (fun sl => { sl with members := sl.members.filter (·.who != q), linkGen := c.next, removed := sl.removed ++ [q] })
-      (fun _ => rfl)] at hsl'
-    cases hc : c.slates.find? (fun x => x.id == s) with
-    | none => rw [hc] at hsl'; cases hsl'
-    | some sl =>
-      rw [hc] at hsl'; simp only [Option.map_some', Option.some.injEq] at hsl'
-      have hid : sl.id = s := by simpa using List.find?_some hc
-      subst hsl'
-      refine ⟨by simp [hid], fun m hm hwho => ?_⟩
-      simp only [hid, beq_self_eq_true, ite_true, List.mem_filter, bne_iff_ne, ne_eq] at hm
-      exact absurd hwho hm.2
+    rw [slate_lookup_through_a_map s s (fun sl => if a == sl.owner then
+      { sl with members := sl.members.filter (·.who != q), linkGen := c.next, removed := sl.removed ++ [q] }
+      else { sl with members := sl.members.filter (·.who != q) }) (fun x => by by_cases hx : (a == x.owner) = true <;> simp [hx])] at hsl'
+    unfold Core.slate at hsl0
+    rw [hsl0] at hsl'
+    simp only [Option.map_some', Option.some.injEq] at hsl'
+    have hid : sl0.id = s := by simpa using List.find?_some hsl0
+    subst hsl'
+    simp only [hid, beq_self_eq_true, ite_true, ha]
+    refine ⟨by simp, fun m hm hwho => ?_⟩
+    simp only [List.mem_filter, bne_iff_ne, ne_eq] at hm
+    exact absurd hwho hm.2
   obtain ⟨_, hm⟩ := stays _ Policy.full E (sessionsFrom_kept Policy.full E s q c.next) evs _ h1
   intro c2
   unfold Core.sessionOk
