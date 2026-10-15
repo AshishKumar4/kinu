@@ -46,7 +46,8 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
       result: v.string(), output: v.optional(JsonValueSchema), error: v.optional(v.string()), durationMs: v.optional(v.number()),
       ...ToolOutcomeSchema.options[1].entries }),
   ]),
-  v.object({
+  // Loose: a step carries its request, account, egress and context on to the ledger and the cache warm.
+  v.looseObject({
     type: v.literal('step-finish'),
     stepIndex: v.number(),
     responseMessages: ModelMessagesSchema,
@@ -55,6 +56,8 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
     text: v.optional(v.string()),
   }),
   v.object({ type: v.literal('error'), message: v.string() }),
+  v.object({ type: v.literal('model-fallback'), from: v.string(), to: v.string(), reason: v.string() }),
+  v.object({ type: v.literal('context-admitted'), tokens: v.number(), contextWindow: v.nullable(v.number()) }),
   v.object({
     type: v.literal('done'),
     text: v.string(),
@@ -124,7 +127,12 @@ async function* scaffoldTurn(
       case 'ui_chunk': {
         const parsed = v.safeParse(ChatEventSchema, ev.chunk);
 
-        if (!parsed.success) break;
+        // Never dropped unseen: the turn goes on, and the chunk's issue is reported where the owner reads failures.
+        if (!parsed.success) {
+          yield { type: 'error', message: `The scaffold emitted a chunk that is not a chat event: ${v.summarize(parsed.issues)}`, source: 'scaffold' };
+          break;
+        }
+
         const inner = parsed.output;
         inner.source = 'scaffold';
 
