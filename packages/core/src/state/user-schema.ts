@@ -125,8 +125,7 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_credentials_revision (
       id        INTEGER PRIMARY KEY CHECK (id = 1),
-      revision  INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      revision  INTEGER NOT NULL
     )
   `);
 

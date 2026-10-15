@@ -1509,8 +1509,7 @@
   ],
   "user_credentials_revision@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "revision INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "revision INTEGER NOT NULL"
   ],
   "user_credentials@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
