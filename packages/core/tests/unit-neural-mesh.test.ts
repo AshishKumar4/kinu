@@ -200,4 +200,22 @@ describe('the mesh is drawn cheaply and quietly', () => {
 
     expect(picture.frame().lift).toBe(picture.frame().lift);
   });
+
+  test('a glint fades more slowly than the tissue, so firing still reads as light on the faintest mesh', () => {
+    const glint = (opacity: number) => {
+      const picture = new NeuralMesh({ seed: 1729, aspect: ASPECT, width: WIDTH, field: { left: RAIL / WIDTH, right: 1 }, opacity });
+
+      picture.click(0.2, 0.05);
+      const frame = picture.frame();
+
+      // A node's alpha is its sixth float.
+      return { disc: frame.nodes[5] ?? 0, lift: frame.lift?.dark ?? 0 };
+    };
+
+    const faint = glint(MESH_OPACITY);
+    const fainter = glint(MESH_OPACITY / 4);
+
+    expect(fainter.lift / faint.lift).toBeCloseTo(0.25);
+    expect(fainter.disc / faint.disc).toBeCloseTo(0.5);
+  });
 });

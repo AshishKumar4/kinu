@@ -46,7 +46,7 @@ export interface MeshOptions {
 }
 
 /** The mesh's ink: texture first, neurons when you look. */
-export const MESH_OPACITY = 0.55;
+export const MESH_OPACITY = 0.2;
 
 interface Layer {
   readonly scale: number;
@@ -144,6 +144,9 @@ const ATTENTION_DECAY = 1.3;
 
 /** Glow a glint carries: below the renderers' halo threshold (0.55), so firing reads as light, never as a flare. */
 const GLINT_GLOW = 0.5;
+
+/** Below this opacity a glint keeps the square root of the drop: at 0.2 it carries 0.33 of its full ink, not 0.2. */
+const GLINT_OPACITY = 0.55;
 
 const GLOW_DECAY = 1.1;
 
@@ -321,6 +324,8 @@ export class NeuralMesh {
   /** Every stroke's and pulse's alpha, by ground: the lift times the opacity, one object so a renderer can keep it. */
   private readonly lift: Lift;
   private readonly opacity: number;
+  /** What a glint carries beyond the opacity: firing fades more slowly than the tissue, so it still reads as light. */
+  private readonly glint: number;
 
   constructor(options: MeshOptions) {
     this.seed = options.seed;
@@ -330,6 +335,7 @@ export class NeuralMesh {
     this.chance = seededRandom(options.seed + 1);
     this.opacity = clamp(options.opacity ?? MESH_OPACITY, 0, 1);
     this.lift = { dark: MESH_LIFT.dark * this.opacity, light: MESH_LIFT.light * this.opacity };
+    this.glint = this.opacity > 0 ? Math.sqrt(GLINT_OPACITY / Math.min(this.opacity, GLINT_OPACITY)) : 1;
 
     if (options.activity !== undefined) this.activity = options.activity;
     this.grow();
@@ -451,7 +457,7 @@ export class NeuralMesh {
       spot.y = cell.y;
       spot.radius = cell.radius * (1 + 0.3 * cell.glow);
       spot.glow = GLINT_GLOW * clamp(cell.glow, 0, 1);
-      spot.alpha = this.opacity * 0.5 * lit * (1 - this.cover(cell.x, cell.y));
+      spot.alpha = this.opacity * this.glint * 0.5 * lit * (1 - this.cover(cell.x, cell.y));
       nodeCount = this.writeNode(nodeCount);
     }
 
@@ -461,7 +467,7 @@ export class NeuralMesh {
       [spot.x, spot.y] = branch.synapse;
       spot.radius = 1.7;
       spot.glow = GLINT_GLOW;
-      spot.alpha = this.opacity * 0.55 * branch.flash * (1 - this.cover(spot.x, spot.y));
+      spot.alpha = this.opacity * this.glint * 0.55 * branch.flash * (1 - this.cover(spot.x, spot.y));
       nodeCount = this.writeNode(nodeCount);
     }
 
@@ -1079,7 +1085,7 @@ export class NeuralMesh {
       if (piece === undefined || piece.cover >= 0.995) continue;
       const lit = cell.glow * (1 - 0.5 * piece.depth) + 0.5 * cell.sense;
 
-      this.inked(piece.alpha * (1 - piece.cover) * 1.3 * lit, GLINT_GLOW * clamp(0.3 + lit, 0, 1), TONE_ACCENT);
+      this.inked(piece.alpha * (1 - piece.cover) * 1.3 * this.glint * lit, GLINT_GLOW * clamp(0.3 + lit, 0, 1), TONE_ACCENT);
       count = this.writeStroke(count, piece);
     }
 
@@ -1151,7 +1157,7 @@ export class NeuralMesh {
         data[at + 8] = spike.upDendrite ? 1.2 : 1.5;
         data[at + 9] = GLINT_GLOW;
         data[at + 10] = TONE_BRIGHT;
-        data[at + 11] = (spike.upDendrite ? 0.4 : 0.7) * ends * (1 - piece.cover);
+        data[at + 11] = (spike.upDendrite ? 0.4 : 0.7) * this.glint * ends * (1 - piece.cover);
         data[at + 12] = id;
         data[at + 13] = 0;
         data[at + 14] = 1;
