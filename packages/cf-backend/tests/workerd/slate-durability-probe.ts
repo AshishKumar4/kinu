@@ -512,7 +512,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   /** What a person's call answered, as a word: a value, a part (and its key), or the refusal. */
   private static said(answer: SlateAnswer<RoomCallOutcome>): Said {
-    if (!answer.ok) return { said: `refused ${answer.reason}`, part: null };
+    if (!answer.ok) return { said: `refused ${answer.reason}: ${answer.error}`, part: null };
 
     return 'part' in answer.value ? { said: 'part', part: answer.value.part.key } : { said: `value ${JSON.stringify(answer.value.value)}`, part: null };
   }
@@ -679,7 +679,11 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const call = room.callAs(people.bob, 'deploy', [4]);
     // Admitted with Sam's lend, it would wait for Sam at its deploy: the ask is then what is seen.
     const asked = await SlateDurabilityProbeRoot.askedOrEnded(owner, (each) => each.asks.some((ask) => ask.kind === 'effect'), call);
-    const bob = asked === null ? SlateDurabilityProbeRoot.said(await call).said : 'waiting for Sam';
+    const waiting = asked?.asks.find((ask) => ask.kind === 'effect')?.id ?? null;
+
+    // A step left waiting would hold the run open: Sam declines it, so the run ends either way.
+    if (waiting !== null) await owner.call({ op: 'decline', ask: waiting });
+    const bob = waiting === null ? SlateDurabilityProbeRoot.said(await call).said : 'waited for Sam';
 
     void at;
 

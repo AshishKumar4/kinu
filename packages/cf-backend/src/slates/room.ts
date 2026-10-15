@@ -1204,9 +1204,11 @@ export class SlateRoom extends DurableObject<Env> {
   /** Every call a slate's code makes, through the stub its env holds: the stub's sealed props name its binding and run. */
   bindingCall(props: RoomBindingProps, request: { readonly path: string[]; readonly args: JsonValue[]; readonly invocation: string | null }): Promise<SlateSurfaceResult> {
     return settle(slateAnswer(`slate ${props.binding}`, Effect.gen({ self: this }, function* () {
-      const runId = request.invocation === null ? null : this.invocations.get(request.invocation) ?? null;
+      // A confined run's stub names its run; the shared server's names none and is told the run by its invocation. Its
+      // `__storage` calls carry no invocation (they need no lineage), so the stub's own run is theirs.
+      const invoked = request.invocation === null ? null : this.invocations.get(request.invocation) ?? null;
+      const runId = props.binding === '__storage' && request.invocation === null ? props.run : invoked;
 
-      // A confined run's stub names its run; the shared server's names none and is told the run by its invocation.
       if (props.run !== null && runId !== props.run) return yield* refuse('denied', 'This call belongs to no run of this stub');
       const run = runId === null ? null : this.caretaker.run(runId);
 

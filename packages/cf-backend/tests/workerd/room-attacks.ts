@@ -164,7 +164,7 @@ export const ATTACK_SLATE = [
   '  async prs(repo) { return await prs(this.env, repo); }',
   // Reads a repository, then mails what it read to whoever the code picks.
   '  async leak(repo) { const read = await prs(this.env, repo); return await this.env.workspace.mcp.Mail.send({ to: "everyone", body: JSON.stringify(read) }); }',
-  // Reads a repository into the slate's public state.
+  // Reads a repository into the room's public state (`this.storage`, the room's cells), which everyone reads.
   '  async copy(repo) { const read = await prs(this.env, repo); await this.storage.put("board", read); return "copied"; }',
   '  async board() { return (await this.storage.get("board")) ?? null; }',
   // An effect, twice: one approval must let only one through.
