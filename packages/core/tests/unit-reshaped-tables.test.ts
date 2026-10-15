@@ -15,6 +15,8 @@ import { readSearchTree } from '../src/read-models/search-tree';
 import { insertSearchNode } from '../src/mcts/record-node';
 import { TaskListStore } from '../src/tools/task-store';
 import { HeadJournal } from '../src/heads/journal';
+import { agentArtifactDirectory } from '../src/vfs/agent-home';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createTestActor, createTestWorkspace, makeSqlExec, type TestWorkspace } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
@@ -132,7 +134,7 @@ const LARGE = 'a large payload '.repeat(70_000);
 function historyOver(ws: TestWorkspace, actor: ActorHandle): SessionHistory {
   return new SessionHistory({
     sql: ws.sql, actor, transactionSync: (write) => ws.db.transaction(write)(),
-    files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor' }),
+    files: async () => ({ vfs: ws.vfs, artifactDirectory: agentArtifactDirectory(WORKSPACE_ROOT) }),
     claims: claimFences(ws.sql, actor),
   });
 }
