@@ -30,6 +30,7 @@ import { deployCallbackRoutes } from "./deploy/routes";
 import { authPageRoutes } from "./auth/routes";
 import { landingRoutes } from "./landing-route";
 import { pcRoutes } from "./pc-routes";
+import { opsRoutes } from "./ops-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
@@ -336,6 +337,9 @@ worker.use('*', async (c, next) => (isPreviewHostRequest(new URL(c.req.url), c.e
 worker.all('/api/*', beneath<WorkerEnv>('/api', async (c) => api.fetch(c.req.raw, c.env, c.executionCtx)));
 
 mount(pcRoutes);
+
+// Before any session: its own pass (ops-routes.ts).
+mount(opsRoutes);
 
 // Access before every bypass.
 worker.use(CONTROL_PLANE_UI_ROUTE, controlPlaneAccess);

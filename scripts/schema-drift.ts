@@ -353,7 +353,12 @@ const GenesisLockSchema = v.record(v.string(), v.array(v.string()));
 export type GenesisLock = v.InferOutput<typeof GenesisLockSchema>;
 
 export function readGenesisLock(path: string = GENESIS_LOCK): GenesisLock {
-  return v.parse(GenesisLockSchema, JSON.parse(readFileSync(path, 'utf8')));
+  return readGenesisLockText(readFileSync(path, 'utf8'));
+}
+
+/** A lock as another commit carries it (`git show <sha>:scripts/schema-genesis.lock.json`). */
+export function readGenesisLockText(text: string): GenesisLock {
+  return v.parse(GenesisLockSchema, JSON.parse(text));
 }
 
 /** What a drifted table or view does while every test stays green. */

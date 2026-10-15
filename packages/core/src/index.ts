@@ -82,6 +82,11 @@ export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorSt
 
 export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
 
+export {
+  OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, resetTables, TablesRequestSchema,
+  type ChangedTable, type HeldTable, type OpsCaller, type TableRows, type TablesAnswer, type TablesRequest, type TableWrites,
+} from './state/tables-reset';
+
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type WorkspaceKeyedRows } from './state/user-schema';
 
 export {

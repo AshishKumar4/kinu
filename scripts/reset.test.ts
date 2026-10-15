@@ -224,6 +224,17 @@ describe('a reset stopped anywhere can be finished', () => {
     state.serving = { versionId: 'an-unrecorded-placeholder', bound: new Map() };
     expect(pendingReset(worker, target.serving(), target.latest())).toBeUndefined();
   });
+
+  test('a tables reset, which deletes no class, is never a pending wipe', () => {
+    const worker = config.name ?? '';
+
+    const tables: Reset = {
+      environment: 'staging', worker, tag: 'tables-1', at: '2026-10-15T00:00:00Z', placeholderVersion: '', classes: [], applications: [],
+      state: 'started', kind: 'tables', from: 'f9c17ac7b', candidate: 'abcdef123', tables: [{ table: 'device_joins', change: 'remade', classes: ['UserDO'] }],
+    };
+
+    expect(pendingReset(worker, { versionId: 'v', bound: new Map() }, tables)).toBeUndefined();
+  });
 });
 
 describe('a reset deletes the snapshots its applications made', () => {

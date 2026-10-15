@@ -20,6 +20,7 @@ export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 
 import { diagnostics, KinuError, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { requireOps, resetTables, TablesRequestSchema, type OpsCaller, type TablesAnswer, type TablesRequest } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
 import { tenantDrive } from '../drive/tenant';
@@ -768,6 +769,19 @@ export class UserDO extends Agent<Env> {
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
     return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
+  }
+
+  /** A release's tables reset (`scripts/reset.ts tables`): what this account holds of the changed tables, and with
+   *  `drop`, those still in the old shape dropped and made again. Only `/ops/tables` holds the capability. */
+  async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
+    await requireOps(this.env, caller);
+    const { tables, drop } = v.parse(TablesRequestSchema, request);
+
+    const answer = resetTables(this.ctx.storage.sql, { tables, drop }, {
+      transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { this.initTables(); },
+    });
+
+    return { name: null, ...answer };
   }
 
   /** Once per activation, from the constructor. Claims live in isolate memory, so any claim in storage

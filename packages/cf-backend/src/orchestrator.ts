@@ -40,6 +40,7 @@ import {
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
+import { requireOps, resetTables, TablesRequestSchema, type OpsCaller, type TablesAnswer, type TablesRequest } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
@@ -4236,6 +4237,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // per-agent verifies, attaches, issues or lists a device token.
 
   /** DDL only; no persisted schema version. */
+  /** A release's tables reset (`scripts/reset.ts tables`): what this workspace holds of the changed tables, and with
+   *  `drop`, those still in the old shape dropped and made again. Only `/ops/tables` holds the capability. A Nimbus
+   *  sibling holds no workspace table and makes none. */
+  async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
+    await requireOps(this.env, caller);
+    const { tables, drop } = v.parse(TablesRequestSchema, request);
+
+    const answer = resetTables(this.ctx.storage.sql, { tables, drop }, {
+      transactionSync: (write) => this.ctx.storage.transactionSync(write),
+      init: () => { if (!this.nimbusSibling && this.storageRefusal === undefined) this.initTables(); },
+    });
+
+    return { name: this.addressedName, ...answer };
+  }
+
   private initTables(): void {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
