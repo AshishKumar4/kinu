@@ -258,6 +258,18 @@ if [ "$KINU_RESET_TABLES" = "1" ]; then
   KINU_TABLES_RECORD="$(mktemp -t kinu-tables.XXXXXX.json)"
   KINU_TABLES_FROM="$(bun "$KINU_ROOT/scripts/reset.ts" served "$KINU_ENV")" || exit 1
   echo -e "${BOLD}RESET TABLES: after the upload, the tables changed since $KINU_TABLES_FROM are dropped on every object of $KINU_ENV that holds them; the plan prints then.${NC}"
+elif [ "$KINU_RESET" != "1" ] && [ "$KINU_ROLLBACK" != "1" ] && [ "$KINU_GATES_ONLY" != "1" ]; then
+  # A build that moves a class's stamp refuses every database of that class until the tables step reaches it, so it
+  # never ships without the step.
+  KINU_STAMPS_MOVED="$(bun "$KINU_ROOT/scripts/reset.ts" stamps "$KINU_ENV")"
+  case $? in
+    0) ;;
+    3)
+      echo -e "${RED}This build moves the stamp of: $KINU_STAMPS_MOVED. Every such database is refused until the tables step reaches it: deploy with --reset-tables.${NC}"
+      exit 1
+      ;;
+    *) exit 1 ;;
+  esac
 fi
 
 # The pre-deploy phase, read by scripts/infra-verify.ts, travels in the

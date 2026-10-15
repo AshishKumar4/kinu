@@ -17,7 +17,7 @@ import {
   inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
-  resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
+  readStamp, stampOf, StoragePredatesReleaseError, writeStamp, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
 } from '@kinu.run/core';
@@ -609,32 +609,41 @@ export abstract class ActorAgent extends Agent<Env> {
   /**
    * Created in the constructor: the only point guaranteed to precede every access on both cf roots
    * (`onStart` may follow an RPC). Per-root by design; `core/conformance/manifest.ts` marks it
-   * absent for cli.
+   * absent for cli. The storage is asked its stamp first (identity/schema-stamp.ts): storage a release's tables step
+   * has not reached gets no init, and every call but that step's is refused with why.
    */
   private initCapabilitySchema(): void {
-    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_capability (
+    const stamp = readStamp(this.ctx.storage.sql, 'workspace');
+
+    if (stamp === 'behind') {
+      this.storageRefusal = new StoragePredatesReleaseError('workspace', stampOf(this.ctx.storage.sql));
+      diagnostics.failure('workspace.storage_predates_release', this.storageRefusal);
+
+      return;
+    }
+
+    this.initBaseTables();
+
+    if (stamp === 'unmade') writeStamp(this.ctx.storage.sql, 'workspace');
+  }
+
+  /** The tables a root makes before anything reads it; the tables step runs this again once it repaired the storage. */
+  protected initBaseTables(): void {
+    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
+
+    execRaw(`CREATE TABLE IF NOT EXISTS workspace_capability (
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       token TEXT NOT NULL
     )`);
     // Pending-send ledger is declared once in core (`initPendingSendTables`) because the CLI
     // backend shares the table names with a nullable `turn_id`; one writer keeps creation order
     // from picking the shape.
-    initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
-
+    initPendingSendTables(execRaw);
     // Per-actor admission ledger (one workspace-wide pointer cannot distinguish concurrent actors).
     // In the base constructor: the SDK's fiber recovery reads it before any subclass constructor body.
-    try {
-      initActorClaimTables(resetGuardedExec((ddl: string) => this.ctx.storage.sql.exec(ddl), this.ctx.storage.sql));
-    } catch (cause) {
-      if (!(cause instanceof StoragePredatesResetError)) throw cause;
-      this.storageRefusal = cause;
-      diagnostics.failure('workspace.storage_predates_reset', cause, { table: cause.table });
-
-      return;
-    }
-
+    initActorClaimTables(execRaw);
     // Same reason.
-    initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
+    initTerminalEffectTable(execRaw);
   }
 
   /** Spliced between `agents` and `web` so provider order (and the LLM-visible type description)
@@ -938,7 +947,7 @@ export abstract class ActorAgent extends Agent<Env> {
   });
 
   // The bare prototype must read as sound.
-  protected storageRefusal?: StoragePredatesResetError;
+  protected storageRefusal?: StoragePredatesReleaseError;
 
   /** Kinu's two durable wakes; see wake-jobs.ts. */
   protected readonly wakes = new WakeJobs({

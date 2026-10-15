@@ -12,6 +12,7 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
 import { timingSafeEqual } from '../utils/crypto';
+import { readStamp, writeStamp, type SchemaClass, type StampReading } from '../identity/schema-stamp';
 import type { SqlExec } from '../types/primitives';
 
 const SqlName = v.pipe(v.string(), v.regex(/^[a-z_][a-z0-9_]*$/u));
@@ -44,6 +45,9 @@ export interface HeldTable {
   readonly keepsRows: boolean;
   /** Why SQLite refused to drop a column here, which makes the table one remade. */
   readonly refused?: string;
+  /** Tables the release did not change that hold rows referring to this one: dropping it would delete or orphan them,
+   *  so it is not dropped, and the step refuses. */
+  readonly cascades?: readonly string[];
 }
 
 /** A table's rows, as an object held them when it was asked. */
@@ -57,11 +61,18 @@ export interface TableRows {
 export interface TablesAnswer {
   /** The workspace's name, for a workspace object; null for an account, which is reached by id alone. */
   readonly name: string | null;
+  /** Its stamp before this call: `behind` is storage no call but the tables step reads until it is stamped. */
+  readonly stamp: StampReading;
   /** Every table, before any drop: a rehearsal diffs two of these, so each count the release did not touch must hold. */
   readonly census: readonly TableRows[];
   readonly held: readonly HeldTable[];
   readonly dropped: readonly string[];
+  /** A workspace's agents, each its own database: by name, what each held and dropped. */
+  readonly agents?: readonly AgentTables[];
 }
+
+/** One agent's database as its workspace's tables reset reached it. */
+export type AgentTables = Omit<TablesAnswer, 'name' | 'agents'> & { readonly name: string };
 
 const OPS_LABEL = 'kinu.deploy.tables.v1';
 
@@ -129,6 +140,8 @@ function census(sql: SqlExec): TableRows[] {
 
 /** How an object's own transactions run: only a synchronous throw from the callback rolls one back. */
 export interface TableWrites {
+  /** The class of database this is, whose stamp it carries. */
+  schema: SchemaClass;
   transactionSync: <A>(write: () => A) => A;
   /** The object's own init, which makes a dropped table anew. */
   init: () => void;
@@ -152,6 +165,15 @@ function dropColumns(sql: SqlExec, writes: TableWrites, change: { table: string;
     }))),
     catch: (cause) => (cause instanceof KinuError ? cause : new KinuError('unsupported', String(cause))),
   }).pipe(Effect.catch((failure) => (failure === TRIAL ? Effect.void : Effect.fail(failure))));
+}
+
+const ReferenceSchema = v.object({ table: v.string() });
+
+/** The tables outside `changed` that hold rows referring to `table` by a foreign key. */
+function referrers(sql: SqlExec, table: string, tables: readonly TableRows[], changed: ReadonlySet<string>): string[] {
+  return tables.filter(({ table: other, rows }) => other !== table && rows > 0 && !changed.has(other))
+    .filter(({ table: other }) => sql.exec(`PRAGMA foreign_key_list("${other}")`).toArray().some((row) => v.parse(ReferenceSchema, row).table === table))
+    .map(({ table: other }) => other);
 }
 
 /** `table` as `sql` holds it: absent, or its rows, whether the build before left it so, and whether that is mended
@@ -201,16 +223,26 @@ function mend(sql: SqlExec, writes: TableWrites, changed: ChangedTable, table: H
   }).pipe(Effect.flatMap((dropped) => (dropped.length > 0 || present.length === 0 ? Effect.succeed(dropped) : dropTable)));
 }
 
-/** What `sql` holds of `request`'s tables; with `drop`, each stale one mended (columns dropped, or the table dropped,
- *  and `init` run to make it anew). */
+/** What `sql` holds of `request`'s tables; with `drop`, each stale one mended (columns dropped, or the table dropped),
+ *  `init` run to make what is missing, and the database stamped as this build's. */
 export function resetTables(sql: SqlExec, request: TablesRequest, writes: TableWrites): Omit<TablesAnswer, 'name'> {
   return settleSync(Effect.gen(function* () {
+    const stamp = readStamp(sql, writes.schema);
     const tables = census(sql);
     const changed = new Map(request.tables.map((table) => [table.table, table]));
-    const before = (yield* Effect.forEach(request.tables, (table) => held(sql, writes, table))).flatMap((table) => table ?? []);
-    const stale = before.filter((table) => table.stale);
+    const named = new Set(changed.keys());
 
-    if (!request.drop || stale.length === 0) return { census: tables, held: before, dropped: [] };
+    const before = (yield* Effect.forEach(request.tables, (table) => held(sql, writes, table))).flatMap((table) => table ?? [])
+      .map((table): HeldTable => {
+        const cascades = table.stale && !table.keepsRows ? referrers(sql, table.table, tables, named) : [];
+
+        return cascades.length === 0 ? table : { ...table, cascades };
+      });
+
+    // A table whose drop would reach rows the release did not change is left as it is, and the step refuses.
+    const stale = before.filter((table) => table.stale && table.cascades === undefined);
+
+    if (!request.drop) return { stamp, census: tables, held: before, dropped: [] };
 
     const dropped = (yield* Effect.forEach(stale, (table) => {
       const declared = changed.get(table.table);
@@ -218,8 +250,10 @@ export function resetTables(sql: SqlExec, request: TablesRequest, writes: TableW
       return declared === undefined ? Effect.succeed([]) : mend(sql, writes, declared, table);
     })).flat();
 
-    if (dropped.some((name) => !name.includes('.'))) writes.init();
+    // Storage behind its stamp ran no init when its object started, so it runs now, whether or not a table was dropped.
+    writes.init();
+    writeStamp(sql, writes.schema);
 
-    return { census: tables, held: before, dropped };
+    return { stamp, census: tables, held: before, dropped };
   }));
 }

@@ -482,7 +482,27 @@ bash scripts/deploy.sh --rollback
 
 A reset deletes what the upload owns, so a '--reset' deploy whose build never uploaded is finished by the next '--reset' deploy. That deploy hands `gate:infra` the newest reset's record (`KINU_RESET_RECORD`, written by `scripts/reset.ts pending`), and before the upload the gate defers exactly what that reset deleted. The deferred rows are the namespace of each class the record names and each container application it names. While the Worker still serves the record's placeholder, they also include every binding that placeholder lacks; the placeholder carries only `CF_VERSION_METADATA`. No other deploy carries a record. The post-deploy run defers nothing.
 
-'--reset-tables' keeps every object. After the upload and before the smoke test, `scripts/reset.ts tables` diffs the genesis lock of the build the deployment served before against the candidate's (`scripts/tables-reset.ts`). A removed table is dropped. A table that only lost columns has them dropped with its rows kept, unless SQLite refuses (a key, an index or a trigger names the column), which a rolled-back trial finds first. Any other change drops the table, and the object's own init makes it anew. The step reaches every object Cloudflare lists in the UserDO and OrchestratorAgent namespaces through the candidate's `/ops/tables`, which admits only a one-time pass the step writes into AUTH_KV with wrangler. It prints the lossless changes apart from those that lose rows, per object with row counts. On production it asks for a typed confirmation naming every table and column. Its record goes to `resets/tables-<tag>.json` and the rollback barrier. A rerun changes nothing a finished run made. A change that keeps every column name (a type or a CHECK) is refused: that needs '--reset'. `scripts/reset.ts census <environment> <out>` writes every table's rows per object, one sorted line each, for a rehearsal to diff.
+'--reset-tables' keeps every object. Every database Kinu makes carries its class's stamp in `PRAGMA user_version` (`packages/core/src/identity/schema-stamp.ts`). There are four classes: account (UserDO), workspace (the OrchestratorAgent root), agent (each agent's facet) and local (the CLI's). A stamp is the digest of the genesis of the tables its class's init makes. `scripts/schema-classes.json` records those tables, measured by `schema-classes.test.ts` in cf-backend and cli-backend, and `bun scripts/schema-drift.ts --lock` writes the stamps into `schema-genesis.ts`. An object asks its stamp once as it starts, with one PRAGMA (about 0.2 µs on SQLite). Its own stamp opens it. A stamp of 0 on storage its class never made is made and stamped. Anything else, including a Durable Object made before stamps were per class (0, with its tables), is behind: no init runs over it, and every call except the tables step's is refused, naming the step, until the step reaches it. A change to one class's tables moves only that class's stamp. A deploy that moves a stamp is refused without '--reset-tables' (`scripts/reset.ts stamps`).
+
+After the upload and before the smoke test, `scripts/reset.ts tables` diffs the genesis lock of the build the deployment served before against the candidate commit's (`scripts/tables-reset.ts`):
+- A removed table is dropped.
+- A table that only lost columns has them dropped with its rows kept, unless SQLite refuses (a key, an index or a trigger names the column). A rolled-back trial finds that refusal before the plan prints.
+- Any other change drops the table, and the database's own init makes it anew.
+
+The step reaches every object Cloudflare lists in the UserDO and OrchestratorAgent namespaces, through the candidate's `/ops/tables`. That route admits only a one-time pass the step writes into AUTH_KV with wrangler. Each workspace takes the step to every agent database it keeps, retired agents' included. Each database is repaired, made, and stamped.
+
+The plan prints, per database (`workspace/agent` for an agent), with row counts:
+- the lossless changes;
+- separately, those that lose rows;
+- how many databases of each class it stamps.
+
+It refuses, before anything changes:
+- a change that keeps every column name (a type or a CHECK);
+- a table two files declare differently;
+- a changed table no class's stamp covers;
+- a drop that would delete rows of a table the release did not change (a foreign key).
+
+Those need '--reset'. On production it asks for a typed confirmation naming every table and column. It writes every table's rows per database before and after the drops beside its record (`<record>.census-{before,after}.tsv`), and prints what moved that the release did not name. Its record goes to `resets/tables-<tag>.json` and the rollback barrier. A rerun changes nothing a finished run made. `scripts/reset.ts census <environment> <out>` writes the same census at any time.
 
 On 2026-10-09, staging's reset upload stored version 174af18c, but Wrangler 4.145 could not read it back. Its five version lookups returned 404 in 3 s. Wrangler asked: "Re-run the same `wrangler deploy` command to retry and finish deployment." `scripts/deploy-upload.sh` follows that instruction once, with identical arguments and no added wait. Every other upload failure ends immediately.
 

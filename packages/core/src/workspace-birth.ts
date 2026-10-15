@@ -18,7 +18,7 @@ import { cloudPlanes } from './vfs/resolve';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import type { ActorHandle } from './identity/actor-handle';
 import { initWorkspaceActorTable, WorkspaceActorDirectory } from './identity/workspace-actors';
-import { SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
+import { SCHEMA_STAMPS } from './identity/schema-genesis';
 
 export interface WorkspaceBirthConfig {
   /** The address slug (`workspaceSlug`), held by `workspace_identity.name` for life. */
@@ -83,7 +83,7 @@ export async function createWorkspace(
 
   const actor = transactionSync(() => {
     initAllTables(execRaw, sql);
-    execRaw(`PRAGMA user_version = ${String(SCHEMA_GENESIS_STAMP)}`);
+    execRaw(`PRAGMA user_version = ${String(SCHEMA_STAMPS.local)}`);
 
     const workspaceId = nanoid();
     void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;

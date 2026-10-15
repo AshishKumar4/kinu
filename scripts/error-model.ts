@@ -228,7 +228,7 @@ export const DECLARED = byFile([
     ['packages/cf-backend/src/cli/auth-store.ts', ['RateLimitError', 'CliAuthCodeError']],
     ['packages/core/src/mission-budget.ts', ['MissionBudgetExhausted']],
     ['packages/core/src/providers/util.ts', ['StaleModelList']],
-    ['packages/core/src/state/store-reset.ts', ['StoragePredatesResetError']],
+    ['packages/core/src/identity/schema-stamp.ts', ['StoragePredatesReleaseError']],
     ['packages/core/src/tools/db-codemode.ts', ['AppBatchError']],
     ['packages/core/src/types/file-edits.ts', ['FileRefusalError']],
 

@@ -19,6 +19,7 @@
  *                                                     the newest reset of the Worker, if any, written to <record> for
  *                                                     the pre-upload gate, which defers exactly the rows it deleted
  *   bun scripts/reset.ts served <environment>         the build the deployment serves, which a tables reset diffs from
+ *   bun scripts/reset.ts stamps <environment>         the classes whose stamp the candidate moves; exit 3 if any
  *   bun scripts/reset.ts census <environment> <out>   every table's rows on every object, for a rehearsal's diff
  *   bun scripts/reset.ts tables <environment> <record> [--from <sha>]
  *                                                     only the tables the release changed dropped, on every object
@@ -41,9 +42,9 @@ import {
   type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, bucketOf, deployedConfig, liveClasses,
 } from './infra-manifest';
 import { servedHealth } from './served-health';
-import { readGenesisLock, readGenesisLockText } from './schema-drift';
+import { readGenesisLockText } from './schema-drift';
 import {
-  censusLines, changedTables, confirmation, listedObjects, undetectableChanges, planLines, reachAll, RESET_CLASSES, writeLines,
+  cascadingDrops, censusDiff, censusLines, changedTables, confirmation, listedObjects, storesOf, undetectableChanges, unstampedTables, planLines, reachAll, RESET_CLASSES, writeLines,
   type Reached, type TablesTarget,
 } from './tables-reset';
 import { OPS_PASS_PREFIX } from '@kinu.run/core';
@@ -456,7 +457,7 @@ async function confirmedAtTerminal(words = PRODUCTION_CONFIRMATION, what = 'dele
 }
 
 /** A tables reset's commands (scripts/tables-reset.ts). */
-const TABLES_COMMANDS = ['served', 'census', 'tables'] as const;
+const TABLES_COMMANDS = ['served', 'stamps', 'census', 'tables'] as const;
 
 /** `served`, `census` and `tables`: a tables reset's commands. */
 async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environment: InfraEnvironment, args: readonly string[]): Promise<number> {
@@ -469,6 +470,18 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
     console.log(sha);
 
     return 0;
+  }
+
+  // Exit 3 when the candidate moves a class's stamp: every database of that class is refused until the step reaches it.
+  if (command === 'stamps' && recordFile === undefined) {
+    const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
+    const served = sha === undefined ? undefined : stampsAt(sha);
+    const candidate = stampsAt('HEAD') ?? {};
+    const moved = Object.keys(candidate).filter((schema) => served?.[schema] !== candidate[schema]);
+
+    console.log(moved.length === 0 ? 'none' : moved.join(','));
+
+    return moved.length === 0 ? 0 : 3;
   }
 
   if (command === 'census' && recordFile !== undefined) {
@@ -485,10 +498,13 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
     return await resetChangedTables({ environment, recordFile, from });
   }
 
-  console.error('usage: bun scripts/reset.ts served <environment> | census <environment> <out> | tables <environment> <record> [--from <sha>]');
+  console.error('usage: bun scripts/reset.ts served <environment> | stamps <environment> | census <environment> <out> | tables <environment> <record> [--from <sha>]');
 
   return 2;
 }
+
+/** How long a pass lives if this process dies before it deletes it: past the longest sweep, short of a day. */
+const PASS_TTL_SECONDS = 6 * 60 * 60;
 
 /** The deployment as a tables reset reaches it: Cloudflare's object lists, its AUTH_KV, and its `/ops/tables`. */
 function tablesTarget(environment: InfraEnvironment, config: DeployedConfig): TablesTarget {
@@ -513,7 +529,7 @@ function tablesTarget(environment: InfraEnvironment, config: DeployedConfig): Ta
 
       return await listedObjects(account, namespace, token);
     },
-    admit: (digest) => { run(['kv', 'key', 'put', `${OPS_PASS_PREFIX}${digest}`, '1', '--namespace-id', kv, '--ttl', '1800', '--remote']); },
+    admit: (digest) => { run(['kv', 'key', 'put', `${OPS_PASS_PREFIX}${digest}`, '1', '--namespace-id', kv, '--ttl', String(PASS_TTL_SECONDS), '--remote']); },
     forget: (digest) => { run(['kv', 'key', 'delete', `${OPS_PASS_PREFIX}${digest}`, '--namespace-id', kv, '--remote']); },
     ops: async (pass, body) => {
       const answer = await fetch(`${site}/ops/tables`, {
@@ -536,7 +552,9 @@ function releaseTables(from: string): ReturnType<typeof changedTables> {
 
   if (fromLock.exitCode !== 0) throw new Error(`${from} carries no scripts/schema-genesis.lock.json in this checkout: ${fromLock.stderr.toString().trim()}`);
   const before = readGenesisLockText(fromLock.stdout.toString());
-  const tables = changedTables(before, readGenesisLock());
+  // The candidate's lock as committed: the worktree's file may say what no uploaded build does.
+  const candidate = Bun.spawnSync(['git', 'show', 'HEAD:scripts/schema-genesis.lock.json']);
+  const tables = changedTables(before, readGenesisLockText(candidate.stdout.toString()));
   const undetectable = undetectableChanges(tables.changed, before);
 
   if (undetectable.length > 0) {
@@ -545,6 +563,21 @@ function releaseTables(from: string): ReturnType<typeof changedTables> {
   }
 
   return tables;
+}
+
+/** The tables each class's init makes, as the candidate commit measured them. */
+function candidateClasses(): Record<string, readonly string[]> {
+  const shown = Bun.spawnSync(['git', 'show', 'HEAD:scripts/schema-classes.json']);
+
+  return v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(shown.stdout.toString()));
+}
+
+/** The class stamps a commit's build carries, or none for a build before stamps were per class. */
+export function stampsAt(commit: string): Record<string, string> | undefined {
+  const shown = Bun.spawnSync(['git', 'show', `${commit}:packages/core/src/identity/schema-genesis.ts`]);
+  const stamps = [...shown.stdout.toString().matchAll(/^\s+(\w+): 0x([0-9a-f]+),$/gmu)].map((match) => [match[1] ?? '', match[2] ?? ''] as const);
+
+  return shown.exitCode !== 0 || stamps.length === 0 ? undefined : Object.fromEntries(stamps);
 }
 
 /** The plan, the confirmation, the record `started`, the drops, the record `done`: `tables <environment> <record>`. */
@@ -565,14 +598,27 @@ async function resetChangedTables(input: { environment: InfraEnvironment; record
   if (candidate.startsWith(from.slice(0, 7))) throw new Error(`${site} already served ${candidate} before: name the build it served earlier with --from <sha>`);
   const { changed, added } = releaseTables(from);
 
-  if (changed.length === 0) {
-    console.log(`tables: no table changed between ${from} and ${candidate}; nothing to drop`);
+  const target = tablesTarget(environment, config);
+  const asked = await reachAll(target, { tables: changed, drop: false });
+  const unstamped = unstampedTables(changed, candidateClasses(), asked);
+
+  if (unstamped.length > 0) {
+    throw new Error(`${unstamped.join(', ')} changed and no class's stamp covers it: its object makes it after it starts, so storage holding `
+      + 'its old genesis is never refused. Make it in its class\'s init (scripts/schema-classes.json), or reset fully (deploy --reset); nothing was dropped');
+  }
+
+  const cascading = cascadingDrops(asked);
+
+  if (cascading.length > 0) {
+    throw new Error(`dropping would reach rows no changed table holds: ${cascading.join('; ')}. Change the referring table in the same `
+      + 'release, or reset fully (deploy --reset); nothing was dropped');
+  }
+
+  if (changed.length === 0 && storesOf(asked).every((store) => store.answer.stamp !== 'behind')) {
+    console.log(`tables: no table changed between ${from} and ${candidate}, and every database is stamped as this build's; nothing to do`);
 
     return 0;
   }
-
-  const target = tablesTarget(environment, config);
-  const asked = await reachAll(target, { tables: changed, drop: false });
 
   console.log(`tables: ${from} → ${candidate} on ${config.name ?? ''}; ${String(asked.length)} object(s) listed in ${RESET_CLASSES.join(', ')}`);
 
@@ -585,7 +631,7 @@ async function resetChangedTables(input: { environment: InfraEnvironment; record
     return 1;
   }
 
-  const holders = (table: string) => [...new Set(asked.filter((object) => object.answer?.held.some((held) => held.table === table) === true).map((object) => object.className))];
+  const holders = (table: string) => [...new Set(storesOf(asked).filter((store) => store.answer.held.some((held) => held.table === table)).map((store) => store.kind))];
   const tag = `tables-${new Date().toISOString().replace(/[-:]|\.\d+/gu, '')}`;
 
   const started: Reset = {
@@ -601,11 +647,23 @@ async function resetChangedTables(input: { environment: InfraEnvironment; record
     console.log(`tables: dropped ${object.answer?.dropped.join(', ') ?? ''} on ${object.className} ${object.answer?.name ?? object.id}`);
   }
 
-  const left = (await reachAll(target, { tables: changed, drop: false })).filter((object) => object.answer === undefined || object.answer.held.some((held) => held.stale));
+  // Every object either pass met is asked again, though a listing may have dropped it since.
+  const met = [...asked, ...dropped];
+  const verified = await reachAll(target, { tables: changed, drop: false }, met);
+  // The census either side of the drops, beside the record: a rehearsal diffs them, and so does this run.
+  writeLines(`${recordFile}.census-before.tsv`, censusLines(asked));
+  writeLines(`${recordFile}.census-after.tsv`, censusLines(verified));
+  const moved = censusDiff(censusLines(asked), censusLines(verified), new Set([...changed.map((table) => table.table), ...added]));
 
-  if (left.length > 0) {
-    throw new Error(`${String(left.length)} object(s) still hold an old table or did not answer: ${left.map((object) => `${object.className} ${object.answer?.name ?? object.id}${object.error === undefined ? '' : ` (${object.error})`}`).join('; ')}. Run again to finish`);
-  }
+  console.log(`tables: census before and after in ${recordFile}.census-{before,after}.tsv; ${String(moved.meant.length)} line(s) the release meant to move, `
+    + `${String(moved.unmeant.length)} it did not mean to (live writes during the run, or a fault)`);
+
+  for (const line of moved.unmeant) console.log(`tables:   unmeant ${line}`);
+  const unanswered = verified.filter((object) => object.answer === undefined).map((object) => `${object.className} ${object.id} (${object.error ?? ''})`);
+  const unfinished = storesOf(verified).filter((store) => store.answer.stamp !== 'current' || store.answer.held.some((held) => held.stale)).map((store) => `${store.kind} ${store.label}`);
+  const left = [...unanswered, ...unfinished];
+
+  if (left.length > 0) throw new Error(`${String(left.length)} database(s) still behind this build or not answering: ${left.join('; ')}. Run again to finish`);
 
   record({ putRecord: tablesRecordPut(config) }, recordFile, { ...started, state: 'done' });
   console.log(`tables: done; recorded at resets/${tag}.json`);

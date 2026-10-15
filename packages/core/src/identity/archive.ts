@@ -11,8 +11,8 @@ import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { SqlExec } from '../types/primitives';
 import type { JsonPrimitive } from '../utils/json';
-import { SCHEMA_GENESIS } from './schema-genesis';
-import { requireSchemaGenesis } from './schema-stamp';
+import { SCHEMA_STAMPS } from './schema-genesis';
+import { requireSchemaStamp } from './schema-stamp';
 import { settle } from '../obs/effect';
 import { KinuError } from '../obs/error';
 import { VfsExportPageSchema } from '../vfs/export-page';
@@ -213,8 +213,9 @@ interface ArchiveHeader {
   workspace: string;
   source: 'cloud' | 'local';
   exported_at: number;
-  /** The schema genesis of the Kinu that wrote it; an archive under another, or none, is refused by name. */
-  schema_genesis?: string;
+  /** The workspace class's stamp of the Kinu that wrote it (identity/schema-stamp.ts); an archive under another, or
+   *  none, is refused by name. */
+  schema_stamp?: number;
   /** Each agent must close its section, or the archive is refused. */
   agents?: string[];
 }
@@ -292,7 +293,7 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
     workspace: v.string(),
     source: v.picklist(['cloud', 'local']),
     exported_at: v.number(),
-    schema_genesis: v.optional(v.string()),
+    schema_stamp: v.optional(v.number()),
     agents: v.optional(v.array(v.string())),
   }),
   v.object({
@@ -663,7 +664,7 @@ function emitHeader(sink: PageSink, schema: readonly SchemaObject[], opts: Expor
     workspace: opts.workspace,
     source: opts.source,
     exported_at: opts.now ?? Date.now(),
-    schema_genesis: SCHEMA_GENESIS,
+    schema_stamp: SCHEMA_STAMPS.workspace,
     ...(agents.length > 0 && { agents: [...agents] }),
   });
 
@@ -982,14 +983,14 @@ const NO_FILE_TARGET = 'This archive contains workspace files, but no filesystem
 
 const NO_STORE_TARGET = 'This archive contains a workspace store, but no store target was provided.';
 
-/** The first record, refused unless it is this format's header under this Kinu's schema genesis. */
+/** The first record, refused unless it is this format's header under this Kinu's workspace stamp. */
 function archiveHeader(record: ArchiveRecord): Effect.Effect<ArchiveHeader> {
   if (record.t !== 'header' || record.kinu_workspace_archive !== WORKSPACE_ARCHIVE_VERSION) {
     return Effect.die(new Error(`This file is not a Kinu workspace archive v${WORKSPACE_ARCHIVE_VERSION}.`));
   }
 
   return Effect.sync(() => {
-    requireSchemaGenesis(`This archive of "${record.workspace}"`, record.schema_genesis?.slice(0, 7) ?? null);
+    requireSchemaStamp(`This archive of "${record.workspace}"`, 'workspace', record.schema_stamp ?? 0);
 
     return record;
   });

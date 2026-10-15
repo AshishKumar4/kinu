@@ -80,11 +80,9 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
-export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
-
 export {
   OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, resetTables, TablesRequestSchema,
-  type ChangedTable, type HeldTable, type OpsCaller, type TableRows, type TablesAnswer, type TablesRequest, type TableWrites,
+  type AgentTables, type ChangedTable, type HeldTable, type OpsCaller, type TableRows, type TablesAnswer, type TablesRequest, type TableWrites,
 } from './state/tables-reset';
 
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type WorkspaceKeyedRows } from './state/user-schema';
@@ -168,9 +166,11 @@ export {
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive';
 
-export { SCHEMA_GENESIS } from './identity/schema-genesis';
+export { SCHEMA_STAMPS } from './identity/schema-genesis';
 
-export { requireSchemaGenesis, SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
+export {
+  readStamp, requireSchemaStamp, stampOf, StoragePredatesReleaseError, writeStamp, type SchemaClass, type StampReading,
+} from './identity/schema-stamp';
 
 export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
@@ -1634,7 +1634,7 @@ export {
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
-  type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
+  type BackgroundJobRunnerDeps, type JobHolder, initJobHoldersTable, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
   WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
   type JobOutputFrame, type JobOutputTail,
@@ -2627,6 +2627,7 @@ export {
   type DriverLeaseRefusal,
   type DriverLeaseDeps,
   DriverLeaseHold,
+  initDriverLeaseTable,
 } from './execution/driver-lease';
 
 export {

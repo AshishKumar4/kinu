@@ -25,7 +25,7 @@ import {
   DefaultExecutionRouter,
   adaptMemory,
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, createBashShell, holdsGrant, createInheritedApprovalPolicy,
-  initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
+  initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, writeStamp, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver,
@@ -61,7 +61,6 @@ import { detach, diagnostics, KinuError, renderCauseChain, settleLogged, settleS
 import { Effect } from 'effect';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from '@kinu.run/core';
 import * as v from 'valibot';
-import { stampSchemaGenesis } from './schema-genesis';
 
 /** Where a local owner changes a tier's model, as a refusal notice names it. */
 const LOCAL_MODEL_SETTINGS = 'your model settings';
@@ -228,6 +227,9 @@ function buildCLIRuntime(
     agentName = config.actorBinding.name;
   } else {
     execRaw(WORKSPACE_IDENTITY_DDL);
+    // The root's local tables, made with it so its stamp covers them; the lease and the job holders fill them on use.
+    initDriverLeaseTable(execRaw);
+    initJobHoldersTable(execRaw);
     const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
 
     if (existing) {
@@ -237,7 +239,7 @@ function buildCLIRuntime(
       agentId = crypto.randomUUID();
       agentName = config.agentName ?? 'agent';
       void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
-      stampSchemaGenesis(db);
+      writeStamp(makeSqlExec(db), 'local');
       initWorkspaceActorTable(execRaw);
       new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
     }

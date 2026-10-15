@@ -158,6 +158,7 @@ const crossings = new Crossings('host.executeTool');
 
 /** The facet's calls as the workspace makes them: every one of AgentFacetCalls, which the compiler holds this list to. */
 const FACET_CALLS = Object.keys({
+  opsTables: true,
   activePlanReview: true, planReviews: true, savePlanReviewAnnotations: true, dismissPlanReview: true,
   ownerQuestions: true, dismissOwnerQuestions: true, admit: true, landing: true, sendState: true, awaitSend: true,
   interruptChat: true, wake: true, modelSettingsChanged: true, revertTo: true, clearConversation: true, owed: true,

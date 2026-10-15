@@ -20,7 +20,10 @@ export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 
 import { diagnostics, KinuError, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { requireOps, resetTables, TablesRequestSchema, type OpsCaller, type TablesAnswer, type TablesRequest } from '@kinu.run/core';
+import {
+  readStamp, requireOps, resetTables, stampOf, StoragePredatesReleaseError, TablesRequestSchema, writeStamp,
+  type OpsCaller, type TablesAnswer, type TablesRequest,
+} from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
 import { tenantDrive } from '../drive/tenant';
@@ -72,19 +75,30 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
-    const gate = new ActivationGate();
+    // Asked once, never caught: storage a release's tables step has not reached is read by that step alone, and every
+    // other call is refused with why (identity/schema-stamp.ts).
+    const stamp = readStamp(this.ctx.storage.sql, 'account');
+
+    if (stamp === 'behind') this.storageRefusal = new StoragePredatesReleaseError('account', stampOf(this.ctx.storage.sql));
+    const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
+
     // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.
-    this.initTables();
+    if (stamp !== 'behind') this.initTables();
+
+    if (stamp === 'unmade') writeStamp(this.ctx.storage.sql, 'account');
   }
+
+  /** Why this account's storage may not be read: a release's tables step has not reached it yet. */
+  private storageRefusal: StoragePredatesReleaseError | undefined;
 
   /** Every gated RPC waits for this (`startBeforeRpc`); the MCP dials it starts are not awaited. */
   override onStart(): void {
-    this.mcpServers.start();
+    if (this.storageRefusal === undefined) this.mcpServers.start();
   }
 
   private readonly host: UserObjectHost = {
@@ -776,10 +790,14 @@ export class UserDO extends Agent<Env> {
   async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
     await requireOps(this.env, caller);
     const { tables, drop } = v.parse(TablesRequestSchema, request);
+    const { sql } = this.ctx.storage;
 
-    const answer = resetTables(this.ctx.storage.sql, { tables, drop }, {
-      transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { this.initTables(); },
+    const answer = resetTables(sql, { tables, drop }, {
+      schema: 'account', transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { this.initTables(); },
     });
+
+    // Brought to this build and stamped: open to every call from here.
+    if (drop) this.storageRefusal = undefined;
 
     return { name: null, ...answer };
   }

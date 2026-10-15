@@ -1,13 +1,13 @@
 /**
- * A workspace whose store predates the conversation store's storage reset, on the real orchestrator over workerd:
- * only the platform shows the object still constructs over such a store, and what each entry answers there. The
- * probe plants the 2026-09-21 `session_messages` in a claimed workspace and evicts it, so the next access
- * constructs over the planted store, as the account's workspace does after a deploy.
+ * A workspace whose storage a release's tables step has not reached, on the real orchestrator over workerd: only the
+ * platform shows the object still constructs over such storage, what each entry answers there, and that the step's
+ * own call brings it to this build. The probe stamps a claimed workspace as an older build's (identity/schema-stamp.ts)
+ * and evicts it, so the next access constructs over that storage, as an account's workspace does after a deploy.
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { ownerCaller } from '@kinu.run/core';
+import { opsCaller, ownerCaller } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
@@ -17,46 +17,23 @@ import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 export * from '../../src/server';
 
 
-/** `session_messages` as a 2026-09-21 build created it (5682c7907), before its envelope and sealed content columns. */
-const PRE_RESET_SESSION_MESSAGES = `CREATE TABLE IF NOT EXISTS session_messages (
-    actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), message_id TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('system','user','assistant','tool')),
-    native_content_kind TEXT NOT NULL CHECK(native_content_kind IN ('string','parts')),
-    origin TEXT NOT NULL CHECK(origin IN ('input','output','edit','context_transform','render')),
-    request_id TEXT, output_slot INTEGER, ingress_id TEXT, sealed_sequence INTEGER,
-    recorded_at INTEGER NOT NULL,
-    PRIMARY KEY(actor_id,message_id), UNIQUE(actor_id,request_id,output_slot),
-    FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id),
-    FOREIGN KEY(actor_id,message_id,sealed_sequence) REFERENCES message_updates(actor_id,message_id,sequence),
-    CHECK(output_slot IS NULL OR output_slot >= 0),
-    CHECK((request_id IS NULL) = (output_slot IS NULL)))`;
-
 const PROBE_OWNER_ID = '0123456789abcdef0123456789abcdef';
 
-const PLANTED = 'the pre-reset store is planted';
+const PLANTED = 'the older stamp is planted';
 
 /** The production orchestrator with what no production path has: planting the old table, and its wake entry. */
 export class OrchestratorAgent extends ProductionOrchestrator {
   constructor(ctx: AgentContext, env: ConstructorParameters<typeof ProductionOrchestrator>[1]) {
     super(ctx, env);
 
-    for (const name of ['plantPreResetSessionMessages', 'wakeOnce']) Reflect.deleteProperty(this, name);
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'plantPreResetSessionMessages', 'wakeOnce']);
+    for (const name of ['plantOlderStamp', 'wakeOnce']) Reflect.deleteProperty(this, name);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'plantOlderStamp', 'wakeOnce']);
   }
 
-  /** The current table is set aside under another name, so no foreign key has to be undone. Its indexes go with it
-   *  and their names would satisfy the next `CREATE INDEX IF NOT EXISTS`, so they are dropped: the account's store
-   *  never had them. Once that is on disk (an abort discards writes that are not), the object is evicted, so the
-   *  next access constructs over it. */
-  async plantPreResetSessionMessages(): Promise<void> {
-    const sql = this.ctx.storage.sql;
-
-    sql.exec('ALTER TABLE session_messages RENAME TO session_messages_current');
-
-    const moved = sql.exec(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'session_messages_current'
-      AND sql IS NOT NULL`).toArray().map((row) => v.parse(NamedSchema, row).name);
-
-    for (const name of moved) sql.exec(`DROP INDEX "${name}"`);
-    sql.exec(PRE_RESET_SESSION_MESSAGES);
+  /** Its storage stamped as an older build's; once that is on disk (an abort discards writes that are not), the
+   *  object is evicted, so the next access constructs over it. */
+  async plantOlderStamp(): Promise<void> {
+    this.ctx.storage.sql.exec('PRAGMA user_version = 1');
     await this.ctx.storage.sync();
     this.ctx.abort(PLANTED);
   }
@@ -78,10 +55,8 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type ResetTarget = Pick<Fetcher, 'fetch'>
-  & Pick<ProductionOrchestrator, 'claimOwner' | 'exportWorkspaceArchive'>
-  & Pick<OrchestratorAgent, 'plantPreResetSessionMessages' | 'wakeOnce'>;
-
-const NamedSchema = v.object({ name: v.string() });
+  & Pick<ProductionOrchestrator, 'claimOwner' | 'exportWorkspaceArchive' | 'opsTables'>
+  & Pick<OrchestratorAgent, 'plantOlderStamp' | 'wakeOnce'>;
 
 const FrameSchema = v.looseObject({ type: v.string(), done: v.optional(v.boolean()), error: v.optional(v.boolean()) });
 
@@ -110,7 +85,7 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
     return getAgentByName<ProbeEnv, OrchestratorAgent>(this.env.OrchestratorAgent, workspace);
   }
 
-  /** A claimed workspace, then the old table planted in its store and the object evicted over it. */
+  /** A claimed workspace, then an older build's stamp planted in its storage and the object evicted over it. */
   async plantRefusedWorkspace(workspace: string): Promise<string> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
@@ -120,7 +95,7 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
 
     try {
-      await (await this.target(workspace)).plantPreResetSessionMessages();
+      await (await this.target(workspace)).plantOlderStamp();
 
       return 'the object answered after its eviction';
     } catch (cause) {
@@ -172,7 +147,17 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
     }
   }
 
-  async exportedLines(workspace: string): Promise<number> {
-    return (await (await this.target(workspace)).exportWorkspaceArchive()).lines.length;
+  /** Its export, or why it was refused. */
+  async exported(workspace: string): Promise<string> {
+    try {
+      return `${String((await (await this.target(workspace)).exportWorkspaceArchive()).lines.length)} line(s)`;
+    } catch (cause) {
+      return renderThrownChain({ cause });
+    }
+  }
+
+  /** The tables step's own call: what it found of the stamp, before it brought the storage to this build. */
+  async repaired(workspace: string): Promise<string> {
+    return (await (await this.target(workspace)).opsTables(await opsCaller(this.env), { tables: [], drop: true })).stamp;
   }
 }

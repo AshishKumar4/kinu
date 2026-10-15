@@ -66,8 +66,8 @@ import {
   type ExplorationRecord,
   boundedInt,
   RUN_TIMELINE_MAX,
-  SCHEMA_GENESIS,
-  requireSchemaGenesis as requireGenesis,
+  SCHEMA_STAMPS,
+  requireSchemaStamp,
   type Page,
   type RecordCellHandle,
   type RecordCellSummary,
@@ -501,10 +501,10 @@ function openLocalDb(name: string, mode: DbMode): SqliteDb {
   const db = mode === 'read' ? new Database(dbPath, { readonly: true }) : new Database(dbPath);
 
   if (mode === 'write') return db;
-  const genesis = schemaGenesisOf(db);
+  const stamp = schemaGenesisOf(db);
 
-  if (genesis !== SCHEMA_GENESIS.slice(0, 7)) db.close();
-  requireGenesis(`Workspace "${name}"`, genesis);
+  if (stamp !== SCHEMA_STAMPS.local) db.close();
+  requireSchemaStamp(`Workspace "${name}"`, 'local', stamp);
 
   return db;
 }

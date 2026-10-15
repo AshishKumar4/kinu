@@ -9,11 +9,15 @@
  * `remade`, unless only columns left it, when they are dropped and its rows kept (`columns`); one only the candidate
  * declares needs nothing (its object's init makes it). No list is written by hand.
  *
- * WHICH OBJECTS. Every object Cloudflare lists in the UserDO and OrchestratorAgent namespaces
+ * WHICH DATABASES. Every object Cloudflare lists in the UserDO and OrchestratorAgent namespaces
  * (`/workers/durable_objects/namespaces/{id}/objects`), reached by id through the candidate's `/ops/tables` route,
- * which asks each what it holds. The class that holds a table is the class whose objects answer with it: measured,
- * never assumed. A changed table no object holds is said so (a CLI-local table is one), and an object that could not
- * answer is named with why.
+ * which asks each what it holds; each workspace asks every agent database it keeps (`workspace/agent`), a retired
+ * agent's too. Which class holds a table is what the databases answer: measured, never assumed. A changed table no
+ * database holds is said so (a CLI-local table is one), and an object that could not answer is named with why.
+ *
+ * STAMPS. Each database carries its class's stamp (core identity/schema-stamp.ts); one behind it answers every call
+ * but this step's with why, so the step also brings up databases whose class's tables moved without a change it
+ * drops, and stamps each it reaches.
  *
  * THE PASS. `/ops/tables` admits a one-time pass this step writes into the deployment's AUTH_KV with wrangler, the
  * authority `reset.ts wipe` deletes with, and deletes when it is done; no session reaches the route.
@@ -50,17 +54,31 @@ export interface ReleaseTables {
   readonly added: readonly string[];
 }
 
-/** Every table's genesis by name: its parts across every file that declares it (`table@file`). */
-function byTable(lock: GenesisLock): Map<string, string[]> {
-  const tables = new Map<string, string[]>();
+/** Every table's genesis by name. A name two files declare differently is two tables in two databases, which a
+ *  change to either could not be told apart in: it is named, and the step refuses it. */
+interface LockTables {
+  readonly tables: Map<string, readonly string[]>;
+  readonly ambiguous: Set<string>;
+}
+
+function byTable(lock: GenesisLock): LockTables {
+  const tables = new Map<string, readonly string[]>();
+  const ambiguous = new Set<string>();
 
   for (const [key, parts] of Object.entries(lock)) {
     const table = key.slice(0, key.indexOf('@'));
+    const held = tables.get(table);
 
-    tables.set(table, [...tables.get(table) ?? [], ...parts]);
+    if (held !== undefined && !sameParts(held, parts)) ambiguous.add(table);
+    tables.set(table, parts);
   }
 
-  return tables;
+  return { tables, ambiguous };
+}
+
+/** Two genesis part lists alike in any order, as the drift gate compares them. */
+function sameParts(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
 }
 
 /** How `table` moved from `before` to `now`: only columns left it (each part of the rest unchanged), or anything else. */
@@ -68,31 +86,40 @@ function change(table: string, before: readonly string[], now: readonly string[]
   const columns = columnsOf(now);
   const gone = columnsOf(before).filter((column) => !columns.includes(column));
   const kept = before.filter((part) => !gone.includes(columnsOf([part])[0] ?? ''));
-  const onlyColumns = gone.length > 0 && JSON.stringify(kept) === JSON.stringify(now);
+  const onlyColumns = gone.length > 0 && sameParts(kept, now);
 
   return { table, change: onlyColumns ? 'columns' : 'remade', columns, dropped: onlyColumns ? gone : [] };
 }
 
-/** The changed tables, by name, from the two locks: a table's genesis being every file's parts. */
+/** The changed tables, by name, from the two locks; a name declared differently in two files throws. */
 export function changedTables(from: GenesisLock, to: GenesisLock): ReleaseTables {
   const before = byTable(from);
   const after = byTable(to);
+  const ambiguous = [...before.ambiguous, ...after.ambiguous].filter((table, at, all) => all.indexOf(table) === at);
   const changed: ChangedTable[] = [];
 
-  for (const [table, parts] of [...before].sort(([a], [b]) => a.localeCompare(b))) {
-    const now = after.get(table);
+  for (const [table, parts] of [...before.tables].sort(([a], [b]) => a.localeCompare(b))) {
+    const now = after.tables.get(table);
 
     if (now === undefined) changed.push({ table, change: 'removed', columns: [], dropped: [] });
-    else if (JSON.stringify(now) !== JSON.stringify(parts)) changed.push(change(table, parts, now));
+    else if (!sameParts(now, parts)) changed.push(change(table, parts, now));
   }
 
-  return { changed, added: [...after.keys()].filter((table) => !before.has(table)).sort() };
+  const added = [...after.tables.keys()].filter((table) => !before.tables.has(table)).sort();
+  const touched = ambiguous.filter((table) => added.includes(table) || changed.some((entry) => entry.table === table));
+
+  if (touched.length > 0) {
+    throw new Error(`${touched.join(', ')} is declared differently by two files, two tables in two databases, and changed: `
+      + 'this step cannot tell which store holds which; that needs a full reset (deploy --reset)');
+  }
+
+  return { changed, added };
 }
 
 /** A remade table whose column names all stayed (a type, default or constraint moved): no object's columns tell its
  *  old genesis from its new one, so no rerun could know it is done. */
 export function undetectableChanges(changed: readonly ChangedTable[], from: GenesisLock): readonly string[] {
-  const before = byTable(from);
+  const before = byTable(from).tables;
 
   return changed.filter((table) => table.change === 'remade').filter((table) => {
     const named = columnsOf(before.get(table.table) ?? []);
@@ -109,43 +136,58 @@ export interface Reached {
   readonly error?: string;
 }
 
-/** The object as a line names it: a workspace by its name, an account by its id. */
-function objectLabel(object: Reached): string {
-  return object.answer?.name ?? object.id;
+/** One database a run reached: an account's, a workspace's, or one of a workspace's agents' (`workspace/agent`). */
+export interface Store {
+  readonly kind: ResetClass | 'agent';
+  readonly label: string;
+  readonly answer: Omit<TablesAnswer, 'name' | 'agents'>;
 }
 
-/** Every table's rows per object, one tab-separated line each, sorted: two of these diff line by line. */
-export function censusLines(reached: readonly Reached[]): string[] {
-  return reached.flatMap((object) => (object.answer === undefined
-    ? [`${object.className}\t${object.id}\t!unreachable\t${object.error ?? ''}`]
-    : object.answer.census.map((row) => `${object.className}\t${objectLabel(object)}\t${row.table}\t${String(row.rows)}`)))
-    .sort();
-}
-
-/** One changed table as the objects hold it: who holds it in the build before's form, and with how many rows. */
-function holdersOf(table: ChangedTable, reached: readonly Reached[]) {
+/** Every database the answers name, a workspace's agents after it; an object that gave none is not one. */
+export function storesOf(reached: readonly Reached[]): Store[] {
   return reached.flatMap((object) => {
-    const held = object.answer?.held.find((entry) => entry.table === table.table);
+    if (object.answer === undefined) return [];
+    const label = object.answer.name ?? object.id;
 
-    return held === undefined ? [] : [{ object, held }];
+    return [
+      { kind: object.className, label, answer: object.answer },
+      ...(object.answer.agents ?? []).map((agent): Store => ({ kind: 'agent', label: `${label}/${agent.name}`, answer: agent })),
+    ];
   });
 }
 
-/** What a run changes, lossless first, then what loses rows: each table with its class, its change, and per object. */
+/** Every table's rows per database, one tab-separated line each, sorted: two of these diff line by line. */
+export function censusLines(reached: readonly Reached[]): string[] {
+  const unreachable = reached.filter((object) => object.answer === undefined).map((object) => `${object.className}\t${object.id}\t!unreachable\t${object.error ?? ''}`);
+
+  return [...unreachable, ...storesOf(reached).flatMap((store) => store.answer.census.map((row) => `${store.kind}\t${store.label}\t${row.table}\t${String(row.rows)}`))].sort();
+}
+
+/** One changed table as the databases hold it: who holds it in the build before's form, and with how many rows. */
+function holdersOf(table: ChangedTable, stores: readonly Store[]) {
+  return stores.flatMap((store) => {
+    const held = store.answer.held.find((entry) => entry.table === table.table);
+
+    return held === undefined ? [] : [{ store, held }];
+  });
+}
+
+/** What a run changes, lossless first, then what loses rows, then the stamps it brings up: each table with its class,
+ *  its change, and per database. */
 export function planLines(changed: readonly ChangedTable[], added: readonly string[], reached: readonly Reached[]): string[] {
+  const stores = storesOf(reached);
   const lossless: string[] = [];
   const losing: string[] = [];
   const nobody: string[] = [];
 
   for (const table of changed) {
-    const holders = holdersOf(table, reached);
-    const classes = [...new Set(holders.map(({ object }) => object.className))].join(', ');
-    const stale = holders.filter(({ held }) => held.stale);
+    const holders = holdersOf(table, stores);
+    const classes = [...new Set(holders.map(({ store }) => store.kind))].join(', ');
 
     if (holders.length === 0) nobody.push(`  ${table.table} (${table.change})`);
 
-    for (const { object, held } of stale) {
-      const where = `${object.className} ${objectLabel(object)}`;
+    for (const { store, held } of holders.filter((holder) => holder.held.stale)) {
+      const where = `${store.kind} ${store.label}`;
 
       if (held.keepsRows) lossless.push(`  ${table.table} [${classes}]: drop column(s) ${table.dropped.join(', ')} on ${where}; its ${String(held.rows)} row(s) kept`);
       else {
@@ -155,15 +197,41 @@ export function planLines(changed: readonly ChangedTable[], added: readonly stri
     }
   }
 
+  const behind = stores.filter((store) => store.answer.stamp === 'behind');
   const unreachable = reached.filter((object) => object.answer === undefined).map((object) => `  ${object.className} ${object.id}: ${object.error ?? ''}`);
 
   return [
     `LOSSLESS (columns dropped, rows kept): ${lossless.length === 0 ? 'none' : ''}`, ...lossless,
     `LOSES DATA (tables dropped): ${losing.length === 0 ? 'none' : ''}`, ...losing,
-    ...nobody.length === 0 ? [] : ['held by no UserDO or OrchestratorAgent object (a table only a CLI-local database holds is outside this step):', ...nobody],
-    ...added.length === 0 ? [] : [`added, made by each object's init: ${added.join(', ')}`],
+    `STAMPED (behind this build, refused until reached): ${behindCounts(behind)}`,
+    ...nobody.length === 0 ? [] : ['held by no account, workspace or agent database (a CLI-local table is outside this step):', ...nobody],
+    ...added.length === 0 ? [] : [`added, made by each database's init: ${added.join(', ')}`],
     ...unreachable.length === 0 ? [] : ['UNREACHED:', ...unreachable],
   ];
+}
+
+/** How many databases of each class are behind this build's stamp. */
+function behindCounts(behind: readonly Store[]): string {
+  const counts = new Map<string, number>();
+
+  for (const store of behind) counts.set(store.kind, (counts.get(store.kind) ?? 0) + 1);
+
+  return counts.size === 0 ? 'none' : [...counts].map(([kind, count]) => `${String(count)} ${kind}`).join(', ');
+}
+
+/** Each stale table whose drop would reach rows of a table the release did not change, where: never dropped. */
+export function cascadingDrops(reached: readonly Reached[]): string[] {
+  return storesOf(reached).flatMap((store) => store.answer.held.filter((held) => (held.cascades?.length ?? 0) > 0)
+    .map((held) => `${held.table} on ${store.kind} ${store.label}, whose rows ${held.cascades?.join(', ') ?? ''} refer to`));
+}
+
+/** A changed table some database holds that no class's stamp covers: made lazily, after its object started, so a
+ *  database holding its old genesis is never refused, and this step cannot tell when it is done. */
+export function unstampedTables(changed: readonly ChangedTable[], classes: Readonly<Record<string, readonly string[]>>, reached: readonly Reached[]): string[] {
+  const stamped = new Set(Object.values(classes).flat());
+  const stores = storesOf(reached);
+
+  return changed.filter((table) => table.change !== 'removed' && !stamped.has(table.table) && holdersOf(table, stores).length > 0).map((table) => table.table);
 }
 
 /** The words a production tables reset is confirmed with: every table it drops or remakes, every column it drops. */
@@ -185,21 +253,30 @@ export interface TablesTarget {
   ops: (pass: string, body: { readonly class: ResetClass; readonly ids: readonly string[]; readonly request: TablesRequest }) => Promise<{ status: number; text: string }>;
 }
 
+const StoreAnswerEntries = {
+  stamp: v.picklist(['current', 'unmade', 'behind']),
+  census: v.array(v.object({ table: v.string(), rows: v.number() })),
+  held: v.array(v.object({
+    table: v.string(), rows: v.number(), stale: v.boolean(), keepsRows: v.boolean(), refused: v.optional(v.string()), cascades: v.optional(v.array(v.string())),
+  })),
+  dropped: v.array(v.string()),
+};
+
 const OpsAnswerSchema = v.object({
   objects: v.array(v.object({
     id: v.string(),
     answer: v.optional(v.object({
       name: v.nullable(v.string()),
-      census: v.array(v.object({ table: v.string(), rows: v.number() })),
-      held: v.array(v.object({ table: v.string(), rows: v.number(), stale: v.boolean(), keepsRows: v.boolean(), refused: v.optional(v.string()) })),
-      dropped: v.array(v.string()),
+      ...StoreAnswerEntries,
+      agents: v.optional(v.array(v.object({ name: v.string(), ...StoreAnswerEntries }))),
     })),
     error: v.optional(v.string()),
   })),
 });
 
-/** Every object of both classes asked `request`, under a pass written for this run and deleted after it. */
-export async function reachAll(target: TablesTarget, request: TablesRequest): Promise<Reached[]> {
+/** Every object of both classes asked `request`, under a pass written for this run and deleted after it: those the
+ *  listing names, and every one in `met` besides, which an earlier pass reached and a later listing may not name. */
+export async function reachAll(target: TablesTarget, request: TablesRequest, met: readonly Reached[] = []): Promise<Reached[]> {
   const pass = randomBytes(32).toString('base64url');
   const digest = sha256Hex(pass);
 
@@ -209,7 +286,8 @@ export async function reachAll(target: TablesTarget, request: TablesRequest): Pr
     const reached: Reached[] = [];
 
     for (const className of RESET_CLASSES) {
-      const ids = await target.objects(className);
+      const listed = await target.objects(className);
+      const ids = [...new Set([...listed, ...met.filter((object) => object.className === className).map((object) => object.id)])];
 
       for (let at = 0; at < ids.length; at += OPS_OBJECTS_PER_REQUEST) {
         const answer = await askAdmitted(target, pass, { class: className, ids: ids.slice(at, at + OPS_OBJECTS_PER_REQUEST), request });
@@ -257,6 +335,35 @@ export async function listedObjects(account: string, namespace: string, token: s
   } while (cursor !== undefined && cursor !== '');
 
   return ids;
+}
+
+/** The census lines two runs disagree on, as `table: before → after` per database; `changed` names the tables the
+ *  release meant to change, so every other line is one it should not have moved. */
+export interface CensusDiff {
+  readonly meant: string[];
+  readonly unmeant: string[];
+}
+
+export function censusDiff(before: readonly string[], after: readonly string[], changed: ReadonlySet<string>): CensusDiff {
+  const rows = (lines: readonly string[]) => new Map(lines.map((line) => {
+    const [kind, label, table, count] = line.split('\t');
+
+    return [`${kind ?? ''}\t${label ?? ''}\t${table ?? ''}`, count ?? ''];
+  }));
+
+  const was = rows(before);
+  const now = rows(after);
+  const meant: string[] = [];
+  const unmeant: string[] = [];
+
+  for (const key of [...new Set([...was.keys(), ...now.keys()])].sort()) {
+    if (was.get(key) === now.get(key)) continue;
+    const line = `${key.replaceAll('\t', ' ')}: ${was.get(key) ?? '-'} → ${now.get(key) ?? '-'}`;
+
+    (changed.has(key.split('\t')[2] ?? '') ? meant : unmeant).push(line);
+  }
+
+  return { meant, unmeant };
 }
 
 /** Writes `lines` to `file`, newline-ended. */

@@ -38,7 +38,7 @@ function previousAccount() {
   return { db, sql };
 }
 
-const writes = (db: Database, sql: SqlExec): TableWrites => ({ transactionSync: (write) => db.transaction(write)(), init: () => { initUserTables(sql); } });
+const writes = (db: Database, sql: SqlExec): TableWrites => ({ schema: 'account', transactionSync: (write) => db.transaction(write)(), init: () => { initUserTables(sql); } });
 
 const columnsOf = (sql: SqlExec, table: string) => sql.exec(`PRAGMA table_info(${table})`).toArray().map((row) => v.parse(ColumnSchema, row).name);
 
@@ -87,4 +87,20 @@ test('only the capability /ops/tables mints is admitted', async () => {
   await expect(requireOps(KEY, { opsToken: 'b'.repeat(64) })).rejects.toThrow('only through the deployment\'s /ops/tables route');
   await expect(requireOps(KEY, null)).rejects.toThrow('/ops/tables');
   await expect(requireOps({}, await opsCaller(KEY))).rejects.toThrow('CREDENTIAL_ENCRYPTION_KEY');
+});
+
+test('a table whose drop would reach rows of a table the release did not change is not dropped, and says which', () => {
+  const db = new Database(':memory:');
+  const sql = sqlStorageOver(db);
+
+  sql.exec('CREATE TABLE parents (id TEXT PRIMARY KEY, old INTEGER)');
+  sql.exec('CREATE TABLE children (id TEXT PRIMARY KEY, parent TEXT REFERENCES parents(id) ON DELETE CASCADE)');
+  sql.exec("INSERT INTO parents VALUES ('p', 1)");
+  sql.exec("INSERT INTO children VALUES ('c', 'p')");
+  const remade: ChangedTable = { table: 'parents', change: 'remade', columns: ['id', 'fresh'], dropped: [] };
+  const answer = resetTables(sql, { tables: [remade], drop: true }, { schema: 'account', transactionSync: (write) => db.transaction(write)(), init: () => {} });
+
+  expect(answer.held).toEqual([{ table: 'parents', rows: 1, stale: true, keepsRows: false, cascades: ['children'] }]);
+  expect(answer.dropped).toEqual([]);
+  expect(sql.exec('SELECT COUNT(*) AS n FROM children').toArray()).toEqual([{ n: 1 }]);
 });

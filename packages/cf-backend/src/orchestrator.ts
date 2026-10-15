@@ -482,7 +482,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     this.installClientMessageGate();
-    const gate = new ActivationGate();
+    const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     startBeforeRpc(this, ORCHESTRATOR_STARTED_RPC, () => (this.nimbusSibling ? Promise.resolve() : gate.ready()));
   }
@@ -4236,20 +4236,38 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Device connection is user-level: UserDO owns the tunnel socket and tokens; nothing
   // per-agent verifies, attaches, issues or lists a device token.
 
-  /** DDL only; no persisted schema version. */
-  /** A release's tables reset (`scripts/reset.ts tables`): what this workspace holds of the changed tables, and with
-   *  `drop`, those still in the old shape dropped and made again. Only `/ops/tables` holds the capability. A Nimbus
-   *  sibling holds no workspace table and makes none. */
+  /**
+   * A release's tables reset (`scripts/reset.ts tables`): what this workspace and each agent whose database it keeps
+   * (a retired one's too) hold of the changed tables, and with `drop`, each brought to this build: what is stale
+   * dropped, made again by its own init, and stamped. The agents go first, while the directory that names them is as
+   * the build before left it. Only `/ops/tables` holds the capability. A Nimbus sibling holds no workspace table.
+   */
   async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
     await requireOps(this.env, caller);
     const { tables, drop } = v.parse(TablesRequestSchema, request);
 
+    const agents = this.nimbusSibling ? [] : await Promise.all(this.agentsWithStores(true).map(async (actorId) => ({
+      name: this.actorDirectoryStore().retained(actorId)?.name ?? actorId,
+      ...await this.isolateCall(actorId, (isolate) => isolate.opsTables({ tables, drop })),
+    })));
+
     const answer = resetTables(this.ctx.storage.sql, { tables, drop }, {
-      transactionSync: (write) => this.ctx.storage.transactionSync(write),
-      init: () => { if (!this.nimbusSibling && this.storageRefusal === undefined) this.initTables(); },
+      schema: 'workspace', transactionSync: (write) => this.ctx.storage.transactionSync(write),
+      init: () => {
+        this.initBaseTables();
+
+        if (!this.nimbusSibling) this.initTables();
+      },
     });
 
-    return { name: this.addressedName, ...answer };
+    // Brought to this build and stamped: open to every call from here, as one constructed now would be.
+    if (drop && this.storageRefusal !== undefined) {
+      this.storageRefusal = undefined;
+
+      if (!this.nimbusSibling && this.workspaceBorn()) this.registerCompactionExtension();
+    }
+
+    return { name: this.addressedName, ...answer, agents };
   }
 
   private initTables(): void {
@@ -5318,8 +5336,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Retired ones hold their stores until destroyed; main's isolate, once it ran a turn, and not opened for none. A store
    *  this version refuses never ran one: its conversation is the workspace's own, old, table. */
-  private agentsWithStores(): string[] {
-    const mainHolds = (): boolean => this.storageRefusal === undefined && this.config.getHoldsTurns();
+  /** `behind`: asked by the tables step of storage it has not brought to this build yet, which no other call reads. */
+  private agentsWithStores(behind = false): string[] {
+    const mainHolds = (): boolean => (behind || this.storageRefusal === undefined) && this.config.getHoldsTurns();
 
     return this.actorDirectoryStore().list({ retired: true })
       .filter((record) => (record.parentActorId === null ? mainHolds() : hostedActorPlacement(record).homeName !== null))
