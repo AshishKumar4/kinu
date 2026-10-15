@@ -953,3 +953,156 @@ requirements:
       - Read correctness assumes ordered authentic records and correct base and chunk bytes; SHA-256 collision resistance and the Rust translation are tested assumptions, not axioms or kernel proofs
       - The readiness state machine covers the composed mounts and captured runtime generation; kernel scheduling, external mount mutation, network latency and the 30-second wall-clock target remain runtime evidence
       - Arbitrary service scans and writable opens can demand whole files before full lifecycle readiness; no bound on that demanded work or on unsynced mmap checkpointing is claimed
+  PR-SHARE-001:
+    statement: In the sharing model a grant keeps its holder, slate, source, function, domain and effect for life, a run keeps its requester, function, revision, argument, grants and label, a cell keeps its label, every id and generation lies below a counter that only grows, everything the state holds names a slate that exists, and the structural state never depends on a value.
+    status: by-construction-witness
+    theorems:
+      - Kinu.Sharing.Model.step_core
+      - Kinu.Sharing.Facts.lookup_through_a_map
+      - Kinu.Sharing.Facts.capSame_refl
+      - Kinu.Sharing.Facts.capSame_trans
+      - Kinu.Sharing.Facts.a_grant_keeps_its_identity
+      - Kinu.Sharing.Facts.a_run_keeps_its_identity
+      - Kinu.Sharing.Facts.a_cell_keeps_its_label
+      - Kinu.Sharing.Facts.a_cell_stays_where_it_is
+      - Kinu.Sharing.Facts.slate_lookup_through_a_map
+      - Kinu.Sharing.Facts.the_counter_never_falls
+      - Kinu.Sharing.Facts.fresh_init
+      - Kinu.Sharing.Facts.every_id_is_below_the_counter
+      - Kinu.Sharing.Confinement.exec_core
+      - Kinu.Sharing.Confinement.every_reachable_state_is_fresh_and_anchored
+    tsRefs:
+      - packages/core/src/slates/sharing.ts#ShareGrantSchema
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore
+      - packages/core/src/slates/state.ts#SqliteSlateStateStore
+    remainingEvidence:
+      - The model is the sharing design (one live slate, lends, personal grants, labels), which is not built; today's code is the live share it replaces, so no fixture runs any of it
+      - Ids and generations are one counter; the build must mint them from one monotonic source per slate object
+  PR-SHARE-002:
+    statement: On one shared slate every grant a run holds was minted by its holder to that slate and function and admits the run's argument; a person's own connection is exercised only in that person's own requests, never another collaborator's, a link visitor's or the slate's own work; another person's run reaches the owner's authority only as a lend the owner minted; every admission holds each grant live at its current generation, bound to the code revision that runs, with the argument in the declared domain; an effect someone else's call asks for runs only on its holder's approval of that generation, argument and step; and removing the requester check, the revision binding or the one-step approval lets a collaborator drive another's connection, an editor run the owner's effect, or one approval repeat an effect.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.Sharing.Confinement.confinement_is_kept
+      - Kinu.Sharing.Confinement.every_run_holds_only_grants_of_its_own_slate_and_function
+      - Kinu.Sharing.Confinement.a_grant_is_minted_by_its_holder
+      - Kinu.Sharing.Confinement.another_persons_run_reaches_the_owner_only_through_a_lend
+      - Kinu.Sharing.Confinement.a_personal_grant_acts_only_in_its_holders_requests
+      - Kinu.Sharing.Confinement.every_admission_is_current_and_in_domain
+      - Kinu.Sharing.Attacks.a_collaborator_drives_anothers_connection_without_the_requester_check
+      - Kinu.Sharing.Attacks.the_requester_check_keeps_a_connection_its_holders
+      - Kinu.Sharing.Attacks.an_editor_runs_the_owners_effect_without_revision_binding
+      - Kinu.Sharing.Attacks.revision_binding_suspends_an_edited_lend
+      - Kinu.Sharing.Revocation.an_approval_names_one_step
+      - Kinu.Sharing.Attacks.one_approval_repeats_an_effect_without_binding_it_to_a_step
+      - Kinu.Sharing.Attacks.an_approval_admits_one_effect
+    tsRefs:
+      - packages/core/src/slates/caller.ts#shareCaller
+      - packages/core/src/slates/share-viewers.ts#SlateShareViewers.call
+      - packages/core/src/slates/capability-graph.ts#cutShareGrant
+      - packages/core/src/slates/surface.ts#SlateCallRequestSchema
+      - packages/cf-backend/src/slates/bindings.ts#SlateBinding
+    remainingEvidence:
+      - Not built. Today's shareCaller resolves every viewer call as the owner's root, which this requirement replaces; the build adds per-run envs holding grant references, admission in one caretaker, and a refinement fixture of permits over admit and toolStep
+      - Unforgeable references and the codec's soundness are premises; Workers RPC stubs with host-sealed props and the bounded codec are what the build must show satisfy them
+      - Credentials are outside the model; that no credential byte enters a run's isolate is the reference premise, not a theorem
+  PR-SHARE-003:
+    statement: A fork of a shared slate is owned by its forker, at the source's code, with no member, link, listing, grant, declassification, run or state; in every reachable state its runs hold only its own grants, never its parent's; listing a slate in the Gallery changes nothing but the listing; and a fork that kept its source's lends would still call the owner's server after the owner stopped sharing.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.Sharing.Confinement.a_fork_starts_with_its_code_alone
+      - Kinu.Sharing.Confinement.a_fork_never_reaches_its_parents_grants
+      - Kinu.Sharing.Confinement.a_listing_never_mints
+      - Kinu.Sharing.Attacks.a_fork_keeps_the_owners_lend_without_bare_forks
+      - Kinu.Sharing.Attacks.bare_forks_hold_no_lend
+    tsRefs:
+      - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.admit
+      - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.liveBundle
+    remainingEvidence:
+      - Not built as modelled; today's blueprint admission already carries no credential and admits every requirement unsatisfied, which the build keeps
+      - Code is modelled as a revision, not as data; a secret a person types into code is outside the model and is what the publish-time secret scan looks for
+      - The Gallery's own object and index are not modelled; that a listing is a projection which never mints is the model's publish step
+  PR-SHARE-004:
+    statement: Revocation is one step of one caretaker, its linearization point; afterwards no run that held a switched-off grant at an earlier generation acts or releases again, even after the grant is switched back on, no session a removed person held before (membership or link) and no session of a stopped link is current again, a withdrawn declassification is never live again, and without generations a revoked call resumes and reaches its requester.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.Sharing.Revocation.a_dead_run_is_refused_everything
+      - Kinu.Sharing.Revocation.a_grants_generation_never_returns
+      - Kinu.Sharing.Revocation.a_revoked_grant_never_acts_again
+      - Kinu.Sharing.Revocation.a_removed_persons_sessions_stay_ended
+      - Kinu.Sharing.Revocation.a_stopped_links_sessions_stay_ended
+      - Kinu.Sharing.Revocation.a_withdrawn_declassification_stays_withdrawn
+      - Kinu.Sharing.Attacks.a_revoked_call_resumes_without_generations
+      - Kinu.Sharing.Attacks.generations_keep_a_revoked_call_dead
+    tsRefs:
+      - packages/core/src/slates/share-viewers.ts#SlateShareViewers.admit
+      - packages/cf-backend/src/slates/host.ts#SlateHost.surfaceCall
+    remainingEvidence:
+      - Not built. The build serializes grants, sessions and declassifications in one object and checks the generation at admission, after every wait, before each tool step and before each release; a workerd test must show a revoke between admission and a queued approval, between two tool steps and before release
+      - Bytes already released are not recalled, and remote work dispatched before a revocation may complete after it; dispatch is the boundary the caretaker controls, and the model claims nothing past it
+  PR-SHARE-005:
+    statement: Data origin on a shared slate. For any fixed history with no event opening a source to a principal (its holder declassifying it to them, or a reader check finding they read it), that principal is shown the same values and placeholders, in the same order, by releases, rendered shared state and tool arguments, whatever the source holds; inserting anywhere an action of a run that read the source changes nothing they are shown; only a tag's holder can declassify it; and without the per-tag holder check, labels on persisted state, the tool-flow check, the sink audience, or with labelled runs free to post shared state, someone's private data reaches a person who cannot read it.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.Sharing.Origin.output_cells_are_kept
+      - Kinu.Sharing.Origin.one_step_keeps_q_blind
+      - Kinu.Sharing.Origin.q_stays_blind
+      - Kinu.Sharing.Origin.release_needs_every_contributing_tag_holder
+      - Kinu.Sharing.Origin.a_hidden_runs_step_shows_q_nothing
+      - Kinu.Sharing.Origin.a_hidden_runs_choices_show_q_nothing
+      - Kinu.Sharing.Origin.only_a_tags_holder_declassifies_it
+      - Kinu.Sharing.Origin.what_reaches_q_carries_no_closed_source
+      - Kinu.Sharing.Attacks.a_persons_own_mail_publishes_their_secret_without_the_sink_check
+      - Kinu.Sharing.Attacks.the_sink_check_keeps_a_secret_out_of_a_wide_effect
+      - Kinu.Sharing.Attacks.the_owner_leaks_a_collaborators_repo_without_the_holder_check
+      - Kinu.Sharing.Attacks.the_holder_check_keeps_a_collaborators_repo_private
+      - Kinu.Sharing.Attacks.shared_state_launders_a_label_without_persisted_labels
+      - Kinu.Sharing.Attacks.persisted_labels_keep_shared_state_private
+      - Kinu.Sharing.Attacks.a_lend_exfiltrates_a_collaborators_data_without_the_tool_flow_check
+      - Kinu.Sharing.Attacks.the_tool_flow_check_keeps_arguments_readable
+      - Kinu.Sharing.Attacks.a_labelled_run_posts_a_secret_without_the_post_guard
+      - Kinu.Sharing.Attacks.the_post_guard_hides_a_labelled_runs_choice
+    tsRefs:
+      - packages/core/src/slates/state.ts#slateStorageCall
+      - packages/core/src/slates/capability-graph.ts#grantAdmits
+    remainingEvidence:
+      - Not built; Kinu has no labels today. The build labels each grant's source, fixes a run's label at admission, stores labels with shared state, and checks every release, render and tool argument; a refinement fixture of flows and of the label a run gets must be generated from this model
+      - Runtime isolation is a premise; one run is one isolate whose label covers its whole heap, so the shared slate server never holds labelled content, only opaque handles
+      - Sealed rendering is a premise; labelled content reaches a screen in a frame the slate's own client code cannot read, so a request carries only what its person chose to send
+      - Reader checks are a premise; a check run with the reader's own grant must answer yes only if the reader may see what the source held, then or since, and a grant's declared sink must include everyone its effect reaches
+      - The schedule is a premise; a confined run cannot request admissions, mint, declassify, approve or edit code, so its own choices are only the actions the insertion theorem covers
+      - Timing, termination and refusal channels and relaying by a recipient are outside the model
+  PR-SHARE-006:
+    statement: The sharing model asks little of people. A call once admitted stays admissible until a grant of it is switched off, the code moves past the revision it was granted for, or its session ends; a placeholder asks exactly the holders of the sources the viewer cannot read, and their consent to that part shows it and no other part; connecting one's own source admits one's personal part; and being added lets a person in.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.Sharing.Friction.a_granted_call_stays_admissible
+      - Kinu.Sharing.Friction.a_placeholder_asks_exactly_the_holders_of_what_it_hides
+      - Kinu.Sharing.Friction.the_holders_consent_shows_a_placeholder
+      - Kinu.Sharing.Friction.a_parts_consent_shows_only_that_part
+      - Kinu.Sharing.Friction.connecting_admits_a_personal_part
+      - Kinu.Sharing.Friction.adding_someone_lets_them_in
+    tsRefs:
+      - packages/core/src/slates/share-viewers.ts#SlateShareViewers.admits
+      - packages/cf-backend/src/slates/host.ts#SlateHost.admitViewerRequest
+    remainingEvidence:
+      - Not built. Prompts are UI acts outside the model; the model proves what each answer unlocks and what a person need not be asked again, and the design page names the prompt for each
+  PR-SHARE-007:
+    statement: In the sharing model a grant serves only the function it was granted for, an effect waits for its holder only on someone else's call, and in the design scenarios (a team board, a public dashboard, a Gallery fork, a private repository shared with someone who cannot read it, a part over two people's sources) each person sees what the design page says and makes the decisions it counts.
+    status: by-construction-witness
+    theorems:
+      - Kinu.Sharing.Friction.a_grant_serves_only_its_function
+      - Kinu.Sharing.Friction.an_effect_waits_only_for_another_persons_call
+      - Kinu.Sharing.Friction.a_team_board_asks_only_its_owner
+      - Kinu.Sharing.Friction.a_public_dashboard_asks_visitors_nothing
+      - Kinu.Sharing.Friction.a_fork_asks_its_forker_only_for_their_own
+      - Kinu.Sharing.Friction.a_private_part_is_a_placeholder_and_no_prompt
+      - Kinu.Sharing.Friction.the_owner_showing_it_is_one_decision
+      - Kinu.Sharing.Friction.a_reader_of_the_source_sees_it_unasked
+      - Kinu.Sharing.Friction.a_join_needs_no_cross_consent
+      - Kinu.Sharing.Friction.a_withdrawn_show_hides_the_part_again
+      - Kinu.Sharing.Friction.a_removed_person_cannot_fork_by_the_link
+    tsRefs:
+      - packages/core/src/slates/members.ts#slateAddressImpact
+    remainingEvidence:
+      - The scenarios are concrete traces evaluated by the kernel; they witness the design's counts on those traces, not on every slate
+      - Signing in is not an event of the model, and clicks are counted on the design page, not here
