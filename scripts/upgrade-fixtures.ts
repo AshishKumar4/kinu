@@ -27,9 +27,9 @@
  *   bun scripts/upgrade-fixtures.ts     the deployment KINU_EVAL_ORIGIN names, as every post-publish row
  */
 import * as v from 'valibot';
-import { SLATES_ROOT } from '@kinu.run/core';
+import { SLATES_ROOT, VfsRevisionSchema } from '@kinu.run/core';
 import { evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
-import { resolveWebIdentity, webHeaders } from '../evals/src/workspace-roster';
+import { deleteWorkspace, listWorkspaces, resolveWebIdentity, webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { openSocketAs } from '../tests/first-run/public-socket';
 import { r2ObjectText, r2PutJson } from './cloudflare-rest';
 import { requireCloudflareAccountId } from './infra-cloudflare';
@@ -50,6 +50,12 @@ const SENDER_PASSWORD_ENV = 'KINU_UPGRADE_SENDER_PASSWORD';
 const EVAL_RECIPIENT = 'eval-service+devices@kinu.run';
 
 const SLATE = 'upgrade-slate';
+
+/** What every machine this row joins is labelled, so a later run finds the ones no anchor keeps. */
+const MACHINE_LABEL = 'upgrade fixture';
+
+/** What every eval workspace this row makes is named from, for the same reason. */
+const FRESH_PREFIX = 'upgrade-fresh-';
 
 /** The two paths a seed's file takes in turn, so a seed never writes over the file the baseline it replaces holds. */
 const NOTE_PATHS = ['notes/upgrade-a.md', 'notes/upgrade-b.md'] as const;
@@ -88,12 +94,16 @@ interface Request {
   readonly method?: string;
   readonly body?: string;
   readonly type?: string;
+  /** The revision a checked write is made over (`If-Match`). */
+  readonly ifMatch?: string;
 }
 
 async function call(account: Account, path: string, init: Request = {}): Promise<{ status: number; text: string }> {
   const headers = new Headers(account.headers);
 
   if (init.body !== undefined) headers.set('content-type', init.type ?? 'application/json');
+
+  if (init.ifMatch !== undefined) headers.set('if-match', init.ifMatch);
   const answer = await fetch(`${account.origin}${path}`, { method: init.method ?? 'GET', headers, body: init.body, signal: AbortSignal.timeout(60_000) });
 
   return { status: answer.status, text: await answer.text() };
@@ -156,10 +166,25 @@ function filePath(workspace: string, path: string): string {
   return `/api/workspaces/${encodeURIComponent(workspace)}/files?${new URLSearchParams({ executor: 'workspace', path }).toString()}`;
 }
 
-async function writeFile(account: Account, workspace: string, note: Note): Promise<void> {
-  const put = await call(account, filePath(workspace, note.path), { method: 'PUT', body: note.text, type: 'application/octet-stream' });
+const ConflictSchema = v.object({ revision: VfsRevisionSchema });
 
-  if (put.status >= 300) throw new Error(`writing ${note.path} as ${account.email} answered ${String(put.status)}: ${put.text.slice(0, 300)}`);
+type Revision = v.InferOutput<typeof VfsRevisionSchema>;
+
+/** `note` written as the file manager writes one: created where it is absent; where it is there (an earlier seed's),
+ *  over the revision the refusal names, which is the revision a reader would have opened. */
+async function writeFile(account: Account, workspace: string, note: Note): Promise<void> {
+  const put = (revision?: Revision) => {
+    const request: Request = { method: 'PUT', body: note.text, type: 'application/octet-stream' };
+
+    return call(account, filePath(workspace, note.path), revision === undefined ? request : { ...request, ifMatch: JSON.stringify(revision) });
+  };
+
+  let written = await put();
+  const held = written.status === 412 ? v.safeParse(v.pipe(v.string(), v.parseJson(), ConflictSchema), written.text) : null;
+
+  if (held?.success === true) written = await put(held.output.revision);
+
+  if (written.status >= 300) throw new Error(`writing ${note.path} as ${account.email} answered ${String(written.status)}: ${written.text.slice(0, 300)}`);
 }
 
 async function fileReads(account: Account, workspace: string, note: Note): Promise<Verdict> {
@@ -207,11 +232,11 @@ async function holdsShare(recipient: Account, share: string, wait: boolean): Pro
 
 /** A machine joined to `workspace` by a ticket issued now: its device, or why there is none. */
 async function joinMachine(account: Account, workspace: string): Promise<{ device?: string; why: string }> {
-  const issued = await call(account, '/api/user/devices', { method: 'POST', body: JSON.stringify({ label: 'upgrade fixture', workspace }) });
+  const issued = await call(account, '/api/user/devices', { method: 'POST', body: JSON.stringify({ label: MACHINE_LABEL, workspace }) });
   const ticket = /--join '([^']+)'/u.exec(issued.text)?.[1];
 
   if (ticket === undefined) return { why: `devices answered ${String(issued.status)}: ${issued.text.slice(0, 200)}` };
-  const joined = await call(account, '/pc/join', { method: 'POST', body: JSON.stringify({ ticket, label: 'upgrade fixture' }) });
+  const joined = await call(account, '/pc/join', { method: 'POST', body: JSON.stringify({ ticket, label: MACHINE_LABEL }) });
   const device = joined.status === 201 ? /"deviceId":"([^"]+)"/u.exec(joined.text)?.[1] : undefined;
 
   return device === undefined ? { why: `join answered ${String(joined.status)}: ${joined.text.slice(0, 200)}` } : { device, why: '' };
@@ -221,6 +246,17 @@ async function machineListed(account: Account, device: string): Promise<Verdict>
   const devices = await call(account, '/api/user/devices');
 
   return ['the machine joined to the workspace is listed', devices.status === 200 && devices.text.includes(device), `devices answered ${String(devices.status)} without ${device}`];
+}
+
+const DevicesSchema = v.array(v.looseObject({ id: v.string(), label: v.string() }));
+
+/** Every machine this row joined to the fixture account but `keep`. */
+async function removeMachinesBut(account: Account, keep: string | undefined): Promise<void> {
+  const listed = await call(account, '/api/user/devices');
+
+  for (const device of v.parse(DevicesSchema, JSON.parse(listed.text)).filter((each) => each.label === MACHINE_LABEL && each.id !== keep)) {
+    await removeMachine(account, device.id);
+  }
 }
 
 async function removeMachine(account: Account, device: string): Promise<void> {
@@ -242,6 +278,7 @@ async function continuity(fixture: Account, manifest: Manifest): Promise<Verdict
 interface EvalAccounts {
   readonly account: Account;
   readonly recipient: Account;
+  readonly identity: PublicWebIdentity;
 }
 
 function evalAccounts(origin: string): EvalAccounts {
@@ -252,13 +289,14 @@ function evalAccounts(origin: string): EvalAccounts {
   return {
     account: { origin, email: 'eval-service', headers: webHeaders(resolved.identity) },
     recipient: { origin, email: EVAL_RECIPIENT, headers: webHeaders({ ...resolved.identity, account: 'devices' }) },
+    identity: resolved.identity,
   };
 }
 
 /** The eval identity's account from nothing, on this build: its workspace's name, and the verdicts. */
 async function freshStart({ account, recipient }: EvalAccounts, stamp: string): Promise<{ workspace: string; verdicts: Verdict[] }> {
-  // Not `eval-`, which the eval sweep deletes: the newest stays, and this row removes the one before.
-  const workspace = await createWorkspace(account, `upgrade-fresh-${stamp}`);
+  // Not `eval-`, which the eval sweep deletes: the anchor's stays, and this row removes the rest.
+  const workspace = await createWorkspace(account, `${FRESH_PREFIX}${stamp}`);
   const note = { path: 'notes/fresh.md', text: `written on the build that just deployed, ${stamp}\n` };
   const said = `a fresh start ${stamp}: reply with one word`;
 
@@ -301,12 +339,24 @@ async function seed(fixture: Account, sender: Account, made: { stamp: string; fr
   return { manifest, verdicts };
 }
 
-/** What a seed made that no anchor keeps: its share, its machine, the eval account's fresh workspace. */
-async function retire(accounts: { fixture: Account; sender: Account; eval: Account }, made: Manifest): Promise<void> {
-  await call(accounts.sender, '/api/shared/revoke', { method: 'POST', body: JSON.stringify({ workspace: made.senderWorkspace, share: made.share }) });
+const SharedSchema = v.object({ mine: v.array(v.looseObject({ id: v.string(), kind: v.string(), slate: v.optional(v.string()), workspace: v.string() })) });
 
-  if (made.device !== '') await removeMachine(accounts.fixture, made.device);
-  await call(accounts.eval, `/api/user/workspaces/${encodeURIComponent(made.fresh)}`, { method: 'DELETE' });
+/** Everything this row made that `kept` does not name, removed by name: the sender's live shares of its slate, the
+ *  fixture account's machines, and the eval account's fresh workspaces. */
+async function sweep(accounts: { fixture: Account; sender: Account; evals: EvalAccounts }, kept: Manifest | null): Promise<void> {
+  const { fixture, sender, evals } = accounts;
+  const shared = v.parse(SharedSchema, JSON.parse((await call(sender, '/api/shared')).text));
+
+  for (const share of shared.mine.filter((row) => row.kind === 'live' && row.slate === SLATE && row.id !== kept?.share)) {
+    await call(sender, '/api/shared/revoke', { method: 'POST', body: JSON.stringify({ workspace: share.workspace, share: share.id }) });
+  }
+
+  await removeMachinesBut(fixture, kept?.device);
+  const { origin } = evals.account;
+
+  for (const row of await listWorkspaces(origin, evals.identity)) {
+    if (row.name.startsWith(FRESH_PREFIX) && row.name !== kept?.fresh) await deleteWorkspace(origin, evals.identity, row.name);
+  }
 }
 
 function printed(title: string, verdicts: readonly Verdict[]): boolean {
@@ -329,14 +379,15 @@ export interface FixtureRun {
   readonly freshStart: () => Promise<{ workspace: string; verdicts: Verdict[] }>;
   readonly seed: (made: { fresh: string; previous: Manifest | null }) => Promise<Seeded>;
   readonly writeAnchor: (manifest: Manifest) => Promise<void>;
-  /** What a seed made, removed: the one an anchor replaced, or one that did not hold. */
-  readonly retire: (made: Manifest) => Promise<void>;
+  /** Everything a run of this row made that `kept` (the anchor, when there is one) does not name, removed by name: the
+   *  baseline an anchor replaced, a seed that did not hold, and what any run that stopped part way left. */
+  readonly sweep: (kept: Manifest | null) => Promise<void>;
 }
 
 /**
  * The previous seed checked against the anchor; on any miss, red, and nothing more. Then a fresh start, and the next
- * seed, which becomes the anchor only once every part of it held; the anchor it replaced is then retired. A seed that
- * did not hold is removed, and the anchor stays as it was.
+ * seed, which becomes the anchor only once every part of it held; then everything the anchor does not name is swept.
+ * A seed that did not hold is swept, and the anchor stays as it was.
  */
 export async function runFixtures(run: FixtureRun, report: (title: string, verdicts: readonly Verdict[]) => boolean = printed): Promise<boolean> {
   const previous = await run.anchor();
@@ -348,14 +399,13 @@ export async function runFixtures(run: FixtureRun, report: (title: string, verdi
   const next = await run.seed({ fresh: fresh.workspace, previous });
 
   if (!report('the seed for the next deploy', next.verdicts)) {
-    await run.retire(next.manifest);
+    await run.sweep(previous);
 
     return false;
   }
 
   await run.writeAnchor(next.manifest);
-
-  if (previous !== null) await run.retire(previous);
+  await run.sweep(next.manifest);
 
   return started;
 }
@@ -381,7 +431,7 @@ async function deploymentRun(origin: string): Promise<FixtureRun> {
     freshStart: () => freshStart(evals, stamp),
     seed: (made) => seed(fixture, sender, { stamp, ...made }),
     writeAnchor: (manifest) => r2PutJson({ ...anchored, value: manifest }),
-    retire: (made) => retire({ fixture, sender, eval: evals.account }, made),
+    sweep: (kept) => sweep({ fixture, sender, evals }, kept),
   };
 }
 

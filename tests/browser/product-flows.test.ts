@@ -516,10 +516,11 @@ describe(productFlowTestName('drive-opens', 'the Drive opens and draws nothing e
     observed = await flowRow('drive-opens', driveOpens);
   });
 
-  test('on My stuff, or on Shared for an account that owns nothing yet, with its sidebar row lit', () => {
+  // The approved design (42f40a419, `landingPlace`): Slates first when there is one, as 8f9598ea1 built it.
+  test('on Slates when there is one, else on My stuff or Shared for an account that owns nothing yet, its sidebar row lit', () => {
     const opened = verdictOf(observed, 'drive-opens');
 
-    expect(['/drive', '/shared']).toContain(opened.landedAt);
+    expect(opened.places.includes('slates') ? ['/slates'] : ['/drive', '/shared']).toContain(opened.landedAt);
     expect(opened.sidebarLit).toBe(true);
   });
 

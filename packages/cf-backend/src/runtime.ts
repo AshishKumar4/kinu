@@ -31,7 +31,7 @@ import { diagnostics, toKinuError, detach } from "@kinu.run/core/obs";
 import { Effect } from 'effect';
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { DESKTOP_SIZE, WATCH_SHEET } from "@kinu.run/devbox/desktop";
-import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
+import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from "./computer-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
 import { previewHostSuffix, scopedTurnSurface } from "@kinu.run/core";
@@ -141,13 +141,13 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
   return objectNamed(namespace, userId);
 }
 
-async function ownerSandboxSize(env: Env, actor: ActorRuntimeIdentity): Promise<BoxSize | null> {
+async function ownerComputerSize(env: Env, actor: ActorRuntimeIdentity): Promise<BoxSize | null> {
   const owner = userDOStubFor(env, actor);
 
-  return owner === null ? null : accountSandboxSize(await owner.getConfig(await ownerCaller(env), SANDBOX_SIZE_CONFIG_KEY));
+  return owner === null ? null : accountComputerSize(await owner.getConfig(await ownerCaller(env), COMPUTER_SIZE_CONFIG_KEY));
 }
 
-const SANDBOX_SIZES = {
+const COMPUTER_SIZES = {
   sizes: BOX_SIZE_ORDER.map((size) => ({ size, ...BOX_SIZES[size] })),
   defaultSize: DEFAULT_BOX_SIZE,
 };
@@ -417,7 +417,7 @@ export function createCFRuntime(
         if (!userId) return;
         await sdk.configureEgress({ workspaceName: actor.workspaceName, ownerUserId: userId });
         // Unread, the box keeps its last default.
-        const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
+        const [accountSize] = await Promise.allSettled([ownerComputerSize(env, actor)]);
 
         if (accountSize.status === 'fulfilled') await sdk.useDefaultSize(accountSize.value);
         else diagnostics.failure('computer.account_size_unread', toKinuError({
@@ -438,7 +438,7 @@ export function createCFRuntime(
       executionRouter.register(createSandboxExecutor(handle, {
         previewHostSuffix: previewSuffix,
         activated: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts']),
-        sizes: SANDBOX_SIZES,
+        sizes: COMPUTER_SIZES,
         shells: machineShells,
         // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
         desktop: { driver: actor.actor.actorId, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } },

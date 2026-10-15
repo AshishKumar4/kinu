@@ -565,7 +565,7 @@ describe('a report that lands in a turn at work is not the ask that turn answers
 });
 
 // Since c66751bf2 a device call with no binding parks NOT RUN on its consent card, and the owner's answer wakes the agent
-// that asked, which re-issues it once: the scripted agent of each case whose own call parked does so.
+// that asked, which re-issues it once: machine-consent's scripted agent, whose own call parks, does so.
 describe('the owner\'s consent answer wakes the agent, which re-issues the call it approves', () => {
   const parkedOn = (machine: string) => `NOT RUN: using ${machine} from this workspace waits on the owner's consent. You are woken when they answer; do not re-issue it before then.`;
 
@@ -584,13 +584,6 @@ describe('the owner\'s consent answer wakes the agent, which re-issues the call 
     // Spliced into the turn that parked, as it lands while that turn is at work.
     expect(await reissued([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'user', content: wake }]))
       .toEqual([expect.objectContaining({ runtime: 'device', command: 'hostname' })]);
-  });
-
-  test('device-job-output: the job command, approved, is run again on the device', async () => {
-    const wake = await consentWake('kinu-first-run-devjob', DEVICE_JOB_COMMAND, 'once');
-
-    expect(await reissued([{ role: 'user', content: DEVICE_JOB_ASK }, ...shellCall('j1', DEVICE_JOB_COMMAND), { role: 'assistant', content: 'JOB NONE' }, { role: 'user', content: wake }]))
-      .toEqual([expect.objectContaining({ runtime: 'device', command: DEVICE_JOB_COMMAND })]);
   });
 
   test('a denial re-issues nothing, nor does an approval of a call this agent never asked for', async () => {

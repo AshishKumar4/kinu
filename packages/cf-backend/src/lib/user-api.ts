@@ -27,7 +27,7 @@ import * as v from 'valibot';
 import { ApiError, request } from './http';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
 import { THEME_CONFIG_KEY, type ThemeName } from '@kinu.run/core';
-import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
+import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 
 export type UserProfile = NonNullable<v.InferOutput<typeof AccountProfileSchema>>;
 
@@ -289,12 +289,12 @@ export const updateProfileCatalog = (
 
 export const listAvailableModels = (): Promise<ModelMenuResponse> => settle(api(ModelMenuResponseSchema, 'GET', '/models'));
 
-const SANDBOX_SIZE_PATH = `/config/${SANDBOX_SIZE_CONFIG_KEY}`;
+const COMPUTER_SIZE_PATH = `/config/${COMPUTER_SIZE_CONFIG_KEY}`;
 
-export const getAccountSandboxSize = (): Promise<BoxSize | null> =>
-  settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', SANDBOX_SIZE_PATH), (row) => accountSandboxSize(row.value)));
+export const getAccountComputerSize = (): Promise<BoxSize | null> =>
+  settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', COMPUTER_SIZE_PATH), (row) => accountComputerSize(row.value)));
 
-export const setAccountSandboxSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size }));
+export const setAccountComputerSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', COMPUTER_SIZE_PATH, { value: size }));
 
 /** The page already wears the account's theme (the server names it before paint); only a choice is sent. */
 export const setAccountTheme = (theme: ThemeName) => settle(api(OkSchema, 'PUT', `/config/${THEME_CONFIG_KEY}`, { value: theme }));

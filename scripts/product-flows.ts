@@ -1522,8 +1522,10 @@ const DRIVE_SECTIONS = `[...document.querySelectorAll('[data-drive-section]')].m
 const DRIVE_DRAWN = `document.querySelector('[data-drive-section], [data-drive-empty]') !== null`;
 
 export interface DriveOpensVerdict {
-  /** Where `/drive` landed: My stuff, or Shared for an account that owns nothing yet but was shared something. */
+  /** Where `/drive` landed: Slates when there is one, else My stuff, or Shared for an account that owns nothing yet. */
   readonly landedAt: string;
+  /** The places the Drive offers, by id (`mine`, `slates`, `shared`), as its column or its switch draws them. */
+  readonly places: readonly string[];
   readonly sections: readonly { readonly title: string; readonly tiles: number }[];
   readonly empty: boolean;
   /** The sidebar's Drive row is marked as the current page. */
@@ -1551,7 +1553,11 @@ export async function driveOpens(target: FlowTarget): Promise<DriveOpensVerdict>
       `[...document.querySelectorAll('a[aria-current="page"]')].some((link) => (link.textContent ?? '').trim() === 'Drive')`,
     ));
 
-    return { landedAt: new URL(page.url()).pathname, sections, empty, sidebarLit };
+    const places = v.parse(v.array(v.string()), await page.evaluate(
+      `[...new Set([...document.querySelectorAll('[data-drive-place], [data-drive-tab]')].map((place) => place.getAttribute('data-drive-place') ?? place.getAttribute('data-drive-tab') ?? ''))]`,
+    ));
+
+    return { landedAt: new URL(page.url()).pathname, places, sections, empty, sidebarLit };
   } finally {
     await page.close();
   }

@@ -19,6 +19,8 @@ interface PagedScrollOptions<Item> {
   pageSize?: number;
   /** `null`: not ready, ask again. */
   startFrom: () => SeekCursor | null;
+  /** What is being paged: another one starts the walk again, and a page asked for the one before never lands. */
+  subject?: string;
 }
 
 export const MAX_PAGE = 200;
@@ -89,14 +91,24 @@ function usePageLoads(pageSize: number) {
 }
 
 export function usePagedScroll<Item>({
-  fetchPage, startFrom, pageSize = 40,
+  fetchPage, startFrom, pageSize = 40, subject = "",
 }: PagedScrollOptions<Item>): PagedScroll<Item> {
   const [fetched, setFetched] = useState<readonly Item[]>([]);
   const [exhausted, setExhausted] = useState(false);
+  const [walking, setWalking] = useState(subject);
   const cursor = useRef<SeekCursor | null>(null);
   const latest = useRef({ fetchPage, startFrom });
   latest.current = { fetchPage, startFrom };
-  const { loading, error, busy, sizeFor, run } = usePageLoads(pageSize);
+  const { loading, error, busy, sizeFor, run, retire } = usePageLoads(pageSize);
+
+  // In the render that sees it, before anything can ask from the cursor the last subject left.
+  if (walking !== subject) {
+    setWalking(subject);
+    setFetched([]);
+    setExhausted(false);
+    cursor.current = null;
+    retire();
+  }
 
   const ready = cursor.current !== null || startFrom() !== null;
 

@@ -21,7 +21,7 @@ import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
 import { InviteCard } from "@/components/account/InviteCard";
 import { DevicesCard } from "@/components/devices/DevicesCard";
 import { AccountUsageCard } from "@/components/account/AccountUsageCard";
-import { SandboxSizeSettings } from "@/components/SandboxSize";
+import { ComputerSizeSettings } from "@/components/ComputerSize";
 import { BetaSettings } from "@/components/BetaSettings";
 import { AccountMemoryCard } from "@/components/account/AccountMemoryCard";
 import { AppearanceCard } from "@/components/account/AppearanceCard";
@@ -154,7 +154,7 @@ export default function UserSettingsPage() {
 
         {section === "models" && <ProfileCatalogSettings />}
 
-        {section === "computer" && <SandboxSizeSettings />}
+        {section === "computer" && <ComputerSizeSettings />}
 
         {section === "beta" && <BetaSettings />}
 

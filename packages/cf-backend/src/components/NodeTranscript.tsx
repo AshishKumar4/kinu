@@ -6,11 +6,11 @@ import {
   TreeStructureIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { UIMessage } from "ai";
+import { Effect } from "effect";
+import { KinuError, settle } from "@kinu.run/core/obs";
 import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
 import { shownHeadStatus, threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
 import { StatusDot, type StatusTone } from "@/components/ui/Status";
-import { Cause, Effect } from "effect";
-import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { ChatLiveTail, MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
@@ -20,7 +20,8 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@kinu.run/core/swarm-view";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
-import type { SeekCursor } from "@kinu.run/core";
+import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import type { Page, SeekCursor } from "@kinu.run/core";
 import { fmtTokens, timeAgo } from "@kinu.run/core";
 import type { ForkNode } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -227,7 +228,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
       )}
       <Outcome view={view} />
 
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      <div ref={scrollerRef} data-node-steps className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {messages.length === 0 && arriving === null ? <EmptyTrace view={view} /> : (
           <div className="space-y-3">
             {older && (older.hasMore || older.loading || older.error) && (
@@ -322,13 +323,6 @@ export function useNodeTranscript({ runId, nodeId, ownerPath = null, rpc, headAc
     if (previous.subject === subject && previous.tick !== tick) reload();
   }, [subject, tick, reload]);
 
-  // The boundary cursor freezes once the first older page lands; new steps change only the view.
-  const [walk, setWalk] = useState<{ steps: HeadStep[]; hasMore: boolean; below: SeekCursor | null; loading: boolean; error: string | null }>(
-    () => ({ steps: [], hasMore: false, below: null, loading: false, error: null }),
-  );
-
-  useEffect(() => { setWalk({ steps: [], hasMore: false, below: null, loading: false, error: null }); }, [subject]);
-
   const view = lastValue(resource);
 
   /** Retire the live delta when the journal's step count rises, whichever read revealed it; otherwise the step paints twice. */
@@ -343,62 +337,33 @@ export function useNodeTranscript({ runId, nodeId, ownerPath = null, rpc, headAc
     if (before.subject === subject && steps > before.steps) headDeltas.retire(nodeId);
   }, [subject, nodeId, view?.stepCount, headDeltas]);
 
-  const hasMore = walk.steps.length > 0 ? walk.hasMore : view?.steps.status === 'more';
   const viewBelow = view?.steps.status === 'more' ? view.steps.next : null;
-  const below = walk.steps.length > 0 ? walk.below : viewBelow;
-  const walkRef = useRef(subject);
-  walkRef.current = subject;
-  const inFlight = useRef<symbol | null>(null);
 
-  const loadOlder = useCallback(() => {
-    const at = walkRef.current;
+  // Each page is one item, so the walk reads oldest first by turning the pages around.
+  const fetchPage = useCallback((cursor: SeekCursor, limit: number): Promise<Page<readonly HeadStep[]>> => settle(Effect.gen(function* () {
+    if (runId === null || nodeId === null) return { status: 'end' as const, items: [] };
+    const page = { cursor, limit };
+    const next = yield* Effect.promise(() => rpc('getNodeTranscript', ownerPath === null ? [runId, nodeId, page] : [runId, nodeId, page, ownerPath]));
 
-    if (inFlight.current !== null || below === null || runId === null || nodeId === null) return;
-    setWalk((prev) => ({ ...prev, loading: true, error: null }));
-    const owner = Symbol('older page');
-    // Install the owner before a synchronous RPC fake can settle the page load.
-    inFlight.current = owner;
-    detach(Effect.ensuring(Effect.catchCause(Effect.catchCause(Effect.gen(function* () {
-      const page = { cursor: below };
-      const next = yield* Effect.promise(() => rpc('getNodeTranscript', ownerPath === null ? [runId, nodeId, page] : [runId, nodeId, page, ownerPath]));
+    if (!next) return yield* Effect.fail(new KinuError('missing', 'This trace could not be read.'));
 
-      if (walkRef.current !== at) return;
+    return next.steps.status === 'more'
+      ? { status: 'more' as const, items: [next.steps.items], next: next.steps.next }
+      : { status: 'end' as const, items: [next.steps.items] };
+  })), [rpc, runId, nodeId, ownerPath]);
 
-      if (!next) {
-        setWalk((prev) => ({ ...prev, loading: false, error: 'This trace could not be read.' }));
-
-        return;
-      }
-
-      setWalk((prev) => ({
-        steps: [...next.steps.items, ...prev.steps],
-        hasMore: next.steps.status === 'more',
-        below: next.steps.status === 'more' ? next.steps.next : null,
-        loading: false,
-        error: null,
-      }));
-    }), (failed) => Effect.sync(() => {
-      const cause = Cause.squash(failed);
-      diagnostics.event('transcript.older_page_abandoned',
-        { subject: at, error: renderThrownChain({ cause }) });
-
-      if (walkRef.current === at) {
-        setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause }) }));
-      }
-    })), (failed) => Effect.sync(() => {
-      diagnostics.event('transcript.older_page_handler_failed',
-        { subject: at, error: renderThrownChain({ cause: Cause.squash(failed) }) });
-    })), Effect.sync(() => {
-      if (inFlight.current === owner) inFlight.current = null;
-    })));
-  }, [rpc, runId, nodeId, ownerPath, below]);
+  // The boundary cursor freezes once the first older page lands; new steps change only the view.
+  const startFrom = useCallback(() => viewBelow, [viewBelow]);
+  const walk = usePagedScroll<readonly HeadStep[]>({ fetchPage, startFrom, subject });
+  const olderSteps = useMemo(() => [...walk.fetched].reverse().flat(), [walk.fetched]);
+  const hasMore = walk.fetched.length > 0 ? !walk.exhausted : view?.steps.status === 'more';
 
   return {
     view,
     resource,
     reload,
-    older: { steps: walk.steps, hasMore, loading: walk.loading, error: walk.error },
-    loadOlder,
+    older: { steps: olderSteps, hasMore, loading: walk.loading, error: walk.error },
+    loadOlder: walk.loadMore,
     pending: nodeId === null ? undefined : headDeltas.get(nodeId),
   };
 }

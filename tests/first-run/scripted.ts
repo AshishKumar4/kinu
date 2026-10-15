@@ -210,9 +210,8 @@ const machineConsent: Script = (request) => latest(request) !== CONSENT_ASK && !
   call('shell', { runtime: 'device', command: 'hostname', why }),
 ], ([shell]) => `HOST ${oneLine(shell?.result).slice(0, 300)}`);
 
-/** device-job-output: the one command, re-issued once the owner's answer approves it, answered with the job it detached
- *  into. */
-const deviceJob: Script = (request) => latest(request) !== DEVICE_JOB_ASK && !approvedAgain(request, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND) ? null : steps(request, [
+/** device-job-output: the one command, answered with the job it detached into. */
+const deviceJob: Script = (request) => latest(request) !== DEVICE_JOB_ASK ? null : steps(request, [
   call('shell', { runtime: 'device', command: DEVICE_JOB_COMMAND, why }),
 ], ([shell]) => `JOB ${/bgjob-[\w-]+/.exec(shell?.result ?? '')?.[0] ?? 'NONE'}`);
 
