@@ -15,6 +15,7 @@ import type { RawSqlExec, SqlExec } from '../../types/primitives';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
 import type { RoomRole } from '../room-api';
 import { READER_CHECK_LIFETIME_MS } from './reader-check';
+import { codecAdmits, CodecSchema, type Codec } from './codec';
 import {
   audienceFlows, canonicalRoot, dedup, flows, hidden, observers, sameTag, within,
   type Audience, type Elem, type LabelFacts, type Show, type Tag,
@@ -40,7 +41,8 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
   // image, so the room's image and the modules it runs can never describe two builds.
   execRaw(`CREATE TABLE IF NOT EXISTS room_images (
     image TEXT PRIMARY KEY,
-    modules TEXT NOT NULL
+    modules TEXT NOT NULL,
+    contracts TEXT NOT NULL
   )`);
   // name: a display copy, written when the person opens the slate; NULL while only invited.
   execRaw(`CREATE TABLE IF NOT EXISTS room_members (
@@ -153,40 +155,14 @@ const MemberRow = v.object({
 export type RoomMember = v.InferOutput<typeof MemberRow>;
 
 /**
- * A bounded data-only codec for a lent function's input: what reaches the function is checked against it at admission
- * (the model's `dom`). `text` and `json` take free input.
+ * What a function's contract is of: its one argument. A room's call carries its arguments as a list, so none is null,
+ * one is itself, and more than one is the list of them.
  */
-export type Codec =
-  | { readonly kind: 'none' }
-  | { readonly kind: 'enum'; readonly values: readonly (string | number | boolean)[] }
-  | { readonly kind: 'integer'; readonly min: number; readonly max: number }
-  | { readonly kind: 'text'; readonly maxLength: number }
-  | { readonly kind: 'json'; readonly maxBytes: number };
+function contractInput(input: JsonValue): JsonValue {
+  if (!Array.isArray(input) || input.length > 1) return input;
 
-const CodecSchema: v.GenericSchema<Codec> = v.variant('kind', [
-  v.object({ kind: v.literal('none') }),
-  v.object({ kind: v.literal('enum'), values: v.array(v.union([v.string(), v.number(), v.boolean()])) }),
-  v.object({ kind: v.literal('integer'), min: v.number(), max: v.number() }),
-  v.object({ kind: v.literal('text'), maxLength: v.number() }),
-  v.object({ kind: v.literal('json'), maxBytes: v.number() }),
-]);
-
-/** Takes free input: what someone types reaches the service. */
-export function codecIsFree(codec: Codec): boolean {
-  return codec.kind === 'text' || codec.kind === 'json';
+  return input[0] ?? null;
 }
-
-/** The model's `dom.contains arg`. */
-function codecAdmits(codec: Codec, input: JsonValue): boolean {
-  switch (codec.kind) {
-    case 'none': return input === null;
-    case 'enum': return codec.values.some((value) => value === input);
-    case 'integer': return typeof input === 'number' && Number.isInteger(input) && input >= codec.min && input <= codec.max;
-    case 'text': return typeof input === 'string' && input.length <= codec.maxLength;
-    case 'json': return new TextEncoder().encode(JSON.stringify(input)).length <= codec.maxBytes;
-  }
-}
-
 
 const GrantRow = v.object({
   id: v.number(), holder: v.string(), personal: v.number(), server: v.string(), root: v.string(), tools: v.string(),
@@ -553,6 +529,8 @@ export class RoomCaretaker {
   publish(author: string, built: {
     readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string; readonly secret: SecretSighting | null;
     readonly source?: string;
+    /** Each function's input contract, as the image's slate declares it: what a grant of it admits from then on. */
+    readonly contracts?: Readonly<Record<string, Codec>>;
   }): void {
     return settleSync(Effect.gen({ self: this }, function* () {
       if (!this.canEdit(author)) return yield* refused('denied', `${author} cannot change this slate`);
@@ -563,12 +541,19 @@ export class RoomCaretaker {
       // The same image again: the version a fork gets stays the one that built it, so files added since reach no fork.
       if (this.room().image === image) return;
 
-      this.db.exec('INSERT OR IGNORE INTO room_images (image, modules) VALUES (?, ?)', image, JSON.stringify(built.modules));
+      const contracts = built.contracts ?? {};
+
+      this.db.exec('INSERT OR IGNORE INTO room_images (image, modules, contracts) VALUES (?, ?, ?)', image, JSON.stringify(built.modules), JSON.stringify(contracts));
       this.db.exec(
         'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, source = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
         image, author, title, secret === null ? null : JSON.stringify(secret), source, author !== owner ? 1 : 0, secret !== null ? 1 : 0,
       );
       this.db.exec('UPDATE room_grants SET image = ? WHERE holder = ?', image, author);
+
+      // The author's own grants take the new image's contract for their function, where it declares one.
+      for (const [fn, contract] of Object.entries(contracts)) {
+        this.db.exec('UPDATE room_grants SET domain = ? WHERE holder = ? AND fn = ?', JSON.stringify(contract), author, fn);
+      }
 
       for (const show of this.shows().filter((each) => each.holder === author && each.fn !== null)) {
         this.db.exec('UPDATE room_shows SET images = ? WHERE id = ?', JSON.stringify([...show.images ?? [], image]), show.id);
@@ -577,6 +562,16 @@ export class RoomCaretaker {
   }
 
   // ── Grants ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  /** What the running image declares `fn` takes, or null where it declares nothing. */
+  contract(fn: string): Codec | null {
+    const image = this.room().image;
+    const row = image === null ? undefined : this.db.exec('SELECT contracts FROM room_images WHERE image = ?', image).toArray()[0];
+
+    if (row === undefined) return null;
+
+    return v.parse(v.record(v.string(), CodecSchema), JSON.parse(v.parse(v.object({ contracts: v.string() }), row).contracts))[fn] ?? null;
+  }
 
   grants(): Grant[] {
     return this.db.exec('SELECT * FROM room_grants ORDER BY id').toArray().map((row) => {
@@ -740,7 +735,7 @@ export class RoomCaretaker {
   private admits(grant: Grant, call: { readonly requester: Session | null; readonly fn: string; readonly input: JsonValue; readonly image: string }): boolean {
     const { requester } = call;
 
-    if (grant.fn !== call.fn || grant.image !== call.image || !codecAdmits(grant.domain, call.input)) return false;
+    if (grant.fn !== call.fn || grant.image !== call.image || !codecAdmits(grant.domain, contractInput(call.input))) return false;
 
     return grant.personal ? requester?.email === grant.holder : requester === null || requester.email !== null;
   }

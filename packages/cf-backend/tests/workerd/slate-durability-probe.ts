@@ -13,6 +13,7 @@ import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { cookieForTicket, frameTicket, roomHandle, roomObjectName, ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { handleSlateRoomHostRequest } from '../../src/slates/room-routes';
+import { sealedPart } from '../../src/slates/room-parts';
 import { ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
 import { GALLERY_OBJECT } from '../../src/gallery/gallery-do';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
@@ -461,6 +462,13 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const consecutive = [await probe('first'), await probe('second')];
 
     return [...consecutive, ...await Promise.all([probe('third'), probe('fourth')])];
+  }
+
+  /** A part's sealed content, as the app's origin serves it: its headers and its body. */
+  async sealed(value: JsonValue | null): Promise<{ csp: string | null; type: string | null; body: string }> {
+    const response = await sealedPart(value);
+
+    return { csp: response.headers.get('content-security-policy'), type: response.headers.get('content-type'), body: await response.text() };
   }
 
   /** A Plan caller's call of a slate method: refused before anything runs. */

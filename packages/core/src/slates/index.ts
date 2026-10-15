@@ -36,8 +36,8 @@ export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps
 export { answer as slateAnswer } from './controller';
 
 export {
-  RoomCaretaker, initSlateRoomTables, codecIsFree,
-  type Access, type Cell, type Codec, type Grant, type PendingEffect, type RoomCaretakerDeps, type RoomMember, type RoomRecord,
+  RoomCaretaker, initSlateRoomTables,
+  type Access, type Cell, type Grant, type PendingEffect, type RoomCaretakerDeps, type RoomMember, type RoomRecord,
   type Run, type SecretSighting, type Session, type ToolVerdict,
 } from './room/caretaker';
 
@@ -52,5 +52,7 @@ export {
 } from './room/passes';
 
 export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
+
+export { codecIsFree, CodecSchema, type Codec } from './room/codec';
 
 export { planReaderCheck, searchFindsRepository, READER_CHECK_LIFETIME_MS, type ConnectionTool, type ReaderCheckPlan } from './room/reader-check';

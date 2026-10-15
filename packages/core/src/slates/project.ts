@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { renderIssues, type JsonPrimitive } from '../utils/json';
+import { CodecSchema } from './room/codec';
 
 const Name = v.pipe(v.string(), v.minLength(1));
 
@@ -16,6 +17,8 @@ const SlateMetadata = v.strictObject({
   runtime: v.optional(v.literal('worker', NODE_ELSEWHERE), 'worker'),
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535))),
   title: v.optional(Name),
+  /** Each function's input contract: what its one argument may be when it runs with someone's lend (`room/codec.ts`). */
+  functions: v.optional(v.record(Name, v.strictObject({ input: CodecSchema }))),
 });
 
 const Project = v.object({

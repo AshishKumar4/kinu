@@ -316,6 +316,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;
   deleteWorkspace(workspace: string, owner: string): Promise<void>;
   isolatedRuns(input: { workspace: string; owner: string }): Promise<string[]>;
+  sealed(value: JsonValue | null): Promise<{ csp: string | null; type: string | null; body: string }>;
   draftRoom(workspace: string, id: string): Promise<boolean>;
   roomExists(workspace: string, id: string): Promise<boolean>;
   rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }>;

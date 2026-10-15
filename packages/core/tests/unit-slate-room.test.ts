@@ -4,7 +4,8 @@
  */
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { initSlateRoomTables, RoomCaretaker, type Codec, type Session } from '../src/slates/room/caretaker';
+import { initSlateRoomTables, RoomCaretaker, type Session } from '../src/slates/room/caretaker';
+import type { Codec } from '../src/slates/room/codec';
 import { canonicalRoot, type Elem } from '../src/slates/room/labels';
 import { makeExecRaw, makeSqlExec } from './helpers';
 
@@ -245,6 +246,28 @@ test('a fork\'s code is never its forker\'s own: publishing it grants nothing by
   const own = newRoom();
 
   expect(own.ownCode(SAM)).toBe(true);
+});
+
+test('each function takes what its slate declares: the image carries the contract, and its author\'s grants follow it', () => {
+  const caretaker = newRoom();
+  const week: Codec = { kind: 'integer', min: 1, max: 52 };
+
+  expect(caretaker.contract('deploy')).toBeNull();
+  caretaker.publish(SAM, { image: 'img-2', modules: {}, title: 'Board', secret: null, contracts: { deploy: week } });
+  expect(caretaker.contract('deploy')).toEqual(week);
+
+  const lend = caretaker.mint(SAM, {
+    personal: false, server: METRICS, root: {}, tools: ['deploy'], fn: 'deploy', domain: caretaker.contract('deploy') ?? ANY, effect: false, sink: [],
+  });
+
+  caretaker.invite(SAM, BOB, 'use');
+  expect(caretaker.grantsFor(enter(caretaker, BOB), 'deploy', 41).map((grant) => grant.id)).toEqual([lend.id]);
+  expect(caretaker.grantsFor(enter(caretaker, BOB), 'deploy', 'rm -rf /')).toEqual([]);
+
+  // Sam narrows it: his own lend follows his new image, contract and all.
+  caretaker.publish(SAM, { image: 'img-3', modules: {}, title: 'Board', secret: null, contracts: { deploy: { kind: 'enum', values: [1, 2] } } });
+  expect(caretaker.grant(lend.id)?.domain).toEqual({ kind: 'enum', values: [1, 2] });
+  expect(caretaker.grantsFor(enter(caretaker, BOB), 'deploy', 41)).toEqual([]);
 });
 
 test('an effect someone else asks for waits at its step, and one approval goes ahead once', () => {

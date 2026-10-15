@@ -4,7 +4,7 @@ export const SCHEMA_STAMPS = {
   workspace: 0x505cccd,
   agent: 0x94c36b4,
   local: 0xaf7b3e0,
-  room: 0xcaad020,
+  room: 0x22ac71d,
 } as const;
 
 /** The tables each class's init makes, which a repair brings to this build (state/schema-repair.ts). */

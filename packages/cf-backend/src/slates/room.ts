@@ -325,6 +325,7 @@ export class SlateRoom extends DurableObject<Env> {
   publish(input: {
     readonly author: string; readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string;
     readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null; readonly source: string;
+    readonly contracts: Readonly<Record<string, Codec>>;
   }): Promise<{ readonly methods: readonly string[] }> {
     return settle(Effect.gen({ self: this }, function* () {
       const before = this.caretaker.room().image;
@@ -799,7 +800,7 @@ export class SlateRoom extends DurableObject<Env> {
       yield* care(() => {
         this.caretaker.mint(holder, {
           personal: true, server: need.server, root: need.root, tools: this.toolsFor(holder, need), fn: need.fn,
-          domain: { kind: 'json', maxBytes: 65_536 }, effect, sink,
+          domain: this.caretaker.contract(need.fn) ?? { kind: 'json', maxBytes: OWN_GRANT_INPUT_BYTES }, effect, sink,
         });
       });
       this.needs.delete(part);
@@ -861,7 +862,8 @@ export class SlateRoom extends DurableObject<Env> {
     for (const grant of own.filter((each) => each.personal)) {
       this.caretaker.mint(actor, {
         personal: false, server: grant.server, root: v.parse(v.record(v.string(), v.string()), JSON.parse(grant.root)), tools: grant.tools,
-        fn, domain: grant.domain, effect: grant.effect, sink: grant.sink,
+        // A lend admits only what the function declares it takes; one that declares nothing takes free input, and says so.
+        fn, domain: this.caretaker.contract(fn) ?? grant.domain, effect: grant.effect, sink: grant.sink,
       });
     }
   }
@@ -1064,7 +1066,7 @@ export class SlateRoom extends DurableObject<Env> {
 
     this.caretaker.mint(holder, {
       personal: true, server: need.server, root: need.root, tools: [...new Set([...held?.tools ?? [], need.tool])], fn: need.fn,
-      domain: { kind: 'json', maxBytes: OWN_GRANT_INPUT_BYTES }, effect: impact !== 'observe', sink: impact === 'externalSend' ? 'anyone' : [],
+      domain: this.caretaker.contract(need.fn) ?? { kind: 'json', maxBytes: OWN_GRANT_INPUT_BYTES }, effect: impact !== 'observe', sink: impact === 'externalSend' ? 'anyone' : [],
     });
   }
 

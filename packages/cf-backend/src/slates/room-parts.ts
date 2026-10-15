@@ -52,7 +52,10 @@ export async function sealedPart(value: JsonValue | null): Promise<Response> {
           return;
         }
 
-        for (const [name] of element.attributes) {
+        // Named first: workerd refuses an attribute removed while its attributes are being walked.
+        const names = [...element.attributes].map(([name]) => name);
+
+        for (const name of names) {
           if (!ATTRIBUTES.has(name)) element.removeAttribute(name);
         }
       },

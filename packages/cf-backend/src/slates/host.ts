@@ -3,7 +3,7 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import { facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import {
   SlateController, slateAnswer, heldSlateKey, initEphemeralSlateTable, initSlateUsageTable, slateStorageCall, ROOT_SLATE_CALLER,
-  type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
+  type Codec, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
 } from '@kinu.run/core/slates';
 import {
   slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
@@ -61,6 +61,8 @@ export interface SlateRoomStub {
     readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null;
     /** The version of the slate's files the image was built from, which a fork of it gets. */
     readonly source: string;
+    /** Each function's input contract, as the slate's package.json declares it. */
+    readonly contracts: Readonly<Record<string, Codec>>;
   }): Promise<{ readonly methods: readonly string[] }>;
   callAs(email: string | null, fn: string, args: JsonValue[]): Promise<SlateAnswer<RoomCallOutcome>>;
   ownerFrame(): Promise<string>;
@@ -334,7 +336,7 @@ export class SlateHost {
 
       const { methods } = yield* attempt({ doing: `publishing slate ${id}`, otherwise: 'unavailable' }, async () => room.publish({
         author: this.editing.get(id) ?? owner, image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title: slateTitle(source.project, id), secret,
-        source: version.value,
+        source: version.value, contracts: Object.fromEntries(Object.entries(source.project.slate.functions ?? {}).map(([fn, declared]) => [fn, declared.input])),
       }));
 
       // Nothing of the workspace's serves the slate: its URL and its socket are its room's.

@@ -1195,7 +1195,8 @@
   ],
   "room_images@packages/core/src/slates/room/caretaker.ts": [
     "image TEXT PRIMARY KEY",
-    "modules TEXT NOT NULL"
+    "modules TEXT NOT NULL",
+    "contracts TEXT NOT NULL"
   ],
   "room_lend_uses@packages/core/src/slates/room/caretaker.ts": [
     "fn TEXT NOT NULL",
