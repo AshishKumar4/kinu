@@ -2350,6 +2350,42 @@ describe('Files at every width it is drawn', () => {
     });
   });
 
+  test("the view menu shows hidden items and draws tiles, and the account's choice holds when Files opens again", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const listed = () => page.$$eval('[data-files-entry]', (rows) => rows.map((row) => row.getAttribute('title') ?? ''));
+
+      const pick = async (item: string) => {
+        await page.click('[aria-label="View options"]');
+        await page.click(`[role="menu"] [${item}]`);
+      };
+
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=files&inspector=480`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-files-entry][title="home"]');
+
+      // A machine's own directories sit beside the workspace's places at its root, out of sight until asked for.
+      expect(await listed()).not.toContain('usr');
+      await pick('data-files-view-hidden');
+      await page.waitForSelector('[data-files-entry][title="usr"]');
+      await pick('data-files-view-tiles');
+      await page.waitForSelector('[data-files-layout="tiles"]');
+
+      // Tiles stand side by side: the first two share a line.
+      const tops = await page.$$eval('[data-files-entry]', (rows) => rows.slice(0, 2).map((row) => Math.round(row.getBoundingClientRect().top)));
+
+      expect(new Set(tops).size).toBe(1);
+
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-files-layout="tiles"] [data-files-entry][title="usr"]');
+      await page.click('[aria-label="View options"]');
+      const checked = await page.$$eval('[role="menu"] [aria-checked="true"]', (items) => items.map((item) => (item.textContent ?? '').trim()));
+
+      expect(checked.sort()).toEqual(['Show hidden items', 'Tiles']);
+      await page.close();
+    });
+  });
+
   test("a row's menu waits for the pointer, and a touch screen shows it on every row", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const menuShown = (page: Page, name: string) => page.$eval(

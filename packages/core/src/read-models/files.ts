@@ -9,13 +9,13 @@ import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
  */
 
 import {
-  MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, listWithVfsOps,
-  readBoundedWithVfsOps, partialTreeRemovalMessage, removeTree, type VfsMountRouting,
+  EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, listWithVfsOps,
+  readBoundedWithVfsOps, partialTreeRemovalMessage, removeTree,
 } from '../vfs/mounts';
 import { move } from '@nimbus-sh/core/vfs/move.js';
 import { inlineFileType } from './file-types';
 import type { DirectoryPages } from '../vfs/dirent';
-import { isSystemManaged } from '../vfs/workspace-path';
+import { isHiddenEntry, isSystemManaged } from '../vfs/workspace-path';
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -24,7 +24,7 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
 
 export interface ExecutorFileLookup {
-  getProvider(name: string): { files?: VFS & Pick<VfsMountRouting, 'places'> & Partial<DirectoryPages>; homeDir(segment?: string): Promise<string> } | undefined;
+  getProvider(name: string): { files?: VFS & Partial<DirectoryPages>; homeDir(segment?: string): Promise<string> } | undefined;
 }
 
 /** `consistency`: `durable` survives everything, `ephemeral` dies with the container,
@@ -70,6 +70,8 @@ export interface DirEntry {
   type: 'file' | 'dir';
   size?: number;
   mtimeMs?: number;
+  /** Listed because the reader asked for hidden items ({@link isHiddenEntry}). */
+  hidden?: true;
 }
 
 export type ExecutorWriteResult =
@@ -379,6 +381,12 @@ const LONGEST_ENTRY: DirEntry = { name: '\u0001'.repeat(NAME_MAX_BYTES), type: '
  *  any size is read and sent a page at a time. */
 export const FILES_PAGE_ENTRIES = Math.floor(PLATFORM_CATALOG['files.page_bytes'].limit.value / (JSON.stringify(LONGEST_ENTRY).length + 1));
 
+/** A page of a folder from `from`, its hidden items ({@link isHiddenEntry}) among the rest when `hidden`. */
+export interface FilesRequest {
+  readonly from?: number;
+  readonly hidden?: boolean;
+}
+
 /** `next`: where the folder's following page starts; absent after its last. */
 export interface FilesPage {
   path?: string;
@@ -404,6 +412,25 @@ function machineWindows(router: ExecutorFileLookup, dir: string): { readonly fil
   return { files: { readdirPage: (path, window) => readdirPage.call(files, path, window) }, at: dir.slice(point.length) };
 }
 
+/** A machine's own `/`: the workspace's namespace, the computer's, a PC's. */
+function atMachineRoot(dir: string): boolean {
+  return dir === '/' || dir === EXECUTOR_MOUNTS.computer || new RegExp(`^${EXECUTOR_MOUNTS.device}/[^/]+$`, 'u').test(dir);
+}
+
+/** The entries a reader is shown: the platform's never, the hidden ones only when asked, and then marked. */
+export function shownEntries(entries: readonly DirEntry[], dir: string, hidden: boolean): DirEntry[] {
+  const root = atMachineRoot(dir);
+
+  return entries.flatMap((entry): DirEntry[] => {
+    if (isSystemManaged(entry.name)) return [];
+
+    if (!isHiddenEntry(entry.name, root)) return [entry];
+    const marked: DirEntry = { ...entry, hidden: true };
+
+    return hidden ? [marked] : [];
+  });
+}
+
 /** A null `stat` is one unreadable child, or a mount point, not a failed listing. */
 function dirEntryOf({ name, type, stat }: { readonly name: string; readonly type: string; readonly stat?: VfsStat | null }): DirEntry {
   return { name, type: (stat?.type ?? type) === 'directory' ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs };
@@ -411,12 +438,9 @@ function dirEntryOf({ name, type, stat }: { readonly name: string; readonly type
 
 /** The whole folder, sorted: each ancestor of home also lists the next segment down, since on a fresh workspace nothing
  *  above home has directory entries and home would be unreachable by browsing. */
-async function wholeFolder(vfs: VFS & Pick<VfsMountRouting, 'places'>, dir: string, home: string): Promise<DirEntry[]> {
+async function wholeFolder(vfs: VFS, dir: string, home: string): Promise<DirEntry[]> {
   // A machine is asked nothing per child: its listing carries what it read, and a computer asked starts.
-  const listed = await listWithVfsOps(vfs, dir, (child) => !onMachine(child));
-  // The rest of a namespace's `/` is the machine's, which the owner never browses to.
-  const places = dir === '/' ? vfs.places?.() : undefined;
-  const entries = listed.filter(({ name }) => !isSystemManaged(name) && (places?.includes(name) ?? true)).map(dirEntryOf);
+  const entries = (await listWithVfsOps(vfs, dir, (child) => !onMachine(child))).map(dirEntryOf);
 
   if (home.startsWith('/') && (dir === '/' || home.startsWith(`${dir}/`))) {
     const next = home.slice(dir === '/' ? 1 : dir.length + 1).split('/')[0];
@@ -427,9 +451,10 @@ async function wholeFolder(vfs: VFS & Pick<VfsMountRouting, 'places'>, dir: stri
   return sortDirEntries(entries);
 }
 
-/** Typed directory listing, a page from `from`. Empty `path` means the environment's start; the answer always carries
- *  the absolute directory listed. */
-export function getExecutorFiles(router: ExecutorFileLookup, executorId: string, path: string, from = 0): Promise<FilesPage> {
+/** Typed directory listing, a page as `request` asks. Empty `path` means the environment's start; the answer always
+ *  carries the absolute directory listed. */
+export function getExecutorFiles(router: ExecutorFileLookup, executorId: string, path: string, request: FilesRequest = {}): Promise<FilesPage> {
+  const { from = 0, hidden = false } = request;
   const provider = router.getProvider(executorId);
   const vfs = provider?.files;
 
@@ -446,12 +471,12 @@ export function getExecutorFiles(router: ExecutorFileLookup, executorId: string,
       // A machine's folder is read from the machine a window at a time: its size never sits whole in this object.
       if (windows !== null) {
         const window = await windows.files.readdirPage(windows.at, { offset: from, limit: FILES_PAGE_ENTRIES });
-        const entries = sortDirEntries(window.entries.filter(({ name }) => !isSystemManaged(name)).map(dirEntryOf));
+        const entries = sortDirEntries(shownEntries(window.entries.map(dirEntryOf), dir, hidden));
 
         return { path: dir, entries, ...(window.next !== null && { next: window.next }) };
       }
 
-      const folder = await wholeFolder(vfs, dir, await provider.homeDir());
+      const folder = shownEntries(await wholeFolder(vfs, dir, await provider.homeDir()), dir, hidden);
       const end = from + FILES_PAGE_ENTRIES;
 
       return { path: dir, entries: folder.slice(from, end), ...(end < folder.length && { next: end }) };

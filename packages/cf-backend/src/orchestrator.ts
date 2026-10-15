@@ -196,7 +196,7 @@ import {
   type ChangeNote, type ChangeNotesResult, type NotedChanges,
   diffLines, type DiffLine,
   listEnvironments,
-  type ExecutorTextFile, type FilesPage, type ExecutorWriteResult,
+  type ExecutorTextFile, type FilesPage, type FilesRequest, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
   listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
@@ -6457,8 +6457,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** A page of the folder from `from`, read off the executor's own raw handle; its answer names where the next starts. */
-  @callable() async getExecutorFiles(executorId: string, path: string, from?: number): Promise<FilesPage> {
-    return await this.executors.files(executorId, path, from);
+  @callable() async getExecutorFiles(executorId: string, path: string, request?: FilesRequest): Promise<FilesPage> {
+    return await this.executors.files(executorId, path, request);
   }
 
   @callable() async readExecutorFile(executorId: string, path: string): Promise<ExecutorTextFile> {

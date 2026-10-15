@@ -2,18 +2,19 @@
 import { Effect, Cause } from 'effect';
 import {
   useCallback, useEffect, useMemo, useRef, useState,
-  type KeyboardEvent as ReactKeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
   ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon,
-  DownloadSimpleIcon, FileIcon, FolderIcon, FolderOpenIcon, HouseIcon,
-  MagnifyingGlassIcon, PencilSimpleIcon, PlugIcon, TrashIcon, UploadSimpleIcon,
+  DownloadSimpleIcon, EyeIcon, FileIcon, FolderIcon, FolderOpenIcon, HouseIcon, ListIcon,
+  MagnifyingGlassIcon, PencilSimpleIcon, PlugIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon,
   WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  formatBytes, joinDir, parentDir, shortAge, MOUNT_EXECUTORS, type DirEntry, type EnvironmentInfo,
+  DEFAULT_FILES_VIEW, formatBytes, joinDir, parentDir, shortAge, MOUNT_EXECUTORS,
+  type DirEntry, type EnvironmentInfo, type FilesView,
 } from "@kinu.run/core";
 import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
@@ -31,6 +32,7 @@ import {
 import type { VfsRevision } from "@nimbus-sh/core/vfs/vfs.js";
 import { composing } from "@/components/ui/form";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { getFilesView, setFilesView } from "@/lib/user-api";
 
 /** An upload over a file already there: replaced only on the owner's word. */
 function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: () => void; onKeep: () => void }) {
@@ -56,6 +58,9 @@ const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
 /** The list's columns at every width: icon, name, then size and age, one cell below 26rem and a column each from it. A
  *  touch screen keeps a gutter for the row's menu, which a pointer finds on hover over the age. */
 const COLUMNS = "grid-cols-[1rem_minmax(0,1fr)_auto] @[26rem]:grid-cols-[1rem_minmax(0,1fr)_4.5rem_4rem] items-center gap-x-2.5 px-3 pointer-coarse:pr-11";
+
+/** Tiles fill the column's width, as many as fit at their least. */
+const TILE_GRID = "grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1 px-2 py-1.5";
 
 /** What the menu covers under a pointer while it shows. */
 const UNDER_MENU = "pointer-fine:group-hover:invisible pointer-fine:group-has-[[data-drive-menu]:focus-visible]:invisible pointer-fine:group-has-[[aria-expanded=true]]:invisible";
@@ -131,6 +136,34 @@ function useMachines(executors: readonly ExecutorInfo[], mounts: readonly Enviro
   }, [deviceLabel, mounts, onConnectDevice]);
 }
 
+/** The account's Files view: its stored choice once read, and each change kept as it is made. */
+function useFilesView(): readonly [FilesView, (view: FilesView) => void] {
+  const { resource } = useAsyncResource(getFilesView, undefined, "files-view");
+  const [chosen, setChosen] = useState<FilesView | null>(null);
+
+  const choose = useCallback((next: FilesView) => {
+    setChosen(next);
+    detach(Effect.promise(() => setFilesView(next)));
+  }, []);
+
+  return [chosen ?? lastValue(resource) ?? DEFAULT_FILES_VIEW, choose];
+}
+
+/** How the folder is drawn, and whether its hidden items are among the rest: the account's, wherever it opens Files. */
+function ViewMenu({ view, onChange }: { view: FilesView; onChange: (view: FilesView) => void }) {
+  return (
+    <TileMenu name="View" className="relative" trigger={{
+      label: "View options",
+      icon: view.layout === "tiles" ? <SquaresFourIcon size={12} /> : <ListIcon size={12} />,
+      className: "p-1 rounded-sm hover:bg-[var(--c-elevated)]",
+    }} items={[
+      { label: "List", icon: <ListIcon size={16} />, radio: true, checked: view.layout === "list", marker: "data-files-view-list", onSelect: () => onChange({ ...view, layout: "list" }) },
+      { label: "Tiles", icon: <SquaresFourIcon size={16} />, radio: true, checked: view.layout === "tiles", marker: "data-files-view-tiles", onSelect: () => onChange({ ...view, layout: "tiles" }) },
+      { label: "Show hidden items", icon: <EyeIcon size={16} />, apart: true, checked: view.hidden, marker: "data-files-view-hidden", onSelect: () => onChange({ ...view, hidden: !view.hidden }) },
+    ]} />
+  );
+}
+
 /** A folder's page as the server answers it: `next` is where the following page starts, absent after the last. */
 interface FolderPage { readonly path: string; readonly entries: DirEntry[]; readonly next?: number }
 
@@ -138,9 +171,11 @@ interface FolderPage { readonly path: string; readonly entries: DirEntry[]; read
  * The folder at `path`, a page at a time: the first as the path opens, each following one on `more`. A bare mount
  * point's answer names the folder it landed on, which `adopt` makes the path; `cache` hears each first page.
  */
-function useFolder(rpc: WorkspaceRpc, path: string, adopt: (path: string) => void, cache: (dir: string, entries: DirEntry[]) => void) {
+function useFolder(rpc: WorkspaceRpc, target: { readonly path: string; readonly hidden: boolean }, adopt: (path: string) => void, cache: (dir: string, entries: DirEntry[]) => void) {
+  const { path, hidden } = target;
+
   const listDir = useCallback((dir: string, from?: number): Promise<FolderPage> => settle(Effect.gen(function* () {
-    const r = yield* Effect.promise(async () => rpc("getExecutorFiles", from === undefined ? [PLANE, dir] : [PLANE, dir, from]));
+    const r = yield* Effect.promise(async () => rpc("getExecutorFiles", [PLANE, dir, { ...(from !== undefined && { from }), hidden }]));
 
     if (r.error) return yield* Effect.die(new Error(r.error));
     const listed = r.entries ?? [];
@@ -149,7 +184,7 @@ function useFolder(rpc: WorkspaceRpc, path: string, adopt: (path: string) => voi
     if (from === undefined) cache(at, listed);
 
     return { path: at, entries: listed, ...(r.next !== undefined && { next: r.next }) };
-  })), [cache, rpc]);
+  })), [cache, hidden, rpc]);
 
   /** A bare mount point's listing, answered for the directory it landed on: written as that listing adopts the
    *  landed path, taken by the load the adoption starts, which then asks for nothing. */
@@ -177,7 +212,8 @@ function useFolder(rpc: WorkspaceRpc, path: string, adopt: (path: string) => voi
     return yield* Effect.die(new Error(renderThrownChain({ cause: e }), { cause: e }));
   }))), [adopt, listDir, path]);
 
-  const { resource: listing, reload } = useAsyncResource(loadListing, undefined, path);
+  // Keyed on what is listed too: hidden items shown is another listing of the folder.
+  const { resource: listing, reload } = useAsyncResource(loadListing, undefined, `${hidden ? "all" : "shown"}:${path}`);
   // The pages read after the first, dropped whenever the first is read again.
   const [later, setLater] = useState<FolderPage | null>(null);
 
@@ -250,7 +286,12 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const mounts = lastValue(mountsResource) ?? [];
 
   const cacheListing = useCallback((dir: string, listed: DirEntry[]) => setTreeCache((prev) => nextTreeCache(prev, dir, listed)), []);
-  const folder = useFolder(rpc, path, setPath, cacheListing);
+  const [view, chooseView] = useFilesView();
+  const folder = useFolder(rpc, { path, hidden: view.hidden }, setPath, cacheListing);
+  const { Entry, Away, grid, columns } = LAYOUTS[view.layout];
+
+  // The tree's folders were read for the other choice: each is read again as it is opened.
+  useEffect(() => { setTreeCache(new Map()); }, [view.hidden]);
   const { listing, entries, loading, err, listDir, reload: reloadListing } = folder;
 
   useEffect(() => {
@@ -406,19 +447,22 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
       </div>
 
       <div className="flex-1 min-w-0 flex flex-col relative">
-        <div className="px-3 py-2 border-b p-border flex items-center gap-1 text-xs font-mono shrink-0 overflow-x-auto">
-          <button data-files-crumb onClick={() => setPath("/")}
-            className="p-text-3 hover:p-text shrink-0" title="Workspace root">/</button>
-          {segments.map((seg, i) => (
-            <span key={i} className="flex items-center gap-1 min-w-0">
-              <button
-                data-files-crumb
-                onClick={() => setPath(`/${segments.slice(0, i + 1).join("/")}`)}
-                className={`truncate ${i === segments.length - 1 ? "p-text" : "p-text-3 hover:p-text"}`}
-              >{seg}</button>
-              {i < segments.length - 1 && <span className="p-text-3 shrink-0">/</span>}
-            </span>
-          ))}
+        {/* Only the crumbs scroll: a scrolling row would clip the view menu that opens under it. */}
+        <div className="px-3 py-2 border-b p-border flex items-center gap-1 text-xs font-mono shrink-0">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            <button data-files-crumb onClick={() => setPath("/")}
+              className="p-text-3 hover:p-text shrink-0" title="Workspace root">/</button>
+            {segments.map((seg, i) => (
+              <span key={i} className="flex items-center gap-1 min-w-0">
+                <button
+                  data-files-crumb
+                  onClick={() => setPath(`/${segments.slice(0, i + 1).join("/")}`)}
+                  className={`truncate ${i === segments.length - 1 ? "p-text" : "p-text-3 hover:p-text"}`}
+                >{seg}</button>
+                {i < segments.length - 1 && <span className="p-text-3 shrink-0">/</span>}
+              </span>
+            ))}
+          </div>
           <input ref={uploadInputRef} type="file" multiple className="hidden"
             onChange={(e) => detach(Effect.promise(async () => {
               const picked = [...(e.currentTarget.files ?? [])];
@@ -436,6 +480,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             <button onClick={() => uploadInputRef.current?.click()}
               className="flex items-center gap-1 p-text-3 hover:p-text p-1"
               title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
+            <ViewMenu view={view} onChange={chooseView} />
             {/* Drops every cached listing: a plane without mtime gives `nextTreeCache` nothing to compare. */}
             <button onClick={() => detach(Effect.promise(() => run(Effect.sync(() => {
               setTreeCache(new Map());
@@ -486,9 +531,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             className={`group/list flex-1 min-w-0 overflow-y-auto pb-1 text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--c-accent)] ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
             {...listDrop}
           >
-            <div aria-hidden="true" className={`sticky top-0 z-[1] hidden @[26rem]:grid ${COLUMNS} h-7 border-b p-border p-sidebar p-meta p-text-3`}>
-              <span /><span>Name</span><span className="text-right">Size</span><span className="text-right">Modified</span>
-            </div>
+            {columns}
             {err && <div className="p-danger px-3 py-1.5 break-words">{err}</div>}
             {uploads.map((u) => {
               // Named by its folder too once the owner has browsed away from it.
@@ -512,32 +555,36 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                 className={`grid ${COLUMNS} ${ROW_HEIGHT} w-full text-left p-text-3 hover:p-text p-row-hover`}
               ><ArrowUpIcon size={16} /><span className="p-row-text">..</span></button>
             )}
-            {!loading && placeOffline(filtered, offline).map((row) => {
-              if (!("entry" in row)) return <OfflineMountRow key={`offline-${row.name}`} row={row} />;
+            {!loading && (
+              <div data-files-layout={view.layout} className={grid}>
+                {placeOffline(filtered, offline).map((row) => {
+                  if (!("entry" in row)) return <Away key={`offline-${row.name}`} row={row} />;
 
-              const { entry, index } = row;
-              const full = joinDir(path, entry.name);
+                  const { entry, index } = row;
+                  const full = joinDir(path, entry.name);
 
-              return (
-                <EntryRow
-                  key={entry.name}
-                  entry={entry} badge={atRoot ? badgeFor(entry.name) : null}
-                  selected={index === selected}
-                  previewing={preview === full}
-                  renaming={renaming?.path === full ? renaming.draft : null}
-                  confirming={confirmDelete === full}
-                  downloadHref={entry.type === "file" ? rawUrl(full, true) : null}
-                  onSelect={() => setSelected(index)}
-                  onOpen={() => open(entry)}
-                  onRenameDraft={(draft) => setRenaming({ path: full, draft })}
-                  onRenameCommit={(draft) => commitRename(full, draft)}
-                  onRenameCancel={() => setRenaming(null)}
-                  onAskDelete={() => setConfirmDelete(full)}
-                  onDelete={() => deletePath(full)}
-                  onCancelDelete={() => setConfirmDelete(null)}
-                />
-              );
-            })}
+                  return (
+                    <Entry
+                      key={entry.name}
+                      entry={entry} badge={atRoot ? badgeFor(entry.name) : null}
+                      selected={index === selected}
+                      previewing={preview === full}
+                      renaming={renaming?.path === full ? renaming.draft : null}
+                      confirming={confirmDelete === full}
+                      downloadHref={entry.type === "file" ? rawUrl(full, true) : null}
+                      onSelect={() => setSelected(index)}
+                      onOpen={() => open(entry)}
+                      onRenameDraft={(draft) => setRenaming({ path: full, draft })}
+                      onRenameCommit={(draft) => commitRename(full, draft)}
+                      onRenameCancel={() => setRenaming(null)}
+                      onAskDelete={() => setConfirmDelete(full)}
+                      onDelete={() => deletePath(full)}
+                      onCancelDelete={() => setConfirmDelete(null)}
+                    />
+                  );
+                })}
+              </div>
+            )}
             {!loading && <MoreRow next={folder.next} more={() => run(Effect.promise(folder.more))} />}
             {!loading && filtered.length === 0 && offline.length === 0 && entries.length > 0 && (
               <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
@@ -690,7 +737,8 @@ function OfflineMountRow({ row }: { row: OfflineRow }) {
   );
 }
 
-function EntryRow({ entry, badge, selected, previewing, renaming, confirming, downloadHref, onSelect, onOpen, onRenameDraft, onRenameCommit, onRenameCancel, onAskDelete, onDelete, onCancelDelete }: {
+/** What a folder's entry is drawn from, as a row or a tile. */
+interface EntryProps {
   entry: DirEntry;
   badge: string | null;
   selected: boolean;
@@ -706,66 +754,120 @@ function EntryRow({ entry, badge, selected, previewing, renaming, confirming, do
   onAskDelete: () => void;
   onDelete: () => Promise<void>;
   onCancelDelete: () => void;
-}) {
-  const size = entry.type === "file" && entry.size != null ? formatBytes(entry.size) : null;
-  const age = entry.mtimeMs ? shortAge(entry.mtimeMs) : null;
-  const changed = entry.mtimeMs ? new Date(entry.mtimeMs).toLocaleString() : undefined;
+}
 
+/** An entry's size and age as the reader is told them, and its age to the second on hover. */
+function entryFacts(entry: DirEntry) {
+  return {
+    size: entry.type === "file" && entry.size != null ? formatBytes(entry.size) : null,
+    age: entry.mtimeMs ? shortAge(entry.mtimeMs) : null,
+    changed: entry.mtimeMs ? new Date(entry.mtimeMs).toLocaleString() : undefined,
+  };
+}
+
+/** The entry's own menu: its bytes, its name, and its removal. */
+function entryMenu({ entry, downloadHref, onRenameDraft, onAskDelete }: EntryProps): MenuItem[] {
   const fetchItem: MenuItem[] = downloadHref === null ? [] : [{
     label: "Download", icon: <DownloadSimpleIcon size={16} />, onSelect: () => saveAs(downloadHref), marker: "data-files-download",
   }];
 
-  const menu: MenuItem[] = [
+  return [
     ...fetchItem,
     { label: "Rename", icon: <PencilSimpleIcon size={16} />, onSelect: () => onRenameDraft(entry.name), marker: "data-files-rename" },
     { label: "Delete", icon: <TrashIcon size={16} />, onSelect: onAskDelete, danger: true, apart: true, marker: "data-files-delete" },
   ];
+}
 
-  // The cursor shows only while the keys drive it; what is open in the viewer stays marked.
-  const tone = previewing ? "p-fill p-text" : `p-text ${selected ? "group-focus-visible/list:p-fill" : ""}`;
+/** The cursor shows only while the keys drive it; what is open in the viewer stays marked. A hidden item is dimmed. */
+function entryTone({ entry, previewing, selected }: EntryProps): string {
+  const marked = previewing ? "p-fill p-text" : `p-text ${selected ? "group-focus-visible/list:p-fill" : ""}`;
+
+  return entry.hidden === true ? `${marked} [&_[data-entry-face]]:opacity-55` : marked;
+}
+
+function EntryIcon({ entry, size }: { entry: DirEntry; size: number }) {
+  return entry.type === "dir"
+    ? <FolderIcon data-entry-face size={size} className="shrink-0 p-info" weight="fill" />
+    : <FileIcon data-entry-face size={size} className="shrink-0 p-text-3" />;
+}
+
+function RenameField({ draft, onRenameDraft, onRenameCommit, onRenameCancel, className }: {
+  draft: string;
+  onRenameDraft: (draft: string) => void;
+  onRenameCommit: (draft: string) => Promise<void>;
+  onRenameCancel: () => void;
+  className: string;
+}) {
+  return (
+    <input
+      data-files-rename-input
+      autoFocus
+      value={draft}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => onRenameDraft(e.currentTarget.value)}
+      onKeyDown={(e) => detach(Effect.promise(async () => {
+        e.stopPropagation();
+
+        if (composing(e.nativeEvent)) return;
+
+        if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
+
+        if (e.key === "Escape") onRenameCancel();
+      }))}
+      onBlur={onRenameCancel}
+      className={`min-w-0 bg-transparent border p-border rounded-xs px-1.5 py-0 p-row-text p-text ${className}`}
+    />
+  );
+}
+
+function DeleteChoice({ name, onDelete, onCancelDelete, className }: {
+  name: string;
+  onDelete: () => Promise<void>;
+  onCancelDelete: () => void;
+  className: string;
+}) {
+  return (
+    <span className={`flex items-center gap-2.5 p-meta ${className}`} onClick={(e) => e.stopPropagation()}>
+      <button data-files-delete-confirm onClick={() => detach(Effect.promise(onDelete))}
+        className="font-medium p-danger hover:underline" aria-label={`Delete ${name}`}>Delete</button>
+      <button onClick={onCancelDelete} className="p-text-3 hover:p-text" aria-label="Keep it">Keep</button>
+    </span>
+  );
+}
+
+/** The entry's menu, out of sight until a pointer is over it, the keys reach it, or a finger could want it. */
+function EntryMenu({ props, className }: { props: EntryProps; className: string }) {
+  return (
+    <span className={`opacity-0 group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100 ${className}`}
+      onClick={(e) => e.stopPropagation()}>
+      <span className="relative block size-7">
+        <TileMenu name={props.entry.name} items={entryMenu(props)} className="absolute inset-0" />
+      </span>
+    </span>
+  );
+}
+
+function EntryRow(props: EntryProps) {
+  const { entry, badge, previewing, renaming, confirming, onSelect, onOpen } = props;
+  const { size, age, changed } = entryFacts(entry);
 
   return (
     <div
       data-files-entry
-      aria-selected={selected || undefined}
+      aria-selected={props.selected || undefined}
       title={entry.name}
-      className={`group relative grid ${COLUMNS} ${ROW_HEIGHT} cursor-pointer p-row-hover ${tone}`}
+      className={`group relative grid ${COLUMNS} ${ROW_HEIGHT} cursor-pointer p-row-hover ${entryTone(props)}`}
       onClick={() => { onSelect(); onOpen(); }}
     >
-      {entry.type === "dir"
-        ? <FolderIcon size={16} className="p-info" weight="fill" />
-        : <FileIcon size={16} className="p-text-3" />}
-      <span className="flex min-w-0 items-baseline gap-2">
-        {renaming !== null ? (
-          <input
-            data-files-rename-input
-            autoFocus
-            value={renaming}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => onRenameDraft(e.currentTarget.value)}
-            onKeyDown={(e) => detach(Effect.promise(async () => {
-              e.stopPropagation();
-
-              if (composing(e.nativeEvent)) return;
-
-              if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
-
-              if (e.key === "Escape") onRenameCancel();
-            }))}
-            onBlur={onRenameCancel}
-            className="w-full min-w-0 bg-transparent border p-border rounded-xs px-1.5 py-0 p-row-text p-text"
-          />
-        ) : (
-          <span className={`truncate p-row-text ${previewing ? "font-medium" : ""}`}>{entry.name}</span>
-        )}
+      <EntryIcon entry={entry} size={16} />
+      <span data-entry-face className="flex min-w-0 items-baseline gap-2">
+        {renaming !== null
+          ? <RenameField draft={renaming} {...props} className="w-full" />
+          : <span className={`truncate p-row-text ${previewing ? "font-medium" : ""}`}>{entry.name}</span>}
         {badge && <span data-mount-badge className="truncate p-meta p-text-3">{badge}</span>}
       </span>
       {confirming ? (
-        <span className="flex items-center justify-end gap-2.5 p-meta @[26rem]:col-span-2" onClick={(e) => e.stopPropagation()}>
-          <button data-files-delete-confirm onClick={(...args: Parameters<typeof onDelete>) => detach(Effect.promise(async () => onDelete(...args)))}
-            className="font-medium p-danger hover:underline" aria-label={`Delete ${entry.name}`}>Delete</button>
-          <button onClick={onCancelDelete} className="p-text-3 hover:p-text" aria-label="Keep it">Keep</button>
-        </span>
+        <DeleteChoice name={entry.name} {...props} className="justify-end @[26rem]:col-span-2" />
       ) : (
         <>
           <span className="hidden truncate text-right p-meta p-text-3 @[26rem]:block">{size}</span>
@@ -776,12 +878,70 @@ function EntryRow({ entry, badge, selected, previewing, renaming, confirming, do
         </>
       )}
       {/* No transform on the way: the menu is a fixed sheet on a phone. */}
-      <span className="absolute inset-y-0 right-1.5 flex items-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100"
-        onClick={(e) => e.stopPropagation()}>
-        <span className="relative size-7">
-          <TileMenu name={entry.name} items={menu} className="inset-0" />
-        </span>
+      <EntryMenu props={props} className="absolute inset-y-0 right-1.5 flex items-center" />
+    </div>
+  );
+}
+
+/** An entry as a tile: its icon large, its name on up to two lines, and what it holds under them. */
+function EntryTile(props: EntryProps) {
+  const { entry, badge, previewing, renaming, confirming, onSelect, onOpen } = props;
+  const { size, age, changed } = entryFacts(entry);
+
+  return (
+    <div
+      data-files-entry
+      aria-selected={props.selected || undefined}
+      title={entry.name}
+      className={`group relative flex min-w-0 cursor-pointer flex-col items-center gap-1 rounded-lg px-2 pb-2 pt-3 p-row-hover ${entryTone(props)}`}
+      onClick={() => { onSelect(); onOpen(); }}
+    >
+      <EntryIcon entry={entry} size={32} />
+      {renaming !== null
+        ? <RenameField draft={renaming} {...props} className="w-full text-center" />
+        : <span data-entry-face className={`line-clamp-2 w-full break-words text-center p-row-text ${previewing ? "font-medium" : ""}`}>{entry.name}</span>}
+      {badge && <span data-mount-badge className="max-w-full truncate p-meta p-text-3">{badge}</span>}
+      {confirming
+        ? <DeleteChoice name={entry.name} {...props} className="justify-center" />
+        : <span className="max-w-full truncate p-meta p-text-3" title={changed}>{[size, age].filter((part) => part !== null).join(" · ")}</span>}
+      <EntryMenu props={props} className="absolute right-1 top-1" />
+    </div>
+  );
+}
+
+/** A machine that is not there, as a tile where its folder's would be: its name, that it is away, and the way to bring it. */
+function OfflineMountTile({ row }: { row: OfflineRow }) {
+  return (
+    <div data-files-offline-mount title={row.reason} className="flex min-w-0 flex-col items-center gap-1 rounded-lg px-2 pb-2 pt-3">
+      <PlugIcon size={32} className="p-text-4" />
+      <span className="max-w-full truncate p-row-text p-text-3">{row.name}</span>
+      {row.label !== null && <span data-mount-badge className="max-w-full truncate p-meta p-text-4">{row.label}</span>}
+      <span className="flex items-baseline gap-1.5 p-meta">
+        <span className="p-text-4">offline</span>
+        {row.onConnect && (
+          <button type="button" data-files-connect onClick={row.onConnect} className="font-medium p-accent hover:underline">Connect</button>
+        )}
       </span>
     </div>
   );
 }
+
+/** The list's column heads, from 26rem where it has columns. */
+const COLUMN_HEADS = (
+  <div aria-hidden="true" className={`sticky top-0 z-[1] hidden @[26rem]:grid ${COLUMNS} h-7 border-b p-border p-sidebar p-meta p-text-3`}>
+    <span /><span>Name</span><span className="text-right">Size</span><span className="text-right">Modified</span>
+  </div>
+);
+
+/** What a way of drawing a folder draws it with: a list's rows sit in the list itself, tiles in their grid. */
+interface Layout {
+  readonly Entry: (props: EntryProps) => ReactNode;
+  readonly Away: (props: { row: OfflineRow }) => ReactNode;
+  readonly grid: string;
+  readonly columns: ReactNode;
+}
+
+const LAYOUTS: Readonly<Record<FilesView["layout"], Layout>> = {
+  list: { Entry: EntryRow, Away: OfflineMountRow, grid: "contents", columns: COLUMN_HEADS },
+  tiles: { Entry: EntryTile, Away: OfflineMountTile, grid: TILE_GRID, columns: null },
+};

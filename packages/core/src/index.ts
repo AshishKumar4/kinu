@@ -1092,7 +1092,7 @@ export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
+  isHiddenEntry, workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
@@ -1902,13 +1902,13 @@ export {
   getExecutorFiles, readExecutorFile, sortDirEntries, writeExecutorFileOp,
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, joinDir, parentDir,
-  FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, FILES_PAGE_ENTRIES,
+  FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, FILES_PAGE_ENTRIES, shownEntries,
   ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
 } from './read-models/files';
 
 export type {
   DirEntry, EnvironmentInfo, ExecutorFileLookup, ExecutorRowLookup, ExecutorTextFile, ExecutorWriteResult,
-  FilesPage,
+  FilesPage, FilesRequest,
 } from './read-models/files';
 
 export { inlineFileType } from './read-models/file-types';
@@ -2190,6 +2190,10 @@ export {
 export {
   accountTheme, DEFAULT_THEME, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed, type Mode, type ThemeName,
 } from './web/theme';
+
+export {
+  accountFilesView, DEFAULT_FILES_VIEW, FILES_VIEW_CONFIG_KEY, filesViewNamed, type FilesView,
+} from './web/files-view';
 
 export { hueStops, rankHue } from './web/agent-colour';
 

@@ -628,20 +628,26 @@ describe('executor file plane', () => {
     db.close();
   });
 
-  test("the root lists the workspace's own places, not the machine's directories beside them", async () => {
+  test("hidden items, as on a desktop: a machine's own directories at a root and dotfiles anywhere, shown and marked when asked", async () => {
     const db = new Database(':memory:');
     const machines = new Map(Object.values(MOUNT_EXECUTORS).map((machine) => [machine, { isAvailable: () => true, files: machinePlane(machine, []) }]));
     const { files } = workspaceFilePlane(createWorkspaceBundle(db), { mounts: standardMounts((name) => machines.get(name)), principal: {}, home: WORKSPACE_ROOT });
-    await files.mkdir('/home/main/proj', { recursive: true });
+    await files.mkdir('/home/main/proj/tmp', { recursive: true });
+    await files.writeFile('/home/main/proj/.env', new TextEncoder().encode('KEY=1'));
+    const names = (page: { entries?: readonly { name: string }[] }) => page.entries?.map((entry) => entry.name).sort();
 
     const root = await getExecutorFiles(router(files), 'workspace', '/');
-    const machineRoot = await files.readdir('/');
+    const shown = await getExecutorFiles(router(files), 'workspace', '/', { hidden: true });
+    const project = await getExecutorFiles(router(files), 'workspace', '/home/main/proj');
+    const projectShown = await getExecutorFiles(router(files), 'workspace', '/home/main/proj', { hidden: true });
 
-    // The namespace's `/` holds the machine's own (`usr`, `tmp`, `proc`…); the owner's browser shows the workspace's.
-    expect(machineRoot.map((entry) => entry.name)).toEqual(expect.arrayContaining(['usr', 'tmp']));
-    expect(root.entries?.map((entry) => entry.name).sort()).toEqual(['computer', 'home', 'pc', 'slates']);
-    // Below `/` nothing is hidden: a path the agent names is reachable.
-    expect((await getExecutorFiles(router(files), 'workspace', '/home')).entries?.map((entry) => entry.name)).toEqual(['main']);
+    // The namespace's `/` holds the machine's own (`usr`, `tmp`, `proc`…) beside the workspace's places.
+    expect(names(root)).toEqual(['computer', 'home', 'pc', 'slates']);
+    expect(shown.entries?.filter((entry) => entry.hidden === true).map((entry) => entry.name)).toEqual(expect.arrayContaining(['usr', 'tmp', 'etc']));
+    expect(shown.entries?.filter((entry) => entry.hidden !== true).map((entry) => entry.name).sort()).toEqual(['computer', 'home', 'pc', 'slates']);
+    // Below a root a project's `tmp` is its own; its dotfile waits to be asked for.
+    expect(names(project)).toEqual(['tmp']);
+    expect(projectShown.entries?.find((entry) => entry.name === '.env')).toEqual(expect.objectContaining({ hidden: true }));
     db.close();
   });
 

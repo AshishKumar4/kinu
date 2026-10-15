@@ -292,7 +292,7 @@ describe('where the file browser lands on a mount', () => {
         : router.getProvider(name),
     };
 
-    return { t, list: (path: string, from?: number) => getExecutorFiles(lookup, 'workspace', path, from) };
+    return { t, list: (path: string, from?: number) => getExecutorFiles(lookup, 'workspace', path, { from }) };
   }
 
   test("a machine's folder is read a page at a time, each entry's size and age from the listing, and no entry statted", async () => {

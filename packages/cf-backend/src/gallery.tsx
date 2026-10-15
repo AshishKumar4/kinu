@@ -90,7 +90,7 @@ import {
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory, ownerAsks,
-  FILES_PAGE_ENTRIES, parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
+  FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubordinateInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
@@ -181,7 +181,6 @@ const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
   : STOCK_ROSTER;
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
-  "/api/user/config/sandbox_size": { key: "sandbox_size", value: null },
   // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
@@ -310,19 +309,37 @@ function pluginsFixture(path: string): Response | null {
 /** The account's name as last saved here. */
 let galleryDisplayName = "Owner";
 
+/** An account's config row the gallery keeps in this browser, under `stored`; `seeded` until it is first set. */
+interface StoredConfig { readonly stored: string; readonly seeded: () => string | null }
+
+const STORED_CONFIG = new Map<string, StoredConfig>([
+  ["sandbox_size", { stored: "gallery-computer-size", seeded: () => null }],
+  // `&layout=tiles`, `&hidden=1`: Files opens drawn so, as an account that chose it would see it.
+  [FILES_VIEW_CONFIG_KEY, { stored: "gallery-files-view", seeded: () => {
+    const params = new URLSearchParams(location.search);
+
+    return params.has("layout") || params.has("hidden")
+      ? JSON.stringify({ layout: params.get("layout") === "tiles" ? "tiles" : "list", hidden: params.get("hidden") === "1" })
+      : null;
+  } }],
+]);
+
+function storedConfigFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  const key = path.startsWith("/api/user/config/") ? path.slice("/api/user/config/".length) : null;
+  const config = key === null ? undefined : STORED_CONFIG.get(key);
+
+  if (key === null || config === undefined) return null;
+
+  if (method === "GET") return fixtureJson({ key, value: localStorage.getItem(config.stored) ?? config.seeded() });
+
+  const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
+
+  localStorage.setItem(config.stored, value);
+
+  return fixtureJson({ ok: true });
+}
+
 function accountProfileFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
-  if (path === "/api/user/config/sandbox_size") {
-    if (method === "GET") return fixtureJson({ key: "sandbox_size", value: localStorage.getItem("gallery-computer-size") });
-
-    if (method === "PUT") {
-      const { value } = v.parse(v.object({ value: v.string() }), JSON.parse(v.parse(v.string(), body)));
-
-      localStorage.setItem("gallery-computer-size", value);
-
-      return fixtureJson({ ok: true });
-    }
-  }
-
   if (path === "/api/user/onboarding/complete" && method === "POST") {
     return fixtureJson({ onboardedAt: NOW });
   }
@@ -1175,6 +1192,10 @@ function accountMachinesFixture(asked: string, method: string): Response | null 
 }
 
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
+  // The account's choices, kept in this browser for every frame that reads one.
+  const stored = storedConfigFixture(path, method, body);
+
+  if (stored !== null) return Promise.resolve(stored);
   const machines = accountMachinesFixture(path, method);
 
   if (machines !== null) return Promise.resolve(machines);
@@ -5916,7 +5937,9 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
 function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   const tree = new Map<string, DirEntry[]>([
     // The workspace's places, as `read-models/files.ts` lists `/`: home's, `/slates` and each mount point.
+    // The namespace's `/` as the server reads it: the workspace's places beside the machine's own, which are hidden.
     ["/", [
+      ...["bin", "dev", "etc", "opt", "proc", "tmp", "usr", "var"].map((name) => ({ name, type: "dir" as const, mtimeMs: NOW - 5e3 })),
       { name: "computer", type: "dir", mtimeMs: NOW - 30 * 60e3 },
       { name: "context", type: "dir" },
       { name: "home", type: "dir", mtimeMs: NOW - 4 * 36e5 },
@@ -5938,6 +5961,8 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
     ["/slates/checkout-dashboard", [{ name: "index.html", type: "file", size: 6_120, mtimeMs: NOW - 2 * 864e5 }]],
     ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
     ["/home/main", [
+      { name: ".cache", type: "dir", mtimeMs: NOW - 12e5 },
+      { name: ".env", type: "file", size: 214, mtimeMs: NOW - 2 * 864e5 },
       { name: "logs", type: "dir", mtimeMs: NOW - 60e3 },
       { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
       { name: "skills", type: "dir", mtimeMs: NOW - 20 * 864e5 },
@@ -5972,6 +5997,11 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
 
   return tree;
 }
+
+/** `getExecutorFiles`' arguments, its request's defaults filled as the read model fills them. */
+const FILES_REQUEST_ARGS = v.tuple([
+  v.string(), v.string(), v.optional(v.object({ from: v.optional(v.number(), 0), hidden: v.optional(v.boolean(), false) }), {}),
+]);
 
 /** A page of `entries` from `from`, as `getExecutorFiles` answers one: `next` while more follow. */
 function filesPage(dir: string, entries: readonly DirEntry[], from = 0) {
@@ -6044,7 +6074,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
     if (method === "listMounts") return rpcResult(v.parse(JsonValueSchema, mounts)).json<T>();
 
     if (method === "getExecutorFiles") {
-      const [execName, path, from] = v.parse(v.tuple([v.string(), v.string(), v.optional(v.number())]), args ?? []);
+      const [execName, path, { from, hidden }] = v.parse(FILES_REQUEST_ARGS, args ?? []);
 
       noteListing(path);
 
@@ -6054,7 +6084,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
       const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
-      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, filesPage(dir, entries, from))).json<T>();
+      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, filesPage(dir, shownEntries(entries, dir, hidden), from))).json<T>();
 
       // In the words of `deviceFiles`' path guard.
       const error = dir.startsWith(PC_MOUNT)

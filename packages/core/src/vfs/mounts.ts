@@ -17,7 +17,7 @@ import { CompositeVFS, type Principal, type VfsRoute } from '@nimbus-sh/core/vfs
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { observeNamespace, type WriteObserver } from './write-events';
 import { move, type MoveFs } from '@nimbus-sh/core/vfs/move.js';
-import { SLATES_ROOT, walkedPath } from './workspace-path';
+import { walkedPath } from './workspace-path';
 
 export interface VfsMount {
 	readonly name: string;
@@ -206,11 +206,6 @@ export interface VfsMountRouting {
 	/** The user's writable mount roots, connected or not. */
 	userRoots(): readonly string[];
 	/**
-	 * The names at `/` that are the workspace's own: its home's, `/slates` and each mount point, connected or not. A
-	 * namespace's `/` is a machine's too (Nimbus's seeded `bin`, `etc`, `usr`…, `/proc`, `/dev`); a plain VFS has none.
-	 */
-	places?(): readonly string[];
-	/**
 	 * `path` as the namespace's own lookup resolves it, links followed (the last one unless `follow` is false): the one
 	 * path a gate decides on and the operation then reaches. A directory on the way that is not there is ENOENT, as the
 	 * operation's own lookup answers, unless `creating` (a write that makes its parents): then it passes as named.
@@ -380,10 +375,6 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 	const relative: VFS | { readonly home: string } = 'namespace' in base ? { home: base.home } : base;
 	const userRoots = declared.filter((m) => m.filesOwner === 'user' && m.readOnly !== true).map((m) => m.at ?? `/${m.name}`);
 
-	const places = 'home' in relative
-		? [...new Set([relative.home, SLATES_ROOT, ...declared.map((m) => m.at ?? `/${m.name}`)].map((path) => path.split('/')[1] ?? ''))]
-		: null;
-
 	// The path as written, made absolute: its `..` is the namespace's walk to take, after a link where there is one.
 	const on = async (path: string): Promise<Target> => {
 		if (path.startsWith('/') || 'home' in relative) {
@@ -436,7 +427,6 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 	return {
 		mounts: () => [...mounts],
 		userRoots: () => userRoots,
-		...(places !== null && { places: () => places }),
 		async stat(path, options) {
 			const target = await on(path);
 			const stat = await target.files.stat(target.at, options);

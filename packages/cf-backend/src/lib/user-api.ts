@@ -26,7 +26,7 @@ import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { ApiError, request } from './http';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
-import { THEME_CONFIG_KEY, type ThemeName } from '@kinu.run/core';
+import { accountFilesView, FILES_VIEW_CONFIG_KEY, THEME_CONFIG_KEY, type FilesView, type ThemeName } from '@kinu.run/core';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 
 export type UserProfile = NonNullable<v.InferOutput<typeof AccountProfileSchema>>;
@@ -295,6 +295,13 @@ export const getAccountComputerSize = (): Promise<BoxSize | null> =>
   settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', COMPUTER_SIZE_PATH), (row) => accountComputerSize(row.value)));
 
 export const setAccountComputerSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', COMPUTER_SIZE_PATH, { value: size }));
+
+const FILES_VIEW_PATH = `/config/${FILES_VIEW_CONFIG_KEY}`;
+
+export const getFilesView = (): Promise<FilesView> =>
+  settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', FILES_VIEW_PATH), (row) => accountFilesView(row.value)));
+
+export const setFilesView = (view: FilesView) => settle(api(OkSchema, 'PUT', FILES_VIEW_PATH, { value: JSON.stringify(view) }));
 
 /** The page already wears the account's theme (the server names it before paint); only a choice is sent. */
 export const setAccountTheme = (theme: ThemeName) => settle(api(OkSchema, 'PUT', `/config/${THEME_CONFIG_KEY}`, { value: theme }));
