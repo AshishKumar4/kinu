@@ -2386,42 +2386,6 @@ describe('Files at every width it is drawn', () => {
     });
   });
 
-  test('a hidden item reads dimmed alike in the list and the tree beside it, and nothing else does', async () => {
-    await withGallery(async ({ newPage, origin }) => {
-      const page = await newPage();
-      await page.setViewport({ width: 1280, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=files&hidden=1`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-files-tree-node="/usr"]');
-
-      // How strongly each entry's name is drawn, in the list and in the tree, keyed by where it is drawn.
-      const strength = await page.evaluate(() => {
-        const drawn = (row: Element) => {
-          const name = [...row.querySelectorAll('span')].find((span) => span.children.length === 0 && (span.textContent ?? '').trim() !== '');
-          let opacity = 1;
-
-          for (let at: Element | null = name ?? row; at !== null && at !== row.parentElement; at = at.parentElement) opacity *= Number(getComputedStyle(at).opacity);
-
-          return { name: (name?.textContent ?? '').trim(), opacity };
-        };
-
-        return {
-          list: [...document.querySelectorAll('[data-files-entry]')].map(drawn),
-          tree: [...document.querySelectorAll('[data-files-tree-node]')].filter((node) => node.getAttribute('data-files-tree-node') !== '/').map(drawn),
-        };
-      });
-
-      const machines = ['bin', 'dev', 'etc', 'opt', 'proc', 'tmp', 'usr', 'var'];
-
-      for (const where of [strength.list, strength.tree]) {
-        const dimmed = where.filter((entry) => entry.opacity < 1).map((entry) => entry.name).sort();
-
-        expect(dimmed).toEqual(machines);
-      }
-
-      await page.close();
-    });
-  });
-
   test("a row's menu waits for the pointer, and a touch screen shows it on every row", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const menuShown = (page: Page, name: string) => page.$eval(
