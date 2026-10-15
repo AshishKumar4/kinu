@@ -7,6 +7,7 @@
  * It reads the room's sheet and calls the room; the next view shows each call's effect.
  */
 import { useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
 import { Button } from "@cloudflare/kumo";
 import { CaretDownIcon, CheckIcon, GlobeHemisphereWestIcon, KeyIcon, LinkSimpleIcon, LockSimpleIcon, ShareNetworkIcon, UsersThreeIcon } from "@phosphor-icons/react";
@@ -264,15 +265,24 @@ function Lends({ lends, uses, send }: { lends: readonly SheetLend[]; uses: reado
 }
 
 /** A secret's shape in the code keeps the link off, since anyone who can open the slate can fork it. */
-function SecretInCode({ secret, onFix }: { secret: NonNullable<SheetView["secret"]>; onFix: () => void }) {
+/**
+ * `file` is from the slate's own root and `kind` the scanner's words ("AWS access key id"). Fix hands it to the
+ * workspace's chat, which sends it as its first message (`useOpeningMessage`).
+ */
+function SecretInCode({ workspace, title, secret }: { workspace: string; title: string; secret: NonNullable<SheetView["secret"]> }) {
+  const navigate = useNavigate();
+  const at = `${secret.file} line ${String(secret.line)}`;
+  const opening = `In the slate ${title}, ${at} holds a secret (${secret.kind}). Move it into a vault secret and have the code read it from there.`;
+
   return (
     <div data-share-secret className="flex items-start gap-3 rounded-lg p-notice-warning px-3 py-2.5">
       <KeyIcon size={16} className="mt-0.5 shrink-0" />
       <span className="min-w-0 flex-1">
-        <span className="block p-row-text font-medium">{secret.file} line {secret.line} looks like {secret.kind}</span>
+        <span className="block p-row-text font-medium first-letter:uppercase">{secret.kind} in {at}</span>
         <span className="block p-meta">People can fork the code, so only you can open it until that&apos;s gone.</span>
       </span>
-      <Button size="sm" variant="secondary" data-share-secret-fix onClick={onFix}>Fix with the agent</Button>
+      <Button size="sm" variant="secondary" data-share-secret-fix
+        onClick={() => void navigate(`/workspace/${encodeURIComponent(workspace)}`, { state: { opening } })}>Fix with the agent</Button>
     </div>
   );
 }
@@ -291,13 +301,12 @@ function LinkRow({ url }: { url: string | null }) {
   );
 }
 
-export function ShareSheet({ title, owner, sheet, call, onFixSecret, onClose }: {
+export function ShareSheet({ workspace, title, owner, sheet, call, onClose }: {
+  workspace: string;
   title: string;
   owner: RoomPerson;
   sheet: SheetView;
   call: (call: RoomCall) => Effect.Effect<void, KinuError>;
-  /** Starts the owner's agent on the secret the code holds. */
-  onFixSecret: (secret: NonNullable<SheetView["secret"]>) => void;
   onClose: () => void;
 }) {
   const menus = useMenu();
@@ -317,7 +326,7 @@ export function ShareSheet({ title, owner, sheet, call, onFixSecret, onClose }: 
   return (
     <Modal title={`Share ${title}`} icon={<ShareNetworkIcon size={18} className="p-accent" />} onClose={onClose} busy={busy > 0} maxWidthClass="max-w-[460px]"
       footer={<div className="flex justify-end"><FilledButton onClick={onClose}>Done</FilledButton></div>}>
-      {sheet.secret !== null && <SecretInCode secret={sheet.secret} onFix={() => onFixSecret(sheet.secret ?? { file: "", line: 0, kind: "" })} />}
+      {sheet.secret !== null && <SecretInCode workspace={workspace} title={title} secret={sheet.secret} />}
       <LinkRow url={sheet.url} />
       <div className="space-y-2">
         <div className="p-meta font-medium p-text-3">Who can open it</div>

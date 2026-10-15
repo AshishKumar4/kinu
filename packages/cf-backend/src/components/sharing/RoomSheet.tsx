@@ -12,9 +12,6 @@ import { ShareSheet } from "./ShareSheet";
 export function RoomSheet({ workspace, slate, title, onClose }: { workspace: string; slate: string; title: string; onClose: () => void }) {
   const { view, call } = useRoom({ workspace, slate, linkKey: null });
 
-  const fix = (secret: { file: string; line: number }) =>
-    window.location.assign(`/workspace/${encodeURIComponent(workspace)}?fix=${encodeURIComponent(`${secret.file}:${String(secret.line)}`)}`);
-
   if (view?.sheet === null || view?.sheet === undefined) {
     return (
       <Modal title={`Share ${title}`} icon={<ShareNetworkIcon size={18} className="p-accent" />} onClose={onClose}>
@@ -23,7 +20,7 @@ export function RoomSheet({ workspace, slate, title, onClose }: { workspace: str
     );
   }
 
-  return <ShareSheet title={title} owner={view.session.owner} sheet={view.sheet} call={call} onFixSecret={fix} onClose={onClose} />;
+  return <ShareSheet workspace={workspace} title={title} owner={view.session.owner} sheet={view.sheet} call={call} onClose={onClose} />;
 }
 
 /** The slate tab's share button and its sheet. */

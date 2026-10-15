@@ -279,8 +279,12 @@ describe('a shared slate', () => {
 
           try {
             await secret.waitForSelector('[data-share-secret]', SOON);
-            expect(await secret.$('[data-share-secret-fix]')).not.toBeNull();
             expect(await secret.$eval('[data-share-audience]', (button) => (button instanceof HTMLButtonElement ? button.disabled : null))).toBe(true);
+            // Fix opens the owner's workspace chat, which asks the agent about that file and line as its first message.
+            await secret.click('[data-share-secret-fix]');
+            await secret.waitForSelector('[data-gallery-landed]', SOON);
+            expect(await secret.$eval('[data-gallery-landed]', (node) => node.getAttribute('data-gallery-landed'))).toBe('/workspace/acme');
+            expect(await secret.$eval('[data-gallery-landed]', (node) => node.getAttribute('data-gallery-opening'))).toContain('server.ts line 12');
           } finally {
             await secret.close();
           }

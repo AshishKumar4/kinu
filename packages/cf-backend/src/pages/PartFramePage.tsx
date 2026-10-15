@@ -55,20 +55,28 @@ export function PartFrame({ part }: { part: string }) {
   };
 
   return (
-    <div data-part-frame={shown.state} className="flex min-h-full flex-col p-text">
+    <div data-part-frame={shown.state} className="flex h-dvh flex-col p-text">
       <PartFrameView part={shown} signedIn={view.session.me !== null} act={act} />
       {failure !== null && <p role="alert" className="mt-1.5 p-meta p-danger">{failure}</p>}
     </div>
   );
 }
 
-/** `?scheme=light|dark`: the slate's page says which suits it; else the app's own. */
+/**
+ * A part's frame sits inside the slate's own page: it shows that page through it, not the app's background, and takes
+ * `?scheme=light|dark` when the slate's page says which suits it.
+ */
 export function useSlateScheme(scheme: string | null): void {
   useEffect(() => {
+    const root = document.documentElement;
+
+    root.style.background = "transparent";
+    document.body.style.background = "transparent";
+
     if (scheme !== "light" && scheme !== "dark") return;
 
-    document.documentElement.setAttribute("data-mode", scheme);
-    document.documentElement.style.colorScheme = scheme;
+    root.setAttribute("data-mode", scheme);
+    root.style.colorScheme = scheme;
   }, [scheme]);
 }
 

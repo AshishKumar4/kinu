@@ -58,7 +58,8 @@ function AskInPlace({ icon, said, action, onAct, detail, ...data }: {
 
 /** Labelled content: in its own frame with no scripts, so nothing of the slate's code ever holds it. */
 function Sealed({ content }: { content: string }) {
-  return <iframe src={content} sandbox="" title="Part" data-part-content className="block min-h-0 w-full flex-1 border-0 bg-transparent" />;
+  // Basis 0, so it takes only what the frame leaves after its label, never its default 150px.
+  return <iframe src={content} sandbox="" title="Part" data-part-content className="block h-0 min-h-0 w-full flex-1 border-0 bg-transparent" />;
 }
 
 /** Whose data a shown part holds, when it is others' shown to this person. */

@@ -30,7 +30,7 @@ export function ShowChoice({ source, members, onShow, onClose }: {
 
   return (
     <Modal title="Show this part" icon={<EyeIcon size={18} className="p-accent" />} onClose={onClose}
-      footer={<div className="flex justify-end gap-2"><Button variant="secondary" onClick={onClose}>Not now</Button><FilledButton data-show-confirm onClick={() => onShow(scope)}>Show</FilledButton></div>}>
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><FilledButton data-show-confirm onClick={() => onShow(scope)}>Show</FilledButton></div>}>
       <p className="flex items-center gap-1.5 p-meta p-text-3"><LockSimpleIcon size={13} className="shrink-0" />From {source} · only this part</p>
       <div role="radiogroup" aria-label="Show to" className="space-y-1">
         {options.map((option) => (
@@ -63,7 +63,7 @@ export function GrantAsk({ slate, reach, again, onAllow, onClose }: {
 
   return (
     <Modal title={title} icon={<PlugIcon size={18} className="p-accent" />} onClose={onClose}
-      footer={<div className="flex justify-end gap-2"><Button variant="secondary" onClick={onClose}>Not now</Button><FilledButton data-grant-allow onClick={onAllow}>{again === null ? "Allow" : "Use again"}</FilledButton></div>}>
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><FilledButton data-grant-allow onClick={onAllow}>{again === null ? "Allow" : "Use again"}</FilledButton></div>}>
       <ul className="space-y-1.5 p-row-text">
         <li className="flex gap-2 p-text"><CheckIcon size={15} weight="bold" className="mt-0.5 shrink-0 p-success" />{canOf(reach)}</li>
         <li className="flex gap-2 p-text-2"><XIcon size={15} weight="bold" className="mt-0.5 shrink-0 p-text-3" />{cannotOf(reach)}</li>
@@ -100,14 +100,15 @@ export function askWords(ask: RoomAsk, slate: string): AskWords {
 
     case "effect": {
       return {
-        said: `${firstName(ask.from)} wants ${ask.tool.title} on ${ask.scope ?? ask.service.title}, with ${ask.argument}.`,
+        said: `${firstName(ask.from)} wants ${ask.tool.title} on ${ask.scope ?? ask.service.title} for ${ask.argument}.`,
         answers: [{ label: "Approve", call: { op: "approve", ask: ask.id } }, { label: "Decline", call: { op: "decline", ask: ask.id } }],
       };
     }
 
     case "outflow": {
       return {
-        said: `${ask.fn} would send data from ${ask.source.label} by ${ask.tool.title} on ${ask.service.title}: ${ask.argument}.`,
+        // The argument names where the data goes ("to bob@acme.dev"); the service, how.
+        said: `This part sends data from ${ask.source.label} ${ask.argument} by ${ask.service.title}.`,
         answers: [{ label: "Send", call: { op: "send", ask: ask.id } }, { label: "Not now", call: { op: "decline", ask: ask.id } }],
       };
     }

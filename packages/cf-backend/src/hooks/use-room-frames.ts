@@ -1,7 +1,7 @@
 /**
- * Serves the part frames of a slate a page embeds (lib/room-bridge.ts): every page that shows a slate holds its room's
- * socket and answers its parts, the live page and the chat's inline slate alike. Answers what a frame asks with the room;
- * hands a decision a frame asks for to the page, which opens it where the slate's code cannot cover it.
+ * Serves the part frames of a slate a page embeds (lib/room-bridge.ts): the page that shows the slate holds its room's
+ * socket and answers its parts. Answers what a frame asks with the room; hands a decision a frame asks for to the page,
+ * which opens it where the slate's code cannot cover it.
  */
 import { useEffect, useRef, useState } from "react";
 import { Effect } from "effect";

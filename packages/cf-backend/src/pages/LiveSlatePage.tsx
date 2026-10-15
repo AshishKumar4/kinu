@@ -93,8 +93,7 @@ export function LiveSlate({ room, entry, linkKey, live, opened = {}, workspaces 
       )}
       {view.ended === null && <RoomDecisionDialogs view={view} deciding={deciding} send={send} onDone={done} />}
       {sharing && view.sheet !== null && (
-        <ShareSheet title={session.title} owner={session.owner} sheet={view.sheet} call={call} onClose={() => setSharing(false)}
-          onFixSecret={(secret) => window.location.assign(`/workspace/${encodeURIComponent(room.workspace)}?fix=${encodeURIComponent(`${secret.file}:${String(secret.line)}`)}`)} />
+        <ShareSheet workspace={room.workspace} title={session.title} owner={session.owner} sheet={view.sheet} call={call} onClose={() => setSharing(false)} />
       )}
       {picking !== null && (
         <ForkDialog room={room} title={entry.title} mode={picking} onClose={() => setPicking(null)} workspaces={workspaces}

@@ -7,7 +7,7 @@
  * which embeds its parts. `frame=room-part&part=<key>`: one part's frame. `frame=room-closed&state=<closed>`: the page a
  * closed room shows.
  */
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import * as v from "valibot";
 import { RoomClientFrameSchema } from "@kinu.run/core";
 import type {
@@ -214,7 +214,7 @@ const STATES = new Map<string, RoomState>([
     opened: { sheet: true },
   }],
   ["sheet-secret", {
-    scene: "release", me: SAM, access: "owner", sheet: { ...SHEET, audience: "only-you", url: null, people: [], privateOf: [], secret: { file: "server.ts", line: 12, kind: "an API key" } },
+    scene: "release", me: SAM, access: "owner", sheet: { ...SHEET, audience: "only-you", url: null, people: [], privateOf: [], secret: { file: "server.ts", line: 12, kind: "API key" } },
     opened: { sheet: true },
   }],
   ["sheet-only", { scene: "pr-board", me: SAM, access: "owner", sheet: { ...SHEET, audience: "only-you", url: null, people: [], privateOf: [] }, opened: { sheet: true } }],
@@ -370,8 +370,16 @@ export function installRoomFixture(frame: string): void {
 
 export function RoomFrame() {
   const [search] = useSearchParams();
+  const location = useLocation();
   const state = stateOf(search.get("state"));
   const scene = SCENES[state.scene];
+
+  // Where a control took the app, and what it carried there: the frame's tests read it.
+  if (location.pathname !== "/") {
+    const opening = v.safeParse(v.object({ opening: v.string() }), location.state);
+
+    return <div data-gallery-landed={location.pathname} data-gallery-opening={opening.success ? opening.output.opening : undefined} />;
+  }
 
   return (
     <LiveSlate room={{ workspace: "acme", slate: state.scene }} entry={{ title: scene.title, owner: SAM, access: state.access }} linkKey={null}
