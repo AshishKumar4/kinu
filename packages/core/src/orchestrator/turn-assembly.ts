@@ -13,7 +13,7 @@ import type { MediaModality } from '../prompting/attachment-sanitizer';
 import type { PromptBackend, PromptIdentity } from '../prompting/surface';
 import { withOperationProfile, type OperationProfile } from '../profiles/operation';
 import { effectiveRoleCatalog } from '../profiles/catalog';
-import { ownProfileChoices, resolveAgentTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
+import { ownProfileChoices, resolveTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
 import type { FrozenAuthority } from './turn-facts';
 import type { TierId } from '../types/profile';
 import { reasoningEffortOptions } from '../providers/effort';
@@ -147,12 +147,12 @@ async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'c
   const profileInputs = await sources.profileInputs();
   const ancestors = sources.ancestors?.() ?? [];
   const choices = sources.choices ?? ownProfileChoices(sources.config, profileInputs, ancestors.length === 0 ? undefined : ancestors, request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
-  const drafted = resolveAgentTurnProfile({ ...profileInputs, ...choices, workMode: request.workMode, availableTools: [], activeSkills: [] });
+  const drafted = resolveTurnProfile({ ...profileInputs, ...choices, workMode: request.workMode, availableTools: [], activeSkills: [] });
   const served = sources.models.normalize(request.model ?? drafted.tier.model);
 
   return {
     profileInputs, ancestors, choices, drafted, served,
-    roleSkills: effectiveRoleCatalog(profileInputs.envelope.catalog)[choices.activeRoleId]?.skills ?? [],
+    roleSkills: effectiveRoleCatalog(profileInputs.envelope.catalog)[choices.roleId]?.skills ?? [],
     limits: sources.models.catalog.window(served),
   };
 }
@@ -165,7 +165,7 @@ function frozenDraft(sources: Pick<TurnAssemblySources, 'models' | 'choices'>, f
 
   return {
     profileInputs: inputs, ancestors: [], drafted: profile, served,
-    choices: { activeRoleId: profile.role.id, ...sources.choices },
+    choices: { roleId: profile.role.id, ...sources.choices },
     roleSkills: effectiveRoleCatalog(inputs.envelope.catalog)[profile.role.id]?.skills ?? [],
     limits: sources.models.catalog.window(served),
   };
@@ -180,7 +180,7 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 }): ResolvedTurnProfile {
   const { drafted } = turn;
 
-  return resolveAgentTurnProfile({
+  return resolveTurnProfile({
     ...turn.profileInputs,
     ...turn.choices,
     workMode: turn.workMode,

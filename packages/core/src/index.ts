@@ -2139,9 +2139,9 @@ export type {
 
 export {
   resolveModelRoute,
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource, type PinnedProfile,
-  type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
+  type ResolveTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
   type FixedTierSource,
   DEFAULT_ROLE_ID,
