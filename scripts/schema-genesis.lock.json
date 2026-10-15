@@ -546,7 +546,6 @@
     "note TEXT NOT NULL",
     "route TEXT NOT NULL",
     "workspace TEXT",
-    "object_key TEXT",
     "bytes INTEGER"
   ],
   "cp_users@packages/core/src/control-plane/store.ts": [
