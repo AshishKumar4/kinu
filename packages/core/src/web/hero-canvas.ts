@@ -1,7 +1,7 @@
 /** Canvas2D renderers for the living art (non-GPU `ArtFrame` pictures and the phone's dust); no mounting, observing, or clocks. */
 
 import {
-  type ArtPalette, type ArtRenderer, cssRgba, NODE_STRIDE, PULSE_STRIDE, RECESS, type Rgb, STROKE_STRIDE, TONE_ASH,
+  type ArtPalette, type ArtRenderer, cssRgba, DEFAULT_LIFT, NODE_STRIDE, PULSE_STRIDE, RECESS, type Rgb, STROKE_STRIDE, TONE_ASH,
   TONE_BRIGHT, TONE_EMBER,
 } from './art';
 import { seededRandom } from '../utils/stats';
@@ -23,9 +23,6 @@ export interface StrokeSurface {
   fill(): void;
   createLinearGradient(x0: number, y0: number, x1: number, y1: number): CanvasGradient;
 }
-
-/** Light-mode lift for the mesh; strokes and pulses share it, dark is untouched. */
-const LIGHT_LIFT = 2.4;
 
 function mix(from: Rgb, to: Rgb, amount: number): Rgb {
   return [
@@ -63,13 +60,31 @@ function clearSurface(
   surface.clearRect(0, 0, size.width * size.ratio, size.height * size.ratio);
 }
 
-export function createCanvasRenderer(context: StrokeSurface, initialPalette: ArtPalette): ArtRenderer {
+/** A second surface of the canvas's size, where a frame's resting strokes are kept between the frames that change them. */
+export interface KeptLayer {
+  readonly surface: StrokeSurface;
+  /** Device pixels; 0 by 0 lets the bitmap go. */
+  resize(width: number, height: number): void;
+  /** Draws the kept surface onto the canvas at the identity transform. */
+  stamp(): void;
+}
+
+export function createCanvasRenderer(context: StrokeSurface, initialPalette: ArtPalette, kept?: KeptLayer): ArtRenderer {
   let palette = initialPalette;
   let width = 1;
   let height = 1;
   let ratio = 1;
+  /** The rest epoch on the kept layer; null when it holds nothing current. */
+  let keptEpoch: number | null = null;
+  /** The lift the kept layer was drawn with; a frame that asks for another redraws it. */
+  let lift = DEFAULT_LIFT;
 
-  const curve = (strokes: Float32Array, at: number): void => {
+  /** Strokes sharing an ink, an alpha and a width, and discs sharing an ink and an alpha; emptied each frame and dropped
+   *  once a frame leaves one empty. */
+  const batches = new Map<number, { readonly style: string; readonly width: number; readonly at: number[] }>();
+  const spots = new Map<number, { readonly style: string; readonly width: number; readonly at: number[] }>();
+
+  const trace = (target: StrokeSurface, strokes: Float32Array, at: number): void => {
     const x0 = (strokes[at] ?? 0) * width;
     const y0 = (strokes[at + 1] ?? 0) * height;
     const cx = (strokes[at + 2] ?? 0) * width;
@@ -82,9 +97,52 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
     const qy = y0 + (cy - y0) * t;
     const rx = cx + (x1 - cx) * t;
     const ry = cy + (y1 - cy) * t;
-    context.beginPath();
-    context.moveTo(x0, y0);
-    context.quadraticCurveTo(qx, qy, qx + (rx - qx) * t, qy + (ry - qy) * t);
+    target.moveTo(x0, y0);
+    target.quadraticCurveTo(qx, qy, qx + (rx - qx) * t, qy + (ry - qy) * t);
+  };
+
+  /** Adds the stroke at `at` to the path of its ink, alpha and width. */
+  const join = (color: Rgb, alpha: number, lineWidth: number, at: number): void => {
+    const ink = Math.round(Math.min(1, alpha) * 255);
+    const quarters = Math.round(lineWidth * 4);
+    const key = (((Math.round(color[0]) * 256 + Math.round(color[1])) * 256 + Math.round(color[2])) * 256 + ink) * 4096 + quarters;
+    const batch = batches.get(key);
+
+    if (batch === undefined) batches.set(key, { style: cssRgba(color, ink / 255), width: quarters / 4, at: [at] });
+    else batch.at.push(at);
+  };
+
+  // Each stroke, and a lit one's underlay, joins the path of its ink, alpha and width, at the canvas's own 8-bit alpha and a
+  // quarter pixel: a frame strokes, and parses a colour, once per path rather than once per stroke.
+  const paintStrokes = (target: StrokeSurface, strokes: Float32Array, from: number, to: number): void => {
+    for (const [key, batch] of batches) {
+      if (batch.at.length === 0) batches.delete(key);
+      else batch.at.length = 0;
+    }
+
+    for (let index = from; index < to; index += 1) {
+      const at = index * STROKE_STRIDE;
+      const glow = strokes[at + 8] ?? 0;
+      const tone = strokes[at + 9] ?? 0;
+      const alpha = (strokes[at + 10] ?? 0) * lift[palette.mode];
+      const lineWidth = strokes[at + 7] ?? 1;
+
+      if (alpha <= 0.004) continue;
+      const color = recede(palette, toneColor(palette, tone, glow));
+
+      if (glow > 0.55) join(color, alpha * 0.14 * glow, lineWidth * 3.2, at);
+      join(color, alpha * (0.6 + 0.4 * glow), lineWidth, at);
+    }
+
+    for (const batch of batches.values()) {
+      if (batch.at.length === 0) continue;
+      target.beginPath();
+
+      for (const at of batch.at) trace(target, strokes, at);
+      target.lineWidth = batch.width;
+      target.strokeStyle = batch.style;
+      target.stroke();
+    }
   };
 
   // Sub-curve a pulse lights, via the quadratic's blossom; a returning pulse has tail past head.
@@ -119,9 +177,11 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
       width = nextWidth;
       height = nextHeight;
       ratio = nextRatio;
+      keptEpoch = null;
     },
     setPalette(next) {
       palette = next;
+      keptEpoch = null;
     },
     render(frame) {
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -130,35 +190,35 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
       context.globalAlpha = 1;
       const { strokes, nodes, pulses } = frame;
 
-      for (let index = 0; index < frame.count; index += 1) {
-        const at = index * STROKE_STRIDE;
-        const glow = strokes[at + 8] ?? 0;
-        const tone = strokes[at + 9] ?? 0;
-        const alpha = (strokes[at + 10] ?? 0) * (palette.mode === 'light' ? LIGHT_LIFT : 1);
-        const lineWidth = strokes[at + 7] ?? 1;
+      if ((frame.lift ?? DEFAULT_LIFT) !== lift) {
+        lift = frame.lift ?? DEFAULT_LIFT;
+        keptEpoch = null;
+      }
 
-        if (alpha <= 0.004) continue;
-        const color = recede(palette, toneColor(palette, tone, glow));
+      const rest = kept === undefined ? undefined : frame.rest;
 
-        if (glow > 0.55) {
-          curve(strokes, at);
-          context.lineWidth = lineWidth * 3.2;
-          context.strokeStyle = cssRgba(color, alpha * 0.14 * glow);
-          context.stroke();
+      if (kept !== undefined && rest !== undefined) {
+        if (rest.epoch !== keptEpoch) {
+          kept.resize(Math.round(width * ratio), Math.round(height * ratio));
+          kept.surface.setTransform(ratio, 0, 0, ratio, 0, 0);
+          kept.surface.clearRect(0, 0, width, height);
+          kept.surface.lineCap = 'round';
+          paintStrokes(kept.surface, strokes, 0, rest.count);
+          keptEpoch = rest.epoch;
         }
 
-        curve(strokes, at);
-        context.lineWidth = lineWidth;
-        context.strokeStyle = cssRgba(color, alpha * (0.6 + 0.4 * glow));
-        context.stroke();
+        kept.stamp();
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
       }
+
+      paintStrokes(context, strokes, rest?.count ?? 0, frame.count);
 
       for (let index = 0; index < frame.pulseCount; index += 1) {
         const at = index * PULSE_STRIDE;
         const lineWidth = pulses[at + 8] ?? 1;
         const glow = pulses[at + 9] ?? 0;
         const tone = pulses[at + 10] ?? 0;
-        const alpha = (pulses[at + 11] ?? 0) * (palette.mode === 'light' ? LIGHT_LIFT : 1);
+        const alpha = (pulses[at + 11] ?? 0) * lift[palette.mode];
 
         if (alpha <= 0.004 || (pulses[at + 6] ?? 0) === (pulses[at + 7] ?? 0)) continue;
         const color = recede(palette, mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6));
@@ -187,6 +247,11 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
         context.stroke();
       }
 
+      for (const [key, batch] of spots) {
+        if (batch.at.length === 0) spots.delete(key);
+        else batch.at.length = 0;
+      }
+
       for (let index = 0; index < frame.nodeCount; index += 1) {
         const at = index * NODE_STRIDE;
         const x = (nodes[at] ?? 0) * width;
@@ -206,14 +271,34 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
           context.fill();
         }
 
+        const ink = Math.round(Math.min(1, alpha) * 255);
+        const key = ((Math.round(color[0]) * 256 + Math.round(color[1])) * 256 + Math.round(color[2])) * 256 + ink;
+        const batch = spots.get(key);
+
+        if (batch === undefined) spots.set(key, { style: cssRgba(color, ink / 255), width: 0, at: [at] });
+        else batch.at.push(at);
+      }
+
+      // One fill per ink; each disc starts its own subpath, so no edge joins one disc to the next.
+      for (const batch of spots.values()) {
+        if (batch.at.length === 0) continue;
         context.beginPath();
-        context.arc(x, y, radius, 0, Math.PI * 2);
-        context.fillStyle = cssRgba(color, alpha);
+
+        for (const at of batch.at) {
+          const x = (nodes[at] ?? 0) * width;
+          const y = (nodes[at + 1] ?? 0) * height;
+          const radius = nodes[at + 2] ?? 1;
+          context.moveTo(x + radius, y);
+          context.arc(x, y, radius, 0, Math.PI * 2);
+        }
+
+        context.fillStyle = batch.style;
         context.fill();
       }
     },
     dispose() {
       clearSurface(context, { width, height, ratio });
+      kept?.resize(0, 0);
     },
   };
 }

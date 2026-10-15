@@ -6,16 +6,17 @@ import {
 import { VGPUError as CoreVGPUError } from '@vgpu/core';
 
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { type ArtFrame, type ArtPalette, type ArtRenderer, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE } from '@kinu.run/core/web/art';
+import { type ArtFrame, type ArtPalette, type ArtRenderer, DEFAULT_LIFT, type Lift, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE } from '@kinu.run/core/web/art';
 import blurSource from './blur.wgsl';
 import brightSource from './bright.wgsl';
 import compositeSource from './composite.wgsl';
+import copySource from './copy.wgsl';
 import nodesSource from './nodes.wgsl';
 import pulsesSource from './pulses.wgsl';
 import strokesSource from './strokes.wgsl';
 
 /** A frame past capacity draws its first strokes and drops the rest. */
-const STROKE_CAPACITY = 16_384;
+const STROKE_CAPACITY = 65_536;
 
 const NODE_CAPACITY = 1_024;
 
@@ -30,7 +31,7 @@ export type WebGpuRendererOutcome =
   | { readonly kind: 'unsupported'; readonly reason: string }
   | { readonly kind: 'failed'; readonly reason: string };
 
-function paletteUniform(palette: ArtPalette) {
+function paletteUniform(palette: ArtPalette, lift: Lift) {
   const unit = ([red, green, blue]: ArtPalette['accent']): readonly number[] => [red / 255, green / 255, blue / 255, 1];
 
   return {
@@ -40,8 +41,8 @@ function paletteUniform(palette: ArtPalette) {
     ground: unit(palette.ground),
     mode: palette.mode === 'light' ? 1 : 0,
     recess: RECESS,
-    pad1: 0,
-    pad2: 0,
+    light_lift: lift.light,
+    dark_lift: lift.dark,
   };
 }
 
@@ -80,11 +81,17 @@ export async function createWebGpuRenderer({
     });
 
     const scene: Target = target(gpu, { size, format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-scene' });
+    // The picture at rest, drawn once per rest epoch and laid under every frame of it.
+    const rest: Target = target(gpu, { size, format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-rest' });
     const bloomA: Target = target(gpu, { size: bloomSize(size[0], size[1]), format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-bloom-a' });
     const bloomB: Target = target(gpu, { size: bloomSize(size[0], size[1]), format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-bloom-b' });
     const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
 
     const strokeData = new Float32Array(new ArrayBuffer(4 * STROKE_CAPACITY * STROKE_STRIDE));
+    /** The rest epoch drawn into `rest`; null when it holds nothing current. */
+    let drawnRest: number | null = null;
+    let palette = initialPalette;
+    let lift = DEFAULT_LIFT;
     const nodeData = new Float32Array(new ArrayBuffer(4 * NODE_CAPACITY * NODE_STRIDE));
     const pulseData = new Float32Array(new ArrayBuffer(4 * PULSE_CAPACITY * PULSE_STRIDE));
 
@@ -115,7 +122,7 @@ export async function createWebGpuRenderer({
       geometry: strokeGeometry,
       blend: 'premultiplied',
       label: 'hero-strokes',
-      set: { view: view(), palette: paletteUniform(initialPalette) },
+      set: { view: view(), palette: paletteUniform(initialPalette, DEFAULT_LIFT) },
     });
 
     const nodes: Draw = draw(gpu, {
@@ -123,7 +130,7 @@ export async function createWebGpuRenderer({
       geometry: nodeGeometry,
       blend: 'premultiplied',
       label: 'hero-nodes',
-      set: { view: view(), palette: paletteUniform(initialPalette) },
+      set: { view: view(), palette: paletteUniform(initialPalette, DEFAULT_LIFT) },
     });
 
     const pulses: Draw = draw(gpu, {
@@ -131,10 +138,12 @@ export async function createWebGpuRenderer({
       geometry: pulseGeometry,
       blend: 'premultiplied',
       label: 'hero-pulses',
-      set: { view: view(), palette: paletteUniform(initialPalette) },
+      set: { view: view(), palette: paletteUniform(initialPalette, DEFAULT_LIFT) },
     });
 
     const bright: Effect = effect(gpu, brightSource, { label: 'hero-bright', set: { scene, samp: linear } });
+
+    const restCopy: Effect = effect(gpu, copySource, { label: 'hero-rest-copy', blend: 'premultiplied', set: { source: rest, samp: linear } });
 
     const blurH: Effect = effect(gpu, blurSource, {
       label: 'hero-blur-h',
@@ -153,7 +162,7 @@ export async function createWebGpuRenderer({
 
     // A surface is only a target inside a frame; its signature pre-warms the composite pipeline.
     await Promise.all([
-      strokes.compile(scene), pulses.compile(scene), nodes.compile(scene), bright.compile(bloomA),
+      strokes.compile(scene), pulses.compile(scene), nodes.compile(scene), restCopy.compile(scene), bright.compile(bloomA),
       blurH.compile(bloomB), blurV.compile(bloomA), composite.compile({ colors: [canvasSurface.format] }),
     ]);
 
@@ -163,6 +172,14 @@ export async function createWebGpuRenderer({
 
     let faultHandler: ((error: Error) => void) | null = null;
 
+    /** The palette and lift reach every draw, and whatever the rest texture holds was drawn in the old ones. */
+    const tint = (): void => {
+      strokes.set({ palette: paletteUniform(palette, lift) });
+      pulses.set({ palette: paletteUniform(palette, lift) });
+      nodes.set({ palette: paletteUniform(palette, lift) });
+      drawnRest = null;
+    };
+
     const renderer: ArtRenderer = {
       kind: 'webgpu',
       resize(nextWidth, nextHeight, nextRatio) {
@@ -171,6 +188,8 @@ export async function createWebGpuRenderer({
         size = physical(nextWidth, nextHeight);
         canvasSurface.resize(size);
         scene.resize(size);
+        rest.resize(size);
+        drawnRest = null;
         bloomA.resize(bloomSize(size[0], size[1]));
         bloomB.resize(bloomSize(size[0], size[1]));
         strokes.set({ view: view() });
@@ -179,30 +198,42 @@ export async function createWebGpuRenderer({
         blurH.set({ blur: { texel: bloomA.texelSize } });
         blurV.set({ blur: { texel: bloomB.texelSize } });
       },
-      setPalette(palette) {
+      setPalette(next) {
         if (disposed) return;
-        strokes.set({ palette: paletteUniform(palette) });
-        pulses.set({ palette: paletteUniform(palette) });
-        nodes.set({ palette: paletteUniform(palette) });
+        palette = next;
+        tint();
         composite.set({ composite: { strength: BLOOM_STRENGTH[palette.mode] } });
       },
       render(current: ArtFrame) {
         if (disposed) return;
         const strokeCount = Math.min(current.count, STROKE_CAPACITY);
+        // The resting strokes live in `rest` for as long as their epoch holds: only those after them are sent and drawn.
+        const resting = current.rest === undefined ? 0 : Math.min(current.rest.count, strokeCount);
+        const redraw = resting > 0 && current.rest?.epoch !== drawnRest;
         const nodeCount = Math.min(current.nodeCount, NODE_CAPACITY);
         const pulseCount = Math.min(current.pulseCount, PULSE_CAPACITY);
 
         try {
           // Inside the try: `geometry.write` throws DISPOSED/LOST on a device that died between ticks.
-          if (strokeCount > 0) strokeGeometry.write(current.strokes.subarray(0, strokeCount * STROKE_STRIDE));
+          if ((current.lift ?? DEFAULT_LIFT) !== lift) {
+            lift = current.lift ?? DEFAULT_LIFT;
+            tint();
+          }
+
+          const from = redraw ? 0 : resting;
+
+          if (strokeCount > from) strokeGeometry.write(current.strokes.subarray(from * STROKE_STRIDE, strokeCount * STROKE_STRIDE), 4 * from * STROKE_STRIDE);
 
           if (nodeCount > 0) nodeGeometry.write(current.nodes.subarray(0, nodeCount * NODE_STRIDE));
 
           if (pulseCount > 0) pulseGeometry.write(current.pulses.subarray(0, pulseCount * PULSE_STRIDE));
 
           frame(gpu, (pass) => {
+            if (redraw) pass.pass({ target: rest, clear: [0, 0, 0, 0] }, (encoder) => { encoder.draw(strokes, { instances: resting }); });
+
             pass.pass({ target: scene, clear: [0, 0, 0, 0] }, (encoder) => {
-              encoder.draw(strokes, { instances: strokeCount });
+              if (resting > 0) encoder.draw(restCopy);
+              encoder.draw(strokes, { firstInstance: resting, instances: strokeCount - resting });
               encoder.draw(pulses, { instances: pulseCount });
               encoder.draw(nodes, { instances: nodeCount });
             });
@@ -211,6 +242,8 @@ export async function createWebGpuRenderer({
             pass.pass({ target: bloomA }, blurV);
             pass.pass({ target: canvasSurface, clear: [0, 0, 0, 0] }, composite);
           });
+
+          if (redraw) drawnRest = current.rest?.epoch ?? null;
         } catch (thrown) {
           // A dead device throws from `frame()`, not `gpu.onError`. Check @vgpu/core's shared base class:
           // its ValidationError is not a vgpu VGPUError. DISPOSED here can only be a self-killed device;

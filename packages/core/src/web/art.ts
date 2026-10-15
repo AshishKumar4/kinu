@@ -60,7 +60,19 @@ export interface ArtFrame {
   readonly pulses: Float32Array<ArrayBuffer>;
   readonly pulseCount: number;
   readonly time: number;
+  /** The first `count` strokes are the picture at rest, unchanged for as long as `epoch` is: a renderer may keep them. */
+  readonly rest?: { readonly count: number; readonly epoch: number };
+  /** What every stroke's and pulse's alpha is multiplied by on each ground; DEFAULT_LIFT unless the picture says. */
+  readonly lift?: Lift;
 }
+
+/** Paper needs more ink than the dark ground for a line to read the same: today's tissue is lifted 2.4 on paper. */
+export interface Lift {
+  readonly dark: number;
+  readonly light: number;
+}
+
+export const DEFAULT_LIFT: Lift = { dark: 1, light: 2.4 };
 
 export function grown(buffer: Float32Array<ArrayBuffer>, needed: number): Float32Array<ArrayBuffer> {
   if (needed <= buffer.length) return buffer;
