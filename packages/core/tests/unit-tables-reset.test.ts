@@ -135,6 +135,26 @@ test('a removed table whose drop would reach rows of a table the release did not
   expect(rows(sql, 'SELECT COUNT(*) AS n FROM stays')).toEqual([{ n: 1 }]);
 });
 
+test('two changed tables, each indexed, are each rebuilt with their own indexes and none of the other\'s', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE tickets (hash TEXT PRIMARY KEY, expires_at INTEGER, used_at INTEGER);
+    CREATE INDEX tickets_exp ON tickets(expires_at);
+    CREATE TABLE joins (id TEXT PRIMARY KEY, expires_at INTEGER, used_at INTEGER);
+    CREATE INDEX joins_exp ON joins(expires_at);
+    INSERT INTO tickets VALUES ('t', 1, NULL);
+    INSERT INTO joins VALUES ('j', 2, 3);`, `
+    CREATE TABLE IF NOT EXISTS tickets (hash TEXT PRIMARY KEY, expires_at INTEGER);
+    CREATE INDEX IF NOT EXISTS tickets_exp ON tickets(expires_at);
+    CREATE TABLE IF NOT EXISTS joins (id TEXT PRIMARY KEY, expires_at INTEGER);
+    CREATE INDEX IF NOT EXISTS joins_exp ON joins(expires_at);`);
+
+  const done = resetTables(sql, { tables: altered('tickets', 'joins'), drop: true }, writes);
+
+  expect({ rebuilt: [...done.rebuilt].sort(), dropped: done.dropped }).toEqual({ rebuilt: ['joins', 'tickets'], dropped: [] });
+  expect(rows(sql, 'SELECT hash, expires_at FROM tickets')).toEqual([{ hash: 't', expires_at: 1 }]);
+  expect(rows(sql, "SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name")).toEqual([{ name: 'joins_exp' }, { name: 'tickets_exp' }]);
+});
+
 test('a census names every table and its rows, sorted', () => {
   const { sql, writes } = world(`CREATE TABLE b (id TEXT); CREATE TABLE a (id TEXT); INSERT INTO a VALUES ('x');`, '');
 

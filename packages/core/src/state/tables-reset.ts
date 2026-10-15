@@ -231,7 +231,7 @@ function viewsOver(rows: readonly SchemaRow[], tables: readonly string[]): Schem
 /** The candidate's schema for a group of tables: each table's statement, then its indexes, triggers and views. */
 interface CandidateSchema {
   readonly tables: ReadonlyMap<string, string>;
-  readonly after: readonly string[];
+  readonly after: readonly SchemaRow[];
 }
 
 /** What the candidate's init makes of `group`, read in a rolled-back transaction: the group and the views over it
@@ -245,11 +245,11 @@ function candidateSchema(sql: SqlExec, writes: TableWrites, group: readonly stri
     for (const table of [...group].reverse()) yield* run(sql, `DROP TABLE "${table}"`);
     yield* Effect.try({ try: () => { writes.init(); }, catch: (cause) => new KinuError('unsupported', `the init over the rest refused: ${String(cause)}`) });
     const made = schemaRows(sql);
-    const on = (type: string) => made.filter((row) => row.type === type && group.includes(row.tbl_name) && row.sql !== null).map((row) => row.sql ?? '');
+    const on = (type: string) => made.filter((row) => row.type === type && group.includes(row.tbl_name) && row.sql !== null);
 
     return {
       tables: new Map(made.filter((row) => row.type === 'table' && group.includes(row.name)).map((row) => [row.name, row.sql ?? ''])),
-      after: [...on('index'), ...on('trigger'), ...viewsOver(made, group).map((row) => row.sql ?? '')],
+      after: [...on('index'), ...on('trigger'), ...viewsOver(made, group)],
     };
   }), true);
 }
@@ -304,8 +304,12 @@ function rebuild(sql: SqlExec, writes: TableWrites, change: { group: readonly st
       yield* run(sql, `DROP TABLE "${table}__kinu_rows"`);
     }
 
-    // After the copy, so a trigger the candidate makes does not run on rows it already accounts for.
-    for (const statement of candidate.after) yield* run(sql, statement);
+    // After the copy, so a trigger the candidate makes does not run on rows it already accounts for. Only this group's:
+    // the candidate was read for every changed table, and another group's still stand.
+    const views = viewsOver(candidate.after, group);
+    const own = candidate.after.filter((row) => (row.type === 'view' ? views.includes(row) : group.includes(row.tbl_name)));
+
+    for (const row of own) yield* run(sql, row.sql ?? '');
     const orphaned = yield* run(sql, 'PRAGMA foreign_key_check');
 
     if (orphaned > 0) return yield* new KinuError('unsupported', `the rebuilt rows break ${String(orphaned)} foreign key(s)`);
