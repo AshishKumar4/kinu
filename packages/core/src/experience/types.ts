@@ -23,8 +23,8 @@ export type ExperiencePayload =
   | { kind: 'fact'; key: string; value: JsonValue; confidence: number }
   | { kind: 'scaffold'; version: number; rationale: string; code: string };
 
+/** Its kind is its payload's: `payload.kind` is the one discriminator, and a store's `kind` column is written from it. */
 export interface PublishableCandidate {
-  kind: ExperienceKind;
   /** Stable within (source workspace, kind); re-publishing the same key replaces the entry. */
   key: string;
   title: string;

@@ -184,7 +184,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, se
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
-  const executors = surface.configuredExecutors;
+  const executors = surface.executors;
 
   if (executors.length === 0) return '';
 

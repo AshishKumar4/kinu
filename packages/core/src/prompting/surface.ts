@@ -53,8 +53,8 @@ export interface PromptSurface {
   builtinTools: BuiltinToolName[];
   agentsActions: AgentsOp[];
   temporaryAsk: boolean;
+  /** The executors this workspace configured, an offline one among them: one it never configured is never described. */
   executors: PromptExecutorInfo[];
-  configuredExecutors: PromptExecutorInfo[];
   model: PromptModelProfile;
   backend?: PromptBackend;
   roleSection: { id: string; label: string; instructions: string } | null;
@@ -118,7 +118,7 @@ function uniqueAgentsActions(
 }
 
 export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface {
-  const executors = uniquePromptExecutors(opts);
+  const executors = uniquePromptExecutors(opts).filter(executorIsConfigured);
   const builtinTools = uniqueBuiltinTools(opts.availableTools);
   const workspaceTitle = opts.identity?.workspace?.trim() ?? '';
   const agentTitle = opts.identity?.agent?.trim() ?? '';
@@ -128,7 +128,6 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     temporaryAsk: opts.temporaryAsk ?? false,
     agentsActions: uniqueAgentsActions(opts.agentsActions, builtinTools),
     executors,
-    configuredExecutors: executors.filter(executorIsConfigured),
     model: resolvePromptModelProfile(opts.model),
     roleSection: opts.roleSection ?? null,
     backend: opts.backend,

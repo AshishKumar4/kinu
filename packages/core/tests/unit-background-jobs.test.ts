@@ -2,11 +2,11 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, withSpawnDetach,
-  isBackgroundHandle, serializeJobResult, readSpawnStarted, SPAWN_STARTED_OPTION,
+  serializeJobResult, readSpawnStarted, SPAWN_STARTED_OPTION,
 } from '../src/jobs/index';
 import { isBackgroundOutcomeText } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActorsOver, handClock } from '@kinu.run/test-utils';
+import { createTestActorsOver, handClock, isBackgroundHandle } from '@kinu.run/test-utils';
 
 function newStore() {
   const db = new Database(':memory:');

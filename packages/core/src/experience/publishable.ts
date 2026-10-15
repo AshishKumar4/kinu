@@ -62,7 +62,6 @@ function craftCandidate(
   }
 
   return {
-    kind: 'craft',
     key: name,
     title: titleOf(tool.description || name),
     payload: {
@@ -89,7 +88,6 @@ function lessonCandidate(src: PublishSources, id: string): PublishableCandidate 
   }
 
   return {
-    kind: 'lesson',
     key: lesson.id,
     title: titleOf(lesson.text),
     payload: { kind: 'lesson', text: lesson.text },
@@ -110,7 +108,6 @@ function factCandidate(src: PublishSources, key: string): PublishableCandidate |
   }
 
   return {
-    kind: 'fact',
     key: fact.key,
     title: titleOf(fact.key),
     payload: { kind: 'fact', key: fact.key, value: fact.value, confidence: fact.confidence },
@@ -215,7 +212,6 @@ async function scaffoldCandidate(
   }
 
   return {
-    kind: 'scaffold',
     key: String(version),
     title: titleOf(`Scaffold v${version}: ${row.rationale}`),
     payload: { kind: 'scaffold', version, rationale: row.rationale, code },

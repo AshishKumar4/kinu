@@ -159,7 +159,8 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
    */
   async function tickWithDueTrigger(home: string, project: string): Promise<v.InferOutput<typeof DaemonTickRun>> {
     const script = `
-      const { createRecordingLogger, setDiagnosticsSink } = await import('@kinu.run/core/obs');
+      const { setDiagnosticsSink } = await import('@kinu.run/core/obs');
+      const { createRecordingLogger } = await import('@kinu.run/test-utils/recording');
       const { createCliAgent } = await import('./packages/cli/src/agent-create.ts');
       const { triggersCommand } = await import('./packages/cli/src/commands/control.ts');
       const { daemonCommand } = await import('./packages/cli/src/commands/daemon.ts');

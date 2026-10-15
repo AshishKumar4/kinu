@@ -8,8 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
-  actorConnectionTag, BUILTIN_TOOLS,
-  observedOpEnum, REPORT_TOOL, type JsonValue, TASK_TURN_ENDINGS, terminalTaskReport,
+  actorConnectionTag, BUILTIN_TOOLS, REPORT_TOOL, type JsonValue, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import { gatedTools, present, TURN_REACH } from '@kinu.run/test-utils';
 import { KeptTranscript } from '../src/components/KeptTranscript';
@@ -22,6 +21,7 @@ import {
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
 import { answeringGateway, chatCompletion, offeredTools, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { observedOpEnum } from '@kinu.run/test-utils/conformance';
 
 mockAgentsSdk();
 

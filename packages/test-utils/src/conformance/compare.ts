@@ -5,7 +5,7 @@
 
 import type { JSONSchema7 } from 'ai';
 import * as v from 'valibot';
-import { isBuiltinToolName } from '../tools/registry';
+import { isBuiltinToolName } from '@kinu.run/core';
 import {
   BACKEND_CONFORMANCE,
   CONFORMANCE_PLANES,

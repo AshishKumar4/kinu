@@ -676,7 +676,7 @@ export class ChatSession {
       // A refusal's words fit its row: no file is written for it.
       const refusal = refusedRun(failure ?? new KinuError('cancelled', 'The run was no longer owed.'));
 
-      this.pendingSends.recordRunEnd(item.run.id, { json: JSON.stringify(refusal), path: null, digest: null });
+      this.pendingSends.recordRunEnd(item.run.id, { json: JSON.stringify(refusal), path: null });
       this.ports.runs?.tell();
     }
 

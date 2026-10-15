@@ -12,9 +12,9 @@ const DEFAULT_PAGE = boundEventQuery().limit;
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
 
 import type { JsonValue } from '../src/utils/json';
-import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
+import { setDiagnosticsSink, KinuError } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActorsOver, createRecordingLogger } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
 /** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */

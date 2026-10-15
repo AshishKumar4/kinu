@@ -1,8 +1,7 @@
 diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
-index 423e1a02d..99123c4e3 100644
 --- a/packages/core/src/bench/types.ts
 +++ b/packages/core/src/bench/types.ts
-@@ -127,7 +127,7 @@ export interface Solver {
+@@ -125,7 +125,7 @@
  
  /** All-or-nothing: partial credit would need a chosen weighting, i.e. a rubric. */
  export function attemptPassed(checks: readonly CheckOutcome[]): boolean {
@@ -10,4 +9,4 @@ index 423e1a02d..99123c4e3 100644
 +  return checks.every((c) => c.passed);
  }
  
- /** Provider usage is a trust boundary with two dialects (nested V3 `{ total }` and flat).
+ /** Per task and repeat from the run seed, so order is not confounded with variant. */

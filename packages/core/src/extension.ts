@@ -9,6 +9,7 @@ import type { ModelMessage, ToolSet } from 'ai';
 import type { JsonObject } from './utils/json';
 import { diagnostics, KinuError, toKinuError } from './obs/index';
 import type { ToolOutcome } from './tools/outcome';
+import { raceAbort } from '@kinu.run/agent-utils';
 
 export interface TurnStartContext {
   readonly system: string;
@@ -91,24 +92,14 @@ export interface KinuExtension {
   registerTools?(): ToolSet;
 }
 
+const HOOK_CANCELLED = 'the turn was cancelled while an extension hook was running';
+
 /** A hook that never settles must not hold the turn past its abort; the orphaned promise settles on its own. */
 function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Effect.Effect<T, KinuError> {
-  if (signal === undefined) return Effect.promise(() => pending);
-
-  const cancelled = (): KinuError =>
-    new KinuError('cancelled', 'the turn was cancelled while an extension hook was running', { cause: signal.reason });
-
-  if (signal.aborted) return Effect.fail(cancelled());
-  let onAbort: (() => void) | undefined;
-
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(cancelled());
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-
-  return Effect.ensuring(Effect.promise(() => Promise.race([pending, aborted])), Effect.sync(() => {
-    if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
-  }));
+  // The shared race stops the wait; the abort reads as the turn's cancellation, and the hook's own failure as itself.
+  return Effect.catchCause(Effect.promise(() => raceAbort(() => pending, signal, HOOK_CANCELLED)), (failed) => (signal?.aborted
+    ? Effect.fail(new KinuError('cancelled', HOOK_CANCELLED, { cause: signal.reason }))
+    : Effect.failCause(failed)));
 }
 
 /** The hooks an extension observes a turn by, each fired in registration order. */

@@ -8,14 +8,13 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     origin TEXT NOT NULL CHECK(origin IN ('input','output','edit','context_transform','render')),
     request_id TEXT, output_slot INTEGER, ingress_id TEXT,
     envelope_json TEXT NOT NULL,
-    sealed_at INTEGER, content_json TEXT, content_path TEXT, content_digest TEXT,
+    sealed_at INTEGER, content_json TEXT, content_path TEXT,
     PRIMARY KEY(actor_id,message_id), UNIQUE(actor_id,request_id,output_slot),
     FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id),
     CHECK(output_slot IS NULL OR output_slot >= 0),
     CHECK((request_id IS NULL) = (output_slot IS NULL)),
-    CHECK((sealed_at IS NULL AND content_json IS NULL AND content_path IS NULL AND content_digest IS NULL)
-      OR (sealed_at IS NOT NULL AND ((content_json IS NOT NULL AND content_path IS NULL AND content_digest IS NULL)
-        OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL)))))`);
+    CHECK((sealed_at IS NULL AND content_json IS NULL AND content_path IS NULL)
+      OR (sealed_at IS NOT NULL AND (content_json IS NULL) <> (content_path IS NULL))))`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS session_message_ingress ON session_messages(actor_id,ingress_id) WHERE ingress_id IS NOT NULL`);
   // `sealAbandoned` names the literal `sealed_at IS NULL` at every admission.
   exec(`CREATE INDEX IF NOT EXISTS session_open_messages ON session_messages(actor_id) WHERE sealed_at IS NULL`);
@@ -24,14 +23,13 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   exec(`CREATE TABLE IF NOT EXISTS stream_parts (
     actor_id TEXT NOT NULL, message_id TEXT NOT NULL, part_no INTEGER NOT NULL, segment INTEGER NOT NULL,
     stream_order INTEGER NOT NULL,
-    descriptor_json TEXT, descriptor_path TEXT, descriptor_digest TEXT,
+    descriptor_json TEXT, descriptor_path TEXT,
     text TEXT NOT NULL DEFAULT '', ended INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(actor_id,message_id,part_no,segment),
     FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id),
     CHECK(part_no >= 0), CHECK(segment >= 0), CHECK(stream_order >= 0), CHECK(ended IN (0,1)),
-    CHECK((segment > 0 AND descriptor_json IS NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL)
-      OR (segment = 0 AND ((descriptor_json IS NOT NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL)
-        OR (descriptor_json IS NULL AND descriptor_path IS NOT NULL AND descriptor_digest IS NOT NULL)))))`);
+    CHECK((segment > 0 AND descriptor_json IS NULL AND descriptor_path IS NULL)
+      OR (segment = 0 AND (descriptor_json IS NULL) <> (descriptor_path IS NULL))))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_contexts (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL,
     PRIMARY KEY(actor_id,context_id))`);
@@ -77,11 +75,10 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), request_id TEXT NOT NULL, turn_id TEXT NOT NULL, run_id TEXT NOT NULL,
     epoch INTEGER NOT NULL, step_index INTEGER, revision INTEGER NOT NULL,
     context_id TEXT NOT NULL, context_revision INTEGER NOT NULL,
-    metadata_json TEXT, metadata_path TEXT, metadata_digest TEXT, recorded_at INTEGER NOT NULL,
+    metadata_json TEXT, metadata_path TEXT, recorded_at INTEGER NOT NULL,
     PRIMARY KEY(actor_id,request_id), UNIQUE(actor_id,turn_id,epoch,revision),
     FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision),
-    CHECK((metadata_json IS NOT NULL AND metadata_path IS NULL AND metadata_digest IS NULL)
-      OR (metadata_json IS NULL AND metadata_path IS NOT NULL AND metadata_digest IS NOT NULL)))`);
+    CHECK((metadata_json IS NULL) <> (metadata_path IS NULL)))`);
   // `lastStep` names the literal `step_index IS NOT NULL`.
   exec(`CREATE INDEX IF NOT EXISTS actor_step_requests ON actor_requests(actor_id,recorded_at) WHERE step_index IS NOT NULL`);
   // A step's list is a revision of the actor's unselected `requests` context.

@@ -2,14 +2,14 @@
 // while leaving the others flat, measured against the clean run rather than the locked baseline.
 
 import type { ModelMessage } from 'ai';
-import type { PrepareStepContext } from '../extension';
-import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
-import { StepInjections, type RecordedInjection } from '../prompting/step-injections';
-import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../tools/clamp';
+import type { PrepareStepContext } from '../src/extension';
+import { DynamicContextLedger, type DynamicContext } from '../src/prompting/volatile-context';
+import { StepInjections, type RecordedInjection } from '../src/prompting/step-injections';
+import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../src/tools/clamp';
 import { LAYERS, type Layer } from './layers';
 import { observePipeline, scoreAgainstBaseline } from './gate';
 import type { PipelineSubjects } from './subjects';
-import { renderThrownChain } from '../obs/index';
+import { renderThrownChain } from '../src/obs/index';
 
 export interface Fault<S = PipelineSubjects> {
   readonly id: string;
@@ -84,7 +84,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       compilePromptSurface: (opts) => {
         const surface = s.compilePromptSurface(opts);
 
-        return { ...surface, configuredExecutors: surface.executors };
+        return { ...surface, executors: [...opts.executors ?? []] };
       },
       buildSystemPromptSync: (opts) => s.buildSystemPromptSync({ ...opts, agentsMd: undefined }),
       admitAgentsMd: (candidates) => ({ admit: candidates, referenced: [] }),

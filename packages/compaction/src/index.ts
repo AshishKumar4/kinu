@@ -36,11 +36,3 @@ export {
 } from './stores';
 
 export { createModelSummarizer } from './summarizer';
-
-// Compaction-ladder layer-gate slice; see scripts/layergate.ts for the merged report.
-export {
-  COMPACTION_LAYERS, COMPACTION_FAULTS, createCompactionLadderSubjects,
-  type CompactionLadderSubjects,
-} from './layergate';
-
-export { COMPACTION_LOCKED_BASELINE } from './layergate-baseline';

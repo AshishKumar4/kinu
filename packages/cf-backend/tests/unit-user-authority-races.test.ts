@@ -7,7 +7,7 @@ import {
   asFetchFunction,
   credentialToHeaders,
 } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import {
   createTestUserDO,
   createdWorkspace,
@@ -26,6 +26,7 @@ import {
 import { sha256Hex } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 /** The headers a call sent with the login stored under `key` holding `accessToken`, which the upstream then refused. */
 function refusedWith(key: string, accessToken: string): Record<string, string> {

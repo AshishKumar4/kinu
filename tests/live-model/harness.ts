@@ -20,7 +20,7 @@ import {
   actorNamespaces, SURFACE_POLICY, TurnContextBudget, type SurfaceActor,
   isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
   projectJsonValue, failedToolOutcome, TaskListStore,
-  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
+  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
   WORKSPACE_RUN_ID, BackgroundJobRunner, BACKGROUNDABLE_TOOLS, narrowToolSurface,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
@@ -669,10 +669,10 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
       + 'wired and every judge, fast and reflection call would fail before reaching a model');
   }
 
-  rt.setProfileResolver(() => Promise.resolve(resolveAgentTurnProfile({
+  rt.setProfileResolver(() => Promise.resolve(resolveTurnProfile({
     envelope,
     provider,
-    activeRoleId: role,
+    roleId: role,
     workMode: 'build',
     availableTools: [],
     activeSkills: [],

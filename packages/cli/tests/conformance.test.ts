@@ -1,5 +1,5 @@
 // Backend conformance over the production `kinu create` + open chain; compareSurface fails on any
-// disagreement with core/src/conformance/manifest.ts.
+// disagreement with test-utils/src/conformance/manifest.ts.
 import { describe, test, expect, afterAll } from 'bun:test';
 
 import { homedir, tmpdir } from 'node:os';
@@ -7,9 +7,7 @@ import { join, resolve } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
-  compareSurface, observedOpEnum, wiredProducers,
-  renderConformanceFindings, NO_COUNT_ENDPOINT, BUILTIN_PROFILE_CATALOG, profileCatalogDigest,
-  type ObservedSurface, type ProfileCatalog,
+  NO_COUNT_ENDPOINT, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, type ProfileCatalog,
 } from '@kinu.run/core';
 import {
   LocalAgentHost, openWorkspaceCLI,
@@ -20,6 +18,7 @@ import { resolveModelDefaults, agentDbPath, AGENT_HOME, listLocalRefsAllProjects
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { present } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
+import { compareSurface, observedOpEnum, wiredProducers, renderConformanceFindings, type ObservedSurface } from '@kinu.run/test-utils/conformance';
 
 // Dummy provider config so resolveModelDefaults names a model offline. Passed as arguments, not `process.env`:
 // bun runs every file of an invocation in one process, so env set here leaks into later files.

@@ -12,8 +12,12 @@ import {
 } from '../src/index';
 import { statedRetryAfterMs } from '../src/providers/fallback-cooldown';
 import {
-  KinuError, createLineLogger, createRecordingLogger, renderThrownChain, setDiagnosticsSink,
+  KinuError,
+  createLineLogger,
+  renderThrownChain,
+  setDiagnosticsSink,
 } from '../src/obs/index';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 interface CircularProviderError {
   code: undefined;

@@ -143,7 +143,7 @@ const GATED_CALLS: GatedCall[] = [
     capability: 'experience.write',
     name: 'publishExperience',
     run: (u, c) => u.publishExperience(c, {
-      kind: 'fact', key: 'deploy.target', title: 'deploy.target',
+      key: 'deploy.target', title: 'deploy.target',
       payload: { kind: 'fact', key: 'deploy.target', value: 'x.workers.dev', confidence: 1 },
       evidence: 'held at confidence 1.00',
     }),

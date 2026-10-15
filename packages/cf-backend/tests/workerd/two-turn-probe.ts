@@ -16,10 +16,8 @@ import {
 import {
   createCompositeLogger,
   createConsoleLogger,
-  createRecordingLogger,
   setDiagnosticsSink,
   type Logger,
-  type RecordedLog,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
@@ -95,6 +93,7 @@ import { changeNotesCard, ownerCaller, turnTags, type ChangeNote, type NotedChan
 import type { ChatWire, ChatWireTransport } from '../../src/chat-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import type { ToolSet } from 'ai';
+import { type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils/recording';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
 // classes, as slate-actor-probe.ts:43-48 does.

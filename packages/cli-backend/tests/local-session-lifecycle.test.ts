@@ -1,7 +1,7 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
+import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase, createRecordingLogger } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -21,7 +21,7 @@ import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { staticModelPlane } from '../src/profile-authority';
 import { osLeaseProcess } from '../src/agent-host/lease-process';
 import * as v from 'valibot';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, swarmsOn, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, SEARCH_ASK, SEARCH_TASK, textStream, toolCallStream, } from './helpers/local-session';
 
 const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');

@@ -35,7 +35,7 @@ export interface ConversationEntry {
 
 export type PreparedConversationEntry = Omit<ConversationEntry, 'recordedAt' | 'position'>;
 
-interface EntryRow { id: string; position: number; role: ConversationEntry['role']; turn_id: string | null; run_id: string | null; recorded_at: number; metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null; context_id: string | null; context_revision: number | null }
+interface EntryRow { id: string; position: number; role: ConversationEntry['role']; turn_id: string | null; run_id: string | null; recorded_at: number; metadata_json: string | null; metadata_path: string | null; context_id: string | null; context_revision: number | null }
 
 interface EntryPartRow { message_id: string; part_no: number; text_start: number | null; text_length: number | null }
 
@@ -49,7 +49,7 @@ function withParts(rows: readonly EntryWithPartRow[]): ConversationEntry[] {
     let entry = entries.at(-1);
 
     if (entry?.id !== row.id) {
-      const metadata = payloadReference(row.metadata_json, row.metadata_path, row.metadata_digest);
+      const metadata = payloadReference(row.metadata_json, row.metadata_path);
 
       entry = { id: row.id, position: row.position, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
         context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
@@ -308,7 +308,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     this.actor.assertCurrent();
     const { actorId } = this.actor;
 
-    return withParts(this.sql<EntryWithPartRow>`SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,e.metadata_digest,
+    return withParts(this.sql<EntryWithPartRow>`SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,
         e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
       FROM conversation_entries e LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
       WHERE e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=${id} ORDER BY p.position`)[0] ?? null;
@@ -343,7 +343,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
 
     return withParts(this.sql<EntryWithPartRow>`WITH newest AS (SELECT id,position FROM conversation_entries
         WHERE actor_id=${actorId} AND session_id=${this.sessionId} ORDER BY position DESC LIMIT ${limit})
-      SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,e.metadata_digest,
+      SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,
         e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
       FROM newest CROSS JOIN conversation_entries e ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=newest.id
       LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
@@ -565,8 +565,8 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
       this.actor.assertCurrent();
       const actorId = this.actor.actorId;
       const context = entry.context === undefined ? this.selection() : entry.context;
-      void this.sql`INSERT INTO conversation_entries(actor_id,session_id,id,position,role,turn_id,run_id,metadata_json,metadata_path,metadata_digest,recorded_at,context_id,context_revision)
-        VALUES(${actorId},${this.sessionId},${entry.id},${this.count()},${entry.role},${entry.turnId},${entry.runId},${entry.metadata?.json ?? null},${entry.metadata?.path ?? null},${entry.metadata?.digest ?? null},${Date.now()},${context?.contextId ?? null},${context?.revision ?? null})`;
+      void this.sql`INSERT INTO conversation_entries(actor_id,session_id,id,position,role,turn_id,run_id,metadata_json,metadata_path,recorded_at,context_id,context_revision)
+        VALUES(${actorId},${this.sessionId},${entry.id},${this.count()},${entry.role},${entry.turnId},${entry.runId},${entry.metadata?.json ?? null},${entry.metadata?.path ?? null},${Date.now()},${context?.contextId ?? null},${context?.revision ?? null})`;
 
       for (const [position, part] of entry.parts.entries()) {
         void this.sql`INSERT INTO conversation_entry_parts(actor_id,session_id,entry_id,position,message_id,part_no,text_start,text_length)
@@ -588,7 +588,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
 
     this.atomic(() => {
       this.actor.assertCurrent();
-      void this.sql`UPDATE conversation_entries SET metadata_json=${metadata.json}, metadata_path=${metadata.path}, metadata_digest=${metadata.digest}
+      void this.sql`UPDATE conversation_entries SET metadata_json=${metadata.json}, metadata_path=${metadata.path}
         WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`;
     });
   }

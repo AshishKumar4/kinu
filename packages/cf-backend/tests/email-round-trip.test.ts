@@ -3,8 +3,8 @@
 // answered once; and an entry that cannot reach the workspace failing by name without its cause's secrets.
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
-import { KinuError, createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { scriptedTurnModel, createRecordingLogger } from '@kinu.run/test-utils';
 import { handleInboundEmail } from '../src/email/handler';
 import { fireSoonestWake, orchestratorHarness, until, type RecordedUserPlaneCalls } from './helpers/actor-harness';
 import { refuseUnlistedHeaders } from './helpers/email-service';

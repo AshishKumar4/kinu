@@ -1364,7 +1364,7 @@ export * from './strategy/index';
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export * from './bench/index';
 
-export * from './curriculum/index';
+export * from './curriculum/proposer';
 
 // Providers. Secrets stay inside UserDO and never enter the provider layer.
 export * from './providers/index';
@@ -1626,7 +1626,7 @@ export {
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
   backgroundJobNotice,
-  isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
+  SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership, execCallArgs, execContext,
   BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
   invocationBackgroundPolicy,
@@ -1869,7 +1869,7 @@ export {
   runGepa,
   DEFAULT_GEPA_BUDGET,
   initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks, aggregateScore,
 } from './evolution/gepa/index';
 
 export type {
@@ -1881,32 +1881,6 @@ export type {
 } from './evolution/gepa/index';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
-
-// Layer gate
-export {
-  LAYERS, FAULTS, LOCKED_BASELINE,
-  LOCALIZATION_OWN_MIN_PP, LOCALIZATION_OTHER_MAX_PP,
-  createPipelineSubjects, SUBJECT_SOURCE,
-  observePipeline, scoreAgainstBaseline, runLayerGate, lockBaseline,
-  renderLayerGateReport, runFaultMatrix, renderFaultMatrix,
-} from './layergate/index';
-
-export type {
-  Layer, Probe, PipelineSubjects, SubjectName,
-  Baseline, LayerGateReport, LayerScore, Fault, FaultImpact,
-} from './layergate/index';
-
-// Backend conformance gate
-export {
-  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS,
-  compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables, wiredProducers,
-  renderConformanceFindings,
-} from './conformance/index';
-
-export type {
-  CapabilityStatus, ConformanceFinding, ConformanceFindingKind, ConformanceManifest,
-  ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
-} from './conformance/index';
 
 export {
   getRunTimeline,
@@ -2165,9 +2139,9 @@ export type {
 
 export {
   resolveModelRoute,
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource, type PinnedProfile,
-  type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
+  type ResolveTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
   type FixedTierSource,
   DEFAULT_ROLE_ID,
@@ -2649,7 +2623,7 @@ export {
 } from './mcp/client';
 
 export {
-  validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
+  validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
   McpServerSummarySchema, McpTransportSchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput,
   type McpServerSummary, type McpTransport,
 } from './mcp/servers';

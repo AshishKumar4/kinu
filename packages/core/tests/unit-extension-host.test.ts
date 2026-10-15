@@ -15,7 +15,8 @@ import {
   type ChatEvent,
   type Usage,
 } from '../src/index';
-import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
+import { setDiagnosticsSink, KinuError } from '../src/obs/index';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 /** One text answer, streamed the way the SDK delivers it. */
 function textStream(text: string): ReadableStream<LanguageModelV3StreamPart> {

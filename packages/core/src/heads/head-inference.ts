@@ -531,7 +531,7 @@ async function inferPrepared(
     if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
   };
 
-  // One dense counter across every turn: `head_steps` is keyed `${id}-s${seq}`, so a per-turn
+  // One dense counter across every turn: `head_steps` is keyed by head and seq, so a per-turn
   // counter would overwrite earlier turns. Steps with no prose, reasoning or tool call are not recorded.
   let recorded = 0;
   let lastText = '';

@@ -146,7 +146,7 @@ import {
   type InstructionSourceRow, type InstructionSourceView,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
+  resolveTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   activeOperationProfile, captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
   inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
@@ -608,7 +608,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Created in the constructor: the only point guaranteed to precede every access on both cf roots
-   * (`onStart` may follow an RPC). Per-root by design; `core/conformance/manifest.ts` marks it
+   * (`onStart` may follow an RPC). Per-root by design; `test-utils/src/conformance/manifest.ts` marks it
    * absent for cli. The storage is asked its stamp first (identity/schema-stamp.ts): storage a release's tables step
    * has not reached gets no init, and every call but that step's is refused with why.
    */
@@ -4006,7 +4006,7 @@ export abstract class ActorAgent extends Agent<Env> {
       resolve: async () => {
         const inputs = await this.profileInputs();
 
-        return resolveAgentTurnProfile({
+        return resolveTurnProfile({
           ...inputs,
           ...ownProfileChoices(this.config, inputs),
           workMode: preparedMode ?? await this.preparedWorkMode(),
@@ -4027,7 +4027,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const inputs = await this.profileInputs();
 
     return {
-      profile: resolveAgentTurnProfile({
+      profile: resolveTurnProfile({
         ...inputs,
         ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), {
           explicitTier: input.explicitTier,

@@ -30,7 +30,6 @@ export type ImportStatus = 'provisional' | 'corroborated';
 export interface ImportedExperienceRow {
   id: string;
   libraryId: string;
-  kind: ExperienceKind;
   key: string;
   title: string;
   payload: ExperiencePayload;
@@ -75,7 +74,7 @@ interface RawImportRow {
 function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
   const payload = parseExperiencePayload(r.payload_json);
 
-  if (!payload || payload.kind !== r.kind) return null;
+  if (!payload) return null;
   const rawTurnIds: unknown = tolerate(() => JSON.parse(r.turn_ids), 'malformed-input');
   const parsedTurnIds = v.safeParse(v.array(v.string()), rawTurnIds);
 
@@ -96,7 +95,7 @@ function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
   const turnIds = parsedTurnIds.output;
 
   return {
-    id: r.id, libraryId: r.library_id, kind: r.kind, key: r.key, title: r.title,
+    id: r.id, libraryId: r.library_id, key: r.key, title: r.title,
     payload, evidence: r.evidence, sourceWorkspace: r.source_workspace,
     status: r.corroborated_at === null ? 'provisional' : 'corroborated', turnIds, importedAt: r.imported_at,
     corroboratedAt: r.corroborated_at,
@@ -131,13 +130,6 @@ export function stageImport(
   entry: ExperienceEntry,
   now = nowMs(),
 ): ImportOutcome {
-  // The library decoded the payload; only the pairing with `kind` is left to refuse.
-  if (entry.payload.kind !== entry.kind) {
-    return {
-      ok: false,
-      reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience: refusing a row lists would skip`,
-    };
-  }
 
   const verdict = checkMisevolutionForSurface(misevolutionSourceOf(entry.payload), 'import');
 
@@ -145,7 +137,7 @@ export function stageImport(
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'import',
       violation: verdict,
-      detail: `${entry.kind} "${entry.key}" from workspace "${entry.sourceWorkspace}" rejected`,
+      detail: `${entry.payload.kind} "${entry.key}" from workspace "${entry.sourceWorkspace}" rejected`,
     });
 
     return {
@@ -173,14 +165,14 @@ export function stageImport(
   void rt.storage.sql`INSERT INTO imported_experience
       (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
        turn_ids, imported_at, corroborated_at)
-    VALUES (${rt.actor.actorId}, ${id}, ${entry.id}, ${entry.kind}, ${entry.key}, ${entry.title},
+    VALUES (${rt.actor.actorId}, ${id}, ${entry.id}, ${entry.payload.kind}, ${entry.key}, ${entry.title},
             ${JSON.stringify(entry.payload)}, ${entry.evidence}, ${entry.sourceWorkspace},
             '[]', ${now}, NULL)`;
 
   return {
     ok: true,
     row: {
-      id, libraryId: entry.id, kind: entry.kind, key: entry.key, title: entry.title,
+      id, libraryId: entry.id, key: entry.key, title: entry.title,
       payload: entry.payload, evidence: entry.evidence, sourceWorkspace: entry.sourceWorkspace,
       status: 'provisional', turnIds: [], importedAt: now, corroboratedAt: null,
     },

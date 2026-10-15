@@ -416,7 +416,8 @@ describe('account cache isolation', () => {
 describe('the turn profile authority reader', () => {
 
   const RECORD_DIAGNOSTICS = `
-    const { createRecordingLogger, setDiagnosticsSink } = await import('@kinu.run/core/obs');
+    const { setDiagnosticsSink } = await import('@kinu.run/core/obs');
+    const { createRecordingLogger } = await import('@kinu.run/test-utils/recording');
     const recorder = createRecordingLogger();
     setDiagnosticsSink(recorder);
   `;
