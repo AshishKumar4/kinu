@@ -23,9 +23,8 @@ export function backgroundJobNotice(job: BackgroundJob) {
 }
 
 export interface JobClaim {
+  /** The new lease, which is also the re-drives so far (1 on the first recovery). */
   epoch: number;
-  /** Re-drives so far (1 on the first recovery). */
-  attempts: number;
 }
 
 export interface JobResume {
@@ -37,7 +36,7 @@ interface Row {
   id: string; kind: string; label: string | null; status: string;
   work_mode: string;
   result: string | null; error: string | null; created_at: number; settled_at: number | null;
-  epoch: number; resume_attempts: number; attempt_started_at: number | null; retried_by: string | null;
+  epoch: number; attempt_started_at: number | null; retried_by: string | null;
   resume_after: number | null;
   serves?: number | null;
 }
@@ -51,7 +50,6 @@ function toJob(r: Row): BackgroundJob {
     id: r.id, kind: r.kind, label: r.label, workMode: r.work_mode === 'plan' ? 'plan' : 'build', status,
     result: r.result, error: r.error, createdAt: r.created_at, settledAt: r.settled_at,
     epoch: r.epoch,
-    resumeAttempts: r.resume_attempts,
     retriedBy: r.retried_by ?? null,
     attemptStartedAt: r.attempt_started_at ?? r.created_at,
     resumeAfter: r.resume_after ?? null,
@@ -78,7 +76,6 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
     error       TEXT,
     input_json  TEXT,
     epoch       INTEGER NOT NULL DEFAULT 0,
-    resume_attempts INTEGER NOT NULL DEFAULT 0,
     attempt_started_at INTEGER,
     resume_after INTEGER,
     retry_of TEXT,
@@ -110,8 +107,8 @@ export class BackgroundJobStore {
 
   create(opts: { id: string; kind: string; workMode: WorkMode; label?: string; input?: string; now: number }): void {
     this.actor.assertCurrent();
-    void this.sql`INSERT OR IGNORE INTO background_jobs (actor_id, id, kind, label, work_mode, status, input_json, epoch, resume_attempts, created_at, attempt_started_at)
-      VALUES (${this.actorId}, ${opts.id}, ${opts.kind}, ${opts.label ?? null}, ${opts.workMode}, 'running', ${opts.input ?? null}, 0, 0, ${opts.now}, ${opts.now})`;
+    void this.sql`INSERT OR IGNORE INTO background_jobs (actor_id, id, kind, label, work_mode, status, input_json, epoch, created_at, attempt_started_at)
+      VALUES (${this.actorId}, ${opts.id}, ${opts.kind}, ${opts.label ?? null}, ${opts.workMode}, 'running', ${opts.input ?? null}, 0, ${opts.now}, ${opts.now})`;
   }
 
   /** Create a replacement and claim its settled source in one statement; unique `retry_of` blocks a second. */
@@ -126,10 +123,9 @@ export class BackgroundJobStore {
   }): boolean {
     this.actor.assertCurrent();
     void this.sql`INSERT OR IGNORE INTO background_jobs
-      (actor_id, id, kind, label, work_mode, status, input_json, epoch, resume_attempts,
-       created_at, attempt_started_at, retry_of)
+      (actor_id, id, kind, label, work_mode, status, input_json, epoch, created_at, attempt_started_at, retry_of)
       SELECT source.actor_id, ${opts.id}, ${opts.kind}, ${opts.label ?? null}, ${opts.workMode},
-             'running', ${opts.input}, 0, 0, ${opts.now}, ${opts.now}, source.id
+             'running', ${opts.input}, 0, ${opts.now}, ${opts.now}, source.id
       FROM background_jobs source
       WHERE source.actor_id=${this.actorId} AND source.id=${opts.sourceId} AND source.status != 'running'
         AND NOT EXISTS (
@@ -163,19 +159,18 @@ export class BackgroundJobStore {
   }
 
   /**
-   * Claim a running job for re-drive, compared and set on the epoch the claimant read: bump epoch, attempts and
-   * attempt clock, and clear the served `resume_after`. Null when it moved on or stopped running: another claimed it.
+   * Claim a running job for re-drive, compared and set on the epoch the claimant read: bump the epoch and the attempt
+   * clock, and clear the served `resume_after`. Null when it moved on or stopped running: another claimed it.
    */
   reclaim(id: string, epoch: number, now = Date.now()): JobClaim | null {
     this.actor.assertCurrent();
 
-    const row = this.sql<{ epoch: number; resume_attempts: number }>`UPDATE background_jobs
-      SET epoch = epoch + 1, resume_attempts = resume_attempts + 1, attempt_started_at = ${now},
-          resume_after = NULL
+    const row = this.sql<{ epoch: number }>`UPDATE background_jobs
+      SET epoch = epoch + 1, attempt_started_at = ${now}, resume_after = NULL
       WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch}
-      RETURNING epoch, resume_attempts`[0];
+      RETURNING epoch`[0];
 
-    return row === undefined ? null : { epoch: row.epoch, attempts: row.resume_attempts };
+    return row === undefined ? null : { epoch: row.epoch };
   }
 
   /** Earliest next-attempt instant; absolute so it survives eviction. Running rows only. */
@@ -231,7 +226,7 @@ export class BackgroundJobStore {
 
     const rows = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
-      job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
+      job.epoch, job.attempt_started_at, job.resume_after,
       replacement.id AS retried_by, serving.port AS serves
       FROM background_jobs job
       LEFT JOIN background_jobs replacement
@@ -247,7 +242,7 @@ export class BackgroundJobStore {
 
     return this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
-      job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
+      job.epoch, job.attempt_started_at, job.resume_after,
       replacement.id AS retried_by, serving.port AS serves
       FROM background_jobs job
       LEFT JOIN background_jobs replacement
@@ -325,7 +320,7 @@ export class BackgroundJobStore {
 
     const items = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
-      job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
+      job.epoch, job.attempt_started_at, job.resume_after,
       replacement.id AS retried_by
       FROM background_jobs job
       LEFT JOIN background_jobs replacement

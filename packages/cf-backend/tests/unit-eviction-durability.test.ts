@@ -72,7 +72,7 @@ describe('a background job whose executor died', () => {
     await joinHarnessFibers();
 
     expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
-    expect(jobsOver(harness.db).get('bgjob-evicted')?.resumeAttempts).toBe(1);
+    expect(jobsOver(harness.db).get('bgjob-evicted')?.epoch).toBe(1);
   });
 
   /** A settled job's lane row is the only record that its wake never landed; the wake resolves when its turn ends. */

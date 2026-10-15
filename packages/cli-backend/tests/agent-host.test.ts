@@ -856,7 +856,7 @@ describe('LocalAgentHost', () => {
     if (hire === null) throw new Error('the hire was not created');
     const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: HELD_SEARCH, branches: 1, depth: 1 });
 
-    seeded.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, resume_attempts)
+    seeded.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, epoch)
       VALUES (?, 'bgjob-held', 'agents', 'build', 'running', ?, 1, 6)`).run(hire.actor_id, input);
     seeded.query(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, 'f-held', 'bg:agents', ?, 1)`)
       .run(hire.actor_id, JSON.stringify({ phase: 'running', jobId: 'bgjob-held', kind: 'agents' }));

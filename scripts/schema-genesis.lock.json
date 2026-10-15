@@ -312,7 +312,6 @@
     "error TEXT",
     "input_json TEXT",
     "epoch INTEGER NOT NULL DEFAULT 0",
-    "resume_attempts INTEGER NOT NULL DEFAULT 0",
     "attempt_started_at INTEGER",
     "resume_after INTEGER",
     "retry_of TEXT",
