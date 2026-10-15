@@ -126,6 +126,18 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(entry.revert).toEqual({ type: 'fact_forget_many', targets: ['computer.npm_version'] });
   });
 
+  // core-rest review P2-9: a value that was not JSON showed as raw text, so a corrupt row read as a fact.
+  test('a fact value that is not JSON is refused as corrupt, never shown as text', () => {
+    const { rt, facts } = setup();
+    facts.upsert('project.deploy_target', 'example.workers.dev');
+    const shown = buildChangelog(rt.storage.sql, rt.actor).find((entry) => entry.kind === 'fact')?.items?.[0]?.summary;
+    void rt.storage.sql`UPDATE agent_facts SET value_json = ${'example.workers.dev'}
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'project.deploy_target'`;
+
+    expect(shown).toContain('example.workers.dev');
+    expect(() => buildChangelog(rt.storage.sql, rt.actor)).toThrow(expect.objectContaining({ code: 'io', cause: expect.any(SyntaxError) }));
+  });
+
   test('groups all facts in the digest window into one aggregate card', () => {
     const { rt, facts } = setup();
     const now = Date.now();

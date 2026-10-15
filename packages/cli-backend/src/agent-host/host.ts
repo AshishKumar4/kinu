@@ -24,7 +24,6 @@ import {
   subordinateDescendants,
   stoppedBelow,
   deliveryMetadata,
-  canonicalConversationId,
   childContextResolver, hostedChildTree,
   createLocalPeerEndpoint,
   defaultLoopOrigin,
@@ -75,6 +74,7 @@ import {
   type WorkspaceActorDirectory,
   readWorkspaceWork, type WorkspaceWork,
   isSubordinateOrigin, type SubordinateSeed,
+  CHAT_SESSION_ID,
 } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
 import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, settleSync, settleLogged, settleLoggedSync, detach } from '@kinu.run/core/obs';
@@ -605,7 +605,7 @@ export class LocalAgentHost {
     // Subordinate names are per-parent, so this roster is bound to this actor.
     const roster = new SubordinateRosterStore(hubSql, input.actor.handle);
     roster.ensureSchema();
-    const sessionId = canonicalConversationId(config);
+    const sessionId = CHAT_SESSION_ID;
 
     const sessionOpts: LocalAgentSessionOpts = {
       rt: input.ws.rt,

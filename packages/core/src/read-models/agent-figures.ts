@@ -51,6 +51,10 @@ interface FoldedEvent {
   readonly usd: number | null;
   /** A step's own payload, typed where every stored event is (`parseStoredRunEvent`); null for every other event. */
   readonly step: string | null;
+  readonly run_id: string;
+  readonly event_index: number;
+  readonly type: string;
+  readonly ts: string;
   /** A turn's end: the time since its start. */
   readonly ms: number | null;
 }
@@ -73,7 +77,7 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
 
   // By the actor index's rowid, never by type: the type index would scan every step the actor ever took.
   const events = sql<FoldedEvent>`
-    SELECT e.rowid AS seq,
+    SELECT e.rowid AS seq, e.run_id, e.event_index, e.type, e.ts,
            CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usage.input') END AS input,
            CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usage.output') END AS output,
            CASE WHEN e.type IN ('step_finish', 'model_call') THEN json_extract(e.payload, '$.usd') END AS usd,
@@ -99,7 +103,7 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
   }
 
   const window = [...totals.window, ...events.flatMap((event): Array<v.InferOutput<typeof WindowStepSchema>> => {
-    const step = event.step === null ? null : parseStoredRunEvent(event.step);
+    const step = event.step === null ? null : parseStoredRunEvent({ ...event, payload: event.step });
 
     return step?.type === 'step_finish' ? [[step.usage?.input ?? null, step.usage?.cacheRead ?? null]] : [];
   })].slice(-AGENT_STEP_WINDOW);

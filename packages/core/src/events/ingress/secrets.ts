@@ -5,7 +5,7 @@ import type { SqlExec } from '../../types/primitives';
 import type { SecretStore } from './webhook';
 
 export interface WebhookSecretStore extends SecretStore {
-  put(secretId: string, triggerId: string, secret: string, now: number): void;
+  put(secretId: string, triggerId: string, secret: string): void;
   /** Revocation calls this in the same host call that closes the trigger. */
   deleteByTrigger(triggerId: string): void;
 }
@@ -18,8 +18,7 @@ export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
     CREATE TABLE IF NOT EXISTS webhook_secrets (
       secret_id TEXT PRIMARY KEY,
       trigger_id TEXT NOT NULL,
-      secret TEXT NOT NULL,
-      created_at INTEGER NOT NULL
+      secret TEXT NOT NULL
     )`);
 
   // Trigger ids are unique across actors; secrets have no actor scope.
@@ -40,11 +39,8 @@ export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
 
       return parsed.success ? parsed.output.secret : null;
     },
-    put(secretId, triggerId, secret, now) {
-      sql.exec(
-        `INSERT INTO webhook_secrets (secret_id, trigger_id, secret, created_at) VALUES (?, ?, ?, ?)`,
-        secretId, triggerId, secret, now,
-      );
+    put(secretId, triggerId, secret) {
+      sql.exec(`INSERT INTO webhook_secrets (secret_id, trigger_id, secret) VALUES (?, ?, ?)`, secretId, triggerId, secret);
     },
     deleteByTrigger(triggerId) {
       sql.exec(`DELETE FROM webhook_secrets WHERE trigger_id = ?`, triggerId);

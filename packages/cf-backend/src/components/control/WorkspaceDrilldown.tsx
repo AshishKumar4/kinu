@@ -303,9 +303,9 @@ function JobRows(
             <span className="p-annotation p-text-2">{job.kind}</span>
             <Status tone={JOB_TONE[job.status]}>{job.status}</Status>
             <span className="p-meta p-text-3">{when(job.createdAt)}</span>
-            {(job.resumeAttempts ?? 0) > 0 && (
+            {(job.epoch ?? 0) > 0 && (
               <span className="p-t-status p-warning">
-                interrupted {job.resumeAttempts}x
+                interrupted {job.epoch}x
                 {job.resumeAfter != null && job.resumeAfter > Date.now()
                   ? `, next attempt ${when(job.resumeAfter)}` : ''}
               </span>

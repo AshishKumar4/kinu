@@ -1,7 +1,7 @@
 /**
  * A workspace the agent proposes and its owner approves once, in the Work tab, before it exists. The proposal is a
- * durable row, so an activation that never saw the ask still shows it; the decision wakes the agent with the outcome:
- * the new workspace's link, the decline, or why the create failed. Creation itself is the host's: one call into the
+ * durable row while it waits, so an activation that never saw the ask still shows it; once decided the row goes, and
+ * the decision wakes the agent with the outcome: the new workspace's link, the decline, or why the create failed. Creation itself is the host's: one call into the
  * same path `POST /api/user/workspaces` takes.
  */
 import { markStoreChanged } from '@kinu.run/agent-utils';
@@ -17,7 +17,8 @@ const WORKSPACE_PROPOSAL_SIGNAL = 'workspace_proposal';
 /** The display name's longest form: a title, never a paragraph. */
 const WORKSPACE_PROPOSAL_NAME_MAX = 80;
 
-type WorkspaceProposalStatus = 'pending' | 'creating' | 'declined' | 'created' | 'failed';
+/** An open proposal's state: waiting on the owner, or approved with its create cut short by an eviction. */
+type WorkspaceProposalStatus = 'pending' | 'creating';
 
 export type WorkspaceProposalAnswer = 'approve' | 'decline';
 
@@ -33,7 +34,12 @@ export interface WorkspaceProposal extends WorkspaceProposalInput {
   readonly status: WorkspaceProposalStatus;
   readonly requestedAt: number;
   readonly decidedAt: number | null;
-  /** The created workspace's address, once it exists. */
+}
+
+/** The owner's decision as `decide` answers it; none of it is stored, since the row goes once it settles. */
+export interface WorkspaceProposalDecision extends Omit<WorkspaceProposal, 'status'> {
+  readonly status: 'declined' | 'created' | 'failed';
+  /** The created workspace's address. */
   readonly workspace: string | null;
   readonly error: string | null;
 }
@@ -61,9 +67,7 @@ export function initWorkspaceProposalsTable(execRaw: RawSqlExec): void {
     brief         TEXT NOT NULL,
     status        TEXT NOT NULL DEFAULT 'pending',
     requested_at  INTEGER NOT NULL,
-    decided_at    INTEGER,
-    workspace     TEXT,
-    error         TEXT
+    decided_at    INTEGER
   )`);
 }
 
@@ -75,14 +79,12 @@ interface ProposalRow {
   status: WorkspaceProposalStatus;
   requested_at: number;
   decided_at: number | null;
-  workspace: string | null;
-  error: string | null;
 }
 
 function toProposal(row: ProposalRow): WorkspaceProposal {
   return {
     id: row.id, name: row.name, soul: row.soul, brief: row.brief, status: row.status,
-    requestedAt: row.requested_at, decidedAt: row.decided_at, workspace: row.workspace, error: row.error,
+    requestedAt: row.requested_at, decidedAt: row.decided_at,
   };
 }
 
@@ -93,8 +95,8 @@ export class WorkspaceProposalStore {
   /** What waits on the owner, oldest first: a pending ask, or a create an eviction cut short. */
   open(): WorkspaceProposal[] {
     return this.sql<ProposalRow>`
-      SELECT id, name, soul, brief, status, requested_at, decided_at, workspace, error
-      FROM workspace_proposals WHERE status IN ('pending', 'creating') ORDER BY requested_at ASC, rowid ASC`.map(toProposal);
+      SELECT id, name, soul, brief, status, requested_at, decided_at
+      FROM workspace_proposals ORDER BY requested_at ASC, rowid ASC`.map(toProposal);
   }
 
   insert(proposal: WorkspaceProposal): void {
@@ -107,17 +109,17 @@ export class WorkspaceProposalStore {
   take(id: string, now: number): WorkspaceProposal | null {
     const rows = this.sql<ProposalRow>`
       UPDATE workspace_proposals SET status = 'creating', decided_at = ${now}
-      WHERE id = ${id} AND status IN ('pending', 'creating')
-      RETURNING id, name, soul, brief, status, requested_at, decided_at, workspace, error`;
+      WHERE id = ${id}
+      RETURNING id, name, soul, brief, status, requested_at, decided_at`;
 
     if (rows.length > 0) markStoreChanged(this.sql);
 
     return rows[0] === undefined ? null : toProposal(rows[0]);
   }
 
-  settle(id: string, outcome: { readonly status: 'declined' | 'created' | 'failed'; readonly workspace?: string; readonly error?: string }, now: number): void {
-    void this.sql`UPDATE workspace_proposals SET status = ${outcome.status}, decided_at = ${now},
-      workspace = ${outcome.workspace ?? null}, error = ${outcome.error ?? null} WHERE id = ${id}`;
+  /** A decided proposal leaves the queue; its outcome is the decision's answer and the agent's wake, never a row. */
+  settle(id: string): void {
+    void this.sql`DELETE FROM workspace_proposals WHERE id = ${id}`;
     markStoreChanged(this.sql);
   }
 }
@@ -162,7 +164,7 @@ export class WorkspaceProposals {
 
       deps.store.insert({
         id, name, soul: input.soul.trim(), brief: input.brief.trim(), status: 'pending',
-        requestedAt: deps.now(), decidedAt: null, workspace: null, error: null,
+        requestedAt: deps.now(), decidedAt: null,
       });
       deps.announce();
 
@@ -176,7 +178,7 @@ export class WorkspaceProposals {
   }
 
   /** One decision per proposal: a second answer, or one for a proposal already settled, decides nothing. */
-  decide(id: string, answer: WorkspaceProposalAnswer): Effect.Effect<WorkspaceProposal | null, KinuError> {
+  decide(id: string, answer: WorkspaceProposalAnswer): Effect.Effect<WorkspaceProposalDecision | null, KinuError> {
     const deps = this.deps;
     const creating = this.creating;
 
@@ -187,7 +189,7 @@ export class WorkspaceProposals {
       if (taken === null) return null;
 
       if (answer === 'decline') {
-        deps.store.settle(id, { status: 'declined' }, deps.now());
+        deps.store.settle(id);
         deps.announce();
         yield* Effect.promise(() => deps.inbox.send({
           kind: WORKSPACE_PROPOSAL_SIGNAL,
@@ -195,7 +197,7 @@ export class WorkspaceProposals {
           metadata: { proposal: id, decision: 'declined' },
         }));
 
-        return { ...taken, status: 'declined' as const };
+        return { ...taken, status: 'declined' as const, workspace: null, error: null };
       }
 
       creating.add(id);
@@ -209,7 +211,7 @@ export class WorkspaceProposals {
       if (Exit.isFailure(created)) {
         const error = renderThrownChain({ cause: Cause.squash(created.cause) });
 
-        deps.store.settle(id, { status: 'failed', error }, deps.now());
+        deps.store.settle(id);
         deps.announce();
         yield* Effect.promise(() => deps.inbox.send({
           kind: WORKSPACE_PROPOSAL_SIGNAL,
@@ -217,13 +219,13 @@ export class WorkspaceProposals {
           metadata: { proposal: id, decision: 'failed' },
         }));
 
-        return { ...taken, status: 'failed' as const, error };
+        return { ...taken, status: 'failed' as const, workspace: null, error };
       }
 
       const workspace = created.value.name;
       const url = deps.link(workspace);
 
-      deps.store.settle(id, { status: 'created', workspace }, deps.now());
+      deps.store.settle(id);
       deps.announce();
       yield* Effect.promise(() => deps.inbox.send({
         kind: WORKSPACE_PROPOSAL_SIGNAL,
@@ -231,7 +233,7 @@ export class WorkspaceProposals {
         metadata: { proposal: id, decision: 'created', workspace, url },
       }));
 
-      return { ...taken, status: 'created' as const, workspace };
+      return { ...taken, status: 'created' as const, workspace, error: null };
     });
   }
 }

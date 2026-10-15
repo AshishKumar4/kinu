@@ -32,7 +32,6 @@ export function initGitHubActivityTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS github_nodes (
     node_id TEXT PRIMARY KEY,
     repo    TEXT NOT NULL,
-    subject TEXT NOT NULL,
     number  INTEGER NOT NULL,
     at      INTEGER NOT NULL
   )`);
@@ -83,7 +82,7 @@ export function recordGitHubActivity(
   for (const each of facts) {
     if (each.action === 'identified') {
       if ('repo' in each && each.node !== undefined && each.number !== undefined && each.subject !== 'repo') {
-        void sql`INSERT OR REPLACE INTO github_nodes (node_id, repo, subject, number, at) VALUES (${each.node}, ${each.repo}, ${each.subject}, ${each.number}, ${origin.at})`;
+        void sql`INSERT OR REPLACE INTO github_nodes (node_id, repo, number, at) VALUES (${each.node}, ${each.repo}, ${each.number}, ${origin.at})`;
         void sql`DELETE FROM github_nodes WHERE node_id NOT IN (SELECT node_id FROM github_nodes ORDER BY at DESC LIMIT ${NODE_LIMIT})`;
       }
 

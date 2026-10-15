@@ -396,7 +396,6 @@ describe('auth and desktop security invariants', () => {
       // Switching rewrites only the selection.
       const switched = withCloudflareAccount(credential, 'bbb222bbb222bbb222bbb222bbb222bb');
       expect(accountIdFromCloudflareCredential(switched)).toBe('bbb222bbb222bbb222bbb222bbb222bb');
-      expect(switched.metadata?.accountName).toBe('Employer');
       expect(switched.accessToken).toBe(credential.accessToken);
       // Against the literal list the stub returned, not a second call of the function under test.
       expect(cloudflareAccountsFromCredential(switched)).toEqual([

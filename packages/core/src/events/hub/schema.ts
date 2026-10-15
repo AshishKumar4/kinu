@@ -67,9 +67,7 @@ CREATE TABLE IF NOT EXISTS reply_channels (
   ttl_expires_at      INTEGER NOT NULL,
   state               TEXT    NOT NULL DEFAULT 'open'
                               CHECK(state IN ('open', 'replied', 'expired', 'aborted')),
-  reply_payload       TEXT,
   created_at          INTEGER NOT NULL,
-  updated_at          INTEGER NOT NULL,
   PRIMARY KEY (actor_id, id)
 )`;
 

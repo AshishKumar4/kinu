@@ -8,14 +8,19 @@ const WithHeadersSchema = v.looseObject({
   cause: v.optional(v.unknown()),
 });
 
+/** The first wait a cause in the chain states, however deep; a chain that loops ends where it repeats. */
 export function statedRetryAfterMs(failure: { readonly cause: unknown }, nowMs: number = Date.now()): number | null {
-  let at = v.safeParse(WithHeadersSchema, failure.cause);
+  const seen = new Set<unknown>();
 
-  for (let depth = 0; at.success && depth < 4; depth += 1) {
+  for (let link = failure.cause; !seen.has(link);) {
+    seen.add(link);
+    const at = v.safeParse(WithHeadersSchema, link);
+
+    if (!at.success) return null;
     const ms = at.output.retryAfterMs ?? retryAfterOf(new Headers(at.output.responseHeaders ?? {}), nowMs);
 
     if (ms !== null) return ms;
-    at = v.safeParse(WithHeadersSchema, at.output.cause);
+    link = at.output.cause;
   }
 
   return null;

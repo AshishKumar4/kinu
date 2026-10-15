@@ -5,6 +5,7 @@ import { base64UrlDecode } from '@nimbus-sh/sdk/oauth';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { base64Url, hmacSha256Hex } from '../utils/crypto';
+import { utf8 } from '../utils/text';
 
 const ENVELOPE_PREFIX = 'pce1.';
 
@@ -147,6 +148,3 @@ function deriveKey(secret: string): Promise<{ keyId: string; key: CryptoKey }> {
   return pending;
 }
 
-function utf8(value: string): Uint8Array<ArrayBuffer> {
-  return new TextEncoder().encode(value);
-}

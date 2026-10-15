@@ -413,7 +413,7 @@ describe("the agent-job row's job", () => {
 
     const job = (status: 'completed' | 'failed', result: string | null): BackgroundJob => ({
       id: 'bgjob-start01', kind: 'eval', label: null, workMode: 'build', status, result, error: status === 'failed' ? 'the computer did not start' : null,
-      createdAt: 1, settledAt: 2, epoch: 0, resumeAttempts: 0, retriedBy: null, attemptStartedAt: 1, resumeAfter: null, serves: null,
+      createdAt: 1, settledAt: 2, epoch: 0, retriedBy: null, attemptStartedAt: 1, resumeAfter: null, serves: null,
     });
 
     // The ask's turn, its eval backgrounded, then the wake the product sends (core jobs/runner.ts).

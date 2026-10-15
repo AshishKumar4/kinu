@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementListing, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
-import { getChatHistoryPage, getToolList, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
+import { getChatHistoryPage, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
 import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -149,7 +149,6 @@ export class LocalAgentClient implements AgentClient {
   /** Outlives the session, so a walk-back fork does not invalidate it. */
   private readonly config: AgentConfigStore;
   /** JSONL transcripts carry this id so an export ties back to its conversation. */
-  private readonly canonicalConversation: string;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private readonly session: LocalAgentSession;
   private readonly unsubscribe: () => void;
@@ -169,10 +168,9 @@ export class LocalAgentClient implements AgentClient {
     this.fileLinks = localFileLinks(deps.rt.planes);
     initAgentConfigTable(deps.rt.storage.execRaw);
     this.config = deps.rt.actor.config;
-    this.canonicalConversation = canonicalConversationId(this.config);
     this.activeCliSession = createCliSession(deps.agentName, {
       ...deps.transcript,
-      conversationId: deps.transcript.conversationId ?? this.canonicalConversation,
+      conversationId: deps.transcript.conversationId ?? CHAT_SESSION_ID,
     });
     this.session = deps.session;
     this.unsubscribe = deps.host.subscribe((agent, event) => {
@@ -317,7 +315,7 @@ export class LocalAgentClient implements AgentClient {
     await this.session.revertConversation(pivotRow.id);
     this.activeCliSession = createCliSession(this.agentName, {
       ...this.deps.transcript,
-      conversationId: this.canonicalConversation,
+      conversationId: CHAT_SESSION_ID,
     });
 
     return { client: this, label: `branch ${this.activeCliSession.id}` };
@@ -346,7 +344,7 @@ export class LocalAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
-    const transcript = this.deps.rt.stores.history.transcript(this.canonicalConversation);
+    const transcript = this.deps.rt.stores.history.transcript(CHAT_SESSION_ID);
 
     return readConversation((request) => getChatHistoryPage(transcript, request));
   }

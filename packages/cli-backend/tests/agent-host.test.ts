@@ -739,7 +739,8 @@ describe('LocalAgentHost', () => {
     const config = main.config;
     expect(sessions).toEqual([{ session_id: 'default' }]);
     expect(rows?.n).toBe(4);
-    expect(config.get('conversation.id')).toBe('default');
+    // schema audit: the session is the chat-session constant, never a stored key.
+    expect(config.get('conversation.id')).toBeNull();
     db.close();
     await host.close();
   });
@@ -855,7 +856,7 @@ describe('LocalAgentHost', () => {
     if (hire === null) throw new Error('the hire was not created');
     const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: HELD_SEARCH, branches: 1, depth: 1 });
 
-    seeded.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, resume_attempts)
+    seeded.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, epoch)
       VALUES (?, 'bgjob-held', 'agents', 'build', 'running', ?, 1, 6)`).run(hire.actor_id, input);
     seeded.query(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, 'f-held', 'bg:agents', ?, 1)`)
       .run(hire.actor_id, JSON.stringify({ phase: 'running', jobId: 'bgjob-held', kind: 'agents' }));
@@ -2529,7 +2530,7 @@ function evolutionRows(dbPath: string, actorId: string) {
         'SELECT score, source FROM turn_ratings WHERE actor_id = ? ORDER BY created_at',
       ).all(actorId),
       lessons: db.query<{ source: string; status: string }, [string]>(
-        'SELECT source, status FROM lessons WHERE actor_id = ? ORDER BY created_at',
+        "SELECT source, CASE WHEN corroborated_at IS NULL THEN 'provisional' ELSE 'corroborated' END AS status FROM lessons WHERE actor_id = ? ORDER BY created_at",
       ).all(actorId),
     };
   } finally { db.close(); }

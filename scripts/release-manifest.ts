@@ -233,7 +233,6 @@ export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_
       modules: build.modules,
       modulesPath: 'worker',
       assets: 'client',
-      assetsBinding: config.assets?.binding ?? 'ASSETS',
       crons: config.triggers?.crons ?? [],
     },
     bindings: releaseBindings(config, optional),
