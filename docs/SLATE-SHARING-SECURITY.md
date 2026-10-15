@@ -254,6 +254,12 @@ observe); the confinement and revocation theorems cover them.
   for the slate's behaviour, not with others' authority or data.
 - **The premises.** Workers isolation and the Worker Loader, the sealed frame, the codec, the caretaker and the
   reader checks are the trusted base.
+- **A lost reader, for an hour.** GitHub tells no one when a person loses read access to a repository, and asking it
+  at each release would ask once per person, part and view. A reader check's yes therefore holds for one hour
+  (`slate_room.reader_check.lifetime` in `packages/core/src/platform-catalog.ts`): that is the longest a lost GitHub
+  permission still opens a part, after which the part is a placeholder until a new check with the person's own GitHub
+  connection finds they read it. Only a connection added from the GitHub preset takes part, on either side; a server
+  someone named GitHub does not.
 - **Cost.** No meter or budget (the owner's decision); a lend exercised by many people spends its holder's compute.
 
 ## 6. What it asks of people

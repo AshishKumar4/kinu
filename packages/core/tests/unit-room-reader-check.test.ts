@@ -5,7 +5,7 @@ import { expect, test } from 'bun:test';
 import type { SerializableToolDescriptor } from '../src/tools/mcp-surface';
 import { initSlateRoomTables, RoomCaretaker } from '../src/slates/room/caretaker';
 import { canonicalRoot, flows } from '../src/slates/room/labels';
-import { planReaderCheck, READER_CHECK_TTL_MS, searchFindsRepository } from '../src/slates/room/reader-check';
+import { planReaderCheck, READER_CHECK_LIFETIME_MS, searchFindsRepository } from '../src/slates/room/reader-check';
 import { makeExecRaw, makeSqlExec } from './helpers';
 
 const SEARCH = 'search_repositories';
@@ -51,7 +51,7 @@ test('a check\'s yes lapses: the part is hidden again until the reader is checke
   room.checked('bob@acme.dev', elem, true);
   expect(flows(room.facts(), [elem], 'bob@acme.dev')).toBe(true);
 
-  now += READER_CHECK_TTL_MS;
+  now += READER_CHECK_LIFETIME_MS;
   expect(flows(room.facts(), [elem], 'bob@acme.dev')).toBe(false);
 
   room.checked('bob@acme.dev', elem, true);

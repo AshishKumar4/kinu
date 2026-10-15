@@ -55,13 +55,10 @@ export class GalleryDO extends DurableObject<Env> {
   }
 
   /** A signed-in person's star, its withdrawal, or their report; false when the slate is not listed. */
-  mark(email: string, mark: GalleryMark): 'marked' | 'unlisted' | 'limited' {
+  mark(email: string, mark: GalleryMark): boolean {
     const at = { email, workspace: mark.workspace, slate: mark.slate };
 
-    if (mark.kind === 'star') return this.index.star({ ...at, on: mark.on }, Date.now()) ? 'marked' : 'unlisted';
-    const reported = this.index.report({ ...at, reason: mark.reason }, Date.now());
-
-    return reported === 'reported' ? 'marked' : reported;
+    return mark.kind === 'star' ? this.index.star({ ...at, on: mark.on }, Date.now()) : this.index.report({ ...at, reason: mark.reason }, Date.now());
   }
 
   starred(email: string): GalleryListing[] {

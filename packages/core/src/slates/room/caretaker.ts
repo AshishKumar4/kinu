@@ -14,7 +14,7 @@ import { settleSync } from '../../obs/effect';
 import type { RawSqlExec, SqlExec } from '../../types/primitives';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
 import type { RoomRole } from '../room-api';
-import { READER_CHECK_TTL_MS } from './reader-check';
+import { READER_CHECK_LIFETIME_MS } from './reader-check';
 import {
   audienceFlows, canonicalRoot, dedup, flows, hidden, observers, sameTag, within,
   type Audience, type Elem, type LabelFacts, type Show, type Tag,
@@ -694,8 +694,8 @@ export class RoomCaretaker {
   }
 
   facts(): LabelFacts {
-    // A yes lapses: a reader who lost the repository since must be asked again (`READER_CHECK_TTL_MS`).
-    const readers = this.db.exec('SELECT email, holder, server, root FROM room_readers WHERE checked_at > ?', this.now() - READER_CHECK_TTL_MS).toArray()
+    // A yes lapses: a reader who lost the repository since must be asked again (`READER_CHECK_LIFETIME_MS`).
+    const readers = this.db.exec('SELECT email, holder, server, root FROM room_readers WHERE checked_at > ?', this.now() - READER_CHECK_LIFETIME_MS).toArray()
       .map((row) => v.parse(v.object({ email: v.string(), holder: v.string(), server: v.string(), root: v.string() }), row));
 
     return {

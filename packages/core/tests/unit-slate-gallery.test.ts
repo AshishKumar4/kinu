@@ -63,7 +63,7 @@ test('taking a listing down takes its stars, and a slate that is not listed take
 
   expect(index.slate('sam', 'board', null, NOW)).toBeNull();
   expect(index.star({ email: 'a@x.dev', workspace: 'sam', slate: 'board', on: true }, NOW)).toBe(false);
-  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'board', reason: 'spam' }, NOW)).toBe('unlisted');
+  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'board', reason: 'spam' }, NOW)).toBe(false);
 
   index.list(entry('board'), NOW);
   expect(index.slate('sam', 'board', null, NOW)?.listing.stars).toBe(0);
@@ -82,19 +82,18 @@ test('a deleted account\'s stars go, and the others\' stay', () => {
   expect(index.starred('b@x.dev', NOW).map((listing) => listing.slate)).toEqual(['board']);
 });
 
-test('a person reports a listing once, reporting again replaces it, and twenty new listings a day is the most', () => {
-  const index = newIndex();
+test('a person reports a listing once: reporting it again replaces their reason, and someone else\'s is their own', () => {
+  const db = new Database(':memory:');
 
-  for (let n = 0; n < 21; n++) index.list(entry(`slate${String(n)}`), NOW);
-  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'slate0', reason: 'spam' }, NOW)).toBe('reported');
-  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'slate0', reason: 'spam, again' }, NOW)).toBe('reported');
+  initGalleryTables(makeExecRaw(db));
+  const index = new GalleryIndex(makeSqlExec(db));
 
-  for (let n = 1; n < 20; n++) expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: `slate${String(n)}`, reason: 'spam' }, NOW)).toBe('reported');
-  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'slate20', reason: 'spam' }, NOW)).toBe('limited');
-  // One already reported is still theirs to change; tomorrow is a new day.
-  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'slate3', reason: 'worse' }, NOW)).toBe('reported');
-  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'slate20', reason: 'spam' }, NOW + DAY)).toBe('reported');
-  expect(index.report({ email: 'b@x.dev', workspace: 'sam', slate: 'slate20', reason: 'spam' }, NOW)).toBe('reported');
+  index.list(entry('board'), NOW);
+  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'board', reason: 'spam' }, NOW)).toBe(true);
+  expect(index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'board', reason: 'spam, again' }, NOW)).toBe(true);
+  expect(index.report({ email: 'b@x.dev', workspace: 'sam', slate: 'board', reason: 'spam' }, NOW)).toBe(true);
+  expect(db.query('SELECT email, reason FROM gallery_reports ORDER BY email').all())
+    .toEqual([{ email: 'a@x.dev', reason: 'spam, again' }, { email: 'b@x.dev', reason: 'spam' }]);
 });
 
 test('a page holds 24 listings and names the next one', () => {

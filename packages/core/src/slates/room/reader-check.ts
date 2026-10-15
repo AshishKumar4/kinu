@@ -4,14 +4,18 @@
  * only a connection added from it, on the holder's side and on the reader's, takes part in a check.
  */
 import * as v from 'valibot';
+import { PLATFORM_CATALOG } from '../../platform-catalog';
 import { safeJsonParse } from '../../utils/json';
 import type { Tag } from './labels';
 
 /** The GitHub tool a reader check asks with the reader's own connection: a repository it finds is one they read. */
 const READER_CHECK_TOOL = 'search_repositories';
 
-/** How long a check's yes holds: a reader who lost the repository since is hidden again once it lapses. */
-export const READER_CHECK_TTL_MS = 60 * 60 * 1000;
+/**
+ * The policy for how long a lost GitHub permission still opens a part: a check's yes holds this long, then the part
+ * hides again until the reader is checked anew (`platform-catalog.ts`, `slate_room.reader_check.lifetime`).
+ */
+export const READER_CHECK_LIFETIME_MS = PLATFORM_CATALOG['slate_room.reader_check.lifetime'].limit.value;
 
 const GITHUB_PRESET = 'github';
 
