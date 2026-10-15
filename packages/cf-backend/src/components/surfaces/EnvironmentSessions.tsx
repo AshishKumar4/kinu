@@ -14,13 +14,13 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
  *  marks current while the tab is open, and nothing reads while it is closed or hidden. */
 const SESSIONS_EVERY_MS = 3_000;
 
-export type SessionTone = "working" | "ready" | "danger" | "off" | "attention";
+type SessionTone = "working" | "ready" | "danger" | "off" | "attention";
 
 /** A session's state: its dot's tone and its word. */
 interface SessionReading { readonly tone: SessionTone; readonly word: string }
 
 /** Waiting for an answer, running, done, failed, or not open. */
-export function sessionTone(session: TerminalSession): SessionReading {
+function sessionTone(session: TerminalSession): SessionReading {
   if (!session.open) return { tone: "off", word: "Not open" };
 
   if (session.needsInput) return { tone: "attention", word: "Needs input" };
@@ -42,7 +42,7 @@ function sessionDetail(session: TerminalSession, now: number): string | null {
 }
 
 /** How long ago, as a row has room for: now, minutes, hours. */
-export function since(at: number, now: number): string {
+function since(at: number, now: number): string {
   const minutes = Math.floor((now - at) / 60_000);
 
   if (minutes < 1) return "now";
@@ -123,7 +123,7 @@ function Dot({ tone }: { tone: SessionTone }) {
 }
 
 /** A session an agent's job runs in (D95), beside the person's own. */
-export function AgentMark() {
+function AgentMark() {
   return <span title="Started by the agent" className="inline-flex shrink-0"><SparkleIcon size={11} weight="fill" className="p-accent-mark" aria-label="Started by the agent" /></span>;
 }
 
@@ -233,14 +233,4 @@ function folderTail(cwd: string): string {
 /** Opens a session, then shows it; a refusal stays with the hook's failure. */
 export function openSession(sessions: ComputerSessions, show: (id: string) => void): Effect.Effect<void> {
   return sessions.open().pipe(Effect.map((record) => { if (record !== null) show(record.id); }));
-}
-
-/** The wide column's new session, under the computer's sessions. */
-export function NewSessionRow({ onOpen }: { onOpen: () => Effect.Effect<void> }) {
-  return (
-    <button type="button" onClick={() => detach(onOpen())}
-      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 p-meta p-text-3 hover:bg-[var(--c-neutral-tint)] hover:p-text">
-      <PlusIcon size={12} aria-hidden />New session
-    </button>
-  );
 }
