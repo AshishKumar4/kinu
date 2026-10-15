@@ -327,6 +327,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
             SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
+            GALLERY: { className: 'GalleryDO', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],

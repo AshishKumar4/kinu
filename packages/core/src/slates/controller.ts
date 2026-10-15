@@ -204,9 +204,14 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return settle(this.blueprintAnswer('admitting a blueprint', (blueprints) => blueprints.admit(this.ports.workspace, bundle)));
   }
 
-  /** A fork's bundle of `slate`: its code, with what it reaches as requirements. Who may fork is the room's to say. */
-  forkBundle(slate: string): Promise<SlateAnswer<BlueprintBundle>> {
-    return settle(this.blueprintAnswer(`forking slate ${slate}`, (blueprints) => blueprints.liveBundle(slate)));
+  /** The version of `slate` a publish names: its tree now, retained. */
+  currentSource(slate: string): Promise<SlateAnswer<string>> {
+    return settle(this.blueprintAnswer(`reading slate ${slate}'s version`, (blueprints) => blueprints.currentSource(slate)));
+  }
+
+  /** A fork's bundle of the version of `slate` its room published. Who may fork is the room's to say. */
+  forkBundle(slate: string, source: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return settle(this.blueprintAnswer(`forking slate ${slate}`, (blueprints) => blueprints.bundleAt(slate, source)));
   }
 
   /**

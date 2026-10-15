@@ -210,9 +210,20 @@ it('a deleted workspace’s slates leave no page behind: their rooms go with it'
   const boot = await subject.serveSlate({ workspace: 'durability-deleted', owner, id: 'keeper', body: 'keeper-body' });
 
   expect(await subject.drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+  // A slate never built still has a room once its owner opened it, and that room holds people, a link, a listing.
+  expect(await subject.draftRoom('durability-deleted', 'draft')).toBe(true);
   await subject.deleteWorkspace('durability-deleted', owner);
   // The room serves its own image, so only its retirement ends the page: the owner included, no one gets in.
   expect(await subject.drivePreview(boot.url)).toEqual({ status: 403, body: '' });
+  expect({ keeper: await subject.roomExists('durability-deleted', 'keeper'), draft: await subject.roomExists('durability-deleted', 'draft') })
+    .toEqual({ keeper: false, draft: false });
+});
+
+it('the owner removing someone re-keys the link, and the Gallery lists the new one', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('rekeyed'));
+
+  await subject.serveSlate({ workspace: 'durability-rekeyed', owner: 'durability-owner', id: 'listed', body: 'listed-body' });
+  expect(await subject.rekeyedListing('durability-rekeyed', 'listed')).toEqual({ moved: true, before: false, after: true });
 });
 
 it('a removed slate’s picture goes with it, and its neighbour’s stays', async () => {

@@ -53,7 +53,11 @@ async function marked(c: Context<FamilyEnv<Env, object>>, mark: (body: v.InferOu
 
   if (made === null) return err(400, 'Body must name the slate, and say on, or the reason');
 
-  return await gallery(c.env).mark(viewer, made) ? new Response(null, { status: 204 }) : err(404, 'No such listing');
+  const answer = await gallery(c.env).mark(viewer, made);
+
+  if (answer === 'limited') return err(429, 'You have reported enough slates for today');
+
+  return answer === 'marked' ? new Response(null, { status: 204 }) : err(404, 'No such listing');
 }
 
 galleryRoutes.post('/api/gallery/star', async (c) => marked(c, (body) => (body.on === undefined ? null : { kind: 'star', workspace: body.workspace, slate: body.slate, on: body.on })));

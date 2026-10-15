@@ -13,6 +13,8 @@ import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { cookieForTicket, frameTicket, roomHandle, roomObjectName, ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { handleSlateRoomHostRequest } from '../../src/slates/room-routes';
+import { ROOM_PERSON_HEADER } from '../../src/slates/room';
+import { GALLERY_OBJECT } from '../../src/gallery/gallery-do';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
@@ -709,6 +711,75 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const value = v.parse(RemovedValueSchema, removed.value);
 
     return { ok: value.removed, port: value.port };
+  }
+
+  /** A slate that was never built, whose room its owner opened anyway (the frame route makes it): its link on. */
+  async draftRoom(workspace: string, id: string): Promise<boolean> {
+    const target = await this.workspaceTarget(workspace);
+
+    await this.writeSlateFile(target, `/slates/${id}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: id } }));
+    const made = await workspaceOwner(this.env, workspace).ensureSlateRoom(id);
+
+    if (!made.ok) throw new Error(`room refused: ${made.reason}: ${made.error}`);
+    const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, made.value.handle)));
+
+    return await room.exists();
+  }
+
+  /**
+   * The owner, over the room's own socket, turns the link on, lists the slate, adds someone and removes them: whether the
+   * link the Gallery listed before the removal, and the one it lists after, still let a visitor in.
+   */
+  async rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }> {
+    const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, roomHandle(workspace, id))));
+    const owner = this.ctx.storage.kv.get<string>(`owner:${workspace}`) ?? '';
+
+    const upgraded = await room.fetch('https://room.internal/socket', {
+      headers: { upgrade: 'websocket', [ROOM_PERSON_HEADER]: JSON.stringify({ email: owner, name: owner }) },
+    });
+
+    const socket = upgraded.webSocket;
+
+    if (socket === null) throw new Error(`the room answered ${String(upgraded.status)}, not a socket`);
+    socket.accept();
+    const answers = new Map<number, () => void>();
+
+    socket.addEventListener('message', (event) => {
+      const frame = v.parse(v.object({ id: v.optional(v.number()) }), JSON.parse(String(event.data)));
+
+      if (frame.id !== undefined) answers.get(frame.id)?.();
+    });
+    let next = 0;
+
+    const call = async (body: JsonValue): Promise<void> => {
+      const answered = Promise.withResolvers<undefined>();
+      const callId = next++;
+
+      answers.set(callId, () => { answered.resolve(undefined); });
+      socket.send(JSON.stringify({ id: callId, call: body }));
+      await answered.promise;
+    };
+
+    const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
+    const listed = async (): Promise<string | null> => (await gallery.slate(workspace, id, null))?.listing.url ?? null;
+
+    await call({ op: 'setAudience', audience: 'anyone' });
+    await call({ op: 'list', line: 'A probe slate', category: 'fun' });
+    const before = await listed();
+
+    await call({ op: 'invite', email: 'gone@probe.local', role: 'use' });
+    await call({ op: 'remove', email: 'gone@probe.local' });
+    const after = await listed();
+    const opens = async (url: string | null): Promise<boolean> => url !== null && await room.ticketFor(null, new URL(url, 'https://app.test').searchParams.get('k')) !== null;
+
+    socket.close();
+
+    return { moved: before !== after, before: await opens(before), after: await opens(after) };
+  }
+
+  /** Whether `id`'s room still holds anything of the slate's. */
+  async roomExists(workspace: string, id: string): Promise<boolean> {
+    return await this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, roomHandle(workspace, id)))).exists();
   }
 
   /** The owner's deletion of the whole workspace, as their account's roster runs it. */

@@ -52,3 +52,5 @@ export {
 } from './room/passes';
 
 export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
+
+export { planReaderCheck, searchFindsRepository, READER_CHECK_TTL_MS, type ConnectionTool, type ReaderCheckPlan } from './room/reader-check';

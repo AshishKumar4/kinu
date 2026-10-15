@@ -220,6 +220,33 @@ test('a person\'s own effect that would send their secret wider waits for them, 
   caretaker.resume(verdict.pending.id);
 });
 
+test('a fork\'s code is never its forker\'s own: publishing it grants nothing by authorship, and its outflow waits for them', () => {
+  const db = new Database(':memory:');
+
+  initSlateRoomTables(makeExecRaw(db));
+  const fork = new RoomCaretaker({ db: makeSqlExec(db) });
+
+  fork.create({ workspace: 'dana', slate: 'board', title: 'Board', owner: ALICE, parent: 'sam/board' });
+  fork.publish(ALICE, { image: 'img-1', modules: {}, title: 'Board', secret: null, source: 'v1' });
+  expect(fork.room()).toMatchObject({ imageAuthor: ALICE, foreign: true, source: 'v1' });
+  expect(fork.ownCode(ALICE)).toBe(false);
+  const alice = enter(fork, ALICE);
+
+  const repo = fork.mint(ALICE, {
+    personal: true, server: GITHUB, root: { owner: 'acme', repo: 'secret' }, tools: ['list_pull_requests'], fn: 'mail', domain: ANY, effect: false, sink: [],
+  });
+
+  const mail = fork.mint(ALICE, { personal: true, server: 'https://mail.acme.dev/mcp', root: {}, tools: ['send'], fn: 'mail', domain: ANY, effect: true, sink: 'anyone' });
+  const run = fork.admit({ requester: alice, fn: 'mail', input: null, grants: [repo.id, mail.id], inputs: [], out: 'part:mail' });
+
+  expect(fork.toolStep(run.id, mail.id, 'send', { to: BOB })).toMatchObject({ kind: 'wait', pending: { kind: 'outflow' } });
+
+  // The same code in a room of her own making, written by her: her request is her consent.
+  const own = newRoom();
+
+  expect(own.ownCode(SAM)).toBe(true);
+});
+
 test('an effect someone else asks for waits at its step, and one approval goes ahead once', () => {
   const caretaker = newRoom();
   caretaker.invite(SAM, BOB, 'use');

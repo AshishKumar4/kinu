@@ -119,7 +119,7 @@ roomRoutes.post('/api/rooms/:workspace/:slate/fork', async (c) => {
   if (bundle === null) return new Response('This slate is not yours to fork.', { status: 403, headers: NO_STORE });
 
   if (!bundle.ok) return new Response(bundle.error, { status: 409, headers: NO_STORE });
-  const forked = await into.success.admitBlueprint(bundle.value);
+  const forked = await into.success.admitBlueprint(bundle.value, `${workspace}/${slate}`);
 
   return forked.ok
     ? Response.json({ workspace: forked.value.workspace, slate: forked.value.slate } satisfies Forked, { headers: NO_STORE })

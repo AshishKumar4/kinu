@@ -57,6 +57,8 @@ export interface SlateRoomStub {
   publish(input: {
     readonly author: string; readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string;
     readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null;
+    /** The version of the slate's files the image was built from, which a fork of it gets. */
+    readonly source: string;
   }): Promise<{ readonly methods: readonly string[] }>;
   callAs(email: string | null, fn: string, args: JsonValue[]): Promise<SlateAnswer<RoomCallOutcome>>;
   ownerFrame(): Promise<string>;
@@ -287,9 +289,13 @@ export class SlateHost {
       const owner = yield* this.owner();
       const room = yield* this.room(id, owner);
       const secret = yield* attempt({ doing: `scanning slate ${id} for secrets`, otherwise: 'io' }, async () => this.secretIn(source));
+      const version = yield* Effect.promise(async () => this.controller.currentSource(id));
+
+      if (!version.ok) return yield* new KinuError(version.reason, version.error);
 
       const { methods } = yield* attempt({ doing: `publishing slate ${id}`, otherwise: 'unavailable' }, async () => room.publish({
         author: owner, image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title: slateTitle(source.project, id), secret,
+        source: version.value,
       }));
 
       // Nothing of the workspace's serves the slate: its URL and its socket are its room's.

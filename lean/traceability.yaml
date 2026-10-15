@@ -1001,10 +1001,10 @@ requirements:
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.decide
       - packages/cf-backend/src/slates/room-bindings.ts#RoomBinding
     remainingEvidence:
-      - lean/fixtures/sharing-traces.json holds 300 traces of 30 model events on one slate, each with whether permits lets it through; refinement-sharing.test.ts replays them against the caretaker on bun:sqlite, which agrees on every step, admit and toolStep included
-      - One step differs by design: a person's own data in their own request, through their own grant, to a sink that may not see it; the model refuses it and the room lets it wait for that person (go when they wrote the code), which the test checks each time
+      - lean/fixtures/sharing-traces.json holds 400 traces of 40 model events on a slate and its forks, with the signed-out visitor among the people, each with whether permits lets it through and, for a tool step, whether effectOk lets its effect go; refinement-sharing.test.ts replays them against one caretaker per slate on bun:sqlite, deciding an approved step as its holder (no one else's decision counts), and agrees on every step
+      - One step differs by design: a person's own data in their own request, through their own grant, to a sink that may not see it, every other guard holding; the model refuses it and the room lets it wait for that person as an outflow (go when the code is wholly theirs, never in a fork), which the test checks each time
       - The traces keep to the caretaker's fragment: one function's code edited (the room binds a grant to the whole image, so an edit suspends every grant at once), grants only taken back, and no removal of someone who still lends or shows, which the room drops and the model keeps
-      - Approvals are not in the traces: the room decides a step that waits, where the model registers an approval ahead of it; unit-slate-room.test.ts holds the room's approvals
+      - The model registers an approval ahead of its step and the room decides the step that waits; the traces compare where the effect goes, and a grant's generation moving between the wait and its decision is not representable in the fragment (a grant is only taken back), so unit-slate-room.test.ts holds that case
       - Every run's env holds only stubs the room sealed with its run id (room-bindings.ts); the Durable Object's SQLite build is not exercised by the fixture
       - Unforgeable references and the codec's soundness are premises; Workers RPC stubs with host-sealed props and the bounded codec are what the build must show satisfy them
       - Credentials are outside the model; that no credential byte enters a run's isolate is the reference premise, not a theorem
@@ -1022,7 +1022,7 @@ requirements:
     tsRefs:
       - packages/cf-backend/src/slates/room.ts#SlateRoom.forkBundle
       - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.admit
-      - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.liveBundle
+      - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.bundleAt
     remainingEvidence:
       - Built: a fork is asked of the slate's room (room-routes.ts, SlateRoom.forkPreview and forkBundle), which admits a signed-in person who can open it, a link visitor only with its key; the bundle is the code alone, admitted into a workspace the forker owns with every requirement unsatisfied; the fork row (tests/first-run/slate-fork.first-run.ts) drives it on a deployment
       - Code is modelled as a revision, not as data; a secret a person types into code is outside the model and is what the publish-time secret scan looks for

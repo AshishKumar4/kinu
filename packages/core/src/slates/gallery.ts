@@ -34,13 +34,14 @@ export function initGalleryTables(execRaw: RawSqlExec): void {
     at INTEGER NOT NULL,
     PRIMARY KEY (workspace, slate, email)
   )`);
+  // One report per person per listing, its latest reason: reporting again replaces it.
   execRaw(`CREATE TABLE IF NOT EXISTS gallery_reports (
-    id INTEGER PRIMARY KEY,
     workspace TEXT NOT NULL,
     slate TEXT NOT NULL,
     email TEXT NOT NULL,
     reason TEXT NOT NULL,
-    at INTEGER NOT NULL
+    at INTEGER NOT NULL,
+    PRIMARY KEY (workspace, slate, email)
   )`);
 }
 
@@ -62,6 +63,11 @@ export interface GalleryEntry {
 
 /** One page of listings. */
 const GALLERY_PAGE_SIZE = 24;
+
+/** New listings one person may report in a day. */
+const REPORTS_PER_DAY = 20;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The window stars count toward trending, and toward this week's featured two. */
 const TRENDING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -181,13 +187,24 @@ export class GalleryIndex {
       [email], email, now).map((row) => listingOf(row, featured));
   }
 
-  report(report: { readonly email: string; readonly workspace: string; readonly slate: string; readonly reason: string }, now: number): boolean {
+  /**
+   * A person's report of a listing: one per person per listing, reporting again replaces it, and at most
+   * `REPORTS_PER_DAY` new listings a day per person, so no one account fills the Gallery's store.
+   */
+  report(report: { readonly email: string; readonly workspace: string; readonly slate: string; readonly reason: string }, now: number): 'reported' | 'unlisted' | 'limited' {
     const { email, workspace, slate, reason } = report;
 
-    if (this.listed(workspace, slate) === null) return false;
-    this.db.exec('INSERT INTO gallery_reports (workspace, slate, email, reason, at) VALUES (?, ?, ?, ?, ?)', workspace, slate, email, reason.slice(0, 2000), now);
+    if (this.listed(workspace, slate) === null) return 'unlisted';
+    const again = this.db.exec('SELECT 1 FROM gallery_reports WHERE workspace = ? AND slate = ? AND email = ?', workspace, slate, email).toArray().length > 0;
+    const today = v.parse(v.object({ n: v.number() }), this.db.exec('SELECT COUNT(*) AS n FROM gallery_reports WHERE email = ? AND at > ?', email, now - DAY_MS).toArray()[0]).n;
 
-    return true;
+    if (!again && today >= REPORTS_PER_DAY) return 'limited';
+    this.db.exec(
+      'INSERT INTO gallery_reports (workspace, slate, email, reason, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (workspace, slate, email) DO UPDATE SET reason = excluded.reason, at = excluded.at',
+      workspace, slate, email, reason.slice(0, 2000), now,
+    );
+
+    return 'reported';
   }
 
   private rows(tail: string, params: readonly (string | number)[], viewer: string | null, now: number): Row[] {

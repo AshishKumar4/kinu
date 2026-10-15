@@ -72,6 +72,7 @@ import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WO
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
 import type { SlateRoom } from "./slates/room";
+import { initSlateRoomRegistry, SlateRoomRegistry } from "./slates/room-registry";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
@@ -245,7 +246,6 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
-import { GALLERY_OBJECT } from './gallery/gallery-do';
 import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
@@ -609,6 +609,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private _pictures: SlatePictures | undefined;
 
+  private _slateRooms: SlateRoomRegistry | undefined;
+
+  private get slateRooms(): SlateRoomRegistry {
+    this._slateRooms ??= new SlateRoomRegistry(this.ctx.storage.sql);
+
+    return this._slateRooms;
+  }
+
   private get pictures(): SlatePictures {
     this._pictures ??= new SlatePictures(this.ctx.storage.sql);
 
@@ -625,7 +633,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       url: async (slate) => {
         const owner = await this.email.ownerEmail();
 
-        return owner === null ? null : await this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate))))
+        return owner === null ? null : await this.slateRoom(slate)
           .ticketFor({ email: owner.toLowerCase(), name: owner }, null);
       },
       slates: async () => {
@@ -4175,7 +4183,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Every slate's room, by name: a room is made on its slate's first run, and one never made answers an empty census.
     // A Nimbus sibling holds no slates.
     const slates = !this.nimbusSibling && this.storageRefusal === undefined
-      ? this.ctx.storage.sql.exec('SELECT DISTINCT id FROM slates').toArray().map((row) => v.parse(v.object({ id: v.string() }), row).id)
+      ? [...new Set([...this.ctx.storage.sql.exec('SELECT DISTINCT id FROM slates').toArray().map((row) => v.parse(v.object({ id: v.string() }), row).id), ...this.slateRooms.slates()])]
       : [];
 
     const workspace = this.addressedName;
@@ -4194,6 +4202,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
     initChangeNotesTable(execRaw);
     initSlatePictureTable(execRaw);
+    initSlateRoomRegistry(execRaw);
     initSlateBuildTable(execRaw);
     initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
@@ -4568,13 +4577,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const changed = yield* Effect.promise(() => this.pictures.captureDue(capture, now));
         span.setAttribute('kinu.pictures_changed', changed);
 
-        if (changed) {
-          this.overviewChanged();
-          // A listed slate's Gallery card shows its newest picture; the Gallery ignores a slate it does not list.
-          const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
-
-          for (const [slate, digest] of this.pictures.digests()) yield* Effect.promise(async () => gallery.pictured(this.name, slate, digest));
-        }
+        // The owner's own view stays theirs: a listed slate's Gallery picture is taken by its room, as a visitor sees it.
+        if (changed) this.overviewChanged();
       }), phaseFailed(span, { doing: 'photographing the slates due a picture', otherwise: 'unavailable' }, (failure) => {
         diagnostics.failure('slate.pictures_failed', failure);
       }))));
@@ -5311,10 +5315,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async releaseOutsideState(): Promise<void> {
-    // A room serves its own image: one left behind would keep its slate's page, link and Gallery listing open. Every
-    // slate built here was published to its room, a slate whose files a shell removed included.
+    // A room serves its own image and holds its own people, link and listing: one left behind would keep them open.
+    // Every room made here is in the registry, built or not; every slate built was published to one.
     if (this.storageRefusal === undefined) {
-      await Promise.all(this.slateHosting.builds.slates().map(async (slate) => { await this.slateRoom(slate).retire(); }));
+      const rooms = new Set([...this.slateRooms.slates(), ...this.slateHosting.builds.slates()]);
+
+      await Promise.all([...rooms].map(async (slate) => { await this.slateRoom(slate).retire(); }));
     }
 
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
@@ -5803,12 +5809,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slateRoom: async (slate, title, owner) => {
         const room = this.slateRoom(slate);
 
-        await room.create({ workspace: this.name, slate, title, owner, parent: null });
+        await room.create({ workspace: this.name, slate, title, owner, parent: this.slateRooms.making(slate) });
 
         return room;
       },
       ownerEmail: async () => (await this.email.ownerEmail())?.toLowerCase() ?? null,
-      forgetRoom: async (slate) => { await this.slateRoom(slate).retire(); },
+      forgetRoom: async (slate) => {
+        await this.slateRoom(slate).retire();
+        this.slateRooms.forget(slate);
+      },
     });
 
     return this._slateHosting;
@@ -5886,10 +5895,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       if (owner === null) return yield* new KinuError('unavailable', 'This workspace has no owner to make a room for');
       const project = yield* attempt({ doing: `slate ${slate}`, otherwise: 'missing' }, async () => (await this.slates()).controller.project(CRED_SESSION_USER, slate));
       const handle = roomHandle(this.name, slate);
-      const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, handle)));
+      const room = this.slateRoom(slate);
+      const parent = this.slateRooms.making(slate);
 
       yield* attempt({ doing: `making slate ${slate}'s room`, otherwise: 'unavailable' }, async () => room.create({
-        workspace: this.name, slate, title: slateTitle(project, slate), owner: owner.toLowerCase(), parent: null,
+        workspace: this.name, slate, title: slateTitle(project, slate), owner: owner.toLowerCase(), parent,
       }));
 
       return { handle };
@@ -5901,13 +5911,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** DO-only: a fork's bundle of one of this workspace's slates, its code alone; its room has said who may fork it. */
-  async slateForkBundle(slate: string): Promise<SlateAnswer<BlueprintBundle>> {
-    return (await this.slates()).controller.forkBundle(slate);
+  async slateForkBundle(slate: string, source: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return (await this.slates()).controller.forkBundle(slate, source);
   }
 
   /** Admits into this workspace as a new slate that calls this workspace's own surface; nothing runs. */
-  async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
-    return (await this.slates()).controller.admitBlueprint(bundle);
+  async admitBlueprint(bundle: BlueprintBundle, parent: string): Promise<SlateAnswer<BlueprintFork>> {
+    const admitted = await (await this.slates()).controller.admitBlueprint(bundle);
+
+    // Its code is someone else's: its room, when made, says so, and nothing is granted for being its author.
+    if (admitted.ok) this.slateRooms.forked(admitted.value.slate, parent);
+
+    return admitted;
   }
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {

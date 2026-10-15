@@ -20,9 +20,10 @@ export interface WorkspaceOwnerRpc {
   listOperations(caller: OperationCaller): Promise<readonly OperationListing[]>;
   /** Stops a `callOperation` still running; one that has answered is not touched. */
   cancelOperation(callId: string): Promise<void>;
-  admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>>;
+  /** Admits a fork of `parent` (`<workspace>/<slate>`): its room, when made, knows the code is not its owner's. */
+  admitBlueprint(bundle: BlueprintBundle, parent: string): Promise<SlateAnswer<BlueprintFork>>;
   /** A fork's bundle of a slate: its code alone. */
-  slateForkBundle(slate: string): Promise<SlateAnswer<BlueprintBundle>>;
+  slateForkBundle(slate: string, source: string): Promise<SlateAnswer<BlueprintBundle>>;
   /** The modules of a slate's image, by content digest, for its room to load; refused when one is gone. */
   slateImageModules(slate: string, digests: readonly string[]): Promise<SlateAnswer<Readonly<Record<string, string>>>>;
   /** The slate's room, made on its first need by this workspace, which alone names its owner. */

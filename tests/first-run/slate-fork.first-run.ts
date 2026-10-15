@@ -37,6 +37,9 @@ const observations: EvalObservation[] = [];
 
 afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
+/** A slate operation's answer: `{ ok: true, value }` when the call went through. */
+const SlateCalled = v.object({ ok: v.literal(true), value: v.unknown() });
+
 const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()) });
 
 const SLATE = 'forkprobe';
@@ -93,7 +96,7 @@ async function forkedAlone(at: { origin: string; workspace: string; key: string 
       reached: intoOwners.status === 403 && forked?.workspace === forker.session.workspace,
       detail: JSON.stringify({ intoOwners: intoOwners.status, intoOwn: intoOwn.status, forked }),
     },
-    { what: 'fork-starts-from-its-code-alone', reached: JSON.stringify(called) === JSON.stringify(1), detail: JSON.stringify(called).slice(0, 200) },
+    { what: 'fork-starts-from-its-code-alone', reached: v.safeParse(SlateCalled, called).success && v.parse(SlateCalled, called).value === 1, detail: JSON.stringify(called).slice(0, 200) },
   ];
 }
 
@@ -160,15 +163,19 @@ describe(SUITE, () => {
           const key = await owner.view((view) => view.sheet?.url !== null && view.sheet?.url !== undefined);
 
           return [
-            { what: 'owner-call-publishes', reached: JSON.stringify(first) === JSON.stringify(1), detail: JSON.stringify({ first, listed }).slice(0, 300) },
+            { what: 'owner-call-publishes', reached: v.safeParse(SlateCalled, first).success && v.parse(SlateCalled, first).value === 1, detail: JSON.stringify({ first, listed }).slice(0, 300) },
             ...forked,
             await linkEnded(at, owner, headers, new URL(key.sheet?.url ?? '', plan.origin).searchParams.get('k')),
           ];
         } finally {
-          await owner.call({ op: 'unlist' });
-          await owner.call({ op: 'setAudience', audience: 'only-you' });
-          owner.close();
-          await forker.teardown();
+          // The forker's workspace goes whatever the owner's socket does.
+          try {
+            await owner.call({ op: 'unlist' });
+            await owner.call({ op: 'setAudience', audience: 'only-you' });
+          } finally {
+            owner.close();
+            await forker.teardown();
+          }
         }
       },
     }, observations);

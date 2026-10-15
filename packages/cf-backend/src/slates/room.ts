@@ -21,11 +21,12 @@ import {
   RoomClientFrameSchema,
   type JsonValue, type OpsCaller, type PartView, type Repair, type RoomAccess, type RoomAsk, type RoomAudience, type RoomCall,
   type RoomPerson, type RoomReach, type RoomServerFrame, type RoomService, type RoomSource, type RoomView, type SheetView,
-  GALLERY_CATEGORIES, slateHostOrigin, type BlueprintBundle, type ForkPreview, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, type TablesAnswer,
+  GALLERY_CATEGORIES, slateHostOrigin, type BlueprintBundle, type ForkPreview, type SerializableToolDescriptor, type SlateAnswer, type SlateSurfaceResult,
+  type SlateSurfaceValue, type TablesAnswer,
 } from '@kinu.run/core';
 import {
   canonicalRoot, frameTicket, linkKeyHolds, linkUrl, ROOM_ENTER_PATH, type FrameClaim,
-  RoomCaretaker, codecIsFree, flows, initSlateRoomTables, slateAnswer, ROOT_SLATE_CALLER,
+  RoomCaretaker, codecIsFree, flows, initSlateRoomTables, slateAnswer, ROOT_SLATE_CALLER, planReaderCheck, searchFindsRepository,
   type Access, type Audience, type Codec, type Elem, type Grant, type RoomMember, type Run, type Session, type Tag,
 } from '@kinu.run/core/slates';
 import { attempt, diagnostics, inItsWords, KinuError, settle, settleSync, type ErrorCode } from '@kinu.run/core/obs';
@@ -37,6 +38,7 @@ import { slateBatchStub } from './rpc-transport';
 import type { RoomBindingName, RoomBindingProps } from './room-bindings';
 import { sealedPart } from './room-parts';
 import { GALLERY_OBJECT } from '../gallery/gallery-do';
+import { browserCamera, pictureKey } from './pictures';
 import type { UserDO } from '../user/user-do';
 
 /** Who a request is, as the Worker's route proved it. */
@@ -133,9 +135,6 @@ const OWN_GRANTS_PER_CALL = 8;
 
 /** What a personal grant made for its holder's own code admits: any input up to this size. */
 const OWN_GRANT_INPUT_BYTES = 256 * 1024;
-
-/** The GitHub tool a reader check asks with the reader's own connection: a repository it finds is one they read. */
-const READER_CHECK_TOOL = 'search_repositories';
 
 /** A part's key: one function on one input, for one person when what it reads is theirs. */
 function partKey(fn: string, args: readonly JsonValue[], requester: string | null): string {
@@ -274,11 +273,19 @@ export class SlateRoom extends DurableObject<Env> {
 
   /** A Drive card the room could not write is recorded, not fatal: the slate itself is unchanged by it. */
   private cardOrRecord(email: string, card: { readonly role?: 'edit' | 'use'; readonly url?: string } | null): Effect.Effect<void> {
+    return this.recorded('slate.card_failed', this.card(email, card));
+  }
+
+  /** Work whose failure leaves the slate as it was: recorded under `event`, and not the caller's failure. */
+  private recorded(event: `${string}.${string}`, work: Effect.Effect<void, KinuError>): Effect.Effect<void> {
     const room = this.caretaker.room();
 
-    return Effect.catch(this.card(email, card), (failure) => Effect.sync(() => {
-      diagnostics.failure('slate.card_failed', failure, { workspace: room.workspace, slate: room.slate });
-    }));
+    return Effect.catch(work, (failure) => Effect.sync(() => { diagnostics.failure(event, failure, { workspace: room.workspace, slate: room.slate }); }));
+  }
+
+  /** The room's one alarm: the listing's picture, taken again once a sync asked for it (`repicture`). */
+  override alarm(): Promise<void> {
+    return settle(this.repicture());
   }
 
   exists(): boolean {
@@ -309,12 +316,12 @@ export class SlateRoom extends DurableObject<Env> {
    */
   publish(input: {
     readonly author: string; readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string;
-    readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null;
+    readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null; readonly source: string;
   }): Promise<{ readonly methods: readonly string[] }> {
     return settle(Effect.gen({ self: this }, function* () {
       const before = this.caretaker.room().image;
 
-      yield* care(() => { this.caretaker.publish(input.author, { image: input.image, modules: input.modules, title: input.title, secret: input.secret }); });
+      yield* care(() => { this.caretaker.publish(input.author, input); });
 
       if (before !== input.image && this.server !== null) {
         this.server = null;
@@ -559,8 +566,10 @@ export class SlateRoom extends DurableObject<Env> {
 
         case 'remove': {
           yield* care(() => { this.caretaker.remove(actor, call.email); });
+          yield* this.card(call.email, null);
 
-          return yield* this.card(call.email, null);
+          // The owner's removal re-keys the link: the listing carries the new one.
+          return yield* this.syncGallery();
         }
 
         case 'leave': {
@@ -585,9 +594,20 @@ export class SlateRoom extends DurableObject<Env> {
         case 'allow': return yield* this.allow(session, call.part);
         case 'ask': return yield* care(() => { this.ask(session, call.part); });
         case 'show': return yield* care(() => { this.showPart(session, call.part, call.scope); });
-        case 'unshow': return yield* care(() => { this.unshowPart(session, call.part); });
+        case 'unshow': {
+          yield* care(() => { this.unshowPart(session, call.part); });
+
+          // What a visitor sees may be less now: the listing's picture is taken again.
+          return yield* this.syncGallery();
+        }
+
         case 'setLend': return yield* care(() => { this.setLend(actor, call.fn, call.on); });
-        case 'setLendShown': return yield* care(() => { this.setLendShown(actor, call.fn, call.shown); });
+        case 'setLendShown': {
+          yield* care(() => { this.setLendShown(actor, call.fn, call.shown); });
+
+          return yield* this.syncGallery();
+        }
+
         case 'showTo': case 'showToMembers': case 'decline': return yield* care(() => { this.answerAsk(actor, call.ask, call.op); });
         case 'approve': case 'send': return yield* care(() => { this.decideWaiting(actor, call.ask, true); });
         case 'check': return yield* this.check(session, call.part);
@@ -638,9 +658,52 @@ export class SlateRoom extends DurableObject<Env> {
         workspace: room.workspace, slate: room.slate, title: room.title, line: listing.line, category: listing.category,
         ownerName: owner?.name ?? owner?.email.slice(0, owner.email.indexOf('@')) ?? '', url: new URL(url).pathname + new URL(url).search,
         needs: [...needs.values()], files: Object.keys(room.modules ?? {}).filter((name) => name !== RUNNER_MODULE).sort(),
-        readsAuthor: grants.some((grant) => !grant.personal), picture: null,
+        readsAuthor: grants.some((grant) => !grant.personal), picture: this.caretaker.listing()?.picture ?? null,
       }));
+      // Taken past this call: a browser takes seconds, and the listing is right without it.
+      yield* Effect.promise(async () => this.ctx.storage.setAlarm(Date.now()));
     });
+  }
+
+  /**
+   * The Gallery's picture of the slate: its page as a visitor holding only the link sees it, never its owner's own view,
+   * taken again each time the listing is synced, from the room's alarm. A failure is recorded.
+   */
+  private repicture(): Effect.Effect<void> {
+    const { BROWSER: browser, SLATE_PICTURES: bucket } = this.env;
+
+    if (!this.exists()) return Effect.void;
+    const room = this.caretaker.room();
+
+    if (browser === undefined || bucket === undefined || !room.link || this.caretaker.listing() === null) return Effect.void;
+    const at = { workspace: room.workspace, handle: this.handle() };
+
+    return this.recorded('slate.gallery_picture_failed', Effect.gen({ self: this }, function* () {
+      const origin = yield* Effect.promise(async () => slateHostOrigin(this.env, at.workspace, at.handle));
+      const ticket = yield* Effect.promise(async () => frameTicket(this.env, at, { email: null, access: { kind: 'link', gen: room.linkGen } }));
+
+      if (origin === null || ticket === null) return;
+      const camera = yield* attempt({ doing: 'opening a browser', otherwise: 'unavailable' }, async () => browserCamera(browser));
+
+      const shot = yield* Effect.ensuring(
+        attempt({ doing: 'photographing the slate as a visitor sees it', otherwise: 'unavailable' }, async () => camera.shoot(`${origin}${ROOM_ENTER_PATH}?t=${ticket}`)),
+        Effect.promise(async () => camera.close()),
+      );
+
+      const digest = sha256Hex(shot);
+      const previous = this.caretaker.listing()?.picture ?? null;
+
+      if (digest === previous) return;
+      yield* attempt({ doing: 'storing the Gallery picture', otherwise: 'unavailable' },
+        async () => bucket.put(pictureKey(room.workspace, room.slate, digest), shot, { httpMetadata: { contentType: 'image/webp' } }));
+
+      if (this.caretaker.pictured(digest)) {
+        yield* attempt({ doing: 'showing the picture in the Gallery', otherwise: 'unavailable' },
+          async () => this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT)).pictured(room.workspace, room.slate, digest));
+      }
+
+      if (previous !== null) yield* attempt({ doing: 'dropping the last Gallery picture', otherwise: 'unavailable' }, async () => bucket.delete(pictureKey(room.workspace, room.slate, previous)));
+    }));
   }
 
   /**
@@ -746,23 +809,20 @@ export class SlateRoom extends DurableObject<Env> {
       const closed = cell.label.filter((elem) => elem.holder !== email && !flows(facts, [elem], email));
 
       for (const elem of closed) {
-        const root = v.parse(v.record(v.string(), v.string()), JSON.parse(elem.root));
-        const { owner, repo } = root;
+        // Decided by what each connection is, never by its name: a server someone named GitHub takes no part in a check.
+        const plan = planReaderCheck(elem, yield* this.mcpSurface(elem.holder), yield* this.mcpSurface(email));
 
-        if (serviceOf(elem.server).kind !== 'github' || owner === undefined || repo === undefined) {
-          return yield* refuse('unsupported', `${serviceOf(elem.server).title} cannot say who reads it; ask ${elem.holder} instead`);
-        }
+        if (plan.kind === 'unsupported') return yield* refuse('unsupported', `${serviceOf(elem.server).title} cannot say who reads it; ask ${elem.holder} instead`);
 
-        const descriptor = yield* this.mcpDescriptor(email, elem.server, READER_CHECK_TOOL);
-
-        if (descriptor === null) return yield* refuse('missing', `Connect your own ${serviceOf(elem.server).title} to check`);
+        if (plan.kind === 'no-connection') return yield* refuse('missing', 'Connect your own GitHub to check');
+        const { tool: descriptor, owner, repo } = plan;
         const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, email));
         const caller = yield* attempt({ doing: 'reaching the account', otherwise: 'unavailable' }, async () => ownerCaller(this.env));
 
         const answered = yield* attempt({ doing: `asking ${serviceOf(elem.server).title} who reads ${owner}/${repo}`, otherwise: 'unavailable' },
           async () => callUserMcpTool({ stub: this.userObject(account), caller }, descriptor, { query: `repo:${owner}/${repo}` }, undefined));
 
-        const reads = answered.toLowerCase().includes(`${owner}/${repo}`.toLowerCase());
+        const reads = searchFindsRepository(answered, owner, repo);
 
         yield* care(() => { this.caretaker.checked(email, elem, reads); });
       }
@@ -974,7 +1034,7 @@ export class SlateRoom extends DurableObject<Env> {
 
         if (!('part' in outcome) || need === undefined || requester === null || tries >= OWN_GRANTS_PER_CALL) return outcome;
 
-        if (this.caretaker.room().imageAuthor !== requester) return outcome;
+        if (!this.caretaker.ownCode(requester)) return outcome;
         yield* care(() => { this.ownGrant(requester, need[1]); });
         this.needs.delete(need[0]);
       }
@@ -1241,15 +1301,19 @@ export class SlateRoom extends DurableObject<Env> {
     return this.env.UserDO.get(this.env.UserDO.idFromName(account));
   }
 
-  private mcpDescriptor(holder: string, server: string, tool: string) {
+  /** A person's MCP tools, as their own account describes them. */
+  private mcpSurface(email: string): Effect.Effect<SerializableToolDescriptor[], KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, holder));
+      const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, email));
       const caller = yield* attempt({ doing: 'reaching the account', otherwise: 'unavailable' }, async () => ownerCaller(this.env));
       const listed = yield* attempt({ doing: 'reading the connections', otherwise: 'unavailable' }, async () => this.userObject(account).userMcp_toolDescriptors(caller));
-      const surface = v.parse(McpToolSurfaceSchema, listed);
 
-      return surface.descriptors.find((each) => each.serverName === server.slice('mcp.'.length) && each.name === tool) ?? null;
+      return v.parse(McpToolSurfaceSchema, listed).descriptors;
     });
+  }
+
+  private mcpDescriptor(holder: string, server: string, tool: string): Effect.Effect<SerializableToolDescriptor | null, KinuError> {
+    return Effect.map(this.mcpSurface(holder), (descriptors) => descriptors.find((each) => each.serverName === server.slice('mcp.'.length) && each.name === tool) ?? null);
   }
 
   // ── Parts ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1418,7 +1482,11 @@ export class SlateRoom extends DurableObject<Env> {
     if (await this.forkPreview(visitor, key) === null) return null;
     const room = this.caretaker.room();
 
-    return await workspaceOwner(this.env, room.workspace).slateForkBundle(room.slate);
+    const { source } = room;
+
+    if (source === null) return await settle(slateAnswer('forking the slate', Effect.fail(new KinuError('missing', 'This slate has not been published'))));
+
+    return await workspaceOwner(this.env, room.workspace).slateForkBundle(room.slate, source);
   }
 
   /** The slate's own host, entered by this visitor now: a ticket of theirs for its entry, or null when they may not open it. */

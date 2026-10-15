@@ -11,6 +11,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
+import { secretSightings } from '../safety/secret-scan';
 import { readRetainedTree, RetainedTreeSchema, type RetainedTree, type WorkspaceSlateContentStore } from './content';
 import { slateProject, slateTitle, type SlateProject } from './project';
 import { namespaceHead, type SlateUsage } from './capability-graph';
@@ -64,25 +65,32 @@ export interface WorkspaceBlueprintsDeps {
 export class WorkspaceBlueprints {
   constructor(private readonly deps: WorkspaceBlueprintsDeps) {}
 
-  /** A fork's bundle: the skeleton is built from the running slate's synchronized tree. */
-  async liveBundle(slateId: string): Promise<BlueprintBundle> {
+  /** The slate's tree as it is now, retained: the version a publish names, so a fork gets that and nothing added since. */
+  async currentSource(slateId: string): Promise<string> {
+    return (await this.deps.slates.synchronize(new SlateId(slateId))).source.value;
+  }
+
+  /**
+   * A fork's bundle of the version `source` names, the one its room published: files written since are not in it. A
+   * version holding a secret is refused whole, as its room keeps its link off.
+   */
+  async bundleAt(slateId: string, source: string): Promise<BlueprintBundle> {
     return settle(Effect.gen({ self: this }, function* () {
-      const slate = yield* Effect.promise(() => this.deps.slates.synchronize(new SlateId(slateId)));
-      const tree = readRetainedTree(this.deps.content, slate.source);
-      const skeleton = new SlateSkeleton(slate.source.digest, yield* blueprintRequirements(reachOf(this.deps.usage(slateId))));
+      const ref = new ContentRef(source);
+      const tree = readRetainedTree(this.deps.content, ref);
+      const skeleton = new SlateSkeleton(ref.digest, yield* blueprintRequirements(reachOf(this.deps.usage(slateId))));
       const blobs: Record<string, string> = {};
 
       for (const entry of tree.entries) {
-        if (entry.kind === 'file' && blobs[entry.content] === undefined) {
-          blobs[entry.content] = bytesToBase64(this.deps.content.read(new ContentRef(entry.content)));
-        }
+        if (entry.kind !== 'file' || blobs[entry.content] !== undefined) continue;
+        const bytes = this.deps.content.read(new ContentRef(entry.content));
+        const [secret] = bytes.includes(0) ? [] : secretSightings(entry.path, new TextDecoder('utf8', { fatal: false }).decode(bytes));
+
+        if (secret !== undefined) return yield* new KinuError('denied', `${secret.path}:${String(secret.line)} holds ${secret.message}: this version cannot be forked`);
+        blobs[entry.content] = bytesToBase64(bytes);
       }
 
-      return v.parse(BlueprintBundleSchema, {
-        skeleton: skeleton.toData(),
-        tree: new TextDecoder().decode(this.deps.content.read(slate.source)),
-        blobs,
-      });
+      return v.parse(BlueprintBundleSchema, { skeleton: skeleton.toData(), tree: new TextDecoder().decode(this.deps.content.read(ref)), blobs });
     }));
   }
 

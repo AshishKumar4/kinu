@@ -17,7 +17,8 @@ export function openRoom(origin: string, headers: Readonly<Record<string, string
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   const socket = new HEADER_WEBSOCKET(url.toString(), { headers: { ...headers } });
   const views: RoomView[] = [];
-  const answers = new Map<number, (frame: RoomServerFrame) => void>();
+  const answers = new Map<number, { resolve: (frame: RoomServerFrame) => void; reject: (error: Error) => void }>();
+  let ended: Error | null = null;
   const waiting = new Set<() => void>();
   let next = 0;
 
@@ -25,21 +26,34 @@ export function openRoom(origin: string, headers: Readonly<Record<string, string
     const frame = v.parse(RoomServerFrameSchema, JSON.parse(String(event.data)));
 
     if ('view' in frame) views.push(frame.view);
-    else answers.get(frame.id)?.(frame);
+    else answers.get(frame.id)?.resolve(frame);
 
     for (const wake of waiting) wake();
   });
 
   const opened = Promise.withResolvers<RoomSocket>();
 
-  socket.addEventListener('error', () => { opened.reject(new Error(`The room socket at ${path} failed`)); });
+  // A socket that ends answers every call still waiting with its end, so no caller's cleanup waits forever.
+  const end = (error: Error): void => {
+    ended = error;
+    opened.reject(error);
+
+    for (const answer of answers.values()) answer.reject(error);
+    answers.clear();
+
+    for (const wake of waiting) wake();
+  };
+
+  socket.addEventListener('error', () => { end(new Error(`The room socket at ${path} failed`)); });
+  socket.addEventListener('close', () => { end(new Error(`The room socket at ${path} closed`)); });
   socket.addEventListener('open', () => {
     opened.resolve({
       call: async (call) => {
         const answered = Promise.withResolvers<RoomServerFrame>();
         const id = next++;
 
-        answers.set(id, answered.resolve);
+        if (ended !== null) throw ended;
+        answers.set(id, answered);
         socket.send(JSON.stringify({ id, call }));
 
         return await answered.promise;
@@ -49,6 +63,8 @@ export function openRoom(origin: string, headers: Readonly<Record<string, string
           const found = views.find(holds);
 
           if (found !== undefined) return found;
+
+          if (ended !== null) throw ended;
           // The next frame the room pushes.
           const woken = Promise.withResolvers<void>();
           const done = () => { waiting.delete(done); woken.resolve(); };

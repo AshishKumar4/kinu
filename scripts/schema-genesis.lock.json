@@ -813,12 +813,12 @@
     "PRIMARY KEY (workspace, slate)"
   ],
   "gallery_reports@packages/core/src/slates/gallery.ts": [
-    "id INTEGER PRIMARY KEY",
     "workspace TEXT NOT NULL",
     "slate TEXT NOT NULL",
     "email TEXT NOT NULL",
     "reason TEXT NOT NULL",
-    "at INTEGER NOT NULL"
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (workspace, slate, email)"
   ],
   "gallery_stars@packages/core/src/slates/gallery.ts": [
     "workspace TEXT NOT NULL",
@@ -1208,7 +1208,8 @@
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "line TEXT NOT NULL",
     "category TEXT NOT NULL",
-    "listed_at INTEGER NOT NULL"
+    "listed_at INTEGER NOT NULL",
+    "picture TEXT"
   ],
   "room_members@packages/core/src/slates/room/caretaker.ts": [
     "email TEXT PRIMARY KEY",
@@ -1221,6 +1222,7 @@
     "holder TEXT NOT NULL",
     "server TEXT NOT NULL",
     "root TEXT NOT NULL",
+    "checked_at INTEGER NOT NULL",
     "PRIMARY KEY (email, holder, server, root)"
   ],
   "room_shows@packages/core/src/slates/room/caretaker.ts": [
@@ -1242,6 +1244,7 @@
     "image TEXT",
     "image_author TEXT",
     "secret TEXT",
+    "source TEXT",
     "foreign_code INTEGER NOT NULL",
     "parent TEXT",
     "next INTEGER NOT NULL"
@@ -1373,6 +1376,10 @@
     "id TEXT PRIMARY KEY",
     "slate_id TEXT NOT NULL",
     "bytes BLOB NOT NULL"
+  ],
+  "slate_rooms@packages/cf-backend/src/slates/room-registry.ts": [
+    "slate TEXT PRIMARY KEY",
+    "parent TEXT"
   ],
   "slate_share_users@packages/core/src/slates/shares.ts": [
     "share_id TEXT NOT NULL REFERENCES slate_shares(id)",

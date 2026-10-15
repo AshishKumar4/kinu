@@ -14,6 +14,7 @@ import { settleSync } from '../../obs/effect';
 import type { RawSqlExec, SqlExec } from '../../types/primitives';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
 import type { RoomRole } from '../room-api';
+import { READER_CHECK_TTL_MS } from './reader-check';
 import {
   audienceFlows, canonicalRoot, dedup, flows, hidden, observers, sameTag, within,
   type Audience, type Elem, type LabelFacts, type Show, type Tag,
@@ -30,6 +31,7 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
     image TEXT,
     image_author TEXT,
     secret TEXT,
+    source TEXT,
     foreign_code INTEGER NOT NULL,
     parent TEXT,
     next INTEGER NOT NULL
@@ -77,6 +79,7 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
     holder TEXT NOT NULL,
     server TEXT NOT NULL,
     root TEXT NOT NULL,
+    checked_at INTEGER NOT NULL,
     PRIMARY KEY (email, holder, server, root)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS room_cells (
@@ -104,7 +107,8 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
     id INTEGER PRIMARY KEY CHECK (id = 1),
     line TEXT NOT NULL,
     category TEXT NOT NULL,
-    listed_at INTEGER NOT NULL
+    listed_at INTEGER NOT NULL,
+    picture TEXT
   )`);
 }
 
@@ -115,7 +119,7 @@ const AudienceSchema = v.union([v.literal('anyone'), v.array(v.string())]);
 const RoomRow = v.object({
   workspace: v.string(), slate: v.string(), title: v.string(), link: v.number(), link_gen: v.number(), image: v.nullable(v.string()),
   modules: v.nullable(v.string()),
-  image_author: v.nullable(v.string()), secret: v.nullable(v.string()), foreign_code: v.number(), parent: v.nullable(v.string()),
+  image_author: v.nullable(v.string()), secret: v.nullable(v.string()), source: v.nullable(v.string()), foreign_code: v.number(), parent: v.nullable(v.string()),
   next: v.number(),
 });
 
@@ -131,6 +135,8 @@ export interface RoomRecord {
   readonly modules: Readonly<Record<string, string>> | null;
   readonly imageAuthor: string | null;
   readonly secret: SecretSighting | null;
+  /** The version of the slate's files the image was built from: what a fork gets. */
+  readonly source: string | null;
   /** Code by someone other than the owner has entered: no grant is implied by authorship from then on. */
   readonly foreign: boolean;
   readonly parent: string | null;
@@ -327,7 +333,7 @@ export class RoomCaretaker {
       workspace: parsed.workspace, slate: parsed.slate, title: parsed.title, link: parsed.link === 1, linkGen: parsed.link_gen,
       image: parsed.image, imageAuthor: parsed.image_author,
       modules: parsed.modules === null ? null : v.parse(v.record(v.string(), v.string()), JSON.parse(parsed.modules)),
-      secret: parsed.secret === null ? null : v.parse(SecretSightingSchema, JSON.parse(parsed.secret)),
+      secret: parsed.secret === null ? null : v.parse(SecretSightingSchema, JSON.parse(parsed.secret)), source: parsed.source,
       foreign: parsed.foreign_code === 1, parent: parsed.parent,
     };
   }
@@ -416,6 +422,16 @@ export class RoomCaretaker {
     }
   }
 
+  /**
+   * Whether the code running is `email`'s own: they published it, and no one else's code ever entered it, a fork's
+   * included. Only then is running it their consent to what it reaches with their connections.
+   */
+  ownCode(email: string): boolean {
+    const room = this.room();
+
+    return room.imageAuthor === email && !room.foreign;
+  }
+
   /** The display copy of a person's name, refreshed each time they open the slate. */
   named(email: string, name: string): void {
     this.db.exec('UPDATE room_members SET name = ? WHERE email = ?', name, email);
@@ -466,13 +482,18 @@ export class RoomCaretaker {
   }
 
   /** The listing while the slate is listed. */
-  listing(): { readonly line: string; readonly category: string; readonly listedAt: number } | null {
-    const row = this.db.exec('SELECT line, category, listed_at FROM room_listing WHERE id = 1').toArray()[0];
+  listing(): { readonly line: string; readonly category: string; readonly listedAt: number; readonly picture: string | null } | null {
+    const row = this.db.exec('SELECT line, category, listed_at, picture FROM room_listing WHERE id = 1').toArray()[0];
 
     if (row === undefined) return null;
-    const parsed = v.parse(v.object({ line: v.string(), category: v.string(), listed_at: v.number() }), row);
+    const parsed = v.parse(v.object({ line: v.string(), category: v.string(), listed_at: v.number(), picture: v.nullable(v.string()) }), row);
 
-    return { line: parsed.line, category: parsed.category, listedAt: parsed.listed_at };
+    return { line: parsed.line, category: parsed.category, listedAt: parsed.listed_at, picture: parsed.picture };
+  }
+
+  /** The listing's picture: the page as a visitor with only the link saw it. False when it is no longer listed. */
+  pictured(digest: string): boolean {
+    return this.db.exec('UPDATE room_listing SET picture = ? WHERE id = 1 RETURNING id', digest).toArray().length > 0;
   }
 
   /** `collaborate`: someone added, or their role changed, at a new generation. */
@@ -531,17 +552,21 @@ export class RoomCaretaker {
    */
   publish(author: string, built: {
     readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string; readonly secret: SecretSighting | null;
+    readonly source?: string;
   }): void {
     return settleSync(Effect.gen({ self: this }, function* () {
       if (!this.canEdit(author)) return yield* refused('denied', `${author} cannot change this slate`);
       const owner = this.owner();
       const { image, title, secret } = built;
+      const source = built.source ?? null;
 
+      // The same image again: the version a fork gets stays the one that built it, so files added since reach no fork.
       if (this.room().image === image) return;
+
       this.db.exec('INSERT OR IGNORE INTO room_images (image, modules) VALUES (?, ?)', image, JSON.stringify(built.modules));
       this.db.exec(
-        'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
-        image, author, title, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
+        'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, source = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
+        image, author, title, secret === null ? null : JSON.stringify(secret), source, author !== owner ? 1 : 0, secret !== null ? 1 : 0,
       );
       this.db.exec('UPDATE room_grants SET image = ? WHERE holder = ?', image, author);
 
@@ -659,12 +684,18 @@ export class RoomCaretaker {
 
   /** `readerCheck`: what the source's own check said, with the reader's own connection. */
   checked(email: string, tag: Tag, reads: boolean): void {
-    if (reads) this.db.exec('INSERT OR IGNORE INTO room_readers (email, holder, server, root) VALUES (?, ?, ?, ?)', email, tag.holder, tag.server, tag.root);
+    if (reads) {
+      this.db.exec(
+        'INSERT INTO room_readers (email, holder, server, root, checked_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (email, holder, server, root) DO UPDATE SET checked_at = excluded.checked_at',
+        email, tag.holder, tag.server, tag.root, this.now(),
+      );
+    }
     else this.db.exec('DELETE FROM room_readers WHERE email = ? AND holder = ? AND server = ? AND root = ?', email, tag.holder, tag.server, tag.root);
   }
 
   facts(): LabelFacts {
-    const readers = this.db.exec('SELECT email, holder, server, root FROM room_readers').toArray()
+    // A yes lapses: a reader who lost the repository since must be asked again (`READER_CHECK_TTL_MS`).
+    const readers = this.db.exec('SELECT email, holder, server, root FROM room_readers WHERE checked_at > ?', this.now() - READER_CHECK_TTL_MS).toArray()
       .map((row) => v.parse(v.object({ email: v.string(), holder: v.string(), server: v.string(), root: v.string() }), row));
 
     return {
@@ -835,7 +866,7 @@ export class RoomCaretaker {
 
         // Their own data, in their own request, through code they wrote themselves: the request is their consent. Code
         // someone else wrote waits for them to see where it sends their data (`Attacks.lean`, the sink audience).
-        if (this.room().imageAuthor !== grant.holder) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'outflow' }) };
+        if (!this.ownCode(grant.holder)) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'outflow' }) };
       }
 
       if (grant.effect && run.requester?.email !== grant.holder) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'effect' }) };

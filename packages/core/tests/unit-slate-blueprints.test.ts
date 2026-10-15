@@ -48,7 +48,7 @@ test('a fork carries the slate\'s code and its requirements, and admits with eve
     ]);
     owner.vfs.writeFile(root + '/src/server.ts', 'export default { fetch() { return new Response("issues"); } };');
 
-    const bundle = await owner.blueprints.liveBundle('issues');
+    const bundle = await owner.blueprints.bundleAt('issues', await owner.blueprints.currentSource('issues'));
 
     expect(bundle.skeleton.bindings.map((requirement) => requirement.name + '@' + requirement.facet)).toEqual([
       'mcp.github@kinu.slate.mcp', 'slates.other@kinu.slate.slates', 'workspace@kinu.slate.workspace',
@@ -86,11 +86,33 @@ test('a requirement reads back as its namespace verbatim, as the slate\'s code c
   owner.usage.set('mixed', reaches.map((namespace) => ({ namespace, member: 'read' })));
 
   try {
-    const fork = await forker.blueprints.admit('forker', await owner.blueprints.liveBundle('mixed'));
+    const fork = await forker.blueprints.admit('forker', await owner.blueprints.bundleAt('mixed', await owner.blueprints.currentSource('mixed')));
 
     expect(fork.requirements.map((requirement) => requirement.name).sort()).toEqual([...reaches].sort());
   } finally {
     owner.ws.db.close();
     forker.ws.db.close();
+  }
+});
+
+test('a fork gets the version its room published: a file written since, a secret included, is not in it', async () => {
+  const owner = await slatePlane('owner');
+  const root = slateDirectory(new SlateId('board'));
+
+  owner.vfs.mkdir(root, { recursive: true });
+  owner.vfs.writeFile(root + '/package.json', JSON.stringify({ main: 'a.js' }));
+  owner.vfs.writeFile(root + '/a.js', 'export default {};');
+
+  try {
+    const published = await owner.blueprints.currentSource('board');
+
+    owner.vfs.writeFile(root + '/.env', 'OPENAI_API_KEY=sk-proj-' + 'a'.repeat(48));
+    const bundle = await owner.blueprints.bundleAt('board', published);
+
+    expect(Object.values(bundle.blobs).map((blob) => atob(blob)).some((text) => text.includes('sk-proj-'))).toBe(false);
+    // The version that holds it is refused whole.
+    await expect(owner.blueprints.bundleAt('board', await owner.blueprints.currentSource('board'))).rejects.toMatchObject({ code: 'denied' });
+  } finally {
+    owner.ws.db.close();
   }
 });

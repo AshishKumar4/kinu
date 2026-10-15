@@ -35,6 +35,9 @@ const observations: EvalObservation[] = [];
 
 afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
+/** A slate operation's answer: `{ ok: true, value }` when the call went through. */
+const SlateCalled = v.object({ ok: v.literal(true), value: v.unknown() });
+
 const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()) });
 
 const Profile = v.object({ email: v.string() });
@@ -171,7 +174,7 @@ describe(SUITE, () => {
         const strangerEntry = await room.entry(recipient);
 
         return [
-          { what: 'owner-call-publishes', reached: JSON.stringify(first) === JSON.stringify(1), detail: JSON.stringify(first).slice(0, 200) },
+          { what: 'owner-call-publishes', reached: v.safeParse(SlateCalled, first).success && v.parse(SlateCalled, first).value === 1, detail: JSON.stringify(first).slice(0, 200) },
           {
             what: 'unshared-is-refused', reached: ownerOpened?.access === 'owner' && strangerEntry.status === 403,
             detail: JSON.stringify({ owner: ownerEntry.status, access: ownerOpened?.access ?? null, recipient: strangerEntry.status }),
