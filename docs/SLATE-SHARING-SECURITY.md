@@ -22,7 +22,7 @@ page (`packages/cf-backend/src/share-design/ShareDesign.tsx` on the UI lane's br
 - **Revocation takes effect at one point.** Grants, memberships, the link and every "show" decision have generations
   in one serialized caretaker. After a revoke nothing admitted under the old generation acts, writes or releases,
   live sessions included.
-- **Proved, not asserted.** 73 Lean theorems: confinement, collaborator isolation, admission, revocation, forks and
+- **Proved, not asserted.** 75 Lean theorems: confinement, collaborator isolation, admission, revocation, forks and
   listings, data origin as noninterference (for any history and any slate code, and unchanged by anything a run that
   read the source chooses to do), the attack each of ten guards exists for, and what the design asks of people. The
   proofs cover the model, under premises stated in §3. What the build must do to refine it is §8.

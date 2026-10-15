@@ -26,15 +26,15 @@ evidence.
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 6 | what each shipped executor claims, over the inputs its constructor reads | The capability lists are transcribed from the constructors; no fixture runs them |
 | Safety | 30 | the credential store's client view, envelope binding and rotation; what a connected machine's file methods reach in each tier; the connect ticket, token rotation and reuse revocation | The cipher's guarantees are premises. Paths are judged where a syscall reaches them, and a link swapped after the check is outside the model. A connection is one atomic step inside the token's window |
-| Sharing | 73 | one live slate used by its owner, the people they add and anyone with its link: grant confinement and collaborator isolation, admission and one-step approvals, revocation by generation, forks and Gallery listings, data origin as noninterference (for any fixed history and any slate code, and unchanged by a labelled run's own actions), the attack each of ten guards exists for, and what the design asks of people, with five scenarios run | Not built: no refinement fixture, and every requirement names the code it replaces. Unforgeable references, the codec, runtime isolation, sealed rendering, one caretaker, who schedules events, reader checks and declared sinks are premises; timing channels and relaying are outside |
+| Sharing | 75 | one live slate used by its owner, the people they add and anyone with its link: grant confinement and collaborator isolation, admission and one-step approvals, revocation by generation, forks and Gallery listings, data origin as noninterference (for any fixed history and any slate code, and unchanged by a labelled run's own actions), the attack each of ten guards exists for, and what the design asks of people, with five scenarios run | Not built: no refinement fixture, and every requirement names the code it replaces. Unforgeable references, the codec, runtime isolation, sealed rendering, one caretaker, who schedules events, reader checks and declared sinks are premises; timing channels and relaying are outside |
 
 Measured 2026-09-23: `node lean/check-traceability.mjs --list-declarations`
 reports 451 named declarations, and the traceability map enrolls all 451: 75
 under `proved-and-refined` requirements, 316 under `proved-in-abstract-model`
 and 60 under `by-construction-witness`.
 
-Measured 2026-10-15 on `proof/sharing`: 51 requirements and 466 theorems; Sharing
-adds 7 requirements and 73 theorems.
+Measured 2026-10-15 on `proof/sharing`: 51 requirements and 468 theorems; Sharing
+adds 7 requirements and 75 theorems.
 
 Status is declared on a requirement and inherited by every theorem it claims,
 so the same status words count over two totals: theorems and requirements. Name

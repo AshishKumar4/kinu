@@ -347,6 +347,22 @@ theorem a_reader_of_the_source_sees_it_unasked :
       acts 1 (privateRepo ++ [.readerCheck 3 ⟨1, 6⟩ true]) = 2 := by
   decide
 
+/-- (iv, Sam takes it back) Withdrawing the "show" hides the part from Bob again at the next render. -/
+theorem a_withdrawn_show_hides_the_part_again :
+    seen 3 (exec Policy.full senv sworld (init 1)
+      (privateRepo ++ consents 0 3 [⟨⟨1, 6⟩, 6, 0⟩] ++
+        [.render 4 3 (.member 1), .undeclassify 1 5, .render 4 3 (.member 1)])) = [none, some 900, none] := by
+  decide
+
+/-- Removing Bob from a slate shared by link keeps him from forking it through the link until Sam adds him again. -/
+theorem a_removed_person_cannot_fork_by_the_link :
+    (exec Policy.full senv sworld (init 1)
+      [.share 1 0 true, .collaborate 1 0 3 .use, .remove 1 0 3, .fork 3 0]).core.slates.length = 1 ∧
+    (exec Policy.full senv sworld (init 1)
+      [.share 1 0 true, .collaborate 1 0 3 .use, .remove 1 0 3, .collaborate 1 0 3 .use, .fork 3 0]).core.slates.length
+      = 2 := by
+  decide
+
 /-- (v) A part over two people's sources. One run holding Alice's repository and Sam's metrics may not call Sam's
     metrics: Sam's server would see an argument computed in a run that holds Alice's data. Split into one run per
     holder and a join with no tools, it needs nobody's consent beyond Sam showing his metrics, and Alice sees the

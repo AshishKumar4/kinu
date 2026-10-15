@@ -255,6 +255,8 @@ import Kinu
 #print axioms Kinu.Sharing.Friction.a_private_part_is_a_placeholder_and_no_prompt
 #print axioms Kinu.Sharing.Friction.the_owner_showing_it_is_one_decision
 #print axioms Kinu.Sharing.Friction.a_reader_of_the_source_sees_it_unasked
+#print axioms Kinu.Sharing.Friction.a_withdrawn_show_hides_the_part_again
+#print axioms Kinu.Sharing.Friction.a_removed_person_cannot_fork_by_the_link
 #print axioms Kinu.Sharing.Friction.a_join_needs_no_cross_consent
 
 /-! ## Kinu/Storage/FTS5Search.lean -/
