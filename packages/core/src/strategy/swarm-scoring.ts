@@ -389,8 +389,7 @@ export function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | nu
       },
     });
     insertSearchNode(sql, rt.actor, {
-      nodeId: expansion.id, parentNodeId: expansion.parentId, rootId,
-      task: resolved.task, action: '', observation: expansion.artifact,
+      nodeId: expansion.id, parentNodeId: expansion.parentId, rootId, action: '', observation: expansion.artifact,
       depth: expansion.depth,
     });
     nodes.set(expansion.id, {

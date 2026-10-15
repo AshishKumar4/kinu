@@ -283,7 +283,7 @@ function localMcts(db: SqliteDb): SearchNode[] {
     db,
     `SELECT id, parent_id, root_id, task, action, observation, visits, value, depth,
             status, created_at
-     FROM search_nodes
+     FROM search_node_scores
      WHERE actor_id = ?
      ORDER BY depth, created_at`,
     actor.actorId,

@@ -46,7 +46,7 @@ function bestUnexpanded(
   sql: SqlExecutor, actor: ActorHandle, rootId: string, maxDepth: number,
 ): SearchNode | null {
   return sql<SearchNode>`
-    SELECT s.* FROM search_nodes s
+    SELECT s.* FROM search_node_scores s
     WHERE s.actor_id = ${actor.actorId} AND s.root_id = ${rootId}
       AND s.status = 'open' AND s.depth < ${maxDepth}
       AND NOT EXISTS (
@@ -61,7 +61,7 @@ function unexpandedRoot(
   sql: SqlExecutor, actor: ActorHandle, rootId: string, maxDepth: number,
 ): SearchNode | null {
   return sql<SearchNode>`
-    SELECT s.* FROM search_nodes s
+    SELECT s.* FROM search_node_scores s
     WHERE s.actor_id = ${actor.actorId} AND s.id = ${rootId}
       AND s.status = 'open' AND s.depth < ${maxDepth}
       AND NOT EXISTS (

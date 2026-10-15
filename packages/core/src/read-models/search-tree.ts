@@ -109,7 +109,7 @@ export function readSearchNodeDetail(
     )
     SELECT n.id, n.parent_id, n.depth, n.visits, n.value, n.status, n.action,
            n.task, n.observation, n.created_at
-    FROM search_nodes n JOIN line ON n.id = line.id WHERE n.actor_id = ${actor.actorId}`;
+    FROM search_node_scores n JOIN line ON n.id = line.id WHERE n.actor_id = ${actor.actorId}`;
 
   const node = lineage.find((row) => row.id === nodeId);
 
@@ -119,7 +119,7 @@ export function readSearchNodeDetail(
   const children = sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,
            task, observation, created_at
-    FROM search_nodes WHERE actor_id = ${actor.actorId} AND parent_id = ${nodeId}
+    FROM search_node_scores WHERE actor_id = ${actor.actorId} AND parent_id = ${nodeId}
     ORDER BY value DESC, visits DESC, created_at`;
 
   return {

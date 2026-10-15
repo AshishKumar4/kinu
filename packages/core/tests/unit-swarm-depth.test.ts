@@ -210,7 +210,7 @@ function tree(): Tree {
       const id = `n${String(minted)}`;
       insertSearchNode(sql, actor, {
         nodeId: id, parentNodeId: parentId, rootId,
-        task: 't', action: '', observation: `answer ${id}`, depth: depthOf(parentId) + 1,
+        action: '', observation: `answer ${id}`, depth: depthOf(parentId) + 1,
       });
 
       if (reward !== null) backpropagate(sql, actor, id, reward);
