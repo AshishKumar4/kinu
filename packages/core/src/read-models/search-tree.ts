@@ -5,7 +5,8 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { NodeStatus, SearchNode } from '../types/mcts';
 
-export type SearchTreeRow = SearchNode & { readonly own_score: number | null };
+/** A node as `search_node_scores` gives it: with its search's task, which is its root's, and its own score. */
+export type SearchTreeRow = Omit<SearchNode, 'task'> & { readonly task: string; readonly own_score: number | null };
 
 export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): SearchTreeRow[] {
   actor.assertCurrent();

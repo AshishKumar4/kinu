@@ -30,7 +30,7 @@ export function selectNode(
   // The parent's visits for children; the root's own visits (floored) for the root.
   const rows = sql<SearchNode>`
     SELECT s.*
-    FROM search_node_scores s
+    FROM search_nodes s
     LEFT JOIN search_nodes p ON p.actor_id = s.actor_id AND s.parent_id = p.id
     WHERE s.actor_id = ${actor.actorId} AND s.root_id = ${rootId}
       AND s.status = 'open' AND s.depth < ${maxDepth}
