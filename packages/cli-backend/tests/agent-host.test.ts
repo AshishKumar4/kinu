@@ -2530,7 +2530,7 @@ function evolutionRows(dbPath: string, actorId: string) {
         'SELECT score, source FROM turn_ratings WHERE actor_id = ? ORDER BY created_at',
       ).all(actorId),
       lessons: db.query<{ source: string; status: string }, [string]>(
-        'SELECT source, status FROM lessons WHERE actor_id = ? ORDER BY created_at',
+        "SELECT source, CASE WHEN corroborated_at IS NULL THEN 'provisional' ELSE 'corroborated' END AS status FROM lessons WHERE actor_id = ? ORDER BY created_at",
       ).all(actorId),
     };
   } finally { db.close(); }

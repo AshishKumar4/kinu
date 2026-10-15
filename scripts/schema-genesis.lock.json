@@ -913,7 +913,6 @@
     "payload_json TEXT NOT NULL",
     "evidence TEXT NOT NULL",
     "source_workspace TEXT NOT NULL",
-    "status TEXT NOT NULL CHECK (status IN ('provisional','corroborated'))",
     "turn_ids TEXT NOT NULL",
     "imported_at INTEGER NOT NULL",
     "corroborated_at INTEGER",
@@ -949,7 +948,6 @@
     "turn_ids TEXT NOT NULL",
     "text TEXT NOT NULL",
     "source TEXT NOT NULL CHECK (source IN (${sqlCheckList(LESSON_SOURCES)}))",
-    "status TEXT NOT NULL CHECK (status IN ('provisional','corroborated'))",
     "created_at INTEGER NOT NULL",
     "corroborated_at INTEGER",
     "PRIMARY KEY (actor_id, id)"

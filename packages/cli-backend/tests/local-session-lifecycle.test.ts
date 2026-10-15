@@ -1518,7 +1518,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     expect(row.turn_id).toBe(firstAssistant.id);
 
     expect(db.query<{ c: number }, []>(
-      `SELECT count(*) AS c FROM lessons WHERE status = 'corroborated'`,
+      `SELECT count(*) AS c FROM lessons WHERE corroborated_at IS NOT NULL`,
     ).get()?.c).toBe(1);
   });
 

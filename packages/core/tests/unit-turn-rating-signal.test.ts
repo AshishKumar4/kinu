@@ -6,6 +6,7 @@
 import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
+import { listLessons } from '../src/evolution/lessons';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { DecisionPort } from '../src/providers/decision-model';
 import { createTestRuntime } from './helpers';
@@ -50,7 +51,7 @@ describe('a turn is judged by the user reply alone', () => {
 
     await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn(), 'No, I said the streaming API. Do it again.');
 
-    expect(rt.storage.sql<{ text: string; status: string }>`SELECT text, status FROM lessons`)
+    expect(listLessons(rt.storage.sql, rt.actor).map(({ text, status }) => ({ text, status })))
       .toEqual([{ text: REFLECTION, status: 'corroborated' }]);
   });
 });
