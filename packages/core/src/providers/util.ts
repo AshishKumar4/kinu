@@ -248,16 +248,21 @@ function readProviderFailure(
   const fields = record.output;
   const status = v.safeParse(StatusFieldSchema, fields);
   const reported = status.success ? status.output.status ?? status.output.statusCode : undefined;
-  const providerCode = nonEmptyString({ value: fields.code }) ?? nonEmptyString({ value: fields.type });
+
+  // Cloudflare's API numbers its codes.
+  const providerCode = nonEmptyString({ value: fields.code }) ?? nonEmptyString({ value: fields.type })
+    ?? (v.is(v.number(), fields.code) ? String(fields.code) : undefined);
 
   const stated = nonEmptyString({ value: fields.message })
     ?? nonEmptyString({ value: fields.error_description })
     ?? nonEmptyString({ value: fields.detail });
 
-  // Gateways stamp code and status on the outer envelope.
-  const nested = stated !== undefined || fields.error === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
+  // Gateways stamp code and status on the outer envelope; Cloudflare's API answers `errors: [{ code, message }]`.
+  const inner = fields.error ?? (Array.isArray(fields.errors) ? fields.errors[0] : undefined);
+
+  const nested = stated !== undefined || inner === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
     ? null
-    : readProviderFailure({ cause: fields.error, depth: depth + 1 });
+    : readProviderFailure({ cause: inner, depth: depth + 1 });
 
   // Name the keys, never the values: the values may leak.
   const named = Object.keys(fields).join(', ') || 'no fields';

@@ -139,6 +139,9 @@ describe('describeProviderError', () => {
       status: 400,
     });
     expect(providerFailureFacts({ cause: '  plain stream text  ' })).toEqual({ message: 'plain stream text' });
+    // core-rest review P1-31: Cloudflare's envelope read as an unrecognised error, though retry classified it.
+    expect(providerFailureFacts({ cause: { success: false, errors: [{ code: 3040, message: 'Capacity temporarily exceeded' }] } }))
+      .toEqual({ message: 'Capacity temporarily exceeded', providerCode: '3040' });
     expect(providerFailureFacts({ cause: undefined }).providerCode).toBeUndefined();
   });
 
