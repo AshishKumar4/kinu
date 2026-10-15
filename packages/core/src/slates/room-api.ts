@@ -66,6 +66,8 @@ export const RoomSourceSchema = v.object({
   service: RoomServiceSchema,
   scope: v.nullable(v.string()),
   label: v.string(),
+  /** The service can say whether this session's person reads the scope directly, with their own connection (`check`). */
+  checkable: v.boolean(),
 });
 
 export type RoomSource = v.InferOutput<typeof RoomSourceSchema>;
@@ -189,6 +191,14 @@ export const RoomAskSchema = v.variant('kind', [
     /** The exact argument the call would send, as text. */
     argument: v.string(),
   }),
+  /** Someone asks the holder to lend a function again, after another person's edit suspended it. */
+  v.object({
+    kind: v.literal('lend'),
+    id: v.string(),
+    from: RoomPersonSchema,
+    fn: v.string(),
+    editor: RoomPersonSchema,
+  }),
   v.object({
     kind: v.literal('outflow'),
     id: v.string(),
@@ -282,7 +292,10 @@ export const RoomCallSchema = v.variant('op', [
   v.object({ op: v.literal('setLendShown'), fn: v.string(), shown: v.picklist(['everyone', 'holder'] as const) }),
   // Anyone's, on a part.
   v.object({ op: v.literal('open'), part: v.string() }),
+  /** Asks the holders of what the part hides to show it; on a waiting part, asks the lend's holder to lend it again. */
   v.object({ op: v.literal('ask'), part: v.string() }),
+  /** Runs the reader check of the part's checkable sources with this person's own connection. */
+  v.object({ op: v.literal('check'), part: v.string() }),
   /** Mints this person's own grant for the part, after they saw what it reaches; also "use it again" after an edit. */
   v.object({ op: v.literal('allow'), part: v.string() }),
   v.object({ op: v.literal('show'), part: v.string(), scope: ShowScopeSchema }),
@@ -290,6 +303,7 @@ export const RoomCallSchema = v.variant('op', [
   // A holder's, on an ask.
   v.object({ op: v.literal('showTo'), ask: v.string() }),
   v.object({ op: v.literal('showToMembers'), ask: v.string() }),
+  /** An effect goes ahead; on a lend ask, the function is lent again at the code as it now stands. */
   v.object({ op: v.literal('approve'), ask: v.string() }),
   v.object({ op: v.literal('send'), ask: v.string() }),
   v.object({ op: v.literal('decline'), ask: v.string() }),
