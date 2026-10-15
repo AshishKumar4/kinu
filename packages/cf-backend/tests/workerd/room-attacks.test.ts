@@ -43,4 +43,6 @@ it('7. a fork holds none of its parent\'s lends: Sam\'s Ops is never called for 
   expect(await probe().attackFork()).toEqual({ forked: 'ok', dana: 'stopped', samDeploysForDana: 0 });
 });
 
-
+it('the team board and the public dashboard: Sam decides twice, and no one who uses it is asked anything', async () => {
+  expect(await probe().scenarioBoard()).toEqual({ alice: 'the board', bob: 'the board', visitor: 'the board', asked: { sam: 0, alice: 0, bob: 0 } });
+});

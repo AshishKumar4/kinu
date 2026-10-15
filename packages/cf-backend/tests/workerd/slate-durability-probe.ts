@@ -573,6 +573,44 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return { alice: saw.includes('the-secret') ? 'her secret' : saw, bobFirst, afterSamShows, afterAliceShows };
   }
 
+  /**
+   * The design's team board and public dashboard (Friction.lean): Sam's own GitHub read, lent and shown to everyone,
+   * two decisions of his; Alice and Bob use it and a visitor with only the link reads it, and no one is asked anything.
+   */
+  async scenarioBoard(): Promise<{ alice: string; bob: string; visitor: string; asked: { sam: number; alice: number; bob: number } }> {
+    const { at, people, room, owner, asOwner } = await this.stage('board');
+
+    await asOwner('prs', ['board']);
+    await owner.call({ op: 'setLend', fn: 'prs', on: true });
+    await owner.call({ op: 'setLendShown', fn: 'prs', shown: 'everyone' });
+    await owner.call({ op: 'setAudience', audience: 'anyone' });
+    const alice = await personSocket(this.env, at, people.alice);
+    const bob = await personSocket(this.env, at, people.bob);
+
+    const read = async (email: string | null): Promise<string> => {
+      const call = room.callAs(email, 'prs', ['board']);
+      // A read Sam had to approve would wait for him: the ask is then what is seen.
+      const asked = await SlateDurabilityProbeRoot.askedOrEnded(owner, (each) => each.asks.length > 0, call);
+
+      if (asked !== null) return `Sam asked: ${asked.asks.map((ask) => ask.kind).join(', ')}`;
+      const answer = SlateDurabilityProbeRoot.said(await call).said;
+
+      return answer.includes('acme') ? 'the board' : answer;
+    };
+
+    const seen = { alice: await read(people.alice), bob: await read(people.bob), visitor: await read(null) };
+
+    const asks = async (socket: PersonSocket): Promise<number> => {
+      const since = socket.mark();
+
+      await socket.call({ op: 'here', where: null, typing: null });
+
+      return (await socket.view(() => true, since)).asks.length;
+    };
+
+    return { ...seen, asked: { sam: await asks(owner), alice: await asks(alice), bob: await asks(bob) } };
+  }
+
   /** Attack 3, the requester check: Alice's own GitHub, allowed for her part, never runs for Bob's request. */
   async attackRequester(): Promise<{ alice: string; bob: string; aliceCallsForBob: number }> {
     const { at, people, room } = await this.stage('requester');

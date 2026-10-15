@@ -801,15 +801,7 @@ export class SlateRoom extends DurableObject<Env> {
         return yield* refuse('missing', 'This part asks nothing of you now');
       }
 
-      const holder = session.email;
-      const { effect, sink } = yield* this.contract(need, holder);
-
-      yield* care(() => {
-        this.caretaker.mint(holder, {
-          personal: true, server: need.server, root: need.root, tools: this.toolsFor(holder, need), fn: need.fn,
-          domain: this.caretaker.contract(need.fn) ?? { kind: 'json', maxBytes: OWN_GRANT_INPUT_BYTES }, effect, sink,
-        });
-      });
+      yield* this.personalGrant(session.email, need);
       this.needs.delete(part);
     });
   }
@@ -849,12 +841,29 @@ export class SlateRoom extends DurableObject<Env> {
     });
   }
 
-  /** The tools a renewed grant keeps: the ones the person already granted that function, and the one it asked for now. */
-  private toolsFor(holder: string, need: Need): string[] {
-    const held = this.caretaker.grants().find((grant) => grant.personal && grant.holder === holder && grant.fn === need.fn
-      && grant.server === need.server);
+  /**
+   * A person's own connection granted to the function that needed it, for their own requests. A grant they held for that
+   * function on that source is renewed with its tools and this one: an effect if any tool is one (by what the tool is,
+   * for an MCP server its own read-only mark), and its sink the widest of theirs.
+   */
+  private personalGrant(holder: string, need: Need): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const root = canonicalRoot(need.root);
 
-    return [...new Set([...held?.tools ?? [], need.tool])];
+      const held = this.caretaker.grants().find((grant) => grant.personal && grant.holder === holder && grant.server === need.server
+        && grant.root === root && grant.fn === need.fn);
+
+      const asked = yield* this.contract(need, holder);
+      const effect = asked.effect || held?.effect === true;
+      const sink: Audience = asked.sink === 'anyone' || held?.sink === 'anyone' ? 'anyone' : [...new Set([...held?.sink ?? [], ...asked.sink])];
+
+      yield* care(() => {
+        this.caretaker.mint(holder, {
+          personal: true, server: need.server, root: need.root, tools: [...new Set([...held?.tools ?? [], need.tool])], fn: need.fn,
+          domain: this.caretaker.contract(need.fn) ?? { kind: 'json', maxBytes: OWN_GRANT_INPUT_BYTES }, effect, sink,
+        });
+      });
+    });
   }
 
   /** The owner's lend of one function: what the owner's own grant for it reaches, for anyone's call. */
@@ -1066,24 +1075,9 @@ export class SlateRoom extends DurableObject<Env> {
         if (!('part' in outcome) || need === undefined || requester === null || tries >= OWN_GRANTS_PER_CALL) return outcome;
 
         if (!this.caretaker.ownCode(requester)) return outcome;
-        yield* care(() => { this.ownGrant(requester, need[1]); });
+        yield* this.personalGrant(requester, need[1]);
         this.needs.delete(need[0]);
       }
-    });
-  }
-
-  /** A personal grant of `holder`'s for what their own code needed, widened by the tool if they held one already. */
-  private ownGrant(holder: string, need: Need): void {
-    const root = canonicalRoot(need.root);
-
-    const held = this.caretaker.grants().find((grant) => grant.personal && grant.holder === holder && grant.server === need.server
-      && grant.root === root && grant.fn === need.fn);
-
-    const impact = slateAddressImpact({ namespace: need.server, member: need.tool });
-
-    this.caretaker.mint(holder, {
-      personal: true, server: need.server, root: need.root, tools: [...new Set([...held?.tools ?? [], need.tool])], fn: need.fn,
-      domain: this.caretaker.contract(need.fn) ?? { kind: 'json', maxBytes: OWN_GRANT_INPUT_BYTES }, effect: impact !== 'observe', sink: impact === 'externalSend' ? 'anyone' : [],
     });
   }
 
