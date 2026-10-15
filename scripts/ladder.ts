@@ -1147,7 +1147,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -2549,6 +2549,32 @@ export const LADDER: readonly Gate[] = [
       + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
     blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
+  },
+  {
+    run: 'bun scripts/upgrade-fixtures.ts',
+    label: 'Upgrade fixtures, on the deployment',
+    ciExempt: 'has nothing to read at CI: its subject is data the previous staging deploy wrote, read by the build that just '
+      + 'went up, as two builtin accounts whose passwords no pull request holds.',
+    phase: 'post-publish',
+    alone: 'runs after the upload and the tables walk, in the wave of the tiers whose subject is the build that just shipped '
+      + '(L18): what it reads is the previous deploy\'s seed, and what it writes is the next one\'s. It acts as two builtin '
+      + 'accounts no other row touches, and as eval-service on a workspace of its own, whose one machine it removes as it '
+      + 'joins, so no first-run case counts it.',
+    tier: 'deploy',
+    secrets: ['KINU_UPGRADE_FIXTURE_PASSWORD', 'KINU_UPGRADE_SENDER_PASSWORD'],
+    // Not yet measured on a deployment: three chat turns, two shares and two joins, each one short.
+    seconds: 90,
+    catches: 'a build that cannot read what the build before it wrote. Every other tier and the evals make each workspace '
+      + 'they read on the build under test, so none of them ever upgrades data: a repair that loses a table\'s rows, a '
+      + 'reshaped table the new code cannot read, a sign-in an account no longer passes, a received share or a joined '
+      + 'machine gone. It checks, on the builtin fixture account, the roster, the chat\'s history, a file\'s bytes, the '
+      + 'share the sender\'s account gave it and the machine joined to its workspace, then makes the eval account a fresh '
+      + 'start and seeds the next deploy\'s fixtures.',
+    blind: 'data no fixture holds: a table the seed never writes, a workspace with years of history, an agent other than '
+      + 'Main, rows that break a constraint only production\'s data breaks. It reads the build before this one on '
+      + 'staging, not production\'s: a release production skips builds of is upgraded once over the gap, which the repair '
+      + 'treats as any other, since it compares each table with this build\'s init and never with the build that made it.',
+    inputs: { kind: 'live', why: 'reads and writes the DEPLOYED staging build\'s fixture accounts, as their own sign-in.' },
   },
   {
     run: 'bash scripts/product-flows-tier.sh',

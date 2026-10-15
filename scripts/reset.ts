@@ -20,7 +20,7 @@
  *                                                     the pre-upload gate, which defers exactly the rows it deleted
  *   bun scripts/reset.ts served <environment>         the build the deployment serves, which a tables plan diffs from
  *   bun scripts/reset.ts stamps <environment>         the classes whose stamp the candidate moves; exit 3 if any
- *   bun scripts/reset.ts census <environment> <out>   every table's rows on every object, for a rehearsal's diff
+ *   bun scripts/reset.ts census <environment> <out>   every table's rows on every object, for a diff
  *   bun scripts/reset.ts tables-plan <environment> <record> [--from <sha>]
  *                                                     before the upload: what each object's repair of the tables
  *                                                     the release changed will do, and what refuses
