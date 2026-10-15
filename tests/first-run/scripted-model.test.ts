@@ -22,6 +22,8 @@ import {
   JOB_STARTED, PARKED_COMMANDS,
 } from '../../scripts/flows-script';
 import { COMPUTER } from '../../packages/core/src/operations/executors';
+import { wakeText } from '../../packages/core/src/jobs/runner';
+import type { BackgroundJob } from '../../packages/core/src/types/jobs';
 import { generateText, streamText } from 'ai';
 import { codemodeNamespace, createOpenAICompatProvider, runSleepTimeCompute, type JsonValue, type LLM } from '@kinu.run/core';
 import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
@@ -402,27 +404,40 @@ describe("the agent-job row's job", () => {
   });
 
   // Staging b11719d71: a fresh workspace's computer took longer to wake than the eval tool waits, so the program was
-  // backgrounded; the row read that as a refusal. The job is started when its wake says the program's value carried one.
-  test('started in the background, it is called started when the wake brings the started job, and not before', async () => {
+  // backgrounded. Staging fcc2e05d6: the wake the product sends names the job and asks for `agent.jobResult`, carrying
+  // no result; the script read a wake of its own invention, so it said the job did not start and the row waited 396 s.
+  test('started in the background, it reads the job its wake names and is called started only from that', async () => {
     const call = { id: 'call_job', type: 'function', function: { name: 'eval', arguments: JSON.stringify({ code: 'return 1;' }) } };
     const handle = { background: true, jobId: 'bgjob-start01', kind: 'eval', message: 'Outran the 30s foreground window; backgrounded.' };
+    const started = JSON.stringify({ processId: 'job-1', restartable: true });
 
-    // The ask's turn, its eval backgrounded, then whatever came after it.
-    const conversation = (...after: JsonObject[]): JsonObject[] => [
+    const job = (status: 'completed' | 'failed', result: string | null): BackgroundJob => ({
+      id: 'bgjob-start01', kind: 'eval', label: null, workMode: 'build', status, result, error: status === 'failed' ? 'the computer did not start' : null,
+      createdAt: 1, settledAt: 2, epoch: 0, resumeAttempts: 0, retriedBy: null, attemptStartedAt: 1, resumeAfter: null, serves: null,
+    });
+
+    // The ask's turn, its eval backgrounded, then the wake the product sends (core jobs/runner.ts).
+    const woken = (wake: BackgroundJob, ...after: JsonObject[]): JsonObject[] => [
       { role: 'user', content: JOB_ASK },
       { role: 'assistant', content: 'Calling eval.', tool_calls: [call] },
       { role: 'tool', tool_call_id: 'call_job', content: JSON.stringify(handle) },
+      { role: 'assistant', content: 'The job is starting in the background as bgjob-start01.' },
+      { role: 'user', content: wakeText(wake) },
       ...after,
     ];
 
-    const woken = async (result: string) => (await reply(conversation(
-      { role: 'assistant', content: 'The job is starting in the background as bgjob-start01.' },
-      { role: 'user', content: `Background eval job bgjob-start01 completed.\n\nResult:\n${result}` },
+    const read = present((await reply(woken(job('completed', started)), ['eval'])).tool_calls?.[0], 'the read of the job');
+    const readCall = { id: 'call_read', type: 'function', function: { name: 'eval', arguments: read.function.arguments } };
+
+    const said = async (row: BackgroundJob) => (await reply(woken(job('completed', started),
+      { role: 'assistant', content: '', tool_calls: [readCall] },
+      { role: 'tool', tool_call_id: 'call_read', content: JSON.stringify({ result: JSON.stringify(row) }) },
     ), ['eval'])).content;
 
-    expect(await reply(conversation(), ['eval']).then((said) => said.content)).not.toBe(JOB_STARTED);
-    expect(await woken(JSON.stringify({ processId: 'job-1', restartable: true }))).toBe(JOB_STARTED);
-    expect(await woken(JSON.stringify({ success: false, reason: 'unavailable', error: 'the computer did not start' }))).not.toBe(JOB_STARTED);
+    expect(v.parse(v.object({ code: v.string() }), JSON.parse(read.function.arguments)).code).toContain("agent.jobResult('bgjob-start01')");
+    expect(await said(job('completed', started))).toBe(JOB_STARTED);
+    expect(await said(job('completed', JSON.stringify({ success: false, reason: 'unavailable', error: 'refused' })))).not.toBe(JOB_STARTED);
+    expect((await reply(woken(job('failed', null)), ['eval'])).content).toContain('did not start');
   });
 });
 
