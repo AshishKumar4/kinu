@@ -149,12 +149,7 @@ const MAX_DELIVERY_ATTEMPTS = 8;
 
 const RETRY_BASE_MS = 5_000;
 
-interface PeerBackHolder {
-  agent_name: string;
-  user_id: string;
-  ask_id: string;
-  mode: WorkMode;
-}
+type PeerBackHolder = v.InferOutput<typeof PeerBackHolderSchema>;
 
 interface OutboundPeerMessage {
   readonly receiverAgent: string;

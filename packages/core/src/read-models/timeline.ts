@@ -67,28 +67,7 @@ function turnUsageDetail(usage: Usage | undefined): string | undefined {
 }
 
 /** Shown by name only; a new event type must be placed here or given a switch arm. */
-type DiagnosisOnlyEvent = Extract<RunEvent, { type:
-  | 'model_call'
-  | 'provider_wait'
-  | 'model_operation'
-  | 'db_op'
-  | 'context_edit'
-  | 'context_budget'
-  | 'file_edit'
-  | 'turn_steering'
-  | 'profile_resolution'
-  | 'completion_gate'
-  | 'craft_cycle'
-  | 'execution_recovery'
-  | 'approval_consumed'
-  | 'execution_escalation'
-  | 'budget_exhausted'
-  | 'stop_requested'
-  | 'context_admitted'
-  | 'context_overflow'
-}>;
-
-const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['type']>([
+const DIAGNOSIS_ONLY_TYPES = [
   'model_call',
   'provider_wait',
   'model_operation',
@@ -107,7 +86,11 @@ const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['t
   'stop_requested',
   'context_admitted',
   'context_overflow',
-]);
+] as const satisfies readonly RunEvent['type'][];
+
+type DiagnosisOnlyEvent = Extract<RunEvent, { type: (typeof DIAGNOSIS_ONLY_TYPES)[number] }>;
+
+const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set(DIAGNOSIS_ONLY_TYPES);
 
 function isDiagnosisOnly(e: RunEvent): e is DiagnosisOnlyEvent {
   return DIAGNOSIS_ONLY_EVENTS.has(e.type);
