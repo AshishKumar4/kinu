@@ -16,7 +16,7 @@ import {
 } from '@kinu.run/core';
 import { RoomCaretaker, initSlateRoomTables, linkKeyHolds, linkUrl, type Access, type RoomMember, type Session } from '@kinu.run/core/slates';
 import { Effect, Result } from 'effect';
-import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, inItsWords, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 
 
 /** Who a request is, as the Worker's route proved it. */
@@ -104,6 +104,14 @@ export class SlateRoom extends DurableObject<Env> {
     }
 
     this.caretaker.create(input);
+  }
+
+  /** A person leaves the slate: their membership ends, and every session they hold on it with it. */
+  leave(email: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* inItsWords('io', Effect.sync(() => { this.caretaker.remove(email, email); }));
+      yield* Effect.promise(async () => this.broadcast());
+    }));
   }
 
   exists(): boolean {

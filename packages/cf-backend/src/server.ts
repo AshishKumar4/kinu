@@ -33,7 +33,6 @@ import { pcRoutes } from "./pc-routes";
 import { opsRoutes } from "./ops-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
-import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
 import {
   crossSiteRejection, sessionGate,
@@ -276,12 +275,6 @@ previewHost.get(`${SLATE_FONTS_PATH}:file`, async (c, next) => {
   const file = appFontFile(c.req.param('file'));
 
   return file === null ? await next() : await c.env.ASSETS.fetch(new Request(new URL(`${APP_FONTS_PATH}${file}`, c.req.url)));
-});
-
-previewHost.use('*', async (c, next) => {
-  const share = await handleSlateShareHostRequest(c.req.raw, c.env);
-
-  return share === null ? await next() : containPreviewResponse(share);
 });
 
 previewHost.use('*', async (c, next) => {

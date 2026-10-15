@@ -26,10 +26,10 @@ export const PAGE_ROWS = {
   home: ['workspace-title', 'agent-chats-persist'],
   welcome: ['account-settings'],
   workspaces: ['workspace-title'],
-  plugins: ['blueprint-fork'],
+  plugins: ['slate-room'],
   devices: ['device-link', 'two-machines'],
   userSettings: ['account-settings'],
-  userMcp: ['blueprint-fork'],
+  userMcp: ['slate-room'],
   workspace: ['snapshot-after-turn', 'approve-clears', 'enter-sends'],
   workspaceAgent: ['agent-tab', 'agent-chats-persist', 'agent-dismissed-chat'],
   workspaceAgentPath: ['agent-nested-chat'],
@@ -39,11 +39,9 @@ export const PAGE_ROWS = {
   drive: ['drive'],
   driveFolder: ['drive'],
   slates: ['slate'],
-  shared: ['blueprint-fork'],
-  sharedBlueprint: ['blueprint-fork'],
-  sharedLive: ['users-share'],
-  liveSlate: ['slate'],
-  liveSlatePart: ['slate'],
+  shared: ['slate-room'],
+  liveSlate: ['slate-room'],
+  liveSlatePart: ['slate-room'],
   gallery: { unreachable: 'the Gallery reads /api/gallery, which the sharing build serves from its step 6; until then no deployed row has a listing to open' },
   gallerySlate: { unreachable: 'a listed slate\'s page reads /api/gallery/:workspace/:slate, served from the same step 6' },
   deploy: ['deploy-door'],
@@ -60,7 +58,7 @@ export const STRIP_ROWS = {
   Agent: ['snapshot-after-turn', 'every-tool'],
   Environment: ['sandbox-mount-write', 'sandbox-exec-output', 'device-link'],
   Activity: ['every-tool', 'codemode-craft'],
-  slate: ['slate', 'public-share', 'share-capability-cut', 'blueprint-fork', 'slate-browser'],
+  slate: ['slate', 'slate-browser'],
   preview: ['preview-address', 'slate'],
 } as const satisfies Record<(typeof SURFACES)[number] | 'Activity' | 'slate' | 'preview', Rows>;
 
@@ -69,7 +67,7 @@ export const ENTRY_ROWS = {
   tui: ['enter-sends'],
   cli: ['workspace-title', 'preview-address', 'command-refusal', 'multi-account'],
   daemon: ['device-link', 'device-join', 'two-machines', 'approve-clears'],
-  shareHost: ['public-share', 'share-capability-cut', 'users-share'],
+  slateHost: ['slate-room'],
 } as const satisfies Record<string, Rows>;
 
 /** What the owner asked a deployed proof of, beyond a page answering. */

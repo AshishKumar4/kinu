@@ -259,9 +259,6 @@ const ORCHESTRATOR_METHODS = [
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',
-  'blueprintBundle',
-  'readBlueprint',
-  'shareBlueprintWith',
   'acceptEmailDelivery',
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',
@@ -314,13 +311,6 @@ const ORCHESTRATOR_METHODS = [
   'callOperation',
   'listOperations',
   'cancelOperation',
-  // Reachable by a DO stub in this Worker, never a browser; none is `@callable`.
-  'routeSlateShare',
-  'readLiveShare',
-  'shareLiveWith',
-  'liveShareBundle',
-  'liveShareUrl',
-  'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',
   'ownsBrowserSession',

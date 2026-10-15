@@ -28,8 +28,8 @@ const read = (path: string): SlateBuildRead => ({ path, missing: false });
 
 const missing = (path: string): SlateBuildRead => ({ path, missing: true });
 
-/** A private caller of another authority, as a share's restricted viewer is. */
-const RESTRICTED: SlateCaller = { path: [], cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 }, workMode: 'build', share: 'share-1' };
+/** A private caller of another authority. */
+const RESTRICTED: SlateCaller = { path: [], cred: { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 }, workMode: 'build' };
 
 /** Slates over one build store; `activation()` is a fresh controller over it, as the next activation's is. */
 function backend() {

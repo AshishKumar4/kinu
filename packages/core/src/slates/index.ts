@@ -21,23 +21,15 @@ export {
   SlateFrameMessageSchema, type SlateHostContext,
 } from './host-context';
 
-export { SlateShareStore, initSlateShareTables, type NewSlateShare, type ShareUser } from './shares';
-
-export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps, type BlueprintReading } from './blueprints';
+export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps } from './blueprints';
 
 export type { DurableAppIdentity, DurableApps } from './durable-app';
 
-export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
-
-export { shareLiveSlate } from './live-sharing';
-
 export { SlateBuilds, initSlateBuildTable, slateImage, type FailingSlateBuild, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from './builds';
 
-export { ROOT_SLATE_CALLER, shareCaller, slateCallerKey, type SlateCaller, type SlateCallerHop } from './caller';
+export { ROOT_SLATE_CALLER, slateCallerKey, type SlateCaller, type SlateCallerHop } from './caller';
 
 export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type SlateProcessPorts, type RunnableSlateSource } from './processes';
-
-export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, type ViewerRun } from './share-viewers';
 
 export { SlateController, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
 

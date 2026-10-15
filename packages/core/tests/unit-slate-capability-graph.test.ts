@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { cutShareGrant, grantAdmits, slateCapabilityGraph, type SlateSurfaceCatalog, type SlateUsage } from '../src/slates/capability-graph';
+import { slateCapabilityGraph, type SlateSurfaceCatalog, type SlateUsage } from '../src/slates/capability-graph';
 
 const used = (...paths: string[]): SlateUsage[] => paths.map((path) => {
   const names = path.split('.');
@@ -66,34 +66,7 @@ test('a namespace naming something absent is a problem row that keeps its member
   expect(() => slateCapabilityGraph({ slate: 'nope', workspace: 'w', catalog, usage: () => [] })).toThrow('No slate named nope');
 });
 
-test('a cut grant is every observing member plus exactly the approved ones that act', () => {
-  const grant = cutShareGrant(graph, []);
-
-  expect(grant.slates).toEqual(['issues', 'digest']);
-  expect(grant.members).toEqual([
-    { slate: 'issues', namespace: 'mcp.github', member: 'read_issue', impact: 'observe' },
-    { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe' },
-    { slate: 'issues', namespace: 'memory', member: 'recall', impact: 'observe' },
-    { slate: 'issues', namespace: 'tasks', member: 'list', impact: 'observe' },
-    { slate: 'issues', namespace: 'web', member: 'search', impact: 'observe' },
-    { slate: 'issues', namespace: 'reads', member: 'getExecutors', impact: 'observe' },
-    { slate: 'issues', namespace: 'slates.digest', member: 'count', impact: 'observe' },
-    { slate: 'digest', namespace: 'workspace', member: 'readFile', impact: 'observe' },
-    { slate: 'digest', namespace: 'slates.issues', member: 'refresh', impact: 'observe' },
-  ]);
-
-  const approved = cutShareGrant(graph, [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }]);
-  expect(approved.members).toEqual([...grant.members, { slate: 'issues', namespace: 'mcp.github', member: 'create_issue', impact: 'externalSend' }]);
-
-  expect(grantAdmits(grant, 'issues', 'workspace', 'readFile')).toEqual({ slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe' });
-  expect(grantAdmits(grant, 'issues', 'workspace', 'writeFile')).toBeNull();
-  expect(grantAdmits(grant, 'digest', 'workspace', 'writeFile')).toBeNull();
-
-  expect(() => cutShareGrant(graph, [{ slate: 'issues', namespace: 'workspace', member: 'readFile' }])).toThrow('is not a member of slate issues that acts');
-  expect(() => cutShareGrant(graph, [{ slate: 'issues', namespace: 'workspace', member: 'remove' }])).toThrow('is not a member of slate issues that acts');
-});
-
-test('helpers an owner\'s slate hired are in its graph, but no share carries them: not even listing them', () => {
+test('helpers an owner\'s slate hired are in its graph', () => {
   const hiring = slateCapabilityGraph({
     slate: 'board', workspace: 'w', catalog: { mcp: [], slates: ['board'] }, usage: () => used('agents.list', 'agents.hire', 'workspace.readFile'),
   });
@@ -101,8 +74,6 @@ test('helpers an owner\'s slate hired are in its graph, but no share carries the
   expect(hiring.namespaces.find((each) => each.namespace === 'agents')?.members.map((member) => [member.member, member.impact])).toEqual([
     ['list', 'observe'], ['hire', 'delegate'],
   ]);
-  expect(cutShareGrant(hiring, []).members).toEqual([{ slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe' }]);
-  expect(() => cutShareGrant(hiring, [{ slate: 'board', namespace: 'agents', member: 'hire' }])).toThrow("agents.hire runs only in its owner's own slate; a share cannot grant it");
 });
 
 test('a dotted slate or server name is walked and looked up whole', () => {
@@ -134,5 +105,4 @@ test("a slate reaches what each operation's catalog entry says, and nothing unde
     ['agent', []],
     ['workspace', []],
   ]);
-  expect(cutShareGrant(notes, []).members).toEqual([{ slate: 'notes', namespace: 'file', member: 'read', impact: 'observe' }]);
 });

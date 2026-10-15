@@ -3,7 +3,6 @@ import type { Refusal } from '../obs/index';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import type { WorkMode } from '../types/turn';
 import { requireWorkModePermission } from '../execution/work-mode';
-import { LiveShareVisibilitySchema } from './live-share-visibility';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
@@ -45,9 +44,7 @@ export type SlateSurfaceResult = SlateAnswer<SlateSurfaceValue>;
 
 const VersionId = v.pipe(v.string(), v.minLength(1));
 
-const ShareId = v.pipe(v.string(), v.minLength(1));
 
-const IncludedPaths = v.array(v.pipe(v.string(), v.check((name) => name !== '' && !name.includes('/') && name !== '.' && name !== '..', 'An included path is one top-level name')));
 
 export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('list') }),
@@ -60,19 +57,7 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('restore'), id: SlateDirectoryName, version: VersionId }),
   // Ends processes, durable application and tree; versions stay.
   v.strictObject({ op: v.literal('remove'), id: SlateDirectoryName }),
-  v.strictObject({ op: v.literal('inspect'), id: SlateDirectoryName, version: VersionId, include: v.optional(IncludedPaths) }),
-  v.strictObject({ op: v.literal('publish'), id: SlateDirectoryName, version: VersionId, include: v.optional(IncludedPaths) }),
-  v.strictObject({ op: v.literal('unshare'), share: ShareId }),
-  v.strictObject({ op: v.literal('shares') }),
   v.strictObject({ op: v.literal('graph'), id: SlateDirectoryName }),
-  v.strictObject({
-    op: v.literal('share'), id: SlateDirectoryName,
-    visibility: LiveShareVisibilitySchema,
-    approved: v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() })),
-    fork: v.optional(v.boolean()),
-  }),
-  v.strictObject({ op: v.literal('liveShares') }),
-  v.strictObject({ op: v.literal('viewerRequests'), share: ShareId }),
   // Keeps an answer's `<slate-ui>` page, addressed as the chat draws it, as a slate with files under its title.
   v.strictObject({ op: v.literal('save'), page: v.pipe(v.string(), v.minLength(1)) }),
 ]);
@@ -85,10 +70,6 @@ type SlateMemberSpec = { readonly on: 'directory' | 'slate'; readonly params: re
 export const SLATE_PROGRAM_MEMBERS = {
   list: { on: 'directory', params: [] },
   fork: { on: 'directory', params: ['version'] },
-  shares: { on: 'directory', params: [] },
-  liveShares: { on: 'directory', params: [] },
-  unshare: { on: 'directory', params: ['share'] },
-  viewerRequests: { on: 'directory', params: ['share'] },
   preview: { on: 'slate', params: [] },
   methods: { on: 'slate', params: [] },
   commit: { on: 'slate', params: [] },
@@ -96,9 +77,6 @@ export const SLATE_PROGRAM_MEMBERS = {
   remove: { on: 'slate', params: [] },
   graph: { on: 'slate', params: [] },
   restore: { on: 'slate', params: ['version'] },
-  inspect: { on: 'slate', params: ['version', 'include'] },
-  publish: { on: 'slate', params: ['version', 'include'] },
-  share: { on: 'slate', params: ['...'] },
   save: { on: 'directory', params: ['page'] },
 } as const satisfies Record<Exclude<SlateOperation['op'], 'call'>, SlateMemberSpec>;
 
@@ -109,10 +87,8 @@ function programMember(operation: SlateOperation): string {
 }
 
 const READ_ONLY_OPERATIONS: Record<SlateOperation['op'], boolean> = {
-  list: true, history: true, inspect: true, shares: true,
-  graph: true, liveShares: true, viewerRequests: true,
-  preview: false, methods: false, call: false, commit: false, fork: false, restore: false, remove: false, publish: false, unshare: false,
-  share: false, save: false,
+  list: true, history: true, graph: true,
+  preview: false, methods: false, call: false, commit: false, fork: false, restore: false, remove: false, save: false,
 };
 
 /** Reads run in Plan; the rest change resources or run authored code, as `methods` does by booting the slate. */
