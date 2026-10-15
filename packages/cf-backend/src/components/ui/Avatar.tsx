@@ -1,7 +1,7 @@
 /** A person by their initial, in a hue of their own that their presence in a shared slate also wears. */
 
 /** A name's own hue, the same wherever that person appears. */
-export function hueOf(name: string): number {
+function hueOf(name: string): number {
   let sum = 0;
 
   for (let at = 0; at < name.length; at += 1) sum += name.charCodeAt(at);

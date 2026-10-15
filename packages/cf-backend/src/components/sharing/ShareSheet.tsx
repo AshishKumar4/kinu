@@ -6,7 +6,7 @@
  *
  * It reads the room's sheet and calls the room; the next view shows each call's effect.
  */
-import { useState, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
 import { Button } from "@cloudflare/kumo";
@@ -111,6 +111,13 @@ function RoleMenu({ role, onRole, onRemove, menu }: { role: RoomRole; onRole: (r
   );
 }
 
+/** A form's submit: acts on its text, trimmed, when there is any. */
+const withText = (text: string, act: (trimmed: string) => void) => (event: FormEvent) => {
+  event.preventDefault();
+
+  if (text.trim() !== "") act(text.trim());
+};
+
 /** The people: an invitation by email with its role, then the owner and each person. */
 function People({ owner, people, send, menu }: { owner: RoomPerson; people: readonly SheetMember[]; send: (call: RoomCall) => void; menu: (key: string) => Menu }) {
   const [email, setEmail] = useState("");
@@ -119,13 +126,10 @@ function People({ owner, people, send, menu }: { owner: RoomPerson; people: read
   return (
     <div className="space-y-2">
       <form className="flex items-center gap-1.5 rounded-lg border p-border bg-[var(--c-input-bg)] py-1 pl-3 pr-1"
-        onSubmit={(event) => {
-          event.preventDefault();
-
-          if (email.trim() === "") return;
-          send({ op: "invite", email: email.trim(), role });
+        onSubmit={withText(email, (trimmed) => {
+          send({ op: "invite", email: trimmed, role });
           setEmail("");
-        }}>
+        })}>
         <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="Add by email" aria-label="Add by email" data-share-invite-email
           className="min-w-0 flex-1 bg-transparent p-row-text p-text outline-none placeholder:text-[var(--c-text-4)]" />
         <RoleMenu role={role} onRole={setRole} menu={menu("invite")} />
@@ -176,13 +180,10 @@ function Gallery({ listing, send }: { listing: SheetView["listing"]; send: (call
       </div>
       {listing !== null && <p className="p-meta p-text-3">{listing.line} · {CATEGORY_WORDS[listing.category]}</p>}
       {listing === null && drafting && (
-        <form className="space-y-2 rounded-lg border p-border p-2.5" onSubmit={(event) => {
-          event.preventDefault();
-
-          if (line.trim() === "") return;
-          send({ op: "list", line: line.trim(), category });
+        <form className="space-y-2 rounded-lg border p-border p-2.5" onSubmit={withText(line, (trimmed) => {
+          send({ op: "list", line: trimmed, category });
           setDrafting(false);
-        }}>
+        })}>
           <input value={line} onChange={(event) => setLine(event.target.value)} placeholder="One line about it" aria-label="One line about it" data-share-gallery-line maxLength={120}
             className="w-full rounded-md border p-border bg-[var(--c-input-bg)] px-2.5 py-1.5 p-row-text p-text outline-none placeholder:text-[var(--c-text-4)]" />
           <div role="radiogroup" aria-label="Category" className="flex flex-wrap gap-1.5">

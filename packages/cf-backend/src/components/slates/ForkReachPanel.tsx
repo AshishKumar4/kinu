@@ -13,7 +13,7 @@ interface ReachConnection {
 }
 
 /** One namespace of a slate's surface, as a person reads what it asks of them. */
-export function reachConnection(namespace: string): ReachConnection {
+function reachConnection(namespace: string): ReachConnection {
   // The head is the first name; the rest, dots and all, is the server or slate it names.
   const [head = "", ...rest] = namespace.split(".");
   const name = rest.join(".");

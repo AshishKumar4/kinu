@@ -479,8 +479,8 @@ function AudienceGlyph({ audience }: { audience: RoomAudience | undefined }) {
   if (audience === undefined || audience === "only-you") return null;
 
   return audience === "anyone"
-    ? <GlobeIcon size={13} className="shrink-0 p-text-4" aria-label="Anyone with the link" />
-    : <UsersIcon size={13} className="shrink-0 p-text-4" aria-label="People you add" />;
+    ? <GlobeIcon size={13} className="shrink-0 p-text-4" aria-label="Anyone with the link" data-drive-audience={audience} />
+    : <UsersIcon size={13} className="shrink-0 p-text-4" aria-label="People you add" data-drive-audience={audience} />;
 }
 
 function whyUnused(refusal: SkillFileRefusal): string {

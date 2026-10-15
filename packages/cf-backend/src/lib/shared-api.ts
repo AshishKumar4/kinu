@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { refusal, request, respond } from './http';
 
 /** One of the owner's slates, and who can open it. */
-export const OwnedSlateSchema = v.object({
+const OwnedSlateSchema = v.object({
   id: v.string(),
   title: v.string(),
   workspace: v.string(),
@@ -25,7 +25,7 @@ export type DriveCard = DriveLibrary['shared'][number];
  * What the Drive shows of sharing: the owner's slates; slates shared with them; slates they used through a link; and
  * Gallery slates they starred. `unseen` marks a slate shared with them since they last opened Shared.
  */
-export const DriveLibrarySchema = v.object({
+const DriveLibrarySchema = v.object({
   slates: v.array(OwnedSlateSchema),
   shared: v.array(v.object({ ...DriveRoomCardSchema.entries, unseen: v.optional(v.literal(true)) })),
   used: v.array(DriveRoomCardSchema),

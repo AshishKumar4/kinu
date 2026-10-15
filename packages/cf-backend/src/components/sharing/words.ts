@@ -1,7 +1,8 @@
 /**
  * The sentences sharing says, built from the facts the room gives (room-api.ts; docs/SLATE-SHARING-SECURITY.md §6):
  * a grant's service, its tools, its scope, whether it acts. One place, so the sheet, a part and an ask say the same
- * thing the same way.
+ * thing the same way. Hosted only, so locked in `capability-parity.lock.json`: rooms live in the cf worker, and the
+ * local CLI has no slate to share.
  */
 import type { RoomPerson, RoomReach, RoomSource, RoomTool } from "@kinu.run/core";
 
@@ -19,7 +20,7 @@ export const firstName = (person: RoomPerson) => {
 const reached = (reach: RoomReach) => (reach.scope === null ? reach.service.title : `${reach.service.title} ${reach.scope}`);
 
 /** A tool's title in the middle of a sentence: "Start deploy job" becomes "start deploy job". */
-export const midSentence = (title: string) => (title.length === 0 ? title : `${title[0]?.toLowerCase() ?? ""}${title.slice(1)}`);
+const midSentence = (title: string) => (title.length === 0 ? title : `${title[0]?.toLowerCase() ?? ""}${title.slice(1)}`);
 
 /** The first tool of a grant that changes something; none for a grant that only reads. */
 const acting = (tools: readonly RoomTool[]) => tools.find((tool) => !tool.readOnly);

@@ -189,9 +189,10 @@ const LIBRARY: DriveLibrary = {
     { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", audience: "people", picture: SLATE_PICTURES.lighthouse },
     { id: "standup", title: "Standup notes", workspace: "email-triage", audience: "only-you" },
   ],
+  // Oldest first, as the account's rows arrive: the Drive shows the newest first.
   shared: [
-    { workspace: "sam-mail", slate: "inbox-digest", title: "Inbox digest", owner: SAM, relation: "shared", role: "use", at: NOW - 2 * 3600e3, unseen: true },
     { workspace: "sam-mail", slate: "deploy-board", title: "Deploy status board", owner: SAM, relation: "shared", role: "edit", at: NOW - 864e5 },
+    { workspace: "sam-mail", slate: "inbox-digest", title: "Inbox digest", owner: SAM, relation: "shared", role: "use", at: NOW - 2 * 3600e3, unseen: true },
   ],
   used: [
     { workspace: "lee-ops", slate: "on-call", title: "On-call rota", owner: { email: "lee@example.com", name: "Lee Park" }, relation: "used", at: NOW - 3 * 864e5 },
@@ -264,8 +265,10 @@ export function installDriveFixture(frame: string): void {
   const held = new URLSearchParams(location.search).get("libraryHold") === "1" ? Promise.withResolvers<void>() : null;
 
   Object.assign(window, { __releaseLibrary: () => held?.resolve() });
-  // Opening Shared sees what it holds, as the account's stamp does.
+  // Opening Shared sees what it holds, as the account's stamp does; leaving takes a slate off it.
   let seen = false;
+  const left = new Set<string>();
+  const kept = <Row extends { workspace: string; slate: string }>(rows: readonly Row[]) => rows.filter((row) => !left.has(`${row.workspace}/${row.slate}`));
 
   window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -274,9 +277,19 @@ export function installDriveFixture(frame: string): void {
     if (path === "/api/drive" || path.startsWith("/api/drive/")) return drive.then((tenant) => serveDrive(tenant, request));
 
     if (path === "/api/shared" && request.method === "GET") {
-      const shared = seen ? fixture.library.shared.map(({ unseen: _, ...row }) => row) : fixture.library.shared;
+      const shared = kept(seen ? fixture.library.shared.map(({ unseen: _, ...row }) => row) : fixture.library.shared);
 
-      return (held?.promise ?? Promise.resolve()).then(() => Response.json({ ...fixture.library, shared }));
+      return (held?.promise ?? Promise.resolve()).then(() => Response.json({ ...fixture.library, shared, used: kept(fixture.library.used) }));
+    }
+
+    if (path === "/api/shared/leave" && request.method === "POST") {
+      return request.json().then((body) => {
+        const room = v.parse(v.object({ workspace: v.string(), slate: v.string() }), body);
+
+        left.add(`${room.workspace}/${room.slate}`);
+
+        return Response.json({ left: true });
+      });
     }
 
     if (path === "/api/shared/seen" && request.method === "POST") {

@@ -270,13 +270,18 @@ describe('the Drive', () => {
     });
   });
 
-  test('a live share of yours shows its slate\'s picture; a blueprint and a share you received keep their covers', async () => {
+  test('a slate tile marks who else can open it', async () => {
     await withGallery(async (gallery) => {
-      const tiles = await drawnPictures(gallery, 'shared', '[data-drive-share]', 'data-drive-share');
+      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
 
-      // Only a live share of yours has a slate of yours to show; the others, two blueprints and a live share someone
-      // gave you, keep their covers.
-      expect(tiles.filter(([, how]) => how === 'picture').map(([id]) => id)).toEqual(['live-board-1']);
+      try {
+        // Only you shows no mark.
+        expect(await page.$$eval('[data-drive-slate]', (tiles) => tiles.map((tile) => [
+          tile.getAttribute('data-drive-slate'), tile.querySelector('[data-drive-audience]')?.getAttribute('data-drive-audience') ?? null,
+        ]))).toEqual([['issue-triage', 'anyone'], ['lighthouse', 'people'], ['standup', null]]);
+      } finally {
+        await page.close();
+      }
     });
   });
 
@@ -657,7 +662,7 @@ describe('the Drive', () => {
     });
   });
 
-  test('a file opens in the viewer, and the Shared tab holds both directions', async () => {
+  test('a file opens in the viewer; Shared holds slates shared with you, used and starred', async () => {
     await withGallery(async (gallery) => {
       const page = await myStuff(gallery, 'dark');
 
@@ -676,22 +681,20 @@ describe('the Drive', () => {
       const shared = await freshPage(gallery, 'shared', 'light', 'desktop');
 
       try {
+        // Newest first, though the account's rows arrive oldest first.
         expect(await sections(shared)).toEqual([
           { title: 'Shared with you', tiles: ['Inbox digest', 'Deploy status board'] },
-          { title: 'Shared by you', tiles: ['Issue triage', 'Issue triage'] },
+          { title: 'Used', tiles: ['On-call rota'] },
+          { title: 'Starred', tiles: ['Recipe scaler'] },
         ]);
         // Opening Shared sees what it holds: back on My stuff, Shared has nothing new.
         await shared.click('[data-drive-place="mine"]');
         await shared.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
         await shared.waitForFunction(() => document.querySelector('[data-drive-place="shared"] [data-drive-unseen]') === null);
         await shared.click('[data-drive-place="shared"]');
-        await shared.waitForSelector('[data-drive-section="Shared by you"]');
+        await shared.waitForSelector('[data-drive-section="Shared with you"]');
 
-        // Newest first, though the owner's rows arrive oldest first.
-        expect(await shared.$$eval('[data-drive-section="Shared by you"] [data-drive-share-kind]',
-          (tiles) => tiles.map((tile) => tile.getAttribute('data-drive-share-kind')))).toEqual(['live', 'blueprint']);
-
-        // Search narrows both sections by title, description or sharer, and says so when nothing matches.
+        // Search narrows every section by title, line or owner, and says so when nothing matches.
         const search = async (text: string): Promise<void> => {
           await shared.click('[data-drive-search]', { count: 3 });
           await shared.keyboard.press('Backspace');
@@ -701,25 +704,33 @@ describe('the Drive', () => {
 
         await search('digest');
         expect(await sections(shared)).toEqual([{ title: 'Shared with you', tiles: ['Inbox digest'] }]);
-        await search('every service');
-        expect(await sections(shared)).toEqual([{ title: 'Shared with you', tiles: ['Deploy status board'] }]);
-        await search('SAM@');
-        expect(await sections(shared)).toEqual([{ title: 'Shared with you', tiles: ['Inbox digest', 'Deploy status board'] }]);
-        await search('triage');
-        expect(await sections(shared)).toEqual([{ title: 'Shared by you', tiles: ['Issue triage', 'Issue triage'] }]);
+        await search('in grams');
+        expect(await sections(shared)).toEqual([{ title: 'Starred', tiles: ['Recipe scaler'] }]);
+        await search('LEE');
+        expect(await sections(shared)).toEqual([{ title: 'Used', tiles: ['On-call rota'] }]);
         await search('nothing like it');
         expect(await sections(shared)).toEqual([]);
         expect(await shared.$eval('[data-drive-no-match]', (element) => element.textContent)).toContain('nothing like it');
         await search('');
-        // Both forks where the sharer allows it; what the owner shared also stops.
-        expect((await menuOf(shared, '[data-drive-share="live-mail-9"]')).map((item) => item.label)).toEqual(['Open', 'Fork…']);
-        expect((await menuOf(shared, '[data-drive-share="live-board-1"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Stop sharing']);
-        await shared.click('[data-drive-share="live-board-1"] [data-drive-stop-sharing]');
-        await shared.waitForSelector('[role="dialog"]');
-        // The confirmation names everyone the share was given to, the two people who lose it.
-        const confirm = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');
 
-        expect(['sam@example.com', 'lee@example.com'].filter((person) => !confirm.includes(person))).toEqual([]);
+        // Each opens live and forks; one shared with you is left, one used is forgotten, a starred one is linked.
+        expect((await menuOf(shared, '[data-drive-room="inbox-digest"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Leave']);
+        await shared.keyboard.press('Escape');
+        expect((await menuOf(shared, '[data-drive-room="on-call"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Remove']);
+        await shared.keyboard.press('Escape');
+        expect((await menuOf(shared, '[data-drive-starred="recipe-scaler"]')).map((item) => item.label)).toEqual(['Open', 'Copy link']);
+        await shared.keyboard.press('Escape');
+        expect(await shared.$eval('[data-drive-room="inbox-digest"] a', (link) => link.getAttribute('href'))).toBe('/s/sam-mail/inbox-digest');
+
+        await menuOf(shared, '[data-drive-room="inbox-digest"]');
+        await shared.click('[data-drive-room="inbox-digest"] [data-drive-leave]');
+        await shared.click('[data-drive-leave-confirm]');
+        await shared.waitForFunction(() => document.querySelector('[data-drive-room="inbox-digest"]') === null);
+        expect(await sections(shared)).toEqual([
+          { title: 'Shared with you', tiles: ['Deploy status board'] },
+          { title: 'Used', tiles: ['On-call rota'] },
+          { title: 'Starred', tiles: ['Recipe scaler'] },
+        ]);
         await shoot(shared, 'drive-shared-light');
       } finally {
         await shared.close();

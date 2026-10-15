@@ -10,7 +10,7 @@ import { renderThrownChain, settle, type KinuError } from "@kinu.run/core/obs";
 import { hostRoomFrames, type RoomDecision, type RoomFrames } from "@/lib/room-bridge";
 
 /** Back to this page after signing in, or after connecting a service. */
-export const returnHere = () => window.location.pathname + window.location.search;
+const returnHere = () => window.location.pathname + window.location.search;
 
 export function signInAndReturn(): void {
   const login = new URL("/login", window.location.origin);
@@ -20,7 +20,7 @@ export function signInAndReturn(): void {
 }
 
 /** Where a person connects a service of their own, and comes back from. */
-export function connectAndReturn(): void {
+function connectAndReturn(): void {
   window.location.assign(`/user/settings/mcp?return_to=${encodeURIComponent(returnHere())}`);
 }
 
@@ -41,8 +41,8 @@ export function useRoomFrames({ view, call, opened = null }: {
     const hosted = hostRoomFrames({
       view: () => latest.current,
       call: (sent) => settle(Effect.match(call(sent), {
-        onSuccess: () => ({ ok: true }) as const,
-        onFailure: (refused) => ({ ok: false, message: renderThrownChain({ cause: refused }) }) as const,
+        onSuccess: () => null,
+        onFailure: (refused) => renderThrownChain({ cause: refused }),
       })),
       decide: setDeciding,
       signIn: signInAndReturn,

@@ -265,22 +265,33 @@ function viewOf(state: RoomState): RoomView {
 /** A part shown once its person allowed, checked or was shown it: what its sealed frame then holds. */
 const opened = (part: PartView): PartView => SEEN.get(part.key) ?? part;
 
+/** The owner's calls on the sheet. */
+const SHEET_OPS = ["setAudience", "invite", "setRole", "remove", "list", "unlist", "setLend", "setLendShown"] as const;
+
+type SheetCall = Extract<RoomCall, { op: (typeof SHEET_OPS)[number] }>;
+
+const isSheetCall = (call: RoomCall): call is SheetCall => SHEET_OPS.some((op) => op === call.op);
+
+function sheetChange(sheet: SheetView, call: SheetCall): Partial<SheetView> {
+  switch (call.op) {
+    case "setAudience": return { audience: call.audience, url: call.audience === "only-you" ? null : SHEET.url };
+    case "invite": return { people: [...sheet.people, { person: { email: call.email, name: null }, role: call.role }] };
+    case "setRole": return { people: sheet.people.map((each) => (each.person.email === call.email ? { ...each, role: call.role } : each)) };
+    case "remove": return { people: sheet.people.filter((each) => each.person.email !== call.email), uses: sheet.uses.filter((use) => use.person.email !== call.email) };
+    case "list": return { listing: { line: call.line, category: call.category } };
+    case "unlist": return { listing: null };
+    case "setLend": return { lends: sheet.lends.map((lend) => (lend.fn === call.fn ? { ...lend, on: call.on, suspendedBy: call.on ? null : lend.suspendedBy } : lend)) };
+    case "setLendShown": return { lends: sheet.lends.map((lend) => (lend.fn === call.fn ? { ...lend, shown: call.shown } : lend)) };
+  }
+}
+
 function applied(view: RoomView, call: RoomCall): RoomView {
+  if (isSheetCall(call)) return view.sheet === null ? view : { ...view, sheet: { ...view.sheet, ...sheetChange(view.sheet, call) } };
+
   const part = "part" in call ? view.parts[call.part] : undefined;
   const withPart = (next: PartView) => ({ ...view, parts: { ...view.parts, [next.key]: next } });
-  const sheet = view.sheet;
-  const withSheet = (next: Partial<SheetView>) => (sheet === null ? view : { ...view, sheet: { ...sheet, ...next } });
-  const without = (ask: string) => ({ ...view, asks: view.asks.filter((each) => each.id !== ask) });
 
   switch (call.op) {
-    case "setAudience": return withSheet({ audience: call.audience, url: call.audience === "only-you" ? null : SHEET.url });
-    case "invite": return withSheet({ people: [...(sheet?.people ?? []), { person: { email: call.email, name: null }, role: call.role }] });
-    case "setRole": return withSheet({ people: (sheet?.people ?? []).map((each) => (each.person.email === call.email ? { ...each, role: call.role } : each)) });
-    case "remove": return withSheet({ people: (sheet?.people ?? []).filter((each) => each.person.email !== call.email), uses: (sheet?.uses ?? []).filter((use) => use.person.email !== call.email) });
-    case "list": return withSheet({ listing: { line: call.line, category: call.category } });
-    case "unlist": return withSheet({ listing: null });
-    case "setLend": return withSheet({ lends: (sheet?.lends ?? []).map((lend) => (lend.fn === call.fn ? { ...lend, on: call.on, suspendedBy: call.on ? null : lend.suspendedBy } : lend)) });
-    case "setLendShown": return withSheet({ lends: (sheet?.lends ?? []).map((lend) => (lend.fn === call.fn ? { ...lend, shown: call.shown } : lend)) });
     case "ask": return part?.state === "placeholder" ? withPart({ ...part, asked: true }) : view;
     case "allow":
     case "check": return part === undefined ? view : withPart(opened(part));
@@ -290,7 +301,7 @@ function applied(view: RoomView, call: RoomCall): RoomView {
     case "showToMembers":
     case "approve":
     case "send":
-    case "decline": return without(call.ask);
+    case "decline": return { ...view, asks: view.asks.filter((each) => each.id !== call.ask) };
     case "open":
     case "here":
     case "leave": return view;
@@ -423,5 +434,3 @@ export function RoomClosedFrame() {
 
   return <Closed {...closed} action={<FilledButton>Go to Kinu</FilledButton>} />;
 }
-
-export const ROOM_STATES = [...STATES.keys()];

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-15",
-  "files": 3331,
-  "functions": 87186,
+  "files": 3351,
+  "functions": 87643,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -175,10 +175,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/ModelPicker.tsx#ModelPicker",
-      "complexity": 28
-    },
-    {
-      "key": "packages/cf-backend/src/components/slates/BlueprintShareForm.tsx#BlueprintShareForm",
       "complexity": 28
     },
     {

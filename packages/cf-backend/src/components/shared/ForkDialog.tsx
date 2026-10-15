@@ -27,7 +27,7 @@ export interface RoomSlate {
 }
 
 /** Where the editor's agent works on the shared slate: its chat, with the slate attached. */
-export const editPath = (workspace: string, room: RoomSlate) =>
+const editPath = (workspace: string, room: RoomSlate) =>
   `/workspace/${encodeURIComponent(workspace)}?edit=${encodeURIComponent(`${room.workspace}/${room.slate}`)}`;
 
 /** Where a fork opens: the workspace it landed in, with the forked slate open. */

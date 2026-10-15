@@ -30,7 +30,7 @@ export function PartFrame({ part }: { part: string }) {
   useEffect(() => {
     if (bridge === null) return;
 
-    detach(Effect.map(Effect.promise(() => bridge.call({ op: "open", part })), (answer) => { if (!answer.ok) setFailure(answer.message); }));
+    detach(Effect.map(Effect.promise(() => bridge.call({ op: "open", part })), (refused) => { if (refused !== null) setFailure(refused); }));
   }, [bridge, part]);
 
   if (outside) return <PartOutsideItsSlate />;
@@ -41,7 +41,7 @@ export function PartFrame({ part }: { part: string }) {
 
   const send = (sent: RoomCall) => {
     setFailure(null);
-    detach(Effect.map(Effect.promise(() => bridge.call(sent)), (answer) => { if (!answer.ok) setFailure(answer.message); }));
+    detach(Effect.map(Effect.promise(() => bridge.call(sent)), (refused) => { if (refused !== null) setFailure(refused); }));
   };
 
   const act = {

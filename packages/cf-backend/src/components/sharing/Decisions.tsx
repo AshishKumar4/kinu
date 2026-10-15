@@ -14,7 +14,7 @@ import { Modal } from "@/components/ui/Modal";
 import { askOf, cannotOf, canOf, firstName, names } from "./words";
 
 /** Choosing whom to show one's own data to; it applies to that part only. */
-export function ShowChoice({ source, members, onShow, onClose }: {
+function ShowChoice({ source, members, onShow, onClose }: {
   source: string;
   /** The people added to the slate, by first name, when the room names them. */
   members: readonly string[] | null;
@@ -51,7 +51,7 @@ export function ShowChoice({ source, members, onShow, onClose }: {
  * Letting a part use this person's own connection, for this slate only, where the part first needs it; again, after
  * someone else changed the part.
  */
-export function GrantAsk({ slate, reach, again, onAllow, onClose }: {
+function GrantAsk({ slate, reach, again, onAllow, onClose }: {
   slate: string;
   reach: RoomReach;
   /** Who changed the part since this person last allowed it; null for a first time. */
@@ -85,7 +85,7 @@ export interface AskWords {
   readonly answers: readonly Answer[];
 }
 
-export function askWords(ask: RoomAsk, slate: string): AskWords {
+function askWords(ask: RoomAsk, slate: string): AskWords {
   switch (ask.kind) {
     case "show": {
       return {

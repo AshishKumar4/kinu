@@ -3,7 +3,8 @@
  * opens every decision itself (security §6: a decision never opens inside a part's frame, which the slate's code could
  * cover). The frame says hello to the top with the app's own origin as the only one allowed to receive it; the live page
  * answers with a port of a channel of its own, and everything after flows over that port. The slate's page between them
- * has another origin, so it neither receives the hello nor holds the port.
+ * has another origin, so it neither receives the hello nor holds the port. Hosted only, so locked in
+ * `capability-parity.lock.json`: the local CLI serves no shared slate.
  */
 import { Effect } from "effect";
 import * as v from "valibot";
@@ -11,7 +12,7 @@ import { detach } from "@kinu.run/core/obs";
 import { RoomCallSchema, RoomViewSchema, type RoomCall, type RoomView } from "@kinu.run/core";
 
 /** What a part's frame may ask the live page to decide, in the live page. */
-export const RoomDecisionSchema = v.object({ kind: v.picklist(["show", "allow"] as const), part: v.string() });
+const RoomDecisionSchema = v.object({ kind: v.picklist(["show", "allow"] as const), part: v.string() });
 
 export type RoomDecision = v.InferOutput<typeof RoomDecisionSchema>;
 
@@ -32,8 +33,7 @@ type Request = v.InferOutput<typeof RequestSchema>;
 /** What the live page sends a frame: the room's view, or a call's answer. */
 const ReplySchema = v.union([
   v.object({ view: v.nullable(RoomViewSchema) }),
-  v.object({ id: v.number(), ok: v.literal(true) }),
-  v.object({ id: v.number(), ok: v.literal(false), message: v.string() }),
+  v.object({ id: v.number(), refused: v.nullable(v.string()) }),
 ]);
 
 type Reply = v.InferOutput<typeof ReplySchema>;
@@ -41,15 +41,12 @@ type Reply = v.InferOutput<typeof ReplySchema>;
 /** What the live page does for its part frames. */
 export interface RoomHost {
   readonly view: () => RoomView | null;
-  /** A call that decides nothing (open, ask, check, unshow): done, or refused in the room's words. Never rejects. */
-  readonly call: (call: RoomCall) => Promise<CallAnswer>;
+  /** A call that decides nothing (open, ask, check, unshow): null when done, else its refusal in the room's words. */
+  readonly call: (call: RoomCall) => Promise<string | null>;
   readonly decide: (decision: RoomDecision) => void;
   readonly signIn: () => void;
   readonly connect: (service: string) => void;
 }
-
-/** A call's answer, as it crosses to the frame. */
-export type CallAnswer = { readonly ok: true } | { readonly ok: false; readonly message: string };
 
 /** The live page's hold on its part frames. */
 export interface RoomFrames {
@@ -70,7 +67,7 @@ export function hostRoomFrames(host: RoomHost): RoomFrames {
 
     switch (request.op) {
       case "call": {
-        detach(Effect.map(Effect.promise(() => host.call(request.call)), (answer) => send({ id: request.id, ...answer })));
+        detach(Effect.map(Effect.promise(() => host.call(request.call)), (refused) => send({ id: request.id, refused })));
         break;
       }
 
@@ -123,8 +120,8 @@ export function hostRoomFrames(host: RoomHost): RoomFrames {
 
 /** A part frame's side of its live page: the room's view as it changes, and the requests a frame may make. */
 export interface RoomBridge {
-  /** Done, or refused in the room's words. Never rejects. */
-  readonly call: (call: RoomCall) => Promise<CallAnswer>;
+  /** Null when done, else its refusal in the room's words. Never rejects. */
+  readonly call: (call: RoomCall) => Promise<string | null>;
   readonly decide: (decision: RoomDecision) => void;
   readonly signIn: () => void;
   readonly connect: (service: string) => void;
@@ -143,7 +140,7 @@ export function connectRoomBridge(onView: (view: RoomView | null) => void, onBri
 
   let port: MessagePort | null = null;
   let next = 0;
-  const waiting = new Map<number, (answer: CallAnswer) => void>();
+  const waiting = new Map<number, (refused: string | null) => void>();
 
   const answered = (event: MessageEvent) => {
     if (event.origin !== window.location.origin || !v.is(HelloSchema, event.data)) return;
@@ -167,14 +164,14 @@ export function connectRoomBridge(onView: (view: RoomView | null) => void, onBri
       const answer = waiting.get(reply.output.id);
 
       waiting.delete(reply.output.id);
-      answer?.(reply.output.ok ? { ok: true } : { ok: false, message: reply.output.message });
+      answer?.(reply.output.refused);
     });
     given.start();
 
     const send = (request: Request) => given.postMessage(request);
 
     onBridge({
-      call: (call) => new Promise<CallAnswer>((resolve) => {
+      call: (call) => new Promise<string | null>((resolve) => {
         const id = next++;
 
         waiting.set(id, resolve);
