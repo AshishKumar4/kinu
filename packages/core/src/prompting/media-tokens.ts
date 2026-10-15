@@ -6,7 +6,7 @@
 import type { FilePart, ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { rasterImage, type RasterImage } from '../utils/raster-image';
-import { CHARS_PER_TOKEN } from '../token-estimate';
+import { estimateTokens } from '../token-estimate';
 import { attachmentBytes } from './attachment-sanitizer';
 import { resolvePromptModelProfile } from './model-profile';
 
@@ -82,7 +82,7 @@ export function messageTokens(spec: string, messages: readonly ModelMessage[]): 
     }
   }
 
-  return Math.ceil(chars / CHARS_PER_TOKEN) + media;
+  return estimateTokens(chars) + media;
 }
 
 type ContentPart = Exclude<ModelMessage['content'], string>[number];

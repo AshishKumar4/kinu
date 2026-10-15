@@ -9,7 +9,7 @@ import { authenticatedSend } from './authenticated-send';
 import type { AuthResolution, ModelProvider, ProviderDeps } from './types';
 import { accountOf } from '../credentials/accounts';
 import { Effect } from 'effect';
-import { diagnostics, KinuError, settle, settleSync, tolerate } from '../obs/index';
+import { diagnostics, KinuError, settle, tolerate } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } from '../utils/json';
 import { xxHash64 } from '../utils/xxhash64';
@@ -71,8 +71,6 @@ const DEAD_LOGIN = 'Your Claude login is no longer valid.';
 const NOT_CONNECTED = "Claude isn't connected for this account.";
 
 /** The retired `claude -p` provider's aliases, which api.anthropic.com does not serve. */
-const RETIRED_CLI_MODELS = new Set(['claude-opus-4-x', 'claude-sonnet-4-x', 'claude-haiku-4-x']);
-
 const BlockSchema = v.looseObject({
   type: v.string(),
   text: v.optional(v.string()),
@@ -510,29 +508,25 @@ export function createClaudeProvider(): ModelProvider {
     unavailableReason() { return NOT_CONNECTED; },
     listModels: (deps) => listAnthropicModels(deps),
     createModel(modelId, deps): LanguageModel {
-      return settleSync(RETIRED_CLI_MODELS.has(modelId)
-        ? Effect.fail(new KinuError('bad_input', `Claude has no model ${modelId}: that name came from the retired claude binary. Pick a Claude model with /model.`))
-        : Effect.sync(() => {
-          const transport = deps.fetch ?? fetch;
+      const transport = deps.fetch ?? fetch;
 
-          const call: ClaudeCall = {
-            deps, modelId, version, sessionId: conversationUuid(`kinu-claude-session:${deps.sessionAffinity}`),
-            authenticated: (context, request, auth) => authenticatedSend({
-              key: CLAUDE_CRED_KEY, auth, getAuth: deps.getAuth,
-              send: (next) => settle(sendAtAcceptedVersion(context, request, next)),
-            }),
-            refusingSpentUsage: (paid) => asFetchFunction((input, init) => settle(Effect.gen(function* () {
-              const response = yield* Effect.promise(() => transport(input, init));
-              const reached = yield* Effect.promise(() => usageLimitReached(call, response, paid));
+      const call: ClaudeCall = {
+        deps, modelId, version, sessionId: conversationUuid(`kinu-claude-session:${deps.sessionAffinity}`),
+        authenticated: (context, request, auth) => authenticatedSend({
+          key: CLAUDE_CRED_KEY, auth, getAuth: deps.getAuth,
+          send: (next) => settle(sendAtAcceptedVersion(context, request, next)),
+        }),
+        refusingSpentUsage: (paid) => asFetchFunction((input, init) => settle(Effect.gen(function* () {
+          const response = yield* Effect.promise(() => transport(input, init));
+          const reached = yield* Effect.promise(() => usageLimitReached(call, response, paid));
 
-              return reached === null ? response : yield* Effect.die(reached);
-            }))),
-          };
+          return reached === null ? response : yield* Effect.die(reached);
+        }))),
+      };
 
-          return lazyModel('anthropic.messages', modelId, async () => (await import('@ai-sdk/anthropic'))
-            .createAnthropic({ apiKey: 'oauth-placeholder', fetch: heardFetch(asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {})))) })
-            .languageModel(modelId));
-        }));
+      return lazyModel('anthropic.messages', modelId, async () => (await import('@ai-sdk/anthropic'))
+        .createAnthropic({ apiKey: 'oauth-placeholder', fetch: heardFetch(asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {})))) })
+        .languageModel(modelId));
     },
   };
 }

@@ -4,6 +4,7 @@
  */
 
 import { timingSafeEqual } from './crypto';
+import { utf8 } from './text';
 
 export interface LabelSignerEnv {
   CREDENTIAL_ENCRYPTION_KEY?: string;
@@ -40,9 +41,6 @@ function base32(bytes: Uint8Array): string {
   return encoded;
 }
 
-function utf8(value: string): Uint8Array<ArrayBuffer> {
-  return new TextEncoder().encode(value);
-}
 
 /** One signer per (salt, info) pair; `length` is the base32 token length (15 chars = 75 bits). */
 export function labelSigner(salt: string, info: string, length = 15): LabelSigner {
