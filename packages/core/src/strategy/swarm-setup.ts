@@ -55,7 +55,8 @@ import { nanoid } from '../utils/nanoid';
 import { insertSearchNode } from '../mcts/record-node';
 import { outcomeFacts, reenterSwarm, type SwarmReentry } from './swarm-resume';
 import type { SwarmProfileSnapshot } from '../profiles';
-import { readArtifact, type TreeNode } from './swarm-tree';
+import { type TreeNode } from './swarm-tree';
+import { originReader } from './merge-back';
 import type { ActorHandle } from '../identity/actor-handle';
 import type {
   ExplorationRecord, MeasuredObjective, ObjectiveIdentity, PublishingCarry,
@@ -691,7 +692,7 @@ export async function createRoot(input: {
   const { actor, sql, reentry, verifier, ctx, resolved, measures, journal, agentNodes } = input;
   const rootId = reentry?.rootId ?? nanoid();
   // Measured now even on re-entry: the stored `observation` predates earlier settles and may hold the task text.
-  const rootArtifact = verifier && ctx ? await readArtifact(ctx, verifier.artifact) : null;
+  const rootArtifact = verifier && ctx ? await originReader(ctx.vfs)(verifier.artifact) : null;
 
   if (!reentry) {
     insertSearchNode(sql, actor, {

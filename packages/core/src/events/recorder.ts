@@ -187,7 +187,7 @@ export interface BoundedRunEventQuery extends RunEventQuery {
 const RUN_EVENT_LIMIT_DEFAULT = 200;
 
 /** `seq` orders two rows written in one millisecond. */
-export interface ContextMeasureRow {
+interface ContextMeasureRow {
   readonly tokens: number;
   readonly at: string;
   readonly seq: number;
@@ -325,8 +325,8 @@ export function holdRunHeads(sql: SqlExecutor): void {
   if (!RUN_HEADS.has(sql)) RUN_HEADS.set(sql, new Map());
 }
 
-/** Later in `ORDER BY ts DESC, rowid DESC`. */
-function newer(candidate: { readonly at: string; readonly seq: number }, held: { readonly at: string; readonly seq: number } | null): boolean {
+/** Whether `candidate` is later than `held` in `ORDER BY ts DESC, rowid DESC`; anything is later than nothing. */
+export function newer(candidate: { readonly at: string; readonly seq: number }, held: { readonly at: string; readonly seq: number } | null): boolean {
   return held === null || candidate.at > held.at || (candidate.at === held.at && candidate.seq > held.seq);
 }
 

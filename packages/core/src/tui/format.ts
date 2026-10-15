@@ -1,4 +1,4 @@
-import { codenameFor } from '../identity/naming';
+import { agentTitle } from '../subordinates/nested-agent';
 import { revealMisrepresenting } from '../safety/untrusted-text';
 import { ELAPSED_COUNTER } from '../tui-presentation';
 
@@ -175,7 +175,7 @@ export function literalText(value: string): string {
   return revealMisrepresenting(value.replace(CONTROL_CHARACTER, visible));
 }
 
-/** Blank label means a pre-codename row: show the codename its slug would get (same rule as web `agentTitle`). */
+/** The web's `agentTitle`, over the terminal's `label`. */
 export function agentDisplayLabel(entry: { name: string; label: string }): string {
-  return entry.label.trim() || codenameFor(entry.name);
+  return agentTitle({ name: entry.name, displayName: entry.label });
 }

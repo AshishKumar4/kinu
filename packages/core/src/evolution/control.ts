@@ -160,16 +160,15 @@ export function getEvolutionStatus(sql: SqlExecutor, actor: ActorHandle): Evolut
   };
 }
 
-export type ScaffoldDecisionResult = Awaited<ReturnType<typeof applyPromotionDecision>> & { readonly fromVersion: number };
+export type ScaffoldDecisionResult = Awaited<ReturnType<typeof applyPromotionDecision>>;
 
 /** The owner's decision on the pending scaffold. The misevolution recheck can still turn a promote into a rollback, so the result reports the action applied. */
 export async function applyScaffoldDecision(control: ScaffoldControl, mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
   const pending = getPendingScaffold(control.sql, control.rt.actor);
 
   if (pending === null) return settle(Effect.fail(new KinuError('missing', 'no pending scaffold')));
-  const result = await applyPromotionDecision(control.rt, pending, mode, control.events);
 
-  return { fromVersion: pending.version - (mode === 'promote' ? 1 : 0), ...result };
+  return await applyPromotionDecision(control.rt, pending, mode, control.events);
 }
 
 /**

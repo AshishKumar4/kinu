@@ -108,6 +108,9 @@ class FakeCloudflare implements CloudflareTransport {
 
   readonly indexes: string[] = [];
 
+  /** Each index's shape, as Vectorize reports it. */
+  readonly indexConfigs = new Map<string, { dimensions: number; metric: string }>();
+
   readonly gateways: string[] = [];
 
   readonly apps: string[] = [];
@@ -286,11 +289,12 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     if (path.endsWith('/vectorize/v2/indexes') && call.method === 'GET') {
-      return this.indexes.map((name) => ({ name }));
+      return this.indexes.map((name) => ({ name, config: this.indexConfigs.get(name) ?? null }));
     }
 
     if (path.endsWith('/vectorize/v2/indexes')) {
       this.indexes.push(bodyText(body, 'name'));
+      this.indexConfigs.set(bodyText(body, 'name'), v.parse(v.object({ dimensions: v.number(), metric: v.string() }), body.config));
 
       return { name: body.name ?? '' };
     }
@@ -671,6 +675,20 @@ describe('a refusal', () => {
     expect(rows.find((row) => row.id === 'kv')?.attempt).toBe(1);
     expect(cloudflare.calls.some((call) => call.path.endsWith('/storage/kv/namespaces') && call.method === 'POST')).toBe(false);
     expect(cloudflare.indexes).toEqual(['kinu-memory']);
+  });
+
+  // core-rest review P1-23: a same-name index of another shape read as ready, and every vector written to it was refused.
+  test('an index of another shape under the release\'s name stops the run there, naming both shapes', async () => {
+    cloudflare.indexes.push('kinu-memory');
+    cloudflare.indexConfigs.set('kinu-memory', { dimensions: 768, metric: 'cosine' });
+
+    const rows = await run();
+    const refused = rows.find((row) => row.id === 'vectorize');
+
+    expect(refused?.state).toBe('failed');
+    expect(refused?.failure?.detail).toContain('768 dimensions');
+    expect(refused?.failure?.detail).toContain('384-dimension');
+    expect(cloudflare.calls.some((call) => call.method === 'POST' && call.path.endsWith('/vectorize/v2/indexes'))).toBe(false);
   });
 
   test('a local failure is reported with no Cloudflare code', async () => {

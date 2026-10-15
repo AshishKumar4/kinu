@@ -3,8 +3,7 @@ import type { LanguageModel } from 'ai';
 import type { ModelProvider } from './types';
 import { createAuthedFetch } from './util';
 import { listModelsDevProviderModels } from './models-dev';
-import { heardFetch } from './middleware/attempt';
-import { lazyModel } from './wire-model';
+import { createWireModel } from './wire-model';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
 
@@ -17,14 +16,7 @@ const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
 const PREFERRED_MODEL_IDS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-pro', 'gpt-5.4-pro', 'gpt-5', 'gpt-5.4-mini'];
 
-export interface OpenAIOptions {
-  /** Responses API (default) vs Chat Completions. */
-  useResponsesAPI?: boolean;
-}
-
-export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
-  const useResponses = opts.useResponsesAPI ?? true;
-
+export function createOpenAIProvider(): ModelProvider {
   return {
     id: 'openai',
     credentialKey: OPENAI_CRED_KEY,
@@ -41,11 +33,8 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
         missingCredentialError: 'OpenAI API key not configured',
       });
 
-      return lazyModel(useResponses ? 'openai.responses' : 'openai.chat', modelId, async () => {
-        const provider = (await import('@ai-sdk/openai')).createOpenAI({ apiKey: 'placeholder', fetch: heardFetch(customFetch) });
-
-        return useResponses ? provider.responses(modelId) : provider.chat(modelId);
-      });
+      // The Responses API, unstored, as every other Responses path speaks it; the SDK reads reasoning from the id.
+      return createWireModel({ name: 'openai', modelId, baseURL: OPENAI_BASE_URL, fetch: customFetch, protocol: 'responses', reasoning: false });
     },
   };
 }

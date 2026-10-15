@@ -6,7 +6,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { ANTHROPIC_VERSION } from './anthropic-count';
-import { warmUsage } from './cache-warming';
+import { normalizeAnthropicUsage } from '../usage';
 import { createAuthedFetch } from './util';
 import { KinuError, settle } from '../obs/index';
 import type { ProviderDeps } from './types';
@@ -50,6 +50,6 @@ export async function warmAnthropicCache(input: {
     const parsed = v.parse(WarmResponseSchema, yield* Effect.promise(() => response.json()));
     const account = callAccountOf({ headers: Object.fromEntries(response.headers) });
 
-    return { usage: parsed.usage === undefined ? {} : warmUsage(parsed.usage), account };
+    return { usage: parsed.usage === undefined ? {} : normalizeAnthropicUsage(parsed.usage), account };
   }));
 }

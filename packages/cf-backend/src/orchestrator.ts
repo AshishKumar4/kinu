@@ -37,7 +37,7 @@ import {
   type LoopOrigin, type NodeHomeHost,
   type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   actorStanding, isSubordinateOrigin,
-  whenActorTakesInput,
+  whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
@@ -5788,7 +5788,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable() async getMemoryContent() {
     // `read` returns null only for an absent file; other VFS failures must throw, since "" would
     // be indistinguishable from an empty MEMORY.md.
-    return await this.rt.memory.read("memory/MEMORY.md") ?? "";
+    return await this.rt.memory.read(MEMORY_PATH) ?? "";
   }
 
   /** The workspace root's read models, held to workspace.read by unit-slate-sources. */

@@ -5,6 +5,8 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import { nowMs } from '../utils/date';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { DEFAULT_CONFIG } from '../config';
+import { isReservedCraftToolName } from './in-episode';
+import { admitCraftedSource } from './source';
 
 interface CraftCandidate {
   name: string;
@@ -46,11 +48,22 @@ async function compilesToCallable(rt: AgentRuntime, code: string): Promise<strin
   return error ?? null;
 }
 
-/** Rejects on misevolution veto or non-callable code before any write; replaces a conflict only on a better score. */
+/**
+ * Rejects a reserved name, source that is not one expression, a misevolution veto or non-callable code before any
+ * write, as `workspace.createTool` admits a tool; replaces a conflict only on a better score.
+ */
 export async function upsertCraftedTool(
   rt: AgentRuntime,
-  candidate: CraftCandidate,
+  extracted: CraftCandidate,
 ): Promise<{ accepted: boolean; vetoReason?: string }> {
+  if (isReservedCraftToolName(extracted.name)) {
+    return { accepted: false, vetoReason: `Tool name "${extracted.name}" is reserved: it collides with a built-in tool or the mcp_ prefix owned by MCP tools` };
+  }
+
+  const admitted = admitCraftedSource(extracted.code, extracted.name);
+
+  if (!admitted.ok) return { accepted: false, vetoReason: `Unusable tool code for "${extracted.name}": ${admitted.error}` };
+  const candidate = { ...extracted, code: admitted.code };
   const misevolution = checkMisevolutionForSurface({ code: candidate.code }, 'craft');
 
   if (!misevolution.ok) {

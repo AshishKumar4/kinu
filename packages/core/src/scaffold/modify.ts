@@ -13,7 +13,7 @@ import { nowMs, today } from '../utils/date';
 import { scaffoldRefusal } from './safety-patterns';
 import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import { parsePathologyTag } from '../evolution/pathology';
-import { getCurrentScaffoldVersion, readScaffoldVersion } from './versions';
+import { getCurrentScaffoldVersion, getPendingScaffold, readScaffoldVersion } from './versions';
 import type { ModifyResult } from '../types/scaffold';
 
 export type { ModifyResult } from '../types/scaffold';
@@ -62,15 +62,12 @@ export async function modifyScaffold(
   }
 
   // Only one pending at a time: a second would overwrite the first pending's version file.
-  const pendingRows = rt.storage.sql<{ version: number }>`
-    SELECT version FROM scaffold_versions
-    WHERE actor_id = ${actorId} AND status = 'pending'
-    ORDER BY version DESC LIMIT 1`;
+  const pending = getPendingScaffold(rt.storage.sql, rt.actor);
 
-  if (pendingRows.length > 0) {
+  if (pending !== null) {
     return {
       ok: false, stage: 3,
-      error: `a scaffold rollout (v${pendingRows[0].version}) is already pending; resolve it before proposing another`,
+      error: `a scaffold rollout (v${pending.version}) is already pending; resolve it before proposing another`,
     };
   }
 

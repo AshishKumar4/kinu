@@ -620,13 +620,25 @@ export function actorScaffoldPath(record: Pick<WorkspaceActor, 'origin' | 'stora
   return `${actorStateRoot(record.storageKey)}/scaffold/agent.js`;
 }
 
-/** Runs `send` only if the owner may message `actorId`: a view-only agent (a swarm's or evolution's) takes no input. */
+/**
+ * Runs `send` only if the owner may message `actorId`: an agent of this workspace, not retired, whose profile takes
+ * input (a swarm's or evolution's is view-only).
+ */
 export function whenActorTakesInput<Result>(sql: SqlExecutor, actorId: string, send: () => Promise<Result>): Promise<Result> {
-  const origin = sql<{ origin: string }>`SELECT origin FROM workspace_actors WHERE actor_id = ${actorId}`[0]?.origin;
+  const row = sql<Pick<StoredActorRow, 'origin' | 'lifetime' | 'retiringAt' | 'deletedAt'>>`
+    SELECT origin, lifetime, retiring_at AS retiringAt, deleted_at AS deletedAt FROM workspace_actors WHERE actor_id = ${actorId}`[0];
 
-  return settle(origin === 'swarm' || origin === 'evolution'
-    ? Effect.fail(new KinuError('denied', 'This agent is view-only: it takes no messages. You can watch it or stop it.'))
-    : Effect.promise(send));
+  return settle(Effect.suspend(() => {
+    if (row === undefined || actorStanding(row) === 'retired') {
+      return Effect.fail(new KinuError('missing', 'This agent is not in the workspace any more: it takes no messages.'));
+    }
+
+    if (!profileOf(row.origin, row.lifetime).input) {
+      return Effect.fail(new KinuError('denied', 'This agent is view-only: it takes no messages. You can watch it or stop it.'));
+    }
+
+    return Effect.promise(send);
+  }));
 }
 
 /** Local database access is already owner-authorized. This read never registers an actor. */

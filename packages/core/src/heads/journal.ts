@@ -6,6 +6,7 @@
 
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
+import { boundedInt } from '../utils/bounds';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -318,7 +319,7 @@ export class HeadJournal {
   readStepsPage(headId: HeadId, request: PageRequest = {}): Page<HeadStep> {
     return settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
-      const limit = Math.max(1, Math.min(HeadJournal.STEP_PAGE.max, Math.floor(request.limit ?? HeadJournal.STEP_PAGE.limit)));
+      const limit = boundedInt(request.limit, HeadJournal.STEP_PAGE.limit, 1, HeadJournal.STEP_PAGE.max);
       const over = limit + 1;
       const after = request.cursor?.after ?? null;
       const from = after === null ? null : yield* this.stepAnchor(headId, after);

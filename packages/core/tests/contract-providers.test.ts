@@ -66,6 +66,19 @@ describe('OpenAI provider contract', () => {
     expect(mock.requests[0].headers['authorization']).toBe('Bearer sk-test-key');
   });
 
+  // core-rest review P1-29: direct OpenAI built its own client and missed the stateless middleware every other
+  // Responses path gets, so its requests asked OpenAI to store them.
+  test('asks OpenAI not to store the request, as every Responses path does', async () => {
+    const mock = createMockFetch([
+      { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
+    ]);
+
+    const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } } }, mock.fetch);
+    await call(createOpenAIProvider().createModel('gpt-5.5', deps));
+
+    expect(v.parse(v.looseObject({ store: v.boolean() }), JSON.parse(String(mock.requests[0].body))).store).toBe(false);
+  });
+
   test('short-circuits 401 when no credential stored', async () => {
     const mock = createMockFetch([
       { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },

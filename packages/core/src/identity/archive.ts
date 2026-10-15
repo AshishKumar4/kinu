@@ -9,7 +9,6 @@ import * as v from 'valibot';
 import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import type { AgentDatabase } from './inline-primitives';
 import type { SqlExec } from '../types/primitives';
 import type { JsonPrimitive } from '../utils/json';
 import { SCHEMA_GENESIS } from './schema-genesis';
@@ -22,12 +21,6 @@ import { isTreeRelativePath, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspac
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 
-type NativeArchiveDatabaseValue = ArchiveDatabaseValue | Uint8Array;
-
-interface NativeArchiveDatabaseRow {
-  [column: string]: NativeArchiveDatabaseValue;
-}
-
 const ArchiveDatabaseValueSchema: v.GenericSchema<ArchiveDatabaseValue> = v.union([
   v.string(), v.number(), v.boolean(), v.null(), v.instance(ArrayBuffer),
 ]);
@@ -39,27 +32,6 @@ function bytesAsArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   copy.set(bytes);
 
   return copy.buffer;
-}
-
-function canonicalDatabaseValue(value: NativeArchiveDatabaseValue): ArchiveDatabaseValue {
-  return value instanceof Uint8Array ? bytesAsArrayBuffer(value) : value;
-}
-
-/** `SqlExec` over a local `AgentDatabase`; statements run eagerly. */
-export function archiveSqlFromDatabase(db: AgentDatabase): SqlExec {
-  return {
-    exec(query, ...bindings) {
-      // Canonical BLOBs are ArrayBuffers; bun:sqlite binds TypedArrays only.
-      const bound = bindings.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding));
-      const rows = db.query<NativeArchiveDatabaseRow>(query).all(...bound);
-
-      return {
-        toArray: () => rows.map((row) => Object.fromEntries(
-          Object.entries(row).map(([column, value]) => [column, canonicalDatabaseValue(value)]),
-        )),
-      };
-    },
-  };
 }
 
 /** Bumped only when a reader would misread an older archive. */

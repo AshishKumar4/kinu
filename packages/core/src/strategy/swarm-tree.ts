@@ -1,7 +1,5 @@
 import { Cause, Effect } from 'effect';
-import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Tree mechanics shared by expansion, fan-in and scoring; orchestration lives in `swarm-run.ts`. */
-import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
 import type { Usage } from '../usage';
 import { toKinuError, type KinuError } from '../obs/error';
@@ -15,7 +13,7 @@ import type {
   SwarmPreset,
 } from './swarm';
 import {
-  dominatesPareto, type Measurement, type MeasurementContext, type ParetoAxis,
+  dominatesPareto, type Measurement, type ParetoAxis,
   type ParetoEvidence,
 } from './objective';
 
@@ -164,14 +162,6 @@ export function selectParetoFrontierNode(
     otherIndex !== index && dominatesPareto(axes, other.evidence, candidate.evidence)));
 
   return front[0]?.node ?? null;
-}
-
-/** Absence is checked, not caught: other read failures are a broken instrument. */
-export async function readArtifact(ctx: MeasurementContext, path: string): Promise<string | null> {
-  if (!await exists(ctx.vfs, path)) return null;
-  const text = v.safeParse(v.string(), await readText(ctx.vfs, path));
-
-  return text.success ? text.output : null;
 }
 
 /** Root-first, inclusive. Cycle-guarded. */

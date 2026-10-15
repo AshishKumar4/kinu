@@ -1,5 +1,7 @@
 /** Model-written SVG is untrusted: rebuilt from an allowlist, shown only as an image. */
 
+import { decodeEntities, XML_ENTITIES } from '../utils/text';
+
 const WORKSPACE_LOGO_MAX_BYTES = 8_192;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -59,20 +61,6 @@ const escapeAttribute = (value: string): string => value.replace(/&/g, '&amp;').
 
 const escapeText = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-const XML_ENTITIES = new Map([['amp', '&'], ['lt', '<'], ['gt', '>'], ['quot', '"'], ['apos', "'"]]);
-
-function decodeEntities(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, code: string) => {
-    const lowered = code.toLowerCase();
-    const named = XML_ENTITIES.get(lowered);
-
-    if (named !== undefined) return named;
-
-    const point = lowered.startsWith('#x') ? Number.parseInt(lowered.slice(2), 16) : Number.parseInt(lowered.slice(1), 10);
-
-    return Number.isFinite(point) && point > 0 && point < 0x110000 ? String.fromCodePoint(point) : '';
-  });
-}
 
 function keptAttributes(element: string, source: string): string | null {
   // First wins: XML refuses a redefinition.
@@ -80,7 +68,7 @@ function keptAttributes(element: string, source: string): string | null {
 
   for (const match of source.matchAll(/([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
     const name = (match[1] ?? '').toLowerCase();
-    const value = decodeEntities(match[2] ?? match[3] ?? match[4] ?? '');
+    const value = decodeEntities(match[2] ?? match[3] ?? match[4] ?? '', XML_ENTITIES);
 
     if (!ATTRIBUTES.has(name) || unsafeValue(value)) continue;
 
@@ -116,7 +104,7 @@ class Rebuilt {
 
     // Judged whole: a tag inside could split `url(` past the check.
     if (parent.name === 'style' && (unsafeValue(text) || !(this.out.at(-1) ?? '').startsWith('<style'))) return;
-    this.out.push(escapeText(decodeEntities(text)));
+    this.out.push(escapeText(decodeEntities(text, XML_ENTITIES)));
   }
 
   close(name: string): boolean {
@@ -164,7 +152,7 @@ export function sanitizeWorkspaceLogoSvg(written: string): string | null {
     .replace(/<!--[\s\S]*?(?:-->|$)/g, '')
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (_, inner: string) => escapeText(inner))
     .replace(/<[?!][^>]*>/g, '')
-    .replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (whole, open: string, sheet: string, close: string) => (sheet.includes('<') || unsafeValue(decodeEntities(sheet)) ? `${open}${close}` : whole));
+    .replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (whole, open: string, sheet: string, close: string) => (sheet.includes('<') || unsafeValue(decodeEntities(sheet, XML_ENTITIES)) ? `${open}${close}` : whole));
 
   const rebuilt = new Rebuilt();
 

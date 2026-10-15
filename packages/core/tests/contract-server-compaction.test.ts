@@ -257,8 +257,8 @@ describe('OpenAI server-side compaction', () => {
     const stored = decodeModelMessageValues(encodeModelMessageValues(done.responseMessages));
     const next = await openaiTurn('gpt-5.5', [{ role: 'user', content: 'rename the parser' }, ...stored, { role: 'user', content: 'and the tests' }]);
 
-    // The direct route leaves `store` on, so the API holds the item and the next request names it.
-    expect(JSON.stringify(body(next.mock).input)).toContain(JSON.stringify({ type: 'item_reference', id: 'cmp_1' }));
+    // Unstored, as every Responses route is, so the next request carries the item whole rather than naming it.
+    expect(JSON.stringify(body(next.mock).input)).toContain(JSON.stringify({ type: 'compaction', id: 'cmp_1', encrypted_content: ENCRYPTED }));
   });
 
   test('what follows the item is priced for the model: a small screenshot of heavy bytes asks for no compaction', async () => {

@@ -3,6 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   evidenceWindow,
 } from '../src/index';
+import { digestJsonValue } from '../src/utils/json';
 import { renderReflectionPrompt } from '../src/evolution/gepa/mutate';
 import type { GepaCandidate } from '../src/evolution/gepa/types';
 import { rateTurn } from '../src/evolution/ratings';
@@ -31,6 +32,19 @@ describe('evidenceWindow', () => {
     const windowed = evidenceWindow(text, 100);
     expect(windowed.startsWith('OPENING')).toBe(true);
     expect(windowed.endsWith('CLOSING')).toBe(true);
+  });
+
+  // core-rest review P1-26: a cut through an astral character left a lone surrogate in the evidence and the digest.
+  test('no cut splits a character, and the count names exactly what was cut', () => {
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    const text = '\u{1F600}'.repeat(200);
+    const windowed = evidenceWindow(text, 101);
+    const [head = '', tail = ''] = windowed.split(/\n\[\.\.\. \d+ chars omitted from the middle \.\.\.\]\n/u);
+
+    expect(loneSurrogate.test(windowed)).toBe(false);
+    expect(windowed).toContain(`[... ${String(text.length - head.length - tail.length)} chars omitted`);
+    const digest = digestJsonValue({ value: `a${'\u{1F600}'.repeat(500)}` });
+    expect(typeof digest === 'string' && digest.endsWith('...') && !loneSurrogate.test(digest)).toBe(true);
   });
 });
 
