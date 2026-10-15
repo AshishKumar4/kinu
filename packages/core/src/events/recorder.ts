@@ -167,9 +167,19 @@ function stampRunEvent(input: RunEventInput, runId: string): UnindexedEvent {
   return { ...input, ...base };
 }
 
-/** The single place a persisted event becomes typed; readers must not re-declare event shapes. */
-export function parseStoredRunEvent(payload: string): RunEvent {
-  return v.parse(RunEventSchema, JSON.parse(payload));
+/** A stored event's row: the envelope in its indexed columns, the body alone in `payload`. */
+export interface StoredRunEventRow {
+  readonly run_id: string;
+  readonly event_index: number;
+  readonly type: string;
+  readonly ts: string;
+  readonly payload: string;
+}
+
+/** The single place a persisted event becomes typed; readers must not re-declare event shapes. The envelope is the row's
+ *  own columns, over any copy an older row's body still holds. */
+export function parseStoredRunEvent(row: StoredRunEventRow): RunEvent {
+  return v.parse(RunEventSchema, { ...JSON.parse(row.payload), runId: row.run_id, eventIndex: row.event_index, type: row.type, timestamp: row.ts });
 }
 
 export interface RunEventQuery {
@@ -462,9 +472,11 @@ export class RunEventRecorder {
       // Counted before it writes: a statement that throws may still have written.
       if (this.head !== null) this.head.unpublished += 1;
 
+      // The envelope is stored once, in its columns; the payload is the body.
+      const { runId: _runId, type: _type, timestamp: _timestamp, ...body } = ev;
+
       return this.sql<{ event_index: number; seq: number }>`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
-        SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type},
-          json_set(${JSON.stringify(ev)}, '$.eventIndex', COALESCE(MAX(event_index), -1) + 1), ${ev.timestamp}
+        SELECT ${this.actorId}, ${ev.runId}, COALESCE(MAX(event_index), -1) + 1, ${ev.type}, ${JSON.stringify(body)}, ${ev.timestamp}
         FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${ev.runId}
         RETURNING event_index, rowid AS seq`[0];
     }), (stored) => {
@@ -488,15 +500,19 @@ export class RunEventRecorder {
     // catalog ships all of it (89 KB) to every page.
     const pageBytes = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
 
+    // The wire's event carries its envelope, set over the stored body.
     const rows = this.sql<{ event_index: number; type: string; payload: string }>`
       SELECT event_index, type, payload FROM (
         SELECT event_index, type, payload, size, SUM(size) OVER (ORDER BY event_index) AS running FROM (
-          SELECT event_index, type, payload, length(CAST(payload AS BLOB)) AS size
-          FROM run_events
-          WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${opts.since}
-            AND (${types} IS NULL OR type IN (SELECT value FROM json_each(${types})))
-          ORDER BY event_index ASC
-          LIMIT ${opts.limit}
+          SELECT event_index, type, payload, length(CAST(payload AS BLOB)) AS size FROM (
+            SELECT event_index, type,
+              json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload
+            FROM run_events
+            WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${opts.since}
+              AND (${types} IS NULL OR type IN (SELECT value FROM json_each(${types})))
+            ORDER BY event_index ASC
+            LIMIT ${opts.limit}
+          )
         )
       )
       WHERE running <= ${pageBytes} OR running = size
@@ -513,14 +529,14 @@ export class RunEventRecorder {
     const since = boundedInt(opts.since, 0, 0, Number.MAX_SAFE_INTEGER);
     const types = opts.types !== undefined && opts.types.length > 0 ? JSON.stringify(opts.types) : null;
 
-    const rows = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
+    const rows = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${since}
         AND (${types} IS NULL OR type IN (SELECT value FROM json_each(${types})))
       ORDER BY event_index ASC
       LIMIT ${limit}`;
 
-    return rows.map((row) => parseStoredRunEvent(row.payload));
+    return rows.map((row) => parseStoredRunEvent(row));
   }
 
   /**
@@ -531,13 +547,13 @@ export class RunEventRecorder {
   runForHeadSplit(rootId: string, window = 500): string | null {
     this.actor.assertCurrent();
 
-    const rows = this.sql<{ run_id: string; payload: string }>`
-      SELECT run_id, payload FROM run_events
+    const rows = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = 'head_split'
       ORDER BY ts DESC LIMIT ${window}`;
 
     for (const row of rows) {
-      const ev = parseStoredRunEvent(row.payload);
+      const ev = parseStoredRunEvent(row);
 
       if (ev.type === 'head_split' && ev.rootId === rootId) return row.run_id;
     }
@@ -575,12 +591,12 @@ export class RunEventRecorder {
   unterminatedModelOperations(window = 500): Array<Extract<RunEvent, { type: 'model_operation' }>> {
     this.actor.assertCurrent();
 
-    const rows = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
+    const rows = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = ${'model_operation' satisfies RunEventType}
       ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
 
-    const events = rows.map((row) => parseStoredRunEvent(row.payload))
+    const events = rows.map((row) => parseStoredRunEvent(row))
       .flatMap((event) => event.type === 'model_operation' ? [event] : []);
 
     const ended = new Set(
@@ -602,12 +618,12 @@ export class RunEventRecorder {
 
       if (runId === undefined) return null;
 
-      const [end] = this.sql<{ payload: string }>`
-        SELECT payload FROM run_events
+      const [end] = this.sql<StoredRunEventRow>`
+        SELECT run_id, event_index, type, ts, payload FROM run_events
         WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_end'}
         ORDER BY event_index DESC LIMIT 1`;
 
-      const sealed = end === undefined ? null : parseStoredRunEvent(end.payload);
+      const sealed = end === undefined ? null : parseStoredRunEvent(end);
 
       return { runId, status: sealed?.type === 'run_end' ? sealed.reason ?? null : null };
     });
@@ -641,14 +657,14 @@ export class RunEventRecorder {
   stepFinish(runId: string, stepIndex: number): Extract<RunEvent, { type: 'step_finish' }> | null {
     this.actor.assertCurrent();
 
-    const row = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
+    const row = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = 'step_finish'
         AND json_extract(payload, '$.stepIndex') = ${stepIndex}
       ORDER BY event_index DESC LIMIT 1`[0];
 
     if (row === undefined) return null;
-    const event = parseStoredRunEvent(row.payload);
+    const event = parseStoredRunEvent(row);
 
     return event.type === 'step_finish' ? event : null;
   }
@@ -656,13 +672,13 @@ export class RunEventRecorder {
   finishedSteps(runId: string): { readonly parts: readonly MessagePartReference[]; readonly usage: Usage | undefined }[] {
     this.actor.assertCurrent();
 
-    const rows = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
+    const rows = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType}
       ORDER BY event_index ASC`;
 
     return rows.flatMap((r) => {
-      const event = parseStoredRunEvent(r.payload);
+      const event = parseStoredRunEvent(r);
 
       return event.type === 'step_finish' ? [{ parts: event.parts, usage: event.usage }] : [];
     });
@@ -681,13 +697,13 @@ export class RunEventRecorder {
   finishedStepAfter(runId: string, after: number): { readonly at: number; readonly parts: readonly MessagePartReference[] } | null {
     this.actor.assertCurrent();
 
-    const row = this.sql<{ event_index: number; payload: string }>`
-      SELECT event_index, payload FROM run_events
+    const row = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType} AND event_index > ${after}
       ORDER BY event_index ASC LIMIT 1`[0];
 
     if (row === undefined) return null;
-    const event = parseStoredRunEvent(row.payload);
+    const event = parseStoredRunEvent(row);
 
     return { at: row.event_index, parts: event.type === 'step_finish' ? event.parts : [] };
   }
@@ -704,11 +720,11 @@ export class RunEventRecorder {
   endReason(runId: string): string | null {
     this.actor.assertCurrent();
 
-    const row = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_end' satisfies RunEventType} LIMIT 1`[0];
+    const row = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_end' satisfies RunEventType} LIMIT 1`[0];
 
     if (row === undefined) return null;
-    const end = parseStoredRunEvent(row.payload);
+    const end = parseStoredRunEvent(row);
 
     return end.type === 'run_end' ? end.reason ?? null : null;
   }
@@ -725,14 +741,14 @@ export class RunEventRecorder {
 
     if (runId === null) return null;
 
-    const row = this.sql<{ run_id: string; payload: string }>`
-      SELECT run_id, payload FROM run_events
+    const row = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'run_start' satisfies RunEventType}
       ORDER BY event_index LIMIT 1`[0];
 
     if (row === undefined) return settleSync(Effect.fail(new KinuError('io', `run ${runId} is recorded open with no start`)));
     // An unparseable start row propagates.
-    const start = parseStoredRunEvent(row.payload);
+    const start = parseStoredRunEvent(row);
 
     if (start.type !== 'run_start') return settleSync(Effect.fail(new KinuError('io', `run ${row.run_id} is recorded open with no start`)));
 
@@ -753,13 +769,13 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
     const capped = boundedInt(limit, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
 
-    const rows = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
+    const rows = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = ${type}
       ORDER BY ts DESC, rowid DESC
       LIMIT ${capped}`;
 
-    return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
+    return rows.map((r) => parseStoredRunEvent(r)).reverse();
   }
 
   /** The window this actor's last too-long refusal on `model` measured, or null. */
@@ -809,12 +825,12 @@ export class RunEventRecorder {
   newestMeasuredStep(): Extract<RunEvent, { type: 'step_finish' }> | null {
     this.actor.assertCurrent();
 
-    const row = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
+    const row = this.sql<StoredRunEventRow>`
+      SELECT run_id, event_index, type, ts, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
       ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
 
-    const step = row === undefined ? null : parseStoredRunEvent(row.payload);
+    const step = row === undefined ? null : parseStoredRunEvent(row);
 
     return step?.type === 'step_finish' ? step : null;
   }

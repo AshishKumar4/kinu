@@ -1325,7 +1325,7 @@ export {
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
-  type StoredRunEvent,
+  type StoredRunEvent, type StoredRunEventRow,
   type ContextMeasures,
 } from './events/index';
 

@@ -69,6 +69,20 @@ describe('RunEventRecorder.emit', () => {
     expect(rows[0].type).toBe('run_start');
     expect(rows[1].type).toBe('error');
   });
+
+  // schema audit: the payload repeated the row's run, index, type and time; the wire still carries them.
+  test('stores the envelope once, in its columns, and the wire event still carries it', () => {
+    const { recorder, sql, actor } = setup();
+    const emitted = recorder.emit('run-1', { type: 'error', message: 'x' });
+
+    const [stored] = sql<{ payload: string; ts: string }>`
+      SELECT payload, ts FROM run_events WHERE actor_id = ${actor.actorId} AND run_id = 'run-1'`;
+
+    expect(JSON.parse(present(stored, 'the stored event').payload)).toEqual({ message: 'x' });
+    expect(JSON.parse(present(recorder.readText('run-1', boundRunEventQuery({}))[0], 'the wire event').payload))
+      .toEqual({ message: 'x', runId: 'run-1', eventIndex: emitted.eventIndex, type: 'error', timestamp: stored?.ts });
+    expect(recorder.read('run-1')).toEqual([emitted]);
+  });
 });
 
 describe('a tool result round-trips as the value the tool returned', () => {
