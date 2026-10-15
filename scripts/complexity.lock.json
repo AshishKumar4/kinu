@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-15",
   "files": 3325,
-  "functions": 86871,
+  "functions": 86862,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -54,10 +54,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
-      "complexity": 36
-    },
-    {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
       "complexity": 36
     },
@@ -68,6 +64,10 @@
     {
       "key": "scripts/infra-manifest.ts#draftsFor",
       "complexity": 35
+    },
+    {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
+      "complexity": 34
     },
     {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",

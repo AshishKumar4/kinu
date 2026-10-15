@@ -53,7 +53,6 @@ const DDL = [
      note          TEXT    NOT NULL,
      route         TEXT    NOT NULL,
      workspace     TEXT,
-     object_key    TEXT,
      bytes         INTEGER
    )`,
   `CREATE INDEX IF NOT EXISTS cp_feedback_created ON cp_feedback (created_at DESC, id)`,
@@ -575,7 +574,6 @@ const FeedbackSqlRowSchema = v.object({
   note: v.string(),
   route: v.string(),
   workspace: v.nullable(v.string()),
-  object_key: v.nullable(v.string()),
   bytes: v.nullable(v.number()),
 });
 
@@ -583,16 +581,16 @@ type FeedbackSqlRow = v.InferOutput<typeof FeedbackSqlRowSchema>;
 
 export interface FeedbackWritten { id: string }
 
-/** Screenshot bytes live elsewhere; the row carries only `objectKey`. */
+/** Screenshot bytes live elsewhere; the row carries only their size. */
 export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): FeedbackWritten {
   sql.exec(`INSERT INTO cp_feedback
-       (id, created_at, user_id, email, note, route, workspace, object_key, bytes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (id, created_at, user_id, email, note, route, workspace, bytes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`,
     row.id, row.createdAt, row.userId, row.email,
     clampText(row.note, FEEDBACK_MAX_NOTE_CHARS),
     clampText(row.route, FEEDBACK_MAX_ROUTE_CHARS),
-    row.workspace, row.objectKey, row.bytes);
+    row.workspace, row.bytes);
 
   return { id: row.id };
 }
@@ -600,7 +598,7 @@ export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): Feedb
 export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlFeedbackRow> {
   return settleSync(seekNewest(sql, request, {
     schema: FeedbackSqlRowSchema,
-    columns: 'id, created_at, user_id, email, note, route, workspace, object_key, bytes',
+    columns: 'id, created_at, user_id, email, note, route, workspace, bytes',
     from: 'cp_feedback',
     at: 'created_at',
     id: 'id',
@@ -618,7 +616,6 @@ function projectFeedback(row: FeedbackSqlRow): ControlFeedbackRow {
     note: row.note,
     route: row.route,
     workspace: row.workspace,
-    objectKey: row.object_key,
     bytes: row.bytes,
   };
 }

@@ -43,7 +43,7 @@ describe('a trial\'s slot', () => {
 
 test('a trial account may hold its provider keys and its own bookkeeping, and nothing else', () => {
   expect(inheritedRows({
-    user_credentials: 2, user_credential_revisions: 2, user_credentials_revision: 1, user_profile: 1, user_schema_meta: 1,
+    user_credentials: 2, user_credential_revisions: 2, user_credentials_revision: 1, user_profile: 1,
     experience_library: 3, user_mcp_servers: 1, user_config: 0,
   })).toEqual({ experience_library: 3, user_mcp_servers: 1 });
 });

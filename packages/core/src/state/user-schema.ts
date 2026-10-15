@@ -24,7 +24,6 @@ export const WORKSPACE_KEYED_ROWS = [
   { table: 'workspace_capability_tokens', column: 'workspace_name', removal: 'capability' },
   { table: 'device_inflight_requests', column: 'workspace', removal: { kept: 'the device protocol removes a row once the daemon acknowledges its end' } },
   { table: 'experience_library', column: 'source_workspace', removal: { kept: "provenance: the owner's library outlives the workspace it came from" } },
-  { table: 'user_peer_grants', column: 'sender_agent_name', removal: { kept: "another user's workspace" } },
   { table: 'user_share_cards', column: 'workspace', removal: { kept: "another owner's workspace" } },
   { table: 'share_cards_sent', column: 'workspace', removal: { kept: "the teardown's share-card reconcile removes each row once its recipient's removal is queued" } },
 ] as const satisfies readonly WorkspaceKeyedRows[];
@@ -38,12 +37,6 @@ export interface WorkspaceKeyedRows {
 export function initUserTables(sql: SqlExec): void {
   // The account's memory: its facts in the same `agent_facts` a workspace's world model uses (memory/account.ts).
   initAccountMemoryTables((ddl) => { sql.exec(ddl); });
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_schema_meta (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `);
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_profile (
       id           INTEGER PRIMARY KEY CHECK (id = 1),
@@ -91,16 +84,6 @@ export function initUserTables(sql: SqlExec): void {
 
   initWorkspaceCapabilityTables(sql);
 
-  // Cross-owner peer-messaging grants; default deny, same-owner peers need no row.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_peer_grants (
-      sender_user_id    TEXT NOT NULL,
-      sender_agent_name TEXT NOT NULL,
-      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      PRIMARY KEY (sender_user_id, sender_agent_name)
-    )
-  `);
-
   // Value is a JSON-encoded Credential union.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_credentials (
@@ -131,8 +114,7 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_credentials_revision (
       id        INTEGER PRIMARY KEY CHECK (id = 1),
-      revision  INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      revision  INTEGER NOT NULL
     )
   `);
 
@@ -359,12 +341,14 @@ export function initUserTables(sql: SqlExec): void {
 
   initExperienceLibraryTables(sql);
 
-  // `activity` and `decisions` repeat the JSON's, which goes last so a count never reads it.
+  // The pushed overview is the one source; `activity` and `decisions` are stored derivations of it, read by the roster's
+  // counts, and the JSON goes last so a count never reads it.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_overviews (
       name       TEXT PRIMARY KEY,
-      activity   TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle')),
-      decisions  INTEGER NOT NULL,
+      activity   TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED
+                   CHECK (activity IN ('working', 'unfinished', 'idle')),
+      decisions  INTEGER GENERATED ALWAYS AS (json_extract(overview, '$.decisionsWaiting')) STORED NOT NULL,
       overview   TEXT NOT NULL
     )
   `);
@@ -373,8 +357,7 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_logos (
       name     TEXT PRIMARY KEY,
-      svg      TEXT NOT NULL,
-      drawn_at INTEGER NOT NULL
+      svg      TEXT NOT NULL
     )
   `);
 

@@ -76,9 +76,8 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
     selfAgentName: () => deps.self.name,
     selfUserId: () => groupId,
     deliver: (peer, msg) => deps.deliver(peer, msg),
+    // Cross-group mail is refused: the group is the workspace identity.
     isSameOwner: async (senderGroupId) => senderGroupId === groupId,
-    // Cross-group mail has no grant path: the group is the workspace identity.
-    hasGrant: async () => false,
     scheduleDispatch: async (at) => deps.scheduleDispatch(at),
     onAdmitted: () => deps.onAdmitted(),
     // No `now`: time enters only through `dispatch(now)`, keeping one injectable clock.

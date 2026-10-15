@@ -272,10 +272,6 @@ export class UserDO extends Agent<Env> {
     return this.workspaces.hasWorkspace(caller, name);
   }
 
-  hasPeerGrant(caller: UserCaller, senderAgentName: string, senderUserId: string): Promise<boolean> {
-    return this.workspaces.hasPeerGrant(caller, senderAgentName, senderUserId);
-  }
-
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]> {
     return this.credentials.listCredentials(caller);
   }

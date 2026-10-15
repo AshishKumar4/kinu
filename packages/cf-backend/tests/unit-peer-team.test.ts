@@ -12,8 +12,6 @@ import {
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { createMemoryVfs, createTestActorsOver, filesIn, type MemoryVfs, present } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
-import { makeEnv, orchestratorHarness } from './helpers/actor-harness';
-import { jsrpcStub } from './helpers/jsrpc-stub';
 
 function makeExec(db: Database): SqlExec {
   return sqlExec(db);
@@ -33,7 +31,6 @@ interface TestAgent {
   /** scheduleDispatch timestamps: the DO alarm arms. */
   retries: number[];
   /** Cross-owner senders this agent's owner has granted: `${userId}:${agent}`. */
-  grants: Set<string>;
   /** Receiver DO unreachable (RPC throws). */
   online: boolean;
   /** Null uses the wall clock; a number pins it so a backoff curve reads as an exact instant. */
@@ -92,11 +89,6 @@ function makeNetwork() {
         return peer.hub.receive(msg);
       },
       isSameOwner: async (uid) => uid === userId,
-      hasGrant: async (senderAgent, senderUserId) => {
-        if (!agent) throw new Error('agent network fixture not initialized');
-
-        return agent.grants.has(`${senderUserId}:${senderAgent}`);
-      },
       scheduleDispatch: async (at) => {
         if (!agent) throw new Error('agent network fixture not initialized');
         agent.retries.push(at);
@@ -114,7 +106,7 @@ function makeNetwork() {
 
     agent = {
       name, userId, sql, log, replyChannels, vfs, hub,
-      wakes: 0, retries: [], grants: new Set(), online: true, clock: null,
+      wakes: 0, retries: [], online: true, clock: null,
     };
     dispatchers.peer_back = { dispatch: (ch, p) => agent.hub.dispatchPeerBack(ch, p) };
     network.set(name, agent);
@@ -238,37 +230,17 @@ describe('trust-grant enforcement (cross-owner)', () => {
       agent: 'alice', userId: userA, topic: 'probe', message: 'let me in',
     });
 
-    expect(result).toEqual({ status: 'rejected', reason: 'no grant from receiver for cross-owner sender' });
+    expect(result).toEqual({ status: 'rejected', reason: 'a workspace admits peers of its own owner only' });
     expect(pendingPeerEvents(alice)).toHaveLength(0);
     expect(alice.wakes).toBe(0);
     expect(outboxRows(mallory)[0].state).toBe('dlq');
-  });
-
-  test('a cross-owner ask completes on a ONE-directional grant — the answer is implicitly accepted', async () => {
-    const { addAgent } = makeNetwork();
-    const alice = addAgent('alice', userA);
-    const carol = addAgent('carol', userB);
-    alice.grants.add(`${userB}:carol`);   // alice accepts carol; carol grants nothing
-
-    const askPromise = carol.hub.ask({ mode: 'build',
-      agent: 'alice', userId: userA, topic: 'question', message: 'What is your uptime?',
-    });
-
-    await until(() => pendingPeerEvents(alice).length === 1, 'the cross-owner ask delivery');
-    const events = pendingPeerEvents(alice);
-    expect(events).toHaveLength(1);
-    await alice.hub.reply({ eventId: events[0].id, message: '99.99%' });
-
-    // Without reply-to-my-ask correlation this would dead-letter on carol's side (no grant for alice).
-    expect(await askPromise).toEqual({ status: 'replied', from: 'alice', reply: '99.99%' });
-    expect(outboxRows(alice).map((r) => r.state)).toEqual(['sent']);
   });
 
   test('an uncorrelated cross-owner "reply" envelope is still rejected (no forged replies)', async () => {
     const { addAgent } = makeNetwork();
     const alice = addAgent('alice', userA);
 
-    // A forged reply with a guessed id must hit the default-deny grant path.
+    // A forged reply with a guessed id is still cross-owner, so it is refused.
     const result = await alice.hub.receive({ mode: 'build',
       sender_event_id: 'forged-1',
       sender_agent_name: 'mallory',
@@ -277,24 +249,8 @@ describe('trust-grant enforcement (cross-owner)', () => {
       body: { in_reply_to: 'no-such-ask', content: 'gotcha' },
     });
 
-    expect(result).toEqual({ admitted: false, reason: 'no grant from receiver for cross-owner sender' });
+    expect(result).toEqual({ admitted: false, reason: 'a workspace admits peers of its own owner only' });
     expect(pendingPeerEvents(alice)).toHaveLength(0);
-  });
-
-  test('a granted cross-owner sender is admitted at external trust / background priority', async () => {
-    const { addAgent } = makeNetwork();
-    const alice = addAgent('alice', userA);
-    const carol = addAgent('carol', userB);
-    alice.grants.add(`${userB}:carol`);
-
-    const result = await carol.hub.send({ mode: 'build', agent: 'alice', userId: userA, topic: 'hello', message: 'hi from another owner' });
-    expect(result).toMatchObject({ status: 'delivered' });
-
-    const events = pendingPeerEvents(alice);
-    expect(events).toHaveLength(1);
-    expect(events[0].trust).toBe('external');
-    expect(events[0].priority).toBe('background');
-    expect(alice.wakes).toBe(1);
   });
 });
 
@@ -553,26 +509,5 @@ describe('oversize peer bodies stay reachable', () => {
 
     expect(pendingPeerEvents(alice)).toHaveLength(0);
     expect(await filesIn(alice.vfs)).toEqual([]);
-  });
-});
-
-describe('the workspace object as the receiver', () => {
-  test('a grant lookup that fails is not a refusal: the delivery rejects, so the sender retries', async () => {
-    const lookupFailure = new Error('the owner object reset mid-call');
-    const env = makeEnv();
-
-    Object.assign(env, {
-      UserDO: {
-        idFromName: (name: string) => ({ toString: () => name }),
-        get: () => jsrpcStub({ hasPeerGrant: async (): Promise<boolean> => { throw lookupFailure; } }),
-      },
-    });
-
-    const { agent } = orchestratorHarness(undefined, undefined, env);
-
-    await expect(agent.receivePeerMessage({
-      mode: 'build', sender_event_id: 'out-1', sender_agent_name: 'carol', sender_user_id: 'b'.repeat(32),
-      topic: 'hello', body: 'hi from another owner',
-    })).rejects.toBe(lookupFailure);
   });
 });

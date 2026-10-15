@@ -38,7 +38,7 @@ export function recordFeedback<Id>(
         doing: 'storing a feedback submission in the control plane',
         cause,
         otherwise: 'unavailable',
-      }), { feedbackId: row.id, hasScreenshot: row.objectKey !== null });
+      }), { feedbackId: row.id, hasScreenshot: row.bytes !== null });
 
       return { error: renderThrownChain({ cause }) };
     }));

@@ -5,8 +5,7 @@
     "origin_json TEXT NOT NULL",
     "delivery TEXT UNIQUE",
     "status TEXT NOT NULL DEFAULT 'pending'",
-    "created_at INTEGER NOT NULL",
-    "decided_at INTEGER"
+    "created_at INTEGER NOT NULL"
   ],
   "account_notes@packages/core/src/memory/account.ts": [
     "id TEXT PRIMARY KEY",
@@ -359,8 +358,7 @@
     "credential_id TEXT PRIMARY KEY",
     "user_id TEXT NOT NULL",
     "public_key TEXT NOT NULL",
-    "counter INTEGER NOT NULL",
-    "transports TEXT NOT NULL"
+    "counter INTEGER NOT NULL"
   ],
   "cache_warm@packages/core/src/providers/cache-warming.ts": [
     "actor_id TEXT PRIMARY KEY",
@@ -546,7 +544,6 @@
     "note TEXT NOT NULL",
     "route TEXT NOT NULL",
     "workspace TEXT",
-    "object_key TEXT",
     "bytes INTEGER"
   ],
   "cp_users@packages/core/src/control-plane/store.ts": [
@@ -1160,7 +1157,6 @@
   "sandbox_lifecycle_incidents@packages/cf-backend/src/sandbox-lifecycle.ts": [
     "incident_id TEXT PRIMARY KEY",
     "first_seen_at INTEGER NOT NULL",
-    "announced_at INTEGER",
     "outcome TEXT"
   ],
   "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
@@ -1507,8 +1503,7 @@
   ],
   "user_credentials_revision@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "revision INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "revision INTEGER NOT NULL"
   ],
   "user_credentials@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
@@ -1573,12 +1568,6 @@
     "allowed_tools TEXT",
     "preset_id TEXT"
   ],
-  "user_peer_grants@packages/core/src/state/user-schema.ts": [
-    "sender_user_id TEXT NOT NULL",
-    "sender_agent_name TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "PRIMARY KEY (sender_user_id, sender_agent_name)"
-  ],
   "user_profile@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "email TEXT NOT NULL",
@@ -1586,10 +1575,6 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "onboarded_at INTEGER"
-  ],
-  "user_schema_meta@packages/core/src/state/user-schema.ts": [
-    "key TEXT PRIMARY KEY",
-    "value TEXT NOT NULL"
   ],
   "user_share_cards@packages/core/src/state/user-schema.ts": [
     "owner_user_id TEXT NOT NULL",
@@ -1672,8 +1657,7 @@
   ],
   "workspace_logos@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "svg TEXT NOT NULL",
-    "drawn_at INTEGER NOT NULL"
+    "svg TEXT NOT NULL"
   ],
   "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
@@ -1682,8 +1666,8 @@
   ],
   "workspace_overviews@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
-    "decisions INTEGER NOT NULL",
+    "activity TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED CHECK (activity IN ('working', 'unfinished', 'idle'))",
+    "decisions INTEGER GENERATED ALWAYS AS (json_extract(overview, '$.decisionsWaiting')) STORED NOT NULL",
     "overview TEXT NOT NULL"
   ],
   "workspace_proposals@packages/core/src/safety/workspace-proposals.ts": [

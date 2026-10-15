@@ -317,7 +317,6 @@ function handleFeedbackSubmission(
       route,
       // The authority's answer, never the submitted string.
       workspace: attribution?.workspace ?? null,
-      objectKey: screenshot?.key ?? null,
       bytes: screenshot?.bytes.length ?? null,
     };
 

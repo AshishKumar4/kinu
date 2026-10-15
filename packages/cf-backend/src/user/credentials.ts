@@ -314,11 +314,7 @@ export class UserCredentials {
   }
 
   bumpCredentialsRevision(): void {
-    this.host.sqlx(
-      `INSERT INTO user_credentials_revision (id, revision, updated_at) VALUES (1, 1, ?)
-       ON CONFLICT(id) DO UPDATE SET revision = revision + 1, updated_at = excluded.updated_at`,
-      Date.now(),
-    );
+    this.host.sqlx(`INSERT INTO user_credentials_revision (id, revision) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET revision = revision + 1`);
   }
 
   /**

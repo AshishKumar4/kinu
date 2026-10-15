@@ -40,7 +40,7 @@ export function parseEvalAccount(name: string): EvalAccount | null {
  */
 const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
   'user_credentials', 'user_credential_revisions', 'user_credentials_revision',
-  'user_schema_meta', 'user_profile', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
+  'user_profile', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
 ]);
 
 /** A positive catalog CAS version proves its sole stored configuration row. It routes the trial's models; every
