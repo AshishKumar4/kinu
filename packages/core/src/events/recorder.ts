@@ -261,6 +261,13 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
     PRIMARY KEY (actor_id, run_id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_open_turns_opened ON open_turns(actor_id, opened_at DESC)`);
+  // Kept by the ledger's own append, in its statement: a turn's start and its open row commit together or not at all.
+  // An index for "a start with no end", which SQLite cannot index; deriving it probes every closed run per activation.
+  execRaw(`CREATE TRIGGER IF NOT EXISTS run_events_open_turn AFTER INSERT ON run_events
+    WHEN NEW.type = 'run_start' AND json_valid(NEW.payload) AND json_extract(NEW.payload, '$.turn') IS NOT NULL
+    BEGIN INSERT INTO open_turns (actor_id, run_id, opened_at) VALUES (NEW.actor_id, NEW.run_id, NEW.ts); END`);
+  execRaw(`CREATE TRIGGER IF NOT EXISTS run_events_close_turn AFTER INSERT ON run_events WHEN NEW.type = 'run_end'
+    BEGIN DELETE FROM open_turns WHERE actor_id = NEW.actor_id AND run_id = NEW.run_id; END`);
   // A person's newest words stay one read however much automation follows: their run's start is stamped `operator`.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_operator ON run_events(actor_id)
     WHERE type = 'run_start' AND json_valid(payload) AND json_extract(payload, '$.turn.metadata.kinuAuthor') = 'operator'`);
@@ -440,12 +447,6 @@ export class RunEventRecorder {
    */
   emitDeferred(runId: string, input: RunEventInput): DeferredRunEvent {
     return settleSync(Effect.map(this.persist(stampRunEvent(input, runId)), ({ event, seq }) => {
-      if (event.type === 'run_start' && event.turn !== undefined) {
-        void this.sql`INSERT INTO open_turns (actor_id, run_id, opened_at) VALUES (${this.actorId}, ${runId}, ${event.timestamp})`;
-      }
-
-      if (event.type === 'run_end') void this.sql`DELETE FROM open_turns WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
-
       return {
         event,
         publish: () => {

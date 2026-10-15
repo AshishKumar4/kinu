@@ -789,6 +789,21 @@ describe('RunEventRecorder.openTurn — the continuation ledger', () => {
     expect(() => recorder.openTurn()).toThrow();
   });
 
+  // Main, 2026-10-15: the open row was a second autocommitted statement after the append, so the two could disagree.
+  test('a turn opens and closes in the ledger append\'s own statement', () => {
+    const { recorder, sql, actor } = setup();
+    const at = new Date().toISOString();
+    const start = JSON.stringify({ agentId: 'a', turn });
+
+    expect(sql`INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
+        VALUES (${actor.actorId}, ${'run-raw'}, ${0}, ${'run_start'}, ${at}, ${start})`).toEqual([]);
+    expect(recorder.openTurn()?.runId).toBe('run-raw');
+
+    expect(sql`INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
+        VALUES (${actor.actorId}, ${'run-raw'}, ${1}, ${'run_end'}, ${at}, ${'{}'})`).toEqual([]);
+    expect(recorder.openTurn()).toBeNull();
+  });
+
   test('a side lane opened after a turn does not hide the open turn', () => {
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn });
