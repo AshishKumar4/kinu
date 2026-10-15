@@ -293,6 +293,8 @@ export const DECLARED = byFile([
       'the terminal routes\' HTTP JSON bodies'],
     ['packages/cf-backend/src/user/routes.ts', ['body'],
       'the user routes\' HTTP JSON bodies, read by the browser'],
+    ['packages/cf-backend/src/user/account-api.ts', ['body'],
+      'the account routes\' HTTP JSON bodies, read by the browser and the CLI\'s fetch alike'],
     ['packages/cf-backend/src/user/devices.ts', ['renameDevice', 'verifyDeviceToken', 'issueDeviceConnectTicket', 'verifyDeviceConnectTicket', 'setDeviceTier', 'revokeDeviceConsent', 'acknowledgeUnstoppedDevice', 'sweepAndRevokeDevice'],
       'UserDO device and ticket verdicts read across the isolate'],
     ['packages/cf-backend/src/user/drive.ts', ['DriveAnswer', 'driveOp', 'drive_writeChunk'],

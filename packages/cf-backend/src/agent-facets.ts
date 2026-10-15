@@ -4,10 +4,10 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
-import type { AgentOwnInspection, ArchiveSqlCursor, CacheWarmArm, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import type { CacheWarmArm, ContextEditor, ContextTree, ConversationRecall, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, TurnRequestAt, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, diagnostics, KinuError, relayedLine, settle, toKinuError } from '@kinu.run/core/obs';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -197,27 +197,20 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   logActivity(lines: readonly AgentTurnActivity[]) { return this.open(() => this.answers.logActivity(lines)); }
 }
 
-/** One agent's own stores, in its isolate (D9). */
-export class AgentStoreBroker {
-  constructor(private readonly calls: () => Promise<AgentFacetCalls>, private readonly snapshot: () => AgentSnapshot) {}
+/** A call into one agent's isolate, bound to the agent's snapshot. */
+export type AgentCall = <A>(call: (isolate: AgentFacetCalls, snapshot: AgentSnapshot) => Promise<A>) => Promise<A>;
 
-  async history(limit?: number) { return await (await this.calls()).history(this.snapshot(), limit); }
-  async historyPage(page: PositionPageRequest) { return await (await this.calls()).historyPage(this.snapshot(), page); }
-  async messageCount() { return await (await this.calls()).messageCount(this.snapshot()); }
-  async admitted(id: string) { return await (await this.calls()).admitted(this.snapshot(), id); }
-  async inspect(request: AgentOwnInspection) { return await (await this.calls()).inspect(this.snapshot(), request); }
-  async inheritedContext() { return await (await this.calls()).inheritedContext(this.snapshot()); }
-  async workingContext() { return decodeModelMessageValues(await (await this.calls()).workingContext(this.snapshot())); }
-  async turnRequests(turnId: string) { return await (await this.calls()).turnRequests(this.snapshot(), turnId); }
-  async turnRequest(at: TurnRequestAt) { return await (await this.calls()).turnRequest(this.snapshot(), at); }
-  async archivePage(cursor: ArchiveSqlCursor | null, maxBytes: number) { return await (await this.calls()).archivePage(this.snapshot(), cursor, maxBytes); }
-  async spend(steps: readonly StepSpendSource[]) { return await (await this.calls()).spend(this.snapshot(), steps); }
+/** One agent's own stores, in its isolate (D9), as core's ports read them. */
+export class AgentStoreBroker {
+  constructor(private readonly call: AgentCall) {}
+
+  async workingContext() { return decodeModelMessageValues(await this.call((isolate, snapshot) => isolate.workingContext(snapshot))); }
 
   /** Each call opens the agent's served tree and lets it go once answered: one left open kept the agent's isolate, and
    *  its workspace with it, from hibernating (#69's rule; a Files listing of /context, cmp-kinu-ux4, 2026-10-13). */
   contextTree(editor: ContextEditor): ContextTree {
     return remoteContextTree(async (call) => {
-      const served = await (await this.calls()).context(this.snapshot(), editor);
+      const served = await this.call((isolate, snapshot) => isolate.context(snapshot, editor));
 
       try {
         return await call(served);
@@ -229,23 +222,23 @@ export class AgentStoreBroker {
 
   conversations(): ConversationRecall {
     return {
-      search: async (query, limit) => await (await this.calls()).searchConversations(this.snapshot(), query, limit),
-      scroll: async (around, window, maxChars) => await (await this.calls()).scrollConversation(this.snapshot(), around, window, maxChars),
-      browse: async (limit) => await (await this.calls()).browseConversations(this.snapshot(), limit),
+      search: (query, limit) => this.call((isolate, snapshot) => isolate.searchConversations(snapshot, query, limit)),
+      scroll: (around, window, maxChars) => this.call((isolate, snapshot) => isolate.scrollConversation(snapshot, around, window, maxChars)),
+      browse: (limit) => this.call((isolate, snapshot) => isolate.browseConversations(snapshot, limit)),
     };
   }
 
   /** Its conversation as a fork of its workspace reads it: a section's rows are pulled from its isolate as the fork's
    *  frames go out. */
   forkSource(): ForkConversationSource {
-    const { calls, snapshot } = this;
+    const { call } = this;
 
     return {
-      has: async (messageId) => await (await calls()).forkHas(snapshot(), messageId),
-      plan: async (untilMessageId, artifactDirectory) => await (await calls()).forkPlan(snapshot(), untilMessageId, artifactDirectory),
-      count: async (kind, plan, artifactDirectory) => await (await calls()).forkCount(snapshot(), kind, plan, artifactDirectory),
+      has: (messageId) => call((isolate, snapshot) => isolate.forkHas(snapshot, messageId)),
+      plan: (untilMessageId, artifactDirectory) => call((isolate, snapshot) => isolate.forkPlan(snapshot, untilMessageId, artifactDirectory)),
+      count: (kind, plan, artifactDirectory) => call((isolate, snapshot) => isolate.forkCount(snapshot, kind, plan, artifactDirectory)),
       rows: async function* <K extends ForkConversationSection>(kind: K, plan: ForkConversationPlan, artifactDirectory: string): AsyncIterable<ForkRows[K]> {
-        const lines = await (await calls()).forkRows(snapshot(), kind, plan, artifactDirectory);
+        const lines = await call((isolate, snapshot) => isolate.forkRows(snapshot, kind, plan, artifactDirectory));
 
         yield* jsonLines(lines, forkConversationRowSchema(kind));
       },
@@ -255,9 +248,9 @@ export class AgentStoreBroker {
   /** A fork of its workspace landing its conversation in its isolate, carried payloads re-rooted under `artifactDirectory`. */
   forkTarget(artifactDirectory: string): ForkConversationTarget {
     return {
-      clear: async () => { await (await this.calls()).forkClear(this.snapshot(), artifactDirectory); },
-      stage: async (kind, rows) => { await (await this.calls()).forkStage(this.snapshot(), artifactDirectory, kind, rows); },
-      publish: async (cutMessageId) => { await (await this.calls()).forkPublish(this.snapshot(), artifactDirectory, cutMessageId); },
+      clear: async () => { await this.call((isolate, snapshot) => isolate.forkClear(snapshot, artifactDirectory)); },
+      stage: async (kind, rows) => { await this.call((isolate, snapshot) => isolate.forkStage(snapshot, artifactDirectory, kind, rows)); },
+      publish: async (cutMessageId) => { await this.call((isolate, snapshot) => isolate.forkPublish(snapshot, artifactDirectory, cutMessageId)); },
     };
   }
 }

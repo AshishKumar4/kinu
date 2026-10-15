@@ -111,7 +111,7 @@ describe('CLI provider credentials', () => {
       key: 'openrouter.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-or-real' },
     }), env);
 
-    expect(res?.status).toBe(201);
+    expect(res?.status).toBe(200);
     expect(stored.get('openrouter.bearer')).toMatchObject({ kind: 'bearer' });
     await settled();
   });

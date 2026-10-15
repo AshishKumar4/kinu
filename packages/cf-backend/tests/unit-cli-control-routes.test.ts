@@ -255,9 +255,9 @@ describe('CLI control routes', () => {
     expect(v.parse(OkResponseSchema, await handled(deleted).json())).toEqual({ ok: true });
     expect(calls).toContain(`workspace:remove:jarvis:${USER_ID}`);
 
-    const missing = await cli(cliRequest('/api/cli/workspaces/unknown', { method: 'DELETE' }), env);
-    expect(missing?.status).toBe(404);
-    expect(calls.some((call) => call.includes('workspace:remove:unknown'))).toBe(false);
+    // As the browser's: a delete repeated, or raced by another, is done (staging df49f4cc5, F11; unit-account-api).
+    const gone = await cli(cliRequest('/api/cli/workspaces/unknown', { method: 'DELETE' }), env);
+    expect(gone?.status).toBe(200);
   });
 
   test('mints scoped agent websocket tickets for owned agents', async () => {
