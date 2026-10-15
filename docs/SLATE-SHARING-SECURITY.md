@@ -1,31 +1,63 @@
 # Slate sharing: the security model
 
-Status: design for the owner's review, 2026-10-15. Nothing here is built. The model is proved in
-`lean/Kinu/Sharing/` (requirements `PR-SHARE-001` to `PR-SHARE-007` in `lean/traceability.yaml`). Once built, it
-replaces invariants S1 to S8 in [SLATE-SHARING.md](./SLATE-SHARING.md). The wireframes are the sharing v7 design
-page (`packages/cf-backend/src/share-design/ShareDesign.tsx` on the UI lane's branch).
+Status: design for the owner's review, 2026-10-15. Nothing here is built; a spike measured the one open question
+(§9). The model is proved in `lean/Kinu/Sharing/` (requirements `PR-SHARE-001` to `PR-SHARE-007` in
+`lean/traceability.yaml`). Once built, it replaces invariants S1 to S8 in [SLATE-SHARING.md](./SLATE-SHARING.md).
+The wireframes are the sharing v7 design page (`packages/cf-backend/src/share-design/ShareDesign.tsx` on the UI lane's
+branch).
 
-## 1. In brief
+## 1. The design on one page
 
-- **One live slate.** Everyone who opens a slate uses the same slate: its owner, the people the owner adds (Edit or
-  Use), and anyone with its link (Use). They share its state, see each other's presence and get live updates. Fork is
-  the only way to a copy of one's own, and a fork is code alone.
-- **A slate holds no ambient authority.** Its code reaches only *grants*: a *lend* (a holder's narrow binding to one
-  function, which anyone using the slate exercises through that function) and *personal grants* (a person's own
-  connection, used only in that person's own requests). Nobody's workspace, credentials or other connections are in
-  the slate. This holds for the owner's own preview of a slate with editors and for every fork.
-- **Data carries its origin.** Every value a slate holds or shows carries a label: the sources it came from, each
-  named with whose authority read it. A value reaches a person only if they can read every one of those sources
-  directly, or each source's own holder chose to show it to them. Owning the slate is not that authority: Sam cannot
-  show Bob what Alice's private repository said. Where Bob may not see a part, he sees a placeholder in its place with
-  one action: ask the holder.
-- **Revocation takes effect at one point.** Grants, memberships, the link and every "show" decision have generations
-  in one serialized caretaker. After a revoke nothing admitted under the old generation acts, writes or releases,
-  live sessions included.
-- **Proved, not asserted.** 75 Lean theorems: confinement, collaborator isolation, admission, revocation, forks and
-  listings, data origin as noninterference (for any history and any slate code, and unchanged by anything a run that
-  read the source chooses to do), the attack each of ten guards exists for, and what the design asks of people. The
-  proofs cover the model, under premises stated in §3. What the build must do to refine it is §8.
+**What you get.**
+
+1. Everyone you share a slate with uses the same live slate you do: the people you add (Edit or Use) and anyone with
+   the link (Use). Fork is how anyone gets a copy of their own, and a fork is the code alone.
+2. A slate reaches nothing of yours except what you lend it: one function, one narrow binding, a fixed source, a
+   declared effect. No credential of anyone's ever enters a slate. An effect someone else asks for waits for your
+   approval, each time.
+3. Each person's own connections (their GitHub, their AI) work only for that person, never on anyone else's behalf.
+4. Data remembers whose it is. Anything a slate read from someone's private source is shown only to people who can read
+   that source themselves, or whom that source's holder chose to show it to. Owning the slate is not that right: you
+   cannot show Bob what Alice's private repository says. Where Bob may not look he sees a placeholder, "Private to
+   Alice", with one button, "Ask Alice".
+5. Removing someone, stopping the link or switching off a lend takes effect at once, for calls already under way too,
+   and switching it back on does not revive them.
+6. A fork carries no lend, grant, person or data, and listing a slate in the Gallery grants nothing.
+
+All of this is proved in Lean: 75 theorems, with the attack each of the ten safeguards exists for shown succeeding
+when that one safeguard is removed.
+
+**What it does not cover.** How long things take (timing can leak hints). People passing on what they saw. A remote
+action already sent when you revoke. An AI model inside a slate being talked into misusing what it was lent; the
+rules above bound the damage, they do not make a model immune. Cost (your decision: no meter). What an editor makes
+the slate's public parts do.
+
+**Four decisions for you.**
+
+| Decision | Recommendation |
+|---|---|
+| 1. No slate code runs with your whole workspace any more; it reaches only what is granted. Required once others can edit a slate or fork it; this changes how your own private slates run too | Yes, for every slate: one path. Your own slates get their grants from what they already use, with no prompts |
+| 2. May collaborators lend their own connections to your slate? | The model allows it; keep the v7 interface owner-only for now |
+| 3. May signed-out link visitors change shared state? | No: they view; changing asks them to sign in, so every change has a name and a person can be removed |
+| 4. "Lent parts need sign-in" (your rule) with one live slate | Keep it. What a lend returns, if you let people see it, still shows to signed-out visitors; only calling it with their own input asks them to sign in |
+
+**Against Cloudflare OS**, the same tasks (prompts are questions put to a person):
+
+| Task | Kinu | Cloudflare OS |
+|---|---|---|
+| A board three people edit | You: one sheet. Them: no prompts | Same |
+| A public dashboard over your private metrics | You: one switch. Visitors: nothing to view; sign in to pick another week | Not possible: each visitor must sign in, then fails a check that they can read your metrics |
+| A stranger forks a Gallery app | Fork, then one prompt per part, when first used | Sign in, then one dialog per connection before the copy exists |
+| A slate reading your private repo, shared with someone who cannot read it | They see everything but that part, with "Ask Sam"; no prompts | Two prompts, then the whole workspace is refused |
+| Alice's private data in shared state | Hidden from people who cannot read it; only Alice can show it | A documented gap: it can reach them |
+
+Where Kinu is worse: fewer automatic "can they read it" checks at first (more placeholders until the GitHub check
+ships), sharing a collaborator's connection takes a lend, only you add people, and private parts render without
+scripts (§7).
+
+**The one unknown is settled.** A per-link object that is not your workspace ran a slate as a Worker Loader facet with
+its own storage, measured on a scratch Worker on 2026-10-15 (§9): about 0.1 s to start, a few ms per request after,
+state kept across a restart, sockets for presence, 50 people at once.
 
 ## 2. Decisions
 
@@ -139,7 +171,7 @@ lets Ben's code run with Sam's whole workspace the next time Sam opens his previ
 the forker's whole workspace. So slate code reaches grants only, always: the owner's own slate gets its grants from
 what its usage graph names (`slate_usage`), without prompts while the owner is its only user; sharing turns each into a
 lend or a personal need in the share sheet. One execution path, not one for private slates and another for shared
-ones. This is an architecture change the owner did not ask for, so it is listed in §9 for decision.
+ones. This is an architecture change the owner did not ask for, so it is decision 1 in §1.
 
 ## 3. The model
 
@@ -340,13 +372,38 @@ Build step 3b (`/mnt/local/kinu/tmp/sharing/plan-3b.md`, on hold) is redone agai
   - the eight attack traces and the four scenarios, replayed end to end against the built room, each attack red when
     its guard is removed (`PR-SHARE-005`, `PR-SHARE-007`).
 
-## 9. Decisions for the owner
+## 9. Step 0, measured
 
-1. **No ambient authority for any slate's code** (§2.7). Required for editors and forks; recommended for every slate,
-   so there is one path.
-2. **Collaborators may lend their own connections** (§2.2). The model allows it; the v7 interface offers only the
-   owner's lends. Recommended: keep it so for v7.
-3. **Signed-out link visitors change nothing** (§2.5). Recommended for attribution and removal; the alternative is a
-   per-browser guest who can only be stopped by stopping the link.
-4. **Lent parts need sign-in** is kept (the owner, 2026-10-15). With one live slate, a lend's shown output still
-   renders for signed-out visitors; only calling it with their own input asks them to sign in.
+The question the build plan left open: can an object that is not the workspace host a slate's server with its own
+durable storage? Measured 2026-10-15 on a scratch Worker of this lane's own, `kinu-spike-slateroom-74d46478`
+(account `f44999d1…`, compatibility date 2026-09-30, `nodejs_compat`), deleted afterwards and logged in
+`/mnt/local/kinu/logs/scratch-workers.log`. Its source is kept at `/mnt/local/kinu/tmp/sharing/spike-slateroom-index.ts`
+and two runs at `/mnt/local/kinu/tmp/sharing/measure-run{1,2}.json`. A `SlateRoom` Durable Object, one per link,
+loaded a slate's server (a Durable Object class in the slate's module) through `env.LOADER` and ran it as a facet
+(`ctx.facets.get`) with its own SQLite, the pattern `packages/cf-backend/src/agent-facets.ts` already uses for agents.
+Its env held one stub, a `WorkerEntrypoint` with sealed props standing for a lend, and `globalOutbound: null`.
+Client times are from this PC to workers.dev; room times are measured inside the room around the facet call.
+
+| Measure | Run 1 | Run 2 |
+|---|---|---|
+| First request to a new room, the facet started (room / client) | 96 ms / 383 ms | 98 ms / 371 ms |
+| Later requests, median of 20 (room / client) | 4 ms / 33 ms | 44 ms / 70 ms |
+| After `ctx.abort()`: the facet's own SQLite kept its rows; restart (room) | yes, 96 ms | yes, 96 ms |
+| The slate's env | `GRANT` only | `GRANT` only |
+| `fetch` from the slate with no outbound | refused by the runtime | refused by the runtime |
+| The lend stub reached a second object with its sealed props (grant, generation, room) | yes | yes |
+| 50 concurrent requests to one room | 50 of 50, serialized, 185 ms wall | 50 of 50, 160 ms wall |
+| One request starting 12 (or 30) facets at once | 10 succeed; the rest refused: "each request may have up to 10 concurrent dynamic worker invocations" | the same |
+| A WebSocket accepted inside the facet, and one in the room broadcast to a second client | both work | both work |
+
+What follows for the build:
+
+- The room runs a published version's image directly through `LOADER` and `ctx.facets`, keyed by the version's
+  digest, as agent facets do. It does not need Nimbus's durable-application machinery (port reservation, launch
+  journal), which exists for processes inside a workspace session; Nimbus stays the owner's development preview. Not
+  measured: composing Nimbus's `composeFacetManager` inside the room, which this design no longer needs.
+- One request may start at most 10 confined runs at once (the platform limit above, also Nimbus's
+  `DO_DYNAMIC_WORKER_LIMIT`). A part that would start more queues them within its request.
+- Not measured: the room under sustained load from many rooms, Worker Loader cold starts across colos, and hibernation
+  of facet sockets after idle.
+
