@@ -1,7 +1,7 @@
 diff --git a/packages/core/src/scaffold/versions.ts b/packages/core/src/scaffold/versions.ts
 --- a/packages/core/src/scaffold/versions.ts
 +++ b/packages/core/src/scaffold/versions.ts
-@@ -110,7 +110,7 @@
+@@ -124,7 +124,7 @@
            SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
            WHERE actor_id = ${rt.actor.actorId}
              AND (version = ${pending.version}
@@ -9,4 +9,4 @@ diff --git a/packages/core/src/scaffold/versions.ts b/packages/core/src/scaffold
 +                 OR (status = 'current' AND version = ${pending.version}))`;
        markStoreChanged(sql);
        yield* Effect.promise(() => rt.identity.scaffold.write(pendingCode));
-       yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
+       yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: currentVersion, toVersion: pending.version });

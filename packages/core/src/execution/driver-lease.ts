@@ -1,7 +1,8 @@
 /**
  * Single-driver lease: which OS process may drive one local conversation. Cross-process
  * exclusion is needed because `EventLog.markConsumed` has no `consumed_at IS NULL` guard.
- * No expiry by design (turns run long); recovery is by holder-pid liveness only.
+ * No expiry by design (turns run long); recovery is by the holder's liveness only: its pid still running the process
+ * generation it recorded, so a pid reused by a later process holds nothing.
  * Interactive may preempt a live daemon, never the reverse.
  */
 import { KinuError, refusalOf, type Refusal } from "../obs/index";
@@ -11,10 +12,11 @@ const LEASE_ROW_ID = 'local';
 
 const DRIVER_LEASE_DDL = `
 CREATE TABLE IF NOT EXISTS driver_lease (
-  id    TEXT PRIMARY KEY,
-  pid   INTEGER NOT NULL,
-  token TEXT    NOT NULL,
-  kind  TEXT    NOT NULL CHECK(kind IN ('interactive', 'daemon'))
+  id         TEXT    PRIMARY KEY,
+  pid        INTEGER NOT NULL,
+  generation TEXT    NOT NULL,
+  token      TEXT    NOT NULL,
+  kind       TEXT    NOT NULL CHECK(kind IN ('interactive', 'daemon'))
 )`;
 
 export type DriverKind = 'interactive' | 'daemon';
@@ -31,9 +33,16 @@ export interface DriverLeaseHolder {
   readonly kind: DriverKind;
 }
 
-export interface LeaseProcess {
+/** One run of a process: its pid, and the generation that tells it from a later process given the same pid. */
+interface ProcessGeneration {
   readonly pid: number;
-  isAlive(pid: number): boolean;
+  /** Opaque, from the host; '' where the host reads none, and then the pid alone answers. */
+  readonly generation: string;
+}
+
+/** This process, and the host's answer to whether another still runs. */
+export interface LeaseProcess extends ProcessGeneration {
+  isAlive(holder: ProcessGeneration): boolean;
 }
 
 export interface DriverLeaseRefusal {
@@ -52,6 +61,7 @@ export interface DriverLeaseDeps {
 
 interface LeaseRow {
   pid: number;
+  generation: string;
   token: string;
   kind: string;
 }
@@ -61,17 +71,18 @@ function initDriverLeaseTable(execRaw: RawSqlExec): void {
 }
 
 function readRow(sql: SqlExecutor): DriverLeaseHolderRow | null {
-  const rows = sql<LeaseRow>`SELECT pid, token, kind FROM driver_lease WHERE id = ${LEASE_ROW_ID}`;
+  const rows = sql<LeaseRow>`SELECT pid, generation, token, kind FROM driver_lease WHERE id = ${LEASE_ROW_ID}`;
   const row = rows[0];
 
   if (!row) return null;
   // An unrecognised kind is treated as a live claim, not ignored.
   const kind: DriverKind = row.kind === 'interactive' ? 'interactive' : 'daemon';
 
-  return { pid: Number(row.pid), token: row.token, kind };
+  return { pid: Number(row.pid), generation: row.generation, token: row.token, kind };
 }
 
 interface DriverLeaseHolderRow extends DriverLeaseHolder {
+  readonly generation: string;
   readonly token: string;
 }
 
@@ -100,7 +111,7 @@ function claimOnce(deps: DriverLeaseDeps, kind: DriverKind): DriverLeaseResult |
 
   if (current && current.pid !== proc.pid) {
     // A live holder yields only to interactive-over-daemon; a dead holder yields to anyone.
-    const alive = proc.isAlive(current.pid);
+    const alive = proc.isAlive(current);
     const mayTake = !alive || (kind === 'interactive' && current.kind === 'daemon');
 
     if (!mayTake) {
@@ -118,12 +129,12 @@ function claimOnce(deps: DriverLeaseDeps, kind: DriverKind): DriverLeaseResult |
 
   if (current) {
     void deps.sql`
-      UPDATE driver_lease SET pid = ${proc.pid}, token = ${token}, kind = ${kind}
+      UPDATE driver_lease SET pid = ${proc.pid}, generation = ${proc.generation}, token = ${token}, kind = ${kind}
       WHERE id = ${LEASE_ROW_ID} AND token = ${current.token}`;
   } else {
     void deps.sql`
-      INSERT INTO driver_lease (id, pid, token, kind)
-      VALUES (${LEASE_ROW_ID}, ${proc.pid}, ${token}, ${kind})
+      INSERT INTO driver_lease (id, pid, generation, token, kind)
+      VALUES (${LEASE_ROW_ID}, ${proc.pid}, ${proc.generation}, ${token}, ${kind})
       ON CONFLICT(id) DO NOTHING`;
   }
 

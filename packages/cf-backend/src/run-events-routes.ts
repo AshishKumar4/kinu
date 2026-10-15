@@ -28,8 +28,7 @@ function reportingAs(surface: string): (failed: Cause.Cause<unknown>) => Effect.
 
 const SSE_POLL_MS = 500;
 
-/** How long one browser SSE subscription stays open before the client reconnects.
- *  Unrelated to core's `DEVICE_CONSENT_TIMEOUT_MS`, the same five minutes. */
+/** How long one browser SSE subscription stays open before the client reconnects. */
 const SSE_TIMEOUT_MS = 5 * 60 * 1000;
 
 const SSE_HEARTBEAT_MS = 15_000;

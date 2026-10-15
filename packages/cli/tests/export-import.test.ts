@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, symlin
 
 import { join, resolve } from 'node:path';
 import {
-  ArchiveCursorSchema, archiveSqlFromDatabase, initActorClaimTables, initWorkspaceActorTable, readWorkspaceArchivePage, workspaceArchiveStore,
+  ArchiveCursorSchema, initActorClaimTables, initWorkspaceActorTable, readWorkspaceArchivePage, workspaceArchiveStore,
   type ArchiveCursor,
 } from '@kinu.run/core';
 import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
@@ -20,6 +20,7 @@ import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { createMemoryVfs, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
+import { sqlStorageOver } from '@kinu.run/core/identity';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -212,7 +213,7 @@ describe('kinu export / import', () => {
     const cloudDir = scratch('kinu-export-cloud-db-');
     const cloudDb = join(cloudDir, 'cloud.db');
     seedWorkspace(cloudDb);
-    const source = archiveSqlFromDatabase(new Database(cloudDb, { readonly: true }));
+    const source = sqlStorageOver(new Database(cloudDb, { readonly: true }));
 
     const calls: Array<{ method: string; cursor: ArchiveCursor | null }> = [];
 
@@ -287,7 +288,6 @@ describe('kinu export / import', () => {
 
     await createWorkspace(db, {
       name: 'skywriter', purpose: 'archive restart proof',
-      llm: { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
       // In memory, a workspace has no space: its home is a map.
       home: createMemoryVfs().vfs,
     });
@@ -299,7 +299,7 @@ describe('kinu export / import', () => {
     await writeText(bundle.vfs, 'memory/MEMORY.md', '- kept as agent state');
     let restarted = false;
     let starts = 0;
-    const sql = archiveSqlFromDatabase(db);
+    const sql = sqlStorageOver(db);
 
     const server = Bun.serve({
       hostname: '127.0.0.1', port: 0,
@@ -407,15 +407,16 @@ describe('kinu export / import', () => {
 
     const commands = [
       ['import', archive, '--name', 'from-archive'], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')],
-      ['memory', 'scout', 'wrangler'],
+      ['memory', 'scout', 'wrangler'], ['executors', 'scout', 'workspace', 'true'],
     ];
 
     for (const args of commands) {
       const refused = await result(runCli(home, args));
 
       expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain('made by an older Kinu');
-      expect(refused.stderr).toContain('kinu create');
+      // The workspace by the name the user gave it, and the one command that starts fresh.
+      expect(refused.stderr).toContain('"scout" was made by an older version of Kinu');
+      expect(refused.stderr).toContain('kinu create <new-name>');
     }
 
     expect(() => restoredDb(home, 'from-archive')).toThrow('unable to open database file');

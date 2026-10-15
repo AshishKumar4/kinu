@@ -13,9 +13,9 @@ import {
   METRICS_WINDOWS, type AnalyticsResult, type ControlAuditRow, type ControlFeedbackRow, type ControlUserRow,
   type ControlWorkspaceRow,
 } from '@kinu.run/core/control-plane';
-import { workspaceDisplayTitle, type SeekCursor } from '@kinu.run/core';
+import { formatBytes, workspaceDisplayTitle, type SeekCursor } from '@kinu.run/core';
 import {
-  bytes, Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
+  Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';
 import { WorkspaceDrilldown } from '../components/control/WorkspaceDrilldown';
 
@@ -373,7 +373,7 @@ function FeedbackView(): ReactNode {
                   f.workspace ?? <span className="p-text-3">—</span>,
                   f.objectKey === null
                     ? <span className="p-text-3 p-t-status">note only</span>
-                    : <span className="p-meta tabular-nums">{bytes(f.bytes)}</span>,
+                    : <span className="p-meta tabular-nums">{f.bytes === null ? '—' : formatBytes(f.bytes)}</span>,
                   <span className="p-text-2 text-xs whitespace-pre-wrap">{f.note}</span>,
                 ],
               }))}

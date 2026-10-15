@@ -2,7 +2,7 @@
 import { useCallback, useEffect, type ReactNode } from "react";
 import { composing } from "@/components/ui/form";
 
-export interface ModalProps {
+interface ModalProps {
   title: string;
   onClose: () => void;
   icon?: ReactNode;

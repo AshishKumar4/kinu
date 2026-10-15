@@ -20,7 +20,7 @@ const PURPOSE = 'Run the household and the lab.';
 const bornPath = await (async () => {
   const dbPath = join(scratchDir('open'), 'agent.db');
   const made = workspaceDatabase(dbPath);
-  await createWorkspace(made, { name: 'jarvis', purpose: PURPOSE, llm: DUMMY_LLM, home: workspaceHome(made) });
+  await createWorkspace(made, { name: 'jarvis', purpose: PURPOSE, home: workspaceHome(made) });
   made.close();
 
   return dbPath;

@@ -331,6 +331,8 @@ describe('two actors, one database: the head journal', () => {
     const page = a.readStepsPage('h0', { limit: 2 });
     expect(page.items.map(stepText)).toEqual(['a1', 'a2']);
     expect(page.status).toBe('more');
+    // core-rest review P1-17: a limit that is not a number reads the default page, never `LIMIT NaN`.
+    expect(a.readStepsPage('h0', { limit: Number.NaN }).items.map(stepText)).toEqual(['a0', 'a1', 'a2']);
     const cursor = page.status === 'more' ? page.next.after : null;
     expect(() => b.readStepsPage('h0', { cursor: { after: present(cursor, 'the page cursor') } })).toThrow(StaleCursorError);
     w.close();

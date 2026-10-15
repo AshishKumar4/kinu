@@ -1,7 +1,7 @@
 /**
  * Interactive client vs scheduler daemon for one conversation's driver lease: both hold one SQLite
  * file and `EventLog.markConsumed` has no compare-and-set. The rival is a real `sleep` process
- * holding the lease, since the lease only asks whether the holder's pid exists.
+ * holding the lease, since the lease only asks whether the holder's process still runs.
  */
 import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
@@ -39,7 +39,8 @@ async function scenario(body: string): Promise<JsonObject> {
     const { makeExecRaw, makeSql, makeWorkspaceSchemaSql, workspaceHome } =
       await import('./packages/cli-backend/src/index.ts');
     const { leaseHolder } = await import('./packages/cli-backend/tests/driver-lease-probe.ts');
-    const { resolveLLMConfig, placeLocalWorkspace } = await import('./packages/cli/src/config.ts');
+    const { osLeaseProcess } = await import('./packages/cli-backend/src/agent-host/lease-process.ts');
+    const { placeLocalWorkspace } = await import('./packages/cli/src/config.ts');
     const { openLocalAgentClient } = await import('./packages/cli/src/local-agent-client.ts');
     const { daemonCommand } = await import('./packages/cli/src/commands/daemon.ts');
 
@@ -49,7 +50,7 @@ async function scenario(body: string): Promise<JsonObject> {
     {
       const { workspaceDatabase } = await import('@kinu.run/test-utils');
       const seed = workspaceDatabase(dbPath);
-      await createWorkspace(seed, { name: 'leasebot', purpose: 'lease', llm: resolveLLMConfig(), home: workspaceHome(seed) });
+      await createWorkspace(seed, { name: 'leasebot', purpose: 'lease', home: workspaceHome(seed) });
       initWorkspaceSchema(makeWorkspaceSchemaSql(seed));
       seed.close();
     }
@@ -66,7 +67,7 @@ async function scenario(body: string): Promise<JsonObject> {
       try {
         const hold = new DriverLeaseHold({
           sql: makeSql(db), execRaw: makeExecRaw(db),
-          proc: { pid: rival.pid, isAlive: () => true },
+          proc: osLeaseProcess(rival.pid),
         }, kind);
         if (hold.acquire()) throw new Error('the rival could not take the lease');
         return rival.pid;

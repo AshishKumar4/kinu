@@ -244,6 +244,16 @@ describe('web provider — fetch', () => {
     expect(res.url).toBe('https://example.com/page');
   });
 
+  // core-rest review P1-5: references were decoded in sequence, so `&amp;lt;` became `<`, and a code point past Unicode
+  // threw out of the whole fetch.
+  test('an HTML page\'s character references are decoded once; one past Unicode decodes to nothing', async () => {
+    const html = '<html><body><p>a &amp;lt;b&amp;gt; c&#1114112;d &#x1F600; e&nbsp;f</p></body></html>';
+    const { fetch } = stubFetch(() => ({ body: html, headers: { 'content-type': 'text/html' } }));
+    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+
+    expect((await provider.fetch('https://example.com/page')).markdown).toContain('a &lt;b&gt; cd \u{1F600} e f');
+  });
+
   test('text/markdown content passes through without HTML conversion', async () => {
     const { fetch, calls } = stubFetch(() => ({ body: '# Already Markdown\n\nclean', headers: { 'content-type': 'text/markdown' } }));
     const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });

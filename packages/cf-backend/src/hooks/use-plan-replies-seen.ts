@@ -9,7 +9,7 @@ function readSeen(planId: string | null): number {
   return Number.isFinite(stored) ? stored : 0;
 }
 
-export interface PlanRepliesSeen {
+interface PlanRepliesSeen {
   /** The agent's replies after this are unread: the comments control marks them. */
   readonly seenAt: number;
   /** Replies after this read as new in the open threads: when the owner last looked before this one. */

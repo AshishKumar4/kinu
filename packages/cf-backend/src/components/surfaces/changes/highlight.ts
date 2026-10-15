@@ -2,7 +2,7 @@ import type { ChangeBlock, ChangeRow, ChangeSpan } from "@kinu.run/core";
 import type { CodeToken } from "../code-highlighter";
 import type { NoteSpan } from "./notes";
 
-export type Tint = CodeToken;
+type Tint = CodeToken;
 
 export interface Tints {
   readonly before: ReadonlyMap<number, readonly Tint[]>;

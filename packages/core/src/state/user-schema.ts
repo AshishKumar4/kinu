@@ -14,6 +14,7 @@ export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
 export const WORKSPACE_KEYED_ROWS = [
   { table: 'device_consent', column: 'agent_name', removal: 'before-destroy' },
   { table: 'cli_agent_connect_tickets', column: 'agent_name', removal: 'before-destroy' },
+  { table: 'device_joins', column: 'workspace', removal: 'before-destroy' },
   { table: 'user_workspaces', column: 'name', removal: 'after-destroy' },
   { table: 'workspace_overviews', column: 'name', removal: 'after-destroy' },
   { table: 'workspace_logos', column: 'name', removal: 'after-destroy' },
@@ -315,13 +316,12 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Single-use tickets keep long-lived device tokens out of URLs and edge logs.
+  // Single-use tickets keep long-lived device tokens out of URLs and edge logs; spending one deletes its row.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_connect_tickets (
       ticket_hash       TEXT PRIMARY KEY,
       device_id         TEXT NOT NULL,
       expires_at        INTEGER NOT NULL,
-      used_at           INTEGER,
       -- Whether the token exchanged for this ticket was the device's CURRENT
       -- secret rather than the one-shot grace. The accept reads it to decide
       -- whether its rotation may leave a grace behind: a machine recovering ON
@@ -331,14 +331,18 @@ export function initUserTables(sql: SqlExec): void {
       token_was_current INTEGER
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at, used_at)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at)`);
 
   // A device the browser asked to connect, issued before the machine registers: the machine claims this id, so the
-  // page that asked watches the one row it will become. Unclaimed past `expires_at`, it claims nothing.
+  // page that asked watches the one row it will become. Unclaimed past `expires_at`, it claims nothing. The command
+  // carries `ticket_hash`'s ticket, which claims it on a machine with no session; `workspace` is the one whose
+  // Environment issued it, which the device is granted on registering.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_joins (
-      device_id  TEXT PRIMARY KEY,
-      expires_at INTEGER NOT NULL
+      device_id   TEXT PRIMARY KEY,
+      ticket_hash TEXT NOT NULL UNIQUE,
+      workspace   TEXT,
+      expires_at  INTEGER NOT NULL
     )
   `);
 
@@ -350,11 +354,10 @@ export function initUserTables(sql: SqlExec): void {
       agent_name     TEXT NOT NULL,
       cli_token_hash TEXT NOT NULL,
       capabilities   TEXT NOT NULL,
-      expires_at     INTEGER NOT NULL,
-      used_at        INTEGER
+      expires_at     INTEGER NOT NULL
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_cli_agent_connect_tickets_exp ON cli_agent_connect_tickets (expires_at, used_at)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_cli_agent_connect_tickets_exp ON cli_agent_connect_tickets (expires_at)`);
 
   initExperienceLibraryTables(sql);
 

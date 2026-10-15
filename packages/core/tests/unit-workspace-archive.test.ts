@@ -7,7 +7,6 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import {
-  archiveSqlFromDatabase,
   initActorClaimTables,
   initAllTables,
   initWorkspaceActorTable,
@@ -32,6 +31,7 @@ import { workspaceArchiveStore, workspaceArchiveTarget } from '../src/vfs/worksp
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 import { claimFences } from '../src/orchestrator/actor-claims';
+import { sqlStorageOver } from '../src/identity/inline-primitives';
 
 /** One in-memory database with every handle this suite drives it through. */
 interface Workspace {
@@ -49,7 +49,7 @@ function fresh(): Workspace {
   let bundle: WorkspaceBundle | null = null;
 
   return {
-    db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: archiveSqlFromDatabase(db),
+    db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: sqlStorageOver(db),
     get bundle() { return (bundle ??= createWorkspaceBundle(db)); },
     get vfs() { return this.bundle.vfs; },
   };

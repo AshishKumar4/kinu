@@ -8,6 +8,7 @@ import {
 import type { UIMessage } from "ai";
 import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
 import { shownHeadStatus, threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
+import { StatusDot, type StatusTone } from "@/components/ui/Status";
 import { Cause, Effect } from "effect";
 import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { ChatLiveTail, MessageView } from "@/components/MessageView";
@@ -26,16 +27,16 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 
 /** Shared by this panel and the run pane's node list; covers head-journal and search-node statuses. An unknown status gets the quiet dot. */
-export function statusDot(status: string): string {
-  if (status === "running") return "p-dot-accent";
+export function statusTone(status: string): StatusTone {
+  if (status === "running") return "live";
 
-  if (status === "budget_exceeded") return "p-dot-warning";
+  if (status === "budget_exceeded") return "warning";
 
-  if (status === "completed" || status === "terminal") return "p-dot-success";
+  if (status === "completed" || status === "terminal") return "success";
 
-  if (status === "errored" || status === "failed" || status === "aborted") return "p-dot-danger";
+  if (status === "errored" || status === "failed" || status === "aborted") return "danger";
 
-  return "p-dot-neutral";
+  return "neutral";
 }
 
 const TASK_CLAMP = 240;
@@ -212,7 +213,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   return (
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b p-border">
-        <span className={`size-1.5 rounded-full shrink-0 ${statusDot(shownHeadStatus(view.status, view.errorMessage))} ${live ? "p-dot-pulse" : ""}`} />
+        <StatusDot tone={statusTone(shownHeadStatus(view.status, view.errorMessage))} />
         <span className="p-t-status uppercase tracking-normal p-text-3 shrink-0">{shownHeadStatus(view.status, view.errorMessage)}</span>
         <div className="h-3 w-px bg-[var(--c-border)] shrink-0" />
         <SearchPath view={view} onSelect={onSelect} />

@@ -11,9 +11,10 @@ import {
 } from '@kinu.run/core';
 import { createMemoryVfs, createTestActorsOver, createTestRuntime, present, withHostDeliveries } from '@kinu.run/test-utils';
 import {
-  createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
+  createEmailThreadDispatcher,
   sendInboundEmailReceipt, sendOwnerEmail,
 } from '../src/email/outbound';
+import { dispatchEmailRepliesForTurn } from '@kinu.run/core';
 import { EmailOutbox } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
 import { refuseUnlistedHeaders } from './helpers/email-service';

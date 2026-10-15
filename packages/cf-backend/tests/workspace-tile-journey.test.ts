@@ -194,7 +194,7 @@ describe("a workspace's tile on its owner's home", () => {
 
       // ── Decisions: each change pushed once, a fold that changed nothing not pushed again. ──
       const before = overviews.length;
-      const consent = agent.awaitDeviceConsent({ deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push' });
+      expect(await agent.askDeviceConsent({ deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push', epoch: 0 })).toBe('queued');
 
       await until(() => last()?.decisionsWaiting === 1, 'the raised consent is pushed');
       // The approval ladder parks a gated command nobody is there to answer.
@@ -208,20 +208,21 @@ describe("a workspace's tile on its owner's home", () => {
 
       if (!pending) throw new Error('expected a pending device consent');
       await tab('resolveDeviceConsent', pending.consentId, 'deny');
-      await expect(consent).resolves.toBe('deny');
       const parked = await agent.listDeferredApprovals();
 
       await tab('decideDeferredApprovals', parked.map((action) => action.id), 'denied');
       await until(() => last()?.decisionsWaiting === 0, 'both decisions are pushed');
       expect(overviews.slice(before, before + 2).map((each) => each.decisionsWaiting)).toEqual([1, 2]);
 
-      // A consent an earlier activation raised expires on its own clock, with no local timer to fire.
+      // A consent an earlier activation raised waits on the owner whatever the clock says: no ask lapses.
       new DeviceConsentStore(bindAgentSql(agent)).insert({
         consentId: 'cold-consent', deviceId: 'device', deviceLabel: 'Laptop', method: 'shell', command: 'git push',
-        createdAt: Date.now(), expiresAt: Date.now() + 1_000,
+        createdAt: Date.now(), epoch: 0, status: 'queued', decidedAt: null,
       });
       expect((await agent.foldOverview()).decisionsWaiting).toBe(1);
-      setSystemTime(new Date(Date.now() + 1_001));
+      setSystemTime(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+      expect((await agent.foldOverview()).decisionsWaiting).toBe(1);
+      await tab('resolveDeviceConsent', 'cold-consent', 'deny');
       expect((await agent.foldOverview()).decisionsWaiting).toBe(0);
 
       // ── Children: one working reads Working; one torn down takes its pending plan with it. ──

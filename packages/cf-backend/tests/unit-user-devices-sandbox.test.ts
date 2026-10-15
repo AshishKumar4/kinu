@@ -89,7 +89,7 @@ describe('a machine that cannot sandbox runs no command', () => {
     harness.consentDecision = 'always';
     await harness.sendDeviceHello(hello({ capability: 'files_only', reason: 'no_userns', gpu: [] }));
 
-    const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['make build'], {
+    const refusal = harness.deviceCall(harness.workspace, 'exec', ['make build'], {
       agentName: WORKSPACE,
     });
 
@@ -107,7 +107,7 @@ describe('a machine that cannot sandbox runs no command', () => {
     harness.consentDecision = 'always';
     await harness.sendDeviceHello(hello({ capability: 'files_only', reason: 'no_bwrap', gpu: [] }));
 
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/home/ashish/notes.md', 0, 64], {
+    await harness.deviceCall(harness.workspace, 'readRange', ['/home/ashish/notes.md', 0, 64], {
       agentName: WORKSPACE,
     });
     expect(harness.deviceFrames.map((frame) => frame.method)).toContain('readRange');
@@ -120,7 +120,7 @@ describe('a machine that cannot sandbox runs no command', () => {
     harness.consentDecision = 'always';
     await harness.sendDeviceHello({ type: 'HELLO', os: 'linux', sandbox: CAPABLE, agentRoot: '.kinu/agents' });
 
-    const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    const refusal = harness.deviceCall(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
     await expect(refusal).rejects.toThrow(DEVICE_ERRORS.sandboxUnavailable);
     await expect(refusal).rejects.toThrow('daemon_outdated: the daemon proved a sandbox but did not say where agent homes live');
     await expect(refusal).rejects.toThrow(sandboxReasonFix('daemon_outdated'));
@@ -140,7 +140,7 @@ describe('a machine that cannot sandbox runs no command', () => {
 
     expect(await harness.userDO.setDeviceTier(await testOwner(), harness.deviceId, 'raw'))
       .toEqual({ ok: true });
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['make build'], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'exec', ['make build'], { agentName: WORKSPACE });
 
     const frames = execFrames(harness);
     expect(frames).toHaveLength(1);
@@ -190,8 +190,8 @@ describe('the frame carries the calling workspace own home', () => {
     harness.consentDecision = 'always';
     await harness.sendDeviceHello(hello(CAPABLE, { root: '/home/ashish/projects/kinu' }));
 
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['pwd'], { agentName: WORKSPACE });
-    await harness.userDO.deviceRpc(harness.sibling, 'exec', ['pwd'], { agentName: OTHER_WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'exec', ['pwd'], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.sibling, 'exec', ['pwd'], { agentName: OTHER_WORKSPACE });
 
     const sandboxes = harness.deviceFrames
       .filter((frame) => frame.method === 'exec')
@@ -222,7 +222,7 @@ describe('the frame carries the calling workspace own home', () => {
       ['readRange', [file, 0, 4]], ['writeFile', [file, 'x']], ['listFiles', ['/home/ashish/projects/kinu']],
       ['statPath', [file]], ['unlinkPath', [file]], ['rmdirPath', [`${file}.d`]], ['mkdirPath', [`${file}.d`]],
     ] satisfies Array<[string, JsonValue[]]>) {
-      await harness.userDO.deviceRpc(harness.workspace, method, params, { agentName: WORKSPACE });
+      await harness.deviceCall(harness.workspace, method, params, { agentName: WORKSPACE });
     }
 
     const blocks = harness.deviceFrames.map((frame) => v.parse(FrameSandboxSchema, frame.sandbox));
@@ -244,8 +244,8 @@ describe('the frame carries the calling workspace own home', () => {
     harness.consentDecision = 'always';
     await harness.sendDeviceHello(hello({ capability: 'files_only', reason: 'no_bwrap', gpu: [] }, { root: '/' }));
 
-    await harness.userDO.deviceRpc(harness.workspace, 'readRange', ['/etc/hostname', 0, 64], { agentName: WORKSPACE });
-    await harness.userDO.deviceRpc(harness.workspace, 'listFiles', ['/'], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'readRange', ['/etc/hostname', 0, 64], { agentName: WORKSPACE });
+    await harness.deviceCall(harness.workspace, 'listFiles', ['/'], { agentName: WORKSPACE });
 
     expect(harness.deviceFrames.map((frame) => v.parse(FrameSandboxSchema, frame.sandbox)?.tier)).toEqual(['raw', 'raw']);
     expect((await harness.userDO.listDevices(await testOwner()))[0]).toMatchObject({
@@ -299,7 +299,7 @@ describe('the reason vocabulary is closed and every value carries a fix', () => 
       detail: 'gremlins: the gremlins ate the namespace', gpu: [],
     });
 
-    const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    const refusal = harness.deviceCall(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
     await expect(refusal).rejects.toThrow('gremlins: the gremlins ate the namespace');
     await expect(refusal).rejects.toThrow(sandboxReasonFix(null));
     await expect(refusal).rejects.not.toThrow(NO_REASON);
@@ -314,7 +314,7 @@ describe('the refusal carries what the daemon actually said', () => {
     harness.consentDecision = 'always';
     await harness.sendDeviceHello(hello(daemonHello(daemonStatus('PROBE_FAILED'), PROBE_FAILED_DETAIL)));
 
-    const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['rm -r doomed'], { agentName: WORKSPACE });
+    const refusal = harness.deviceCall(harness.workspace, 'exec', ['rm -r doomed'], { agentName: WORKSPACE });
     await expect(refusal).rejects.toThrow(DEVICE_ERRORS.sandboxUnavailable);
     await expect(refusal).rejects.toThrow(`probe_failed: ${PROBE_FAILED_DETAIL}`);
     await expect(refusal).rejects.toThrow(sandboxReasonFix('probe_failed'));
@@ -348,7 +348,7 @@ describe('the refusal carries what the daemon actually said', () => {
       expect(sandbox?.reason).toBe(reason);
       expect(sandbox?.detail).toBe(detail);
       // `raw_only` is a platform fact, still refused while the switch is on.
-      const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+      const refusal = harness.deviceCall(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
       await expect(refusal).rejects.toThrow(`${status}: ${detail}`);
       await expect(refusal).rejects.toThrow(sandboxReasonFix(reason));
       await harness.closeDeviceHarness();
@@ -360,7 +360,7 @@ describe('the refusal carries what the daemon actually said', () => {
     const silent = await deviceHarness('ashish@studio', daemon, { hello: null });
     silent.consentDecision = 'always';
     await silent.sendDeviceHello(hello({ capability: 'files_only', reason: null, gpu: [] }));
-    const silentRefusal = silent.userDO.deviceRpc(silent.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    const silentRefusal = silent.deviceCall(silent.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
     await expect(silentRefusal).rejects.toThrow(`(${NO_REASON})`);
     await expect(silentRefusal).rejects.toThrow(sandboxReasonFix(null));
     expect((await silent.userDO.listDevices(await testOwner()))[0]?.sandbox.detail).toBeNull();
@@ -368,7 +368,7 @@ describe('the refusal carries what the daemon actually said', () => {
 
     const unheard = await deviceHarness('ashish@studio', daemon, { hello: null });
     unheard.consentDecision = 'always';
-    const unheardRefusal = unheard.userDO.deviceRpc(unheard.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
+    const unheardRefusal = unheard.deviceCall(unheard.workspace, 'exec', ['ls'], { agentName: WORKSPACE });
     await expect(unheardRefusal).rejects.toThrow(`(${NO_REASON})`);
     expect(execFrames(unheard)).toEqual([]);
     await unheard.closeDeviceHarness();

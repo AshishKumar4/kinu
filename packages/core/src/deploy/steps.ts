@@ -5,7 +5,7 @@
 // deployment takes a 0% version (wrangler 4.129.0 sends one).
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { KinuError } from '../obs/index';
+import { KinuError } from '../obs/index';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
   FACT_ACCESS_APP, FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
@@ -215,15 +215,23 @@ function vectorizeStep(manifest: ReleaseManifest): DeployStep {
         const existing = yield* Effect.promise(async () => cloudflareResult(
           context.transport,
           { method: 'GET', path: base },
-          v.array(v.object({ name: v.string() })),
+          v.array(v.object({ name: v.string(), config: v.object({ dimensions: v.number(), metric: v.string() }) })),
         ));
 
-        const held = new Set(existing.map((index) => index.name));
+        const held = new Map(existing.map((index) => [index.name, index.config]));
 
         for (const index of manifest.vectorIndexes) {
           const name = resourceName(context.inputs, index.name);
+          const config = held.get(name);
 
-          if (held.has(name)) {
+          // An index of another shape binds, and refuses every vector this release writes: not ready, and not ours to drop.
+          if (config !== undefined && (config.dimensions !== index.dimensions || config.metric !== index.metric)) {
+            return yield* new KinuError('bad_input', `${name} already exists at ${String(config.dimensions)} dimensions, `
+              + `${config.metric}, and this release writes ${String(index.dimensions)}-dimension ${index.metric} vectors, `
+              + `which it would refuse. Delete ${name} in the Cloudflare dashboard (Vectorize), or deploy under another name.`);
+          }
+
+          if (config !== undefined) {
             context.note(`${name} already exists.`);
             continue;
           }

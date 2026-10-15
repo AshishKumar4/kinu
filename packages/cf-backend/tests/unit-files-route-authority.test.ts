@@ -9,7 +9,7 @@ import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, provisionTestWorkspace, testOwner,
   type DeviceFrame, type TestUserDO,
 } from './helpers/user-do';
-import { CAPABLE_HELLO } from './helpers/device-harness';
+import { CAPABLE_HELLO, CONSENT_PARKED } from './helpers/device-harness';
 import { chatSessionTurns, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { makeKv } from './helpers/kv';
 import { workerContext } from './helpers/bindings';
@@ -328,10 +328,10 @@ describe('a workspace the caller does not hold', () => {
 });
 
 describe('a device the workspace has no grant on', () => {
-  test('read, write, rename and delete are all refused, and no frame reaches the machine', async () => {
+  test('read, write, rename and delete each park NOT RUN on the owner, and no frame reaches the machine', async () => {
     const rail = await seam({ workspaces: ['device-a'] });
     // An unanswered prompt is not a grant.
-    rail.user.consentDecision = 'deny';
+    rail.user.consentDecision = 'hold';
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'device-a', path: PC_FILE });
 
@@ -343,10 +343,10 @@ describe('a device the workspace has no grant on', () => {
     const renamed = await agent.renameExecutorFile('workspace', PC_FILE, MOVED);
     const deleted = await agent.deleteExecutorFile('workspace', PC_FILE);
 
-    expect(await errorOf(read)).toContain('device use was not approved');
-    expect(await errorOf(write)).toContain('device use was not approved');
-    expect(renamed).toMatchObject({ error: expect.stringContaining('device use was not approved') });
-    expect(deleted).toMatchObject({ error: expect.stringContaining('device use was not approved') });
+    expect(await errorOf(read)).toMatch(CONSENT_PARKED);
+    expect(await errorOf(write)).toMatch(CONSENT_PARKED);
+    expect(renamed).toMatchObject({ error: expect.stringMatching(CONSENT_PARKED) });
+    expect(deleted).toMatchObject({ error: expect.stringMatching(CONSENT_PARKED) });
     expect(rail.fileFrames()).toEqual([]);
     expect(rail.device.get(DEVICE_FILE)).toBe('hello');
   });
@@ -354,7 +354,7 @@ describe('a device the workspace has no grant on', () => {
   test('a grant is not transferable between the owner\'s own workspaces', async () => {
     const rail = await seam({ workspaces: ['device-granted', 'device-ungranted'] });
 
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('device-granted', rail.deviceId);
 
     const granted = await rail.files({
       session: rail.ownerSession, workspace: 'device-granted', path: PC_FILE,
@@ -363,33 +363,31 @@ describe('a device the workspace has no grant on', () => {
     expect([granted.status, await bytesOf(granted)]).toEqual([200, 'hello']);
 
     // Consent is keyed on the proven workspace behind the capability token, never the name a caller passes.
-    rail.user.consentDecision = 'deny';
-
     const sibling = await rail.files({
       session: rail.ownerSession, workspace: 'device-ungranted', path: PC_FILE,
     });
 
-    expect(await errorOf(sibling)).toContain('device use was not approved');
+    expect(await errorOf(sibling)).toMatch(CONSENT_PARKED);
     expect(rail.user.consentPrompts.at(-1)?.workspace).toBe('device-ungranted');
   });
 
   test('a grant the owner revokes stops the next request, with nothing restarted', async () => {
     const rail = await seam({ workspaces: ['device-revoked'] });
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('device-revoked', rail.deviceId);
     const before = await rail.files({ session: rail.ownerSession, workspace: 'device-revoked', path: PC_FILE });
     expect(await bytesOf(before)).toBe('hello');
     const reads = rail.fileFrames().length;
 
     expect(await rail.user.userDO.revokeDeviceConsent(rail.owner, 'device-revoked', rail.deviceId))
       .toEqual({ ok: true });
-    rail.user.consentDecision = 'deny';
 
     const after = await rail.files({
       session: rail.ownerSession, workspace: 'device-revoked', path: PC_FILE,
       method: 'PUT', body: 'overwritten',
     });
 
-    expect(await errorOf(after)).toContain('device use was not approved');
+    // Asked again: the revoked grant is no binding, and the owner has yet to answer.
+    expect(await errorOf(after)).toMatch(CONSENT_PARKED);
     expect(rail.fileFrames()).toHaveLength(reads);
     expect(rail.device.get(DEVICE_FILE)).toBe('hello');
   });
@@ -400,8 +398,11 @@ describe('a device the workspace has no grant on', () => {
     rail.user.consentDecision = 'deny';
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'device-base', path: PC_FILE });
+    const again = await rail.files({ session: rail.ownerSession, workspace: 'device-base', path: PC_FILE });
 
-    expect(await errorOf(read)).toContain('device use was not approved');
+    // Parked on the card, which the owner refused: the re-issue stands refused, and asks nothing more.
+    expect(await errorOf(read)).toMatch(CONSENT_PARKED);
+    expect(await errorOf(again)).toContain('device use was not approved');
     expect(rail.user.consentPrompts.map((prompt) => prompt.workspaceName)).toEqual(['device-base']);
     expect(rail.fileFrames()).toEqual([]);
   });
@@ -410,7 +411,7 @@ describe('a device the workspace has no grant on', () => {
 describe('an executor id the caller made up', () => {
   test('names no plane, on either verb, and nothing is asked of any machine', async () => {
     const rail = await seam({ workspaces: ['executor-forged'] });
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('executor-forged', rail.deviceId);
 
     for (const executor of ['device-2', 'workspace/../device', 'ashish@studio', '']) {
       const read = await rail.files({
@@ -449,7 +450,7 @@ describe('an executor id the caller made up', () => {
 describe('a request the authority behind it has since withdrawn', () => {
   test('a workspace removed from the registry closes behind the isolate that proved it', async () => {
     const rail = await seam({ workspaces: ['stale-workspace'] });
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('stale-workspace', rail.deviceId);
     // Membership is answered once and remembered for the life of the isolate (workspace-ownership.ts).
     expect((await rail.files({
       session: rail.ownerSession, workspace: 'stale-workspace', path: PC_FILE,
@@ -471,7 +472,7 @@ describe('a request the authority behind it has since withdrawn', () => {
 
   test('the workspace capability dies with the registry row, so the actor cannot reach the device either', async () => {
     const rail = await seam({ workspaces: ['stale-capability'] });
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('stale-capability', rail.deviceId);
     expect(await bytesOf(await rail.files({
       session: rail.ownerSession, workspace: 'stale-capability', path: PC_FILE,
     }))).toBe('hello');
@@ -489,7 +490,7 @@ describe('a request the authority behind it has since withdrawn', () => {
 
   test('a cookie the owner signed out of buys nothing, even where the KV delete has not landed', async () => {
     const rail = await seam({ workspaces: ['stale-session'] });
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('stale-session', rail.deviceId);
 
     // Sign-out at the authority only, as a colo the KV delete has not reached sees it: a route trusting the record would honour this cookie.
     await rail.signOutAtAuthority();
@@ -527,7 +528,7 @@ describe('the authority the caller does hold', () => {
 
   test('a consented device is read, written, renamed and deleted through the /pc mount', async () => {
     const rail = await seam({ workspaces: ['allowed-device'] });
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('allowed-device', rail.deviceId);
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'allowed-device', path: PC_FILE });
 
@@ -550,7 +551,7 @@ describe('the authority the caller does hold', () => {
 describe('a transfer that does not finish', () => {
   test('an upload cut mid-body publishes nothing, and leaves the transfer reusable', async () => {
     const rail = await seam({ workspaces: ['upload-cut'] });
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('upload-cut', rail.deviceId);
 
     const cut = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -579,7 +580,7 @@ describe('a transfer that does not finish', () => {
   // The workspace's own files keep revisions, so a stale one is a failed precondition; a device's plane keeps none.
   test('a stale revision of a workspace file and any precondition on a device file refuse the write, taking nothing', async () => {
     const rail = await seam({ workspaces: ['upload-conditional'] });
-    rail.user.consentDecision = 'always';
+    rail.user.grantDevice('upload-conditional', rail.deviceId);
     await rail.files({
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,
       method: 'PUT', body: 'first',

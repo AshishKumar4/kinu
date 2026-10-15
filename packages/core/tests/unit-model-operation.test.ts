@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
-  beginModelOperation, createVercelAILLM,
+  beginModelOperation, createChatModel,
   initRunEventTables, recordModelOperations, RunEventRecorder,
   WORKSPACE_RUN_ID,
   type RunEvent,
@@ -12,6 +12,7 @@ import {
 import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import { generateReported } from '../src/providers/model-invocation';
+import { withModelStack } from '../src/providers/wire-model';
 
 function setup() {
   const db = new Database(':memory:');
@@ -149,19 +150,18 @@ describe('the production seams open the frame before the request', () => {
     });
   }
 
-  test('createVercelAILLM.complete closes the frame as failed when the endpoint dies', async () => {
-    // This factory really dials its baseURL, so an unroutable stub makes this the transport-failure case.
+  test('an endpoint model\'s completion closes the frame as failed when the endpoint dies', async () => {
+    // This model really dials its baseURL, so an unroutable stub makes this the transport-failure case.
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
 
-    const llm = createVercelAILLM({
-      name: 'workers-ai',
-      baseURL: 'https://kinu-operation-test.invalid/',
-      headers: {},
-      model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
-    }, { source: 'reflection', report: () => {}, operations: sink });
+    const model = withModelStack(createChatModel({
+      kind: 'openai-compat', name: 'workers-ai', baseURL: 'https://kinu-operation-test.invalid/', headers: {},
+      modelId: '@cf/deepseek-ai/deepseek-v4-pro-0813',
+    }), { provider: 'workers-ai', modelId: '@cf/deepseek-ai/deepseek-v4-pro-0813', lane: 'workers-ai' });
 
-    await expect(llm.complete('reflect')).rejects.toThrow();
+    await expect(generateReported({ model, prompt: 'reflect' }, { spend: { source: 'reflection', report: () => {}, operations: sink } }))
+      .rejects.toThrow();
 
     const rows = operationsOf(recorder, WORKSPACE_RUN_ID);
     expect(rows.map((row) => row.phase)).toEqual(['start', 'end']);

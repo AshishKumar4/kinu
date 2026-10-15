@@ -158,7 +158,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
   const daemon = pcAgentDaemon(opens.gitBin === undefined ? {} : { gitBin: opens.gitBin });
   const device = await deviceHarness('ashish@studio', async (frame) => await daemon.answer(frame) ?? null);
   await device.userDO.setDeviceTier(await testOwner(), device.deviceId, 'raw');
-  device.consentDecision = 'always';
+  device.grantDevice(WORKSPACE, device.deviceId);
   const harness = orchestratorHarness(undefined, { userDO: device.userDO, workspace: WORKSPACE, ownerUserId: 'test-user-do' });
   harness.agent.harnessHoldsCapability(device.workspace.workspaceToken);
   const { agent, db } = harness;
@@ -273,7 +273,7 @@ function bornWorkspace(): Promise<string> {
   born ??= (async () => {
     const path = scratchPath('shared-backend-born', 'agent.db');
     const db = workspaceDatabase(path);
-    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', llm: NO_ENDPOINT, home: workspaceHome(db) });
+    await createWorkspace(db, { name: WORKSPACE, purpose: 'shared behaviour cases', home: workspaceHome(db) });
     db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
     db.close();
 

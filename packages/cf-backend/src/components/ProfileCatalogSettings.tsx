@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@cloudflare/kumo';
 import { BrainIcon, CaretRightIcon, CheckIcon, IdentificationCardIcon, MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
 import {
@@ -29,8 +29,9 @@ import {
   type TierAssignment,
   type TierId, type ModelMenuResponse,
 } from '@kinu.run/core';
-import { Effect, type Exit } from 'effect';
-import { hold, showing } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { settle, showing } from '@kinu.run/core/obs';
+import { lastValue, useAsyncResource, type AsyncResource } from '@/hooks/use-async-resource';
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { Card, Choice, Field, composing, inputCls, tabCls } from './ui/form';
@@ -38,10 +39,6 @@ import { FilledButton } from './ui/FilledButton';
 import { Segmented } from './ui/Segmented';
 
 const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
-
-interface CatalogOperation {
-  promise: Promise<Exit.Exit<void>> | null;
-}
 
 interface TierWords {
   readonly name: string;
@@ -69,45 +66,62 @@ function decisionModelName(spec: string): string {
  *  utilities resolve by order, not intent. */
 const selectSmCls = `${inputCls} !h-6.5 !px-2 !py-0 !text-xs`;
 
-export function ProfileCatalogSettings() {
-  const [envelope, setEnvelope] = useState<ProfileCatalogEnvelope | null>(null);
+/** The first failure of the reads, or null. */
+function readFailure(...reads: readonly AsyncResource<unknown>[]): string | null {
+  for (const read of reads) if (read.status === 'error') return read.message;
+
+  return null;
+}
+
+/**
+ * The account's catalog and the models to pick from, read as the default-model field reads them, and the owner's edit
+ * of the catalog: it starts again from each catalog read or saved, and a save publishes into the read.
+ */
+function useCatalogEdit() {
+  const catalog = useAsyncResource(getProfileCatalog);
+  const models = useAsyncResource(listAvailableModels);
+  const envelope = lastValue(catalog.resource);
   const [draft, setDraft] = useState<ProfileCatalog | null>(null);
-  const [menu, setMenu] = useState<ModelMenuResponse>(EMPTY_MENU);
+  const [draftOf, setDraftOf] = useState<ProfileCatalogEnvelope | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setError] = useState<string | null>(null);
+  const { reload: rereadCatalog, set: publish } = catalog;
+  const rereadModels = models.reload;
+
+  if (envelope !== draftOf) {
+    setDraftOf(envelope);
+    setDraft(envelope?.catalog ?? null);
+  }
+
+  const dirty = envelope !== null && draft !== null && JSON.stringify(envelope.catalog) !== JSON.stringify(draft);
+
+  const save = useCallback(() => settle(Effect.gen(function* () {
+    if (!draft || !envelope || !dirty || saving) return;
+    setSaving(true);
+    setError(null);
+    yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      publish(yield* Effect.promise(() => updateProfileCatalog(draft, envelope.version)));
+    }), showing(setError)), Effect.sync(() => setSaving(false)));
+  })), [draft, envelope, dirty, saving, publish]);
+
+  return {
+    envelope, draft, setDraft, dirty, save, setError,
+    menu: lastValue(models.resource) ?? EMPTY_MENU,
+    busy: saving || catalog.resource.status === 'loading' || models.resource.status === 'loading',
+    error: saveError ?? readFailure(catalog.resource, models.resource),
+    load: useCallback(() => { rereadCatalog(); rereadModels(); }, [rereadCatalog, rereadModels]),
+  };
+}
+
+export function ProfileCatalogSettings() {
+  const { envelope, draft, setDraft, dirty, save, setError, menu, busy, error, load } = useCatalogEdit();
+
   const [selectedRole, setSelectedRole] = useState<RoleId>('task');
   const [newRoleId, setNewRoleId] = useState('');
   const [addingRole, setAddingRole] = useState(false);
   const [newTierId, setNewTierId] = useState('');
   const [newChainModel, setNewChainModel] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const roleNav = useRef<HTMLElement>(null);
-
-  const loadOperation = useRef<CatalogOperation | null>(null);
-  const saveOperation = useRef<CatalogOperation | null>(null);
-
-  const load = (): void => {
-    if (loadOperation.current !== null) return;
-    setBusy(true);
-    setError(null);
-    const owner: CatalogOperation = { promise: null };
-    // Install the owner before a synchronous RPC fake can settle this load.
-    loadOperation.current = owner;
-    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const [profile, models] = yield* Effect.promise(() => Promise.all([getProfileCatalog(), listAvailableModels()]));
-      setEnvelope(profile);
-      setDraft(profile.catalog);
-      setMenu(models);
-    }), showing(setError)), Effect.sync(() => {
-      if (loadOperation.current === owner) {
-        loadOperation.current = null;
-        setBusy(false);
-      }
-    })));
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
 
   const roles: RoleCatalog = useMemo(
     () => draft ? effectiveRoleCatalog(draft) : BUILTIN_ROLE_DEFINITIONS,
@@ -115,9 +129,6 @@ export function ProfileCatalogSettings() {
   );
 
   const role = roles[selectedRole] ?? null;
-
-  const dirty = envelope !== null && draft !== null
-    && JSON.stringify(envelope.catalog) !== JSON.stringify(draft);
 
   // A deep selection the phone's strip hasn't scrolled to yet is invisible.
   useEffect(() => {
@@ -129,24 +140,6 @@ export function ProfileCatalogSettings() {
     setDraft({ ...draft, roles: { ...draft.roles, [id]: next } });
   };
 
-  const save = (): void => {
-    if (!draft || !envelope || !dirty || saveOperation.current !== null) return;
-    setBusy(true);
-    setError(null);
-    const owner: CatalogOperation = { promise: null };
-    // Install the owner before a synchronous RPC fake can settle this save.
-    saveOperation.current = owner;
-    owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const updated = yield* Effect.promise(() => updateProfileCatalog(draft, envelope.version));
-      setEnvelope(updated);
-      setDraft(updated.catalog);
-    }), showing(setError)), Effect.sync(() => {
-      if (saveOperation.current === owner) {
-        saveOperation.current = null;
-        setBusy(false);
-      }
-    })));
-  };
 
   const addRole = () => {
     const id = newRoleId.trim();
@@ -521,7 +514,7 @@ export function ProfileCatalogSettings() {
             {dirty && <span className="p-meta p-warning">Unsaved changes</span>}
             <div className="ml-auto flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</FilledButton>
+              <FilledButton disabled={!dirty || busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save'}</FilledButton>
             </div>
           </div>
         </div>

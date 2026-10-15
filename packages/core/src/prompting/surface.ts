@@ -10,6 +10,7 @@ import {
   type PromptModelContext,
   type PromptModelProfile,
 } from './model-profile';
+import { executorSortKey } from '../read-models/executors';
 
 export type PromptBackend = 'cf' | 'cli-local';
 
@@ -58,14 +59,6 @@ export interface PromptSurface {
   backend?: PromptBackend;
   roleSection: { id: string; label: string; instructions: string } | null;
   identity: ResolvedPromptIdentity;
-}
-
-const EXECUTOR_PROMPT_ORDER = ['device', 'computer', 'workspace'];
-
-function executorSortKey(name: string): number {
-  const idx = EXECUTOR_PROMPT_ORDER.indexOf(name);
-
-  return idx === -1 ? 99 : idx;
 }
 
 function sortExecutors(executors: PromptExecutorInfo[]): PromptExecutorInfo[] {

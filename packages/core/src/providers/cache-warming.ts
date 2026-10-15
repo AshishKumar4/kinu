@@ -11,7 +11,6 @@ import type { ModelCallReport } from '../events/model-call';
 import type { CallAccount } from './quota';
 import { Effect } from 'effect';
 import { settle, toKinuError } from '../obs/index';
-import * as v from 'valibot';
 import { isJsonObject, parseJsonObject, readJsonObjectText, type JsonObject } from '../utils/json';
 
 /** Only the direct provider: through a gateway the cache entry is not Anthropic's to refresh. */
@@ -83,35 +82,6 @@ function warmRequestBody(body: JsonObject): JsonObject | null {
   warm.max_tokens = CACHE_WARM_MAX_TOKENS;
 
   return warm;
-}
-
-/** Anthropic's `usage` block normalized; `input` is cache-inclusive as the SDK sums it, omitted fields stay absent. */
-const WarmUsageSchema = v.looseObject({
-  input_tokens: v.optional(v.number()),
-  output_tokens: v.optional(v.number()),
-  cache_read_input_tokens: v.optional(v.number()),
-  cache_creation_input_tokens: v.optional(v.number()),
-});
-
-export function warmUsage(usage: JsonObject): Usage {
-  const parsed = v.safeParse(WarmUsageSchema, usage);
-
-  if (!parsed.success) return {};
-  const { input_tokens: fresh, output_tokens: output } = parsed.output;
-  const { cache_read_input_tokens: read, cache_creation_input_tokens: write } = parsed.output;
-  const reported: { -readonly [K in keyof Usage]: number } = {};
-
-  if (fresh !== undefined || read !== undefined || write !== undefined) {
-    reported.input = (fresh ?? 0) + (read ?? 0) + (write ?? 0);
-  }
-
-  if (read !== undefined) reported.cacheRead = read;
-
-  if (write !== undefined) reported.cacheWrite = write;
-
-  if (output !== undefined) reported.output = output;
-
-  return reported;
 }
 
 /**

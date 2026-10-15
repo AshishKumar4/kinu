@@ -181,7 +181,6 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
   stopAgent(workspace: string, actorId: string): Promise<Array<{ requestId?: string; outcome: string; detail?: string }>>;
   acknowledge(workspace: string, requestId: string): Promise<void>;
   withdrawConsent(workspace: string, deviceId: string): Promise<{ ok: boolean }>;
-  answerConsent(workspace: string, decision: 'once' | 'always' | 'deny'): Promise<void>;
   revoke(deviceId: string): Promise<{ ok: boolean; unstoppedCommands?: number }>;
   requests(): Promise<Array<{ requestId: string; actorId: string | null; outcome: string | null; claim: string | null }>>;
   unstoppedSince(deviceId: string): Promise<number | null>;

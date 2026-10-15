@@ -24,6 +24,7 @@ import { AccountUsageCard } from "@/components/account/AccountUsageCard";
 import { SandboxSizeSettings } from "@/components/SandboxSize";
 import { BetaSettings } from "@/components/BetaSettings";
 import { AccountMemoryCard } from "@/components/account/AccountMemoryCard";
+import { AppearanceCard } from "@/components/account/AppearanceCard";
 import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
@@ -131,6 +132,8 @@ export default function UserSettingsPage() {
             {profile.resource.value !== null && <DeleteAccountCard email={profile.resource.value.email} />}
           </>
         )}
+
+        {section === "appearance" && <AppearanceCard />}
 
         {section === "cli" && <CliInstallCard />}
 

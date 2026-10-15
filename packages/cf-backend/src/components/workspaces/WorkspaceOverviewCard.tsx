@@ -1,25 +1,11 @@
 /** One workspace on the roster, drawn from the tile its entry carries: the card reads nothing of its own. */
 import { Link } from "react-router-dom";
-import { rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type WorkspaceStatus, type RosterEntry } from "@kinu.run/core";
+import { rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type RosterEntry } from "@kinu.run/core";
 import { WorkspaceLogo } from "@/components/Marks";
 import { SlatePicture } from "@/components/slates/SlatePicture";
-import { Status, type StatusTone } from "@/components/ui/Status";
+import { Status } from "@/components/ui/Status";
+import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
 
-function workspaceStatusTone(status: WorkspaceStatus): StatusTone {
-  switch (status) {
-    case "needs":
-      return "warning";
-    case "working":
-      return "live";
-    case "failed":
-    case "unfinished":
-      return "danger";
-    case "updated":
-    case "idle":
-    case "unreported":
-      return "neutral";
-  }
-}
 
 function StatusChip({ workspace }: { workspace: RosterEntry }) {
   const headline = rosterHeadline(workspace.overview, workspace.decisions);

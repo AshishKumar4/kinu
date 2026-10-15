@@ -152,6 +152,18 @@ export function wrangler(argv: readonly string[], run: WranglerRun = {}): Run {
   };
 }
 
+/** The object at `bucket/key` in R2 as text, or none where the bucket holds no such key: wrangler's own words for an
+ *  object that does not exist. Any other failure is no answer at all, and throws. */
+export function r2Text(bucket: string, key: string): string | undefined {
+  const read = wrangler(['r2', 'object', 'get', `${bucket}/${key}`, '--pipe', '--remote'], { timeoutMs: 600_000 });
+
+  if (read.ok) return read.stdout;
+
+  if (`${read.stderr}\n${read.stdout}`.includes('The specified key does not exist.')) return undefined;
+
+  throw new Error(`wrangler r2 object get ${bucket}/${key} failed: ${why(read)}`);
+}
+
 /** Built rather than written as a literal: an escape character inside a regex
  *  literal is a control character, which `no-control-regex` rejects — correctly,
  *  since it is invisible in the source. */

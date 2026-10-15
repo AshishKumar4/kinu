@@ -23,8 +23,10 @@ export interface WorkspaceInfo {
 }
 
 interface CLIOpenOptions {
-  /** Default endpoint for bare ids; null when nothing derives one. */
+  /** An endpoint this process was given (`--base-url` and `--auth`), served as itself; null without one. */
   llm: LLMProviderConfig | null;
+  /** The model a bare id or no choice means; absent, the given endpoint's own. */
+  defaultSpec?: string | null;
   providerCredentials?: ProviderCredentialSource;
   oauthStore?: LocalOAuthStore;
   /** The signed-in session, whose worker rates turns. */
@@ -38,9 +40,10 @@ export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;
 
 interface OpenedWorkspaceIdentity { readonly id: string; readonly name: string; readonly created_at: number }
 
+/** `name` is the one the user addresses the workspace by, which a refusal to open it names. */
 export function openWorkspaceCLI(
   db: Database,
-  dbPath: string,
+  name: string,
   config: CLIOpenConfig,
 ): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
   return settle(Effect.gen(function* () {
@@ -53,7 +56,7 @@ export function openWorkspaceCLI(
       initActorStateSchema(makeWorkspaceSchemaSql(db));
       identity = { id: config.actorBinding.reference.actorId, name: config.actorBinding.name, created_at: config.actorBinding.createdAt };
     } else {
-      requireSchemaGenesis(db, dbPath);
+      requireSchemaGenesis(db, name);
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
       const stored = sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
 

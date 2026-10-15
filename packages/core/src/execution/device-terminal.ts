@@ -20,6 +20,10 @@ const TERMINAL_WS_TAG_PREFIX = 'terminal:';
 /** Covers one round trip; an unattached session is closed rather than left running. */
 const TERMINAL_ATTACH_WINDOW_MS = 30_000;
 
+/** What a shell may draw before its pane attaches: its prompt, or why it ended, many times over. Past it the oldest go,
+ *  as a congested daemon drops them: a terminal's newest bytes are its picture. */
+const TERMINAL_HELD_BYTES = 64 * 1024;
+
 /** Each is the whole message: a device error crosses RPC as its text. */
 const TERMINAL_SESSION_UNKNOWN = 'that terminal is no longer open; open a new one';
 
@@ -62,6 +66,10 @@ export interface TerminalHolder {
 
 interface PendingSession extends TerminalHolder {
   openedAt: number;
+  /** What the shell drew before its pane attached, and its end if it already ended: the pane gets both first. */
+  held: Uint8Array[];
+  heldBytes: number;
+  exitCode: number | null;
 }
 
 export class DeviceTerminalHub {
@@ -77,9 +85,18 @@ export class DeviceTerminalHub {
     this.sockets = connections(ctx, TerminalAttachmentSchema);
   }
 
-  /** Holding the unguessable name is the authority to attach; the first attach spends it. */
+  /**
+   * Holding the unguessable name is the authority to attach; the first attach spends it. Registered before the machine
+   * is asked to open it: the shell draws its prompt at once, and on f9c17ac7b those bytes, and an exit, reached this
+   * hub before the session was known and were dropped, so the pane sat blank or closed without a word.
+   */
   register(session: string, device: string, workspace: string): void {
-    this.unattached.set(session, { device, workspace, openedAt: this.now() });
+    this.unattached.set(session, { device, workspace, openedAt: this.now(), held: [], heldBytes: 0, exitCode: null });
+  }
+
+  /** A session the machine refused to open: nothing will attach to it. */
+  forget(session: string): void {
+    this.unattached.delete(session);
   }
 
   expired(): { session: string; device: string }[] {
@@ -106,6 +123,11 @@ export class DeviceTerminalHub {
       this.sockets.accept(server, {
         key: terminalTag(session), attachment: { terminal: session, device: pending.device, workspace: pending.workspace },
       });
+      server.send(JSON.stringify({ type: 'ready' }));
+
+      for (const bytes of pending.held) server.send(bytes);
+
+      if (pending.exitCode !== null) this.paneExit(session, pending.exitCode);
 
       return { device: pending.device, workspace: pending.workspace };
     }));
@@ -159,6 +181,16 @@ export class DeviceTerminalHub {
 
   toPane(session: string, bytes: Uint8Array): void {
     const pane = this.paneSocket(session);
+    const pending = pane ? undefined : this.unattached.get(session);
+
+    if (pending) {
+      pending.held.push(bytes);
+      pending.heldBytes += bytes.byteLength;
+
+      while (pending.heldBytes > TERMINAL_HELD_BYTES && pending.held.length > 1) pending.heldBytes -= pending.held.shift()?.byteLength ?? 0;
+
+      return;
+    }
 
     if (!pane) {
       diagnostics.event('device.terminal_output_unclaimed', { reason: 'terminal_pane_missing', workspace: session });
@@ -171,6 +203,9 @@ export class DeviceTerminalHub {
 
   paneExit(session: string, exitCode: number): void {
     const pane = this.paneSocket(session);
+    const pending = pane ? undefined : this.unattached.get(session);
+
+    if (pending) pending.exitCode = exitCode;
 
     if (!pane) return;
     pane.send(JSON.stringify({ type: 'exit', exitCode }));

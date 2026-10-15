@@ -53,7 +53,7 @@ export function ScaffoldVersionDiff({ rpc, version, readAgain }: { rpc: Workspac
   return <div className="flex justify-center py-4"><Loader size="sm" /></div>;
 }
 
-export interface ScaffoldLineageProps {
+interface ScaffoldLineageProps {
   rpc: WorkspaceRpc;
   currentVersion: number;
 }

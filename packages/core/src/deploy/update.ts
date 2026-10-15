@@ -2,25 +2,16 @@
 // Versions are never ordered; "behind" means "not the channel's build".
 import * as v from 'valibot';
 import { isSameBuild } from '../http/device-update';
+import { BuildIdentitySchema } from '../http/deployed-assets';
 import type { ReleaseManifest } from './manifest';
 
 /** Fixed so reloads and retries join the running update; matches `DEPLOY_RUN_ID`. */
 export const SELF_UPDATE_RUN_ID = 'self-update-0000';
 
-export interface UpdateBuild {
-  readonly version: string;
-  readonly sha: string;
-  readonly builtAt: string;
-}
-
-const UpdateBuildSchema: v.GenericSchema<UpdateBuild> = v.object({
-  version: v.string(),
-  sha: v.string(),
-  builtAt: v.string(),
-});
+export type UpdateBuild = v.InferOutput<typeof BuildIdentitySchema>;
 
 /** `GET /api/health`: the stamp is under `build`, not top-level. */
-export const HealthAnswerSchema = v.object({ build: v.nullable(UpdateBuildSchema), versionId: v.nullish(v.string()) });
+export const HealthAnswerSchema = v.object({ build: v.nullable(BuildIdentitySchema), versionId: v.nullish(v.string()) });
 
 /** `reason` is shown instead of the install button. */
 export interface UpdateOffer {
@@ -33,8 +24,8 @@ export interface UpdateOffer {
 }
 
 export const UpdateOfferSchema: v.GenericSchema<UpdateOffer> = v.object({
-  current: v.nullable(UpdateBuildSchema),
-  available: v.nullable(UpdateBuildSchema),
+  current: v.nullable(BuildIdentitySchema),
+  available: v.nullable(BuildIdentitySchema),
   channelOrigin: v.string(),
   upToDate: v.boolean(),
   installable: v.boolean(),

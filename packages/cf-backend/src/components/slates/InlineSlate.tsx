@@ -283,7 +283,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     width: size.w,
     display,
     origin: browserOrigin(),
-  }), [theme.mode, size.w, display]);
+  }), [theme.mode, theme.name, size.w, display]);
 
   const contextRef = useRef(context);
   contextRef.current = context;

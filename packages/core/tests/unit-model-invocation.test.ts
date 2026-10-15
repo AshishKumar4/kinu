@@ -1,18 +1,18 @@
 /**
  * Every model call core makes reaches the workspace spend total, read back from the ledger the total sums
- * (`workspaceSpend` over the run-event rows). One case per call family: the endpoint LLM, the completion rater,
- * the JSON judge, and the Workers AI utility bindings. The turn loop's steps and the MCTS rollouts reach the total
+ * (`workspaceSpend` over the run-event rows). One case per call family: an endpoint model called through the one
+ * stack, and the Workers AI utility bindings. The turn loop's steps and the MCTS rollouts reach the total
  * by their own seams (`step_finish`, the engine's report), which unit-workspace-spend and the MCTS suites hold.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, unpricedLedger } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
-import { unpricedLedgerSink } from '../src/events/model-call-event';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
-import { createVercelAILLM } from '../src/llm';
-import { createWorkersAIEmbedder } from '../src/providers/model-invocation';
+import { createWorkersAIEmbedder, generateReported, streamTextReported } from '../src/providers/model-invocation';
+import { createChatModel } from '../src/llm';
+import { withModelStack } from '../src/providers/wire-model';
 import { buildCfWebSearchProvider } from '../src/web/provider-factory';
 import type { ModelCallSink } from '../src/events/model-call';
 import type { Usage } from '../src/usage';
@@ -37,7 +37,7 @@ function ledger(): Ledger {
   const events = new RunEventRecorder(ws.sql, actor);
 
   return {
-    report: unpricedLedgerSink(events),
+    report: unpricedLedger(events),
     producers: () => Object.fromEntries(workspaceSpend({ events, sql: ws.sql, actor }).producers
       .map((producer) => [producer.source, {
         calls: producer.calls, unmeasured: producer.callsWithoutUsage, usage: producer.usage,
@@ -47,7 +47,7 @@ function ledger(): Ledger {
   };
 }
 
-describe('an endpoint LLM files every call it makes', () => {
+describe('an endpoint model files every call it makes', () => {
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
@@ -78,14 +78,18 @@ describe('an endpoint LLM files every call it makes', () => {
   test('a completion and a drained stream each land once, measured, under the caller\'s producer and account', async () => {
     const { report, producers, accounts } = ledger();
 
-    const llm = createVercelAILLM({
-      name: 'endpoint', baseURL: `http://127.0.0.1:${String(server.port)}/v1`, headers: {}, model: 'served-model',
-    }, { source: 'reflection', report });
+    const model = withModelStack(createChatModel({
+      kind: 'openai-compat', name: 'endpoint', baseURL: `http://127.0.0.1:${String(server.port)}/v1`, headers: {}, modelId: 'served-model',
+    }), { provider: 'endpoint', modelId: 'served-model', lane: 'endpoint' });
 
-    expect(await llm.complete('reflect')).toBe('completed');
+    const spend = { source: 'reflection', report } as const;
+
+    expect((await generateReported({ model, prompt: 'reflect' }, { spend })).text).toBe('completed');
     let streamed = '';
 
-    for await (const chunk of llm.stream({ system: 'brief', messages: [{ role: 'user', content: 'go' }] })) streamed += chunk;
+    for await (const chunk of streamTextReported({ model, instructions: 'brief', messages: [{ role: 'user', content: 'go' }] }, { spend })) {
+      streamed += chunk;
+    }
 
     expect(streamed).toBe('streamed');
     // The endpoint reports cache reads and reasoning as measured zeros, and they stay measured.

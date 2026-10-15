@@ -119,6 +119,16 @@ describe('mission budget — transitive rollup', () => {
     expect(governor.snapshot('mission')[0]?.spent.tokens).toBe(60);
   });
 
+  // core-rest review P2-12: the chain stopped at 32 labels, so the outer budgets of a deeper chain were never charged.
+  test('a debit charges the outermost ancestor however deep the chain', () => {
+    const { governor } = makeGovernor();
+
+    for (let depth = 0; depth < 40; depth++) governor.declare(`level-${String(depth)}`, {}, { parent: depth === 0 ? undefined : `level-${String(depth - 1)}` });
+    governor.debit(7, { labels: ['level-39'] });
+
+    expect(governor.snapshot('level-0')[0]?.spent.tokens).toBe(7);
+  });
+
   test('the outer cap stops a child that is still inside its own', () => {
     const { governor } = makeGovernor();
     governor.declare('mission', { tokens: 50 });

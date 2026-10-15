@@ -23,8 +23,8 @@ export {
 } from './log';
 
 export {
-  ReplyChannelStore,
-  type ReplyDispatcher, type OpenChannelOpts, type ReplyOutcome,
+  ReplyChannelStore, dispatchEmailRepliesForTurn,
+  type ReplyDispatcher, type OpenChannelOpts, type ReplyOutcome, type EmailReplyDispatchResult,
 } from './reply-channel';
 
 export {

@@ -3,6 +3,8 @@
  * neither `Accept: text/markdown` nor `env.AI.toMarkdown` is available. Not a faithful renderer.
  */
 
+import { decodeEntities, HTML_ENTITIES } from '../utils/text';
+
 /** Strip base64 data-URI images and SVGs (token noise). Mirrors hermes-agent clean_base64_images. */
 export function stripBase64Images(text: string): string {
   return text
@@ -14,18 +16,6 @@ export function stripBase64Images(text: string): string {
 const BLOCK_TAGS =
   'address|article|aside|blockquote|details|div|dl|dd|dt|fieldset|figcaption|figure|footer|form|header|hr|main|nav|ol|p|pre|section|table|tr|ul';
 
-/** Decode the small set of HTML entities that survive tag stripping. */
-export function decodeEntities(s: string): string {
-  return s
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)));
-}
 
 /** Convert an HTML string to a compact markdown-ish text suitable for an LLM. */
 export function htmlToMarkdown(html: string): string {
@@ -56,7 +46,7 @@ export function htmlToMarkdown(html: string): string {
   s = s.replace(new RegExp(`<(?:${BLOCK_TAGS})\\b[^>]*>`, 'gi'), '\n');
 
   s = stripTags(s);
-  s = decodeEntities(s);
+  s = decodeEntities(s, HTML_ENTITIES);
   s = stripBase64Images(s);
 
   s = s

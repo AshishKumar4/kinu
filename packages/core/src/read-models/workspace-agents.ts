@@ -70,8 +70,10 @@ function commandParked(sql: SqlExecutor, actorId: string): boolean {
   return sql<{ x: number }>`SELECT 1 AS x FROM deferred_approvals WHERE actor_id = ${actorId} AND status = 'queued' LIMIT 1`.length > 0;
 }
 
-function deviceAsks(sql: SqlExecutor, now: number): boolean {
-  return sql<{ x: number }>`SELECT 1 AS x FROM device_consent_requests WHERE expires_at > ${now} LIMIT 1`.length > 0;
+/** A device ask parked on the person: the owner's own, or a live agent's (a retired one's answers nobody). */
+function deviceAsks(sql: SqlExecutor): boolean {
+  return sql<{ x: number }>`SELECT 1 AS x FROM device_consent_asks c LEFT JOIN workspace_actors a ON a.actor_id = c.actor_id
+    WHERE c.status = 'queued' AND (c.actor_id IS NULL OR (a.retiring_at IS NULL AND a.deleted_at IS NULL AND a.actor_id IS NOT NULL)) LIMIT 1`.length > 0;
 }
 
 function subordinateActivity(walk: Pick<Walk, 'sql' | 'chat'>, entry: SubordinateRosterEntry, actorId: string, running: boolean): AgentActivity {
@@ -252,7 +254,7 @@ export async function readWorkspaceAgents(input: {
   const main: Uncoloured = {
     key: 'main', label: root.config.getChatTitle() ?? 'Main', category: 'main', parent: null,
     // A device's consent request names no actor: it is the workspace's, so Main is the chat that needs the person.
-    activity: deviceAsks(sql, walk.now) ? 'waiting' : chatActivity(walk, root.actorId, turnOwed(walk, root)),
+    activity: deviceAsks(sql) ? 'waiting' : chatActivity(walk, root.actorId, turnOwed(walk, root)),
     open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
   };
 

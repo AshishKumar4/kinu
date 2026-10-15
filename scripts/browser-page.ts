@@ -889,10 +889,15 @@ export async function submitPublicSlateShare(page: Page): Promise<string | null>
 }
 
 /**
- * The open session's details line under `scope`: its folder and the ports under it. The folder is the one its element
- * names: its text holds the whole path for a wide pane and the last part for a narrow one (staging f1f0b451b).
+ * The shown session's details line under `scope`: its folder and the ports under it. The folder is the one its element
+ * names: its text holds the whole path for a wide pane and the last part for a narrow one (staging f1f0b451b). Only the
+ * shown pane's: the column keeps every opened session's pane mounted out of sight (D99).
  */
-export const sessionLine = (scope: string) => `(() => ({
-  folder: document.querySelector('${scope} [data-session-cwd]')?.getAttribute('data-session-cwd') ?? '',
-  ports: [...document.querySelectorAll('${scope} [data-session-port]')].map((port) => (port.textContent ?? '').trim()),
-}))()`;
+export const sessionLine = (scope: string) => `(() => {
+  const shown = (each) => each.checkVisibility({ visibilityProperty: true });
+
+  return {
+    folder: [...document.querySelectorAll('${scope} [data-session-cwd]')].find(shown)?.getAttribute('data-session-cwd') ?? '',
+    ports: [...document.querySelectorAll('${scope} [data-session-port]')].filter(shown).map((port) => (port.textContent ?? '').trim()),
+  };
+})()`;

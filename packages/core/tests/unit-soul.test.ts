@@ -15,8 +15,6 @@ import { agentPlane, createMemoryVfs } from '@kinu.run/test-utils';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { workspaceSoul, writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 
-const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
-
 function freshWorkspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -112,7 +110,7 @@ describe('workspace birth', () => {
     const born = bornSoul();
 
     await createWorkspace(db, {
-      name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM, home: born.home,
+      name: 'atlas', purpose: 'Help with testing.', home: born.home,
     });
 
     const identity = makeSql(db)<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0];
@@ -125,7 +123,7 @@ describe('workspace birth', () => {
     const db = new Database(':memory:');
 
     const rt = await createWorkspace(db, {
-      name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', llm: TEST_LLM, home: bornSoul().home,
+      name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', home: bornSoul().home,
     });
 
     expect((await rt.storage.vfs.stat('scaffold/agent.js'))?.type).toBe('file');
@@ -134,7 +132,7 @@ describe('workspace birth', () => {
 
   test('a custom first loop is born as v0 through the one writer: source, pointer and live view agree, and a reopen keeps them', async () => {
     const custom = 'async function* run(rt, task) { yield { type: "chunk", data: "custom" }; }';
-    const rt = await createWorkspace(new Database(':memory:'), { name: 'atlas', purpose: 'Help.', llm: TEST_LLM, scaffold: custom, home: bornSoul().home });
+    const rt = await createWorkspace(new Database(':memory:'), { name: 'atlas', purpose: 'Help.', scaffold: custom, home: bornSoul().home });
 
     const agree = async () => ({
       pointer: getCurrentScaffoldVersion(rt.storage.sql, rt.actor),
@@ -152,14 +150,14 @@ describe('workspace birth', () => {
     const titledSoul = bornSoul();
 
     await createWorkspace(new Database(':memory:'), {
-      name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', llm: TEST_LLM, home: titledSoul.home,
+      name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', home: titledSoul.home,
     });
 
     expect(await titledSoul.soul()).toContain('Callback Audit');
     const untitledSoul = bornSoul();
 
     const untitled = await createWorkspace(new Database(':memory:'), {
-      name: 'quiet-harbor-1a4e20', purpose: 'Audit it.', llm: TEST_LLM, home: untitledSoul.home,
+      name: 'quiet-harbor-1a4e20', purpose: 'Audit it.', home: untitledSoul.home,
     });
 
     const soul = await untitledSoul.soul() ?? '';

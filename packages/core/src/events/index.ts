@@ -78,4 +78,4 @@ export {
   type SpendTally,
 } from './model-call';
 
-export { buildModelCallEvent, unpricedLedgerSink } from './model-call-event';
+export { buildModelCallEvent } from './model-call-event';

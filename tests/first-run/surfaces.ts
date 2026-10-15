@@ -64,7 +64,7 @@ export const STRIP_ROWS = {
 export const ENTRY_ROWS = {
   tui: ['enter-sends'],
   cli: ['workspace-title', 'preview-address', 'command-refusal', 'multi-account'],
-  daemon: ['device-link', 'two-machines', 'approve-clears'],
+  daemon: ['device-link', 'device-join', 'two-machines', 'approve-clears'],
   shareHost: ['public-share', 'share-capability-cut', 'users-share'],
 } as const satisfies Record<string, Rows>;
 

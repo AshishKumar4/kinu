@@ -40,13 +40,13 @@ import {
 } from "./auth/session";
 import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
-import { ownerCaller } from "@kinu.run/core";
-import { appendIdentityHeaders } from "./cli/rpc-gate";
+import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
+import { ownedWorkspace } from "./api/workspace";
 import { err } from "@kinu.run/core";
 import { controlPlaneAccess } from "./control-plane/admin-caller";
 import { CONTROL_PLANE_UI_ROUTE } from "./control-plane/access-gate";
-import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
+import { observeIdentity } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { api } from "./api/app";
 import { beneath, rawParam, rawPath, routeError, type ApiVariables, type FamilyEnv } from "./api/context";
@@ -311,6 +311,24 @@ function mount<Bindings extends object, Variables extends object>(
 
 const appShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env);
 
+/**
+ * Behind sign-in: the page names the account's theme, so it paints in it on any device it opens on. The theme is only
+ * a look: a read that fails is logged and the page is served in the default, never refused.
+ */
+const accountShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env, {
+  theme: async () => {
+    let theme: ThemeName = DEFAULT_THEME;
+
+    await settleLogged('app.theme_read_failed', { doing: "reading the account's theme for its page", otherwise: 'unavailable' }, async () => {
+      const account = c.env.UserDO.get(c.env.UserDO.idFromName(c.get('identity').userId));
+
+      theme = accountTheme(await account.getConfig(await ownerCaller(c.env), THEME_CONFIG_KEY));
+    });
+
+    return theme;
+  },
+});
+
 worker.use('*', async (c, next) => (isPreviewHostRequest(new URL(c.req.url), c.env)
   ? await previewHost.fetch(c.req.raw, c.env, c.executionCtx)
   : await next()));
@@ -390,30 +408,21 @@ worker.all('/agents/*', async (c, next) => {
 
   // routeAgentRequest maps every DO binding by slug; the rejection above keeps
   // UserDO and KinuDevbox unreachable.
-  const identity = c.get('identity');
-  const claim = await claimOwnedWorkspace(c.env, identity.userId, agentName);
+  const owned = await ownedWorkspace(c, c.get('identity'), agentName, c.get('request'));
 
-  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
-
-  observeWorkspaceUse(c.env, identity, agentName, { retain: c.executionCtx });
-
-  const routed = c.get('request');
-  const headers = appendIdentityHeaders(routed.headers, identity);
-
+  if (Result.isFailure(owned)) return owned.failure;
+  const { agent, request } = owned.success;
   const hosted = hostedActorRoute(c.req.path);
 
-  if (hosted) {
-    const root = c.env.OrchestratorAgent.get(c.env.OrchestratorAgent.idFromName(agentName));
-    const target = await root.resolveHostedActorRoute(hosted.name);
+  if (hosted === null) return (await routeAgentRequest(request, c.env)) ?? next();
+  const target = await agent.resolveHostedActorRoute(hosted.name);
 
-    if ('reason' in target) {
-      return Response.json(target, { status: ERROR_STATUS[target.reason] });
-    }
+  if ('reason' in target) return Response.json(target, { status: ERROR_STATUS[target.reason] });
+  const headers = new Headers(request.headers);
 
-    headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);
-  }
+  headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);
 
-  return (await routeAgentRequest(new Request(routed, { headers }), c.env)) ?? next();
+  return (await routeAgentRequest(new Request(request, { headers }), c.env)) ?? next();
 });
 
 // A workspace's page wakes its object while the document, the app and its socket are still on the way: the claim
@@ -428,13 +437,13 @@ const workspacePage = async (c: Context<WorkerEnv>): Promise<Response> => {
       async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace); }));
   }
 
-  return await appShell(c);
+  return await accountShell(c);
 };
 
 worker.get(APP_ROUTES.workspace, workspacePage);
 
 worker.get(`${APP_ROUTES.workspace}/*`, workspacePage);
 
-worker.notFound(appShell);
+worker.notFound(accountShell);
 
 worker.onError(routeError);

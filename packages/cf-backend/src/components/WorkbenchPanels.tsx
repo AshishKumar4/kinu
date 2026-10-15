@@ -3,6 +3,7 @@
 import { useEffect, useImperativeHandle, useMemo, useState, type ReactNode, type Ref } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { SidebarSimpleIcon } from "@phosphor-icons/react";
+import { DESKTOP_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { needsTheUser, type PersonAsks } from "@kinu.run/core";
 
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
@@ -60,18 +61,7 @@ export function InspectorToggle({ control }: { control: InspectorControl }) {
 export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspector, onInspector }: WorkbenchPanelsProps) {
   const [mobilePane, setMobilePane] = useState<"chat" | "workspace">("chat");
 
-  const [desktopPanels, setDesktopPanels] = useState(
-    () => globalThis.window === undefined || globalThis.window.matchMedia("(min-width: 768px)").matches,
-  );
-
-  useEffect(() => {
-    const media = window.matchMedia("(min-width: 768px)");
-    const sync = () => setDesktopPanels(media.matches);
-    sync();
-    media.addEventListener("change", sync);
-
-    return () => media.removeEventListener("change", sync);
-  }, []);
+  const desktopPanels = useMediaQuery(DESKTOP_QUERY);
 
   const layout = useInspectorLayout({
     desktopPanels,

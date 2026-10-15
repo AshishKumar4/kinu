@@ -388,6 +388,11 @@ describe("sandbox transient error classification", () => {
     // A predicate true for everything would make the two above meaningless.
     expect(isSandboxTransientError(new Error('command not found: nope'))).toBe(false);
   });
+
+  test("a failure the platform was never seen to raise transiently is a fault, not a retry", () => {
+    expect(isSandboxTransientError(new Error('HTTP error! status: 500'))).toBe(false);
+    expect(isSandboxTransientError(new Error('Container suddenly disconnected'))).toBe(false);
+  });
 });
 
 describe("the sandbox namespace a program calls", () => {

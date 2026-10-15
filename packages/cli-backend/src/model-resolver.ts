@@ -49,7 +49,7 @@ import {
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import type { LLM } from '@kinu.run/core';
-import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provider';
+import { createOpenCodeProvider } from './opencode-provider';
 import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
 import { Effect } from 'effect';
@@ -120,9 +120,11 @@ export interface LocalModelResolver {
 }
 
 export interface LocalModelResolverConfig {
-  /** Default endpoint for bare model ids. Null when nothing derives one: explicit
-   *  `provider/model` specs still resolve, bare ids fail with the fixes named. */
+  /** An endpoint this process was given (`--base-url` and `--auth`), served as itself; null without one. */
   llm: LLMProviderConfig | null;
+  /** The model a bare id or no choice means, a full spec; absent, the given endpoint's own. Null when nothing derives
+   *  one: explicit `provider/model` specs still resolve, bare ids fail with the fixes named. */
+  defaultSpec?: string | null;
   credentials?: ProviderCredentialSource;
   oauthStore?: LocalOAuthStore;
   /** When present, workers-ai + my-gateway resolve through the worker's AI proxy;
@@ -187,7 +189,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const authStore = buildAuthStore(localEndpoint, opts.credentials ?? (() => ({})), opts.oauthStore);
 
   const cloud = opts.cloud;
-  const defaultSpec = defaultSpecForEndpoint(localEndpoint);
+  const defaultSpec = opts.defaultSpec !== undefined ? opts.defaultSpec : endpointSpec(localEndpoint);
   const gateway = workersAiRoute(localEndpoint, cloud)?.gateway ?? null;
   const listings = cloud ? new LocalCloudListings(cloud, opts.fetch) : null;
 
@@ -568,10 +570,6 @@ function noDefaultModelMessage(): string {
   return 'No default model is set, and this machine is neither signed in to Kinu nor connected to a model provider.';
 }
 
-type CliProviderId =
-  | 'workers-ai' | 'chatgpt' | 'openai' | 'anthropic'
-  | 'openrouter' | 'openai-compat' | 'opencode' | 'claude';
-
 /**
  * Where a Workers AI call from this CLI goes: the configured endpoint when it serves Workers AI (`KINU_BASE_URL`, a
  * local gateway, a Cloudflare login), else the signed-in worker's proxy, an explicit endpoint winning over it.
@@ -582,7 +580,7 @@ export function workersAiRoute(
 ): { readonly gateway: LLMProviderConfig | null; readonly auth: AuthResolution } | null {
   const proxied = cloud !== undefined && llm !== null && llm.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
 
-  if (llm !== null && !proxied && defaultProviderFor(llm) === 'workers-ai') {
+  if (llm !== null && !proxied && servesWorkersAi(llm)) {
     return { gateway: llm, auth: { baseURL: llm.baseURL, headers: llm.headers } };
   }
 
@@ -591,39 +589,16 @@ export function workersAiRoute(
   return { gateway: null, auth: { baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } } };
 }
 
-/**
- * Which provider a bare model id belongs to, given the configured endpoint. The
- * adapter's one table, create path included; a copy missing rows would seed the
- * wrong provider.
- */
-function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
-  if (llm === null) return null;
-
-  if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
-
-  if (llm.name === 'chatgpt') return 'chatgpt';
-
-  if (llm.name === 'openai') return 'openai';
-
-  if (llm.name === 'anthropic') return 'anthropic';
-
-  if (llm.name === 'openrouter') return 'openrouter';
-
-  if (llm.name === OPENCODE_PROVIDER_ID) return OPENCODE_PROVIDER_ID;
-
-  if (llm.name === 'claude') return 'claude';
-
-  return 'openai-compat';
+/** Whether an endpoint the process was given serves Workers AI: named so, or naming a Workers AI model. */
+function servesWorkersAi(llm: LLMProviderConfig): boolean {
+  return llm.name === 'workers-ai' || llm.model.startsWith('@cf/');
 }
 
-/** Full spec a configured endpoint stands for: the seed for `actor_config.model`
- *  and the bare-id fallback. Null cues `noDefaultModelMessage()`. */
-export function defaultSpecForEndpoint(llm: LLMProviderConfig | null): string | null {
-  const provider = defaultProviderFor(llm);
+/** The spec an endpoint the process was given serves: its own model, as Workers AI or as an OpenAI-compatible one. */
+function endpointSpec(llm: LLMProviderConfig | null): string | null {
+  if (llm === null) return null;
+  const provider = servesWorkersAi(llm) ? 'workers-ai' : 'openai-compat';
 
-  if (provider === null || llm === null) return null;
-
-  // Some configs already carry the prefix; avoid `chatgpt/chatgpt/…`.
   return `${provider}/${stripProvider(llm.model, provider)}`;
 }
 

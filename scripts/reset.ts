@@ -30,10 +30,10 @@ import { registryToken, restApiToken } from './cloudflare-token';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import {
   type ContainerApplication, type DeployedBinding, containerApplications, deleteContainerApplication, deployedVersion, deployment,
-  requireCloudflareAccountId, why, wrangler,
+  r2Text, requireCloudflareAccountId, why, wrangler,
 } from './infra-cloudflare';
 import {
-  type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, deployedConfig, liveClasses,
+  type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, bucketOf, deployedConfig, liveClasses,
 } from './infra-manifest';
 import { servedHealth } from './served-health';
 
@@ -154,10 +154,6 @@ function origin(config: DeployedConfig): string {
   return value;
 }
 
-function bucketOf(config: DeployedConfig, binding: string): string | undefined {
-  return config.r2_buckets?.find((entry) => entry.binding === binding)?.bucket_name;
-}
-
 function run(argv: readonly string[]): string {
   const result = wrangler(argv, { timeoutMs: 600_000 });
 
@@ -174,13 +170,9 @@ function plan(environment: InfraEnvironment) {
 
 /** The newest reset recorded in `bucket`, or none. */
 export function latestReset(bucket: string): Reset | undefined {
-  const read = wrangler(['r2', 'object', 'get', `${bucket}/${LATEST_RESET_KEY}`, '--pipe', '--remote'], { timeoutMs: 600_000 });
+  const text = r2Text(bucket, LATEST_RESET_KEY);
 
-  if (read.ok) return v.parse(ResetSchema, JSON.parse(read.stdout));
-
-  if (`${read.stderr}\n${read.stdout}`.includes('The specified key does not exist.')) return undefined;
-
-  throw new Error(`wrangler r2 object get ${bucket}/${LATEST_RESET_KEY} failed: ${why(read)}`);
+  return text === undefined ? undefined : v.parse(ResetSchema, JSON.parse(text));
 }
 
 /** The account as wrangler and the REST API reach it. */

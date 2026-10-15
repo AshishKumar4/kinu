@@ -861,6 +861,23 @@ describe('ChatWireTransport', () => {
     });
   });
 
+  // unit-chat-reopened-turn hung on it (2026-10-14): a tab opened during a re-drive is told the turn resumes as it opens,
+  // acks, and its own resume probe is answered again while its replay reads the ledger. The answer took the tab a second
+  // hold its replay never released, so it heard the replay and nothing of the turn after it.
+  test("a tab told again that the turn resumes, while its replay reads the ledger, hears the live chunks after its replay", async () => {
+    const { h, revived, joining, acked, release } = await joinedWhileLedgerReads();
+
+    await revived.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-again' }));
+    release();
+    await acked;
+    await revived.observe(chunks([{ type: 'start' }, { type: 'start-step' }]));
+
+    expect(answersHeard(h.received('c2'))).toEqual([
+      'replay start', 'replay start-step', 'replay R text-start', 'replay R text-delta one', 'replay R text-end', 'replay finish-step',
+      'replay complete', 'start', 'start-step',
+    ]);
+  });
+
   /** Owner report 2026-09-26, "reasoning-delta for missing reasoning part": the tab's reader throws on a delta whose
    *  part it never saw open, so every part a joining tab continues must open in what it reads, before its deltas. */
   // 2026-09-26 (two-turn.test.ts red): a done frame for another request is never stored, so the replay on ack

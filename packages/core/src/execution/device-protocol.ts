@@ -46,7 +46,7 @@ export const DeviceUpdateHelloSchema = v.object({
 export const DeviceHelloSchema = v.object({
   ...DeviceUpdateHelloSchema.entries,
   hostname: v.string(),
-  /** The directory `kinu connect` ran in, and the machine's home.
+  /** The directory the owner linked (their home, unless the connect command named one), and the machine's home.
    *  Absolute or ignored: a relative path names nothing the hub can scope a call to. */
   root: v.string(),
   home: v.string(),

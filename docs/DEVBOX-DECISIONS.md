@@ -4915,6 +4915,19 @@ generation, as `scripts/mutation-fences.ts` pins. Because the kernel id changes 
 clears the row: a start or wake after the box ended its container is not counted as a replacement, and one the
 platform made while a container of record stood still is.
 
+D99. A computer's terminals and desktop stay open once opened, and the desktop expands in place (2026-10-14; the owner
+on production f9c17ac7b). The Environment panel unmounted the pane a switch left, so every switch between a session and
+the desktop opened its socket or its client again behind a loading state: on staging b11719d71, warm, the terminal was
+back 323 and 1,119 ms after its tab was chosen and the desktop drew 713 and 718 ms after its own. Now each pane a
+machine opens stays mounted while that machine is chosen: the one shown in the flow, the rest laid out at its size and
+hidden (`visibility: hidden`), so a switch shows a pane again with nothing to reopen or resize. A closed session's pane
+goes, and a resize's restart (D50), which ends them all, starts the list again. The desktop's full screen was a second
+client on its own route in a new tab (b21b68efd), drawn as a thin strip; that route is gone. Expand keeps the one client
+where it is in the document, since an iframe moved in the document reloads, and covers the workspace area with it at
+`main`'s box (`position: fixed`), following that box as the rail folds for it; Back to panel returns it. A
+`container-type` ancestor makes no containing block for it (Chrome 129, Safari 18.4; measured in the tier's Chrome
+151). The product-flow row `desktop-switch` reads both on each deployment, with the switch times.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

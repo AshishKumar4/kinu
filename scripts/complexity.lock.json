@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-14",
-  "files": 3298,
-  "functions": 86341,
+  "measuredAt": "2026-10-15",
+  "files": 3316,
+  "functions": 86807,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -71,10 +71,6 @@
     },
     {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
-      "complexity": 34
-    },
-    {
-      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
       "complexity": 34
     },
     {
@@ -174,10 +170,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/core/src/tui/input-state.ts#reduceInput",
-      "complexity": 29
-    },
-    {
       "key": "packages/core/src/web/hero-canvas.ts#createCanvasRenderer>render",
       "complexity": 29
     },
@@ -203,10 +195,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
-      "complexity": 28
-    },
-    {
-      "key": "packages/cli/src/config.ts#resolveLLMConfig",
       "complexity": 28
     },
     {
@@ -318,10 +306,6 @@
       "complexity": 26
     },
     {
-      "key": "packages/cf-backend/src/components/ProfileCatalogSettings.tsx#ProfileCatalogSettings",
-      "complexity": 26
-    },
-    {
       "key": "packages/cf-backend/src/components/Sidebar.tsx#Sidebar",
       "complexity": 26
     },
@@ -391,6 +375,10 @@
     },
     {
       "key": "packages/core/src/strategy/swarm.ts#resolveSwarm",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 26
     },
     {

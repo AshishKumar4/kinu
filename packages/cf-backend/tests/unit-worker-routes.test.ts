@@ -23,7 +23,8 @@ const DEV_SECRET = 'worker-routes-dev-secret';
 /** The workspace the signed-in caller owns. */
 const OWNED = 'ws';
 
-type Caller = 'anon' | 'page' | 'signed-in' | 'localhost';
+/** `fetch`: no session, accepting any type, as fetch and curl ask by default. */
+type Caller = 'anon' | 'fetch' | 'page' | 'signed-in' | 'localhost';
 
 interface Answer {
   readonly status: number;
@@ -61,6 +62,8 @@ function env(assets: string[]): Env {
       async ensureWorkspaceCapability() {},
       // No OAuth app is configured, so /login asks whether the deployment has its first account.
       async builtinHasOwner() { return false; },
+      // A signed-in page's shell names the account's theme; this account chose none.
+      async getConfig() { return null; },
     }),
     OrchestratorAgent: objects({
       async claimOwner() { return { owner: 'owner', capabilityHash: null }; },
@@ -77,6 +80,8 @@ async function send(caller: Caller, method: string, path: string): Promise<Answe
   const headers: Record<string, string> = {};
 
   if (caller === 'page') headers.accept = 'text/html';
+
+  if (caller === 'fetch') headers.accept = '*/*';
 
   if (caller === 'signed-in') headers[DEV_IDENTITY_HEADER] = DEV_SECRET;
   const origin = caller === 'localhost' ? 'http://localhost:8787' : `https://${APP_HOST}`;
@@ -157,11 +162,15 @@ const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   // `/api/` is its own app; `/api` and `/apix` are not.
   ['anon', 'GET', '/api/health', { status: 200 }],
   ['anon', 'GET', '/api', door(401)],
+  // An API is never a page: a client that accepts anything is refused, not sent to sign-in (a redirect followed reads 200).
+  ['fetch', 'GET', '/api/user/memory', door(401)],
+  ['fetch', 'GET', '/api/user/workspaces', door(401)],
   ['signed-in', 'GET', '/apix', shell('/apix')],
 
   // The session gate, then agent sockets, then the shell.
   ['page', 'GET', '/settings', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fsettings` }],
   ['anon', 'GET', '/settings', door(401)],
+  ['fetch', 'GET', '/settings', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fsettings` }],
   ['signed-in', 'GET', '/settings', shell('/settings')],
   ['page', 'GET', '/agents/orchestrator-agent/ws', door(401)],
   ['anon', 'GET', '/agents/user-d-o/victim', door(401)],

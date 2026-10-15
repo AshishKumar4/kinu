@@ -20,7 +20,7 @@ interface OutlineGeometry { readonly left: number; readonly right: number; reado
 
 const FLARE = 8;
 
-export interface TabOutlineState {
+interface TabOutlineState {
   readonly geometry: OutlineGeometry | null;
   readonly glide: boolean;
   readonly overflow: Overflow;

@@ -57,6 +57,8 @@ export type HubFrame = v.InferOutput<typeof FrameSchema>;
 export type HubPush =
   | { type: typeof DEVICE_FRAMES.rotate; token: string }
   | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string; checksums?: Record<string, string>; signature?: string }
+  /** Keystrokes for an open terminal, base64. */
+  | { type: typeof DEVICE_FRAMES.ptyInput; session: string; data: string }
   /** A call, with the owner's Sandbox switch composed the way the hub composes it. */
   | {
     id: string; method: string; params: unknown[]; sandbox?: { tier: 'raw' | 'sandboxed'; agentHome: string; roots: string[] };

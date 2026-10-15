@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-10-14",
-  "total": 90,
+  "total": 85,
   "files": {
     "packages/cf-backend/tests/helpers/actor-harness.ts": {
       "lap-poll": 1
@@ -107,11 +107,11 @@
       "sleep": 1
     },
     "tests/first-run/device-link.first-run.ts": {
-      "clock-compare": 5,
-      "sleep": 7
+      "clock-compare": 4,
+      "sleep": 5
     },
     "tests/first-run/device-session.ts": {
-      "sleep": 3
+      "sleep": 1
     },
     "tests/first-run/enter-sends.first-run.ts": {
       "clock-compare": 1,

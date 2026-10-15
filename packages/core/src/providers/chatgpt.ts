@@ -14,7 +14,7 @@ import { streamedGenerate } from './middleware/stream-generate';
 import { heardFetch } from './middleware/attempt';
 import { lazyModel } from './wire-model';
 
-export const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
+const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
 
 export const CHATGPT_CRED_KEY = 'chatgpt.oauth';
 

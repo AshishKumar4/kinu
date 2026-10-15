@@ -8,13 +8,13 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   WORKSPACE_ARCHIVE_EXTENSION,
-  archiveSqlFromDatabase,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
   type ArchiveCursor,
   type ArchivePage,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
+import { sqlStorageOver } from '@kinu.run/core/identity';
 import {
   localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stampSchemaGenesis,
 } from '@kinu.run/cli-backend';
@@ -119,7 +119,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
       let store: ReturnType<typeof createInlineWorkspace> | null = null;
       const opened = () => (store ??= createInlineWorkspace(db));
 
-      const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), {
+      const result = await restoreWorkspaceArchive(sqlStorageOver(db), readLines(file), {
         files: () => files, store: () => workspaceArchiveTarget(opened()),
       });
 
@@ -172,7 +172,7 @@ async function* localArchivePages(name: string, output: string): AsyncGenerator<
 
   try {
     requireSchemaGenesis(db, local.name);
-    const sql = archiveSqlFromDatabase(db);
+    const sql = sqlStorageOver(db);
     let cursor: ArchiveCursor | null = null;
 
     do {

@@ -431,7 +431,7 @@
       "file": "packages/core/src/web/provider.ts",
       "kind": "hand-parser",
       "owner": "parseDuckDuckGoHtml",
-      "sourceSha256": "efa8b0553be4251ef463229ede5ea363dfe57e318654258a7b84c3c1d6031b65",
+      "sourceSha256": "122174e1dfee8c9722f6238e2726ebb0f1c85fda4890859a661e7ab97906f67d",
       "decision": "html"
     },
     {

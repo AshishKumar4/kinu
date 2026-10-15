@@ -66,12 +66,12 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
       const script = `
         import { generateText } from 'ai';
         import { createConfiguredLocalModelResolver } from './packages/cli/src/local-model-resolver.ts';
-        const { llmConfig, resolver } = createConfiguredLocalModelResolver();
+        const { defaults, resolver } = createConfiguredLocalModelResolver();
         const providers = await resolver.listProviders();
         const { models } = await resolver.listModels();
         const turn = await generateText({ model: resolver.resolveModel(null, { sessionAffinity: 'kinu-jarvis', workspaceAffinity: 'kinu-jarvis' }), prompt: 'ping' });
         console.log(JSON.stringify({
-          llmName: llmConfig.name,
+          givenEndpoint: defaults.endpoint,
           defaultSpec: resolver.normalizeSpecSync(null),
           providers: providers.filter((p) => ['workers-ai', 'my-gateway'].includes(p.id))
             .map((p) => ({ id: p.id, available: p.available })),
@@ -105,7 +105,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       expect(JSON.parse(stdout)).toEqual({
-        llmName: "workers-ai",
+        givenEndpoint: null,
         defaultSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
         providers: [
           { id: "workers-ai", available: true },

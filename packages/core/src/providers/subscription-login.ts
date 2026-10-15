@@ -62,6 +62,11 @@ export async function rotateLogin(key: string, doing: string, rotate: () => Prom
   return { failed };
 }
 
+/** A subscription login renews, so it is a login at all, only with a refresh token: both backends refuse one without. */
+export function renewableLogin(login: { readonly refreshToken?: string | undefined } | null | undefined): boolean {
+  return Boolean(login?.refreshToken);
+}
+
 /**
  * The one policy for a stored subscription login at a call, both backends. Without a refresh token it is no login. Due
  * or refused, it renews once through the store; a retired login answers null, and an unreachable issuer leaves the
@@ -75,7 +80,7 @@ export async function usableLogin(input: {
 }): Promise<OAuthCredential | null> {
   const { credential } = input;
 
-  if (!credential.refreshToken) return null;
+  if (!renewableLogin(credential)) return null;
 
   if (!input.refused && !input.issuer.expiring(credential)) return credential;
   const renewed = await input.renew();

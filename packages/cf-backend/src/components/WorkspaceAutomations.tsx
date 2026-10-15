@@ -13,6 +13,7 @@ import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
+import { StatusDot, type StatusTone } from "@/components/ui/Status";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import * as v from "valibot";
 import { showing, detach } from '@kinu.run/core/obs';
@@ -83,7 +84,8 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
   );
 }
 
-const TRIGGER_DOT = new Map([["active", "p-dot-success"], ["paused", "p-dot-warning"]]);
+/** An active trigger is healthy; a paused one needs a look. */
+const TRIGGER_TONE: ReadonlyMap<string, StatusTone> = new Map([["active", "success"], ["paused", "warning"]]);
 
 /** The delivery URL carries a signed route capability; a URL built here would 404. */
 function TriggerLine({ trigger, onRevoke }: {
@@ -97,7 +99,7 @@ function TriggerLine({ trigger, onRevoke }: {
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-      <span className={`size-1.5 rounded-full shrink-0 ${TRIGGER_DOT.get(trigger.state) ?? "p-dot-neutral"}`} />
+      <StatusDot tone={TRIGGER_TONE.get(trigger.state) ?? "neutral"} />
       <span className="font-medium p-text-2 truncate max-w-40" title={label}>{label}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
       {cron && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{cron}</code>}
