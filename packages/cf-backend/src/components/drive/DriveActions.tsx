@@ -10,6 +10,7 @@ import { showing, settle } from "@kinu.run/core/obs";
 import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
 } from "@/lib/drive-api";
+import { linkKeyOf } from "@/lib/room-client";
 import { leaveSlate } from "@/lib/shared-api";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { Modal } from "@/components/ui/Modal";
@@ -276,6 +277,6 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
         </ConfirmDialog>
       );
     case "fork":
-      return <ForkDialog room={{ workspace: dialog.card.workspace, slate: dialog.card.slate }} title={dialog.card.title} mode="fork" onClose={onClose} create={create} />;
+      return <ForkDialog room={{ workspace: dialog.card.workspace, slate: dialog.card.slate, key: linkKeyOf(dialog.card.url) }} title={dialog.card.title} mode="fork" onClose={onClose} create={create} />;
   }
 }

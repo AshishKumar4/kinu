@@ -29,6 +29,10 @@ const WelcomePage = lazyRoute(() => import("./pages/WelcomePage"));
 
 const DrivePage = lazyRoute(() => import("./pages/DrivePage"));
 
+const GalleryPage = lazyRoute(() => import("./pages/GalleryPage"));
+
+const GallerySlatePage = lazyRoute(() => import("./pages/GallerySlatePage"));
+
 const WorkspacesPage = lazyRoute(() => import("./pages/WorkspacesPage"));
 
 const PluginsPage = lazyRoute(() => import("./pages/PluginsPage"));
@@ -114,6 +118,8 @@ export default function App() {
             <Route path={APP_ROUTES.driveFolder} element={<Page label="drive-folder"><DrivePage tab="mine" /></Page>} />
             <Route path={APP_ROUTES.slates} element={<Page label="slates"><DrivePage tab="slates" /></Page>} />
             <Route path={APP_ROUTES.shared} element={<Page label="shared"><DrivePage tab="shared" /></Page>} />
+            <Route path={APP_ROUTES.gallery} element={<Page label="gallery"><GalleryPage /></Page>} />
+            <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />
             <Route path={APP_ROUTES.workspaces} element={<Page label="workspaces"><WorkspacesPage /></Page>} />
             <Route path={APP_ROUTES.plugins} element={<Page label="plugins"><PluginsPage /></Page>} />
             <Route path={APP_ROUTES.devices} element={<Page label="devices"><DevicesPage /></Page>} />

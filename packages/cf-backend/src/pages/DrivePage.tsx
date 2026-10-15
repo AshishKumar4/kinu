@@ -9,11 +9,11 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import { Loader } from "@cloudflare/kumo";
 import {
   AppWindowIcon, ArrowSquareOutIcon, BookOpenIcon, CaretDownIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
-  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, WarningIcon, XIcon,
+  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, StarIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
-  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, compareCodeUnits, entryRevision, formatBytes, joinDir, parseSkillFile, roomPagePath, shortAge,
+  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, compareCodeUnits, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
   skillViewPath, workspaceDisplayTitle,
   type DriveEntry, type DriveLibrary, type DriveListing, type DriveRoomCard, type DriveSlate, type FileText, type GalleryListing, type RoomAudience,
   type SkillFileRefusal,
@@ -24,6 +24,7 @@ import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
 import { getDriveLibrary, markSharedSeen } from "@/lib/shared-api";
+import { gallerySlateHref, ListingPicture } from "@/components/gallery/GalleryTiles";
 import { useAsyncResource, lastValue, type AsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
@@ -874,7 +875,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   // A slate shared with this person, or used through its link: opened live, where everyone uses it together.
   const cardTile = (row: DriveRoomCard): ReactNode => {
-    const href = roomPagePath(row.workspace, row.slate);
+    const href = row.url;
     const meta = [row.owner.name ?? row.owner.email, row.relation === "shared" && row.role === "edit" ? "Edit" : null, shortAge(row.at)].filter(Boolean).join(" · ");
 
     return (
@@ -889,12 +890,14 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     );
   };
 
-  // A Gallery slate this person starred: opened from the Gallery, live.
+  // A Gallery slate this person starred: its Gallery page, and its link to open it live.
   const starredTile = (star: GalleryListing): ReactNode => {
-    const href = roomPagePath(star.workspace, star.slate);
+    const href = star.url;
 
     return (
-      <Tile key={`star:${star.workspace}:${star.slate}`} title={star.title} icon={SHARE_ICON.live} picture={<Cover title={star.title} />} href={href}
+      <Tile key={`star:${star.workspace}:${star.slate}`} title={star.title} icon={<StarIcon size={15} weight="fill" className="p-accent" />}
+        picture={<ListingPicture listing={star} />}
+        href={gallerySlateHref(star.workspace, star.slate)}
         meta={<span className="truncate">{[star.owner.name, star.line].join(" · ")}</span>} attributes={{ "data-drive-starred": star.slate }}
         menu={[
           { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(href) },

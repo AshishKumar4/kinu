@@ -302,6 +302,8 @@ export {
 export {
   GALLERY_CATEGORIES, RoomViewSchema, RoomCallSchema, RoomClientFrameSchema, RoomServerFrameSchema,
   DriveLibrarySchema, ForkPreviewSchema, ForkedSchema,
+  GALLERY_SORTS, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH, GALLERY_REPORT_PATH,
+  type GalleryPage, type GallerySlate, type GalleryStar, type GalleryReport,
   roomPagePath, roomSocketPath, roomEntryPath, roomForkPath, RoomEntrySchema, type RoomEntry,
   type RoomPerson, type RoomRole, type RoomAccess, type RoomAudience, type RoomService, type RoomTool, type RoomSource,
   type RoomReach, type GalleryCategory, type SheetLend, type SheetLendUse, type SheetMember, type SheetView,

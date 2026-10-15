@@ -190,16 +190,16 @@ const LIBRARY: DriveLibrary = {
   ],
   // Oldest first, as the account's rows arrive: the Drive shows the newest first.
   shared: [
-    { workspace: "sam-mail", slate: "deploy-board", title: "Deploy status board", owner: SAM, relation: "shared", role: "edit", at: NOW - 864e5 },
-    { workspace: "sam-mail", slate: "inbox-digest", title: "Inbox digest", owner: SAM, relation: "shared", role: "use", at: NOW - 2 * 3600e3, unseen: true },
+    { workspace: "sam-mail", slate: "deploy-board", title: "Deploy status board", owner: SAM, relation: "shared", role: "edit", at: NOW - 864e5, url: "/s/sam-mail/deploy-board" },
+    { workspace: "sam-mail", slate: "inbox-digest", title: "Inbox digest", owner: SAM, relation: "shared", role: "use", at: NOW - 2 * 3600e3, unseen: true, url: "/s/sam-mail/inbox-digest" },
   ],
   used: [
-    { workspace: "lee-ops", slate: "on-call", title: "On-call rota", owner: { email: "lee@example.com", name: "Lee Park" }, relation: "used", at: NOW - 3 * 864e5 },
+    { workspace: "lee-ops", slate: "on-call", title: "On-call rota", owner: { email: "lee@example.com", name: "Lee Park" }, relation: "used", at: NOW - 3 * 864e5, url: "/s/lee-ops/on-call?k=r7t2" },
   ],
   starred: [
     {
       workspace: "ana-home", slate: "recipe-scaler", title: "Recipe scaler", line: "Scale any recipe, in grams.", category: "home", owner: { name: "Ana Souza" },
-      stars: 412, starred: true, listedAt: NOW - 9 * 864e5, needs: [],
+      stars: 412, starred: true, listedAt: NOW - 9 * 864e5, needs: [], featured: false, url: "/s/ana-home/recipe-scaler?k=g3w8",
     },
   ],
 };

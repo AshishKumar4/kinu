@@ -356,6 +356,9 @@ const FORK_PREVIEW: ForkPreview = {
   parts: [{ fn: "listIssues", lent: false, needs: { title: "Linear", kind: "mcp" } }, { fn: "weeklyDeploys", lent: true, needs: null }],
 };
 
+/** The link's key a link visitor's frame came by: the fork route admits them by it, as the room does. */
+const LINK_KEY = "k4m9";
+
 /** Answers the room's HTTP routes in the gallery: its entry, and its fork's preview. */
 export function installRoomFixture(frame: string): void {
   if (!frame.startsWith("room")) return;
@@ -363,9 +366,16 @@ export function installRoomFixture(frame: string): void {
   const next = window.fetch.bind(window);
 
   window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
-    const path = new URL(new Request(input, init).url).pathname;
+    const url = new URL(new Request(input, init).url);
+    const path = url.pathname;
 
-    if (path.startsWith("/api/rooms/") && path.endsWith("/fork")) return Promise.resolve(Response.json(FORK_PREVIEW));
+    if (path.startsWith("/api/rooms/") && path.endsWith("/fork")) {
+      const byLink = stateOf(new URLSearchParams(location.search).get("state")).access === "link";
+
+      return Promise.resolve(byLink && url.searchParams.get("k") !== LINK_KEY
+        ? Response.json({ error: "This slate isn't shared with you" }, { status: 403 })
+        : Response.json(FORK_PREVIEW));
+    }
 
     if (path.startsWith("/api/rooms/") && path.endsWith("/entry")) {
       const entry: RoomEntry = { title: SCENES[stateOf(new URLSearchParams(location.search).get("state")).scene].title, owner: SAM, access: "edit" };
@@ -393,7 +403,7 @@ export function RoomFrame() {
   }
 
   return (
-    <LiveSlate room={{ workspace: "acme", slate: state.scene }} entry={{ title: scene.title, owner: SAM, access: state.access }} linkKey={null}
+    <LiveSlate room={{ workspace: "acme", slate: state.scene, key: state.access === "link" ? LINK_KEY : null }} entry={{ title: scene.title, owner: SAM, access: state.access }}
       live={fakeLive(state)} opened={state.opened} workspaces={ROSTER} />
   );
 }

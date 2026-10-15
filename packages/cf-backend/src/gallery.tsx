@@ -78,6 +78,7 @@ import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { installRoomFixture, RoomClosedFrame, RoomFrame, RoomPartFrame, RoomSlateFrame } from "@/gallery-sharing";
+import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import ConnectedPage from "@/pages/ConnectedPage";
@@ -1249,6 +1250,8 @@ window.fetch = galleryFetch;
 installDriveFixture(frame);
 
 installRoomFixture(frame);
+
+installGalleryFixture(frame);
 
 
 // Stands in for the runtime's terminal facet (core execution/workspace-terminal.ts): echoes input, runs a line at CR,
@@ -7523,6 +7526,9 @@ async function mount() {
     ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
     ["drive-wide", { node: <DrivePageFrame />, entries: [drivePathAsked] }],
     ["drive-recipient", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
+    // The Gallery, and `&slate=<slate>`'s own page.
+    ["gallery-list", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
+    ["gallery-slate", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["fork-reach", {
       node: (
