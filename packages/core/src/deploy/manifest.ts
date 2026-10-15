@@ -58,6 +58,11 @@ export interface ReleaseFile {
   readonly assetHash: string | null;
 }
 
+/** What a release module is to the runtime that loads it: `.wasm` a WebAssembly module, anything else an ES module. */
+export function releaseModuleKind(name: string): 'wasm' | 'esModule' {
+  return name.endsWith('.wasm') ? 'wasm' : 'esModule';
+}
+
 export interface ReleaseWorker {
   readonly name: string;
   readonly mainModule: string;
