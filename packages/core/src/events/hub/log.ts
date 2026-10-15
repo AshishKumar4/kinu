@@ -43,7 +43,6 @@ export interface PendingFilter {
 }
 
 export interface QueryFilter {
-  trace_id?: TraceId;
   turn_id?: TurnId;
   variant?: EventVariant;
   since?: number;
@@ -629,8 +628,6 @@ export class EventLog {
     `;
 
     const bindings: SqlValue[] = [this.actorId];
-
-    if (filter.trace_id) { sql += ' AND trace_id = ?'; bindings.push(filter.trace_id); }
 
     if (filter.turn_id)  { sql += ' AND turn_id = ?';  bindings.push(filter.turn_id); }
 
