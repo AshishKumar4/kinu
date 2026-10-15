@@ -341,10 +341,6 @@ export type RecentEventRow = Pick<
   | 'payload_visibility' | 'payload' | 'received_at'
 >;
 
-function clampLimit(requested: number | undefined, max: number): number {
-  return boundedInt(requested, max, 1, max);
-}
-
 /** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
@@ -2077,10 +2073,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override async terminalFor(connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null> {
     if (!isWorkspaceTerminal(connection.tags)) return null;
-    // Building the root runtime registers the mount table this shell serves.
-    void this.rt;
+    this.mountRootFiles();
 
     return await this.hostedWorkspace().terminal();
+  }
+
+  /** The root's file plane registers the mount table a shell serves, and it is made with the root's runtime. */
+  private mountRootFiles(): void {
+    void this.rt;
   }
 
   /** Send the replies a drained turn owes, then close its delivery leases.
@@ -5606,8 +5606,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {
-    const windowLimit = clampLimit(opts?.steps, ACTIVITY_STEP_WINDOW);
-    const logLimit = clampLimit(opts?.logs, ACTIVITY_LOG_WINDOW);
+    const windowLimit = boundedInt(opts?.steps, ACTIVITY_STEP_WINDOW, 1, ACTIVITY_STEP_WINDOW);
+    const logLimit = boundedInt(opts?.logs, ACTIVITY_LOG_WINDOW, 1, ACTIVITY_LOG_WINDOW);
     // Main's steps are its own isolate's; warms are this object's lane.
     const { steps, newestMeasured } = await this.mainCall((isolate, snapshot) => isolate.steps(snapshot, windowLimit));
 

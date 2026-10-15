@@ -179,7 +179,7 @@ export class UserDevices {
   // can reach the device via `deviceRpc()`. A WebSocket cannot cross RPC; the worker forwards the upgrade.
   readonly _devices: DeviceSocketHub;
 
-  /** Durable record of commands running on devices (see ./device-inflight.ts); the ledger owns the table. */
+  /** Durable record of commands running on devices (core execution/device-inflight.ts); the ledger owns the table. */
   readonly _inflight: DeviceRequestLedger;
 
   /** Single-use socket tickets a daemon trades its long-lived token for, so the token stays out of URLs and edge logs. */
