@@ -85,6 +85,10 @@ export type Reset = v.InferOutput<typeof ResetSchema>;
 /** The newest reset, beside `resets/<tag>.json`: what a rollback must not cross. */
 export const LATEST_RESET_KEY = 'resets/latest.json';
 
+/** What staging's upgrade fixtures expect to find (scripts/upgrade-fixtures.ts). A full reset deletes it with the
+ *  accounts that held them, so the deploy after it seeds them anew, on purpose. */
+export const UPGRADE_ANCHOR_KEY = 'upgrade-fixtures/manifest.json';
+
 /** The words a production reset is confirmed with. */
 export const PRODUCTION_CONFIRMATION = 'reset production';
 
@@ -152,6 +156,8 @@ export interface ResetTarget {
   deleteChains: (chains: { readonly bucket: string; readonly prefix: string }) => Promise<number>;
   /** Puts the record in `file` at `key` in the releases bucket. */
   putRecord: (key: string, file: string) => void;
+  /** Deletes the upgrade fixtures' anchor from the releases bucket ({@link UPGRADE_ANCHOR_KEY}). */
+  forgetUpgradeAnchor: () => void;
   /** Whether the origin's `/api/health` answers 200 `{ build: null }`. */
   stampless: (attempt: number) => Promise<boolean>;
   /** Drops every eval bearer this machine keeps for the origin: each named a session the reset deleted. */
@@ -260,6 +266,9 @@ function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig,
     deleteChains: (chains) => deleteR2Prefix({ accountId: account, bucket: chains.bucket, prefix: chains.prefix }),
     putRecord: (key, file) => {
       run(['r2', 'object', 'put', `${releases}/${key}`, '--file', file, '--content-type', 'application/json', '--remote']);
+    },
+    forgetUpgradeAnchor: () => {
+      run(['r2', 'object', 'delete', `${releases}/${UPGRADE_ANCHOR_KEY}`, '--remote']);
     },
     stampless: async (attempt) => {
       return (await servedHealth(site, { query: `?reset=${String(attempt)}` })).build === null;
@@ -416,6 +425,10 @@ async function finish(input: WipeInput, reset: Reset): Promise<Reset> {
 
     // Last, once no box is left to write one.
     const objects = reset.chains === undefined ? undefined : await target.deleteChains(reset.chains);
+
+    // The fixtures' accounts went with the classes: the deploy after this seeds them as a first seed, not as a loss.
+    target.forgetUpgradeAnchor();
+    console.log(`reset: forgot the upgrade fixtures' anchor (${UPGRADE_ANCHOR_KEY})`);
 
     done = { ...reset, state: 'done' };
 

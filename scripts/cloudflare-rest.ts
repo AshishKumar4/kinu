@@ -122,6 +122,28 @@ export async function deleteR2Prefix(deletion: PrefixDeletion): Promise<number> 
   }
 }
 
+/** `key`'s path under the REST API: each segment escaped, its slashes kept. */
+function objectPath(lookup: Omit<PrefixDeletion, 'prefix'> & { readonly key: string }): string {
+  return `/accounts/${lookup.accountId}/r2/buckets/${lookup.bucket}/objects/${lookup.key.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/** The text of `key` in a bucket, or undefined when the bucket holds no such key. */
+export async function r2ObjectText(lookup: Omit<PrefixDeletion, 'prefix'> & { readonly key: string }): Promise<string | undefined> {
+  const token = lookup.token ?? restApiToken();
+
+  try {
+    return await restAnswer({ method: 'GET', path: objectPath(lookup), token, api: lookup.api });
+  } catch (cause) {
+    if (cause instanceof KinuError && cause.code === 'missing') return undefined;
+    throw cause;
+  }
+}
+
+/** Writes `value` as JSON at `key` in a bucket. */
+export async function r2PutJson(lookup: Omit<PrefixDeletion, 'prefix'> & { readonly key: string; readonly value: unknown }): Promise<void> {
+  await restAnswer({ method: 'PUT', path: objectPath(lookup), token: lookup.token ?? restApiToken(), api: lookup.api, body: lookup.value });
+}
+
 /** The size of `key` in a bucket, or undefined when the bucket does not hold it. */
 export async function r2ObjectSize(lookup: Omit<PrefixDeletion, 'prefix'> & { readonly key: string }): Promise<number | undefined> {
   const token = lookup.token ?? restApiToken();
