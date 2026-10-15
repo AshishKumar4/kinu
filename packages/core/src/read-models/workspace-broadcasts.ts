@@ -153,6 +153,8 @@ export const WorkspaceBroadcastSchema = v.variant('type', [
   }),
   v.object({
     type: v.literal('steer_status'), steerId: v.string(), text: v.string(),
+    /** `queued` lands at the running turn's next step boundary; `landed` was spliced into step `atStep`; `returned`
+     *  was dropped by an interrupt, so the composer takes it back; `turn` ran as its own turn, its opening row its record. */
     status: v.picklist(['queued', 'landed', 'returned', 'turn']),
     /** On `landed`: the step the model read it in. */
     atStep: v.optional(v.number()),

@@ -13,12 +13,12 @@ import { usageTotal } from '../usage';
 import { NO_FIGURES, type AgentFigures } from './agent-figures';
 import { EventLog } from '../events/hub/log';
 
-export type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
+type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
 
 export type AgentActivity = 'working' | 'waiting' | 'idle' | 'done' | 'stopped' | 'failed' | 'dismissed';
 
 /** `owner`: its swarm's agent's path; null is main. */
-export type AgentOpening =
+type AgentOpening =
   | { readonly kind: 'chat'; readonly path: string | null }
   | { readonly kind: 'node'; readonly runId: string; readonly nodeId: string; readonly owner: string | null };
 

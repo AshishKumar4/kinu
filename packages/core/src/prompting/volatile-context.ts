@@ -39,14 +39,14 @@ import { formatByteCap } from '../utils/format';
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
 /** One row of the background-job registry (jobs/store.ts). */
-export interface DynamicJob {
+interface DynamicJob {
   readonly id: string;
   readonly kind: string;
   readonly label: string | null;
 }
 
 /** One agent_tasks row (tools/task-store.ts), flattened: a subtask follows its parent and names it. */
-export interface DynamicTask {
+interface DynamicTask {
   readonly id: string;
   readonly title: string;
   readonly status: string;

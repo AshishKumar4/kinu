@@ -135,7 +135,7 @@ export function recordGitHubObservations(sql: SqlExecutor, observed: readonly Gi
   }
 }
 
-export interface GitHubItem {
+interface GitHubItem {
   readonly subject: 'issue' | 'pr';
   readonly repo: string;
   readonly number: number;
@@ -150,7 +150,7 @@ export interface GitHubItem {
   readonly lastAt: number;
 }
 
-export interface GitHubRepo {
+interface GitHubRepo {
   readonly repo: string;
   /** One of the workspace's git remotes. */
   readonly remote: boolean;

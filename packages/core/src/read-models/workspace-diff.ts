@@ -73,7 +73,7 @@ export interface ExecutorDiffResult {
 }
 
 /** What the change-set asks of the workspace store, Nimbus's SqliteVFS: its snapshots, and reads as one principal. */
-export type WorkspaceBaselineStore = Pick<SqliteVFS, 'snapshot' | 'snapshots' | 'dropSnapshotAsync' | 'diff' | 'at' | 'as'>;
+type WorkspaceBaselineStore = Pick<SqliteVFS, 'snapshot' | 'snapshots' | 'dropSnapshotAsync' | 'diff' | 'at' | 'as'>;
 
 /** The store, and the principal the change-set reads it as: a file that principal may not read is absent. */
 export interface WorkspaceBaselines {

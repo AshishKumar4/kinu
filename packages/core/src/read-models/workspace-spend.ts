@@ -18,7 +18,7 @@ export interface ProducerSpend extends SpendTally {
   readonly source: SpendSource;
 }
 
-export interface SpendCoverage {
+interface SpendCoverage {
   readonly calls: number;
   readonly measured: number;
   readonly reported: number | null;

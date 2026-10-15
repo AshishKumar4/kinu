@@ -12,7 +12,7 @@ import type { Usage } from '../usage';
 import { safeJsonParse, type JsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
 
-export type TimelineKind =
+type TimelineKind =
   | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'swarm' | 'scaffold' | 'shadow-eval'
   | 'craft' | 'reflection' | 'head-split' | 'head-merge' | 'gepa'
   | 'curriculum' | 'trigger' | 'event-ingress' | 'background' | 'error' | 'abort' | 'recovery' | 'other';

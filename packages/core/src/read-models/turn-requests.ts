@@ -10,7 +10,7 @@ import type { JsonObject, JsonValue } from '../utils/json';
 
 const PAGE_BYTES = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
 
-export interface TurnRequestRow {
+interface TurnRequestRow {
   readonly requestId: string;
   readonly runId: string;
   readonly epoch: number;
@@ -24,7 +24,7 @@ export interface TurnRequestIndex {
   readonly requests: readonly TurnRequestRow[];
 }
 
-export interface TurnRequestHead {
+interface TurnRequestHead {
   readonly metadata: JsonValue;
   readonly response: Extract<RunEvent, { type: 'step_finish' }> | null;
 }

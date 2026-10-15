@@ -85,7 +85,7 @@ export function initTaskListTable(execRaw: RawSqlExec): void {
 }
 
 /** The model gets the reason, never a silent drop. */
-export interface TaskAddRejection {
+interface TaskAddRejection {
   readonly title: string;
   readonly reason: string;
 }

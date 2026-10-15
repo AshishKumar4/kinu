@@ -105,7 +105,7 @@ export type ChatEvent = (
   | { type: 'done'; text: string; responseMessages: ModelMessage[]; answer?: string }
 ) & { source?: 'native' | 'scaffold' };
 
-export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
+type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
 export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>) => Promise<void>;
 

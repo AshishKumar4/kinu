@@ -18,8 +18,6 @@ export const DEVICE_UPDATE_REQUIRED = protocol.updateRequired;
 
 export const DEVICE_METHOD = Object.fromEntries(Object.keys(protocol.methods).map((method) => [method, method]));
 
-export type DeviceMethod = keyof typeof protocol.methods;
-
 /** Every method a current daemon answers, as its HELLO lists them. */
 export const DEVICE_FEATURES: readonly string[] = Object.keys(protocol.methods);
 

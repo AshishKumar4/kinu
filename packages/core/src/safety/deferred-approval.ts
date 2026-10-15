@@ -36,7 +36,7 @@ import { serialQueue } from '@kinu.run/agent-utils';
 export const DEFERRED_APPROVAL_SIGNAL = 'deferred_approval';
 
 /** Where a parked action is. No "executed" state: this queue records permission, not effects. */
-export type DeferredApprovalStatus =
+type DeferredApprovalStatus =
   /** Parked on the owner. Nobody has decided. */
   | 'queued'
   /** The owner said yes. The command has not run; the grant is unspent. */

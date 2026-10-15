@@ -124,13 +124,13 @@ export interface ClaimedWindow {
 }
 
 /** Stays `claimed` until {@link CompletedTurnStore.settleReview}, so a crash mid-review is recoverable. */
-export interface PendingTurnReview {
+interface PendingTurnReview {
   readonly rowId: string;
   readonly turn: CompletedTurn;
 }
 
 /** A review some host owes: `reviewTurn`'s arguments plus the row id. */
-export interface DeferredTurnReview {
+interface DeferredTurnReview {
   readonly id: string;
   readonly turn: CompletedTurn;
   /** Null when no follow-up can grade the turn; carried so drains need not guess. */
@@ -156,12 +156,12 @@ export interface DeferredReviewDrain {
   readonly refused: readonly RefusedTurnReview[];
 }
 
-export interface TakenTurnReviews {
+interface TakenTurnReviews {
   readonly reviews: readonly DeferredTurnReview[];
   readonly refused: readonly RefusedTurnReview[];
 }
 
-export interface AppendTurnOpts {
+interface AppendTurnOpts {
   /** Whether a follow-up that could grade this turn can still arrive; false for
    *  programmatic turns and one-shot hosts, whose next input is not a reply. */
   awaitsFollowup: boolean;

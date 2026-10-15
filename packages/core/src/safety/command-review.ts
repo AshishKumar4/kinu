@@ -7,7 +7,7 @@ import { workspacePath } from '../vfs/workspace-path';
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
 /** Where a rule's harm lands: 'local' (the executing machine only) or 'reaches_out' (leaves the executor). */
-export type ApprovalHarm = 'local' | 'reaches_out';
+type ApprovalHarm = 'local' | 'reaches_out';
 
 /** 'agent': its own disposable state, where local harm is not gated; 'user': anything else. Declared, never read
  *  from a name. */
