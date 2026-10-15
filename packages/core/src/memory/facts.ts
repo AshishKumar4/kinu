@@ -271,8 +271,8 @@ export function createFactsStore(sql: SqlExecutor, actor: Pick<ActorHandle, 'act
   };
 }
 
-/** String verbatim, anything else as JSON; shared by the prompt block and search hits. */
-function renderFactValue(value: JsonValue): string {
+/** String verbatim, anything else as JSON: the one way a fact's value is shown, to a prompt, a search hit or a page. */
+export function renderFactValue(value: JsonValue): string {
   const text = v.safeParse(v.string(), value);
 
   return text.success ? text.output : JSON.stringify(value);
