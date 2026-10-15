@@ -275,6 +275,7 @@ describe(SUITE, () => {
         defect: DEFECT,
         episode: 'device-link-holds',
         modelCalls: 'none',
+        budgetMs: 5 * 60_000,
         genesis: false,
         purpose: 'A probe proving a linked machine stays linked past the keepalive window.',
         async run() {
@@ -351,6 +352,7 @@ describe(SUITE, () => {
         // The owner's answer wakes the agent the call ran under, as a deferred approval's does (the park-and-wake
         // contract): its turn is the one model call, drained below before the spend is read.
         modelCalls: 'expected',
+        budgetMs: 5 * 60_000,
         genesis: false,
         purpose: 'A probe proving one command reaches a linked machine through the consent card.',
         async run({ session }) {
@@ -411,6 +413,7 @@ describe(SUITE, () => {
         defect: DEFECT,
         episode: 'device-link-revoke',
         modelCalls: 'none',
+        budgetMs: 5 * 60_000,
         genesis: false,
         purpose: 'A probe proving revoke ends a link: the socket dies, the credential dies.',
         async run() {
