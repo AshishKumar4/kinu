@@ -457,11 +457,11 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
       // turn's statement count is measured (complexity.test.ts).
       const appended = fence === null
         ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
-          SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
+          SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,${piece},0 FROM stream_parts
           WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
           AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`
         : this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
-          SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
+          SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,${piece},0 FROM stream_parts
           WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
           AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo})
           AND EXISTS (SELECT 1 FROM actor_turn_claims c WHERE c.actor_id=${actorId} AND c.turn_id=${fence.turnId} AND c.epoch=${fence.epoch} AND c.outcome IS NULL)
