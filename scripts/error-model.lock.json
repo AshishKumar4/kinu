@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-14",
+  "measuredAt": "2026-10-15",
   "counts": {
     "packages/cf-backend/src/activation-gate.ts#throw": 1,
     "packages/cf-backend/src/actor-agent.ts#catch": 9,

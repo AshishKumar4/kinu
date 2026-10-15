@@ -12,11 +12,8 @@ import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, authoredRefusal, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
-import { listAvailableModels, listProviderCatalog, testAvailableModel } from './available-models';
-import { readUserAccountUsage } from './account-usage';
-import {
-  handleCreateWorkspaceRequest, notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv,
-} from './workspace-access';
+import { listProviderCatalog } from './available-models';
+import { notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from './workspace-access';
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { displayNameProblem, err, isWorkspaceName, json, safeJson, safeJsonParse } from '@kinu.run/core';
@@ -25,6 +22,7 @@ import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
+import { accountApi, type AccountApiVariables } from './account-api';
 import * as v from 'valibot';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
@@ -54,8 +52,7 @@ export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv 
   CLI_PUBLIC_ORIGIN?: string;
 }
 
-interface UserVariables extends ApiVariables {
-  owner: UserCaller;
+interface UserVariables extends ApiVariables, AccountApiVariables {
   stub: UserRoutesAuthority;
   key: string;
 }
@@ -166,6 +163,7 @@ userRoutes.use('/api/user/*', ownerGate(), async (c, next) => {
   }
 
   c.set('stub', stub);
+  c.set('account', { stub, userId: identity.userId });
   await next();
 });
 
@@ -242,10 +240,6 @@ userRoutes.get('/api/user/pictures/:workspace/:slate/:digest', async (c) => {
   });
 });
 
-userRoutes.post('/api/user/workspaces', async (c) => handleCreateWorkspaceRequest({
-  request: c.req.raw, env: c.env, userId: c.get('identity').userId, userDO: c.get('stub'),
-}));
-
 // A visit the roster did not take is a 404: the workspace is gone, or not visitable while it is created or torn down,
 // and a client that keeps a workspace alive by its visits must hear that rather than an `ok`.
 userRoutes.post('/api/user/workspaces/:name/touch', (c) => settle(Effect.tryPromise({
@@ -256,17 +250,6 @@ userRoutes.post('/api/user/workspaces/:name/touch', (c) => settle(Effect.tryProm
   },
   catch: (cause) => authoredRefusal({ doing: 'recording this workspace visit', cause }),
 })));
-
-userRoutes.delete('/api/user/workspaces/:name', (c) => settle(Effect.tryPromise({
-  try: async () => {
-    await c.get('stub').removeWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')), c.get('identity').userId);
-
-    return json({ body: { ok: true } });
-  },
-  catch: (cause) => authoredRefusal({ doing: 'deleting this workspace', cause }),
-})));
-
-userRoutes.get('/api/user/devices', async (c) => json({ body: await c.get('stub').listDevices(c.get('owner')) }));
 
 // The device is issued here, so the page that asked watches the one row the machine registers as.
 userRoutes.post('/api/user/devices', async (c) => {
@@ -345,46 +328,6 @@ userRoutes.delete('/api/user/devices/:id/consent', async (c) => {
   if (!result.ok) return err(400, 'grant not revoked');
 
   return json({ body: { ok: true } });
-});
-
-userRoutes.get('/api/user/credentials', async (c) => json({ body: await c.get('stub').listCredentials(c.get('owner')) }));
-
-userRoutes.all('/api/user/credentials/:key', async (c, next) => {
-  c.set('key', decodeURIComponent(rawParam(c, 'key')));
-  await next();
-});
-
-userRoutes.post('/api/user/credentials/:key', (c) => {
-  return settle(Effect.gen(function* () {
-    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
-
-    if (body === null) return err(400, 'Body must be JSON');
-
-    yield* Effect.tryPromise({
-      try: async () => {
-        await c.get('stub').setCredential(c.get('owner'), c.get('key'), body);
-      },
-      catch: (cause) => authoredRefusal({ doing: 'storing this credential', cause }),
-    });
-
-    modelSettingsChanged(c);
-
-    return json({ body: { ok: true } });
-  }));
-});
-
-/** `?revoke=1` also has the provider revoke the grant; its refusal answers in its own words. */
-userRoutes.delete('/api/user/credentials/:key', (c) => {
-  return settle(Effect.gen(function* () {
-    const outcome = yield* Effect.tryPromise({
-      try: async () => c.get('stub').deleteCredential(c.get('owner'), c.get('key'), c.req.query('revoke') === '1'),
-      catch: (cause) => authoredRefusal({ doing: 'deleting this credential', cause }),
-    });
-
-    modelSettingsChanged(c);
-
-    return json({ body: { ok: true, ...outcome } });
-  }));
 });
 
 /** The eval identity's own credentials, carried across a reset by scripts/credential-checkpoint.ts; no other identity's. */
@@ -503,24 +446,6 @@ userRoutes.put('/api/user/config/:key', async (c) => {
 userRoutes.get('/api/user/providers/catalog', async (c) => json({
   body: await listProviderCatalog(c.env, c.get('identity').userId, c.get('owner')),
 }));
-
-userRoutes.get('/api/user/models', async (c) => json({
-  body: await listAvailableModels(c.env, c.get('identity').userId, c.get('owner')),
-}));
-
-userRoutes.post('/api/user/models/test', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ spec: v.pipe(v.string(), v.minLength(3)) }));
-
-  if (!body) return err(400, 'spec (string) required');
-
-  return json({ body: await testAvailableModel({
-    env: c.env, userId: c.get('identity').userId, caller: c.get('owner'), spec: body.spec, signal: c.req.raw.signal,
-  }) });
-});
-
-userRoutes.get('/api/user/usage', async (c) => json({ body: await readUserAccountUsage({
-  env: c.env, userDO: c.get('stub'), owner: c.get('owner'), userId: c.get('identity').userId, refresh: c.req.query('refresh') === '1',
-}) }));
 
 userRoutes.get('/api/user/cloudflare/accounts', async (c) => json({ body: await c.get('stub').listCloudflareAccounts(c.get('owner')) }));
 
@@ -654,6 +579,9 @@ userRoutes.get('/api/user/mcp/callback', async (c) => {
 
   return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
 });
+
+// The account's routes the CLI's bearer reaches too, under `/api/cli`.
+userRoutes.route('/api/user', accountApi);
 
 userRoutes.all('/api/user/*', async (c) =>
   err(404, `No such user route: ${c.req.method} ${c.req.path.slice('/api/user'.length)}`));

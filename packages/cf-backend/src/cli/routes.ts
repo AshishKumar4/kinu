@@ -27,8 +27,7 @@ import {
 import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell, ISOLATED_BUN_FLAGS } from '@kinu.run/core';
-import { listAvailableModels, testAvailableModel } from '../user/available-models';
-import { readUserAccountUsage, type AccountLedgerTarget } from '../user/account-usage';
+import type { AccountLedgerTarget } from '../user/account-usage';
 import { answerCatalogPut } from '../user/routes';
 import { WebhookRequestSchema } from '../events/routes';
 import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
@@ -37,11 +36,12 @@ import type { SessionAuthority } from '../auth/store';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserDO } from '../user/user-do';
-import { handleCreateWorkspaceRequest, notifyWorkspacesModelSettingsChanged } from '../user/workspace-access';
+import { notifyWorkspacesModelSettingsChanged } from '../user/workspace-access';
 import type { UserAIProxyEnv } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { ownerCaller } from '@kinu.run/core';
-import { noHead, rawParam, type FamilyEnv } from '../api/context';
+import { noHead, ownerGate, rawParam, type FamilyEnv } from '../api/context';
+import { accountApi, type AccountApiVariables } from '../user/account-api';
 import { authenticateCli, type CliBearerVariables } from '../api/cli-bearer';
 import * as v from 'valibot';
 import { authoredRefusal, classify, diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
@@ -73,9 +73,7 @@ export interface CliRoutesEnv<Id>
 
 type CliIdentity = CliTokenIdentity<CliRoutesAuthority>;
 
-interface CliVariables extends CliBearerVariables<CliRoutesAuthority> {
-  key: string;
-}
+interface CliVariables extends CliBearerVariables<CliRoutesAuthority>, AccountApiVariables {}
 
 type CliEnv = FamilyEnv<CliRoutesEnv<unknown>, CliVariables>;
 
@@ -167,6 +165,14 @@ cliRoutes.use('/api/cli/*', async (c, next) => {
   await next();
 });
 
+// The account the bearer names, as `accountApi` reads it; the web family's gate names it from the session.
+cliRoutes.use('/api/cli/*', ownerGate(), async (c, next) => {
+  const cli = c.get('cli');
+
+  c.set('account', { stub: cli.userDO, userId: cli.userId });
+  await next();
+});
+
 // A preview opens only for its owner (`nimbus-route.ts`): the CLI's way in, as the app's page is a browser's.
 cliRoutes.get(CLI_PREVIEW_ENTRY_PATH, async (c) => await previewEntry(c.req.raw, c.env, c.get('cli').userId));
 
@@ -184,7 +190,7 @@ cliRoutes.get('/api/cli/me', async (c) => {
 
 cliRoutes.post('/api/cli/logout', async (c) => {
   const cli = c.get('cli');
-  await cli.userDO.revokeCliTokenHash(await ownerCaller(c.env), cli.tokenHash);
+  await cli.userDO.revokeCliTokenHash(c.get('owner'), cli.tokenHash);
 
   return json({ body: { ok: true } });
 });
@@ -192,29 +198,29 @@ cliRoutes.post('/api/cli/logout', async (c) => {
 // Session inventory: lets a re-authenticated owner find and end bearers only stored as hashes.
 // Interactive sessions only.
 cliRoutes.get('/api/cli/sessions', async (c) =>
-  json({ body: { sessions: await c.get('cli').userDO.listCliTokens(await ownerCaller(c.env)) } }));
+  json({ body: { sessions: await c.get('cli').userDO.listCliTokens(c.get('owner')) } }));
 
 cliRoutes.delete('/api/cli/sessions', async (c) => {
-  const result = await c.get('cli').userDO.revokeAllCliTokens(await ownerCaller(c.env));
+  const result = await c.get('cli').userDO.revokeAllCliTokens(c.get('owner'));
 
   return json({ body: { ok: true, revoked: result.revoked } });
 });
 
 cliRoutes.delete('/api/cli/sessions/:hash{[a-f0-9]{64}}', async (c) => {
-  await c.get('cli').userDO.revokeCliTokenHash(await ownerCaller(c.env), rawParam(c, 'hash'));
+  await c.get('cli').userDO.revokeCliTokenHash(c.get('owner'), rawParam(c, 'hash'));
 
   return json({ body: { ok: true } });
 });
 
 // Scoped tokens stop at the access-token gate.
-cliRoutes.get('/api/cli/profile', async (c) => json({ body: await c.get('cli').userDO.getProfileCatalog(await ownerCaller(c.env)) }));
+cliRoutes.get('/api/cli/profile', async (c) => json({ body: await c.get('cli').userDO.getProfileCatalog(c.get('owner')) }));
 
 cliRoutes.put('/api/cli/profile', async (c) => answerCatalogPut(c.req.raw,
-  async (catalog, expectedVersion) => c.get('cli').userDO.putProfileCatalog(await ownerCaller(c.env), catalog, expectedVersion),
+  async (catalog, expectedVersion) => c.get('cli').userDO.putProfileCatalog(c.get('owner'), catalog, expectedVersion),
   () => { notifyWorkspacesModelSettingsChanged(c.env, c.get('cli').userDO, c.executionCtx); }));
 
 cliRoutes.get('/api/cli/tokens', async (c) =>
-  json({ body: { tokens: await c.get('cli').userDO.listAccessTokens(await ownerCaller(c.env)) } }));
+  json({ body: { tokens: await c.get('cli').userDO.listAccessTokens(c.get('owner')) } }));
 
 cliRoutes.post('/api/cli/tokens', async (c) => {
   const cli = c.get('cli');
@@ -233,7 +239,7 @@ cliRoutes.post('/api/cli/tokens', async (c) => {
     return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
   }
 
-  const minted = await cli.userDO.mintAccessToken(await ownerCaller(c.env), cli.userId, body.name, body.scopes);
+  const minted = await cli.userDO.mintAccessToken(c.get('owner'), cli.userId, body.name, body.scopes);
 
   if (!minted.ok) return err(400, minted.error);
 
@@ -249,7 +255,7 @@ cliRoutes.post('/api/cli/tokens', async (c) => {
 
 cliRoutes.delete('/api/cli/tokens/:ref', async (c) => {
   const ref = decodeURIComponent(rawParam(c, 'ref'));
-  const result = await c.get('cli').userDO.revokeAccessToken(await ownerCaller(c.env), ref);
+  const result = await c.get('cli').userDO.revokeAccessToken(c.get('owner'), ref);
 
   if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
 
@@ -257,57 +263,15 @@ cliRoutes.delete('/api/cli/tokens/:ref', async (c) => {
 });
 
 cliRoutes.get('/api/cli/workspaces', async (c) =>
-  json({ body: await c.get('cli').userDO.listActiveWorkspaces(await ownerCaller(c.env)) }));
-
-cliRoutes.get('/api/cli/models', async (c) =>
-  json({ body: await listAvailableModels(c.env, c.get('cli').userId, await ownerCaller(c.env)) }));
-
-cliRoutes.post('/api/cli/models/test', async (c) => {
-  const body = await safeJson(c.req.raw, v.object({ spec: v.pipe(v.string(), v.minLength(3)) }));
-
-  if (!body) return err(400, 'spec (string) required');
-
-  return json({ body: await testAvailableModel({
-    env: c.env, userId: c.get('cli').userId, caller: await ownerCaller(c.env), spec: body.spec, signal: c.req.raw.signal,
-  }) });
-});
-
-cliRoutes.get('/api/cli/usage', async (c) =>
-  json({ body: await readUserAccountUsage({
-    env: c.env, userDO: c.get('cli').userDO, owner: await ownerCaller(c.env), userId: c.get('cli').userId, refresh: c.req.query('refresh') === '1',
-  }) }));
-
-cliRoutes.post('/api/cli/workspaces', async (c) => {
-  const cli = c.get('cli');
-
-  return handleCreateWorkspaceRequest({ request: c.req.raw, env: c.env, userId: cli.userId, userDO: cli.userDO });
-});
-
-cliRoutes.delete('/api/cli/workspaces/:name', (c) => {
-  return settle(Effect.gen(function* () {
-    const cli = c.get('cli');
-
-    return yield* Effect.tryPromise({
-      try: async () => {
-        const name = decodeURIComponent(rawParam(c, 'name'));
-
-        if (!(await cli.userDO.hasWorkspace(await ownerCaller(c.env), name))) return err(404, `Agent ${name} not found.`);
-        await cli.userDO.removeWorkspace(await ownerCaller(c.env), name, cli.userId);
-
-        return json({ body: { ok: true } });
-      },
-      catch: (cause) => authoredRefusal({ doing: 'deleting this workspace', cause }),
-    });
-  }));
-});
+  json({ body: await c.get('cli').userDO.listActiveWorkspaces(c.get('owner')) }));
 
 cliRoutes.post('/api/cli/workspaces/:name/connect-ticket', async (c) => {
   const cli = c.get('cli');
   const name = decodeURIComponent(rawParam(c, 'name'));
 
-  if (!(await cli.userDO.hasWorkspace(await ownerCaller(c.env), name))) return err(404, `Agent ${name} not found.`);
+  if (!(await cli.userDO.hasWorkspace(c.get('owner'), name))) return err(404, `Agent ${name} not found.`);
 
-  const issued = await cli.userDO.issueCliAgentConnectTicket(await ownerCaller(c.env), {
+  const issued = await cli.userDO.issueCliAgentConnectTicket(c.get('owner'), {
     userId: cli.userId,
     agentClass: ORCHESTRATOR_AGENT_SLUG,
     agentName: name,
@@ -356,63 +320,20 @@ cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', (c) => {
   }));
 });
 
-cliRoutes.get('/api/cli/devices', async (c) => json({ body: await c.get('cli').userDO.listDevices(await ownerCaller(c.env)) }));
-
 cliRoutes.post('/api/cli/devices', (c) => settle(Effect.tryPromise({
   try: async () => {
     const cli = c.get('cli');
     const registration = await safeJson(c.req.raw, DeviceRegistrationRequestSchema) ?? {};
-    const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(c.env), registration.label, registration.replaces, registration.device);
+    const { deviceId, token } = await cli.userDO.registerDevice(c.get('owner'), registration.label, registration.replaces, registration.device);
 
     return json({ body: { deviceId, token, userId: cli.userId, origin: new URL(c.req.url).origin } }, { status: 201 });
   },
   catch: (cause) => authoredRefusal({ doing: 'registering this device', cause }),
 })));
 
-// Interactive sessions only: a CI token writing a provider key could swap the account's inference
-// credentials. Secrets are never readable back.
-cliRoutes.get('/api/cli/credentials', async (c) => json({ body: await c.get('cli').userDO.listCredentials(await ownerCaller(c.env)) }));
-
-cliRoutes.all('/api/cli/credentials/:key', async (c, next) => {
-  c.set('key', decodeURIComponent(rawParam(c, 'key')));
-  await next();
-});
-
-cliRoutes.post('/api/cli/credentials/:key', (c) => {
-  return settle(Effect.gen(function* () {
-    const cli = c.get('cli');
-    const body = yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema));
-
-    yield* Effect.tryPromise({
-      try: async () => {
-        await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body);
-      },
-      catch: (cause) => authoredRefusal({ doing: 'storing this credential', cause }),
-    });
-
-    // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
-    notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
-
-    return json({ body: { ok: true } }, { status: 201 });
-  }));
-});
-
-cliRoutes.delete('/api/cli/credentials/:key', (c) => {
-  return settle(Effect.gen(function* () {
-    const cli = c.get('cli');
-
-    yield* Effect.tryPromise({
-      try: async () => {
-        await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key'), false);
-      },
-      catch: (cause) => authoredRefusal({ doing: 'deleting this credential', cause }),
-    });
-
-    notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
-
-    return json({ body: { ok: true } });
-  }));
-});
+// The account's routes the browser's session reaches too, under `/api/user`. A CI token's scopes were checked above:
+// credentials are an interactive session's alone, as one writing a provider key could swap the account's inference.
+cliRoutes.route('/api/cli', accountApi);
 
 cliRoutes.all('/api/cli/*', async (c) => err(404, `No such CLI route: ${c.req.method} ${cliPath(c)}`));
 
