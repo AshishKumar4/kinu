@@ -28,6 +28,7 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
     link INTEGER NOT NULL,
     link_gen INTEGER NOT NULL,
     image TEXT,
+    modules TEXT,
     image_author TEXT,
     secret TEXT,
     foreign_code INTEGER NOT NULL,
@@ -98,6 +99,7 @@ const AudienceSchema = v.union([v.literal('anyone'), v.array(v.string())]);
 
 const RoomRow = v.object({
   workspace: v.string(), slate: v.string(), title: v.string(), link: v.number(), link_gen: v.number(), image: v.nullable(v.string()),
+  modules: v.nullable(v.string()),
   image_author: v.nullable(v.string()), secret: v.nullable(v.string()), foreign_code: v.number(), parent: v.nullable(v.string()),
   next: v.number(),
 });
@@ -110,6 +112,8 @@ export interface RoomRecord {
   readonly link: boolean;
   readonly linkGen: number;
   readonly image: string | null;
+  /** The image's modules, each by its content digest, as its workspace stores them. */
+  readonly modules: Readonly<Record<string, string>> | null;
   readonly imageAuthor: string | null;
   readonly secret: SecretSighting | null;
   /** Code by someone other than the owner has entered: no grant is implied by authorship from then on. */
@@ -145,6 +149,11 @@ const CodecSchema: v.GenericSchema<Codec> = v.variant('kind', [
   v.object({ kind: v.literal('text'), maxLength: v.number() }),
   v.object({ kind: v.literal('json'), maxBytes: v.number() }),
 ]);
+
+/** Takes free input: what someone types reaches the service. */
+export function codecIsFree(codec: Codec): boolean {
+  return codec.kind === 'text' || codec.kind === 'json';
+}
 
 /** The model's `dom.contains arg`. */
 function codecAdmits(codec: Codec, input: JsonValue): boolean {
@@ -211,7 +220,7 @@ export interface Session {
 /** One admitted call (the model's `Run`): requested by a session, or by the slate itself (`requester` null). */
 export interface Run {
   readonly id: number;
-  readonly out: string;
+  readonly out: string | null;
   readonly requester: Session | null;
   readonly fn: string;
   readonly image: string;
@@ -287,7 +296,7 @@ export class RoomCaretaker {
   }): void {
     if (this.maybeRoom() !== null) return;
     this.db.exec(
-      'INSERT INTO room (id, workspace, slate, title, link, link_gen, image, image_author, secret, foreign_code, parent, next) VALUES (1, ?, ?, ?, 0, 0, NULL, NULL, NULL, ?, ?, 1)',
+      'INSERT INTO room (id, workspace, slate, title, link, link_gen, image, modules, image_author, secret, foreign_code, parent, next) VALUES (1, ?, ?, ?, 0, 0, NULL, NULL, NULL, NULL, ?, ?, 1)',
       input.workspace, input.slate, input.title, input.parent === null ? 0 : 1, input.parent,
     );
     this.db.exec("INSERT INTO room_members (email, name, role, gen) VALUES (?, NULL, 'owner', 0)", input.owner);
@@ -302,6 +311,7 @@ export class RoomCaretaker {
     return {
       workspace: parsed.workspace, slate: parsed.slate, title: parsed.title, link: parsed.link === 1, linkGen: parsed.link_gen,
       image: parsed.image, imageAuthor: parsed.image_author,
+      modules: parsed.modules === null ? null : v.parse(v.record(v.string(), v.string()), JSON.parse(parsed.modules)),
       secret: parsed.secret === null ? null : v.parse(SecretSightingSchema, JSON.parse(parsed.secret)),
       foreign: parsed.foreign_code === 1, parent: parsed.parent,
     };
@@ -468,7 +478,9 @@ export class RoomCaretaker {
    * else's stay at the image they were made for, so they are suspended until their holder renews them. The secret
    * sighting is the new image's, set in the same statement.
    */
-  publish(author: string, built: { readonly image: string; readonly title: string; readonly secret: SecretSighting | null }): void {
+  publish(author: string, built: {
+    readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string; readonly secret: SecretSighting | null;
+  }): void {
     return settleSync(Effect.gen({ self: this }, function* () {
       if (!this.canEdit(author)) return yield* refused('denied', `${author} cannot change this slate`);
       const owner = this.owner();
@@ -476,8 +488,8 @@ export class RoomCaretaker {
 
       if (this.room().image === image) return;
       this.db.exec(
-        'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
-        image, author, title, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
+        'UPDATE room SET image = ?, modules = ?, image_author = ?, title = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
+        image, JSON.stringify(built.modules), author, title, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
       );
       this.db.exec('UPDATE room_grants SET image = ? WHERE holder = ?', image, author);
 
@@ -664,7 +676,8 @@ export class RoomCaretaker {
    */
   admit(input: {
     readonly requester: Session | null; readonly fn: string; readonly input: JsonValue; readonly grants: readonly number[];
-    readonly inputs: readonly string[]; readonly out: string;
+    /** Null for a call whose answer goes straight back to its caller and is kept nowhere. */
+    readonly inputs: readonly string[]; readonly out: string | null;
   }): Run {
     return settleSync(Effect.gen({ self: this }, function* () {
       const { requester, fn } = input;
@@ -690,10 +703,13 @@ export class RoomCaretaker {
       const visitor = requester?.email ?? null;
 
       if (visitor !== null && grants.some((grant) => !grant.personal)) this.used(fn, visitor);
-      this.db.exec(
-        'INSERT INTO room_cells (key, label, value) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET label = excluded.label, value = excluded.value',
-        input.out, JSON.stringify(label), 'null',
-      );
+
+      if (input.out !== null) {
+        this.db.exec(
+          'INSERT INTO room_cells (key, label, value) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET label = excluded.label, value = excluded.value',
+          input.out, JSON.stringify(label), 'null',
+        );
+      }
 
       const run: Run = {
         id, out: input.out, requester, fn, image, input: input.input,
@@ -854,6 +870,8 @@ export class RoomCaretaker {
       const run = yield* this.liveRun(runId);
 
       if (run.requester !== null && run.requester.email === null) return yield* refused('denied', 'Sign in to change this slate');
+
+      if (run.out === null) return yield* refused('denied', 'This call keeps no output');
       this.db.exec('UPDATE room_cells SET value = ? WHERE key = ?', JSON.stringify(value), run.out);
     }));
   }

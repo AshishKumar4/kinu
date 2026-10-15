@@ -6,13 +6,15 @@
 import { Hono, type Context } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
-import { RoomEntrySchema, type RoomEntry } from '@kinu.run/core';
+import { parseSlateShareLabel, previewHostSuffix, RoomEntrySchema, type RoomEntry } from '@kinu.run/core';
 import { requestIdentity, type AuthIdentity } from '../auth/session';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { rawParam, type FamilyEnv } from '../api/context';
-import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
-import { ROOM_KEY_HEADER, ROOM_PERSON_HEADER, type RoomVisitor, type SlateRoom } from './room';
+import {
+  cookieForTicket, frameCookieHeader, frameCookieOf, hostTokenHolds, readPass, roomHandle, roomObjectName, ROOM_ENTER_PATH,
+} from '@kinu.run/core/slates';
+import { ROOM_HOST_HEADER, ROOM_KEY_HEADER, ROOM_PERSON_HEADER, type RoomVisitor, type SlateRoom } from './room';
 
 export const roomRoutes = new Hono<FamilyEnv<Env, object>>();
 
@@ -77,6 +79,7 @@ roomRoutes.get('/api/rooms/:workspace/:slate', async (c) => {
 
   headers.delete(ROOM_PERSON_HEADER);
   headers.delete(ROOM_KEY_HEADER);
+  headers.delete(ROOM_HOST_HEADER);
 
   if (signedIn !== null) headers.set(ROOM_PERSON_HEADER, JSON.stringify(signedIn.visitor));
   const key = new URL(c.req.url).searchParams.get('k');
@@ -85,3 +88,54 @@ roomRoutes.get('/api/rooms/:workspace/:slate', async (c) => {
 
   return await room.fetch(new Request(c.req.raw, { headers }));
 });
+
+/** A part's sealed content: the room renders what this ticket's session may see, with no script and nothing to reach. */
+roomRoutes.get('/api/rooms/:workspace/:slate/parts/:part/content', async (c) => {
+  const { workspace, slate } = addressOf(c);
+  const handle = roomHandle(workspace, slate);
+  const ticket = new URL(c.req.url).searchParams.get('t') ?? '';
+  const claim = await readPass(c.env, { workspace, handle }, ticket, 'ticket');
+
+  if (claim === null) return new Response('Not found', { status: 404, headers: NO_STORE });
+
+  return await roomOf(c.env, workspace, slate).partContent(claim, decodeURIComponent(rawParam(c, 'part')));
+});
+
+/**
+ * The slate's own host, `<handle>-<token>-<workspace>.<suffix>`: its token is checked before the room is woken. The
+ * entry exchanges a session's ticket for its host-only cookie; every other request goes to the room with the session
+ * that cookie names, or none, and the room admits it again.
+ */
+export async function handleSlateRoomHostRequest(request: Request, env: Env): Promise<Response | null> {
+  const suffix = previewHostSuffix(env);
+
+  if (suffix === null) return null;
+  const url = new URL(request.url);
+  const suffixWithDot = `.${suffix}`;
+
+  if (!url.hostname.endsWith(suffixWithDot)) return null;
+  const label = parseSlateShareLabel(url.hostname.slice(0, -suffixWithDot.length));
+
+  if (label === null) return null;
+  const { workspace, handle, token } = label;
+
+  if (!await hostTokenHolds(env, workspace, handle, token)) return new Response('Not found', { status: 404, headers: NO_STORE });
+  const room = { workspace, handle };
+
+  if (url.pathname === ROOM_ENTER_PATH) {
+    const cookie = await cookieForTicket(env, room, url.searchParams.get('t') ?? '');
+
+    if (cookie === null) return new Response('Open this slate from its page in Kinu.', { status: 403, headers: NO_STORE });
+
+    return new Response(null, { status: 303, headers: { ...NO_STORE, location: '/', 'set-cookie': frameCookieHeader(cookie) } });
+  }
+
+  const pass = frameCookieOf(request.headers.get('cookie'));
+  const claim = pass === null ? null : await readPass(env, room, pass, 'cookie');
+  const headers = new Headers(request.headers);
+
+  headers.delete('cookie');
+  headers.set(ROOM_HOST_HEADER, JSON.stringify(claim === null ? null : { email: claim.email, access: claim.access }));
+
+  return await env.SLATE_ROOM.get(env.SLATE_ROOM.idFromName(roomObjectName(workspace, handle))).fetch(new Request(request, { headers }));
+}

@@ -34,6 +34,7 @@ import { opsRoutes } from "./ops-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
+import { handleSlateRoomHostRequest } from "./slates/room-routes";
 import {
   crossSiteRejection, sessionGate,
   type AuthIdentity,
@@ -107,6 +108,8 @@ export { MonitorDO } from "./monitor/monitor-do";
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
 
 export { SlateRoom } from "./slates/room";
+
+export { RoomBinding } from "./slates/room-bindings";
 
 export { DeployRunDO } from "./deploy/deploy-do";
 
@@ -275,6 +278,12 @@ previewHost.get(`${SLATE_FONTS_PATH}:file`, async (c, next) => {
   const file = appFontFile(c.req.param('file'));
 
   return file === null ? await next() : await c.env.ASSETS.fetch(new Request(new URL(`${APP_FONTS_PATH}${file}`, c.req.url)));
+});
+
+previewHost.use('*', async (c, next) => {
+  const room = await handleSlateRoomHostRequest(c.req.raw, c.env);
+
+  return room === null ? await next() : containPreviewResponse(room);
 });
 
 previewHost.use('*', async (c, next) => {

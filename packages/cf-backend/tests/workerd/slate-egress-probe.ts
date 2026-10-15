@@ -56,6 +56,8 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     },
     browserActor: async () => null,
     catalog: async () => ({ mcp: [], slates: [] }),
+    slateRoom: async () => { throw new Error('this probe runs no slate room'); },
+    ownerEmail: async () => 'owner@kinu.test',
   });
 
   private prepare(): void {

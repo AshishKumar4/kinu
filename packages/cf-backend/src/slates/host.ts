@@ -1,21 +1,22 @@
-import { exports } from 'cloudflare:workers';
 import * as v from 'valibot';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import {
-  SlateController, heldSlateKey, initEphemeralSlateTable, initSlateUsageTable, slateStorageCall,
+  SlateController, slateAnswer, heldSlateKey, initEphemeralSlateTable, initSlateUsageTable, slateStorageCall,
   type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
 } from '@kinu.run/core/slates';
 import {
-  SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
-  SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
+  slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
+  SlateCallRequestSchema, workModeRefusal, routeSlateCall, issuedSlateInvocation,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
   type SlateSurfaceCatalog, type EphemeralSlateAddress,
 } from '@kinu.run/core';
-import { ERROR_CODES, KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { attempt, inItsWords, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { secretSightings, sha256Hex, stableStringify, type SlateAnswer } from '@kinu.run/core';
+import type { RoomCallOutcome } from './room';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
-import { slateBatchStub } from './rpc-transport';
-import { type SlateBinding, type SlateBindingProps } from './bindings';
-import { codemodeEgress } from '../codemode-egress';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 
 type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
@@ -44,21 +45,24 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   /** The block an ephemeral slate's id names, and the author whose authority its page runs with; refused when no stored
    *  answer holds it. */
   messageBlock?(address: EphemeralSlateAddress): Promise<MessageBlock>;
+  /** The slate's room, made on its first need: every slate runs in its room (docs/SLATE-SHARING-SECURITY.md §2.7). */
+  slateRoom(id: string, title: string): Promise<SlateRoomStub>;
+  /** The workspace owner's email, as rooms name people. */
+  ownerEmail(): Promise<string>;
+}
+
+/** What the host asks of a slate's room. */
+export interface SlateRoomStub {
+  publish(input: {
+    readonly author: string; readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string;
+    readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null;
+  }): Promise<void>;
+  callAs(email: string | null, fn: string, args: JsonValue[]): Promise<SlateAnswer<RoomCallOutcome>>;
+  ownerFrame(): Promise<string>;
 }
 
 
-/** The one surface every slate is given, as its process sees it. */
-const SLATE_SURFACE = 'workspace';
 
-/** A guest refusal crosses Cap'n Web as a plain Error with message `reason: error`. */
-const SLATE_REFUSAL_MESSAGE = new RegExp(`^(${ERROR_CODES.join('|')}): ([\\s\\S]*)$`);
-
-function refusalFromThrown(input: { cause: unknown }): Refusal | null {
-  const match = input.cause instanceof Error ? SLATE_REFUSAL_MESSAGE.exec(input.cause.message) : null;
-  const reason = match === null ? undefined : v.safeParse(v.picklist(ERROR_CODES), match[1]);
-
-  return reason?.success === true && match !== null ? refusalOf(new KinuError(reason.output, match[2])) : null;
-}
 
 export type { SlateAppCall };
 
@@ -92,6 +96,7 @@ export class SlateHost {
         }
       },
       call: (request) => this.call(request),
+      frame: async (id) => (await this.room(id)).ownerFrame(),
       catalog: () => deps.catalog(),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
@@ -196,70 +201,106 @@ export class SlateHost {
     }
   }
 
-  /** One Cap'n Web HTTP-batch RPC; the invocation id lives exactly as long as the call. */
-  async call(request: SlateAppCall): Promise<SlateCallResult> {
-    const { caller, id, method, args, chain = [] } = request;
-    const invocation = crypto.randomUUID();
-    this.invocations.set(invocation, { id, chain });
+  /**
+   * A method of a slate, called by the workspace's own work (an agent's hop): in the slate's room, for the workspace's
+   * owner, as the room admits it. What a call needed and the owner has not allowed is the room's part, not an answer.
+   */
+  call(request: SlateAppCall): Promise<SlateCallResult> {
+    const { caller, id, method, args } = request;
 
-    try {
-      requireWorkModePermission(caller.workMode, false, 'Calling authored slate code');
+    return settle(slateAnswer(`slate ${id}.${method}`, Effect.gen({ self: this }, function* () {
+      const planned = workModeRefusal(caller.workMode, false, 'Calling authored slate code');
 
-      if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
+      if (planned !== null) return yield* new KinuError(planned.reason, planned.error);
+
+      if (!isSlateMethodName(method)) return yield* new KinuError('bad_input', `"${method}" is not an app method name`);
       const parsed = v.safeParse(v.array(JsonValueSchema), args);
 
-      if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
-      const process = await this.ensure(caller, id);
+      if (!parsed.success) return yield* new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
 
-      if (!process.methods.includes(method)) {
-        throw new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`);
+      // The room needs the slate built and published first.
+      const room = yield* attempt({ doing: `slate ${id}`, otherwise: 'io' }, async () => {
+        await this.ensure(caller, id);
+
+        return this.room(id);
+      });
+
+      const email = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.deps.ownerEmail());
+      const answered = yield* attempt({ doing: `slate ${id}.${method}`, otherwise: 'io' }, async () => room.callAs(email, method, parsed.output));
+
+      if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
+
+      if (!('value' in answered.value)) {
+        return yield* new KinuError('denied', `${method} reads what only a part shows: open the slate to see it, or allow what it asks there`);
       }
 
-      const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(process, invocation);
+      return answered.value.value;
+    })));
+  }
 
-      try {
-        const raw: unknown = await stub[method](...parsed.output);
-        const value = v.safeParse(JsonValueSchema, raw === undefined ? null : raw);
+  /** The modules of one of a slate's images, by content digest, as its room loads them; refused when one was swept. */
+  imageModules(slate: string, digests: readonly string[]): Promise<SlateAnswer<Readonly<Record<string, string>>>> {
+    return settle(slateAnswer(`reading slate ${slate}'s image`, Effect.gen({ self: this }, function* () {
+      const session = yield* attempt({ doing: 'opening the workspace', otherwise: 'unavailable' }, async () => this.deps.session());
+      const vfs = session.vfs.as(CRED_KERNEL);
+      const texts: Record<string, string> = {};
 
-        if (!value.success) throw new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) });
+      for (const digest of digests) texts[digest] = yield* inItsWords('missing', Effect.sync(() => vfs.readFileString(facetImagePath(digest))));
 
-        return { ok: true, value: value.output };
-      } finally {
-        // Dispose here, not at transport end, or workerd reports the read-loop rejection as unhandled.
-        stub[Symbol.dispose]();
-      }
-    } catch (cause) {
-      const refusal = refusalFromThrown({ cause });
+      return texts;
+    })));
+  }
 
-      if (refusal !== null) return { ok: false, ...refusal };
+  private async room(id: string): Promise<SlateRoomStub> {
+    const source = await this.slateSources.resolve(CRED_SESSION_USER, id);
 
-      return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id}.${method}`, cause, otherwise: 'io' })) };
-    } finally {
-      this.invocations.delete(invocation);
-    }
+    return await this.deps.slateRoom(id, slateTitle(source.project, id));
   }
 
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
     return (await this.controller.processes.booted(caller, id)).process;
   }
 
-  /** A process for `launch`: the slate's bindings as its caller, and its outbound mediated as that caller's eval is. */
+  /**
+   * `launch` publishes: the slate's good build becomes its room's image, written by the workspace's owner, whose own
+   * agent wrote it. The room runs it; nothing of the workspace's does.
+   */
   private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
-    const { id, caller, source, image, app } = launch;
-    const actor = await this.deps.browserActor(caller);
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: true });
+    const { id, source, image } = launch;
+    const title = slateTitle(source.project, id);
+    const room = await this.deps.slateRoom(id, title);
 
-    if (caller.workMode === 'build' && globalOutbound === null) {
-      throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
+    await room.publish({
+      author: await this.deps.ownerEmail(), image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title,
+      secret: await this.secretIn(source),
+    });
+    const elsewhere = async (): Promise<Response> => { throw new KinuError('unsupported', `Slate ${id} runs in its room`); };
+
+    return { id: `room:${id}`, port: null, methods: [], request: elsewhere, connect: elsewhere, isRunning: async () => true, stop: async () => {} };
+  }
+
+  /** The first secret-shaped text in the slate's files: while one is there, its room keeps its link off. */
+  private async secretIn(source: SlateSource): Promise<{ readonly file: string; readonly line: number; readonly kind: string } | null> {
+    if (source.kind !== 'files') return null;
+    const vfs = (await this.deps.session()).vfs.as(CRED_SESSION_USER);
+    const pending = [source.root];
+
+    for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+      for (const entry of vfs.readdir(dir)) {
+        const path = `${dir}/${entry.name}`;
+
+        if (entry.type === 'directory' && entry.name !== 'node_modules' && !entry.name.startsWith('.')) pending.push(path);
+
+        if (entry.type !== 'file') continue;
+        const bytes = vfs.readFile(path);
+
+        if (bytes.includes(0)) continue;
+        const [found] = secretSightings(path.slice(source.root.length + 1), new TextDecoder('utf8', { fatal: false }).decode(bytes));
+
+        if (found !== undefined) return { file: found.path, line: found.line, kind: found.message };
+      }
     }
 
-    const bindings: Record<string, Fetcher<SlateBinding>> = {};
-
-    for (const name of [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
-      const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller };
-      bindings[name] = exports.SlateBinding({ props });
-    }
-
-    return await this.resident.launch({ owner: id, root: source.root, bindings, globalOutbound, app: app === null ? null : { port: app.port } }, image);
+    return null;
   }
 }

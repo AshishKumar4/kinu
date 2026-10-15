@@ -22,7 +22,7 @@ import type { SlateBuilds } from './builds';
 import { ROOT_SLATE_CALLER, type SlateCaller } from './caller';
 import { slateCapabilityGraph, type SlateSurfaceCatalog } from './capability-graph';
 import { WorkspaceSlateContentStore } from './content';
-import type { DurableAppIdentity, DurableApps } from './durable-app';
+import type { DurableApps } from './durable-app';
 import { EphemeralSlates } from './ephemeral';
 import { forgetSlateFiles, slateDirectory, SlateFiles } from './files';
 import { SlateProcesses, type RunnableSlateSource, type RunningSlate, type SlateProcessPorts } from './processes';
@@ -75,6 +75,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   transaction<Result>(body: () => Result): Result;
   session(): Promise<Pick<WorkspaceSession, 'vfs'>>;
   readonly apps: SlateApps;
+  /** The slate's page in its room, entered as the workspace's owner: what a preview shows. */
+  frame(id: string): Promise<string>;
   /** Invokes a method in the slate's process. */
   call(request: SlateAppCall): Promise<SlateCallResult>;
   catalog(): Promise<SlateSurfaceCatalog>;
@@ -348,17 +350,17 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return settle(this.answerServed(caller, id, 'build', ({ broken }) => Effect.succeed<JsonValue>(broken === null ? {} : { broken })));
   }
 
-  /** The application is the root's, so the URL is the same whoever asks and across launches. */
+  /** Every slate runs in its room (docs/SLATE-SHARING-SECURITY.md §2.7): a preview is its page there, as the owner. */
   preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
-    return settle(this.answerServed(caller, id, 'preview', ({ source, app, broken }) => Effect.gen({ self: this }, function* () {
-      const preview = yield* Effect.promise(async () => this.ports.apps.url(app.port, app.capability));
+    return settle(this.answerServed(caller, id, 'preview', ({ source, broken }) => Effect.gen({ self: this }, function* () {
+      const url = yield* Effect.promise(async () => this.ports.frame(id));
 
-      if (preview.url === undefined) return yield* new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
+      if (url === '') return yield* new KinuError('unavailable', 'This deployment cannot mint a slate page address');
 
       // An answer's own block is shown where the answer is, never again as a card of the turn's slates.
       if (source.kind === 'files') this.ports.previewed?.(id);
       // Every page the runner answers reports its height, its class's own `fetch` pages too.
-      const shown = { url: preview.url, port: app.port, sized: true, title: slateTitle(source.project, id) };
+      const shown = { url, sized: true, title: slateTitle(source.project, id) };
 
       // Its latest source does not build: the last that did is what this URL serves, and the compiler's words say why.
       return broken === null ? shown : { ...shown, broken };
@@ -369,7 +371,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    *  refused, and a caller who may not start one is refused first. */
   private answerServed(
     caller: SlateCaller, id: string, doing: 'build' | 'preview',
-    read: (served: RunningSlate<Source, Process> & { readonly app: DurableAppIdentity }) => Effect.Effect<JsonValue, KinuError>,
+    read: (served: RunningSlate<Source, Process>) => Effect.Effect<JsonValue, KinuError>,
   ): Effect.Effect<SlateCallResult> {
     return answer('slate ' + id + ' ' + doing, Effect.gen({ self: this }, function* () {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');

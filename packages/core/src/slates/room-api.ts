@@ -366,6 +366,11 @@ export function roomForkPath(workspace: string, slate: string): string {
   return `${roomSocketPath(workspace, slate)}/fork`;
 }
 
+/** A part's frame: the app's page for one part, embedded by the slate's own page. */
+export function roomPartPath(workspace: string, slate: string, part: string): string {
+  return `/s/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}/parts/${encodeURIComponent(part)}`;
+}
+
 // ── Drive, Gallery, fork ────────────────────────────────────────────────────────────────────────────────────────
 
 /** A slate in someone's Drive that is not theirs: shared with them, or used through its link. */

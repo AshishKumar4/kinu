@@ -36,7 +36,7 @@ export { SlateController, type SlateAppCall, type SlateApps, type SlateClassProc
 export { answer as slateAnswer } from './controller';
 
 export {
-  RoomCaretaker, initSlateRoomTables,
+  RoomCaretaker, initSlateRoomTables, codecIsFree,
   type Access, type Cell, type Codec, type Grant, type PendingEffect, type RoomCaretakerDeps, type RoomMember, type RoomRecord,
   type Run, type SecretSighting, type Session, type ToolVerdict,
 } from './room/caretaker';
@@ -46,4 +46,7 @@ export {
   type Audience, type Elem, type LabelFacts, type Show, type Tag,
 } from './room/labels';
 
-export { linkKeyHolds, linkUrl, roomHandle, roomObjectName } from './room/passes';
+export {
+  linkKeyHolds, linkUrl, roomHandle, roomObjectName, frameTicket, cookieForTicket, readPass, frameCookieHeader, frameCookieOf,
+  hostTokenHolds, slateHostOrigin, ROOM_ENTER_PATH, ROOM_FRAME_COOKIE, type FrameClaim,
+} from './room/passes';

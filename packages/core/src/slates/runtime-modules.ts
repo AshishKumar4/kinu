@@ -33,7 +33,6 @@ export const workspace = clientOnly("workspace");
 /** React and capnweb resolve through the same import map, so this module keeps the singletons shared with the host frame. */
 export const SLATE_CLIENT_MODULE = `import { createElement, useMemo, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import { newWebSocketRpcSession } from "capnweb";
 
 function defaultTheme() {
   return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -89,33 +88,48 @@ function documentHeight() {
   return Math.ceil(document.documentElement.getBoundingClientRect().height);
 }
 
-// One session for the tab's life: per-call sockets would kill callback stubs
-// passed across a call, and every call would pay the handshake. A broken one
-// is replaced on the next call, never reasoned about.
-let live = null;
-function session() {
-  if (live === null) {
-    const socket = new WebSocket(new URL("/__rpc", window.location.href));
-    const stub = newWebSocketRpcSession(socket);
-    stub.onRpcBroken(() => { if (live !== null && live.stub === stub) live = null; });
-    live = { stub };
-  }
-  return live.stub;
+// Every call goes through the slate's room, which admits it as this page's person and runs it with what they hold:
+// in the slate's shared server, or confined when it needs someone's connection.
+async function roomCall(path, body) {
+  const response = await fetch(path, {
+    method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const answer = await response.json();
+  if (!answer.ok) throw new Error(answer.reason + ": " + answer.error);
+  return answer.value;
+}
+
+/** A call whose answer only its page may show answers a part: render it with <Part value={...} />. */
+function outcome(value) {
+  return value && typeof value === "object" && "part" in value ? { kinuPart: value.part.frame } : value.value;
 }
 
 export const slate = new Proxy(Object.create(null), {
   get(_target, member) {
     if (typeof member !== "string" || member === "then") return undefined;
-    return (...args) => session()[member](...args);
+    return async (...args) => outcome(await roomCall("/__kinu/call", { method: member, args }));
   },
 });
+
+/** A method's answer as a part, always: its own frame, which shows each person only what they may see. */
+export async function part(method, ...args) {
+  return outcome(await roomCall("/__kinu/part", { method, args }));
+}
+
+/** A value, or the frame of a part a call answered. */
+export function Part({ value, style }) {
+  if (value && typeof value === "object" && typeof value.kinuPart === "string") {
+    return createElement("iframe", { src: value.kinuPart, style: { border: 0, width: "100%", ...style }, sandbox: "allow-scripts allow-same-origin allow-popups" });
+  }
+  return createElement("span", null, value === undefined || value === null ? "" : typeof value === "string" ? value : JSON.stringify(value));
+}
 
 /** A slate's one surface, as a program reaches its namespaces: workspace.memory.search(query),
  *  workspace.mcp.github.list_issues({ state: "open" }), workspace.agent.send({ text }). The workspace executor's own
  *  members sit at the top too, so workspace.readFile(path) reads as it does in a program. */
 function surface(path) {
   return new Proxy(function () {}, {
-    apply(_fn, _self, args) { return session().$workspace(path, args); },
+    apply(_fn, _self, args) { return roomCall("/__kinu/workspace", { path, args }).then(outcome); },
     get(_fn, name) {
       if (typeof name !== "string" || name === "then") return undefined;
       return surface([...path, name]);

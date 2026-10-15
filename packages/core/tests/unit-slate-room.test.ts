@@ -29,7 +29,7 @@ function newRoom() {
   const room = new RoomCaretaker({ db: makeSqlExec(db) });
 
   room.create({ workspace: 'sam', slate: 'board', title: 'Board', owner: SAM, parent: null });
-  room.publish(SAM, { image: 'img-1', title: 'Board', secret: null });
+  room.publish(SAM, { image: 'img-1', modules: {}, title: 'Board', secret: null });
 
   return room;
 }
@@ -288,7 +288,7 @@ test('an editor\'s edit suspends the owner\'s lend until the owner lends it agai
   caretaker.mint(SAM, { personal: false, server: METRICS, root: {}, tools: ['deploy'], fn: 'deploy', domain: ANY, effect: true, sink: [] });
   caretaker.mint(BEN, { personal: true, server: GITHUB, root: {}, tools: ['issues'], fn: 'deploy', domain: ANY, effect: false, sink: [] });
 
-  caretaker.publish(BEN, { image: 'img-ben', title: 'Board', secret: null });
+  caretaker.publish(BEN, { image: 'img-ben', modules: {}, title: 'Board', secret: null });
   expect(caretaker.room().foreign).toBe(true);
   expect(caretaker.grantsFor(enter(caretaker, SAM), 'deploy', null)).toEqual([]);
   expect(caretaker.grantsFor(ben, 'deploy', null).map((grant) => grant.holder)).toEqual([BEN]);
@@ -300,7 +300,7 @@ test('a Use member cannot change the code or lend, and nobody but the owner mana
   const caretaker = newRoom();
   caretaker.invite(SAM, BOB, 'use');
 
-  expect(() => caretaker.publish(BOB, { image: 'img-bob', title: 'Board', secret: null })).toThrow(/cannot change/);
+  expect(() => caretaker.publish(BOB, { image: 'img-bob', modules: {}, title: 'Board', secret: null })).toThrow(/cannot change/);
   expect(() => caretaker.mint(BOB, { personal: false, server: METRICS, root: {}, tools: [], fn: 'f', domain: ANY, effect: false, sink: [] }))
     .toThrow(/editor/);
   expect(() => caretaker.invite(BOB, ALICE, 'use')).toThrow(/owner/);
@@ -309,11 +309,11 @@ test('a Use member cannot change the code or lend, and nobody but the owner mana
 test('a secret in the code turns the link off with the image that holds it, and keeps it off until it is gone', () => {
   const caretaker = newRoom();
   caretaker.setLink(SAM, true);
-  caretaker.publish(SAM, { image: 'img-2', title: 'Board', secret: { file: 'server.ts', line: 4, kind: 'API key' } });
+  caretaker.publish(SAM, { image: 'img-2', modules: {}, title: 'Board', secret: { file: 'server.ts', line: 4, kind: 'API key' } });
 
   expect(caretaker.room()).toMatchObject({ link: false, image: 'img-2', secret: { file: 'server.ts', line: 4 } });
   expect(() => caretaker.setLink(SAM, true)).toThrow(/secret/);
-  caretaker.publish(SAM, { image: 'img-3', title: 'Board', secret: null });
+  caretaker.publish(SAM, { image: 'img-3', modules: {}, title: 'Board', secret: null });
   caretaker.setLink(SAM, true);
   expect(caretaker.room().link).toBe(true);
 });

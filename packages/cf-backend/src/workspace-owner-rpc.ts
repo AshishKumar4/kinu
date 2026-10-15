@@ -20,6 +20,8 @@ export interface WorkspaceOwnerRpc {
   /** Stops a `callOperation` still running; one that has answered is not touched. */
   cancelOperation(callId: string): Promise<void>;
   admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>>;
+  /** The modules of a slate's image, by content digest, for its room to load; refused when one is gone. */
+  slateImageModules(slate: string, digests: readonly string[]): Promise<SlateAnswer<Readonly<Record<string, string>>>>;
   /** The slate's room, made on its first need by this workspace, which alone names its owner. */
   ensureSlateRoom(slate: string): Promise<SlateAnswer<{ readonly handle: string }>>;
 }

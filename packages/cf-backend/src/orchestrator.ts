@@ -5891,6 +5891,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
       messageBlock: (address) => this.answerBlock(address),
+      slateRoom: async (slate, title) => {
+        const owner = await this.getOwnerEmail();
+
+        if (owner === null) throw new KinuError('unavailable', 'This workspace has no owner to run its slates for');
+        const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate))));
+
+        await room.create({ workspace: this.name, slate, title, owner: owner.toLowerCase(), parent: null });
+
+        return room;
+      },
+      ownerEmail: async () => {
+        const owner = await this.getOwnerEmail();
+
+        if (owner === null) throw new KinuError('unavailable', 'This workspace has no owner');
+
+        return owner.toLowerCase();
+      },
     });
 
     return this._slates;
@@ -5949,6 +5966,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Every agent is reached by its live directory entry. */
   private operationActor(actorId: string): ActorReference {
     return actorReferenceOf(this.actingAgentOf(actorId));
+  }
+
+  /** DO-only: a slate's room reads its image's modules from the workspace that built them. */
+  async slateImageModules(slate: string, digests: readonly string[]): Promise<SlateAnswer<Readonly<Record<string, string>>>> {
+    return (await this.slates()).imageModules(slate, digests);
   }
 
   /** DO-only: the app's room route asks for it after proving the caller owns this workspace. */
