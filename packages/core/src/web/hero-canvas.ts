@@ -1,8 +1,8 @@
 /** Canvas2D renderers for the living art (non-GPU `ArtFrame` pictures and the phone's dust); no mounting, observing, or clocks. */
 
 import {
-  type ArtPalette, type ArtRenderer, cssRgba, DEFAULT_LIFT, NODE_STRIDE, PULSE_STRIDE, RECESS, type Rgb, STROKE_STRIDE, TONE_ASH,
-  TONE_BRIGHT, TONE_EMBER,
+  type ArtFrame, type ArtPalette, type ArtRenderer, cssRgba, DEFAULT_LIFT, NODE_STRIDE, PULSE_STRIDE, RECESS, type Rgb, STROKE_STRIDE,
+  TONE_ASH, TONE_BRIGHT, TONE_EMBER,
 } from './art';
 import { seededRandom } from '../utils/stats';
 
@@ -171,6 +171,87 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
     return [qx, qy, ux * x0 + vx * cx + wx * x1, ux * y0 + vx * cy + wx * y1, rx, ry];
   };
 
+  /**
+   * Brings the kept layer up to the frame's rest, redrawing it only for a new rest epoch, lift, size or palette, and
+   * stamps it; returns the first stroke still to draw. Without a kept layer every stroke is drawn each frame.
+   */
+  const paintRest = (frame: ArtFrame): number => {
+    if ((frame.lift ?? DEFAULT_LIFT) !== lift) {
+      lift = frame.lift ?? DEFAULT_LIFT;
+      keptEpoch = null;
+    }
+
+    const rest = frame.rest;
+
+    if (kept === undefined || rest === undefined) return 0;
+
+    if (rest.epoch !== keptEpoch) {
+      kept.resize(Math.round(width * ratio), Math.round(height * ratio));
+      kept.surface.setTransform(ratio, 0, 0, ratio, 0, 0);
+      kept.surface.clearRect(0, 0, width, height);
+      kept.surface.lineCap = 'round';
+      paintStrokes(kept.surface, frame.strokes, 0, rest.count);
+      keptEpoch = rest.epoch;
+    }
+
+    kept.stamp();
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    return rest.count;
+  };
+
+  /** The frame's discs, one fill per ink and alpha, a lit one over its soft underlay. */
+  const paintNodes = (nodes: Float32Array, count: number): void => {
+    for (const [key, batch] of spots) {
+      if (batch.at.length === 0) spots.delete(key);
+      else batch.at.length = 0;
+    }
+
+    for (let index = 0; index < count; index += 1) {
+      const at = index * NODE_STRIDE;
+      const x = (nodes[at] ?? 0) * width;
+      const y = (nodes[at + 1] ?? 0) * height;
+      const radius = nodes[at + 2] ?? 1;
+      const glow = nodes[at + 3] ?? 0;
+      const tone = nodes[at + 4] ?? 0;
+      const alpha = nodes[at + 5] ?? 0;
+
+      if (alpha <= 0.004) continue;
+      const color = recede(palette, mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6));
+
+      if (glow > 0.5) {
+        context.beginPath();
+        context.arc(x, y, radius * 2.6, 0, Math.PI * 2);
+        context.fillStyle = cssRgba(color, alpha * 0.16 * glow);
+        context.fill();
+      }
+
+      const ink = Math.round(Math.min(1, alpha) * 255);
+      const key = ((Math.round(color[0]) * 256 + Math.round(color[1])) * 256 + Math.round(color[2])) * 256 + ink;
+      const batch = spots.get(key);
+
+      if (batch === undefined) spots.set(key, { style: cssRgba(color, ink / 255), width: 0, at: [at] });
+      else batch.at.push(at);
+    }
+
+    // One fill per ink; each disc starts its own subpath, so no edge joins one disc to the next.
+    for (const batch of spots.values()) {
+      if (batch.at.length === 0) continue;
+      context.beginPath();
+
+      for (const at of batch.at) {
+        const x = (nodes[at] ?? 0) * width;
+        const y = (nodes[at + 1] ?? 0) * height;
+        const radius = nodes[at + 2] ?? 1;
+        context.moveTo(x + radius, y);
+        context.arc(x, y, radius, 0, Math.PI * 2);
+      }
+
+      context.fillStyle = batch.style;
+      context.fill();
+    }
+  };
+
   return {
     kind: 'canvas',
     resize(nextWidth, nextHeight, nextRatio) {
@@ -190,28 +271,9 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
       context.globalAlpha = 1;
       const { strokes, nodes, pulses } = frame;
 
-      if ((frame.lift ?? DEFAULT_LIFT) !== lift) {
-        lift = frame.lift ?? DEFAULT_LIFT;
-        keptEpoch = null;
-      }
+      const live = paintRest(frame);
 
-      const rest = kept === undefined ? undefined : frame.rest;
-
-      if (kept !== undefined && rest !== undefined) {
-        if (rest.epoch !== keptEpoch) {
-          kept.resize(Math.round(width * ratio), Math.round(height * ratio));
-          kept.surface.setTransform(ratio, 0, 0, ratio, 0, 0);
-          kept.surface.clearRect(0, 0, width, height);
-          kept.surface.lineCap = 'round';
-          paintStrokes(kept.surface, strokes, 0, rest.count);
-          keptEpoch = rest.epoch;
-        }
-
-        kept.stamp();
-        context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      }
-
-      paintStrokes(context, strokes, rest?.count ?? 0, frame.count);
+      paintStrokes(context, strokes, live, frame.count);
 
       for (let index = 0; index < frame.pulseCount; index += 1) {
         const at = index * PULSE_STRIDE;
@@ -247,54 +309,7 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
         context.stroke();
       }
 
-      for (const [key, batch] of spots) {
-        if (batch.at.length === 0) spots.delete(key);
-        else batch.at.length = 0;
-      }
-
-      for (let index = 0; index < frame.nodeCount; index += 1) {
-        const at = index * NODE_STRIDE;
-        const x = (nodes[at] ?? 0) * width;
-        const y = (nodes[at + 1] ?? 0) * height;
-        const radius = nodes[at + 2] ?? 1;
-        const glow = nodes[at + 3] ?? 0;
-        const tone = nodes[at + 4] ?? 0;
-        const alpha = nodes[at + 5] ?? 0;
-
-        if (alpha <= 0.004) continue;
-        const color = recede(palette, mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6));
-
-        if (glow > 0.5) {
-          context.beginPath();
-          context.arc(x, y, radius * 2.6, 0, Math.PI * 2);
-          context.fillStyle = cssRgba(color, alpha * 0.16 * glow);
-          context.fill();
-        }
-
-        const ink = Math.round(Math.min(1, alpha) * 255);
-        const key = ((Math.round(color[0]) * 256 + Math.round(color[1])) * 256 + Math.round(color[2])) * 256 + ink;
-        const batch = spots.get(key);
-
-        if (batch === undefined) spots.set(key, { style: cssRgba(color, ink / 255), width: 0, at: [at] });
-        else batch.at.push(at);
-      }
-
-      // One fill per ink; each disc starts its own subpath, so no edge joins one disc to the next.
-      for (const batch of spots.values()) {
-        if (batch.at.length === 0) continue;
-        context.beginPath();
-
-        for (const at of batch.at) {
-          const x = (nodes[at] ?? 0) * width;
-          const y = (nodes[at + 1] ?? 0) * height;
-          const radius = nodes[at + 2] ?? 1;
-          context.moveTo(x + radius, y);
-          context.arc(x, y, radius, 0, Math.PI * 2);
-        }
-
-        context.fillStyle = batch.style;
-        context.fill();
-      }
+      paintNodes(nodes, frame.nodeCount);
     },
     dispose() {
       clearSurface(context, { width, height, ratio });

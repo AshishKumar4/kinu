@@ -45,8 +45,8 @@ export interface MeshOptions {
   readonly opacity?: number;
 }
 
-/** The mesh's ink: texture first, neurons when you look. */
-export const MESH_OPACITY = 0.2;
+/** The mesh's ink: texture first, neurons when you look. The owner's Fainter. */
+const MESH_OPACITY = 0.2;
 
 interface Layer {
   readonly scale: number;

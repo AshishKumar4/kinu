@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { STROKE_STRIDE } from '../src/web/art';
-import { MESH_OPACITY, NeuralMesh } from '../src/web/neural-mesh';
+import { NeuralMesh } from '../src/web/neural-mesh';
 
 const WIDTH = 1440;
 
@@ -187,12 +187,12 @@ describe('the mesh is drawn cheaply and quietly', () => {
     expect(redrawn).toBe(1);
   });
 
-  test('its opacity scales the ink on either ground, one object a renderer can keep', () => {
+  test('it ships at 0.2 of its ink, and its opacity scales the ink on either ground, one object a renderer can keep', () => {
     const quiet = mesh().frame();
-    const quieter = new NeuralMesh({ seed: 1729, aspect: ASPECT, width: WIDTH, opacity: MESH_OPACITY / 2 }).frame();
+    const quieter = new NeuralMesh({ seed: 1729, aspect: ASPECT, width: WIDTH, opacity: 0.1 }).frame();
 
-    expect(quiet.lift?.dark).toBeCloseTo(MESH_OPACITY);
-    expect(quieter.lift?.dark).toBeCloseTo(MESH_OPACITY / 2);
+    expect(quiet.lift?.dark).toBeCloseTo(0.2);
+    expect(quieter.lift?.dark).toBeCloseTo(0.1);
     expect((quieter.lift?.light ?? 0) / (quieter.lift?.dark ?? 1)).toBeCloseTo((quiet.lift?.light ?? 0) / (quiet.lift?.dark ?? 1));
     expect(mesh().frame().lift).not.toBe(quiet.lift);
 
@@ -212,8 +212,8 @@ describe('the mesh is drawn cheaply and quietly', () => {
       return { disc: frame.nodes[5] ?? 0, lift: frame.lift?.dark ?? 0 };
     };
 
-    const faint = glint(MESH_OPACITY);
-    const fainter = glint(MESH_OPACITY / 4);
+    const faint = glint(0.2);
+    const fainter = glint(0.05);
 
     expect(fainter.lift / faint.lift).toBeCloseTo(0.25);
     expect(fainter.disc / faint.disc).toBeCloseTo(0.5);
