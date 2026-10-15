@@ -616,9 +616,11 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   );
 }
 
-function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badgeFor, away = [], onNavigate, onOpenFile, onToggle }: {
+function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expanded, cache, badgeFor, away = [], onNavigate, onOpenFile, onToggle }: {
   dir: string;
   label: string;
+  /** Listed because hidden items are shown: dimmed as the list dims it. */
+  hidden?: boolean;
   depth: number;
   path: string;
   previewPath: string | null;
@@ -640,7 +642,7 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
     <div>
       <div
         data-files-tree-node={dir}
-        className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${active ? "p-fill p-text font-medium" : "p-text-2"}`}
+        className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${active ? "p-fill p-text font-medium" : "p-text-2"} ${hidden ? HIDDEN_FACE : ""}`}
         style={{ paddingLeft: `${8 + depth * 12}px` }}
         onClick={() => onNavigate(dir)}
       >
@@ -655,9 +657,9 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
         >
           {isOpen ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
         </button>
-        {isOpen ? <FolderOpenIcon size={13} className="p-info shrink-0" weight="fill" />
-          : <FolderIcon size={13} className="p-info shrink-0" weight="fill" />}
-        <span className="truncate">{label}</span>
+        {isOpen ? <FolderOpenIcon data-entry-face size={13} className="p-info shrink-0" weight="fill" />
+          : <FolderIcon data-entry-face size={13} className="p-info shrink-0" weight="fill" />}
+        <span data-entry-face className="truncate">{label}</span>
         {depth === 1 && badgeFor(label) && (
           <span data-mount-badge className="truncate p-meta p-text-3">{badgeFor(label)}</span>
         )}
@@ -673,7 +675,7 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
         return child.type === "dir" ? (
           <TreeNode
             key={child.name}
-            dir={full} label={child.name} depth={depth + 1}
+            dir={full} label={child.name} hidden={child.hidden === true} depth={depth + 1}
             path={path} previewPath={previewPath} expanded={expanded} cache={cache} badgeFor={badgeFor}
             onNavigate={onNavigate} onOpenFile={onOpenFile} onToggle={onToggle}
           />
@@ -683,12 +685,12 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
             data-files-tree-file={full}
             title={child.name}
             className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${
-              previewPath === full ? "p-fill p-text font-medium" : "p-text-2"}`}
+              previewPath === full ? "p-fill p-text font-medium" : "p-text-2"} ${child.hidden === true ? HIDDEN_FACE : ""}`}
             style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
             onClick={() => onOpenFile(full)}
           >
-            <FileIcon size={12} className="p-text-3 shrink-0" />
-            <span className="truncate">{child.name}</span>
+            <FileIcon data-entry-face size={12} className="p-text-3 shrink-0" />
+            <span data-entry-face className="truncate">{child.name}</span>
           </div>
         );
       })}
@@ -778,11 +780,14 @@ function entryMenu({ entry, downloadHref, onRenameDraft, onAskDelete }: EntryPro
   ];
 }
 
+/** A hidden item's face, dimmed wherever it is drawn: the list, its tiles, the tree. */
+const HIDDEN_FACE = "[&_[data-entry-face]]:opacity-55";
+
 /** The cursor shows only while the keys drive it; what is open in the viewer stays marked. A hidden item is dimmed. */
 function entryTone({ entry, previewing, selected }: EntryProps): string {
   const marked = previewing ? "p-fill p-text" : `p-text ${selected ? "group-focus-visible/list:p-fill" : ""}`;
 
-  return entry.hidden === true ? `${marked} [&_[data-entry-face]]:opacity-55` : marked;
+  return entry.hidden === true ? `${marked} ${HIDDEN_FACE}` : marked;
 }
 
 function EntryIcon({ entry, size }: { entry: DirEntry; size: number }) {
