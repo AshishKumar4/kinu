@@ -870,22 +870,27 @@ export const PAGE_TABS = `[
   ...(document.querySelector('#inspector nav[aria-label="Pages"] button[aria-haspopup="menu"]')?.getAttribute('title') ?? '').split(', '),
 ].filter((name, index, names) => name !== '' && names.indexOf(name) === index)`;
 
-/** Open the share dialog only once its capability graph has supplied the limits. */
-export async function openSlateShareDialog(page: Page, tile: string): Promise<void> {
+/** Open a slate's share sheet from its tile, once its room has given the owner's sheet. */
+export async function openSlateShareSheet(page: Page, tile: string): Promise<void> {
   await page.click(`${tile} [data-drive-menu]`);
   await page.click(`${tile} [data-drive-share-slate]`);
-  await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
+  await until(page, 'the share sheet', `document.querySelector('[role="dialog"] [data-share-audience]') !== null`);
 }
 
-/** Submit the public share when its control can accept the click, then read the created link. */
-export async function submitPublicSlateShare(page: Page): Promise<string | null> {
-  await page.click('[data-share-access]');
-  await page.click('[data-share-access-option="public"]');
-  await until(page, 'the public share to be ready', `document.querySelector('[data-share-submit]:not([disabled])') !== null`);
-  await page.click('[data-share-submit]');
-  await until(page, 'the share to be made', `document.querySelector('[data-share-created]') !== null`);
+/** Open the slate to anyone with the link, then read the link the sheet gives. */
+export async function shareWithAnyone(page: Page): Promise<string> {
+  await page.click('[data-share-audience]');
+  await page.click('[data-share-audience-option="anyone"]');
+  await until(page, 'the slate open to anyone with the link', `document.querySelector('[data-share-audience="anyone"]') !== null`);
 
-  return v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));
+  return v.parse(v.string(), await page.evaluate(`document.querySelector('[data-share-url]')?.textContent ?? ''`));
+}
+
+/** Back to Only you: the link goes off. */
+export async function shareWithNoOne(page: Page): Promise<void> {
+  await page.click('[data-share-audience]');
+  await page.click('[data-share-audience-option="only-you"]');
+  await until(page, 'the slate back to its owner alone', `document.querySelector('[data-share-audience="only-you"]') !== null`);
 }
 
 /**

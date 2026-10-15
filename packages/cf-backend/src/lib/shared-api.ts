@@ -1,48 +1,51 @@
-/** Typed client for `/api/shared/*` and the public blueprint read; the session rides the HttpOnly cookie. */
+/**
+ * Typed client for the Drive's shared library (`/api/shared`) and the signed-in read; the session rides the HttpOnly
+ * cookie. A slate's own sharing goes through its room (use-room, room-client).
+ */
 import { Effect } from 'effect';
-import {
-  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema,
-  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareVisibility,
-} from '@kinu.run/core';
+import { DriveRoomCardSchema, GalleryListingSchema, RoomAudienceSchema } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { refusal, request, respond } from './http';
 
-function api<Schema extends v.GenericSchema>(schema: Schema, method: string, path: string, body?: JsonValue): Effect.Effect<v.InferOutput<Schema>> {
-  return request(schema, path, { method, ...(body !== undefined && { json: body }) });
+/** One of the owner's slates, and who can open it. */
+export const OwnedSlateSchema = v.object({
+  id: v.string(),
+  title: v.string(),
+  workspace: v.string(),
+  audience: RoomAudienceSchema,
+  picture: v.optional(v.string()),
+});
+
+export type OwnedSlate = v.InferOutput<typeof OwnedSlateSchema>;
+
+export type DriveCard = DriveLibrary['shared'][number];
+
+/**
+ * What the Drive shows of sharing: the owner's slates; slates shared with them; slates they used through a link; and
+ * Gallery slates they starred. `unseen` marks a slate shared with them since they last opened Shared.
+ */
+export const DriveLibrarySchema = v.object({
+  slates: v.array(OwnedSlateSchema),
+  shared: v.array(v.object({ ...DriveRoomCardSchema.entries, unseen: v.optional(v.literal(true)) })),
+  used: v.array(DriveRoomCardSchema),
+  starred: v.array(GalleryListingSchema),
+});
+
+export type DriveLibrary = v.InferOutput<typeof DriveLibrarySchema>;
+
+export function getDriveLibrary(): Promise<DriveLibrary> {
+  return settle(request(DriveLibrarySchema, '/api/shared'));
 }
 
-export function getSharedLibrary(): Promise<SharedLibrary> {
-  return settle(api(SharedLibrarySchema, 'GET', '/api/shared'));
-}
-
-/** Shared was opened: the account's unseen shares are seen, on every device. */
+/** Opening Shared sees what is new in it, on every device. */
 export function markSharedSeen(): Promise<void> {
-  return settle(Effect.asVoid(api(v.object({ seen: v.literal(true) }), 'POST', '/api/shared/seen')));
+  return settle(Effect.asVoid(request(v.unknown(), '/api/shared/seen', { method: 'POST' })));
 }
 
-/** Refused as 404 when unminted or revoked. */
-export function getBlueprint(id: string): Promise<BlueprintView> {
-  return settle(api(BlueprintViewSchema, 'GET', `/api/shared/blueprint/${encodeURIComponent(id)}`));
-}
-
-const Listing = v.optional(v.literal('pending'));
-
-const PublishedLink = v.object({ id: v.string(), share: v.string(), users: v.array(v.string()), listing: Listing });
-
-export type Published = v.InferOutput<typeof PublishedLink>;
-
-export function publishBlueprint(input: { workspace: string; slate: string; version: string; include?: string[]; emails?: string[] }): Promise<Published> {
-  return settle(api(PublishedLink, 'POST', '/api/shared/publish', input));
-}
-
-export function forkBlueprint(input: { blueprint: string; workspace: string }): Promise<BlueprintFork> {
-  return settle(api(BlueprintForkSchema, 'POST', '/api/shared/fork', input));
-}
-
-/** Fork a live share: admitted the same as a blueprint; `ownerWorkspace` names where it runs. */
-export function forkLiveShare(input: { live: string; ownerWorkspace: string; workspace: string }): Promise<BlueprintFork> {
-  return settle(api(BlueprintForkSchema, 'POST', '/api/shared/fork', input));
+/** Leaves a slate shared with this person, or forgets one they used through its link: off their Drive, and its room. */
+export function leaveSlate(input: { workspace: string; slate: string }): Promise<void> {
+  return settle(Effect.asVoid(request(v.unknown(), '/api/shared/leave', { method: 'POST', json: input })));
 }
 
 const MeSchema = v.object({ user: v.nullable(v.object({ email: v.string(), signedInWith: v.optional(v.nullable(v.string()), null) })) });
@@ -61,27 +64,4 @@ const signedIn = Effect.gen(function* () {
 /** The provider this session signed in with, by name ("Cloudflare"); null for a sign-in that is no provider's. */
 export function signedInWith(): Promise<string | null> {
   return settle(Effect.map(signedIn, (user) => user?.signedInWith ?? null));
-}
-
-export function signedInEmail(): Promise<string | null> {
-  return settle(Effect.map(signedIn, (user) => user?.email ?? null));
-}
-
-/** Answers the row and its URL (null where this deployment cannot sign one). */
-export function shareLive(input: {
-  workspace: string; slate: string; visibility: LiveShareVisibility; emails?: string[];
-  approved: { slate: string; namespace: string; member: string }[];
-  fork?: boolean;
-}): Promise<LiveShareCreated & { listing?: 'pending' }> {
-  return settle(api(v.object({ ...LiveShareCreatedSchema.entries, listing: Listing }), 'POST', '/api/shared/live', input));
-}
-
-/** Ends a live share or a blueprint link. */
-export async function revokeShare(input: { workspace: string; share: string }): Promise<{ listing?: 'pending' }> {
-  return settle(api(v.object({ listing: Listing }), 'POST', '/api/shared/revoke', input));
-}
-
-/** Share origin for a public share; a ticket-bearing entry for one that names people. */
-export function openLiveShare(input: { workspace: string; share: string }): Promise<{ url: string }> {
-  return settle(api(v.object({ url: v.string() }), 'POST', '/api/shared/live/open', input));
 }

@@ -26,6 +26,10 @@ export const APP_ROUTES = {
   sharedBlueprint: '/shared/blueprint/:id',
   /** Where a person a live share names enters it: signed in, they are handed the share's ticket. */
   sharedLive: '/shared/live/:workspace/:share',
+  /** A shared slate, live: everyone it is shared with uses it together here. `?k=` the link's key. */
+  liveSlate: '/s/:workspace/:slate',
+  /** One part of a shared slate, in its own frame inside the slate's page. */
+  liveSlatePart: '/s/:workspace/:slate/parts/:part',
   deploy: '/deploy',
   updates: '/updates',
   /** Where a provider's sign-in ends in its helper window: it tells the tab that opened it, then closes. `?next=`

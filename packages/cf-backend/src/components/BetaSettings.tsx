@@ -6,6 +6,7 @@ import { betaSwarms, SWARMS_BETA_SETTING, type ProfileCatalogEnvelope } from "@k
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { Card, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
+import { Switch } from "@/components/ui/Switch";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { getProfileCatalog, updateProfileCatalog } from "../lib/user-api";
 
@@ -38,22 +39,7 @@ export function BetaSettings() {
 
           return (
             <Field label={SWARMS_BETA_SETTING} hint={failure ?? (saving ? "Saving…" : "Applies from each workspace's next turn.")} inline>
-              <button
-                type="button"
-                role="switch"
-                data-beta-swarms
-                aria-checked={on}
-                aria-label={SWARMS_BETA_SETTING}
-                disabled={saving}
-                onClick={() => detach(turn(envelope, !on))}
-                className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50 ${
-                  on ? "border-[var(--c-accent)] bg-[var(--c-accent)]" : "border-[var(--c-border-strong)] bg-[var(--c-fill)]"
-                }`}
-              >
-                <span className={`size-3 rounded-full transition-transform ${
-                  on ? "translate-x-3 bg-[var(--c-accent-on)]" : "translate-x-0.5 bg-[var(--c-text-3)]"
-                }`} />
-              </button>
+              <Switch on={on} onChange={(next) => detach(turn(envelope, next))} label={SWARMS_BETA_SETTING} disabled={saving} data-beta-swarms />
             </Field>
           );
         }}
