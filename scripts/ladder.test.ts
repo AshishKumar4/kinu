@@ -752,14 +752,16 @@ describe('a deploy row with secrets of its own', () => {
     expect(() => armadaPhaseRun('source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
   });
 
-  // The upgrade fixtures' two builtin passwords are its own, beside the deployment's identity it drives.
-  test('the upgrade fixtures drive the deployment in a job of their own, given their two passwords', () => {
+  // The upgrade fixtures' two builtin passwords and the REST token their anchor is kept with are their own, beside the
+  // deployment's identity they drive.
+  test('the upgrade fixtures drive the deployment in a job of their own, given their passwords and the REST token', () => {
     const fixtures = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bun scripts/upgrade-fixtures.ts');
     const argv = armadaPhaseRun('post-publish', fixtures, 'a'.repeat(40), 'https://staging.kinu.run');
 
     expect(argv.filter((arg) => arg.startsWith('--secrets=') || arg.startsWith('--deploy-'))).toEqual([
-      '--secrets=KINU_SCRIPTED_MODEL_KEY,KINU_EVAL_STAGING_WEB_IDENTITY,KINU_UPGRADE_FIXTURE_PASSWORD,KINU_UPGRADE_SENDER_PASSWORD',
-      '--deploy-phase=post-publish', '--deploy-origin=https://staging.kinu.run', '--deploy-secrets=KINU_UPGRADE_FIXTURE_PASSWORD,KINU_UPGRADE_SENDER_PASSWORD',
+      '--secrets=KINU_SCRIPTED_MODEL_KEY,KINU_EVAL_STAGING_WEB_IDENTITY,KINU_CLOUDFLARE_API_TOKEN,KINU_UPGRADE_FIXTURE_PASSWORD,KINU_UPGRADE_SENDER_PASSWORD',
+      '--deploy-phase=post-publish', '--deploy-origin=https://staging.kinu.run',
+      '--deploy-secrets=KINU_CLOUDFLARE_API_TOKEN,KINU_UPGRADE_FIXTURE_PASSWORD,KINU_UPGRADE_SENDER_PASSWORD',
     ]);
   });
 });

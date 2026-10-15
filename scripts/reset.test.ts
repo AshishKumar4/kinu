@@ -33,6 +33,8 @@ function account(failing?: keyof ResetTarget) {
       { id: 'c'.repeat(32), name: 'another-worker-box', namespace: 'ns-other' },
     ],
     chains: 3,
+    /** Whether the releases bucket holds the upgrade fixtures' anchor. */
+    anchor: true,
     records: new Map<string, Reset>(),
     placeholders,
     sessions: true,
@@ -94,6 +96,10 @@ function account(failing?: keyof ResetTarget) {
       step('putRecord');
       state.records.set(key, v.parse(ResetSchema, JSON.parse(readFileSync(file, 'utf8'))));
     },
+    forgetUpgradeAnchor: () => {
+      step('forgetUpgradeAnchor');
+      state.anchor = false;
+    },
     stampless: async () => state.serving.bound.size === 0,
     forgetSessions: () => {
       state.sessions = false;
@@ -125,8 +131,13 @@ describe('a reset stopped anywhere can be finished', () => {
     expect(state.records.get(`resets/${started?.tag ?? ''}.json`)).toEqual(started);
     expect(state.sessions).toBe(false);
     expect(state.applications).toHaveLength(3);
+    // Kept while the reset is unfinished: the fixtures it names are still the baseline until the classes are gone.
+    expect(state.anchor).toBe(true);
 
     const done = await wipe(input);
+
+    // The fixtures' accounts went with the classes, so the deploy after the reset seeds them as a first seed.
+    expect(state.anchor).toBe(false);
 
     expect([done.tag, done.state, done.placeholderVersion, done.chains?.objects]).toEqual([started?.tag, 'done', 'placeholder-1', 3]);
     expect(state.placeholders).toEqual([`${started?.tag ?? ''}: KinuDevbox, CodexEgress`]);
