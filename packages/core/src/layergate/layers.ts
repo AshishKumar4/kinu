@@ -26,6 +26,9 @@ import * as v from 'valibot';
 import type { RunEventInput } from '../events/types';
 import type { JsonValue } from '../utils/json';
 
+/** The model the step-pipeline probes price their steps for: its pricing is text and media alike. */
+const PRUNED_SPEC = 'anthropic/claude-sonnet-4-5';
+
 /** Generic over the subjects record so a dependent package can define its own slice. */
 export interface Probe<S = PipelineSubjects> {
   /** `<layer>/<name>`: the baseline key. */
@@ -575,7 +578,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             extensions: host,
             cache: { strategy: { kind: 'anthropic' } },
             // min(60_000, 200_000/2) keeps the admitted limit at the pinned 140_000.
-            prune: { contextWindow: 200_000, modelOutputLimit: 60_000 },
+            prune: { contextWindow: 200_000, modelOutputLimit: 60_000, spec: PRUNED_SPEC },
           }, { stepNumber: 1, messages: shortHistory(), steps: [] });
 
           return out?.messages;
@@ -631,7 +634,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       {
         id: 'step-pipeline/prune-under-budget-noop',
         asserts: 'a step inside the budget is returned untouched',
-        observe: (s) => s.pruneStepToolOutputs(shortHistory(), { contextWindow: 200_000, modelOutputLimit: 60_000 }),
+        observe: (s) => s.pruneStepToolOutputs(shortHistory(), { contextWindow: 200_000, modelOutputLimit: 60_000, spec: PRUNED_SPEC }),
       },
       {
         id: 'step-pipeline/prune-shrinks-old-keeps-recent',
@@ -639,7 +642,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => {
           const history = toolHeavyHistory();
           // min(15_000, 50_000/2) keeps the limit at the pinned 35_000.
-          const budget = { contextWindow: 50_000, modelOutputLimit: 15_000 };
+          const budget = { contextWindow: 50_000, modelOutputLimit: 15_000, spec: PRUNED_SPEC };
           const pruned = s.pruneStepToolOutputs(history, budget);
 
           return {

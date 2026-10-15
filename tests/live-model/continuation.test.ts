@@ -262,7 +262,7 @@ describe('one same-provider conversation survives every transition', () => {
     expect([first.failure, second.failure, lookups]).toEqual([null, null, 2]);
 
     if (baseline === undefined) throw new Error('the provider received no request');
-    const pruned = pruneStepToolOutputs(conversation, { contextWindow: 1_000, modelOutputLimit: 100 });
+    const pruned = pruneStepToolOutputs(conversation, { contextWindow: 1_000, modelOutputLimit: 100, spec: model.spec });
 
     if (pruned === undefined) throw new Error('the prune truncated nothing');
 
