@@ -24,7 +24,7 @@ import {
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, AccountProposer, Fact } from '@kinu.run/core';
-import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
+import type { SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,

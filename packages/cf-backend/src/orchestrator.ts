@@ -95,7 +95,7 @@ import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
-import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import type { SubordinateView } from "@kinu.run/core/protocol";
 import { markStoreChanged, nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, armedWarms, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
@@ -6152,7 +6152,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Browser-only; delegates to the same orchestration policy as the model's agents tool. */
-  @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
+  @callable() async listSubordinates(): Promise<SubordinateView[]> {
     return this.subordinateViews();
   }
 
@@ -6164,7 +6164,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable() async createSubordinateAgent(opening?: string): Promise<{
     name: string;
     displayName: string;
-    subordinate: SubordinateRosterEntry;
+    subordinate: SubordinateView;
   }> {
     const result = await this.getTeamToolDeps().create({ ...(opening !== undefined && { brief: opening }) });
 
@@ -6180,7 +6180,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ok: true;
     name: string;
     displayName: string;
-    subordinate: SubordinateRosterEntry;
+    subordinate: SubordinateView;
   }> {
     const result = await this.getTeamToolDeps().rename({ name, displayName });
 

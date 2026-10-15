@@ -12,7 +12,7 @@ import { explorationForkTree, type OwedOwnerIntent } from "@kinu.run/core";
 import type {
   MemoryEntry, ForkNode, PendingConsent, AskingAgent, SubordinateActivityEvent, TabPresence,
 } from "@kinu.run/core";
-import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import type { BackgroundJob, SubordinateView } from "@kinu.run/core/protocol";
 import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import { appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas } from "@kinu.run/core";
@@ -191,7 +191,7 @@ export function useWorkspaceReads(link: ChatLink) {
     retire: retireDelta,
   }), [headDeltaMap, retireDelta]);
 
-  const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
+  const [subordinates, setSubordinates] = useState<SubordinateView[]>([]);
   const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
   const [signalCards, setSignalCards] = useState<readonly SignalCard[]>([]);
 
@@ -285,7 +285,7 @@ export function useWorkspaceReads(link: ChatLink) {
   ), [applySlates, refreshCurrentLiveResource, rpc]);
 
   /** Through the "roster" admission, so a read still in flight cannot overwrite it. */
-  const writeRoster = useCallback((next: SetStateAction<SubordinateRosterEntry[]>) => refreshCurrentLiveResource(
+  const writeRoster = useCallback((next: SetStateAction<SubordinateView[]>) => refreshCurrentLiveResource(
     "roster", async () => next, setSubordinates,
   ), [refreshCurrentLiveResource]);
 
