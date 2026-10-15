@@ -790,7 +790,13 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
+/** Built-in sign-in off, as on an account with an OAuth app: the invite card stays away. */
+function builtinAuthFixture(path: string): Response | null {
+  return path === "/api/user/builtin-auth" ? fixtureJson({ enabled: false, owner: false }) : null;
+}
+
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  builtinAuthFixture,
   accountMemoryFixture,
   accountProfileFixture,
   settingsSectionsFixture,
