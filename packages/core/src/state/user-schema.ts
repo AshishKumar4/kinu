@@ -343,12 +343,14 @@ export function initUserTables(sql: SqlExec): void {
 
   initExperienceLibraryTables(sql);
 
-  // `activity` and `decisions` repeat the JSON's, which goes last so a count never reads it.
+  // The pushed overview is the one source; `activity` and `decisions` are stored derivations of it, read by the roster's
+  // counts, and the JSON goes last so a count never reads it.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_overviews (
       name       TEXT PRIMARY KEY,
-      activity   TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle')),
-      decisions  INTEGER NOT NULL,
+      activity   TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED
+                   CHECK (activity IN ('working', 'unfinished', 'idle')),
+      decisions  INTEGER GENERATED ALWAYS AS (json_extract(overview, '$.decisionsWaiting')) STORED NOT NULL,
       overview   TEXT NOT NULL
     )
   `);

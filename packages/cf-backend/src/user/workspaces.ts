@@ -145,12 +145,11 @@ export class UserWorkspaces {
     const parsed = v.parse(WorkspaceOverviewSchema, overview);
 
     const changed = this.host.sqlx(
-      `INSERT INTO workspace_overviews (name, overview, activity, decisions) VALUES (?, ?, ?, ?)
-       ON CONFLICT (name) DO UPDATE SET overview = excluded.overview, activity = excluded.activity,
-         decisions = excluded.decisions
+      `INSERT INTO workspace_overviews (name, overview) VALUES (?, ?)
+       ON CONFLICT (name) DO UPDATE SET overview = excluded.overview
        WHERE workspace_overviews.overview <> excluded.overview
        RETURNING name`,
-      name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting,
+      name, JSON.stringify(parsed),
     );
 
     if (changed.length === 0) return;

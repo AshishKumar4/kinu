@@ -1668,8 +1668,8 @@
   ],
   "workspace_overviews@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
-    "decisions INTEGER NOT NULL",
+    "activity TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED CHECK (activity IN ('working', 'unfinished', 'idle'))",
+    "decisions INTEGER GENERATED ALWAYS AS (json_extract(overview, '$.decisionsWaiting')) STORED NOT NULL",
     "overview TEXT NOT NULL"
   ],
   "workspace_proposals@packages/core/src/safety/workspace-proposals.ts": [
