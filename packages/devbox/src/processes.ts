@@ -207,7 +207,12 @@ const directory = (id: string) => attemptSync('invalid-input', () => `${ROOT}/${
 
 export class Processes {
   readonly #files: Files;
-  constructor(readonly container: Pick<Container, 'exec' | 'running'>, readonly kernel?: string) {
+  /** `trace`: the owner's structured log (devbox.ts `#trace`), told when a status read's exec and its output answer. */
+  constructor(
+    readonly container: Pick<Container, 'exec' | 'running'>,
+    readonly kernel?: string,
+    readonly trace: (event: string, fields: Record<string, string | number | boolean | undefined>) => void = () => {},
+  ) {
     this.#files = new Files(container);
   }
 
@@ -231,7 +236,7 @@ export class Processes {
       exec: (argv, options) => native.exec([
         '/bin/sh', '-c', IN_KERNEL, 'devbox-incarnation', kernel, ...argv,
       ], options),
-    }, kernel);
+    }, kernel, this.trace);
   }
 
   /** With `session`, the job runs in that terminal session, where a person can watch and answer it (D95). */
@@ -362,8 +367,11 @@ end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
   #status(dirs: string[]): Effect.Effect<ProcessRecord[], DevboxError> {
     return Effect.gen({ self: this }, function* () {
       if (dirs.length === 0 || !this.container.running) return [];
+      this.trace('status.exec.enter', { dirs: dirs.length });
       const process = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', STATUS, 'devbox-status', ...dirs]));
+      this.trace('status.exec.exit', {});
       const result = yield* attempt('process', () => process.output());
+      this.trace('status.output.exit', { exitCode: result.exitCode });
 
       if (result.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', `process status failed: ${new TextDecoder().decode(result.stderr)}`));
 
