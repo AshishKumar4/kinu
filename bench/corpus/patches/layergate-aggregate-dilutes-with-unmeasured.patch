@@ -1,7 +1,7 @@
-diff --git a/packages/core/src/layergate/gate.ts b/packages/core/src/layergate/gate.ts
+diff --git a/scripts/layergate/gate.ts b/scripts/layergate/gate.ts
 index f038a45..3bbdefc 100644
---- a/packages/core/src/layergate/gate.ts
-+++ b/packages/core/src/layergate/gate.ts
+--- a/scripts/layergate/gate.ts
++++ b/scripts/layergate/gate.ts
 @@ -98,7 +98,7 @@ export function scoreAgainstBaseline(
      layers: scores,
      aggregate: measured.length === 0

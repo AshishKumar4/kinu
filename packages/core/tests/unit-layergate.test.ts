@@ -8,7 +8,7 @@ import {
   LOCALIZATION_OTHER_MAX_PP, LOCALIZATION_OWN_MIN_PP,
   observePipeline, runFaultMatrix, runLayerGate,
   type SubjectName,
-} from '../src/layergate/index';
+} from '../../../scripts/layergate/index';
 import { createTestRuntime } from './helpers';
 import { moduleEdges } from '../../../scripts/module-edges';
 import { parse, walk } from '../../../scripts/syntax';

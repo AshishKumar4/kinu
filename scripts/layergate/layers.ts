@@ -1,30 +1,30 @@
-import { compactToolCall } from '../evolution/tool-call-record';
+import { compactToolCall } from '../../packages/core/src/evolution/tool-call-record';
 import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Layer decomposition of the turn pipeline plus each layer's deterministic assertion slice: literal fixtures,
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
 
 import { jsonSchema, tool, type ModelMessage, type ToolExecutionOptions } from 'ai';
-import { wordsOnly } from '../execution/command-call';
-import { ExtensionHost } from '../extension';
-import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
-import { TurnAccumulator } from '../orchestrator/turn-accumulator';
-import { TurnSteering } from '../orchestrator/turn-steering';
-import { observingCrafts } from '../delegation/actor-tools';
-import type { CraftLedger } from '../craft/in-episode';
-import { TurnContextBudget } from '../context-budget';
-import { TurnFileLedger } from '../vfs/file-ledger';
-import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
+import { wordsOnly } from '../../packages/core/src/execution/command-call';
+import { ExtensionHost } from '../../packages/core/src/extension';
+import { DynamicContextLedger, type DynamicContext } from '../../packages/core/src/prompting/volatile-context';
+import { TurnAccumulator } from '../../packages/core/src/orchestrator/turn-accumulator';
+import { TurnSteering } from '../../packages/core/src/orchestrator/turn-steering';
+import { observingCrafts } from '../../packages/core/src/delegation/actor-tools';
+import type { CraftLedger } from '../../packages/core/src/craft/in-episode';
+import { TurnContextBudget } from '../../packages/core/src/context-budget';
+import { TurnFileLedger } from '../../packages/core/src/vfs/file-ledger';
+import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../../packages/core/src/tools/registry';
 import { isVfsError, syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store';
-import type { BackendHost } from '../types/backend-host';
-import type { KinuEvent, ReadableKinuEvent } from '../events/hub/types';
-import type { LexicalHit } from '../memory/hybrid-search';
-import type { ActiveSkill } from '../skills/types';
-import { workspaceSkillPath } from '../skills/discover';
+import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../../packages/core/src/memory/vector-store';
+import type { BackendHost } from '../../packages/core/src/types/backend-host';
+import type { KinuEvent, ReadableKinuEvent } from '../../packages/core/src/events/hub/types';
+import type { LexicalHit } from '../../packages/core/src/memory/hybrid-search';
+import type { ActiveSkill } from '../../packages/core/src/skills/types';
+import { workspaceSkillPath } from '../../packages/core/src/skills/discover';
 import type { PipelineSubjects } from './subjects';
 import * as v from 'valibot';
-import type { RunEventInput } from '../events/types';
-import type { JsonValue } from '../utils/json';
+import type { RunEventInput } from '../../packages/core/src/events/types';
+import type { JsonValue } from '../../packages/core/src/utils/json';
 
 /** The model the step-pipeline probes price their steps for: its pricing is text and media alike. */
 const PRUNED_SPEC = 'anthropic/claude-sonnet-4-5';
@@ -1613,7 +1613,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [],
     unmeasuredBecause:
       '@kinu.run/compaction depends on @kinu.run/core, so core cannot import it without a cycle. Its slice lives IN ' +
-      'that package (src/layergate.ts, same Layer contract, own locked baseline); scripts/layergate.ts merges it ' +
+      'that package (scripts/layergate/compaction.ts, same Layer contract, own locked baseline); scripts/layergate.ts merges it ' +
       'into the report, replacing this placeholder row.',
   },
   {

@@ -1,12 +1,10 @@
 // Compaction-ladder layer slice: locked baseline, deterministic observation, own-slice fault.
 // Cross-layer isolation is proven by scripts/layergate.ts --matrix.
 import { describe, expect, test } from 'bun:test';
-import { observePipeline, runLayerGate, runFaultMatrix, LOCALIZATION_OWN_MIN_PP } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
-import {
-  COMPACTION_LAYERS, COMPACTION_FAULTS, COMPACTION_LOCKED_BASELINE,
-  createCompactionLadderSubjects,
-} from '../src/index';
+import { observePipeline, runLayerGate, runFaultMatrix, LOCALIZATION_OWN_MIN_PP } from '../../../scripts/layergate/index';
+import { COMPACTION_LAYERS, COMPACTION_FAULTS, createCompactionLadderSubjects } from '../../../scripts/layergate/compaction';
+import { COMPACTION_LOCKED_BASELINE } from '../../../scripts/layergate/compaction-baseline';
 
 const subjects = createCompactionLadderSubjects();
 

@@ -1882,20 +1882,6 @@ export type {
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 
-// Layer gate
-export {
-  LAYERS, FAULTS, LOCKED_BASELINE,
-  LOCALIZATION_OWN_MIN_PP, LOCALIZATION_OTHER_MAX_PP,
-  createPipelineSubjects, SUBJECT_SOURCE,
-  observePipeline, scoreAgainstBaseline, runLayerGate, lockBaseline,
-  renderLayerGateReport, runFaultMatrix, renderFaultMatrix,
-} from './layergate/index';
-
-export type {
-  Layer, Probe, PipelineSubjects, SubjectName,
-  Baseline, LayerGateReport, LayerScore, Fault, FaultImpact,
-} from './layergate/index';
-
 export {
   getRunTimeline,
   RUN_TIMELINE_MAX,
