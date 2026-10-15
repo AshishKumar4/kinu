@@ -16,10 +16,10 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import {
-  localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stampSchemaGenesis,
+  localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles, requireSchemaGenesis,
 } from '@kinu.run/cli-backend';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
-import { workspaceArchiveTarget } from '@kinu.run/core';
+import { stampSchemaGenesis, workspaceArchiveTarget } from '@kinu.run/core';
 import {
   agentDbPath, agentDir, canonicalProjectRoot, defaultVirtualWorkspaceId, ensureAgentHome,
   placeLocalWorkspace, requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
@@ -124,7 +124,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
       });
 
       restored = { rows: result.rows, tables: result.tables };
-      stampSchemaGenesis(db);
+      stampSchemaGenesis((ddl) => db.exec(ddl));
 
       // Locally every file is a real one: a cloud archive's own-space files, agent state too, land with a local archive's.
       await publishStoreFiles(opened().vfs, files);

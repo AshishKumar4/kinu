@@ -165,7 +165,7 @@ export {
 
 export { SCHEMA_GENESIS } from './identity/schema-genesis';
 
-export { requireSchemaGenesis, SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
+export { requireSchemaGenesis, stampSchemaGenesis } from './identity/schema-stamp';
 
 export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
@@ -563,7 +563,7 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun, type DeliveredRunPorts } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
