@@ -5,8 +5,8 @@
  *
  *   bun scripts/tables-reset-rehearsal.ts seed <origin> <state.json>    a workspace with a chat and files, a slate
  *                                                                       shared with a second account, a device join
- *   bun scripts/tables-reset-rehearsal.ts check <origin> <state.json>   the chat and files open, the share is still
- *                                                                       held, and a device joins by its ticket now
+ *   bun scripts/tables-reset-rehearsal.ts check <origin> <state.json>   the roster, the chat and the files open, the
+ *                                                                       share is still held, and a device joins now
  *
  * The workspace is not named `eval-`, which the eval sweep deletes after its lease, since deploys run in between.
  * Credentials are the eval identity's (`resolveWebIdentity`): its owner, and its `devices` account as the recipient.
@@ -121,6 +121,9 @@ async function check(origin: string, file: string): Promise<boolean> {
   const { owner, recipient } = identities(origin);
   const state = v.parse(StateSchema, JSON.parse(readFileSync(file, 'utf8')));
   const verdicts: Array<[string, boolean, string]> = [];
+  const roster = await call(origin, owner, '/api/user/workspaces');
+
+  verdicts.push(['the owner\'s roster still names the workspace', roster.status === 200 && roster.text.includes(state.workspace), `workspaces answered ${String(roster.status)}`]);
   const history = await call(origin, owner, `/agents/orchestrator-agent/${state.workspace}/get-messages`);
 
   verdicts.push(['chat opens with what was said', history.status === 200 && history.text.includes(state.said), `history answered ${String(history.status)}`]);
