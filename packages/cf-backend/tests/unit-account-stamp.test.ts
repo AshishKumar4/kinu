@@ -3,14 +3,15 @@
 // made is made and stamped as it starts.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { opsCaller, SCHEMA_STAMPS, stampOf } from '@kinu.run/core';
-import { createTestUserDO, sqlExec, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
+import { opsCaller, SCHEMA_STAMPS } from '@kinu.run/core';
+import { kvOf } from './helpers/platform-context';
+import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
 
 test('an account made now is stamped as this build\'s', () => {
   const harness = createTestUserDO();
 
   try {
-    expect(stampOf(sqlExec(harness.db))).toBe(SCHEMA_STAMPS.account);
+    expect(kvOf(harness.db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.account);
   } finally {
     harness.close();
   }
@@ -24,17 +25,19 @@ test('an account behind this build refuses every call until the tables step stam
   await made.userDO.ensureProfile(owner, 'owner@example.com', 'Owner');
   made.close();
   // As a build before this one left it: its tables, and another stamp.
-  storage.exec('PRAGMA user_version = 1');
+  kvOf(storage).set('kinu.schema_stamp', 1);
 
   const behind = createTestUserDO({ storage });
 
   try {
     await expect(behind.userDO.getProfile(owner)).rejects.toThrow("This account's storage was made before this release changed its tables");
+    // A socket or request is refused as a call is.
+    expect((await behind.userDO.fetch(new Request('https://user/devices/connect'))).status).toBe(503);
 
     const repaired = await behind.userDO.opsTables(await opsCaller({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY }), { tables: [], drop: true });
 
     expect(repaired.stamp).toBe('behind');
-    expect(stampOf(sqlExec(storage))).toBe(SCHEMA_STAMPS.account);
+    expect(kvOf(storage).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.account);
     expect((await behind.userDO.getProfile(owner))?.email).toBe('owner@example.com');
   } finally {
     behind.close();

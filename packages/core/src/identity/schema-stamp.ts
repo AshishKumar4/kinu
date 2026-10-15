@@ -1,6 +1,6 @@
 /**
  * Every database Kinu makes is of one class (an account, a workspace, an agent, a CLI-local workspace), and is
- * stamped (`PRAGMA user_version`) with its class's stamp: the digest of the genesis of the tables that class's init
+ * stamped (a local one in `PRAGMA user_version`, a Durable Object in its own KV) with its class's stamp: the digest of the genesis of the tables that class's init
  * makes (`scripts/schema-classes.json`, `SCHEMA_STAMPS`). A database is asked its stamp, never caught failing:
  *
  * - the class's stamp: it holds the tables its init makes, as this build declares them, and is opened;
@@ -29,19 +29,46 @@ const FIRST_TABLE = {
   local: 'workspace_identity',
 } as const satisfies Record<SchemaClass, string>;
 
-/** What a database says of itself, read with one PRAGMA (and, for an unstamped one, whether its class made it). */
+/** What a database says of itself, read once (and, for an unstamped one, whether its class made it). */
 export type StampReading = 'current' | 'unmade' | 'behind';
+
+/** Where a database keeps its stamp: SQLite's `user_version` for a local one; a Durable Object's own synchronous KV,
+ *  since its SQL may run no such PRAGMA (SQLITE_AUTH). */
+export interface StampStore {
+  read(): number;
+  write(stamp: number): void;
+}
 
 const VersionSchema = v.object({ user_version: v.number() });
 
-/** The stamp `sql`'s database carries, 0 for none. */
-export function stampOf(sql: SqlExec): number {
-  return v.parse(VersionSchema, sql.exec('PRAGMA user_version').toArray()[0]).user_version;
+/** A local database's stamp, in its `user_version`. */
+export function pragmaStamps(sql: SqlExec): StampStore {
+  return {
+    read: () => v.parse(VersionSchema, sql.exec('PRAGMA user_version').toArray()[0]).user_version,
+    write: (stamp) => { sql.exec(`PRAGMA user_version = ${String(stamp)}`); },
+  };
+}
+
+/** The key a Durable Object keeps its stamp under, in the KV beside its SQL. */
+const STAMP_KEY = 'kinu.schema_stamp';
+
+/** The part of a Durable Object's synchronous KV a stamp reads and writes. */
+export interface StampKv {
+  get(key: string): number | undefined;
+  put(key: string, value: number): void;
+}
+
+/** A Durable Object's stamp, in its own synchronous KV. */
+export function durableStamps(kv: StampKv): StampStore {
+  return {
+    read: () => v.parse(v.optional(v.number(), 0), kv.get(STAMP_KEY)),
+    write: (stamp) => { kv.put(STAMP_KEY, stamp); },
+  };
 }
 
 /** Whether `sql` holds `schema`'s tables as this build declares them, holds none yet, or is behind this build. */
-export function readStamp(sql: SqlExec, schema: SchemaClass): StampReading {
-  const stamp = stampOf(sql);
+export function readStamp(stamps: StampStore, sql: SqlExec, schema: SchemaClass): StampReading {
+  const stamp = stamps.read();
 
   if (stamp === SCHEMA_STAMPS[schema]) return 'current';
 
@@ -50,9 +77,9 @@ export function readStamp(sql: SqlExec, schema: SchemaClass): StampReading {
   return sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, FIRST_TABLE[schema]).toArray().length === 0 ? 'unmade' : 'behind';
 }
 
-/** Marks `sql`'s database as holding `schema`'s tables as this build declares them. */
-export function writeStamp(sql: SqlExec, schema: SchemaClass): void {
-  sql.exec(`PRAGMA user_version = ${String(SCHEMA_STAMPS[schema])}`);
+/** Marks a database as holding `schema`'s tables as this build declares them. */
+export function writeStamp(stamps: StampStore, schema: SchemaClass): void {
+  stamps.write(SCHEMA_STAMPS[schema]);
 }
 
 /** The refusal a Durable Object behind this build answers every call with until the tables step reaches it. */

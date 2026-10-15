@@ -4,7 +4,7 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { initUserTables, opsCaller, requireOps, resetTables, type ChangedTable, type TableWrites } from '../src/index';
+import { initUserTables, opsCaller, pragmaStamps, requireOps, resetTables, type ChangedTable, type TableWrites } from '../src/index';
 import { sqlStorageOver } from '../src/identity/inline-primitives';
 import type { SqlExec } from '../src/types/primitives';
 
@@ -38,7 +38,7 @@ function previousAccount() {
   return { db, sql };
 }
 
-const writes = (db: Database, sql: SqlExec): TableWrites => ({ schema: 'account', transactionSync: (write) => db.transaction(write)(), init: () => { initUserTables(sql); } });
+const writes = (db: Database, sql: SqlExec): TableWrites => ({ schema: 'account', stamps: pragmaStamps(sql), transactionSync: (write) => db.transaction(write)(), init: () => { initUserTables(sql); } });
 
 const columnsOf = (sql: SqlExec, table: string) => sql.exec(`PRAGMA table_info(${table})`).toArray().map((row) => v.parse(ColumnSchema, row).name);
 
@@ -98,7 +98,7 @@ test('a table whose drop would reach rows of a table the release did not change 
   sql.exec("INSERT INTO parents VALUES ('p', 1)");
   sql.exec("INSERT INTO children VALUES ('c', 'p')");
   const remade: ChangedTable = { table: 'parents', change: 'remade', columns: ['id', 'fresh'], dropped: [] };
-  const answer = resetTables(sql, { tables: [remade], drop: true }, { schema: 'account', transactionSync: (write) => db.transaction(write)(), init: () => {} });
+  const answer = resetTables(sql, { tables: [remade], drop: true }, { schema: 'account', stamps: pragmaStamps(sql), transactionSync: (write) => db.transaction(write)(), init: () => {} });
 
   expect(answer.held).toEqual([{ table: 'parents', rows: 1, stale: true, keepsRows: false, cascades: ['children'] }]);
   expect(answer.dropped).toEqual([]);

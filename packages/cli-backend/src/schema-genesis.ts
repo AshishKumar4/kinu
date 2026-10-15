@@ -7,18 +7,18 @@
 import type { Database } from 'bun:sqlite';
 import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
-import { getCurrentScaffoldVersion, requireSchemaStamp, stampOf, writeStamp, type ActorHandle, type SqlExecutor, type VersionedScaffoldSource } from '@kinu.run/core';
+import { getCurrentScaffoldVersion, pragmaStamps, requireSchemaStamp, writeStamp, type ActorHandle, type SqlExecutor, type VersionedScaffoldSource } from '@kinu.run/core';
 import { KinuError, settle } from '@kinu.run/core/obs';
 import { makeSqlExec } from './runtime';
 
 /** Marks a database this Kinu made outside its runtime's birth, as an import does. */
 export function stampSchemaGenesis(db: Database): void {
-  writeStamp(makeSqlExec(db), 'local');
+  writeStamp(pragmaStamps(makeSqlExec(db)), 'local');
 }
 
 /** The stamp a database carries, 0 for none. */
 export function schemaGenesisOf(db: Database): number {
-  return stampOf(makeSqlExec(db));
+  return pragmaStamps(makeSqlExec(db)).read();
 }
 
 /** Refuses a database another Kinu's schema made. */

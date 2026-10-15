@@ -17,7 +17,7 @@ import {
   inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
-  readStamp, stampOf, StoragePredatesReleaseError, writeStamp, ERROR_STATUS, LiveWorkers,
+  durableStamps, readStamp, StoragePredatesReleaseError, writeStamp, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
 } from '@kinu.run/core';
@@ -613,10 +613,11 @@ export abstract class ActorAgent extends Agent<Env> {
    * has not reached gets no init, and every call but that step's is refused with why.
    */
   private initCapabilitySchema(): void {
-    const stamp = readStamp(this.ctx.storage.sql, 'workspace');
+    const stamps = durableStamps(this.ctx.storage.kv);
+    const stamp = readStamp(stamps, this.ctx.storage.sql, 'workspace');
 
     if (stamp === 'behind') {
-      this.storageRefusal = new StoragePredatesReleaseError('workspace', stampOf(this.ctx.storage.sql));
+      this.storageRefusal = new StoragePredatesReleaseError('workspace', stamps.read());
       diagnostics.failure('workspace.storage_predates_release', this.storageRefusal);
 
       return;
@@ -624,7 +625,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this.initBaseTables();
 
-    if (stamp === 'unmade') writeStamp(this.ctx.storage.sql, 'workspace');
+    if (stamp === 'unmade') writeStamp(stamps, 'workspace');
   }
 
   /** The tables a root makes before anything reads it; the tables step runs this again once it repaired the storage. */

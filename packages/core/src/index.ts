@@ -169,7 +169,7 @@ export {
 export { SCHEMA_STAMPS } from './identity/schema-genesis';
 
 export {
-  readStamp, requireSchemaStamp, stampOf, StoragePredatesReleaseError, writeStamp, type SchemaClass, type StampReading,
+  durableStamps, pragmaStamps, readStamp, requireSchemaStamp, StoragePredatesReleaseError, writeStamp, type SchemaClass, type StampReading, type StampStore,
 } from './identity/schema-stamp';
 
 export {

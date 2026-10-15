@@ -27,6 +27,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { PictureBucket } from '../../src/slates/pictures';
 import type { ShareCardRecipient } from '../../src/user/share-cards';
+import { kvOf } from './platform-context';
 
 mockAgentsSdk();
 
@@ -509,7 +510,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     return device === null ? [] : [`device:${device}`];
   };
 
-  const kv = new Map<string, JsonValue>();
+  const kv = kvOf(db);
 
   const ctx = {
     // Sealed values are bound to the DO id; fixed so a DB written in one test opens in another.

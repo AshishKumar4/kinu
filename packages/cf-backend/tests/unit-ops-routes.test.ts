@@ -60,7 +60,8 @@ test('the written pass reaches each named object, and one that cannot answer is 
   const objects = v.parse(v.object({ objects: v.array(v.looseObject({ id: v.string(), error: v.optional(v.string()) })) }), await answer.json()).objects;
 
   expect(answer.status).toBe(200);
-  expect(asked).toEqual([`OrchestratorAgent:${'a'.repeat(64)}`, `OrchestratorAgent:${'f'.repeat(64)}`]);
+  // Asked side by side, so in no fixed order.
+  expect([...asked].sort()).toEqual([`OrchestratorAgent:${'a'.repeat(64)}`, `OrchestratorAgent:${'f'.repeat(64)}`]);
   expect(objects[1]?.error).toContain('reached by id before any named start');
 });
 

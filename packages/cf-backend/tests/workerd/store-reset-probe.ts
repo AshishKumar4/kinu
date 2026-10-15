@@ -33,7 +33,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
   /** Its storage stamped as an older build's; once that is on disk (an abort discards writes that are not), the
    *  object is evicted, so the next access constructs over it. */
   async plantOlderStamp(): Promise<void> {
-    this.ctx.storage.sql.exec('PRAGMA user_version = 1');
+    this.ctx.storage.kv.put('kinu.schema_stamp', 1);
     await this.ctx.storage.sync();
     this.ctx.abort(PLANTED);
   }

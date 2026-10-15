@@ -15,8 +15,8 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
-import { initAgentDatabaseTables, openAgentDatabase, type AgentDatabase } from './agent-database';
-import { resetTables, TablesRequestSchema, type AgentTables, type TablesRequest } from '@kinu.run/core';
+import { agentSql, initAgentDatabaseTables, openAgentDatabase, type AgentDatabase } from './agent-database';
+import { durableStamps, resetTables, TablesRequestSchema, type AgentTables, type TablesRequest } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -208,9 +208,11 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
    *  build, made again by its own init and stamped. */
   async opsTables(request: TablesRequest): Promise<Omit<AgentTables, 'name'>> {
     const { tables, drop } = v.parse(TablesRequestSchema, request);
+    const { storage } = this.ctx;
 
-    return resetTables(this.ctx.storage.sql, { tables, drop }, {
-      schema: 'agent', transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { initAgentDatabaseTables(this.ctx.storage); },
+    return resetTables(storage.sql, { tables, drop }, {
+      schema: 'agent', stamps: durableStamps(storage.kv), transactionSync: (write) => storage.transactionSync(write),
+      init: () => { initAgentDatabaseTables(storage, { sql: agentSql(storage.sql), exec: storage.sql }); },
     });
   }
 

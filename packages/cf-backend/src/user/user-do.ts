@@ -18,10 +18,10 @@ import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'ag
 // via user-do (after the stub lands), not mcp.ts directly.
 export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 
-import { diagnostics, KinuError, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  readStamp, requireOps, resetTables, stampOf, StoragePredatesReleaseError, TablesRequestSchema, writeStamp,
+  durableStamps, ERROR_STATUS, readStamp, requireOps, resetTables, StoragePredatesReleaseError, TablesRequestSchema, writeStamp,
   type OpsCaller, type TablesAnswer, type TablesRequest,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
@@ -77,9 +77,10 @@ export class UserDO extends Agent<Env> {
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
     // Asked once, never caught: storage a release's tables step has not reached is read by that step alone, and every
     // other call is refused with why (identity/schema-stamp.ts).
-    const stamp = readStamp(this.ctx.storage.sql, 'account');
+    const stamps = durableStamps(this.ctx.storage.kv);
+    const stamp = readStamp(stamps, this.ctx.storage.sql, 'account');
 
-    if (stamp === 'behind') this.storageRefusal = new StoragePredatesReleaseError('account', stampOf(this.ctx.storage.sql));
+    if (stamp === 'behind') this.storageRefusal = new StoragePredatesReleaseError('account', stamps.read());
     const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
@@ -90,7 +91,7 @@ export class UserDO extends Agent<Env> {
     // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.
     if (stamp !== 'behind') this.initTables();
 
-    if (stamp === 'unmade') writeStamp(this.ctx.storage.sql, 'account');
+    if (stamp === 'unmade') writeStamp(stamps, 'account');
   }
 
   /** Why this account's storage may not be read: a release's tables step has not reached it yet. */
@@ -793,7 +794,7 @@ export class UserDO extends Agent<Env> {
     const { sql } = this.ctx.storage;
 
     const answer = resetTables(sql, { tables, drop }, {
-      schema: 'account', transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { this.initTables(); },
+      schema: 'account', stamps: durableStamps(this.ctx.storage.kv), transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { this.initTables(); },
     });
 
     // Brought to this build and stamped: open to every call from here.
@@ -875,7 +876,10 @@ export class UserDO extends Agent<Env> {
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
 
+  /** Storage a release's tables step has not reached answers every socket and request with why, as every RPC does. */
   override async fetch(request: Request): Promise<Response> {
+    if (this.storageRefusal !== undefined) return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
+
     return await this._sockets.fetch(request);
   }
 

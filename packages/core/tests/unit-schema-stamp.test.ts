@@ -3,20 +3,21 @@
 // before stamps were per class (0, with its tables) among them.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { readStamp, requireSchemaStamp, SCHEMA_STAMPS, stampOf, writeStamp } from '../src/index';
+import { pragmaStamps, readStamp, requireSchemaStamp, SCHEMA_STAMPS, writeStamp } from '../src/index';
 import { sqlStorageOver } from '../src/identity/inline-primitives';
 
 test('a database is current, unmade or behind by one PRAGMA, and one its class made unstamped is behind', () => {
   const sql = sqlStorageOver(new Database(':memory:'));
+  const stamps = pragmaStamps(sql);
 
-  expect(readStamp(sql, 'account')).toBe('unmade');
+  expect(readStamp(stamps, sql, 'account')).toBe('unmade');
   sql.exec('CREATE TABLE user_profile (id INTEGER PRIMARY KEY)');
-  expect(readStamp(sql, 'account')).toBe('behind');
-  writeStamp(sql, 'account');
-  expect(stampOf(sql)).toBe(SCHEMA_STAMPS.account);
-  expect(readStamp(sql, 'account')).toBe('current');
+  expect(readStamp(stamps, sql, 'account')).toBe('behind');
+  writeStamp(stamps, 'account');
+  expect(stamps.read()).toBe(SCHEMA_STAMPS.account);
+  expect(readStamp(stamps, sql, 'account')).toBe('current');
   // Another class's stamp is behind this one's, though each opens under its own.
-  expect(readStamp(sql, 'workspace')).toBe('behind');
+  expect(readStamp(stamps, sql, 'workspace')).toBe('behind');
 });
 
 test('each class has its own stamp, so one class\'s change refuses no other\'s databases', () => {

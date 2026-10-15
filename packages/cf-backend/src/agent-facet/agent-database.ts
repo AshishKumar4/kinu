@@ -23,7 +23,7 @@ import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSy
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { readStamp, stampOf, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
+import { durableStamps, readStamp, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
 import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
 
@@ -79,11 +79,13 @@ const IdentitySchema = v.object({
   workspace: v.looseObject({ id: v.string(), owner_user_id: v.nullable(v.string()) }),
 });
 
+/** Tagged statements over an agent's own SQLite, its rows for a read. */
+export function agentSql(sql: SqlStorage): SqlExecutor {
+  return <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+}
+
 /** The tables an agent's database is made with: its constructor's, and the tables step's once it repaired them. */
-export function initAgentDatabaseTables(storage: DurableObjectStorage, over: { sql: SqlExecutor; exec: SqlExec } = {
-  sql: <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray(),
-  exec: storage.sql,
-}): void {
+export function initAgentDatabaseTables(storage: DurableObjectStorage, over: { sql: SqlExecutor; exec: SqlExec }): void {
   initAgentIsolateSchema({
     execRaw: (ddl) => { storage.sql.exec(ddl); },
     sql: over.sql,
@@ -98,12 +100,13 @@ export function initAgentDatabaseTables(storage: DurableObjectStorage, over: { s
  *  is refused, and every call that would read it answers with why, until the step brings it to this build. */
 export function openAgentDatabase(storage: DurableObjectStorage, workspace: ConstructorParameters<typeof AgentDatabase>[1]): AgentDatabase {
   return settleSync(Effect.suspend(() => {
-    const stamp = readStamp(storage.sql, 'agent');
+    const stamps = durableStamps(storage.kv);
+    const stamp = readStamp(stamps, storage.sql, 'agent');
 
-    if (stamp === 'behind') return Effect.fail(new StoragePredatesReleaseError('agent', stampOf(storage.sql)));
+    if (stamp === 'behind') return Effect.fail(new StoragePredatesReleaseError('agent', stamps.read()));
     const database = new AgentDatabase(storage, workspace);
 
-    if (stamp === 'unmade') writeStamp(storage.sql, 'agent');
+    if (stamp === 'unmade') writeStamp(stamps, 'agent');
 
     return Effect.succeed(database);
   }));

@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
 import { timingSafeEqual } from '../utils/crypto';
-import { readStamp, writeStamp, type SchemaClass, type StampReading } from '../identity/schema-stamp';
+import { readStamp, writeStamp, type SchemaClass, type StampReading, type StampStore } from '../identity/schema-stamp';
 import type { SqlExec } from '../types/primitives';
 
 const SqlName = v.pipe(v.string(), v.regex(/^[a-z_][a-z0-9_]*$/u));
@@ -140,8 +140,9 @@ function census(sql: SqlExec): TableRows[] {
 
 /** How an object's own transactions run: only a synchronous throw from the callback rolls one back. */
 export interface TableWrites {
-  /** The class of database this is, whose stamp it carries. */
+  /** The class of database this is, whose stamp it carries, and where it keeps it. */
   schema: SchemaClass;
+  stamps: StampStore;
   transactionSync: <A>(write: () => A) => A;
   /** The object's own init, which makes a dropped table anew. */
   init: () => void;
@@ -227,7 +228,7 @@ function mend(sql: SqlExec, writes: TableWrites, changed: ChangedTable, table: H
  *  `init` run to make what is missing, and the database stamped as this build's. */
 export function resetTables(sql: SqlExec, request: TablesRequest, writes: TableWrites): Omit<TablesAnswer, 'name'> {
   return settleSync(Effect.gen(function* () {
-    const stamp = readStamp(sql, writes.schema);
+    const stamp = readStamp(writes.stamps, sql, writes.schema);
     const tables = census(sql);
     const changed = new Map(request.tables.map((table) => [table.table, table]));
     const named = new Set(changed.keys());
@@ -252,7 +253,7 @@ export function resetTables(sql: SqlExec, request: TablesRequest, writes: TableW
 
     // Storage behind its stamp ran no init when its object started, so it runs now, whether or not a table was dropped.
     writes.init();
-    writeStamp(sql, writes.schema);
+    writeStamp(writes.stamps, writes.schema);
 
     return { stamp, census: tables, held: before, dropped };
   }));
