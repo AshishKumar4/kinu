@@ -17,9 +17,10 @@ import type {
   NoteReply, PlanDecisionOutcome, PlanEdit, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, PlanReviewStatus,
 } from '../types/plans';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
-import { admitReviewAnnotations, byteLength, MAX_PLAN_ANNOTATIONS_BYTES } from './annotation-admission';
+import { admitReviewAnnotations, MAX_PLAN_ANNOTATIONS_BYTES } from './annotation-admission';
 import type { TaskPlan } from '../tools/task-plan-scope';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
+import { utf8Bytes } from '../utils/text';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
@@ -226,7 +227,7 @@ export function applyPlanEdits(existingLines: readonly string[], edits: readonly
 
     if (!content.trim()) return yield* Effect.die(new Error('plan content is empty after applying edits'));
 
-    if (byteLength(content) > MAX_PLAN_CONTENT_BYTES) {
+    if (utf8Bytes(content) > MAX_PLAN_CONTENT_BYTES) {
       return yield* Effect.die(new Error('plan content exceeds the maximum size of 1.5 MiB'));
     }
 
@@ -286,13 +287,13 @@ function noteLine(note: Exclude<ReviewAnnotation, NoteReply>): string {
  * beside `content`, the stored row: a write admits only a list its revision can still carry.
  */
 function carryRefusal(content: string, notes: readonly ReviewAnnotation[], revision: number): string | null {
-  const carried = byteLength(JSON.stringify(notes.map((note) => note.revision === undefined ? { ...note, revision } : note)));
+  const carried = utf8Bytes(JSON.stringify(notes.map((note) => note.revision === undefined ? { ...note, revision } : note)));
 
   if (carried > MAX_PLAN_ANNOTATIONS_BYTES) return `the review's comments would exceed the maximum size of ${String(MAX_PLAN_ANNOTATIONS_BYTES / 1024)} KiB`;
 
   const rowBytes = planReviewRowBytes();
 
-  return byteLength(content) + carried > rowBytes
+  return utf8Bytes(content) + carried > rowBytes
     ? `plan content and annotations exceed the stored row size of ${String(rowBytes)} bytes` : null;
 }
 
@@ -535,7 +536,7 @@ export class PlanReviewStore {
 
       const rowBytes = planReviewRowBytes();
 
-      if (byteLength(content) + byteLength(carried) > rowBytes) {
+      if (utf8Bytes(content) + utf8Bytes(carried) > rowBytes) {
         return { ok: false, error: `plan content exceeds the stored row size of ${rowBytes} bytes`, plan: current };
       }
 

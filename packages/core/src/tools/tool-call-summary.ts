@@ -6,6 +6,7 @@ import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json
 import { redactSecrets } from '../safety/secret-patterns';
 import { NATIVE_ACTION_EFFECTS, type ActionEffect } from '../slates/members';
 import * as v from 'valibot';
+import { oneLineClip } from '../utils/text';
 
 /** Chip budget: must fit one line beside the name, runtime badge and duration. */
 const MAX = 72;
@@ -32,9 +33,7 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
 
 /** Collapse whitespace and clip, marking the clip. */
 function clip(value: string, max: number = MAX): string {
-  const flat = value.replace(/\s+/g, " ").trim();
-
-  return flat.length <= max ? flat : `${flat.slice(0, max - 3).trimEnd()}...`;
+  return oneLineClip(value, max);
 }
 
 function quoted(value: string, max: number = MAX): string {

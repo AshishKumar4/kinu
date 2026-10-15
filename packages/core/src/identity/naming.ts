@@ -5,6 +5,7 @@ import { Effect } from 'effect';
 import { KinuError, settleSync, tolerate } from '../obs/index';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from './actor-handle';
+import { fnv1a32Hex } from '../utils/fnv1a';
 
 const WorkspaceTitleSchema = v.object({ title: v.string() });
 
@@ -263,13 +264,7 @@ export interface WorkspaceTitlePlan {
 }
 
 /** FNV-1a of the slug as eight hex digits, for the word tables. */
-function slugHex(slug: string): string {
-  let hash = 0x811c9dc5;
-
-  for (const unit of new TextEncoder().encode(slug)) hash = Math.imul(hash ^ unit, 0x01000193) >>> 0;
-
-  return hash.toString(16).padStart(8, '0');
-}
+const slugHex = fnv1a32Hex;
 
 /** Default actor name fixed by its slug; a placeholder, so the first message may replace it. */
 export function codenameFor(slug: string): string {

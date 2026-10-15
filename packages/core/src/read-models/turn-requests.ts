@@ -7,6 +7,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import type { JsonObject, JsonValue } from '../utils/json';
+import { utf8Bytes } from '../utils/text';
 
 const PAGE_BYTES = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
 
@@ -108,5 +109,5 @@ async function requestHead(sources: TurnRequestSources, request: StoredRequest):
 }
 
 function byteLength(value: JsonObject | TurnRequestHead): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  return utf8Bytes(JSON.stringify(value));
 }
