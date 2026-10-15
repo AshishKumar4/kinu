@@ -9,7 +9,7 @@ import { sha256Hex } from '../safety/argument-digest';
 
 const INGRESS_WINDOW_MS = 60_000;
 
-const INGRESS_WINDOW_SCHEMA = v.object({ count: v.number(), windowStart: v.number() });
+const INGRESS_WINDOW_SCHEMA = v.object({ count: v.number() });
 
 export type IngressAdmission = 'admitted' | 'first-refusal' | 'refused';
 
@@ -18,11 +18,12 @@ export async function ingressAdmission(kv: KvStore, rail: string, source: string
   const now = Date.now();
   const windowStart = now - (now % INGRESS_WINDOW_MS);
   const key = `ingress:${String(windowStart)}:${await sha256Hex(`${rail}\u0000${source}`)}`;
+  // The window is the key's: a record read under it is that window's.
   const current = await readKvJson(kv, key, INGRESS_WINDOW_SCHEMA);
-  const count = (current !== null && current.windowStart === windowStart ? current.count : 0) + 1;
+  const count = (current?.count ?? 0) + 1;
 
   if (count > limit + 1) return 'refused';
-  await writeKvJson(kv, key, { count, windowStart }, windowStart + 2 * INGRESS_WINDOW_MS - now);
+  await writeKvJson(kv, key, { count }, windowStart + 2 * INGRESS_WINDOW_MS - now);
 
   return count > limit ? 'first-refusal' : 'admitted';
 }
