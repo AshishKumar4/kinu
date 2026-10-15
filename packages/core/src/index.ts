@@ -1048,6 +1048,7 @@ export {
 } from './execution/toolchain';
 
 export {
+  WS_OPEN,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   WORKSPACE_HAS_NO_OWNER, isWorkspaceUnattachedError, SEVERAL_DEVICES_CONNECTED, isDeviceAmbiguityError, isSandboxUnavailableError, DEVICE_DUPLICATE_REQUEST,
   DeviceCancelResultSchema, nextDeviceRequestId, DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
@@ -1061,7 +1062,7 @@ export {
 } from './execution/device-protocol';
 
 export {
-  DeviceSocketHub, deviceIdFromSocket, WS_OPEN, type DeviceSocket,
+  DeviceSocketHub, deviceIdFromSocket, type DeviceSocket,
   type DeviceSocketCtx,
 } from './execution/device-hub';
 
@@ -2554,7 +2555,7 @@ export {
 
 export {
   type DeviceHubClient,
-  type DeviceRpcOptions,
+  type HubDeviceCallOptions,
   type HubDeviceTransportOpts,
   createHubDeviceTransport,
 } from './execution/hub-device-transport';

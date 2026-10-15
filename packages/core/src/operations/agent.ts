@@ -6,17 +6,13 @@ import * as v from 'valibot';
 import { PROPOSED_TASK_STATUSES } from '../types/proposals';
 import { BACKGROUND_POLICY } from '../types/jobs';
 import { JsonObjectSchema } from '../utils/json';
-import { defineOperation, type Operation } from './operation';
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
+import { described, namespace } from './operation';
 
 const Count = (text: string) => v.optional(described(v.pipe(v.number(), v.integer(), v.minValue(1)), text));
 
 const Id = v.pipe(v.string(), v.nonEmpty());
 
-const agentOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
-  op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'> & { readonly plan?: boolean },
-) => defineOperation({ ns: 'agent', slate: false, ...op });
+const agentOp = namespace('agent', { slate: false });
 
 const BACKGROUND_HELP = 'A background job\'s settled result. A search backgrounds the moment it spawns on a live chat '
   + 'session; other long calls background once they outrun this turn\'s threshold '

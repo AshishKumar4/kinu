@@ -126,7 +126,7 @@ async function runTurn(bound: Bound, opts: {
   }, (event) => opts.onEvent?.(event));
 
   // Settle order: name the claim outcome, then release; a bare release settles `indeterminate`.
-  bound.actor.settleTurnClaim(lease, result.failure === null ? 'completed' : 'error');
+  bound.actor.closeTurnClaim(lease, result.failure === null ? 'completed' : 'error')();
   bound.actor.finishTurn(lease);
 
   return { lease, result };

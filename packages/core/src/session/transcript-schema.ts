@@ -1,6 +1,6 @@
+/** Public conversation structure references canonical parts, independently of working-context selection. */
 import type { RawSqlExec } from '../types/primitives';
 
-/** Public conversation structure references canonical parts, independently of working-context selection. */
 /** The chat session every conversational read and write uses. */
 export const CHAT_SESSION_ID = 'default';
 

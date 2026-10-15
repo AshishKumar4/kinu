@@ -110,7 +110,6 @@ interface TurnCommitInput {
   readonly overflowRetry: boolean;
 }
 
-
 /** A `step-cut` as a chat stream carries it to a client, one that watches the turn from another process. */
 export const STEP_CUT_CHUNK = 'data-kinu-step-cut';
 
@@ -194,8 +193,6 @@ interface TurnContinuation {
   /** Not asked again before this instant ({@link ActorSession.reaskAt}). */
   readonly reaskAt: number | null;
 }
-
-
 
 /** A run delivered to the agent (design v2 §1, D2), keyed by its id. */
 export interface DeliveredRun {
@@ -327,8 +324,8 @@ export interface OpenWork {
 
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
-  /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
-  /** Under `round`'s claim: it binds through `round.bind`, and a recovered execution assembles on `round.frozen`. */
+  /** Runs after the opening row and run are durable, under `round`'s claim: it binds through `round.bind`, and a recovered
+   *  execution assembles on `round.frozen`. A throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpeningAsk, round: ClaimedRound): Promise<PreparedTurn>;
   /** Never consumes an armed compaction. */
   composeRequest(): Promise<ComposedRequest>;
@@ -418,8 +415,6 @@ export interface CardSend extends SendOptions {
 
 export type SendLandingWaiter = Pick<ReturnType<typeof Promise.withResolvers<SendLanding>>, 'resolve' | 'reject'>;
 
-/** A caller-named message: the key its row and reservation are stored under. */
-
 function refusedLanding(refusal: Refusal): KinuError {
   return new KinuError(refusal.reason, `${refusal.error}. Close that session, or send this from it.`);
 }
@@ -456,10 +451,6 @@ export class ChatSession {
   private readonly mintAnswerId: () => string;
   private ended = false;
 
-  /** Closing: what it is handed now is owed to its next start, not refused. */
-  get closing(): boolean {
-    return this.ended;
-  }
   private runId: string | null = null;
   /** The scope every effect claim this turn makes is keyed to. Null between turns. */
   private turnId: string | null = null;
@@ -562,6 +553,7 @@ export class ChatSession {
     this.ended = true;
     this.unobserveMeasures();
   }
+  /** Closed: what it is handed now is owed to its next start, not refused. */
   get closed(): boolean { return this.ended; }
 
   /** Non-zero while a terminal transition runs on the pump's stack, where awaiting execution would deadlock. */
@@ -779,14 +771,13 @@ export class ChatSession {
 
   private readonly onDisk: (entryId: string) => boolean;
 
-  /** Settling has no next step. A queued, unopened user turn or genesis offer counts: a message behind it rides its
-   *  first step, so an offer is consumed only by a message that arrived before it. */
   /** The one in-flight decision sends, Retry, Clear and Revert take: a Retry between its claim and its queue counts. */
   turnInFlight(): boolean {
     return this.reopening || this.running();
   }
 
-  /** A turn runs or is queued; a Retry claimed but not yet queued aside. */
+  /** A turn runs or is queued; a Retry claimed but not yet queued aside. A queued, unopened user turn or genesis offer
+   *  counts: a message behind it rides its first step, so an offer is consumed only by a message that arrived before it. */
   private running(): boolean {
     return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
@@ -842,8 +833,8 @@ export class ChatSession {
   }
 
   /** An owner's intent, applied as it is taken: what it did is its answer. A refusal (a stale plan revision, a newest turn
-   *  that moved, a turn still running) is an answer too, which its producer tells the owner. */
-  /** `took` marks the intent applied with what it did; a Retry commits it with the turn it holds. */
+   *  that moved, a turn still running) is an answer too, which its producer tells the owner. `took` marks the intent
+   *  applied with what it did; a Retry commits it with the turn it holds. */
   private applyIntent(id: string, input: IntentInput, took: (result: IntentResult) => void): Effect.Effect<IntentResult, KinuError> {
     const marking = (result: IntentResult): Effect.Effect<void> => Effect.sync(() => { took(result); });
 
@@ -1190,7 +1181,6 @@ export class ChatSession {
     }
   }
 
-  /** Pending steers are dropped and returned so the surface can restore them. */
   /**
    * Stop (design v3 C): queued programmatic turns and the delivered signals the running turn holds are cancelled, the
    * person's unread words handed back, and the turn aborted. `cutoff` is the producer's: nothing it committed at or below
@@ -1369,8 +1359,6 @@ export class ChatSession {
     }).pipe(Effect.tapError(() => Effect.sync(() => { this.reopening = false; })));
   }
 
-  /** Held until the turn is queued, which then holds it: no tick between the two leaves the session idle. `held`: the row
-   *  an intent's Retry holds it under, committed before it is queued, which its opening retires. */
   /** A retried turn, run as that turn again under its own id: its end answers the opener's words too, should they still
    *  be owed. `heldAs` is the Retry's held input, retired as it runs. */
   private retriedItem(turnId: string, text: string, metadata: JsonObject | undefined, heldAs: string | undefined): QueueItem {
@@ -1380,6 +1368,8 @@ export class ChatSession {
     });
   }
 
+  /** Held until the turn is queued, which then holds it: no tick between the two leaves the session idle. `held`: the row
+   *  an intent's Retry holds it under, committed before it is queued, which its opening retires. */
   private queueRetried(turnId: string, held?: { readonly id: string; readonly commit: (text: string, metadata: JsonObject | undefined) => void }): Effect.Effect<void, KinuError> {
     this.reopening = true;
 
@@ -1456,7 +1446,7 @@ export class ChatSession {
 
   /** A model that compacts server-side folds on its provider, so the next request is armed to ask it to. */
   private fold(): Effect.Effect<CompactOutcome, KinuError> {
-    return this.pumpActive || this.queue.length > 0
+    return this.turnOwed
       ? Effect.fail(new KinuError('denied', COMPACT_NEEDS_IDLE))
       : attempt(
         { doing: 'folding the conversation into a summary', otherwise: 'unavailable' },
@@ -1494,7 +1484,7 @@ export class ChatSession {
   }
 
   measureContextRevision(options: { readonly counted: boolean }): Promise<void> {
-    return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : this.revisionMeasure(options));
+    return settleEffect(this.turnOwed ? Effect.void : this.revisionMeasure(options));
   }
 
   private revisionMeasure(options: { readonly counted: boolean }): Effect.Effect<void> {
@@ -1656,7 +1646,8 @@ export class ChatSession {
     }
   }
 
-  /** The taken item, run to its end: the failure its producer is told, and the answer it abandoned. Never throws. */
+  /** The taken item, run to its end: the failure its producer is told, and the answer it abandoned. Never throws: a
+   *  started turn always terminates, with exactly one `turn-end` and a closed run, even when assembly throws. */
   private async runTaken(item: QueueItem): Promise<{ readonly failure: KinuError | null; readonly abandoned: string | null }> {
     let opened = false;
 
@@ -1757,7 +1748,6 @@ export class ChatSession {
     };
   }
 
-  /** A started turn always terminates: exactly one `turn-end` and a closed run, even when assembly throws. */
   /** Through the announced start. */
   private async openTurn(item: QueueItem): Promise<OpenedTurn> {
     const { event, mode } = item.tags;
@@ -2242,11 +2232,6 @@ export class ChatSession {
   }
 
   /**
-   * A turn that ended before an answer committed: its end ({@link endTurn}) carries the failure on its answer, where a
-   * reload reads it. One whose answer cannot be written still closes, without it: its room was told. A close that fails
-   * even so is logged, and the turn stays open, as a death there would leave it.
-   */
-  /**
    * A turn that ended on a failure, `message` its rendered chain: the session's accumulator marks it failed unless a
    * Stop cut it, its run's end is classified from its run's own error or else the failure, `close` closes what the turn
    * still owes under that end (nothing once its answer committed), and the stream hears the error, then the turn's end,
@@ -2272,6 +2257,11 @@ export class ChatSession {
     return end.reason;
   }
 
+  /**
+   * A turn that ended before an answer committed: its end ({@link endTurn}) carries the failure on its answer, where a
+   * reload reads it. One whose answer cannot be written still closes, without it: its room was told. A close that fails
+   * even so is logged, and the turn stays open, as a death there would leave it.
+   */
   private async endFailed(item: QueueItem, lease: ActorTurnLease, end: RunEndClassification, owed: OwedEffect | null = null): Promise<void> {
     let answer: PreparedConversationEntry | null = null;
     let closed = false;
@@ -2526,12 +2516,12 @@ export class ChatSession {
     }
   }
 
-  restoreHistory(): Promise<boolean> {
+  /** The working history its last activation left, restored into the actor's session: whether there was one. */
+  restoreWorkingHistory(): Promise<boolean> {
     return this.actorSession.restoreWorkingHistory();
   }
 }
 
-/** A delivered run's held row: its mode beside the mark that restores it as a run. */
 /** Marks a held row as a Retry's reopened turn, so a later process runs it as that turn again. */
 const RETRIED_TURN_EVENT = 'retried_turn';
 

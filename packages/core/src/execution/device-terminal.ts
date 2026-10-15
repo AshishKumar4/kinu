@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import { connections, type Connections } from '@nimbus-sh/fabric/connections.js';
 import { z } from 'zod/v4';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
-import { WS_OPEN } from './device-hub';
+import { WS_OPEN } from './device-tunnel';
 import { DEVICE_PTY_MAX_AXIS, DEVICE_FRAMES } from './device-protocol';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';

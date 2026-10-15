@@ -5,7 +5,7 @@
 import * as v from 'valibot';
 import { APP_TABLE_SCOPES } from '../types/app-store';
 import { JsonValueSchema } from '../utils/json';
-import { defineOperation, type Operation } from './operation';
+import { namespace } from './operation';
 
 /** Host-injected from the bound handle; rejected as a declared column on either scope. */
 export const ACTOR_COLUMN = 'actor_id';
@@ -136,7 +136,6 @@ const BatchSchema = v.pipe(
   v.maxLength(MAX_BATCH_OPS, `a batch runs at most ${MAX_BATCH_OPS} operations`),
 );
 
-
 const Table = v.pipe(TableNameSchema, v.description('A table name: lowercase letters, digits and underscores.'));
 
 const TableRecord = v.strictObject({ ...TableSpecSchema.pipe[0].entries, createdBy: v.string(), createdAt: v.number() });
@@ -144,9 +143,7 @@ const TableRecord = v.strictObject({ ...TableSpecSchema.pipe[0].entries, created
 const Changed = v.strictObject({ rowsAffected: v.number() });
 
 /** Every db operation runs on Plan: the store decides per call, by the table's scope, whether Plan may write it. */
-const dbOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
-  op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'> & { readonly plan?: boolean },
-) => defineOperation({ ns: 'db', slate: true, plan: true, ...op });
+const dbOp = namespace('db', { slate: true, plan: true });
 
 export const DB = {
   createTable: dbOp({

@@ -59,11 +59,7 @@ const notConnected = (): Refusal => refusalOf(new KinuError('unavailable', NOT_C
 function deviceCall<A>(doing: string, run: () => Promise<A>): Effect.Effect<A | Refusal> {
   return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(Effect.catch((failed) => Effect.succeed(isDeviceNotConnectedError(failed)
     ? notConnected()
-    : refusalOf(deviceFailure({ doing, cause: failed.cause })))));
-}
-
-function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
-  return toKinuError({ ...input, otherwise: 'io' });
+    : refusalOf(toKinuError({ doing, cause: failed.cause, otherwise: 'io' })))));
 }
 
 /** Abort before the frame went out: nothing was sent, so nothing is running. */
@@ -406,7 +402,7 @@ class DevicePlane {
         // Tier refusal with a named fix, not a this.transport fault; not prefixed with the command.
         if (isSandboxUnavailableError(failed)) return Effect.succeed(refusalOf(new KinuError('denied', renderThrownChain(failed))));
 
-        return Effect.succeed(refusalOf(deviceFailure({ doing: `device exec \`${command}\``, cause: failed.cause })));
+        return Effect.succeed(refusalOf(toKinuError({ doing: `device exec \`${command}\``, cause: failed.cause, otherwise: 'io' })));
       }))) };
     });
   }
@@ -636,7 +632,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
         if (code !== undefined) return new VfsError(code, renderThrownChain({ cause }), path, { cause });
 
         // A file call on a machine that is not attached says how to attach it, as a command does.
-        return isDeviceNotConnectedError({ cause }) ? new KinuError('unavailable', NOT_CONNECTED, { cause }) : deviceFailure({ doing: `${method} on the device`, cause });
+        return isDeviceNotConnectedError({ cause }) ? new KinuError('unavailable', NOT_CONNECTED, { cause }) : toKinuError({ doing: `${method} on the device`, cause, otherwise: 'io' });
       },
     });
 

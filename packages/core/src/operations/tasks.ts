@@ -4,11 +4,9 @@
  */
 import * as v from 'valibot';
 import { isValidRoleId } from '../types/profile';
-import { defineOperation, type Operation } from './operation';
+import { described, namespace } from './operation';
 
 export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
 
 const Id = described(v.pipe(v.string(), v.nonEmpty()), 'A task id, such as "t3".');
 
@@ -19,9 +17,7 @@ const Entry = { id: v.string(), title: v.string(), status: Status };
 const Listed = v.strictObject({ ...Entry, note: v.optional(v.string()) });
 
 // The list is read every step, so writing it is planning: Plan turns keep it.
-const tasksOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
-  op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>,
-) => defineOperation({ ns: 'tasks', slate: op.name !== 'switchRole', plan: true, ...op });
+const tasksOp = namespace('tasks', { slate: true, plan: true });
 
 export const TASKS = {
   add: tasksOp({
@@ -70,6 +66,8 @@ export const TASKS = {
   }),
   switchRole: tasksOp({
     name: 'switchRole',
+    // A role is the agent's own: a slate never switches it.
+    slate: false,
     help: 'Switch your active role from your next turn.',
     impact: 'administer',
     input: v.strictObject({ role: described(v.pipe(v.string(), v.guard(isValidRoleId, 'a kebab-case role id like task or researcher')), 'A role id.') }),
