@@ -1160,7 +1160,6 @@
   "sandbox_lifecycle_incidents@packages/cf-backend/src/sandbox-lifecycle.ts": [
     "incident_id TEXT PRIMARY KEY",
     "first_seen_at INTEGER NOT NULL",
-    "announced_at INTEGER",
     "outcome TEXT"
   ],
   "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
