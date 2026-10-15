@@ -1669,8 +1669,7 @@
   ],
   "workspace_logos@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "svg TEXT NOT NULL",
-    "drawn_at INTEGER NOT NULL"
+    "svg TEXT NOT NULL"
   ],
   "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",

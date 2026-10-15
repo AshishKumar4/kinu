@@ -368,8 +368,7 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_logos (
       name     TEXT PRIMARY KEY,
-      svg      TEXT NOT NULL,
-      drawn_at INTEGER NOT NULL
+      svg      TEXT NOT NULL
     )
   `);
 

@@ -590,7 +590,7 @@ export class UserWorkspaces {
       const kept = sanitizeWorkspaceLogoSvg(svg);
 
       if (kept === null) this.host.sqlx(`DELETE FROM workspace_logos WHERE name = ?`, name);
-      else this.host.sqlx(`INSERT OR REPLACE INTO workspace_logos (name, svg, drawn_at) VALUES (?, ?, ?)`, name, kept, Date.now());
+      else this.host.sqlx(`INSERT OR REPLACE INTO workspace_logos (name, svg) VALUES (?, ?)`, name, kept);
       this.rosterChanged(name);
 
       return { drawn: kept !== null };
