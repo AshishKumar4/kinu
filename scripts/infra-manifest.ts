@@ -312,7 +312,6 @@ export function claimedHosts(worker: InfraWorker): ClaimedHosts {
 
 export interface Infrastructure {
   readonly environment: InfraEnvironment;
-  readonly accountId: string;
   readonly worker: InfraWorker;
   readonly resources: readonly Resource[];
 }
@@ -1345,7 +1344,6 @@ export function deriveInfrastructure(
 
   return {
     environment,
-    accountId: config.account_id ?? '',
     worker,
     resources: [...resources.values()],
   };

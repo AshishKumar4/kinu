@@ -67,7 +67,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     // vacuous — the exact shape this repository's ladder exists to refuse.
     expect(infrastructure.resources.length).toBeGreaterThan(20);
     expect(worker.workerName).toBe('kinu');
-    expect(infrastructure.accountId).not.toBe('');
+    expect(deployedConfig('production').account_id).toMatch(/^[0-9a-f]{32}$/);
 
     const ids = infrastructure.resources.map((resource) => resource.id);
     // Named, not counted: a count cannot say WHICH resource the manifest lost.

@@ -12,7 +12,7 @@ import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
-import { containerApplicationsNamed, deleteContainerApplication, r2 } from './infra-cloudflare';
+import { containerApplicationsNamed, deleteContainerApplication, r2, requireCloudflareAccountId } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
 import { deleteR2Prefix } from './cloudflare-rest';
@@ -29,7 +29,7 @@ import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TE
 import { REPO_ROOT as REPO } from './repo-root';
 
 
-const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
+const ACCOUNT = requireCloudflareAccountId();
 
 /** The box's own words when the platform refused it a container and it armed a startup (packages/devbox/src/devbox.ts). */
 const ASK_AGAIN = 'A startup is armed, so ask again';
