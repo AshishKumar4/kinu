@@ -93,6 +93,9 @@ export const WEBSOCKET_POLICY_CLOSE = 1008;
 /** What a socket is told as it is closed for the browser session it runs on having ended. */
 export const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
+/** What a socket is told as it is closed for the CLI authorization it runs on having ended. */
+export const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
+
 /** Every identity header is rewritten from the verified identity: none can be smuggled or stripped. */
 export function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   const next = new Headers(h);

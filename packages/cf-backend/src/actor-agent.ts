@@ -1,6 +1,4 @@
 import { Cause, Effect, Exit } from 'effect';
-import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
-import { logDoCallRetry } from './obs/do-call-retry';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
@@ -11,13 +9,12 @@ import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 import {
   Agent, callable, getCurrentAgent,
   type AgentContext, type Connection, type ConnectionContext,
-  type WSMessage,
 } from "agents";
 import {
   inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
-  resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
+  resetGuardedExec, StoragePredatesResetError, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
 } from '@kinu.run/core';
@@ -25,7 +22,7 @@ import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspect
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
-import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
+import { MessageType } from "agents/chat";
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,
 } from './chat-transport';
@@ -34,18 +31,15 @@ import {
   CLI_SCOPES_HEADER,
   SESSION_BEARER_HEADER,
   SESSION_AUTHORITY_REVOKED,
+  CLI_AUTHORITY_REVOKED,
   WEBSOCKET_POLICY_CLOSE,
   cliBearerConnectionTag,
   cliBearerFromTags,
   cliScopesConnectionTag,
   sessionBearerConnectionTag,
   sessionBearerFromTags,
-  rejectOutOfScopeRpc,
-  rpcFrameOf,
-  type CliSocketBearer,
-  type RpcFrame,
 } from "./cli/rpc-gate";
-import { codemodeSurface, HeldReads, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
+import { codemodeSurface, HeldReads, PAGE_KEEPALIVE, readsWrittenBy, ROSTER_READS, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
@@ -191,10 +185,11 @@ import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallRe
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateDispatchContext } from "./slates/host";
-import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, refusalOf, toKinuError, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { AccountReads, type UserHubClient } from "./account-reads";
-import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
+import { gatedClientHandlers } from "./client-socket-gate";
+import { isWorkspaceTerminal } from "@kinu.run/core";
 import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
@@ -203,10 +198,8 @@ import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
-import { Hono, type Context } from 'hono';
 import { AdviceJobs } from './advice-jobs';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
-import { rawPath, rethrow } from './api/context';
 import { callUserMcpTool } from './user-mcp-call';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -241,7 +234,6 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
  */
 const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
 
-const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
 
 
 /** Text-only: attachment parts are dropped here but still reach the model via
@@ -602,26 +594,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected abstract notifyOwner(subject: string, body: string): void;
 
-  /** Socket-only RPC policy: DO stub calls bypass onMessage, so trusted worker callers keep
-   *  methods denied to client sockets. */
-  protected isClientRpcMethodDenied(_method: string): boolean { return false; }
-
-  private clientRpcRefusal(connection: Connection, rpc: RpcFrame): string | null {
-    if (this.isClientRpcMethodDenied(rpc.method)) return `${rpc.method} is not available from client connections.`;
-    const id = actorFromConnectionTags(connection.tags);
-
-    if (id === null) return null;
-    const name = this.hostedWindowName(id);
-    // The SDK runs any array of arguments; a window's must be JSON values.
-    const args = v.safeParse(v.array(JsonValueSchema), rpc.args);
-
-    if (name === null) return `${rpc.method} from a window whose agent this workspace no longer holds.`;
-
-    if (!args.success) return `${rpc.method} from ${name}'s window carries arguments that are not JSON values.`;
-
-    return hostedWindowMay(rpc.method, args.output, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
-  }
-
   private addressedActor(): string | null {
     const { connection } = getCurrentAgent();
 
@@ -943,137 +915,31 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return agent instanceof ActorAgent ? agent.workspaceName() : '';
   }
+  /** Puts the client gate (client-socket-gate.ts) in front of the Agent base's socket and request handlers. */
   protected installClientMessageGate(): void {
-    const dispatchMessage = this.onMessage.bind(this);
-    this.onMessage = async (connection, message) => {
-      if (await this.refuseRevokedSocketAuthority(connection, message)) return;
-      const terminal = await this.terminalFor(connection);
+    const gated = gatedClientHandlers({
+      storageRefusal: () => this.storageRefusal,
+      runtimeRefusal: () => this.actorRuntimeRefusal(),
+      terminalFor: (connection) => this.terminalFor(connection),
+      hostedWindowName: (actorId) => this.hostedWindowName(actorId),
+      chatRoomFor: (connection) => this.chatRoomFor(connection),
+      history: async (hosted) => await (hosted === null ? this.chatTransport.wire.history() : this.hostedChatWire(hosted)?.history()),
+      overviewChanged: () => { this.overviewChanged(); },
+      connectionOpened: () => { this.connectionOpened(); },
+      lastConnectionClosed: () => { this.lastConnectionClosed(); },
+      turnClaimFrame: () => this.turnClaimFrame(),
+      connections: () => this.getConnections(),
+      ownerHub: () => this.requireOwnerUserDO(),
+      caller: () => this.userCaller(),
+      workspace: () => this.name,
+    }, {
+      onMessage: this.onMessage.bind(this), onConnect: this.onConnect.bind(this), onClose: this.onClose.bind(this), onRequest: this.onRequest.bind(this),
+    });
 
-      if (terminal) {
-        await this.forwardTerminalFrame(terminal, connection, message);
-
-        return;
-      }
-
-      const rejection = rejectOutOfScopeRpc(connection.tags, message);
-
-      if (rejection) {
-        connection.send(rejection);
-
-        return;
-      }
-
-      const rpc = rpcFrameOf(message);
-      const refusal = rpc === null ? null : this.clientRpcRefusal(connection, rpc);
-
-      if (rpc && refusal !== null) {
-        connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: refusal }));
-
-        return;
-      }
-
-      const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;
-      const unavailable = this.actorRuntimeRefusal();
-      const inspection = rpc && (requiredRpcAccess(rpc.method) === 'workspace.read' || rpc.method === 'inspectSubordinate' || rpc.method === 'exportWorkspaceArchive');
-
-      if (unavailable && !inspection) {
-        if (rpc) connection.send(JSON.stringify({ ...unavailable, type: 'rpc', id: rpc.id, success: false }));
-        else if (event?.type === 'chat-request' || event?.type === 'stream-resume-ack') {
-          connection.send(JSON.stringify({ reason: unavailable.reason, type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: unavailable.error, done: true, error: true }));
-        } else connection.send(JSON.stringify({ ...unavailable, type: 'error' }));
-
-        return;
-      }
-
-      // Chat frames go to the room; other frames (RPC, state sync) are the Agent base's.
-      // A frame for an actor no longer hosted here is refused.
-      if (v.is(v.string(), message)) {
-        const room = this.chatRoomFor(connection);
-
-        if (room === null) {
-          connection.send(JSON.stringify({ type: 'error', error: 'The actor this connection addressed is no longer hosted here.' }));
-
-          return;
-        }
-
-        if (await room.onMessage(connection, message)) return;
-      }
-
-      await dispatchMessage(connection, message);
-
-      if (rpc !== null && rpcMovesOverview(rpc.method)) this.overviewChanged();
-    };
-
-    const baseOnConnect = this.onConnect.bind(this);
-    const baseOnClose = this.onClose.bind(this);
-
-    this.onConnect = async (connection, ctx) => {
-      if (await this.refuseRevokedSocketAuthority(connection, '')) return;
-
-      // Before anything reads the store.
-      if (this.storageRefusal !== undefined) {
-        connection.send(JSON.stringify({
-          type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: 'storage-refused', reason: this.storageRefusal.code,
-          body: this.storageRefusal.message, done: true, error: true,
-        }));
-
-        return;
-      }
-
-      this.connectionOpened();
-
-      await baseOnConnect(connection, ctx);
-
-      const terminal = await this.terminalFor(connection);
-
-      if (terminal) {
-        await terminal.attachTerminal(connection);
-
-        return;
-      }
-
-      // Claim frames reach only tabs connected at a change: a root tab away at the settle hears the claim here (#30).
-      if (actorFromConnectionTags(connection.tags) === null) sendIfOpen(connection, this.turnClaimFrame());
-      await this.chatRoomFor(connection)?.onConnect(connection);
-    };
-
-    this.onClose = async (connection, code, reason, wasClean) => {
-      if (this.storageRefusal !== undefined) return await baseOnClose(connection, code, reason, wasClean);
-      const terminal = await this.terminalFor(connection);
-
-      if (terminal) terminal.terminalClose(connection);
-      else this.chatRoomFor(connection)?.onClose(connection);
-      await baseOnClose(connection, code, reason, wasClean);
-
-      // Exclude the closing socket's id explicitly; the platform's state for it is not guaranteed.
-      for (const other of this.getConnections()) if (other.id !== connection.id) return;
-
-      this.lastConnectionClosed();
-    };
-
-    const dispatchRequest = this.onRequest.bind(this);
-    const requests = new Hono({ getPath: rawPath });
-
-    requests.use('*', async (_c, next) => (this.storageRefusal === undefined
-      ? next()
-      : Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] })));
-
-    // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
-    const seed = async (c: Context): Promise<Response> => {
-      const hosted = hostedActorRoute(c.req.path) === null ? null : c.req.header(HOSTED_ACTOR_ID_HEADER) ?? '';
-      const history = await (hosted === null ? this.chatTransport.wire.history() : this.hostedChatWire(hosted)?.history());
-
-      if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
-
-      return Response.json(history);
-    };
-
-    requests.all('/get-messages', seed);
-    requests.all('/:prefix{.*}/get-messages', seed);
-    requests.notFound(async (c) => dispatchRequest(c.req.raw));
-    requests.onError(rethrow);
-
-    this.onRequest = async (request) => requests.fetch(request);
+    this.onMessage = gated.onMessage;
+    this.onConnect = gated.onConnect;
+    this.onClose = gated.onClose;
+    this.onRequest = gated.onRequest;
   }
   /** Lazy: `actorHandle()` resolves the directory row the constructor creates, after field init. */
 
@@ -1412,98 +1278,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return { closed };
   }
 
-  /**
-   * Upgrade checks authority once and hibernated sockets resume without it, so re-check per frame.
-   * Asks the owning UserDO (no cached verdict); an unreachable UserDO refuses the frame.
-   */
-  private async refuseRevokedSocketAuthority(connection: Connection, message: WSMessage): Promise<boolean> {
-    const denial = await this.socketAuthorityDenial(connection);
-
-    if (denial === null) return false;
-    const rpc = rpcFrameOf(message);
-
-    // The rpc reply carries the authority's reason so a pending call fails instead of hanging;
-    // the close reason is the user-facing instruction for the token kind.
-    if (rpc) connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial.why }));
-    connection.close(WEBSOCKET_POLICY_CLOSE, denial.close);
-    diagnostics.event('auth.socket_frame_denied', { outcome: 'denied', reason: 'authority_not_live' });
-
-    return true;
-  }
-
-  /** Denial reason plus client instruction, or null when the connection may act.
-   *  Bearer and session each fail closed; a connection carrying both is refused by whichever died. */
-  private async socketAuthorityDenial(
-    connection: Connection,
-  ): Promise<{ why: string; close: string } | null> {
-    const bearer = cliBearerFromTags(connection.tags);
-
-    if (bearer !== null) {
-      const denial = await this.cliBearerDenial(bearer);
-
-      if (denial !== null) return { why: denial, close: CLI_AUTHORITY_REVOKED };
-    }
-
-    const session = sessionBearerFromTags(connection.tags);
-
-    if (session !== null) {
-      const denial = await this.sessionBearerDenial(session);
-
-      // A session denial is already an instruction, so it doubles as the close reason.
-      if (denial !== null) return { why: denial, close: denial };
-    }
-
-    return null;
-  }
-
-  /** Unreadable tag or unreachable UserDO both refuse: authority must be confirmable. */
-  private async sessionBearerDenial(session: { tokenHash: string } | { unreadable: true }): Promise<string | null> {
-    if ('unreadable' in session) {
-      return 'This connection carries no readable session. Reload the page to sign in again.';
-    }
-
-    try {
-      const caller = await this.userCaller();
-
-      const verified = await idempotent('verifySocketSession', () => this.requireOwnerUserDO(),
-        (stub) => stub.verifySocketSession(caller, session.tokenHash), { onRetry: logDoCallRetry });
-
-      return verified.live ? null : SESSION_AUTHORITY_REVOKED;
-    } catch (cause) {
-      diagnostics.failure('auth.session_bearer_check_failed', toKinuError({
-        doing: 'checking whether a websocket\'s browser session is still live',
-        cause,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-
-      return 'This connection\'s authorization could not be confirmed. Reload the page to sign in again.';
-    }
-  }
-
-  /** Denial reason for the CLI bearer, or null. A generation newer than the account's is refused. */
-  private async cliBearerDenial(bearer: CliSocketBearer): Promise<string | null> {
-    if (!bearer.readable) return 'This connection carries no readable authorization. Reconnect with: kinu auth';
-
-    try {
-      const caller = await this.userCaller();
-
-      const verified = await idempotent('verifyCliSocketBearer', () => this.requireOwnerUserDO(),
-        (stub) => stub.verifyCliSocketBearer(caller, bearer.tokenHash), { onRetry: logDoCallRetry });
-
-      if (verified.live && verified.generation <= bearer.generation) return null;
-
-      return verified.error ?? CLI_AUTHORITY_REVOKED;
-    } catch (cause) {
-      diagnostics.failure('auth.cli_bearer_check_failed', toKinuError({
-        doing: 'checking whether a websocket\'s CLI bearer is still live',
-        cause,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-
-      return 'This connection\'s authorization could not be confirmed. Reconnect with: kinu auth';
-    }
-  }
-
   /** Scoped access-token connections may chat but never write agent state. */
   override shouldConnectionBeReadonly(connection: Connection, ctx: ConnectionContext): boolean {
     return this.actorRuntimeRefusal() !== null || super.shouldConnectionBeReadonly(connection, ctx)
@@ -1575,23 +1349,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The runtime shell a socket addresses, or null for a chat or RPC socket; the base always returns null. */
   protected terminalFor(_connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null> {
     return Promise.resolve(null);
-  }
-
-  /**
-   * Validates the frame at the client boundary; a socket sending any other shape is closed with the reason.
-   */
-  private async forwardTerminalFrame(terminal: WorkspaceTerminal, connection: Pick<Connection, 'send' | 'close'>, message: WSMessage): Promise<void> {
-    const frame = v.is(v.string(), message)
-      ? v.safeParse(WorkspaceTerminalInputSchema, tolerate(() => JSON.parse(message), 'malformed-input'))
-      : null;
-
-    if (frame === null || !frame.success) {
-      connection.close(WEBSOCKET_POLICY_CLOSE, 'terminal frame refused: not an input or resize frame');
-
-      return;
-    }
-
-    await terminal.terminalFrame(connection, JSON.stringify(frame.output));
   }
 
   /** Excludes terminal sockets: they carry only shell frames, not the actor protocol. */
