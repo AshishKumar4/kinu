@@ -15,7 +15,8 @@
     "./workers-ai-model-spec": "./src/workers-ai-model-spec.ts",
     "./transcript": "./src/transcript.ts",
     "./vfs": "./src/vfs.ts",
-    "./recording": "./src/recording.ts"
+    "./recording": "./src/recording.ts",
+    "./conformance": "./src/conformance/index.ts"
   },
   "dependencies": {
     "@kinu.run/core": "workspace:*",

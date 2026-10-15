@@ -6,8 +6,8 @@ import {
   initActorStateSchema, initWorkspaceSchema, type WorkspaceSchemaSql,
 } from '../src/state/workspace-schema';
 import { wrapDatabase } from '../src/identity/inline-primitives';
-import { normalizeObservedTables } from '../src/conformance';
 import { makeSqlExec } from './helpers';
+import { normalizeObservedTables } from '@kinu.run/test-utils/conformance';
 
 /** The three dialects initWorkspaceSchema takes and its transaction, over one bun:sqlite handle; core may not import cli-backend. */
 function schemaSql(db: InstanceType<typeof Database>): WorkspaceSchemaSql {

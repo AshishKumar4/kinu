@@ -2,13 +2,11 @@
 // here; the harnesses feeding real observations live in packages/cf-backend and packages/cli.
 import { describe, test, expect } from 'bun:test';
 import {
-  BACKEND_CONFORMANCE, compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables,
-  renderConformanceFindings,
   AGENTS_OPS, BUILTIN_TOOLS,
-  type ConformanceManifest, type ObservedSurface, type RootStatuses,
 } from '../src/index';
 import { renderForLLM } from '../src/events/hub/index';
 import type { KinuEvent } from '../src/events/hub/index';
+import { BACKEND_CONFORMANCE, compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables, renderConformanceFindings, type ConformanceManifest, type ObservedSurface, type RootStatuses } from '@kinu.run/test-utils/conformance';
 
 function observing(planes: ObservedSurface['planes']): ObservedSurface {
   return { root: 'cli', planes };

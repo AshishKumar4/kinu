@@ -608,7 +608,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Created in the constructor: the only point guaranteed to precede every access on both cf roots
-   * (`onStart` may follow an RPC). Per-root by design; `core/conformance/manifest.ts` marks it
+   * (`onStart` may follow an RPC). Per-root by design; `test-utils/src/conformance/manifest.ts` marks it
    * absent for cli. The storage is asked its stamp first (identity/schema-stamp.ts): storage a release's tables step
    * has not reached gets no init, and every call but that step's is refused with why.
    */

@@ -4273,7 +4273,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
-    // Planes only this root carries (declared in core/conformance/manifest.ts).
+    // Planes only this root carries (declared in test-utils/src/conformance/manifest.ts).
     initWebhookIngressTables(this.ctx.storage.sql);
 
     initSleepTimeUpdatesTable(execRaw);

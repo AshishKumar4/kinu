@@ -1896,18 +1896,6 @@ export type {
   Baseline, LayerGateReport, LayerScore, Fault, FaultImpact,
 } from './layergate/index';
 
-// Backend conformance gate
-export {
-  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS,
-  compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables, wiredProducers,
-  renderConformanceFindings,
-} from './conformance/index';
-
-export type {
-  CapabilityStatus, ConformanceFinding, ConformanceFindingKind, ConformanceManifest,
-  ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
-} from './conformance/index';
-
 export {
   getRunTimeline,
   RUN_TIMELINE_MAX,
