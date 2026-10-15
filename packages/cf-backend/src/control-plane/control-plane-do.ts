@@ -1,6 +1,6 @@
 /**
  * ControlPlaneDO: fleet-wide admin index and audit log, singleton. Holds only the
- * capability gate and storage; logic lives in `store.ts`, actions proxy owners' `@callable`s (`actions.ts`).
+ * capability gate and storage; logic lives in core's `control-plane/store.ts`, actions proxy owners' `@callable`s (`actions.ts`).
  * Not an `Agent`: its surface is exactly these methods, each gated before touching storage.
  */
 import { Effect } from 'effect';
@@ -10,7 +10,7 @@ import { requireOps, type OpsCaller, type Page, type PageRequest } from '@kinu.r
 import type { FeedbackRecord } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
-// `./capability`, never `./admin-caller`: the latter pulls `auth/session` and the browser-session
+// Core's capability gate, never `./admin-caller`: the latter pulls `auth/session` and the browser-session
 // store into this DO's isolate; the workerd fixture asserts their absence.
 import {
   requireControl,

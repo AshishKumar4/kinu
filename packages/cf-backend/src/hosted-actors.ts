@@ -477,8 +477,6 @@ export async function hostedParentReport(
   return relayed.disposition;
 }
 
-/** Names a hosted actor after the work it was given, with the title its own isolate suggested (null: the stand-in
- *  only). A failure throws, so the agent's owed row keeps it. */
 /**
  * A hosted agent's title from `subject`: with no `title`, the stand-in lands and the mission its model should name
  * is answered, or null when the title is not the auto-titler's; with one, that name lands.

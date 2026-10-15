@@ -579,7 +579,6 @@ export class AgentDatabase {
     return Object.fromEntries(await answersForDrainTurns(this.readable().transcript, drainTurnIds));
   }
 
-  /** Its conversation's newest rows first, projected as a lane reads them. */
   /** Its conversation as a fork of its workspace reads it. */
   forkSource(): ForkConversationSource {
     return localForkConversationSource(this.sql, this.readable().actor);
@@ -595,6 +594,7 @@ export class AgentDatabase {
     });
   }
 
+  /** Its conversation's newest rows first, projected as a lane reads them. */
   async newestFirst(limit: number): Promise<readonly ConversationProjection[]> {
     return await this.readable().transcript.newestFirst(limit);
   }

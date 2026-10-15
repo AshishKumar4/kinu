@@ -162,14 +162,6 @@ async function stoppable<T>(
   }
 }
 
-/** No conflict queue here: `Devbox` serializes resource conflicts for every caller of the container. */
-
-/**
- * Every container-touching method goes through `onContainer`: egress first (until bound, the
- * container's web requests reach no vault, so a placeholder would go out unresolved; its raw sockets go
- * straight out regardless, D82), then attach (pre-attach reads/writes hit a blank disk that the overlay
- * hides). Methods writing only this DO's rows skip it.
- */
 /** What a moved exposure owes is recorded before the call returns; its failure is reported, never the exposure's. */
 function recordPortsMoved(portsMoved: (() => Promise<void>) | undefined): Effect.Effect<void> {
   return attempt({ doing: 'recording what an exposure moved', otherwise: 'unavailable' }, async () => { await portsMoved?.(); })

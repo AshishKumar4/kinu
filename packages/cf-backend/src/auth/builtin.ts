@@ -13,7 +13,7 @@ import { sanitizeReturnTo } from '@kinu.run/core';
 import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {
-  attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS, NOT_ADMITTED,
+  attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS,
   type AttemptBucket, type ChallengePurpose, type Grant, type InvitePurpose, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
@@ -374,8 +374,6 @@ async function ownerLink(c: Context<SettingsEnv>, purpose: InvitePurpose): Promi
 builtinAccountRoutes.post('/api/user/builtin-auth/invites', async (c) => ownerLink(c, 'join'));
 
 builtinAccountRoutes.post('/api/user/builtin-auth/resets', async (c) => ownerLink(c, 'reset'));
-
-export { NOT_ADMITTED };
 
 
 builtinAccountRoutes.get('/api/user/builtin-auth/accounts', async (c) => {

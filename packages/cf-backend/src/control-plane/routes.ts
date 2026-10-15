@@ -3,7 +3,7 @@ import { Hono, type Context } from 'hono';
 import { Cause, Effect, Result } from 'effect';
 import { authoredRefusal, diagnostics, settle, toKinuError } from '@kinu.run/core/obs';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import type { Page, PageRequest } from '@kinu.run/core';
+import type { PageRequest } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
@@ -515,5 +515,3 @@ function numberParam(url: URL, name: string): number | undefined {
 
   return Number.isFinite(parsed) ? parsed : undefined;
 }
-
-export type { Page, PageRequest };

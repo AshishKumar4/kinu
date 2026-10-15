@@ -316,20 +316,7 @@ export class UserMcpServers {
       : null;
 
     if (callbackUrl) {
-      const authProvider = appCredentials
-        ? new RegisteredAppOAuthClientProvider({
-            storage: this.host.ctx.storage,
-            clientName: USER_MCP_CLIENT_NAME,
-            baseRedirectUrl: callbackUrl,
-            clientId: appCredentials.clientId,
-            clientSecret: appCredentials.clientSecret,
-            scope: preset?.scope,
-          })
-        : new DurableObjectOAuthClientProvider(
-            this.host.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-          );
-
-      authProvider.serverId = row.id;
+      const authProvider = this.oauthProvider({ serverId: row.id, callbackUrl, appCredentials, scope: preset?.scope });
 
       if (!appCredentials && stored?.client_id) authProvider.clientId = stored.client_id;
       transport.authProvider = authProvider;
@@ -443,6 +430,28 @@ export class UserMcpServers {
     return listMcpPresetAvailability(this.host.env);
   }
 
+  /** The OAuth client a server signs in through: the preset's own registered app where this deployment holds its
+   *  credentials, else one registered dynamically; its tokens kept in this object's storage under the one client name. */
+  private oauthProvider(input: {
+    readonly serverId: string;
+    readonly callbackUrl: string;
+    readonly appCredentials: { clientId: string; clientSecret: string } | null;
+    readonly scope: string | undefined;
+  }): RegisteredAppOAuthClientProvider | DurableObjectOAuthClientProvider {
+    const { appCredentials } = input;
+
+    const provider = appCredentials
+      ? new RegisteredAppOAuthClientProvider({
+          storage: this.host.ctx.storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
+          clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.scope,
+        })
+      : new DurableObjectOAuthClientProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
+
+    provider.serverId = input.serverId;
+
+    return provider;
+  }
+
   /** `publicOrigin` is the user-facing origin that determines the OAuth callback URL; the routes
    *  layer derives it from the request's `Origin`/`Host`, since UserDO doesn't see the request. */
   async userMcp_add(
@@ -482,20 +491,7 @@ export class UserMcpServers {
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
 
-    const authProvider = appCredentials
-      ? new RegisteredAppOAuthClientProvider({
-          storage: this.host.ctx.storage,
-          clientName: USER_MCP_CLIENT_NAME,
-          baseRedirectUrl: callbackUrl,
-          clientId: appCredentials.clientId,
-          clientSecret: appCredentials.clientSecret,
-          scope: preset?.scope,
-        })
-      : new DurableObjectOAuthClientProvider(
-          this.host.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-        );
-
-    authProvider.serverId = id;
+    const authProvider = this.oauthProvider({ serverId: id, callbackUrl, appCredentials, scope: preset?.scope });
 
     // The credential is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
     const credential = cfg.headers

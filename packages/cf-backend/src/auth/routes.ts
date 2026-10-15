@@ -8,7 +8,7 @@ import {
   type OAuthProfile, type SessionAuthority,
 } from './store';
 import { sanitizeReturnTo } from '@kinu.run/core';
-import { escapeHtml, json, KINU_USER_AGENT, sha256Hex } from '@kinu.run/core';
+import { escapeHtml, json, KINU_USER_AGENT, nonEmptyString, scopeList, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
 import { builtinSignInOn, grantOf, OAUTH_PROVIDER_ENV, type SignInDeclarationEnv } from '@kinu.run/core/identity';
@@ -650,7 +650,7 @@ function addProviderPrompt(url: URL, provider: OAuthProviderConfig): void {
 }
 
 function stringClaim(value: oauth.JsonValue | undefined): string | null {
-  return v.is(v.string(), value) && value.trim() ? value.trim() : null;
+  return nonEmptyString({ value }) ?? null;
 }
 
 function boolClaim(value: oauth.JsonValue | undefined): boolean | null {
@@ -670,17 +670,7 @@ function numberClaim(value: oauth.JsonValue | undefined): number | null {
 }
 
 function scopeClaim(value: oauth.JsonValue | undefined): string | null {
-  if (v.is(v.string(), value)) return value.trim() || null;
-
-  if (Array.isArray(value)) {
-    const scopes = value
-      .filter((item): item is string => v.is(v.string(), item) && item.trim().length > 0)
-      .map((item) => item.trim());
-
-    return scopes.length ? scopes.join(' ') : null;
-  }
-
-  return null;
+  return scopeList({ value })?.join(' ') ?? null;
 }
 
 interface OAuthFailureSummary { reason: string; log: string }

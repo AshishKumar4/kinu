@@ -94,8 +94,6 @@ function refusalFromThrown(input: { cause: unknown }): Refusal | null {
   return reason?.success === true && match !== null ? refusalOf(new KinuError(reason.output, match[2])) : null;
 }
 
-export type { SlateAppCall };
-
 /**
  * One process per authored tree per caller, and one durable application per slate. The application's port and capability
  * persist in this object's storage, run as the workspace root and keep one facet SQLite until `remove`; other callers' processes are private and portless.

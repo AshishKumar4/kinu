@@ -5,7 +5,7 @@
 import * as v from 'valibot';
 import { LifecycleCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
 import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
-import { retriedLater } from './advice-jobs';
+import { retriedLater } from './wake-jobs';
 
 const AGENT_WAKE_JOB = 'agent-wake';
 

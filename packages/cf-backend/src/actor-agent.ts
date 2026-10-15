@@ -298,7 +298,6 @@ function compactionLogDetail(message: string, detail: CompactionDetail): string 
   return detail.output === undefined ? message : `${message} ${JSON.stringify(detail.output)}`;
 }
 
-/** The owner's review calls on one hosted agent's plans, answered by its isolate. */
 /** Agents' questions to the owner, each in its own isolate (D9), the workspace agent's included: answered by the asking
  *  agent's id. */
 export interface HostedOwnerQuestions {
@@ -366,7 +365,6 @@ interface TurnMemoryReads {
   readonly accountFacts?: readonly Fact[];
 }
 
-/** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
 /**
  * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
@@ -605,8 +603,6 @@ export abstract class ActorAgent extends Agent<Env> {
     initTerminalEffectTable(execRaw);
   }
 
-  /** Spliced between `agents` and `web` so provider order (and the LLM-visible type description)
-   *  is stable across actor kinds. */
   /** `agent.*`, its own lifecycle: only the workspace's main actor has one. */
   protected agentSelf(): AgentSelfHost | null { return null; }
 
@@ -1041,7 +1037,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _terminalTransitions: TerminalTransitions | null = null;
 
-  /** Core's once-only lifecycle; the DO supplies only effect bodies and the wake, as the CLI does. */
   /** Every settled turn's close this activation began has ended; an activation that began none has none to wait for. */
   protected async terminalClosed(): Promise<void> {
     await this._terminalTransitions?.idle();
@@ -1412,7 +1407,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace agent's deliveries: its signals, and its events bound to a turn, committed then crossed. */
   protected abstract workspaceAgentDeliveries(): AgentOrchestratorDeps['deliveries'];
 
-  /** The owner's Stop of main's chat: unseen steers stay queued and rerun. */
   /** The owner's Stop of an agent: nothing it was owed or had queued runs after it. */
   protected abstract stopAgent(actorId: string): Promise<void>;
 
@@ -1863,15 +1857,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const runId = currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID);
 
     settleLoggedSync('event.provider_wait_emit_failed', { doing: 'recording a provider_wait run event', otherwise: 'io' }, () => {
-      this.eventRecorder.emit(runId, {
-        type: 'provider_wait',
-        provider: info.provider,
-        waitMs: info.waitMs,
-        attempt: info.attempt,
-        source: info.source,
-        ...(info.modelId !== undefined && { modelId: info.modelId }),
-        ...(info.status !== undefined && { status: info.status }),
-      });
+      this.eventRecorder.emit(runId, { type: 'provider_wait', ...info });
     }, { provider: info.provider });
 
     const turn = activeOperationProfile();
@@ -1879,9 +1865,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (turn === undefined || turn.turnId === WORKSPACE_RUN_ID) return;
     const room = turn.actor.actorId === this.actorHandle().actorId ? null : turn.actor.actorId;
 
-    this.broadcastToActor(room, JSON.stringify({
-      type: 'provider_wait', provider: info.provider, modelId: info.modelId, waitMs: info.waitMs, attempt: info.attempt, source: info.source, status: info.status,
-    }));
+    this.broadcastToActor(room, JSON.stringify({ type: 'provider_wait', ...info }));
   }
 
   // EventsHub primitives. Spec: docs/ARCHITECTURE.md — "Events and ingress"
@@ -3294,11 +3278,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return this._cfHeadRuntime;
   }
-
-  /**
-   * `hostNodeSeat` (`hosted-actors.ts`) is requested per node: search deps are shallow-copied
-   * per child, so a shared seat would give a whole wave one claim ledger and one loop pointer.
-   */
 
   /** An actor's transcript as this object's stores bind it. */
   protected abstract transcriptFor(actor: ActorHandle): SessionTranscript;

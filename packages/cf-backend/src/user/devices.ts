@@ -165,7 +165,6 @@ const SERVED_STAMP_KEY = 'devices.served_stamp';
 /** The account's device grant epoch: every revocation advances it, so no approval given before it answers a call. */
 const CONSENT_EPOCH_KEY = 'devices.consent_epoch';
 
-/** The owner's machines: tunnels, tokens, consents, tiers and requests. */
 /** One workspace's binding to one machine, as the owner's Devices page and Env tab read it. */
 export interface DeviceBinding {
   readonly agentName: string;
@@ -1259,10 +1258,6 @@ export class UserDevices {
     }));
   }
 
-  /**
-   * Toolchain is probed on status read, not in the HELLO handler: the reply arrives on that socket,
-   * so awaiting it there would deadlock. Kept separate from `listDevices` to avoid a device round-trip.
-   */
   /** Null once removed; asks no machine anything. */
   async deviceName(caller: UserCaller, deviceId: string): Promise<string | null> {
     await this.host.requireTier(caller, 'device.rpc');
@@ -1270,6 +1265,10 @@ export class UserDevices {
     return this.host.sqlx<{ label: string }>(`SELECT label FROM user_devices WHERE id = ?`, deviceId)[0]?.label ?? null;
   }
 
+  /**
+   * Toolchain is probed on status read, not in the HELLO handler: the reply arrives on that socket,
+   * so awaiting it there would deadlock. Kept separate from `listDevices` to avoid a device round-trip.
+   */
   async deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus> {
     const resolved = await this.host.requireTier(caller, 'device.rpc');
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;

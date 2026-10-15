@@ -1,5 +1,5 @@
 import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-/** One non-main agent in its own loader isolate (D9). */
+/** One agent in its own loader isolate (D9), the workspace agent's included. */
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
@@ -27,8 +27,6 @@ import type {
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
 import { getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
-
-export type { AgentWorkspace } from './agent-turn';
 
 export interface AgentFacetEnv {
   readonly WORKSPACE: AgentWorkspaceCalls;
@@ -61,7 +59,6 @@ export interface AgentFacetCalls {
   awaitSend(snapshot: AgentSnapshot, id: string): Promise<SendState>;
   /** `cutoff`: the newest workspace delivery the Stop cancelled; none at or below it is taken after. */
   interruptChat(snapshot: AgentSnapshot, cutoff: number | null): Promise<readonly string[]>;
-  /** The owner's Stop: unseen steers stay queued and rerun. */
   /** What a reset left owed is taken up; the agent tells its workspace what is left once it rests. */
   wake(snapshot: AgentSnapshot): Promise<void>;
   /** The next request is measured on the new settings, and a refusal only the owner could fix may answer now. */

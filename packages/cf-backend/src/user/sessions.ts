@@ -392,8 +392,6 @@ export class UserSessions {
     return { ok: true };
   }
 
-  /** Revoke every active CLI session token, for orphans the caller cannot name.
-   * One generation rise covers every socket at once. */
   /** Ends every browser session and CLI token of this account, and refuses any session of a lower generation. */
   async raiseCredentialFloor(caller: UserCaller, generation: number): Promise<void> {
     await this.host.requireTier(caller, 'auth_tokens');

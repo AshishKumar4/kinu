@@ -34,11 +34,6 @@ export interface ResidentSlateDeps {
   retained: () => Iterable<string>;
 }
 
-/**
- * A slate's compiled modules and the files its runner serves, each held by digest in the facet image directory: what a
- * launch runs, and what a slate falls back to while a later edit fails to build.
- */
-
 /** What a build reads: the authored tree, as its caller sees it. */
 export interface SlateBuildInput {
   /** The slate id, independent of source revision and process incarnation. */

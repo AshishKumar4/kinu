@@ -368,7 +368,6 @@ interface HostedTarget {
   readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
 }
 
-/** The crossings an agent's sources read that wait on nothing of its turn's own, in flight from the moment they start. */
 /** A turn's surface as its factory opened it, with what it reaches. */
 interface OpenedSurface {
   readonly surface: TurnSurface;
@@ -1210,8 +1209,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (actorPolicy(this.agentOf(actorId)).workspaceAgent) this.turnClaimChanged();
   }
 
-  /** An end delayed past the agent's later opening, a later turn's or its Retry's, is that earlier run's: it closes
-   *  nothing of the run now open, in its room or here. */
   /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. */
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
     const runId = event.type === 'turn-end' ? event.runId : '';
@@ -2119,10 +2116,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * One `LIMIT 1` read per store, all read so the wake can name them. Runs in the init gate;
-   * interpreting a lease is left to {@link owedDeliveryWork}.
-   */
-  /**
    * The owed-work probes over this object's own tables, held across a turn's wake decisions (the open, each report and
    * the rest ask all of them). Each names its table's writers; their statements pass `sql` or `watchedExec`, which drop it.
    */
@@ -2142,6 +2135,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     changeNotes: this.held.hold(['change_notes_outbox'], () => owesChangeNotes(this.rt)),
   };
 
+  /**
+   * One `LIMIT 1` read per store, all read so the wake can name them. Runs in the init gate;
+   * interpreting a lease is left to {@link owedDeliveryWork}.
+   */
   protected override owedUntimedArms(): Required<UntimedArms> {
     const probes = this.owedProbes;
 
@@ -2264,8 +2261,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
     });
   }
-
-  /** Each delivered run's caller, awaiting the end its agent reports; one this activation never delivered is no one's. */
 
   /** One agent's due reactions; failure rejects with a classified error. */
   drainAgent(reference: ActorReference): Promise<void> {
@@ -2426,7 +2421,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private _replyChannels: ReplyChannelStore | null = null;
   private readonly warmingLanes = new Map<string, CacheWarmingLane>();
 
-  /** Wakes go through the Kinu timer job, never `setTimeout`: nothing in the isolate survives hibernation. */
   /** The lane keeping an agent's prompt cache warm, keyed by the agent: its own row, its own wake. */
   private warmingOf(actorId: string): CacheWarmingLane {
     const held = this.warmingLanes.get(actorId);
@@ -2802,7 +2796,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.agentDeliveries(this.actorHandle().actorId);
   }
 
-  /** An agent's deliveries, whichever agent: its signals, and its pending events bound to their turn as it is written. */
   /** An agent's deliveries as its orchestrator sends signals through them: each a delivery its room hears carded. */
   private agentDeliveries(actorId: string): AgentOrchestratorDeps['deliveries'] {
     return this.coordinator.port(actorId, (event) => { this.detachOwned(Effect.promise(() => this.hostedChatEvent(actorId, { type: 'broadcast', event }))); });
@@ -2959,8 +2952,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return land ? await this.agentCall(actorId, (isolate, snapshot) => isolate.landing(snapshot, delivery.id)) : null;
   }
 
-  /** Armed before anything crosses into the agent: a delivery, or a decision taken in its own store (an answer, a
-   *  dismissal), so the turn it owes is driven even if its isolate ends before it reports (design v3 A). */
   /**
    * The agents whose newest report said their chat holds a turn owed or running: from the input it took, before its turn
    * opens here, to its rest. Written by each accepted report (`agentOwes`), which replaces the agent's answer; dropped by
@@ -2969,7 +2960,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly agentsWorking = new Set<string>();
 
-  /** One report of an agent's, told or carried by its admission's answer (taken rides admit). */
   /** An agent's open work: its tasks tool and its jobs run here, over its own rows, main's as any agent's. */
   private openWorkOf(actorId: string): OpenWork {
     const reads = this.dynamicReadsOf(actorReferenceOf(this.actingAgentOf(actorId)));
@@ -3456,19 +3446,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { owesNarration: false, metadata: kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept } };
   }
 
-  /**
-   * Readings this root's settled response owes; all taken now, before any effect runs, since the
-   * list is claimed up front. Row order, lanes and gates belong to {@link declareTerminalRoster}.
-   */
   /** What main's turns left here, from their preparation to their handoff. */
   private get turnBranches(): TurnBranchesStore {
     return new TurnBranchesStore(this.boundSql, this.actorHandle().actorId);
   }
 
-  /**
-   * Main's settled turn, handed from its own isolate: the lanes it owes are this object's (its evolution, event log,
-   * titles, replies and branches), declared and owed here once per turn, however often the handoff is repeated.
-   */
   /**
    * Every agent's one settle here, as its isolate's terminal transition tells it: the receipts its tools kept under the
    * settled run go. Its answer is committed, so nothing runs under that run again and its close paired every call it
@@ -3479,6 +3461,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     pruneTurnReceipts(this.boundSql, this.agentBound(actorId).handle, run);
   }
 
+  /**
+   * Main's settled turn, handed from its own isolate: the lanes it owes are this object's (its evolution, event log,
+   * titles, replies and branches), declared and owed here once per turn, however often the handoff is repeated.
+   */
   private async mainTurnSettled(settled: HandedOffTurn): Promise<void> {
     // What the workspace decided as the turn opened, as main's isolate froze it then and handed it over.
     const held = settled.facts;
@@ -3740,16 +3726,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { workspace: await this.workspaceTitle() };
   }
 
-  /**
-   * Eval-only: aborts this activation as the platform would; schedule rows stand. Sealed in
-   * `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`). ARCHITECTURE-DECISIONS
-   * C3.
-   */
   /** The kept activations, oldest first: how often this workspace started, and on which build. */
   activations(): Activation[] {
     return this.storageRefusal === undefined ? listActivations(this.boundSql) : [];
   }
 
+  /**
+   * Eval-only: aborts this activation as the platform would; schedule rows stand. Sealed in
+   * `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`). ARCHITECTURE-DECISIONS
+   * C3.
+   */
   evalAbortActivation(): void {
     this.ctx.abort('eval-service: the activation was aborted on request');
   }
@@ -5180,7 +5166,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return sendChangeNotes(this.rt, { value: set }, this.changeNotesChat);
   }
 
-  /** Main's chat, in its own isolate, holds the card under the message's id; one it holds already is not sent again. */
   /** Main's chat, which notes cross to as one card under their message's id. */
   private get changeNotesChat(): ChangeNotesChat {
     const main = this.actorHandle().actorId;
@@ -5238,16 +5223,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return { ok: true };
     });
   }
-
-  /**
-   * `publishHeadStreamFrame` is reached in-process via `reportNodeDelta` and
-   * `HostedActorSeams.publishDelta`; the RPC allowlist exposes only required remote capabilities.
-   */
-
-  /**
-   * The parent's turn profile for a facet; facets must not resolve their own (they lack the role/turn,
-   * and a later resolution can land a different digest). Resolves one if no turn is open.
-   */
 
   /**
    * One page of the portable archive (format `kinu import` reads); walk `next` until null.
@@ -5528,10 +5503,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /**
-   * One hosted actor's identity, program and open work. Read-only: `bindStores`, never `acquire`,
-   * so inspecting a retained actor starts nothing. Owner-gated and resolved through the directory.
-   */
   /** Resolved through the directory under this root's handle, so a name only reaches this root's children. */
   private hostedChild(target: string) {
     return Effect.gen({ self: this }, function* () {
@@ -6312,10 +6283,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /**
-   * Durable "is a turn running" answer. `unsettled()` is the only record that outlives the isolate;
-   * a claim this isolate is not executing is stranded and nothing else will settle it.
-   */
   /** Main's turn as its room heard it open; its isolate recovers a turn a reset cut, so none here is stranded. */
   private turnClaimState(): TurnClaimState {
     const turnId = this.mainChatTurn();
@@ -6417,8 +6384,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return inputs;
   }
-
-  /** Both an agent's report and its retirement publish a changed settings-wait obligation. */
 
   /** A local parked refusal or an agent's own owed work can depend on changed settings. One read, only while idle. */
   private awaitsSettings(): boolean {
