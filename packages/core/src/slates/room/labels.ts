@@ -43,25 +43,25 @@ export function sameTag(a: Tag, b: Tag): boolean {
   return a.holder === b.holder && a.server === b.server && a.root === b.root;
 }
 
-export function sameElem(a: Elem, b: Elem): boolean {
+function sameElem(a: Elem, b: Elem): boolean {
   return sameTag(a, b) && a.fn === b.fn && a.image === b.image;
 }
 
-export function covers(audience: Audience, email: string): boolean {
+function covers(audience: Audience, email: string): boolean {
   return audience === 'anyone' || audience.includes(email);
 }
 
 /** A show that covers an element, whatever its audience. */
-export function showsElem(show: Show, elem: Elem): boolean {
+function showsElem(show: Show, elem: Elem): boolean {
   return sameTag(show, elem) && (show.fn === null || (show.fn === elem.fn && (show.images ?? []).includes(elem.image)));
 }
 
-export function canRead(facts: LabelFacts, email: string, tag: Tag): boolean {
+function canRead(facts: LabelFacts, email: string, tag: Tag): boolean {
   return email === tag.holder || facts.reads(email, tag);
 }
 
 /** `Model.mayRead`. A visitor who has not signed in reads nobody's source and is covered only by shows to anyone. */
-export function mayRead(facts: LabelFacts, email: string | null, elem: Elem): boolean {
+function mayRead(facts: LabelFacts, email: string | null, elem: Elem): boolean {
   if (email !== null && canRead(facts, email, elem)) return true;
 
   return facts.shows.some((show) => showsElem(show, elem) && (email === null ? show.audience === 'anyone' : covers(show.audience, email)));

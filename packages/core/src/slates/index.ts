@@ -41,13 +41,17 @@ export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, ty
 
 export { SlateController, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
 
+export { answer as slateAnswer } from './controller';
+
 export {
-  RoomCaretaker, initSlateRoomTables, codecAdmits, codecIsFree,
+  RoomCaretaker, initSlateRoomTables,
   type Access, type Cell, type Codec, type Grant, type PendingEffect, type RoomCaretakerDeps, type RoomMember, type RoomRecord,
   type Run, type SecretSighting, type Session, type ToolVerdict,
 } from './room/caretaker';
 
 export {
-  audienceFlows, canRead, canonicalRoot, covers, dedup, flows, hidden, mayRead, observers, sameElem, sameTag, showsElem, within,
+  audienceFlows, canonicalRoot, dedup, flows, hidden, observers, sameTag, within,
   type Audience, type Elem, type LabelFacts, type Show, type Tag,
 } from './room/labels';
+
+export { linkKeyHolds, linkUrl, roomHandle, roomObjectName } from './room/passes';
