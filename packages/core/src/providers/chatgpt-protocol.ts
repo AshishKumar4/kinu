@@ -149,6 +149,17 @@ export interface IdTokenIdentity {
   readonly email: string | null;
 }
 
+/** Unpadded base64url; a length of 4n+1 has no valid form, so nothing past this check can fail to decode. */
+const JWT_SEGMENT = /^[A-Za-z0-9_-]*$/;
+
+/** A JWT segment's text, decoded as UTF-8; null for a segment that is not base64url. */
+export function jwtSegmentText(segment: string): string | null {
+  if (segment.length % 4 === 1 || !JWT_SEGMENT.test(segment)) return null;
+  const padded = segment.replaceAll('-', '+').replaceAll('_', '/');
+
+  return new TextDecoder().decode(Uint8Array.from(atob(padded + '='.repeat((4 - (padded.length % 4)) % 4)), (char) => char.charCodeAt(0)));
+}
+
 export function idTokenKeyId(token: IdToken): { readonly keyId: string } | { readonly problem: string } {
   return token.algorithm !== 'RS256' || token.keyId === undefined
     ? { problem: `the ID token is signed with ${String(token.algorithm)}, not RS256` }

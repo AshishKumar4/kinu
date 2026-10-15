@@ -6,6 +6,7 @@ import type { OAuthCredential } from '../credentials/store';
 import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json';
 import { Effect } from 'effect';
 import { settle, tolerate } from '../obs/index';
+import { jwtSegmentText } from './chatgpt-protocol';
 
 export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 
@@ -85,18 +86,11 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
   };
 }
 
-/** Unpadded base64url of length 4n+1 has no valid form; refused here so the decode below cannot throw. */
-const JWT_PAYLOAD_SEGMENT = /^[A-Za-z0-9_-]+$/;
-
-/** Decode a JWT payload segment; null when absent. A non-object payload throws as a corrupt credential. */
+/** Decode a JWT payload segment, as UTF-8; null when absent or unreadable. */
 function decodeJwtPayload(token: string): JsonObject | null {
-  const segment = token.split('.')[1];
+  const text = jwtSegmentText(token.split('.')[1] ?? '');
 
-  if (segment === undefined || segment.length % 4 === 1 || !JWT_PAYLOAD_SEGMENT.test(segment)) return null;
-  const b64 = segment.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-
-  return tolerate(() => parseJsonObject(globalThis.atob(padded)), 'malformed-input') ?? null;
+  return text === null || text === '' ? null : tolerate(() => parseJsonObject(text), 'malformed-input') ?? null;
 }
 
 export function decodeCodexAccountId(accessToken: string): string | null {
