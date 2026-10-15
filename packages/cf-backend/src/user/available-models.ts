@@ -1,6 +1,7 @@
 /** Model menu and connectable-provider catalog for HTTP clients. The provider registry is the
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
+  objectNamed,
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
   type ModelMenuResponse, type ModelMenuEntry, type ModelTestResult, type ModelsDevProviderInfo, type ProviderCatalogEntry,
 } from '@kinu.run/core';
@@ -18,7 +19,7 @@ export async function listAvailableModels<Id>(
 ): Promise<ModelMenuResponse> {
   const { registry, deps } = createAgentProviderRegistry({
     env,
-    userDO: userCredentials(() => env.UserDO.get(env.UserDO.idFromName(userId)), caller),
+    userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller),
     fetch,
   });
 
@@ -64,7 +65,7 @@ function buildProviderCatalog(
 export async function listProviderCatalog<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ProviderCatalogEntry[]> {
-  const { registry, deps } = createAgentProviderRegistry({ env, userDO: userCredentials(() => env.UserDO.get(env.UserDO.idFromName(userId)), caller), fetch });
+  const { registry, deps } = createAgentProviderRegistry({ env, userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller), fetch });
 
   const [providers, keys] = await Promise.all([
     listModelsDevProviders({ fetch }),
@@ -86,7 +87,7 @@ export async function testAvailableModel<Id>(input: {
   readonly signal: AbortSignal;
 }): Promise<ModelTestResult> {
   const { env, userId, caller } = input;
-  const registry = createAgentProviderRegistry({ env, userDO: userCredentials(() => env.UserDO.get(env.UserDO.idFromName(userId)), caller), fetch });
+  const registry = createAgentProviderRegistry({ env, userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller), fetch });
 
   return testModel({ spec: input.spec, resolve: (spec, affinity) => registry.resolveModel(spec, affinity), signal: input.signal });
 }

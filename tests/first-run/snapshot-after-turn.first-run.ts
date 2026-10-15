@@ -50,6 +50,7 @@ describe(SUITE, () => {
       id: CASE,
       defect: DEFECT,
       modelCalls: 'expected',
+      budgetMs: 5 * 60_000,
       purpose: 'A terse assistant. Reply with one short line and use no tools.',
       async run({ session }) {
         await session.prompt('Reply with only OK.');

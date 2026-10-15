@@ -65,8 +65,6 @@ export interface SlateRoomStub {
 
 
 
-export type { SlateAppCall };
-
 /**
  * One process per authored tree per caller, and one durable application per slate. The application's port and capability
  * persist in this object's storage, run as the workspace root and keep one facet SQLite until `remove`; other callers' processes are private and portless.

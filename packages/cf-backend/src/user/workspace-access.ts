@@ -10,7 +10,7 @@ import {
   type CloudWorkspaceBirth, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv,
   CreateCloudWorkspaceInputSchema,
 } from './workspace-create';
-import { err, json, safeJson } from '@kinu.run/core';
+import { objectNamed, err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { authoredRefusal, diagnostics, toKinuError, settle } from '@kinu.run/core/obs';
 import type { AccountLedgerTarget } from './account-usage';
@@ -87,7 +87,7 @@ export function notifyWorkspacesModelSettingsChanged<Id>(
     if (workspaces === null) return;
 
     const settled = yield* Effect.promise(() => Promise.allSettled(workspaces
-      .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onModelSettingsChanged())));
+      .map((a) => objectNamed(env.OrchestratorAgent, a.name).onModelSettingsChanged())));
 
     for (const [index, outcome] of settled.entries()) {
       if (outcome.status === 'fulfilled') continue;

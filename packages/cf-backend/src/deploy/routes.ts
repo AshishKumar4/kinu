@@ -11,7 +11,7 @@ import {
   mintDeployRun, parseReleaseManifest, promptedSecrets, runKeyDigest,
   type DeployOptions,
 } from '@kinu.run/core/deploy';
-import { createPkcePair, err, fetchDeployedAsset, json, safeJson, serveApp, sha256Hex, timingSafeEqual } from '@kinu.run/core';
+import { objectNamed, createPkcePair, err, fetchDeployedAsset, json, safeJson, serveApp, sha256Hex, timingSafeEqual } from '@kinu.run/core';
 import * as v from 'valibot';
 import { DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/cookies';
 import { beneath, type FamilyEnv } from '../api/context';
@@ -33,7 +33,7 @@ const TokenSchema = v.object({
 });
 
 function runStub(env: Env, runId: string): DurableObjectStub<DeployRunDO> {
-  return env.DeployRunDO.get(env.DeployRunDO.idFromName(runId));
+  return objectNamed(env.DeployRunDO, runId);
 }
 
 /** Absent means the Cloudflare door is not open: said plainly, not an authorize URL with empty `client_id`. */

@@ -218,7 +218,6 @@ export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
-/** `deleteAccount` must work when start throws. */
 /** Never gated: a deletion must work when start throws, and the deploy's tables walk reads tables alone. */
 const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables']);
 

@@ -115,3 +115,12 @@ export class WakeJobs extends LifecycleCapability {
     return job === undefined ? undefined : { time: job.time, pace: paceOf(job) };
   }
 }
+
+/** A job that failed every retry comes back a lap later rather than ending: what it was for is still stored. */
+export function retriedLater(doing: string): NonNullable<DurableObjectCapability['onJobError']> {
+  return ({ job }, cause) => {
+    diagnostics.failure('schedule.job_failed', toKinuError({ doing, cause, otherwise: 'io' }), { job: job.id });
+
+    return { rescheduleAt: Date.now() + RECOVERY_BACKOFF_CEILING_MS };
+  };
+}

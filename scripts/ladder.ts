@@ -2561,7 +2561,8 @@ export const LADDER: readonly Gate[] = [
       + 'accounts no other row touches, and as eval-service on a workspace of its own, whose one machine it removes as it '
       + 'joins, so no first-run case counts it.',
     tier: 'deploy',
-    secrets: ['KINU_UPGRADE_FIXTURE_PASSWORD', 'KINU_UPGRADE_SENDER_PASSWORD'],
+    // The two accounts' passwords, and the REST token the releases bucket's anchor is read and written with.
+    secrets: ['KINU_UPGRADE_FIXTURE_PASSWORD', 'KINU_UPGRADE_SENDER_PASSWORD', 'KINU_CLOUDFLARE_API_TOKEN'],
     // Not yet measured on a deployment: three chat turns, two shares and two joins, each one short.
     seconds: 90,
     catches: 'a build that cannot read what the build before it wrote. Every other tier and the evals make each workspace '

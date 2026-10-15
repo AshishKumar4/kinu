@@ -143,6 +143,7 @@ describe(SUITE, () => {
       id: CASE,
       defect: DEFECT,
       modelCalls: 'expected',
+      budgetMs: 5 * 60_000,
       genesis: false,
       purpose: 'A precise coordinator that delegates exactly as asked and relays answers verbatim.',
       async run({ session, plan, budget }) {

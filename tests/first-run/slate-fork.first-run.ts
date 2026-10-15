@@ -139,7 +139,7 @@ describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
-      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', budgetMs: 5 * 60_000, genesis: false,
       purpose: 'A slate listed in the Gallery and forked by a second account into its own workspace; no model task.',
       async run({ session, plan }) {
         const identity: PublicWebIdentity = { ...plan.identity, account: 'devices' };

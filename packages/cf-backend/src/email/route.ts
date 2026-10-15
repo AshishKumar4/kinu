@@ -3,6 +3,9 @@
  * Unauthorized or unroutable mail is dropped, never rejected: rejection would be an existence oracle.
  */
 
+import { readBounded } from '@kinu.run/core';
+import { Effect } from 'effect';
+import { KinuError, settle } from '@kinu.run/core/obs';
 import { agentNameFromRecipient, isAutoReplyEmail, parseInboundMime } from './inbound';
 
 /** Cloudflare Email Routing delivers up to 25 MiB (email.routing.message_bytes) whole; an unauthorized
@@ -66,12 +69,15 @@ export async function routeInboundEmail(
   }
 
   // message.raw is single-use; the declared size is the sender's claim, the count is ours.
-  const raw = await readRawBounded(message.raw, INBOUND_EMAIL_MAX_BYTES);
+  // Cancelled at the chunk past the limit, so no oversized buffer is ever assembled.
+  const raw = await readBounded(message.raw, INBOUND_EMAIL_MAX_BYTES);
 
   if (raw === 'too_large') {
     return { outcome: 'dropped', agent: agentName, reason: oversizeReason(INBOUND_EMAIL_MAX_BYTES) };
   }
 
+  // A stream that broke mid-read fails the delivery, so Email Routing tries it again.
+  if (raw instanceof KinuError) return await settle(Effect.fail(raw));
   const parsed = await parseInboundMime(raw);
 
   const result = await agent.acceptEmailDelivery({
@@ -93,40 +99,4 @@ export async function routeInboundEmail(
 
 function oversizeReason(bytes: number): string {
   return `message over the ${String(Math.floor(INBOUND_EMAIL_MAX_BYTES / (1024 * 1024)))} MiB inbound limit (${String(bytes)} bytes)`;
-}
-
-/** Cancels the stream at the chunk past the limit, so no oversized buffer is ever assembled. */
-async function readRawBounded(
-  raw: ReadableStream<Uint8Array>,
-  limit: number,
-): Promise<ArrayBuffer | 'too_large'> {
-  const reader = raw.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  for (;;) {
-    const arrived = await reader.read();
-    const value = arrived.value;
-
-    if (arrived.done || value === undefined) break;
-    total += value.byteLength;
-
-    if (total > limit) {
-      await reader.cancel('the inbound message is over its limit');
-
-      return 'too_large';
-    }
-
-    chunks.push(value);
-  }
-
-  const bounded = new Uint8Array(total);
-  let at = 0;
-
-  for (const chunk of chunks) {
-    bounded.set(chunk, at);
-    at += chunk.byteLength;
-  }
-
-  return bounded.buffer;
 }

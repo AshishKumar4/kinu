@@ -168,9 +168,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       },
     });
     Reflect.set(this, '_workspace', undefined);
-    Reflect.set(this, '_slates', undefined);
-    Reflect.set(this, '_slatesLoad', undefined);
-    Reflect.set(this, '_slateBuilds', undefined);
+    Reflect.set(this, '_slateHosting', undefined);
   }
 }
 

@@ -10,6 +10,7 @@ import type { UserDO } from './user-do';
 import { forgetSharesGiven, type ShareRosterAuthority, type SharesGivenEnv } from './shares-given';
 import type { ObjectNamespace } from '@kinu.run/core';
 import {
+  objectNamed,
   confirmsAccountDelete,
   EXPERIENCE_KINDS,
   err, json, safeJson,
@@ -42,7 +43,7 @@ interface AccountVariables extends ApiVariables {
 type AccountEnv = FamilyEnv<AccountRoutesEnv<unknown>, AccountVariables>;
 
 function account(c: Context<AccountEnv>): ShareRosterAuthority & AccountAuthority {
-  return c.env.UserDO.get(c.env.UserDO.idFromName(c.get('identity').userId));
+  return objectNamed(c.env.UserDO, c.get('identity').userId);
 }
 
 export const accountRoutes = new Hono<AccountEnv>();

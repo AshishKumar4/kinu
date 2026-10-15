@@ -10,6 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
+  objectNamed,
   ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
@@ -37,7 +38,7 @@ import { UserDevices, type DeviceCancellationOutcome } from './devices';
 import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
-import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-servers';
+import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall, type McpToolSurface } from './mcp-servers';
 import { UserAccountMemory } from './account-memory';
 import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, SqlValue } from '@kinu.run/core';
 import {
@@ -139,7 +140,7 @@ export class UserDO extends Agent<Env> {
   private readonly shareCards = new ShareCardJobs({
     sql: this.ctx.storage.sql,
     owner: () => ({ userId: this.name, email: this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '' }),
-    recipient: (userId) => this.env.UserDO.get(this.env.UserDO.idFromName(userId)),
+    recipient: (userId) => objectNamed(this.env.UserDO, userId),
     accountOf: (email) => accountIdFor(this.env, email),
     caller: () => ownerCaller(this.env),
   });
@@ -586,7 +587,7 @@ export class UserDO extends Agent<Env> {
     return this.mcpServers.userMcp_remove(caller, id);
   }
 
-  userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
+  userMcp_toolDescriptors(caller: UserCaller): Promise<McpToolSurface> {
     return this.mcpServers.userMcp_toolDescriptors(caller);
   }
 
@@ -859,7 +860,7 @@ export class UserDO extends Agent<Env> {
           this.sqlx(`INSERT INTO workspace_overview_nudges (name, attempts, next_at) VALUES (?, ?, ?)
             ON CONFLICT (name) DO UPDATE SET attempts = excluded.attempts, next_at = excluded.next_at`,
           name, attempts, Date.now() + recoveryBackoffMs(attempts));
-          await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)).requestOverviewPush();
+          await objectNamed(this.env.OrchestratorAgent, name).requestOverviewPush();
         } catch (cause) {
           diagnostics.failure('roster.overview_nudge_failed', toKinuError({
             doing: 'asking a workspace with no tile for its first one', cause, otherwise: 'unavailable',

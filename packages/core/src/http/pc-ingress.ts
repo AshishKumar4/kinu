@@ -33,6 +33,12 @@ export interface ObjectNamespace<Id, Stub> {
   get(id: Id): Stub;
 }
 
+/** The object `name` names in `namespace`: the platform's `getByName`, spelled over the two calls every namespace port
+ *  (a test's included) answers. */
+export function objectNamed<Id, Stub>(namespace: ObjectNamespace<Id, Stub>, name: string): Stub {
+  return namespace.get(namespace.idFromName(name));
+}
+
 export type PcUserNamespace<Id> = ObjectNamespace<Id, PcUserStub>;
 
 export interface PcIngressEnv<Id> extends OwnerCapabilityEnv {

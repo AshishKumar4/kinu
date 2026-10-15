@@ -110,7 +110,7 @@ function attachmentSize(content: ArrayBuffer | Uint8Array | string): number {
     : content.length;
 }
 
-export async function parseInboundMime(raw: ArrayBuffer): Promise<ParsedInboundEmail> {
+export async function parseInboundMime(raw: ArrayBuffer | Uint8Array): Promise<ParsedInboundEmail> {
   const parsed = await (await import('postal-mime')).default.parse(raw);
 
   const text = inboundBody(parsed.text, parsed.html);

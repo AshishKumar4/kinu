@@ -1,6 +1,4 @@
 import { Cause, Effect, Exit } from 'effect';
-import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
-import { logDoCallRetry } from './obs/do-call-retry';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
@@ -11,21 +9,21 @@ import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 import {
   Agent, callable, getCurrentAgent,
   type AgentContext, type Connection, type ConnectionContext,
-  type WSMessage,
 } from "agents";
 import {
+  objectNamed,
   inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
-  durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, ERROR_STATUS, LiveWorkers, type Repair,
+  durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
-import type { AccountMemory, AccountProposer, Fact } from '@kinu.run/core';
+import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
-import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
+import { MessageType } from "agents/chat";
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,
 } from './chat-transport';
@@ -34,20 +32,17 @@ import {
   CLI_SCOPES_HEADER,
   SESSION_BEARER_HEADER,
   SESSION_AUTHORITY_REVOKED,
+  CLI_AUTHORITY_REVOKED,
   WEBSOCKET_POLICY_CLOSE,
   cliBearerConnectionTag,
   cliBearerFromTags,
   cliScopesConnectionTag,
   sessionBearerConnectionTag,
   sessionBearerFromTags,
-  rejectOutOfScopeRpc,
-  rpcFrameOf,
-  type CliSocketBearer,
-  type RpcFrame,
 } from "./cli/rpc-gate";
-import { codemodeSurface, HeldReads, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
+import { codemodeSurface, HeldReads, PAGE_KEEPALIVE, readsWrittenBy, ROSTER_READS, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { attempt, attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -81,7 +76,7 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
-  EvolutionLanes, drainPendingEvents, ActorAdvisor, turnLedgers, type SeatedActor, type DynamicDelegate,
+  EvolutionLanes, drainPendingEvents, ActorAdvisor, turnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -191,11 +186,11 @@ import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallRe
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateDispatchContext } from "./slates/host";
-import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
-import type { UserDO } from "./user/user-do";
+import { diagnostics, KinuError, refusalOf, toKinuError, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { McpToolSurface } from "./user/mcp-servers";
-import type { UserDoRpcMethod } from "./rpc-surface";
-import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
+import { AccountReads, type UserHubClient } from "./account-reads";
+import { gatedClientHandlers } from "./client-socket-gate";
+import { isWorkspaceTerminal } from "@kinu.run/core";
 import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
@@ -204,10 +199,8 @@ import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
-import { Hono, type Context } from 'hono';
 import { AdviceJobs } from './advice-jobs';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
-import { rawPath, rethrow } from './api/context';
 import { callUserMcpTool } from './user-mcp-call';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -229,9 +222,6 @@ interface AsyncTaskOwner {
   promise: Promise<Exit.Exit<void>> | null;
 }
 
-/** Only RPC methods rpc-surface.ts declares reachable; any other is a compile error. */
-type UserHubClient = Pick<UserDO, UserDoRpcMethod>;
-
 /** One actor's half of its job runner. */
 type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
   'store' | 'policy' | 'fiber' | 'inbox' | 'resume' | 'harvest' | 'scheduleResume'> & {
@@ -245,7 +235,6 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
  */
 const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_CATALOG['do.alarm.wall_ms'].limit.value * 9 / 10);
 
-const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
 
 
 /** Text-only: attachment parts are dropped here but still reach the model via
@@ -310,7 +299,6 @@ function compactionLogDetail(message: string, detail: CompactionDetail): string 
   return detail.output === undefined ? message : `${message} ${JSON.stringify(detail.output)}`;
 }
 
-/** The owner's review calls on one hosted agent's plans, answered by its isolate. */
 /** Agents' questions to the owner, each in its own isolate (D9), the workspace agent's included: answered by the asking
  *  agent's id. */
 export interface HostedOwnerQuestions {
@@ -378,7 +366,6 @@ interface TurnMemoryReads {
   readonly accountFacts?: readonly Fact[];
 }
 
-/** Where a slate's `connectBrowser`, `pageTools` and `callPageTool` run: in its class's isolate, which holds the socket. */
 /**
  * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
@@ -435,46 +422,6 @@ export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 /** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
 export function unownedWorkspace(): KinuError {
   return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
-}
-
-/** One read held until dropped; a failed read is not held, so the next need asks again. */
-export class HeldRead<A> {
-  #held: Promise<A> | null = null;
-  #value: A | undefined = undefined;
-
-  get(read: () => Promise<A>): Promise<A> {
-    const held = this.#held ?? read();
-
-    this.#held = held;
-
-    return settle(attempt({ doing: 'reading what the account says', otherwise: 'unavailable' }, () => held).pipe(
-      Effect.tap((value) => Effect.sync(() => { if (this.#held === held) this.#value = value; })),
-      Effect.tapError(() => Effect.sync(() => { if (this.#held === held) this.#held = null; })),
-    ));
-  }
-
-  /** Reads again, holding what it held until the new read answers; a failed read leaves that standing. */
-  again(read: () => Promise<A>): Promise<A> {
-    this.#held = null;
-
-    return this.get(read);
-  }
-
-  /** What it holds once read; none until a first read answers. */
-  get current(): A | undefined {
-    return this.#value;
-  }
-
-  /** Holds what the account already said. */
-  hold(value: A): void {
-    this.#held = Promise.resolve(value);
-    this.#value = value;
-  }
-
-  drop(): void {
-    this.#held = null;
-    this.#value = undefined;
-  }
 }
 
 export abstract class ActorAgent extends Agent<Env> {
@@ -657,34 +604,12 @@ export abstract class ActorAgent extends Agent<Env> {
     initTerminalEffectTable(execRaw);
   }
 
-  /** Spliced between `agents` and `web` so provider order (and the LLM-visible type description)
-   *  is stable across actor kinds. */
   /** `agent.*`, its own lifecycle: only the workspace's main actor has one. */
   protected agentSelf(): AgentSelfHost | null { return null; }
 
   protected abstract get engine(): EvolutionEngine;
 
   protected abstract notifyOwner(subject: string, body: string): void;
-
-  /** Socket-only RPC policy: DO stub calls bypass onMessage, so trusted worker callers keep
-   *  methods denied to client sockets. */
-  protected isClientRpcMethodDenied(_method: string): boolean { return false; }
-
-  private clientRpcRefusal(connection: Connection, rpc: RpcFrame): string | null {
-    if (this.isClientRpcMethodDenied(rpc.method)) return `${rpc.method} is not available from client connections.`;
-    const id = actorFromConnectionTags(connection.tags);
-
-    if (id === null) return null;
-    const name = this.hostedWindowName(id);
-    // The SDK runs any array of arguments; a window's must be JSON values.
-    const args = v.safeParse(v.array(JsonValueSchema), rpc.args);
-
-    if (name === null) return `${rpc.method} from a window whose agent this workspace no longer holds.`;
-
-    if (!args.success) return `${rpc.method} from ${name}'s window carries arguments that are not JSON values.`;
-
-    return hostedWindowMay(rpc.method, args.output, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
-  }
 
   private addressedActor(): string | null {
     const { connection } = getCurrentAgent();
@@ -784,6 +709,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace's one actor host; every logical actor is acquired from it over this object's SQL.
    * Abstract because it is built from root state this base class does not hold. */
   protected abstract actorHost(): ActorHost<CFSeat>;
+
+  /** The workspace agent's stores, bound as its root actor. */
+  protected rootBound(): BoundActor {
+    return this.actorHost().bindStores(actorReferenceOf(this.actorHandle()));
+  }
 
   /** Read directly by the inspection path and slate descent, which resolve actors by name. */
   protected abstract actorDirectoryStore(): WorkspaceActorDirectory;
@@ -885,7 +815,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected subordinateRuntime(): SubordinateRuntime {
     this._subordinateRuntime ??= hostedSubordinateRuntime(
       this.hostedSeams(),
-      () => this.actorHost().bindStores(actorReferenceOf(this.actorHandle())),
+      () => this.rootBound(),
     );
 
     return this._subordinateRuntime;
@@ -949,7 +879,7 @@ export abstract class ActorAgent extends Agent<Env> {
     getOwnerUserId: () => this.getOwnerUserId(),
     getUserCaller: () => this.userCaller(),
     // Asked of the same UserDO the registry reads; held as `accountSettingsAtOpen` keeps it current.
-    getCredentialsRevision: () => this.credentialsRevision(),
+    getCredentialsRevision: () => this.account.credentialsRevision(),
     onProviderWait: (info) => { this.noteProviderWait(info); },
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts?.[provider],
@@ -1010,137 +940,31 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return agent instanceof ActorAgent ? agent.workspaceName() : '';
   }
+  /** Puts the client gate (client-socket-gate.ts) in front of the Agent base's socket and request handlers. */
   protected installClientMessageGate(): void {
-    const dispatchMessage = this.onMessage.bind(this);
-    this.onMessage = async (connection, message) => {
-      if (await this.refuseRevokedSocketAuthority(connection, message)) return;
-      const terminal = await this.terminalFor(connection);
+    const gated = gatedClientHandlers({
+      storageRefusal: () => this.storageRefusal,
+      runtimeRefusal: () => this.actorRuntimeRefusal(),
+      terminalFor: (connection) => this.terminalFor(connection),
+      hostedWindowName: (actorId) => this.hostedWindowName(actorId),
+      chatRoomFor: (connection) => this.chatRoomFor(connection),
+      history: async (hosted) => await (hosted === null ? this.chatTransport.wire.history() : this.hostedChatWire(hosted)?.history()),
+      overviewChanged: () => { this.overviewChanged(); },
+      connectionOpened: () => { this.connectionOpened(); },
+      lastConnectionClosed: () => { this.lastConnectionClosed(); },
+      turnClaimFrame: () => this.turnClaimFrame(),
+      connections: () => this.getConnections(),
+      ownerHub: () => this.requireOwnerUserDO(),
+      caller: () => this.userCaller(),
+      workspace: () => this.name,
+    }, {
+      onMessage: this.onMessage.bind(this), onConnect: this.onConnect.bind(this), onClose: this.onClose.bind(this), onRequest: this.onRequest.bind(this),
+    });
 
-      if (terminal) {
-        await this.forwardTerminalFrame(terminal, connection, message);
-
-        return;
-      }
-
-      const rejection = rejectOutOfScopeRpc(connection.tags, message);
-
-      if (rejection) {
-        connection.send(rejection);
-
-        return;
-      }
-
-      const rpc = rpcFrameOf(message);
-      const refusal = rpc === null ? null : this.clientRpcRefusal(connection, rpc);
-
-      if (rpc && refusal !== null) {
-        connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: refusal }));
-
-        return;
-      }
-
-      const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;
-      const unavailable = this.actorRuntimeRefusal();
-      const inspection = rpc && (requiredRpcAccess(rpc.method) === 'workspace.read' || rpc.method === 'inspectSubordinate' || rpc.method === 'exportWorkspaceArchive');
-
-      if (unavailable && !inspection) {
-        if (rpc) connection.send(JSON.stringify({ ...unavailable, type: 'rpc', id: rpc.id, success: false }));
-        else if (event?.type === 'chat-request' || event?.type === 'stream-resume-ack') {
-          connection.send(JSON.stringify({ reason: unavailable.reason, type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: unavailable.error, done: true, error: true }));
-        } else connection.send(JSON.stringify({ ...unavailable, type: 'error' }));
-
-        return;
-      }
-
-      // Chat frames go to the room; other frames (RPC, state sync) are the Agent base's.
-      // A frame for an actor no longer hosted here is refused.
-      if (v.is(v.string(), message)) {
-        const room = this.chatRoomFor(connection);
-
-        if (room === null) {
-          connection.send(JSON.stringify({ type: 'error', error: 'The actor this connection addressed is no longer hosted here.' }));
-
-          return;
-        }
-
-        if (await room.onMessage(connection, message)) return;
-      }
-
-      await dispatchMessage(connection, message);
-
-      if (rpc !== null && rpcMovesOverview(rpc.method)) this.overviewChanged();
-    };
-
-    const baseOnConnect = this.onConnect.bind(this);
-    const baseOnClose = this.onClose.bind(this);
-
-    this.onConnect = async (connection, ctx) => {
-      if (await this.refuseRevokedSocketAuthority(connection, '')) return;
-
-      // Before anything reads the store.
-      if (this.storageRefusal !== undefined) {
-        connection.send(JSON.stringify({
-          type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: 'storage-refused', reason: this.storageRefusal.code,
-          body: this.storageRefusal.message, done: true, error: true,
-        }));
-
-        return;
-      }
-
-      this.connectionOpened();
-
-      await baseOnConnect(connection, ctx);
-
-      const terminal = await this.terminalFor(connection);
-
-      if (terminal) {
-        await terminal.attachTerminal(connection);
-
-        return;
-      }
-
-      // Claim frames reach only tabs connected at a change: a root tab away at the settle hears the claim here (#30).
-      if (actorFromConnectionTags(connection.tags) === null) sendIfOpen(connection, this.turnClaimFrame());
-      await this.chatRoomFor(connection)?.onConnect(connection);
-    };
-
-    this.onClose = async (connection, code, reason, wasClean) => {
-      if (this.storageRefusal !== undefined) return await baseOnClose(connection, code, reason, wasClean);
-      const terminal = await this.terminalFor(connection);
-
-      if (terminal) terminal.terminalClose(connection);
-      else this.chatRoomFor(connection)?.onClose(connection);
-      await baseOnClose(connection, code, reason, wasClean);
-
-      // Exclude the closing socket's id explicitly; the platform's state for it is not guaranteed.
-      for (const other of this.getConnections()) if (other.id !== connection.id) return;
-
-      this.lastConnectionClosed();
-    };
-
-    const dispatchRequest = this.onRequest.bind(this);
-    const requests = new Hono({ getPath: rawPath });
-
-    requests.use('*', async (_c, next) => (this.storageRefusal === undefined
-      ? next()
-      : Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] })));
-
-    // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
-    const seed = async (c: Context): Promise<Response> => {
-      const hosted = hostedActorRoute(c.req.path) === null ? null : c.req.header(HOSTED_ACTOR_ID_HEADER) ?? '';
-      const history = await (hosted === null ? this.chatTransport.wire.history() : this.hostedChatWire(hosted)?.history());
-
-      if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
-
-      return Response.json(history);
-    };
-
-    requests.all('/get-messages', seed);
-    requests.all('/:prefix{.*}/get-messages', seed);
-    requests.notFound(async (c) => dispatchRequest(c.req.raw));
-    requests.onError(rethrow);
-
-    this.onRequest = async (request) => requests.fetch(request);
+    this.onMessage = gated.onMessage;
+    this.onConnect = gated.onConnect;
+    this.onClose = gated.onClose;
+    this.onRequest = gated.onRequest;
   }
   /** Lazy: `actorHandle()` resolves the directory row the constructor creates, after field init. */
 
@@ -1214,7 +1038,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _terminalTransitions: TerminalTransitions | null = null;
 
-  /** Core's once-only lifecycle; the DO supplies only effect bodies and the wake, as the CLI does. */
   /** Every settled turn's close this activation began has ended; an activation that began none has none to wait for. */
   protected async terminalClosed(): Promise<void> {
     await this._terminalTransitions?.idle();
@@ -1479,98 +1302,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return { closed };
   }
 
-  /**
-   * Upgrade checks authority once and hibernated sockets resume without it, so re-check per frame.
-   * Asks the owning UserDO (no cached verdict); an unreachable UserDO refuses the frame.
-   */
-  private async refuseRevokedSocketAuthority(connection: Connection, message: WSMessage): Promise<boolean> {
-    const denial = await this.socketAuthorityDenial(connection);
-
-    if (denial === null) return false;
-    const rpc = rpcFrameOf(message);
-
-    // The rpc reply carries the authority's reason so a pending call fails instead of hanging;
-    // the close reason is the user-facing instruction for the token kind.
-    if (rpc) connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial.why }));
-    connection.close(WEBSOCKET_POLICY_CLOSE, denial.close);
-    diagnostics.event('auth.socket_frame_denied', { outcome: 'denied', reason: 'authority_not_live' });
-
-    return true;
-  }
-
-  /** Denial reason plus client instruction, or null when the connection may act.
-   *  Bearer and session each fail closed; a connection carrying both is refused by whichever died. */
-  private async socketAuthorityDenial(
-    connection: Connection,
-  ): Promise<{ why: string; close: string } | null> {
-    const bearer = cliBearerFromTags(connection.tags);
-
-    if (bearer !== null) {
-      const denial = await this.cliBearerDenial(bearer);
-
-      if (denial !== null) return { why: denial, close: CLI_AUTHORITY_REVOKED };
-    }
-
-    const session = sessionBearerFromTags(connection.tags);
-
-    if (session !== null) {
-      const denial = await this.sessionBearerDenial(session);
-
-      // A session denial is already an instruction, so it doubles as the close reason.
-      if (denial !== null) return { why: denial, close: denial };
-    }
-
-    return null;
-  }
-
-  /** Unreadable tag or unreachable UserDO both refuse: authority must be confirmable. */
-  private async sessionBearerDenial(session: { tokenHash: string } | { unreadable: true }): Promise<string | null> {
-    if ('unreadable' in session) {
-      return 'This connection carries no readable session. Reload the page to sign in again.';
-    }
-
-    try {
-      const caller = await this.userCaller();
-
-      const verified = await idempotent('verifySocketSession', () => this.requireOwnerUserDO(),
-        (stub) => stub.verifySocketSession(caller, session.tokenHash), { onRetry: logDoCallRetry });
-
-      return verified.live ? null : SESSION_AUTHORITY_REVOKED;
-    } catch (cause) {
-      diagnostics.failure('auth.session_bearer_check_failed', toKinuError({
-        doing: 'checking whether a websocket\'s browser session is still live',
-        cause,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-
-      return 'This connection\'s authorization could not be confirmed. Reload the page to sign in again.';
-    }
-  }
-
-  /** Denial reason for the CLI bearer, or null. A generation newer than the account's is refused. */
-  private async cliBearerDenial(bearer: CliSocketBearer): Promise<string | null> {
-    if (!bearer.readable) return 'This connection carries no readable authorization. Reconnect with: kinu auth';
-
-    try {
-      const caller = await this.userCaller();
-
-      const verified = await idempotent('verifyCliSocketBearer', () => this.requireOwnerUserDO(),
-        (stub) => stub.verifyCliSocketBearer(caller, bearer.tokenHash), { onRetry: logDoCallRetry });
-
-      if (verified.live && verified.generation <= bearer.generation) return null;
-
-      return verified.error ?? CLI_AUTHORITY_REVOKED;
-    } catch (cause) {
-      diagnostics.failure('auth.cli_bearer_check_failed', toKinuError({
-        doing: 'checking whether a websocket\'s CLI bearer is still live',
-        cause,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-
-      return 'This connection\'s authorization could not be confirmed. Reconnect with: kinu auth';
-    }
-  }
-
   /** Scoped access-token connections may chat but never write agent state. */
   override shouldConnectionBeReadonly(connection: Connection, ctx: ConnectionContext): boolean {
     return this.actorRuntimeRefusal() !== null || super.shouldConnectionBeReadonly(connection, ctx)
@@ -1644,23 +1375,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return Promise.resolve(null);
   }
 
-  /**
-   * Validates the frame at the client boundary; a socket sending any other shape is closed with the reason.
-   */
-  private async forwardTerminalFrame(terminal: WorkspaceTerminal, connection: Pick<Connection, 'send' | 'close'>, message: WSMessage): Promise<void> {
-    const frame = v.is(v.string(), message)
-      ? v.safeParse(WorkspaceTerminalInputSchema, tolerate(() => JSON.parse(message), 'malformed-input'))
-      : null;
-
-    if (frame === null || !frame.success) {
-      connection.close(WEBSOCKET_POLICY_CLOSE, 'terminal frame refused: not an input or resize frame');
-
-      return;
-    }
-
-    await terminal.terminalFrame(connection, JSON.stringify(frame.output));
-  }
-
   /** Excludes terminal sockets: they carry only shell frames, not the actor protocol. */
   override broadcast(message: string | ArrayBuffer | ArrayBufferView, without?: string[]): void {
     const terminals: string[] = [];
@@ -1694,7 +1408,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace agent's deliveries: its signals, and its events bound to a turn, committed then crossed. */
   protected abstract workspaceAgentDeliveries(): AgentOrchestratorDeps['deliveries'];
 
-  /** The owner's Stop of main's chat: unseen steers stay queued and rerun. */
   /** The owner's Stop of an agent: nothing it was owed or had queued runs after it. */
   protected abstract stopAgent(actorId: string): Promise<void>;
 
@@ -2145,15 +1858,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const runId = currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID);
 
     settleLoggedSync('event.provider_wait_emit_failed', { doing: 'recording a provider_wait run event', otherwise: 'io' }, () => {
-      this.eventRecorder.emit(runId, {
-        type: 'provider_wait',
-        provider: info.provider,
-        waitMs: info.waitMs,
-        attempt: info.attempt,
-        source: info.source,
-        ...(info.modelId !== undefined && { modelId: info.modelId }),
-        ...(info.status !== undefined && { status: info.status }),
-      });
+      this.eventRecorder.emit(runId, { type: 'provider_wait', ...info });
     }, { provider: info.provider });
 
     const turn = activeOperationProfile();
@@ -2161,9 +1866,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (turn === undefined || turn.turnId === WORKSPACE_RUN_ID) return;
     const room = turn.actor.actorId === this.actorHandle().actorId ? null : turn.actor.actorId;
 
-    this.broadcastToActor(room, JSON.stringify({
-      type: 'provider_wait', provider: info.provider, modelId: info.modelId, waitMs: info.waitMs, attempt: info.attempt, source: info.source, status: info.status,
-    }));
+    this.broadcastToActor(room, JSON.stringify({ type: 'provider_wait', ...info }));
   }
 
   // EventsHub primitives. Spec: docs/ARCHITECTURE.md — "Events and ingress"
@@ -2758,7 +2461,7 @@ export abstract class ActorAgent extends Agent<Env> {
         case 'mcp': {
           // The role admits MCP tools by descriptor key, same as `toolAllowed(d.toolKey)` in native turns.
           const { stub, caller } = yield* Effect.promise(async () => this.userHub());
-          const surface = async (): Promise<McpToolSurface> => v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
+          const surface = async (): Promise<McpToolSurface> => v.parse(McpToolSurfaceSchema, await stub.userMcp_toolDescriptors(caller));
           let offered = yield* Effect.promise(surface);
 
           // A slate call is not a turn opening: a server the user object is still dialling is waited for, once.
@@ -2984,7 +2687,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
-        }, this.agentStores(hosted.handle.actorId).conversations(), this.accountMemoryFor(hosted.record.name));
+        }, this.agentStores(hosted.handle.actorId).conversations(), this.account.ownedMemory({ by: 'agent', agent: hosted.record.name }));
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
         const authority = await this.hostedSlateAuthority(hosted, requested, providers, Object.keys(surface.native));
@@ -3044,7 +2747,7 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       memory: () => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore, facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
-        account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
+        account: this.account.memory({ by: 'agent', agent: this.actorHandle().name }),
       }),
       files: () => {
         // The turn the program runs in, else ledgers of the program's own.
@@ -3098,7 +2801,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const userId = this.getOwnerUserId();
 
     if (!userId) return null;
-    const stub: UserHubClient = this.env.UserDO.get(this.env.UserDO.idFromName(userId));
+    const stub: UserHubClient = objectNamed(this.env.UserDO, userId);
 
     return stub;
   }
@@ -3122,7 +2825,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected requireOwnerUserDO(): UserHubClient {
-    return this.env.UserDO.get(this.env.UserDO.idFromName(this.requireOwner()));
+    return objectNamed(this.env.UserDO, this.requireOwner());
   }
 
   /** Throws when no capability token exists; an unclaimed workspace reaches nothing. */
@@ -3140,45 +2843,10 @@ export abstract class ActorAgent extends Agent<Env> {
     return { stub: this.requireOwnerUserDO(), caller: await this.userCaller() };
   }
 
-  /**
-   * The account's memory as `proposer` reaches it, through the owner's user object; each call finds the hub then, so a
-   * toolset built before the workspace was claimed reaches it once it is. `proposer` is who a proposal names.
-   */
-  protected accountMemory(proposer: AccountProposer): AccountMemory {
-    return {
-      facts: async () => {
-        const { stub, caller } = await this.userHub();
-
-        return await stub.accountMemory_facts(caller);
-      },
-      searchNotes: async (query, limit) => {
-        const { stub, caller } = await this.userHub();
-
-        return await stub.accountMemory_searchNotes(caller, query, limit);
-      },
-      propose: async (proposal, delivery) => {
-        const { stub, caller } = await this.userHub();
-
-        return await stub.accountMemory_propose(caller, proposal, proposer, delivery);
-      },
-    };
-  }
-
-  /** The account's memory for the agent named `agent`, or none where this workspace has no owner to hold it. */
-  protected accountMemoryFor(agent: string): AccountMemory | undefined {
-    return this.getOwnerUserId() === null ? undefined : this.accountMemory({ by: 'agent', agent });
-  }
-
-  /** The account's facts for one turn's memory block; a user object that does not answer costs the turn that block's
-   *  account lines, never the turn. */
-  accountFactsForTurn(): Promise<readonly Fact[]> {
-    return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.accountMemory({ by: 'agent', agent: this.actorHandle().name }).facts()),
-      (failure) => Effect.sync(() => {
-        diagnostics.failure('memory.account_read_failed', failure, { workspace: this.name });
-
-        return [];
-      })));
-  }
+  /** What the owner's account says that a turn reads, asked of its user object as this workspace. */
+  protected readonly account = new AccountReads({
+    hub: () => this.userHub(), owned: () => this.getOwnerUserId() !== null, workspace: () => this.name,
+  });
 
   /** `record` lets core emit the `profile_resolution` run event; this backend only picks where it goes. */
   protected async profileInputs(): Promise<ProfileAuthorityInputs> {
@@ -3190,52 +2858,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected profileCatalog(): Promise<ProfileCatalogEnvelope> {
-    return this.heldCatalog.get(() => this.askAccount((stub, caller) => stub.getWorkspaceProfileCatalog(caller)));
-  }
-
-  /** One read of the account, as this workspace: the account's hub and the caller it reads as. */
-  private async askAccount<A>(read: (stub: UserHubClient, caller: UserCaller) => Promise<A>): Promise<A> {
-    const { stub, caller } = await this.userHub();
-
-    return await read(stub, caller);
-  }
-
-  /**
-   * The account's reads a turn makes, held under their refresh rule (design v2 §3, §8): read at their first need, and read
-   * again only once the account's settings moved: it says so to a workspace awake when they change
-   * (`accountReadsExpire`), and one at rest, which a change does not wake, asks as a turn opens
-   * (`accountSettingsAtOpen`).
-   */
-  private readonly heldRevision = new HeldRead<number>();
-
-  private readonly heldCatalog = new HeldRead<ProfileCatalogEnvelope>();
-
-  /** The account says its model settings changed: what it said before is read again at its next need. */
-  protected accountReadsExpire(): void {
-    this.heldRevision.drop();
-    this.heldCatalog.drop();
-  }
-
-  /**
-   * A turn opens: one call asks the account its settings revision, and the catalog held here is read again only if its
-   * version moved; the credentials' revision is the answer itself. A turn opens on what the account says now, though a
-   * change made while this workspace rested never reached it.
-   */
-  protected async accountSettingsAtOpen(): Promise<void> {
-    const now = await this.askAccount((stub, caller) => stub.getSettingsRevision(caller));
-
-    if (this.heldCatalog.current?.version !== now.catalog) this.heldCatalog.drop();
-    this.heldRevision.hold(now.credentials);
-  }
-
-  /** The account's credentials revision a turn's open last read; null before one opened in this activation. */
-  protected openedCredentialsRevision(): number | null {
-    return this.heldRevision.current ?? null;
-  }
-
-  /** The account's credentials revision as this workspace holds it, read at its first need. */
-  protected credentialsRevision(): Promise<number> {
-    return this.heldRevision.get(() => this.askAccount((stub, caller) => stub.getCredentialsRevision(caller)));
+    return this.account.catalog();
   }
 
   /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
@@ -3654,11 +3277,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._cfHeadRuntime;
   }
 
-  /**
-   * `hostNodeSeat` (`hosted-actors.ts`) is requested per node: search deps are shallow-copied
-   * per child, so a shared seat would give a whole wave one claim ledger and one loop pointer.
-   */
-
   /** An actor's transcript as this object's stores bind it. */
   protected abstract transcriptFor(actor: ActorHandle): SessionTranscript;
 
@@ -3673,7 +3291,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * means. No owner or no identity, no user-level tools: checked rather than caught, as userCaller() throws only when no
    * token was issued, and a real read failure must not silently empty the surface.
    */
-  protected userMcpDescriptors(): Promise<PromiseSettledResult<string>> | null {
+  protected userMcpDescriptors(): Promise<PromiseSettledResult<McpToolSurface>> | null {
     if (!this.getOwnerUserId() || !this.workspaceCapabilityToken()) return null;
     const asked = this.userCaller().then(async (caller) => await this.requireOwnerUserDO().userMcp_toolDescriptors(caller));
 
@@ -3701,7 +3319,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (surface.status === 'rejected') throw surface.reason;
 
-          return v.parse(McpToolSurfaceSchema, JSON.parse(surface.value));
+          return v.parse(McpToolSurfaceSchema, surface.value);
         },
         {
           ...read.value.window(),
@@ -3842,7 +3460,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async composeNextRequest(): Promise<ComposedRequest> {
     const history = await this.mainWorkingContext();
     const mode = await this.preparedWorkMode();
-    const root = this.actorHost().bindStores(actorReferenceOf(this.actorHandle()));
+    const root = this.rootBound();
 
     const surface = await this.actorSurface({ ...root, runtime: this.rt }, {
       key: { actorId: root.handle.actorId, turnId: WORKSPACE_RUN_ID, runId: WORKSPACE_RUN_ID },
@@ -4126,7 +3744,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // Also drops the provider registry (caches per-agent OAuth refreshers) so a disconnected
     // provider stops being marked available.
     this.ownedModelServices.invalidate();
-    this.accountReadsExpire();
+    this.account.expire();
   }
 
   // All credentials live in UserDO; providers resolve auth headers through the UserDO stub at

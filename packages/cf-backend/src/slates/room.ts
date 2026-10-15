@@ -1246,7 +1246,7 @@ export class SlateRoom extends DurableObject<Env> {
       const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, holder));
       const caller = yield* attempt({ doing: 'reaching the account', otherwise: 'unavailable' }, async () => ownerCaller(this.env));
       const listed = yield* attempt({ doing: 'reading the connections', otherwise: 'unavailable' }, async () => this.userObject(account).userMcp_toolDescriptors(caller));
-      const surface = v.parse(McpToolSurfaceSchema, JSON.parse(listed));
+      const surface = v.parse(McpToolSurfaceSchema, listed);
 
       return surface.descriptors.find((each) => each.serverName === server.slice('mcp.'.length) && each.name === tool) ?? null;
     });

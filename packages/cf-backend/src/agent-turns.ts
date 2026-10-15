@@ -344,7 +344,6 @@ export class AgentTurns {
     return [...new Set(this.open.values().filter((turn) => turn.request.run !== undefined).map((turn) => turn.reference.actorId))];
   }
 
-  /** The chat is asked whatever the view says: a workspace that reset since its turn began has no view of it. */
   /** Cuts the agent's turns off, its chat's and its run's: each call of theirs still running here ends with them. */
   async interrupt(actorId: string, cutoff: number | null): Promise<void> {
     const reference = this.deps.reference(actorId);

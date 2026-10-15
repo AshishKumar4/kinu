@@ -94,6 +94,7 @@ describe(SUITE, () => {
       id: CASE,
       defect: DEFECT,
       modelCalls: 'expected',
+      budgetMs: 5 * 60_000,
       purpose: 'A precise engineer who builds small reusable tools and uses them rather than '
         + 'describing what they would do.',
       async run({ session }) {

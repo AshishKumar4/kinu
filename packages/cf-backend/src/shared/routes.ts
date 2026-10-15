@@ -4,7 +4,7 @@
  */
 import { Hono } from 'hono';
 import * as v from 'valibot';
-import { err, json, safeJson, type DriveLibrary, type DriveRoomCard, type DriveSlate, type UserCaller } from '@kinu.run/core';
+import { err, json, objectNamed, safeJson, type DriveLibrary, type DriveRoomCard, type DriveSlate, type UserCaller } from '@kinu.run/core';
 import { GALLERY_OBJECT } from '../gallery/gallery-do';
 import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
 import type { AuthIdentity } from '../auth/session';
@@ -26,7 +26,7 @@ sharedRoutes.get('/api/shared', async (c) => json({ body: await library(c.env, c
 sharedRoutes.post('/api/shared/seen', async (c) => {
   const identity = c.get('identity');
 
-  await c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId)).sharesSeen(c.get('owner'), Date.now());
+  await objectNamed(c.env.UserDO, identity.userId).sharesSeen(c.get('owner'), Date.now());
 
   return json({ body: { seen: true } });
 });

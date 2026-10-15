@@ -6,6 +6,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
+  objectNamed,
   nimbusSessionShell, createShellSession,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
@@ -137,7 +138,7 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
   // Narrowed, never copied: a JSRPC stub's methods live behind a Proxy, so `Object.assign` yields `{}`.
   const namespace: RuntimeUserDONamespace = env.UserDO;
 
-  return namespace.get(namespace.idFromName(userId));
+  return objectNamed(namespace, userId);
 }
 
 async function ownerSandboxSize(env: Env, actor: ActorRuntimeIdentity): Promise<BoxSize | null> {

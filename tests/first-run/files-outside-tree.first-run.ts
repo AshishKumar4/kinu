@@ -89,6 +89,7 @@ describe(SUITE, () => {
       id: CASE,
       defect: DEFECT,
       modelCalls: 'none',
+      budgetMs: 5 * 60_000,
       genesis: false,
       purpose: 'A workspace whose files a person opens.',
       async run({ session }) {

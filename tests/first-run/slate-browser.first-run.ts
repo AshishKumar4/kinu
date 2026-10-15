@@ -42,7 +42,7 @@ describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
-      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', budgetMs: 5 * 60_000, genesis: false,
       purpose: 'Disposable slate that drives Chrome and Kitesurf from its class; no model task.',
       async run({ session }) {
         const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /slates/${SLATE}

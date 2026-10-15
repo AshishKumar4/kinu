@@ -3,14 +3,15 @@ import { Database } from 'bun:sqlite';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  buildDrainBatch, DeferredApprovalQueue, DeferredApprovalStore, EventLog, initDeferredApprovalsTable, initEventsHubTables,
-  reviewCommand, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
+  buildDrainBatch, DeferredApprovalQueue, DeferredApprovalStore, DeviceConsentRegistry, DeviceConsentStore, EventLog,
+  initDeferredApprovalsTable, initEventsHubTables, reviewCommand, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
 } from '@kinu.run/core';
+import { initDeviceConsentAsksTable } from '../../packages/core/src/safety/device-consent';
 import { createTestActors, createTestActorsOver, createTestSql, present } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
 import {
-  DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND, HELLO_SLATE_ASK, HELLO_SLATE_ID,
+  CONSENT_ASK, DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND, HELLO_SLATE_ASK, HELLO_SLATE_ID,
   RELAY_MISSION, STANDBY_MISSION, TREE_ASK, TREE_DEEP_WORD, delegationDismissAsk, sayWordMission,
 } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
@@ -256,6 +257,32 @@ const ReplySchema = v.object({ choices: v.tuple([v.object({ message: v.object({
 const WORKSPACE_CALL = { member: 'exec', cwd: '/home/main', background: true } as const;
 
 /** The wake the product sends when the owner decides `command`, parked where the workspace shell runs it. */
+/** The turn the owner's consent answer on a device call opens, as the workspace's registry words it. */
+async function consentWake(machine: string, command: string, answer: 'once' | 'deny'): Promise<string> {
+  const db = createTestSql();
+  const woken: string[] = [];
+
+  try {
+    initDeviceConsentAsksTable(db.execRaw);
+
+    const registry = new DeviceConsentRegistry({
+      store: new DeviceConsentStore(db.sql), announce: () => {}, newId: () => 'cons-1',
+      wake: (_actor, signal) => Effect.sync(() => { woken.push(signal.text); }),
+    });
+
+    registry.ask({ deviceId: 'dev-1', deviceLabel: machine, method: 'exec', command, actorId: 'actor-main', epoch: 0 });
+    await registry.resolve('cons-1', answer);
+  } finally {
+    db.close();
+  }
+
+  const [text] = woken;
+
+  if (text === undefined) throw new Error(`answering ${command} woke nobody`);
+
+  return text;
+}
+
 async function decisionWake(command: string, answer: 'approved' | 'denied'): Promise<string> {
   const db = createTestSql();
   const { sql, execRaw } = db;
@@ -534,5 +561,43 @@ describe('a report that lands in a turn at work is not the ask that turn answers
     const word = reported('ask-task-deep01', mission, TREE_DEEP_WORD, 'completed').midTurnText;
 
     expect((await reply([...hired, { role: 'user', content: word }])).content).toBe(TREE_DEEP_WORD);
+  });
+});
+
+// Since c66751bf2 a device call with no binding parks NOT RUN on its consent card, and the owner's answer wakes the agent
+// that asked, which re-issues it once: the scripted agent of each case whose own call parked does so.
+describe('the owner\'s consent answer wakes the agent, which re-issues the call it approves', () => {
+  const parkedOn = (machine: string) => `NOT RUN: using ${machine} from this workspace waits on the owner's consent. You are woken when they answer; do not re-issue it before then.`;
+
+  const shellCall = (id: string, command: string): JsonObject[] => [
+    { role: 'assistant', content: 'Calling shell.', tool_calls: [{ id, type: 'function', function: { name: 'shell', arguments: JSON.stringify({ runtime: 'device', command, why: 'asked' }) } }] },
+    { role: 'tool', tool_call_id: id, content: parkedOn('kinu-first-run-consent') },
+  ];
+
+  const reissued = async (messages: readonly JsonObject[]) => (await reply(messages, ['shell'])).tool_calls?.map((made) => JSON.parse(made.function.arguments));
+
+  test('machine-consent: hostname, approved, is run again on the device', async () => {
+    const wake = await consentWake('kinu-first-run-consent', 'hostname', 'once');
+
+    expect(await reissued([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'assistant', content: 'HOST parked' }, { role: 'user', content: wake }]))
+      .toEqual([expect.objectContaining({ runtime: 'device', command: 'hostname' })]);
+    // Spliced into the turn that parked, as it lands while that turn is at work.
+    expect(await reissued([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'user', content: wake }]))
+      .toEqual([expect.objectContaining({ runtime: 'device', command: 'hostname' })]);
+  });
+
+  test('device-job-output: the job command, approved, is run again on the device', async () => {
+    const wake = await consentWake('kinu-first-run-devjob', DEVICE_JOB_COMMAND, 'once');
+
+    expect(await reissued([{ role: 'user', content: DEVICE_JOB_ASK }, ...shellCall('j1', DEVICE_JOB_COMMAND), { role: 'assistant', content: 'JOB NONE' }, { role: 'user', content: wake }]))
+      .toEqual([expect.objectContaining({ runtime: 'device', command: DEVICE_JOB_COMMAND })]);
+  });
+
+  test('a denial re-issues nothing, nor does an approval of a call this agent never asked for', async () => {
+    const denied = await consentWake('kinu-first-run-consent', 'hostname', 'deny');
+    const elsewhere = await consentWake('kinu-first-run-link', 'printf ok', 'once');
+
+    expect(await reissued([{ role: 'user', content: CONSENT_ASK }, ...shellCall('c1', 'hostname'), { role: 'assistant', content: 'HOST parked' }, { role: 'user', content: denied }])).toBeUndefined();
+    expect(await reissued([{ role: 'user', content: elsewhere }])).toBeUndefined();
   });
 });

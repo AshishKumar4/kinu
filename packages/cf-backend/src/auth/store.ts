@@ -15,7 +15,7 @@ import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/ident
 import type { UserDO } from '../user/user-do';
 import type { BrowserSessionIdentity, LiveBrowserSession } from '../user/sessions';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { randomToken, sha256Hex } from '@kinu.run/core';
+import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
@@ -250,7 +250,7 @@ export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): P
 
 /** The one authority on which of a user's sessions are live. */
 function sessionAuthority<Id>(env: AuthStoreEnv<Id>, userId: string): SessionAuthority {
-  return env.UserDO.get(env.UserDO.idFromName(userId));
+  return objectNamed(env.UserDO, userId);
 }
 
 function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number): Effect.Effect<AuthIdentity, KinuError> {

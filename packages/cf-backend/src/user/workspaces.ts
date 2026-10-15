@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
 import {
+  objectNamed,
   autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry, workspaceTitleProblem,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
@@ -85,7 +86,7 @@ export class UserWorkspaces {
       }
 
       commitWorkspaceCapability(this.host.ctx.storage.sql, workspaceName, tokenHash);
-      const workspace = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(workspaceName));
+      const workspace = objectNamed(this.host.env.OrchestratorAgent, workspaceName);
       await workspace.installWorkspaceCapability(token);
     })();
 

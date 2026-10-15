@@ -31,7 +31,7 @@ import { evalAbortRoutes } from '../eval/abort-route';
 import { activationRoutes } from './activations-route';
 import { filesRoutes } from '../files-routes';
 import { terminalRouteDeps, terminalRoutes } from '../terminal-route';
-import { routeError, apiPath, beneath, type FamilyEnv } from './context';
+import { routeError, apiPath, beneath, familyMount, type FamilyEnv } from './context';
 import { workspaceGate } from './workspace';
 
 const app = new Hono<FamilyEnv<Env>>({ getPath: apiPath });
@@ -39,12 +39,8 @@ const app = new Hono<FamilyEnv<Env>>({ getPath: apiPath });
 /** The SDK's one binding for every workspace family. */
 const workspaceAgent = (env: Env) => (name: string) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
-/** Checks each family's declared bindings against `Env`. */
-function mount<Bindings extends object, Variables extends object>(
-  family: Hono<FamilyEnv<Bindings, Variables>> & (Env extends Bindings ? unknown : never),
-): void {
-  app.route('/', family);
-}
+/** Each family mounts at the root, its declared bindings checked against `Env`. */
+const mount = familyMount(app);
 
 // Access before every bypass on the admin API.
 app.use(CONTROL_PLANE_API_ROUTE, controlPlaneAccess);

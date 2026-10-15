@@ -31,7 +31,7 @@ export { ROOT_SLATE_CALLER, slateCallerKey, type SlateCaller, type SlateCallerHo
 
 export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type SlateProcessPorts, type RunnableSlateSource } from './processes';
 
-export { SlateController, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
+export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
 
 export { answer as slateAnswer } from './controller';
 

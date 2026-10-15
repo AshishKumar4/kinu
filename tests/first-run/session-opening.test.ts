@@ -22,7 +22,7 @@ test('session opening failures remain attempted cases with explicitly unavailabl
     let ran = false, sameError = false;
     try {
       await runFirstRunCase({ open: async () => { throw failure; } }, {
-        id: 'slate', purpose: 'opening failure probe', modelCalls: 'expected',
+        id: 'slate', purpose: 'opening failure probe', modelCalls: 'expected', budgetMs: 5 * 60_000,
         run: async () => { ran = true; return []; },
       }, observations);
     } catch (error) { sameError = error === failure; }
@@ -80,7 +80,7 @@ test('a teardown that fails is reported beside the case\'s own failure, never in
     let thrown = null;
     try {
       await runFirstRunCase({ open: async () => session }, {
-        id: 'slate', purpose: 'teardown probe', modelCalls: 'none',
+        id: 'slate', purpose: 'teardown probe', modelCalls: 'none', budgetMs: 5 * 60_000,
         run: async () => { throw new Error('the turn failed on its closed socket'); },
       }, []);
     } catch (error) { thrown = error; }

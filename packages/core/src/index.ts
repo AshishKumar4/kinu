@@ -1991,6 +1991,8 @@ export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks 
 
 export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
+export { OverviewPush, type OverviewPushHost } from './read-models/overview-push';
+
 export {
   AccountMemoryFrameSchema, CredentialSummarySchema, ModelMenuResponseSchema, ProviderCatalogEntrySchema,
   RosterFrameSchema, RosterPageSchema, UserProfileSchema, WorkspaceEntrySchema,
@@ -2510,7 +2512,7 @@ export {
 } from './execution/node-home';
 
 export {
-  type ObjectNamespace,
+  objectNamed, type ObjectNamespace,
   type PcUserNamespace,
   type PcIngressEnv,
   handlePcConnect,

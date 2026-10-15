@@ -8,8 +8,13 @@
  * nothing but this row's own turnover: the fixture account ({@link FIXTURE}) holds a workspace with a file, its chat,
  * a share received from the sender account's slate ({@link SENDER}), and a machine joined to the workspace. The check
  * signs both in and finds each as the previous deploy left it: its roster, the chat's history, the file's bytes, the
- * share, the machine. What it looks for is in a manifest the seed writes into both accounts' workspaces; a deploy whose
- * accounts hold no fixture at all seeds the first.
+ * share, the machine.
+ *
+ * THE ANCHOR. What the check looks for is the manifest the last seed wrote to the releases bucket
+ * ({@link UPGRADE_ANCHOR_KEY}), outside every workspace it checks, so losing them all is a loss and never a first run.
+ * Only an absent anchor seeds a first: a deployment that never seeded, or one a full reset emptied (reset.ts deletes the
+ * anchor with the classes). A continuity miss is red and changes nothing: no fresh start, no seed, no retirement, so the
+ * baseline that failed stays for a person to look at, and every rerun stays red until one does.
  *
  * A FRESH START on the eval identity, whose account a release may move (it is derived as the deployment's sign-in
  * derives one): a new workspace, a chat, a file, a share with its `devices` account and a machine joined, all made on
@@ -26,7 +31,10 @@ import { SLATES_ROOT } from '@kinu.run/core';
 import { evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
 import { resolveWebIdentity, webHeaders } from '../evals/src/workspace-roster';
 import { openSocketAs } from '../tests/first-run/public-socket';
-import { deploymentOf } from './infra-manifest';
+import { r2ObjectText, r2PutJson } from './cloudflare-rest';
+import { requireCloudflareAccountId } from './infra-cloudflare';
+import { bucketOf, deployedConfig, deploymentOf } from './infra-manifest';
+import { UPGRADE_ANCHOR_KEY } from './reset';
 
 /** The fixture account, and the armada secret its password is held in. */
 const FIXTURE = { email: 'upgrade-fixture@kinu.run', workspace: 'upgrade-fixture' } as const;
@@ -43,8 +51,8 @@ const EVAL_RECIPIENT = 'eval-service+devices@kinu.run';
 
 const SLATE = 'upgrade-slate';
 
-/** Where each fixture workspace holds what the last seed made. */
-const MANIFEST_PATH = 'notes/upgrade-manifest.json';
+/** The two paths a seed's file takes in turn, so a seed never writes over the file the baseline it replaces holds. */
+const NOTE_PATHS = ['notes/upgrade-a.md', 'notes/upgrade-b.md'] as const;
 
 const BUDGET_MS = 180_000;
 
@@ -52,7 +60,7 @@ const NoteSchema = v.object({ path: v.string(), text: v.string() });
 
 type Note = v.InferOutput<typeof NoteSchema>;
 
-/** What a seed made, for the next deploy to find. */
+/** What a seed made, for the next deploy to find: the anchor. */
 const ManifestSchema = v.object({
   seededAt: v.string(),
   workspace: v.string(),
@@ -74,7 +82,7 @@ interface Account {
 }
 
 /** One verdict: what must hold, whether it did, and what the deployment answered where it did not. */
-type Verdict = readonly [what: string, held: boolean, detail: string];
+export type Verdict = readonly [what: string, held: boolean, detail: string];
 
 interface Request {
   readonly method?: string;
@@ -160,14 +168,6 @@ async function fileReads(account: Account, workspace: string, note: Note): Promi
   return ['the file reads as written', read.status === 200 && read.text === note.text, `files answered ${String(read.status)}`];
 }
 
-/** The manifest a workspace holds, or null where it holds none. */
-async function manifestIn(account: Account, workspace: string | undefined): Promise<Manifest | null> {
-  if (workspace === undefined) return null;
-  const read = await call(account, filePath(workspace, MANIFEST_PATH));
-
-  return read.status === 200 ? v.parse(ManifestSchema, JSON.parse(read.text)) : null;
-}
-
 /** One chat turn in `workspace`, sent over the browser's own socket. */
 async function chat(account: Account, workspace: string, said: string): Promise<void> {
   const socket = openSocketAs(account.origin, account.headers, `/agents/orchestrator-agent/${workspace}`, AbortSignal.timeout(BUDGET_MS));
@@ -229,30 +229,6 @@ async function removeMachine(account: Account, device: string): Promise<void> {
 
 // ── Check, then seed ─────────────────────────────────────────────────────────
 
-/** What the fixture accounts say of the previous seed: none (no seed ever completed here, or a reset took both
- *  accounts' storage, and with it the accounts), the manifest to check, or what was lost. */
-type Previous = { readonly kind: 'none' } | { readonly kind: 'seeded'; readonly manifest: Manifest } | { readonly kind: 'lost'; readonly why: string };
-
-/** One fixture account's workspace, if its roster names one, and the manifest it holds, if any. */
-interface Held {
-  readonly workspace?: string;
-  readonly manifest: Manifest | null;
-}
-
-/** The previous seed, from the manifest both accounts' workspaces hold: a seed writes the two copies together and
- *  last, so the sender's copy without the fixture's is the fixture account's loss. */
-export function previousSeed(fixture: Held, sender: Held): Previous {
-  if (fixture.manifest !== null) return { kind: 'seeded', manifest: fixture.manifest };
-
-  if (sender.manifest === null) return { kind: 'none' };
-
-  return {
-    kind: 'lost',
-    why: fixture.workspace === undefined ? `${FIXTURE.email}'s roster no longer names its fixture workspace, which ${SENDER.email} still records`
-      : `${fixture.workspace} no longer holds ${MANIFEST_PATH}, which ${SENDER.email} still holds`,
-  };
-}
-
 /** The fixture account as the previous seed left it, on the build that just deployed. */
 async function continuity(fixture: Account, manifest: Manifest): Promise<Verdict[]> {
   return [
@@ -303,12 +279,12 @@ async function freshStart({ account, recipient }: EvalAccounts, stamp: string): 
   };
 }
 
-/** The fixtures for the next deploy, made on this build and checked as made; their manifest is written into both
- *  accounts last, so a seed that fails leaves the previous one standing. */
-async function seed(fixture: Account, sender: Account, made: { stamp: string; fresh: string }): Promise<{ manifest: Manifest; verdicts: Verdict[] }> {
+/** The fixtures for the next deploy, made on this build and checked as made, beside the baseline's and never over it:
+ *  its file takes the path the baseline's does not. */
+async function seed(fixture: Account, sender: Account, made: { stamp: string; fresh: string; previous: Manifest | null }): Promise<Seeded> {
   const workspace = await workspaceNamed(fixture, FIXTURE.workspace) ?? await createWorkspace(fixture, FIXTURE.workspace);
   const senderWorkspace = await workspaceNamed(sender, SENDER.workspace) ?? await createWorkspace(sender, SENDER.workspace);
-  const note = { path: 'notes/upgrade.md', text: `written by the deploy of ${made.stamp}\n` };
+  const note = { path: NOTE_PATHS.find((path) => path !== made.previous?.note.path) ?? NOTE_PATHS[0], text: `written by the deploy of ${made.stamp}\n` };
   const said = `upgrade fixture ${made.stamp}: reply with one word`;
 
   await writeFile(fixture, workspace, note);
@@ -322,21 +298,15 @@ async function seed(fixture: Account, sender: Account, made: { stamp: string; fr
     ['a machine joins the workspace by a ticket issued now', joined.device !== undefined, joined.why],
   ];
 
-  if (verdicts.every(([, held]) => held)) {
-    const text = JSON.stringify(manifest, null, 2);
-
-    await writeFile(fixture, workspace, { path: MANIFEST_PATH, text });
-    await writeFile(sender, senderWorkspace, { path: MANIFEST_PATH, text });
-  }
-
   return { manifest, verdicts };
 }
 
-/** What the previous seed made that the new one replaces: its share, its machine, the eval account's fresh workspace. */
-async function retire(accounts: { fixture: Account; sender: Account; eval: Account }, previous: Manifest): Promise<void> {
-  await call(accounts.sender, '/api/shared/revoke', { method: 'POST', body: JSON.stringify({ workspace: previous.senderWorkspace, share: previous.share }) });
-  await removeMachine(accounts.fixture, previous.device);
-  await call(accounts.eval, `/api/user/workspaces/${encodeURIComponent(previous.fresh)}`, { method: 'DELETE' });
+/** What a seed made that no anchor keeps: its share, its machine, the eval account's fresh workspace. */
+async function retire(accounts: { fixture: Account; sender: Account; eval: Account }, made: Manifest): Promise<void> {
+  await call(accounts.sender, '/api/shared/revoke', { method: 'POST', body: JSON.stringify({ workspace: made.senderWorkspace, share: made.share }) });
+
+  if (made.device !== '') await removeMachine(accounts.fixture, made.device);
+  await call(accounts.eval, `/api/user/workspaces/${encodeURIComponent(made.fresh)}`, { method: 'DELETE' });
 }
 
 function printed(title: string, verdicts: readonly Verdict[]): boolean {
@@ -345,34 +315,74 @@ function printed(title: string, verdicts: readonly Verdict[]): boolean {
   return verdicts.every(([, held]) => held);
 }
 
-/** The previous seed checked, a fresh start made, the next seed made, and the previous one's leftovers removed. */
-async function main(origin: string): Promise<boolean> {
+/** A seed as made, and whether each of it held. */
+interface Seeded {
+  readonly manifest: Manifest;
+  readonly verdicts: Verdict[];
+}
+
+/** What one deploy's run reads and writes: the deployment's, or a test's. */
+export interface FixtureRun {
+  /** What the last completed seed left, read from the releases bucket; null where none is. */
+  readonly anchor: () => Promise<Manifest | null>;
+  readonly continuity: (expected: Manifest) => Promise<Verdict[]>;
+  readonly freshStart: () => Promise<{ workspace: string; verdicts: Verdict[] }>;
+  readonly seed: (made: { fresh: string; previous: Manifest | null }) => Promise<Seeded>;
+  readonly writeAnchor: (manifest: Manifest) => Promise<void>;
+  /** What a seed made, removed: the one an anchor replaced, or one that did not hold. */
+  readonly retire: (made: Manifest) => Promise<void>;
+}
+
+/**
+ * The previous seed checked against the anchor; on any miss, red, and nothing more. Then a fresh start, and the next
+ * seed, which becomes the anchor only once every part of it held; the anchor it replaced is then retired. A seed that
+ * did not hold is removed, and the anchor stays as it was.
+ */
+export async function runFixtures(run: FixtureRun, report: (title: string, verdicts: readonly Verdict[]) => boolean = printed): Promise<boolean> {
+  const previous = await run.anchor();
+
+  if (previous === null) report('continuity: no anchor, so this deploy seeds the first', []);
+  else if (!report(`continuity of the seed of ${previous.seededAt}`, await run.continuity(previous))) return false;
+  const fresh = await run.freshStart();
+  const started = report('a fresh start on the eval account', fresh.verdicts);
+  const next = await run.seed({ fresh: fresh.workspace, previous });
+
+  if (!report('the seed for the next deploy', next.verdicts)) {
+    await run.retire(next.manifest);
+
+    return false;
+  }
+
+  await run.writeAnchor(next.manifest);
+
+  if (previous !== null) await run.retire(previous);
+
+  return started;
+}
+
+/** The deployment's run: two builtin accounts, the eval identity's, and the releases bucket's anchor. */
+async function deploymentRun(origin: string): Promise<FixtureRun> {
   const stamp = new Date().toISOString().replace(/[-:]|\.\d+/gu, '').toLowerCase();
   const fixture = await signedIn(origin, FIXTURE.email, FIXTURE_PASSWORD_ENV);
   const sender = await signedIn(origin, SENDER.email, SENDER_PASSWORD_ENV);
-  const fixtureWorkspace = await workspaceNamed(fixture, FIXTURE.workspace);
-  const senderWorkspace = await workspaceNamed(sender, SENDER.workspace);
-
-  const previous = previousSeed(
-    { workspace: fixtureWorkspace, manifest: await manifestIn(fixture, fixtureWorkspace) },
-    { workspace: senderWorkspace, manifest: await manifestIn(sender, senderWorkspace) },
-  );
-
-  const kept = previous.kind === 'seeded' ? printed(`continuity of the seed of ${previous.manifest.seededAt}`, await continuity(fixture, previous.manifest))
-    : printed('continuity', previous.kind === 'lost' ? [['the previous seed is there', false, previous.why]] : []);
-
-  if (previous.kind === 'none') console.log(`continuity: ${origin} holds no fixture yet; this deploy seeds the first`);
   const evals = evalAccounts(origin);
-  const fresh = await freshStart(evals, stamp);
-  const started = printed('a fresh start on the eval account', fresh.verdicts);
-  const next = await seed(fixture, sender, { stamp, fresh: fresh.workspace });
-  const seeded = printed('the seed for the next deploy', next.verdicts);
+  const bucket = bucketOf(deployedConfig('staging'), 'RELEASES_BUCKET');
 
-  if (seeded && previous.kind === 'seeded') {
-    await retire({ fixture, sender, eval: evals.account }, previous.manifest);
-  }
+  if (bucket === undefined) throw new Error('staging binds no RELEASES_BUCKET, where the upgrade fixtures keep their anchor');
+  const anchored = { accountId: requireCloudflareAccountId(), bucket, key: UPGRADE_ANCHOR_KEY };
 
-  return kept && started && seeded;
+  return {
+    anchor: async () => {
+      const text = await r2ObjectText(anchored);
+
+      return text === undefined ? null : v.parse(ManifestSchema, JSON.parse(text));
+    },
+    continuity: (expected) => continuity(fixture, expected),
+    freshStart: () => freshStart(evals, stamp),
+    seed: (made) => seed(fixture, sender, { stamp, ...made }),
+    writeAnchor: (manifest) => r2PutJson({ ...anchored, value: manifest }),
+    retire: (made) => retire({ fixture, sender, eval: evals.account }, made),
+  };
 }
 
 if (import.meta.main) {
@@ -388,5 +398,5 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  process.exit(await main(target.origin) ? 0 : 1);
+  process.exit(await runFixtures(await deploymentRun(target.origin)) ? 0 : 1);
 }

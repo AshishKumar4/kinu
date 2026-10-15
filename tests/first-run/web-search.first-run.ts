@@ -81,6 +81,7 @@ describe(SUITE, () => {
       id: CASE,
       defect: DEFECT,
       modelCalls: 'expected',
+      budgetMs: 5 * 60_000,
       genesis: false,
       purpose: 'A terse assistant that uses the tool it is asked to use and reports the result in one line.',
       async run({ session }) {

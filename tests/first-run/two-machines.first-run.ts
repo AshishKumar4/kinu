@@ -89,6 +89,7 @@ describe(SUITE, () => {
         id: CASE,
         defect: DEFECT,
         modelCalls: 'expected',
+        budgetMs: 5 * 60_000,
         // Genesis independently probes both machines before the unnamed ask.
         // This row measures routing for the two explicit asks, not orientation.
         genesis: false,

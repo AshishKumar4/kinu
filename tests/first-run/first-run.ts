@@ -220,8 +220,11 @@ export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSe
   readonly modelCalls: 'expected' | 'none';
   /** The most wall time the case may take once its session is open. When it
    *  is spent the evidence is retained as it stands and the case fails on
-   *  the budget, with `failure.json` saying so. */
-  readonly budgetMs?: number;
+   *  the budget, with `failure.json` saying so. Every case declares one: a
+   *  wait on a deployment may never end (a signed-in page has no default
+   *  timeout, `signedInPage`), and without a budget such a wait is a silent
+   *  hang of the whole tier, as approve-clears was on staging 7fecf0225. */
+  readonly budgetMs: number;
   /** The case, driven the way a user drives it. Returns the subgoals it
    *  checked; every one of them is asserted by {@link runFirstRunCase}. */
   run(input: FirstRunRun<Session, Plan>): Promise<readonly EvalSubgoal[]>;
@@ -264,6 +267,11 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
   spec: FirstRunCaseSpec<Session, Plan>,
   observations: EvalObservation[],
 ): Promise<void> {
+  // Refused before any workspace is made: a case with no budget can wait on the deployment forever.
+  if (!(Number.isFinite(spec.budgetMs) && spec.budgetMs > 0)) {
+    throw new Error(`${spec.id}: a first-run case declares the budget its waits end on (budgetMs), and this one declares none`);
+  }
+
   const startedAt = Date.now();
   let opened: Session | undefined;
   let failure: Error | null = null;
@@ -275,7 +283,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
       opened = await plan.open({ subject: spec.id, purpose: spec.purpose, genesis: spec.genesis });
 
       return opened;
-    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls, clock: REAL_CLOCK, ...(spec.budgetMs !== undefined && { budgetMs: spec.budgetMs }) }, async (session, collect, budget) => {
+    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls, clock: REAL_CLOCK, budgetMs: spec.budgetMs }, async (session, collect, budget) => {
     console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
     const subgoals = await spec.run({ session, plan, budget });
 
