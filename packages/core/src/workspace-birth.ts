@@ -6,6 +6,7 @@ import { seedSoul, SOUL_PATH, UNTITLED_WORKSPACE_NAME } from './identity/soul';
 import { createInlineCraftStore, wrapDatabase, type AgentDatabase } from './identity/inline-primitives';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { adaptMemory } from './memory/vector-sync';
+import { MEMORY_PATH } from './memory/note';
 import { bootstrapScaffold } from './scaffold/bootstrap';
 import { nowMs } from './utils/date';
 import { KinuError } from './obs/index';
@@ -93,7 +94,7 @@ export async function createWorkspace(
   await seedSoul({ name: heading, mission: config.purpose }, (soul) => writeText(home, SOUL_PATH, soul));
 
   await home.mkdir('memory', { recursive: true });
-  await writeText(home, 'memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
+  await writeText(home, MEMORY_PATH, `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
   const rt = buildComponents({ db, sql, execRaw, transactionSync, home, actor });
 
   // The loop's versioned source, its pointer and its live view, through the one writer every reopen heals with.

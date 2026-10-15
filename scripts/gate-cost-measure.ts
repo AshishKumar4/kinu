@@ -72,8 +72,8 @@ import {
   LADDER, SHARED_POOL, gatesFor, packageScripts, sharedOf, trackedTestFiles,
   runnableArgv,
 } from './ladder';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /**
  * The sampling rates, and why there are two.

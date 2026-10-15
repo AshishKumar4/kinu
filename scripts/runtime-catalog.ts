@@ -14,8 +14,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
-const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
+import { requireCloudflareAccountId } from './infra-cloudflare';
 
 const LATEST = 'catalog/v1.json';
 
@@ -61,7 +60,7 @@ export async function ensureRuntimeCatalog(bucket: CatalogBucket, pinned: string
 
 function wrangler(args: readonly string[]) {
   const ran = spawnSync(join(import.meta.dir, '..', 'node_modules/.bin/wrangler'), args, {
-    env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: ACCOUNT }, maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: requireCloudflareAccountId() }, maxBuffer: 64 * 1024 * 1024,
   });
 
   return { ok: ran.status === 0, stdout: new Uint8Array(ran.stdout), out: `${ran.stdout.toString()}${ran.stderr.toString()}` };

@@ -32,6 +32,12 @@ describe('toCraftedToolSource', () => {
     expect(toCraftedToolSource(tool({ code: '// retired: superseded by web_fetch' }))).toBeNull();
   });
 
+  // core-rest review P1-11: admission takes `// adds two\n(a) => …`; injection dropped every source that opened `//`.
+  test('a tool whose source opens with a comment is still a real tool', () => {
+    const code = '// adds two\nasync (a) => a.x + a.y';
+    expect(toCraftedToolSource(tool({ code }))?.code).toBe(code);
+  });
+
   test('code that merely CONTAINS a comment is still a real tool', () => {
     const source = toCraftedToolSource(tool({ code: 'export default () => 1; // note' }));
     expect(source?.code).toBe('export default () => 1; // note');

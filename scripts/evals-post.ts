@@ -6,8 +6,8 @@ import { parseResults, trials } from '../evals/src/results';
 import { redact } from '../evals/src/redact';
 import { joinTrialReports, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { deploymentOf } from './infra-manifest';
+import { REPO_ROOT as ROOT } from './repo-root';
 
-const ROOT = join(import.meta.dirname, '..');
 
 /** Light deploy-driver post-steps use the workstation's serialized 4G scope, never uncapped local work. */
 export const LOCAL_CHECK = '/mnt/local/kinu/bin/local-check.sh';

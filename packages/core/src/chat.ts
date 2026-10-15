@@ -960,7 +960,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         extensions,
         abortSignal: signal,
         cache: hasCacheMarkers(attempt.strategy) ? { strategy: attempt.strategy } : null,
-        prune: { contextWindow, modelOutputLimit },
+        prune: { contextWindow, modelOutputLimit, spec: current.spec },
         budget: opts.budget,
         dynamic: opts.dynamicContext,
         destination: servingRoute,

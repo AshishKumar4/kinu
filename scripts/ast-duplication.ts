@@ -70,12 +70,12 @@ import {
   type LockRefusal,
 } from './gate-ratchet';
 import { readSources } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   blockBodyOf, declaredName, functionOwner, identifierCalleeName, identifierText,
   literalText, memberCalleeName, methodKind, parse, type Parsed, type SyntaxNode, walk,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/ast-duplication.lock.json`;
 

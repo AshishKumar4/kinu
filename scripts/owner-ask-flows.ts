@@ -9,10 +9,7 @@ import {
   CONTINUE, CONTINUED, FEEDBACK_HEARD, HIRED, HOME_ASK, HOME_REPORTED, INTERRUPTED_BRIEF, PIN_ASK, PIN_PAGE, PLAN_COMMENT,
   PLAN_COMMENT_ASK, REACH_REPLY, REACH_SLATE, REACH_SLATE_ASK, REACH_STREAM, THREAD_REPLY,
 } from './flows-script';
-import {
-  CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle,
-  settled, settledAfter, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget,
-} from './product-flows';
+import { CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle, settled, settledAfter, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget } from './browser-page';
 import { signedInPage } from '../evals/src/browser';
 import { webHeaders } from '../evals/src/workspace-roster';
 

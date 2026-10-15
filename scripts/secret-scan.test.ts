@@ -20,9 +20,9 @@ import {
   scanText,
 } from './secret-scan';
 import { isTextSource, trackedFiles } from './sources';
+import { REPO_ROOT } from './repo-root';
 import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const AWS_KEY = `AKIA${'ABCDEFGHIJKLMNOP'}`;
 

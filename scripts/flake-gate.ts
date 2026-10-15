@@ -33,8 +33,8 @@ import { parseJUnit } from './skip-ratchet';
 import { parse, walk } from './syntax';
 import { writtenSkips } from './test-census';
 import { ANTI_SLOP_RULES, isAntiSlopRuleSuite, isFirstRunSuite, isParseable, isPythonSuite, isRunnableSuite, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** Runs of each changed suite: the hammer's six, the smallest count that has caught a 1-in-3 flake here. A floor on
  *  confidence, never a proof of absence, and the green path says so. */

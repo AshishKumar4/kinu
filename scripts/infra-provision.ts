@@ -36,7 +36,7 @@ import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
 import {
   type Deployment, type Observation, type Run, authenticated, deployment, environmentArgs, kvNamespace, r2, secretNames,
-  vectorize, why,
+  requireCloudflareAccountId, vectorize, why,
   wrangler,
 } from './infra-cloudflare';
 import {
@@ -336,7 +336,7 @@ async function main(): Promise<number> {
   const infrastructure = deriveInfrastructure(environment);
   const { worker } = infrastructure;
   console.log(`${BOLD}Kinu infrastructure provisioning — ${environment}${NC}`);
-  console.log(`Account:      ${infrastructure.accountId}`);
+  console.log(`Account:      ${requireCloudflareAccountId()}`);
   console.log(`Worker:       ${worker.workerName}`);
 
   const steps: Step[] = [];

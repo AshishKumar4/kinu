@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, symlin
 
 import { join, resolve } from 'node:path';
 import {
-  ArchiveCursorSchema, archiveSqlFromDatabase, initActorClaimTables, initWorkspaceActorTable, readWorkspaceArchivePage, workspaceArchiveStore,
+  ArchiveCursorSchema, initActorClaimTables, initWorkspaceActorTable, readWorkspaceArchivePage, workspaceArchiveStore,
   type ArchiveCursor,
 } from '@kinu.run/core';
 import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
@@ -20,6 +20,7 @@ import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { stampSchemaGenesis } from '@kinu.run/core';
 import { createMemoryVfs, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
+import { sqlStorageOver } from '@kinu.run/core/identity';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -212,7 +213,7 @@ describe('kinu export / import', () => {
     const cloudDir = scratch('kinu-export-cloud-db-');
     const cloudDb = join(cloudDir, 'cloud.db');
     seedWorkspace(cloudDb);
-    const source = archiveSqlFromDatabase(new Database(cloudDb, { readonly: true }));
+    const source = sqlStorageOver(new Database(cloudDb, { readonly: true }));
 
     const calls: Array<{ method: string; cursor: ArchiveCursor | null }> = [];
 
@@ -298,7 +299,7 @@ describe('kinu export / import', () => {
     await writeText(bundle.vfs, 'memory/MEMORY.md', '- kept as agent state');
     let restarted = false;
     let starts = 0;
-    const sql = archiveSqlFromDatabase(db);
+    const sql = sqlStorageOver(db);
 
     const server = Bun.serve({
       hostname: '127.0.0.1', port: 0,

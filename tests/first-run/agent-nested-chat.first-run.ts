@@ -21,17 +21,27 @@ import {
   ChatHistoryEntrySchema, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, WorkspaceWorkSchema,
 } from '../../packages/core/src/index';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { NESTED_HIRE_ASK, NESTED_TASK_TITLE, NESTED_WORD } from './asks';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 
 const SUITE = 'First-run · agent-nested-chat';
 
-const CASE = 'agent-nested-chat' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A helper hired by a hired agent had no chat tab, and its owner in the Work tab was plain text, '
+    + 'so nothing opened its conversation: every chat address resolved one name in the root\'s roster.',
+  missedBecause: 'agent-tab opens a direct child only; delegation-tree builds a nested tree but reads the '
+    + 'ledger, never the grandchild\'s own socket or its reads.',
+  provedRedAt: null,
+  redDirection: 'Written with the fix and not yet run: the tier needs a deployment. On a build before the '
+    + 'fix the nested socket path answers 404 (the edge looks the joined path up as one root name) and '
+    + '`nested-socket-opens` is missed.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'nested');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -121,6 +131,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A grandchild\'s chat opened from the Work-tab owner of its task.',
       budgetMs: 10 * 60_000,
@@ -205,5 +216,3 @@ describe(SUITE, () => {
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

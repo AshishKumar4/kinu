@@ -14,8 +14,8 @@ import * as v from 'valibot';
 
 import { SLATE_VENDOR_ID } from '../packages/cf-backend/slate-vendor';
 import { identifierCalleeName, moduleSpecifiers, parse, stringArguments, walk } from './syntax';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 /** Extension to esbuild loader, for the files that can carry an import. A file
  *  with any other extension is a leaf: `.json`, `.css` and `.wasm` name no

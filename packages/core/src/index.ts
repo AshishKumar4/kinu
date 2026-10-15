@@ -155,7 +155,7 @@ export { forkArtifactPath, type ForkConversationPlan } from './identity/fork-pla
 // Workspace archive: one backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION,
-  archiveSqlFromDatabase, readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
+  readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
   ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
   type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveFilesCursor, type ArchiveAgentPage,
   type ArchiveExportOptions, type ArchivePage,
@@ -452,6 +452,7 @@ export {
   USAGE_FIELDS,
   UsageSchema,
   addUsage,
+  normalizeAnthropicUsage,
   normalizeUsage,
   usageReported,
   usageTotal,
@@ -2268,7 +2269,10 @@ export {
   type PublicPageOptions,
 } from './http/public-shell';
 
-export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
+export {
+  accountTheme, DEFAULT_THEME, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed, type ColourToken, type Mode, type RadiusRole, type ThemeName,
+  type TokenSet,
+} from './web/theme';
 
 export { hueStops, rankHue } from './web/agent-colour';
 

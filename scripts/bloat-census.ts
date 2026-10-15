@@ -21,13 +21,13 @@ import { measureFile } from './complexity';
 import { exportedDeclarations, inScope } from './dead-code';
 import { assertMeasured } from './gate-ratchet';
 import { packageOf, readMatching, readSources, readTests } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   classMembers, declarationOf, declaredBindings, declaredName, identifierText, memberCalleeName, ownerName,
   parse, referencedNames, type SyntaxNode, walk,
 } from './syntax';
 import { buildGraph, builtinToolNames, findEntrypoints, findUnreached, isReacher, measureReach } from './wired';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /**
  * The smallest function body the clone search reads. Measured at 1dd25b3ad:

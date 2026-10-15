@@ -1,4 +1,4 @@
-import type { ContextMeasureRow, ContextMeasures } from '../events/recorder';
+import { newer, type ContextMeasures } from '../events/recorder';
 
 export interface ContextFill {
   readonly tokens: number;
@@ -17,8 +17,4 @@ export function contextFill(measures: ContextMeasures, catalogWindow: number | n
   }
 
   return provider === null ? null : { tokens: provider.tokens, window, source: 'provider', at: provider.at };
-}
-
-function newer(a: Pick<ContextMeasureRow, 'at' | 'seq'>, b: Pick<ContextMeasureRow, 'at' | 'seq'>): boolean {
-  return a.at === b.at ? a.seq > b.seq : a.at > b.at;
 }

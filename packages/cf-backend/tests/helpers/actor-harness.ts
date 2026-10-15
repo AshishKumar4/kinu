@@ -1,6 +1,5 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
-import { agentCallsThrough } from '../../src/dynamic-worker-slots';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Instantiate a real cf actor class under bun, the platform mocked at its seams
  * (agents SDK base, DO storage over bun:sqlite, env). Codemode runs through an in-process Worker Loader.
@@ -52,7 +51,7 @@ import {
 import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, joinHarnessFibersOf, mockAgentsSdk, trackHarnessLane } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
-import { agentDatabase, failNextAnswerWrite, inProcessAgentFacets, scriptConversationModel } from './agent-facets';
+import { agentDatabase, facetCallsThrough, failNextAnswerWrite, inProcessAgentFacets, scriptConversationModel } from './agent-facets';
 import type { AgentFacetCalls } from '../../src/agent-facet/agent-facet';
 import { GATEWAY_MODEL, openingOf, platformGatewayEnv, type RecordedGatewayRun, type StubbedAiBinding } from './platform-gateway';
 import {
@@ -147,7 +146,7 @@ export class HarnessDynamicWorkers {
 
   /** `isolate`, every method counted against the limit while it awaits its answer. */
   counted(key: string, isolate: AgentFacetCalls): AgentFacetCalls {
-    return agentCallsThrough((call) => Effect.promise(async () => {
+    return facetCallsThrough(isolate, (call) => Effect.promise(async () => {
       const release = this.#admit(key);
 
       if (release === null) {
@@ -161,7 +160,7 @@ export class HarnessDynamicWorkers {
       try {
         await this.gate;
 
-        return await call(isolate);
+        return await call();
       } finally {
         release();
       }

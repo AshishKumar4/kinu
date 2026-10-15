@@ -1,7 +1,7 @@
 /** The HTML shell every signed-out page is built from, in the app's own palette (`web/theme.ts`). */
 
 import { escapeHtml } from './http';
-import { THEME_CSS, THEME_TOKENS } from '../web/theme';
+import { DEFAULT_THEME, THEME_CSS, THEME_TOKENS } from '../web/theme';
 
 /** Runs before first paint, so it ships as text; the test evaluates this exact text. Matches `index.html`'s bootstrap. */
 const THEME_BOOT = `(() => {
@@ -34,7 +34,7 @@ function brand(): string {
 
 /** The favicon, in declared colours because a file has no cascade: the brass square, its wave in the dark ground. */
 export function markDocument(): string {
-  const { '--c-accent': brass, '--c-bg': ground } = THEME_TOKENS.dark;
+  const { '--c-accent': brass, '--c-bg': ground } = THEME_TOKENS[DEFAULT_THEME].dark;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="${FOLD}${WAVE}" fill="${brass}"/><path d="${WAVE}" fill="${ground}"/></svg>\n`;
 }

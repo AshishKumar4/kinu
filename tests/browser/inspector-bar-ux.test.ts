@@ -9,7 +9,7 @@ import type { ElementHandle, Page } from 'puppeteer';
 import { detach } from '@kinu.run/core/obs';
 import { DESKTOP_CLIENT_ROOT } from '../../packages/core/src/http/desktop-client';
 import { withGallery } from '../../scripts/gallery-harness';
-import { openInspectorPage, sessionLine } from '../../scripts/product-flows';
+import { openInspectorPage, sessionLine } from '../../scripts/browser-page';
 
 declare global {
   interface Window {
@@ -362,6 +362,25 @@ describe('the Environment panel', () => {
         await page.click('[data-desktop-return]');
         await page.waitForFunction(`${DESKTOP_FILL} < 0.9 && document.querySelector('[data-rail]') !== null`, SOON);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
+      } finally { await page.close(); }
+    });
+  });
+
+  // Staging fcc2e05d6: the computer-sessions row read the first session's line and terminal, kept mounted out of sight
+  // since D99, for a new session's; it waited 128 s for that shell and never saw the new folder.
+  test("the flows' reader reads the session shown, not one kept out of sight", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await openTheComputer(page, origin);
+        await (await required(page, '#inspector', 'tab', 'dev server')).click();
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace/storefront', ports: [':5173'] });
+
+        await page.click('#inspector button[aria-label="New session"]');
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 3, SOON);
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace', ports: [] });
       } finally { await page.close(); }
     });
   });

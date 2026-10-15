@@ -60,6 +60,13 @@ describe('buildSystemPromptSync', () => {
     expect(surface.configuredExecutors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
   });
 
+  // core-rest review P1-9: the prompt kept its own order, which knew no `parent` and sorted it among unknown names.
+  test('the prompt orders a fork\'s parent workspace as the executor list does, before names it does not know', () => {
+    const surface = compilePromptSurface({ registeredExecutors: ['alpha', 'parent', 'workspace'] });
+
+    expect(surface.executors.map((exec) => exec.name)).toEqual(['workspace', 'parent', 'alpha']);
+  });
+
   test('the two axes are read from different metadata keys and neither can suppress the other', () => {
     expect(turnTags({ metadata: null }).reason).toEqual({ provenance: 'chat' });
     expect(turnTags({ metadata: {} }).reason).toEqual({ provenance: 'chat' });

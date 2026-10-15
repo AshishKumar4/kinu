@@ -61,12 +61,12 @@ import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 import { assertMeasured, finding } from './gate-ratchet';
 import type { CreateTableStmt, CreateViewStmt, Node as SqlNode } from 'sql-parser-cst';
 import { isProductSource, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   commentRanges, constInitializer, entityName, type Expand, holesAsNames, leadingKeywords, sqlProgram, sqlStrings, UNWRAPPED, writtenText,
 } from './sql-text';
 import { literalString, type SyntaxNode } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const GENESIS_LOCK = `${root}scripts/schema-genesis.lock.json`;
 

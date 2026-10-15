@@ -20,16 +20,27 @@ import { hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG } from '../../packages/c
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import type { KinuPublicSession } from '../../evals/src/session';
 import { webHeaders } from '../../evals/src/workspace-roster';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 
 const SUITE = 'First-run · agent-confined';
 
-const CASE = 'agent-confined' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Subagents were meant to be "other agents confined to the workspace itself" (the owner, '
+    + '2026-07-13), and no deployed row asked any workspace but the one that made an agent about it.',
+  missedBecause: 'every subagent row reads the agent from the workspace that made it, so a roster, '
+    + 'a pager or a hosted room that answered another workspace\'s agent passes all of them.',
+  provedRedAt: null,
+  redDirection: 'Planted on a loopback `vite dev` build of this tree: a pager that falls back to '
+    + 'the calling workspace\'s own chat for an actor id it never issued answers the other '
+    + 'workspace, and `unreadable-elsewhere` misses. Not re-run against a deployed build: '
+    + 'confinement has held on every deployed build this row could name.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'confined');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -69,6 +80,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'none',
       genesis: false,
       purpose: 'A subagent made in one workspace, looked for from another.',
@@ -159,4 +171,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

@@ -18,8 +18,8 @@ import {
 } from './gate-set-equality';
 import { LADDER, deployGates } from './ladder';
 import { isTestFile, isRunnableSuite, trackedFiles } from './sources';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = new URL('..', import.meta.url).pathname;
 
 const at = (file: string): string => readFileSync(REPO_ROOT + file, 'utf8');
 

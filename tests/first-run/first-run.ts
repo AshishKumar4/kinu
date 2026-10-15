@@ -48,7 +48,8 @@
  * costs nothing.
  */
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { REAL_CLOCK } from '../../packages/core/src/index';
 import {
@@ -71,61 +72,10 @@ export const FIRST_RUN_FAMILY = 'first-run';
  *  (teardown DELETES it). One suite per process, so module scope is suite scope. */
 const observedModels = createObservedModelAccumulator();
 
-/** Every case this tier declares, in the order the defects were found. The list
- *  is DATA and lives here rather than in the six files, because "the set this
- *  tier measures equals the set it governs" is the property `wiring.test.ts`
- *  asserts, and a set spread across six modules cannot be asserted at all. */
-export const FIRST_RUN_CASES = [
-  'codemode-craft',
-  'approve-clears',
-  'two-machines',
-  'enter-sends',
-  'files-outside-tree',
-  'slate',
-  'command-refusal',
-  'preview-address',
-  'workspace-title',
-  'snapshot-after-turn',
-  'every-tool',
-  'sandbox-mount-write',
-  'sandbox-exec-output',
-  'public-share',
-  'share-capability-cut',
-  'blueprint-fork',
-  'slate-browser',
-  'users-share',
-  'drive',
-  'device-link',
-  'device-join',
-  'background-settle',
-  'background-wake',
-  'delegation',
-  'agent-tab',
-  'agent-chats-persist',
-  'agent-dismissed-chat',
-  'agent-nested-chat',
-  'agent-confined',
-  'web-search',
-  'account-settings',
-  'workspace-settings',
-  'machine-consent',
-  'device-job-output',
-  'workspace-panes',
-  'delegation-tree',
-  'exploration',
-  'deploy-door',
-  'capability-isolation',
-  'steer-correction',
-  'multi-account',
-  'turn-rated',
-  'computer-desktop',
-] as const;
-
-export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
-
 /**
- * The defect each case is red on, in the words of the person who found it, with
- * the deployed sha the red direction was proved against.
+ * The defect a case is red on, in the words of the person who found it, with
+ * the deployed sha the red direction was proved against. Each case file holds
+ * its own, and a missed subgoal's failure names it (`expectReached`).
  *
  * Written down because a first-run case whose mechanism lives only in its
  * assertions is one the next person deletes as flaky. `provedRedAt` is the
@@ -134,7 +84,6 @@ export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
  * `redDirection`.
  */
 export interface FirstRunDefect {
-  readonly id: FirstRunCase;
   /** What the user did, and what the product did instead. */
   readonly found: string;
   /** Why every pre-deploy gate stayed green over it. */
@@ -143,551 +92,6 @@ export interface FirstRunDefect {
   readonly provedRedAt: string | null;
   readonly redDirection: string;
 }
-
-export const FIRST_RUN_DEFECTS = {
-  'codemode-craft': {
-    id: 'codemode-craft',
-    found: 'A tool the agent built for itself would not run: the crafted body reached the '
-      + 'executor and failed instead of answering.',
-    missedBecause: 'every crafted-tool test hands the executor a body the TEST author wrote — an '
-      + '`async (args) => …` that is valid by construction — so the one thing a user depends on, '
-      + 'a body the MODEL wrote, was never executed by any suite.',
-    provedRedAt: null,
-    redDirection: 'RED against the deployed build at the time of writing, and it stays red until '
-      + "the CraftValidation lane's rebuild on codemode's modules+prelude lands. It is written "
-      + 'first and deliberately: this is the tier\'s own rule applied to itself.',
-  },
-  'snapshot-after-turn': {
-    id: 'snapshot-after-turn',
-    found: 'After the first answer, the workspace would not open: "Couldn\'t open this workspace. '
-      + 'SQL query failed: no such column: actor_id", and the composer showed no model beside a '
-      + 'turn that had just run.',
-    missedBecause: 'the transcript table is the Agents SDK\'s, created and written by Think with no '
-      + 'actor column, and Kinu read it with one. Every suite built the table from Kinu\'s own '
-      + 'copy of the DDL, so the reads were never run over the shape the deployment has; nothing '
-      + 'sent a turn through the product and then made the read the web app makes on open.',
-    provedRedAt: 'cc82601c4',
-    redDirection: 'one real turn over the public socket, then `getWorkspaceSnapshot` as the web app '
-      + 'calls it: it must answer, count both messages, and name a model. RED at cc82601c4 on the '
-      + 'first of the three.',
-  },
-  'approve-clears': {
-    id: 'approve-clears',
-    found: 'Approving the parked commands re-ticked every checkbox instead of clearing them, so '
-      + 'the queue looked like it had refilled itself.',
-    missedBecause: 'the queue\'s own tests drive the RPC and the read model, where the decided '
-      + 'row does disappear. Nothing clicked the button, and the re-tick is in the component: '
-      + 'selection is `null`-means-everything and the decision resets it to `null`.',
-    provedRedAt: null,
-    redDirection: 'both halves are asserted — the RPC half (the decided row is gone and the '
-      + 'approved command then runs) and the UI half (no checkbox is left checked after the '
-      + 'click). The UI half is the one that was red by hand.',
-  },
-  'two-machines': {
-    id: 'two-machines',
-    found: 'With two machines connected, two calls in one turn landed on different machines: the '
-      + 'executor answered as if the account had one.',
-    missedBecause: 'every device test attaches ONE fake daemon, so "the first live socket" and '
-      + '"the machine the user named" are the same machine in the fixture and different machines '
-      + 'in the account.',
-    provedRedAt: '343e157df',
-    redDirection: 'the parent of 343e157df resolves no name: an unnamed call lands on whichever '
-      + 'machine map iteration yields, and a NAMED call is not routed at all.',
-  },
-  'enter-sends': {
-    id: 'enter-sends',
-    found: 'Enter did not send in the composer on a real terminal: the draft stayed put and no '
-      + 'turn ran.',
-    missedBecause: 'the in-process renderer negotiates no keyboard protocol and delivered CR '
-      + 'only. A tty can deliver Enter as LF, and the LF spelling hit opentui\'s default table, '
-      + 'which opens a line.',
-    provedRedAt: 'daad4aeee',
-    redDirection: 'the parent of daad4aeee binds `return` only, so the LF run submits nothing '
-      + 'and the deployed workspace records no user turn.',
-  },
-  'files-outside-tree': {
-    id: 'files-outside-tree',
-    found: 'Opening a hosted file in the Files tab answered EIO — "Code generation from strings '
-      + 'disallowed for this context".',
-    missedBecause: 'the ranged read ran `node -e` through the box\'s exec, and `node -e` compiles '
-      + 'its source with `new Function`, which workerd forbids and every Node-hosted test '
-      + 'allows. The whole bun suite was green over it.',
-    provedRedAt: 'a85ce8793',
-    redDirection: 'the parent of a85ce8793 has no native ranged read on the box file plane, so '
-      + 'the first read of a path outside the workspace tree answers EIO on the deployment.',
-  },
-  'slate': {
-    id: 'slate',
-    found: 'An agent-built slate appears in the tab strip but its HTTP preview cannot answer.',
-    missedBecause: 'Lower-level suites run projects written by test authors. They do not check '
-      + 'whether files authored by the model produce a working preview.',
-    provedRedAt: null,
-    redDirection: 'Not proved red against a deployed sha. The first deployed tier run must '
-      + 'measure listing, preview startup, and the authored HTTP response.',
-  },
-  'command-refusal': {
-    id: 'command-refusal',
-    found: 'A production slate binding and workspace executor reported a command that never ran as ordinary exit-one prose, losing the denied or waiting-for-approval class.',
-    missedBecause: 'Tests checked NOT RUN prose and queue state rather than structural producer refusals; generic stdout interpretation also mistakes successful business data for errors.',
-    provedRedAt: '4d119fec2',
-    redDirection: 'Non-model CLI REST and AgentClient calls require producer-owned refusal metadata and no execution for denied/parked commands. Executed exit-one failures and successful JSON-looking stdout are independent controls. Original 4d119fec2 RED receipts remain retained unchanged.',
-  },
-  'public-share': {
-    id: 'public-share',
-    found: 'The owner asked for a live share a stranger can open without an account and call one read-only member of, with every mutating member refused unless approved by name.',
-    missedBecause: 'No deployed route served a share origin: the share label parser, the grant cut and the viewer path existed in no build, so every unit and workerd proof ran against code production never had.',
-    provedRedAt: '0415e0f93',
-    redDirection: 'RED against the deployed 0415e0f93 on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, `probe()` to answer over a Cap\'n Web batch, and `mutate()` to be refused with the share\'s own "does not grant" reason.',
-  },
-  'share-capability-cut': {
-    id: 'share-capability-cut',
-    found: 'A public live share under a cut admitting one read member answered the read, refused the mutation with the grant code, left no owner-side effect, and refused an agent-namespace call outright.',
-    missedBecause: 'Unit and harness proofs cover the grant cut and the agent refusal in isolation; nothing drove the share origin signed out and read the owner tree plus the audit row for the same episode.',
-    provedRedAt: null,
-    redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation. '
-      + 'No deployed build carried a hole, and one carrying it fails the deploy\'s own source gates before it reaches staging, '
-      + 'so the red direction is proved at the grant itself: '
-      + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
-  },
-  'slate-browser': {
-    id: 'slate-browser',
-    found: 'A slate\'s class opened a Chrome session as its caller, connected it through the eval program\'s browser gate, loaded a page and read its title, and did the same with a Kitesurf browser.',
-    missedBecause: 'The slate surface exposed openBrowser but refused connectBrowser: the sandbox half of driving a browser was installed only in eval programs, and a slate\'s egress carried no actor, so the gate refused every Chrome session.',
-    provedRedAt: null,
-    redDirection: 'Green requires title(engine, url) to answer \'Example Domain\' for both chrome and kitesurf. Before this, connectBrowser from a slate answered "runs only inside an eval program"; '
-      + 'packages/cf-backend/tests/workerd/slate-share.test.ts proves the gate admits the caller\'s own session and refuses another\'s.',
-  },
-  'users-share': {
-    id: 'users-share',
-    found: 'A share for named people answered its link with a bare "Not found" to the very people it named, and its create answer listed no one; only the Drive card\'s signed entry got them in.',
-    missedBecause: 'The host 404s any users-share visitor without a viewer cookie, and the dialog copies that bare link; the unit proofs minted the ticket through /api/shared/live/open directly, as no recipient holding the link can.',
-    provedRedAt: 'c9fee59a0',
-    redDirection: 'RED on the deployed c9fee59a0 (2026-10-08 staging walk): the recipient following the share link got 404 "Not found", and the create answer\'s share.users was []. '
-      + 'Green requires the link to send a visitor with no cookie to the app\'s page for the share, the answer to name the recipient, and the named account to enter as itself through that page\'s ticket.',
-  },
-  'blueprint-fork': {
-    id: 'blueprint-fork',
-    found: 'A blueprint published from a slate named what it reaches and carried nothing of its owner\'s; a second workspace imported it, its MCP call refused until that workspace connected its own server of the same name, which made the call answer.',
-    missedBecause: 'Unit proofs cover publish and admit in isolation; nothing drove the app-host publish, public read, fork, and forker-side serve for the same bytes on the deployed product.',
-    provedRedAt: null,
-    redDirection: 'Green requires publish to answer inspection plus link, the owner\'s Drive library to list the slate and the blueprint, the public blueprint read and the fork to name the two namespaces the slate reached, the fork\'s MCP call refused before its own server is connected, hello() to answer, and the call to answer through the importer\'s own MCP server.',
-  },
-  'drive': {
-    id: 'drive',
-    found: 'The Drive shipped with no live proof: its unit proofs run the SDK\'s in-memory fake and the workerd tier binds no Mossaic object, so the real tenant store, the /shared mount and the /api/drive routes had never been driven on the deployed product.',
-    missedBecause: 'Every Drive suite is green over the fake; nothing opened the live tenant, put a file through the route, and read it back at /shared from a workspace shell.',
-    provedRedAt: null,
-    redDirection: 'Green requires GET /api/drive to list the reserved skills folder, a made folder and a put file to list back at their size and download as the same bytes, two workspaces of the owner to cat the file at /shared, a pasted skill to land under /skills as a skill on the listing and the mount, and the deletes to leave the root as found.',
-  },
-  'preview-address': {
-    id: 'preview-address',
-    found: 'Production admitted a workspace name whose length prevented every workspace preview URL.',
-    missedBecause: 'Creation tests used short names; preview-only tests refused the long name after the unusable workspace already existed.',
-    provedRedAt: '4d119fec2',
-    redDirection: 'Non-model CLI creation must reject a fresh 32-character address with the 31-character limit, while a fresh 31-character address must serve actual preview HTTP.',
-  },
-  'workspace-title': {
-    id: 'workspace-title',
-    found: 'The owned workspace registry held its generated display title, but the loaded actor status returned the workspace ID.',
-    missedBecause: 'Warm or locally initialized status fixtures did not read a generated title from the real owner registry on a cold actor.',
-    provedRedAt: '82ea0d9e3',
-    redDirection: 'Read-only production mismatch retained by the title owner in workspace-title-production-before.json. This case selects an explicitly owned workspace with a distinct registry title, reads its loaded snapshot first, and compares without writes, eviction or model/spend claims.',
-  },
-  'every-tool': {
-    id: 'every-tool',
-    found: 'The owner asked for one fast row proving every native tool answers on the deployed '
-      + 'is read back.',
-    missedBecause: 'every tool has unit coverage over inputs its author wrote, and no row ever '
-      + 'asked the deployed agent to use each one and then read what it left behind, so a tool '
-      + 'that fails only when the MODEL calls it on the deployment was invisible to every gate.',
-    provedRedAt: 'a90ddda79',
-    redDirection: 'RED against the deployed a90ddda79 on 2026-09-12: the retained transcript '
-      + '(bench-artifacts/first-run-flash-1789196459812/every-tool) shows the model\'s request '
-      + 'for the listing turn carrying ONE user message, the genesis signal, and none of the '
-      + 'text the turn was started with, so every check but `no-agents-call` missed. '
-      + 'One check per tool, each off durable state: `sees-every-tool` reds when the '
-      + 'prompt hides a root tool; `file-wrote` when `file` writes nothing or the wrong bytes; '
-      + '`shell-ran` when `shell` errors or drops stdout; `codemode-tool-ran` when codemode cannot '
-      + 'return a string; `memory-saved-and-found` when a save or the search that should find it '
-      + 'errors or comes back empty; `tasks-written` when `tasks` refuses an add; `web-fetched` '
-      + 'when `web` cannot reach the health route; `every-tool-answered` names any call that '
-      + 'closed with an error or a refusal; `no-unexpected-tool-failure` names any failure the '
-      + 'census calls unexpected, a codemode call inside `eval` included; `reported` when the '
-      + 'agent never says DONE.',
-  },
-  'sandbox-mount-write': {
-    id: 'sandbox-mount-write',
-    found: 'Writing a new file through the /computer mount was refused `io` — '
-      + '"FileNotFoundError: File not found: /workspace/broken.mjs" — while the same '
-      + 'container write through computer.writeFile in a program succeeded, and '
-      + 'computer.listFiles(\'\') refused on the SDK\'s ValidationFailedError.',
-    missedBecause: 'the conformance double answered a missing read with an exit code, the SDK\'s '
-      + 'old contract; the deployed SDK throws FileNotFoundError, which the file view passed '
-      + 'through unclassified, so the write path\'s create-vs-overwrite probe read a create as an '
-      + 'I/O failure. No test ever called listFiles with an empty path.',
-    provedRedAt: '96c3fa2b0',
-    redDirection: 'retained run bench-artifacts/trajectory-product-1789381033344/'
-      + 'public-failure-recovery/events.jsonl on 2026-09-14: event 9 is the refused create '
-      + '(reason io, FileNotFoundError on a path the list at event 7 showed absent), event 12 is '
-      + 'the namespace write succeeding where the mount write failed and listFiles(\'\') refusing '
-      + 'on ValidationFailedError.',
-  },
-  'sandbox-exec-output': {
-    id: 'sandbox-exec-output',
-    found: 'A background command\'s output vanished: the first-run background-settle case on staging '
-      + '690e3a6040 (2026-09-28) ran `sleep 45 && echo KINU_SETTLED_AFTER_DETACH`, which exited 0, and the '
-      + 'product answered "(no output)".',
-    missedBecause: 'the SDK\'s process lane passes output through FIFOs its own monitor can delete before '
-      + 'the command opens them; the command then writes into a plain file nothing reads. It happens only '
-      + 'under concurrent commands on a container that has been running a while, and no suite ran more than '
-      + 'one untimed sandbox command at once, so every pre-deploy exec test met the lane at rest.',
-    provedRedAt: '690e3a6040',
-    redDirection: 'this case against staging serving 690e3a6040 on 2026-09-28 (the old lane), three runs: '
-      + '595, 596 and 596 of 600 marks returned. The probe behind it (docs/DEVBOX-DECISIONS.md D37): 143 of '
-      + '1175 final lines lost through startProcess at 16 at once, 0 of 1200 through ctx.container.exec.',
-  },
-  'device-link': {
-    id: 'device-link',
-    found: 'A linked machine\'s socket dropped about forty seconds after connect, every time: '
-      + 'the daemon\'s keepalive pings and the deployed hub never answers, so the daemon closes '
-      + 'the live socket and redials — and a command that lands in the gap is answered with a '
-      + '"needs a computer of yours" card no reconnect retires.',
-    missedBecause: 'every device test asserts the link at the moment it forms — connectDevice '
-      + 'waits for the first connected and stops — so a hub that cannot answer `ping` drops the '
-      + 'socket at +40 s in a window nothing ever measured.',
-    provedRedAt: '2fbe8695f',
-    redDirection: 'RED against the deployed 2fbe8695f on 2026-09-15: a real daemon under this '
-      + 'repo\'s bun, a real `POST /api/cli/devices` registration, and the devices route\'s own '
-      + 'stamps — `lastSeenAt` moves when the second accept lands and `connected` flickers '
-      + 'through the redial gap. Green requires the link to hold the whole 50 s window, a '
-      + 'command to reach the machine through a `once` consent answer, and revoke to end the '
-      + 'socket and the credential.',
-  },
-  'device-join': {
-    id: 'device-join',
-    found: 'The command Environment → Connect device hands out installed the CLI, then printed "Not signed in. Starting '
-      + 'Kinu sign-in…" and waited on a device-code page, though the owner was signed in to the browser that issued it: '
-      + 'the command carried the device it named and no authority. The device it registered was rooted at /tmp, the '
-      + 'directory it ran in.',
-    missedBecause: 'every device row registers its machine through the CLI\'s own POST /api/cli/devices with a bearer the '
-      + 'tier already holds, so no row ran the command a person is given.',
-    provedRedAt: '0e094da7d',
-    redDirection: 'RED against staging serving 0e094da7d on 2026-10-14: the issued command, run in a fresh home under a '
-      + 'terminal, asked for a sign-in instead of linking. Green requires it to link with no sign-in, the device to read '
-      + 'connected, the issuing workspace to hold it as allow, and device.json to root it at the machine\'s home.',
-  },
-  'background-settle': {
-    id: 'background-settle',
-    found: 'A `run` on the sandbox that outlived the 30s foreground window detached to a '
-      + 'background job and replied with the handle — and the episode closed there. The job\'s '
-      + 'settled result either never woke the agent or woke it where nothing downstream could '
-      + 'see it: public-failure-recovery on 2fbe8695f recorded the detach and no reply carrying '
-      + 'the test\'s outcome.',
-    missedBecause: 'the detach half is asserted in isolation everywhere the threshold is '
-      + 'tested, and the wake half never was: no row asked the deployed product what a detached '
-      + 'run\'s settlement does to the transcript, so a wake that never lands reads the same as '
-      + 'a command still running.',
-    provedRedAt: '5e3acd011',
-    redDirection: 'RED live 2026-09-15 on deployed build 5e3acd011: a sleep-45-then-echo row '
-      + 'against https://kinu.run held in-flight 20 min with no wake run closing and no marker '
-      + 'reply — killed by the row\'s own 10 min budget at '
-      + '/home/mrwhite0racle/kinu-logs/failure-recovery-live/background-settle-live.log. The '
-      + 'retained 2fbe8695f episode (bench-artifacts/trajectory-product-1789455120159/'
-      + 'public-failure-recovery/events.jsonl) shows the same shape: the detached handle at '
-      + 'event 20 and a ledger that closed over a still-running job.',
-  },
-  'background-wake': {
-    id: 'background-wake',
-    found: 'A multi-step turn whose activation ended mid-turn — an isolate killed, an alarm-boundary '
-      + 'reset — sat un-driven: the run row stayed open with nothing scheduled to notice it. The '
-      + 'turn-open wake added at 4fe96cf72 was released by the first tick that fired inside the turn, '
-      + 'so an ordinary turn held a wake for about one second (REVIEW-chat-loop C2).',
-    missedBecause: 'the wake-chain suite listed schedules right after a turn opened and never fired a '
-      + 'tick with the turn parked; the workerd background-wake case holds the turn in-process and '
-      + 'ends no activation; and the deployed product had no way to end one, so no row could ask it.',
-    provedRedAt: 'fddd4f9d6',
-    redDirection: 'RED by reading on build fddd4f9d6: `_kinuTerminalRetryTick` cancelled its armed row '
-      + 'whenever `nextOwedAt()` was null, and an open run row is untimed, so every mid-turn tick left '
-      + 'the registry empty (packages/cf-backend/src/actor-agent.ts:1929-1932 at that build). '
-      + 'Unit red: unit-alarm-wake-chain "a tick that fires inside a parked turn keeps a wake row" '
-      + 'found 0 rows before 14909875d. This row is the live proof; it needs the eval-only abort '
-      + '(ARCHITECTURE-DECISIONS C3) to end an activation on the deployed build, so its first live '
-      + 'run is on the build that carries both.',
-  },
-  'delegation': {
-    id: 'delegation',
-    found: 'A lead was asked for a helper that says one word and reports back. The owner saw the '
-      + 'conversation keep gaining "system, to be shown to the agent" cards as delegation ran — '
-      + 'growth with no bound anyone could name.',
-    missedBecause: 'every-tool deliberately EXCLUDES hire and asserts the agents tool was never '
-      + 'called; the unit proofs drive that tool against fixtures the test author wrote. Nothing '
-      + 'asked the deployed agent to hire and then read back the settle, the relay, and the retire.',
-    provedRedAt: 'fddd4f9d6',
-    redDirection: 'RED by reading on build fddd4f9d6, measured 2026-09-17: the workspace\'s '
-      + 'opening turn never closed inside the 20-minute case budget, no `hire` call ever '
-      + 'settled, no model call was accounted, and the ledger reads hung on the unresponsive '
-      + 'object until the row\'s own test bound ended it. The card ceiling never reached '
-      + 'counting — the product was dead before a second turn could be sent.',
-  },
-  'agent-tab': {
-    id: 'agent-tab',
-    found: 'The "+" tab created the agent and then sat on "Disconnected · Untitled agent" over a '
-      + 'skeleton: the two reads the tab makes on mount, getActorSnapshot and listAgentTasks, '
-      + 'never answered.',
-    missedBecause: 'the workerd proof drives hosted actors through the object and the routing '
-      + 'pin proves the grammar over literals the test writes; nothing opens the actor\'s own '
-      + 'socket path the way the browser does, so a client-built dead facet path stayed invisible.',
-    provedRedAt: 'fddd4f9d6',
-    redDirection: 'RED by reading on build fddd4f9d6, measured 2026-09-17, on a different link of '
-      + 'the chain than reported: the transport-admitted actor path `/actor/<name>` upgraded and '
-      + 'BOTH mount reads answered — proving the socket grammar was never the server\'s defect and '
-      + 'B1 lives entirely in the client\'s address — but the hosted actor was already inside a '
-      + 'turn when the tab\'s message landed, the send spliced mid-turn and was never answered, '
-      + 'and the ledger recorded zero model calls. That is B10\'s self-feeding reactor keeping a '
-      + 'hosted actor permanently busy, which is also why the owner\'s tab showed a skeleton.',
-  },
-  'agent-chats-persist': {
-    id: 'agent-chats-persist',
-    found: 'Two subagents were told to build a chess app; coming back to the workspace, the chat '
-      + 'had been cleared and only the original message remained, and after visiting another '
-      + 'workspace every subagent chat had disappeared. Reopened: back in the workspace only Main '
-      + 'showed, in the tabs and the sidebar, until creating another agent brought the old one back.',
-    missedBecause: 'reachability was derived from employability — the roster read every chat '
-      + "surface makes filtered `status != 'dismissed'`, so a child's only route to a conversation "
-      + 'the dismiss copy promises to keep went with its employment — and `newestId()` returned a '
-      + 'stored `conversation_heads` row without asking whether it still named an entry. Reopened '
-      + 'because this row read the roster over the socket, which answered in full, while the page '
-      + 'threw that answer away: its reset effect bumped the roster read\'s generation after the '
-      + 'sibling effect had sent it.',
-    provedRedAt: 'a13e33514',
-    redDirection: 'the row drops EVERY socket between the sends and the reads, so the answers come '
-      + 'from durable rows rather than a live activation, then loads the page. RED by reading on '
-      + 'build a13e33514, measured 2026-09-23: roster-survives and chats-reachable green, and with '
-      + 'every read the page sent answered its strip and sidebar drew no agent at all.',
-  },
-  'agent-dismissed-chat': {
-    id: 'agent-dismissed-chat',
-    found: 'A subagent dismissed with its conversation kept, the Dismiss dialog\'s default, kept '
-      + 'its tab but its chat never loaded: the pager refused the dismissed agent with "The actor '
-      + 'is not registered in this workspace.", while the dialog promises "Its conversation is '
-      + 'kept, not deleted".',
-    missedBecause: '`agent-chats-persist` proves EMPLOYED agents keep their chats and never '
-      + 'dismisses one, so it passes with the fix (e21207492) reverted. The pre-deploy half '
-      + 'arrived with the fix, in packages/cf-backend/tests/workerd/wide/public-surface.test.ts; no '
-      + 'deployed row read a dismissed agent\'s kept chat the way its pane reads it.',
-    provedRedAt: '2eba2c1e5',
-    redDirection: 'Run against 2eba2c1e5, the parent of e21207492, served by `vite dev` on '
-      + 'loopback (the Worker the deploy ships, with local state): `kept-chat-reads` misses on '
-      + 'the refusal above. Green on e21207492 served the same way.',
-  },
-  'agent-confined': {
-    id: 'agent-confined',
-    found: 'Subagents were meant to be "other agents confined to the workspace itself" (the owner, '
-      + '2026-07-13), and no deployed row asked any workspace but the one that made an agent about it.',
-    missedBecause: 'every subagent row reads the agent from the workspace that made it, so a roster, '
-      + 'a pager or a hosted room that answered another workspace\'s agent passes all of them.',
-    provedRedAt: null,
-    redDirection: 'Planted on a loopback `vite dev` build of this tree: a pager that falls back to '
-      + 'the calling workspace\'s own chat for an actor id it never issued answers the other '
-      + 'workspace, and `unreadable-elsewhere` misses. Not re-run against a deployed build: '
-      + 'confinement has held on every deployed build this row could name.',
-  },
-  'web-search': {
-    id: 'web-search',
-    found: 'The owner asked for an end-to-end pass of the web search capability, and no deployed row '
-      + 'ever asked the agent to search: `every-tool` fetches the product\'s own health route.',
-    missedBecause: 'the search provider (Tavily with a key, DuckDuckGo without) is unit-tested over '
-      + 'fixture pages, so a provider the deployment cannot reach, or a layout it no longer parses, '
-      + 'is invisible until a user asks the agent to look something up.',
-    provedRedAt: 'b220f59f8',
-    redDirection: 'RED on the deployed build: DuckDuckGo answers the Worker 522 or rate-limits it, so every '
-      + 'search fails; it stays red until the search provider serves Worker egress. Also planted on '
-      + 'loopback `vite dev`: an endpoint that does not answer leaves `searched` and `results-returned` missed.',
-  },
-  'account-settings': {
-    id: 'account-settings',
-    found: 'The welcome flow and the account settings page read and write the account itself, and no '
-      + 'deployed row read or wrote it: every row opens a workspace.',
-    missedBecause: 'a profile route that stopped answering, a rename that did not persist or an onboarding '
-      + 'stamp that did not stick strands a person on /welcome or shows a stale name, and passed '
-      + 'every workspace row.',
-    provedRedAt: null,
-    redDirection: 'Planted on a loopback `vite dev` build of this tree: a rename the account object '
-      + 'acknowledges and does not write leaves `rename-persisted` missed.',
-  },
-  'workspace-settings': {
-    id: 'workspace-settings',
-    found: 'A workspace\'s settings page writes its name, SOUL.md, shell approval mode and advisor '
-      + 'setting and exports the workspace, and no deployed row wrote a setting.',
-    missedBecause: 'the chat rows read what a turn left, so a write the workspace acknowledged and then '
-      + 'dropped, or a snapshot that stopped carrying the soul the page shows, passed them all.',
-    provedRedAt: null,
-    redDirection: 'Planted on a loopback `vite dev` build of this tree: a soul write that is acknowledged '
-      + 'and never stored leaves `soul-persisted` missed.',
-  },
-  'machine-consent': {
-    id: 'machine-consent',
-    found: 'MA-041 asked for both consent branches of a cloud workspace\'s first use of the owner\'s '
-      + 'machine, and no deployed row let the agent reach for a machine that was not connected, '
-      + 'or let its own call raise the consent card.',
-    missedBecause: 'device-link drives the Environment pane\'s RPC against a machine already attached, and '
-      + 'approve-clears and two-machines grant consent before their first command, so a card that '
-      + 'never showed, or a connect prompt that never came, passed them all.',
-    provedRedAt: null,
-    redDirection: 'Planted on a loopback `vite dev` build of this tree: a device call that skips the '
-      + 'owner\'s consent leaves `consent-requested` missed.',
-  },
-  'device-job-output': {
-    id: 'device-job-output',
-    found: '2026-10-02: a command on the owner\'s machine that outlasted its call\'s foreground window became a job '
-      + 'whose output reached the workspace only as its settled result, so a build that ran for minutes showed nothing.',
-    missedBecause: 'machine-consent and two-machines run `hostname`, which answers inside the window, so no device '
-      + 'job ever formed; the device suites drive the daemon, the hub and the tunnel in-process against doubles.',
-    provedRedAt: null,
-    redDirection: 'Run on a loopback `vite dev` build of this tree with the daemon from 0be36f6fa^, before the device '
-      + 'leg streamed: the job reads completed with all 45 ticks in its result, but no job_output frame arrives, so '
-      + '`frames-in-order`, `every-tick-heard` and `heard-before-settle` are missed; the current daemon reaches all five '
-      + 'with 15 frames.',
-  },
-  'workspace-panes': {
-    id: 'workspace-panes',
-    found: 'The Diffs and Supervise panes (Supervise since removed) read a workspace\'s review baseline, run list and '
-      + 'triggers, and no deployed row asked any of them anything.',
-    missedBecause: 'the rows that write files read them back through the Files pane and the ledger, so a '
-      + 'baseline that stopped seeing a write or a run list that lost a settled turn '
-      + 'passed them all.',
-    provedRedAt: null,
-    redDirection: 'Planted on a loopback `vite dev` build of this tree: a review diff that reports no files '
-      + 'leaves `diff-shows-the-write` missed.',
-  },
-  'agent-nested-chat': {
-    id: 'agent-nested-chat',
-    found: 'A helper hired by a hired agent had no chat tab, and its owner in the Work tab was plain text, '
-      + 'so nothing opened its conversation: every chat address resolved one name in the root\'s roster.',
-    missedBecause: 'agent-tab opens a direct child only; delegation-tree builds a nested tree but reads the '
-      + 'ledger, never the grandchild\'s own socket or its reads.',
-    provedRedAt: null,
-    redDirection: 'Written with the fix and not yet run: the tier needs a deployment. On a build before the '
-      + 'fix the nested socket path answers 404 (the edge looks the joined path up as one root name) and '
-      + '`nested-socket-opens` is missed.',
-  },
-  'delegation-tree': {
-    id: 'delegation-tree',
-    found: 'Hosted subordinates that delegate in turn, settling a tree whose branches end at '
-      + 'different depths, had no deployed row: `delegation` hires at one level only.',
-    missedBecause: 'a nested hire runs in a subordinate the same workspace object hosts, one delegation '
-      + 'level down, and its answer reaches the root only through the middle helper\'s settlement, '
-      + 'none of which a one-level hire exercises.',
-    provedRedAt: 'b220f59f8',
-    redDirection: 'RED on the deployed build: a task hire settles at its helper\'s first turn end, so a helper '
-      + 'that hires its own and waits for the wake reports "has been hired" upward and the nested answer never '
-      + 'climbs; it stays red until a task hire waits for its helper\'s own delegated work. Also planted on '
-      + 'loopback `vite dev`: a delegation budget that refuses the nested hire leaves `nested-hire-settled` missed.',
-  },
-  'exploration': {
-    id: 'exploration',
-    found: 'Exploration on the deployed product had no row that read the Swarms pane or asked '
-      + 'whether a swarm\'s nodes, which run as agents of the workspace, settled.',
-    missedBecause: 'the eval tier\'s swarm arm asserts a search row exists on the cloud target and reads '
-      + 'neither the pane nor the nodes\' settlement, so a canvas that lost the node transcripts, '
-      + 'or a node left running, passed it.',
-    provedRedAt: 'b220f59f8',
-    redDirection: 'RED on the deployed build: every node errored at its 60 s budget while waiting out the '
-      + 'provider\'s rate-limit backoff, which the budget counts; it stays red until a node\'s budget '
-      + 'stops counting provider-mandated waits. Also planted on loopback `vite dev`: a canvas read that '
-      + 'drops the node transcripts leaves `pane-shows-the-run` and `every-node-an-agent-that-settled` missed.',
-  },
-  'deploy-door': {
-    id: 'deploy-door',
-    found: 'The Cloudflare door is new surface, so no owner has driven it by hand yet. What the '
-      + 'row exists for is the failure it would hide: a deployed door whose authorize URL is '
-      + 'missing `code_challenge_method`, or carries an empty `client_id`, renders a working '
-      + 'sign-in button and dies on Cloudflare\'s own page, where nothing of ours can see it.',
-    missedBecause: 'the authorize URL is built from a deployment VAR. Every pre-deploy proof '
-      + 'supplies that var itself — the unit rows call `authorizeUrl` with a literal, and the '
-      + 'workerd rows bind a fake authorization server — so no gate reads the URL the deployed '
-      + 'build actually mints, nor what it answers when the var is unset.',
-    provedRedAt: null,
-    redDirection: 'Not proved red against a deployed sha: the door has never been deployed. The '
-      + 'red direction is the URL, parameter by parameter — drop `code_challenge_method` from '
-      + '`authorizeUrl`, or leave `CLOUDFLARE_DEPLOY_CLIENT_ID` set to a blank string, and the '
-      + 'row fails on the shape while the page still renders. The first deployed run of this '
-      + 'tier is what turns that into a measurement.',
-  },
-  'capability-isolation': {
-    id: 'capability-isolation',
-    found: 'The owner asked for an object-capability model and a security verdict on it: one forbidden '
-      + 'operation, tried through native tools, codemode, a child agent and a slate, refused on all four '
-      + 'paths. No run had tried the same operation through all four on the product.',
-    missedBecause: 'each path is proved on its own tier: bun drives the web tool and a hired child\'s, '
-      + 'workerd drives `eval` and a slate\'s global fetch. A deployment whose eval sandbox or slate '
-      + 'loader was composed without the egress binding would pass every one of them.',
-    provedRedAt: null,
-    redDirection: 'A build carrying a planted hole fails the deploy\'s own source gates, so it reaches neither staging nor '
-      + 'production. The red direction is proved at each enforcement point on the tier that hosts it: `assertSafeUrl` skipped in '
-      + '`web/provider.ts` turns tests/first-run/capability-isolation.first-run.ts red on '
-      + 'both web paths, and `refusedHostname` skipped in `codemode-egress.ts` turns the workerd '
-      + 'codemode-sandbox and slate-egress rows red.',
-  },
-  'steer-correction': {
-    id: 'steer-correction',
-    found: 'A correction typed while the agent is still working has to reach the work: either the '
-      + 'running turn reads it at a step or it runs as the next turn. A correction the product '
-      + 'acknowledges and then drops leaves the agent finishing the instruction the user took back.',
-    missedBecause: 'unit-mid-turn-steer and the busy-chat workerd probe splice scripted turns; the '
-      + "composer's steer against a model on the deployment ran only in the trajectory eval family, "
-      + 'which is retired, and no first-run row sends one.',
-    provedRedAt: null,
-    redDirection: 'Not proved red against a deployed sha: a dropped steer cannot be deployed, and there '
-      + 'is no staging. The red direction is proved on planted evidence in steer-observation.test.ts: a '
-      + 'correction the running turn never read fails correction-applied, steer-is-durable and '
-      + 'listing-truthful, and a steer the workspace never answered fails landing.',
-  },
-  'multi-account': {
-    id: 'multi-account',
-    found: 'The owner asked on 2026-09-19 (m1447): "I would want multiple accounts per provider '
-      + 'capability for all providers, just like OMP has". The deployed product held one key per '
-      + 'provider: a second OpenAI key under a name could not sit beside the first, so no client could '
-      + 'list both and no workspace could say which one pays.',
-    missedBecause: 'every account proof stores its keys in a store the test built: core over an '
-      + 'in-memory vault, each backend over its own fixture, and the web panel over REST answered from '
-      + 'fixtures in the page. None stores a named key in the DEPLOYED vault and reads it back through '
-      + 'the panel listing, the CLI menu and a workspace\'s own choice.',
-    provedRedAt: 'e1051bd77',
-    redDirection: 'On e1051bd77 all seven subgoals miss on the mechanism: the vault refuses '
-      + '`openai.bearer@<name>` as an invalid credential key, so neither account is stored, listed or '
-      + 'removed; the CLI menu carries no accounts; `setProviderAccount` is no agent RPC method; and '
-      + '`setModel` refuses `openai@<name>/gpt-5.5`. Green needs the build with account keys (b29279646) '
-      + 'and a workspace\'s own account choice (61db52a07).',
-  },
-  'turn-rated': {
-    id: 'turn-rated',
-    found: 'The review of b53b8db77 (2026-10-02): production and staging rate turns through the Workers AI binding, '
-      + 'and the answer shape that path assumed ("bare, no usage") was never measured. Measured on a throwaway Worker '
-      + 'the same day, the binding answers `{ model, answers, usage }`.',
-    missedBecause: 'every rating test hands the decision port an answer the TEST author wrote, so a binding that '
-      + 'answers another shape, or refuses, rates nothing while every gate stays green.',
-    provedRedAt: null,
-    redDirection: 'Not yet run on a deployment: no build that rates turns is deployed. The red direction is any '
-      + 'deployed build before b53b8db77, where getQuality is no RPC, and a binding answer the port cannot read, '
-      + 'which leaves today\'s `rated` at 0 when the budget ends. The case waits on the `reads_changed` frame naming '
-      + 'getQuality, so a build that rates without announcing it is red the same way.',
-  },
-  'computer-desktop': {
-    id: 'computer-desktop',
-    found: 'The owner (2026-10-13, issue #100) asked the agent to use the computer while its desktop was open in the Env '
-      + 'panel. The agent took a web.screenshot of a remote browser, found no DISPLAY, installed Xvfb and started a '
-      + 'second screen nobody could see, and could not read the PNG it took of it.',
-    missedBecause: 'nothing returned the screen to a model, no process on the computer was told where the screen was, '
-      + 'and the desktop started only when a person opened it: every gate exercised the desktop through a person\'s '
-      + 'client, never through an agent.',
-    provedRedAt: null,
-    redDirection: 'Not yet run on a deployment: the scripted model learns this ask with the deploy that ships the desktop. '
-      + 'The red direction is fd76708a1, where the program stops at its first line: the same program through the eval '
-      + 'tool (packages/cli-backend/tests/computer-desktop-eval.test.ts) fails on that build with "computer.screenshot is '
-      + 'not a function", so no image comes back, and a window opened from its shell has no display to open on.',
-  },
-} satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** The model every case's workspace pins: the scripted one, served by the tiers' Worker (scripts/tier-model.ts). */
 export const FIRST_RUN_TIER: EvalTier = 'scripted';
@@ -754,19 +158,13 @@ export function firstRunPlan(suite: string): PublicSessionPlan | null {
  * `first-run-<case>-<subject>-<random>`; this wrapper trims the subject to the
  * case id alone, which keeps every case's name under the cap with room.
  */
-export function firstRunCasePlan(suite: string, caseId: FirstRunCase): PublicSessionPlan | null {
-  const plan = firstRunPlan(suite);
-
-  if (plan === null) return null;
-
-  return {
-    ...plan,
-    open: (request) => plan.open({ ...request, subject: SHORT_SUBJECT[caseId] }),
-  };
+/** A case's id: its file's name, `<id>.first-run.ts`, so the case set is the tracked files (`isFirstRunSuite`). */
+export function firstRunCaseId(moduleUrl: string): string {
+  return basename(fileURLToPath(moduleUrl), '.first-run.ts');
 }
 
 /**
- * The subject each case opens its workspace under, kept to one short word.
+ * The plan a case opens its workspace with, under `subject`: one short word.
  *
  * The resolver composes `eval-<suite-slug>-<subject>-<random>`, and the suite
  * slug alone (`first-run-files-outside-tree`) is already 26 characters — with
@@ -775,51 +173,17 @@ export function firstRunCasePlan(suite: string, caseId: FirstRunCase): PublicSes
  * then cannot be torn down. One short word keeps the attribution (the suite
  * slug says which tier, the record says which case) and every name short.
  */
-const SHORT_SUBJECT = {
-  'codemode-craft': 'craft',
-  'approve-clears': 'approve',
-  'two-machines': 'fleet',
-  'enter-sends': 'enter',
-  'files-outside-tree': 'files',
-  'slate': 'slate',
-  'command-refusal': 'command',
-  'preview-address': 'address',
-  'workspace-title': 'title',
-  'snapshot-after-turn': 'snapshot',
-  'every-tool': 'tools',
-  'sandbox-mount-write': 'mount',
-  'sandbox-exec-output': 'execout',
-  'public-share': 'public',
-  'share-capability-cut': 'cut',
-  'blueprint-fork': 'fork',
-  'slate-browser': 'browse',
-  'users-share': 'named',
-  'drive': 'drive',
-  'device-link': 'link',
-  'device-join': 'join',
-  'background-settle': 'wake',
-  'background-wake': 'bgwake',
-  'delegation': 'deleg',
-  'agent-tab': 'tab',
-  'agent-chats-persist': 'chats',
-  'agent-dismissed-chat': 'kept',
-  'agent-nested-chat': 'nested',
-  'agent-confined': 'confined',
-  'web-search': 'search',
-  'account-settings': 'account',
-  'workspace-settings': 'settings',
-  'machine-consent': 'consent',
-  'device-job-output': 'devjob',
-  'workspace-panes': 'panes',
-  'delegation-tree': 'tree',
-  'exploration': 'swarm',
-  'deploy-door': 'door',
-  'capability-isolation': 'isolation',
-  'steer-correction': 'steer',
-  'multi-account': 'accounts',
-  'turn-rated': 'rated',
-  'computer-desktop': 'desktop',
-} satisfies Record<FirstRunCase, string>;
+export function firstRunCasePlan(suite: string, subject: string): PublicSessionPlan | null {
+  const plan = firstRunPlan(suite);
+
+  if (plan === null) return null;
+
+  return {
+    ...plan,
+    open: (request) => plan.open({ ...request, subject }),
+  };
+}
+
 
 /** What a case's body is handed, and what it hands back. */
 export interface FirstRunSession extends EpisodeEvidenceReader {
@@ -841,7 +205,10 @@ export interface FirstRunRun<Session extends FirstRunSession = KinuPublicSession
 }
 
 export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSession, Plan = PublicSessionPlan> {
-  readonly id: FirstRunCase;
+  /** The case's id, `firstRunCaseId` of its file. */
+  readonly id: string;
+  /** What the case found, which a missed subgoal's failure names. */
+  readonly defect: FirstRunDefect;
   /** The mission the REST create is given — what this workspace is FOR. */
   readonly purpose: string;
   /** Omit the autonomous opening turn when the fixture needs an untouched fleet. */
@@ -939,7 +306,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
     }
 
     for (const subgoal of subgoals) {
-      expectReached(spec.id, subgoal);
+      expectReached(spec.id, spec.defect, subgoal);
     }
     });
   } catch (error) {
@@ -988,14 +355,14 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
  * failure text is the whole point, and a plain `Error` carries it identically in
  * every runner.
  */
-export function expectReached(caseId: FirstRunCase, subgoal: EvalSubgoal): void {
+export function expectReached(caseId: string, defect: FirstRunDefect, subgoal: EvalSubgoal): void {
   if (subgoal.reached) return;
-  throw new Error(`${caseId}/${subgoal.what}: ${subgoal.detail}`);
+  throw new Error(`${caseId}/${subgoal.what}: ${subgoal.detail} — the defect this case guards: ${defect.found}`);
 }
 
 /** Publish with the actual selected model; an operator-only case names none. */
 export async function publishFirstRunRecord(
-  suite: string, modelId: string | undefined, declared: readonly FirstRunCase[], observations: EvalObservation[],
+  suite: string, modelId: string | undefined, declared: readonly string[], observations: EvalObservation[],
 ): Promise<void> {
   const spend = reportLiveModelSpend(suite);
   await publishRunRecord({

@@ -184,7 +184,9 @@ import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codem
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
-import type { AgentStoreBroker } from "./agent-facets";
+import { AgentStoreBroker } from "./agent-facets";
+import type { AgentFacetCalls } from "./agent-facet/agent-facet";
+import type { AgentSnapshot } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel, SlateSurfaceValue } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
@@ -3272,12 +3274,17 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
       transcriptFor: (actor) => this.transcriptFor(actor),
-      ownRows: (actor, own) => this.agentStores(actor.actorId).inspect(own),
+      ownRows: (actor, own) => this.agentCall(actor.actorId, (isolate, snapshot) => isolate.inspect(snapshot, own)),
     }, request, authority);
   }
 
-  /** Every read or write of an agent's own stores goes here (D9). */
-  protected abstract agentStores(actorId: string): AgentStoreBroker;
+  /** Every read or write of an agent's own stores goes here (D9): a call into its isolate, bound to its snapshot. */
+  protected abstract agentCall<A>(actorId: string, call: (isolate: AgentFacetCalls, snapshot: AgentSnapshot) => Promise<A>): Promise<A>;
+
+  /** An agent's own stores as core's ports read them. */
+  protected agentStores(actorId: string): AgentStoreBroker {
+    return new AgentStoreBroker((call) => this.agentCall(actorId, call));
+  }
 
   /** Main's conversations are its own isolate's. */
   protected ownConversations(): ConversationRecall {
@@ -3294,10 +3301,9 @@ export abstract class ActorAgent extends Agent<Env> {
       // Strict: a dropped id cursor from an old client re-reads the newest page forever.
       const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
-      if (actor === undefined) return yield* Effect.promise(async () => this.agentStores(this.actorHandle().actorId).historyPage(page));
-      yield* this.requireSubordinateChat(actor);
+      if (actor !== undefined) yield* this.requireSubordinateChat(actor);
 
-      return yield* Effect.promise(async () => this.agentStores(actor).historyPage(page));
+      return yield* Effect.promise(async () => this.agentCall(actor ?? this.actorHandle().actorId, (isolate, snapshot) => isolate.historyPage(snapshot, page)));
     }));
   }
 

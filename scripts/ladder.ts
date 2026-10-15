@@ -32,6 +32,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { cpus } from 'node:os';
+import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { EVAL_TASK_TIMEOUT_SECONDS } from '../evals/src/config';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -48,10 +49,8 @@ import { auditClosure } from './ladder-audit';
 import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Closure, Inputs, Repo } from './ladder-closure';
-import {
-  isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
-  trackedFiles,
-} from './sources';
+import { isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { discoverArgv } from './python-suites';
 import { CLI_TEST_ROOT } from './test-cli';
 import { modulesReaching } from './import-closure';
@@ -80,7 +79,6 @@ function antiSlopRuleCount(): number {
   ).filter((rule) => rule.startsWith('anti-slop/')).length;
 }
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** Where the tracked hooks live, RELATIVE so git resolves it against each
  *  worktree's own root — see `--install-hooks`. */
@@ -3921,34 +3919,45 @@ function ciVerdict(asked: string, sha: string, report: string): number {
   return reportCIVerdicts(file, 'armada verdict ' + sha.slice(0, 12), report) ? 0 : 1;
 }
 
-/** A `--name=value` argument's value. */
-function argumentValue(name: string): string | undefined {
-  return process.argv.find((argument) => argument.startsWith('--' + name + '='))?.slice(name.length + 3);
+/** This program's options. `--run` is not one: everything after it is the command it wraps, split off unread. */
+const LADDER_OPTIONS = {
+  'ci-plan': { type: 'boolean' }, 'ci-verdict': { type: 'string' }, 'ci-costs': { type: 'string' }, 'ci-row': { type: 'string' },
+  'deploy-phase': { type: 'string' }, 'deploy-origin': { type: 'string' }, 'deploy-secrets': { type: 'string' },
+  tier: { type: 'string' }, gate: { type: 'string' }, changed: { type: 'string' }, verdicts: { type: 'string' },
+  artifacts: { type: 'string' }, skip: { type: 'string' }, 'no-cache': { type: 'boolean' }, serial: { type: 'boolean' },
+  matrix: { type: 'boolean' }, costs: { type: 'boolean' }, 'install-hooks': { type: 'boolean' }, 'audit-closure': { type: 'boolean' },
+} as const;
+
+/** The command line, read once: this program's options, and `--run`'s command when it wraps one. */
+function ladderArgs(argv: readonly string[]) {
+  const runAt = argv.indexOf('--run');
+  const { values } = parseArgs({ args: runAt === -1 ? [...argv] : argv.slice(0, runAt), options: LADDER_OPTIONS });
+
+  return { ...values, run: runAt === -1 ? undefined : argv.slice(runAt + 1) };
 }
+
+type LadderArgs = ReturnType<typeof ladderArgs>;
 
 /** What CI units are cut and weighed from: `ci-cost.json`, with the container runner's own measurements over it
  *  (`--ci-costs`, armada's timings). The plan and every task of one run are given the same file, so all cut the same
  *  units. */
-function ciPlanCosts(): HostedCosts {
-  const measured = argumentValue('ci-costs');
+function ciPlanCosts(measured: string | undefined): HostedCosts {
   const hosted = readHostedCosts();
   const labels = new Map(ciUnits(hosted).map((unit) => [unit.gate.run, unit.gate.label]));
 
   return measured === undefined ? hosted : withRunnerCosts(hosted, parseRunnerTimings(readFileSync(measured, 'utf8')), labels);
 }
 
-async function ciCommand(): Promise<number | undefined> {
-  const option = argumentValue;
+async function ciCommand(cli: LadderArgs): Promise<number | undefined> {
+  if (cli['ci-plan'] === true) {
+    const phases = phasesNamed(cli['deploy-phase']);
 
-  if (process.argv.includes('--ci-plan')) {
-    const phases = phasesNamed(option('deploy-phase'));
-
-    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts()) : armadaPlan(phases, option('deploy-origin'), option('deploy-secrets') ?? '')));
+    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts(cli['ci-costs'])) : armadaPlan(phases, cli['deploy-origin'], cli['deploy-secrets'] ?? '')));
 
     return 0;
   }
 
-  const asked = option('ci-verdict');
+  const asked = cli['ci-verdict'];
 
   if (asked === undefined) return undefined;
   const report = process.env['KINU_DEPLOY_REPORT'] ?? '';
@@ -3973,7 +3982,8 @@ if (import.meta.main) {
   // Read, and deleted from the environment, before this process spawns anything: no row sees the bucket's credentials.
   const remoteStore = fromEnvironment(process.env);
 
-  const ciStatus = await ciCommand();
+  const cli = ladderArgs(process.argv.slice(2));
+  const ciStatus = await ciCommand(cli);
 
   if (ciStatus !== undefined) process.exit(ciStatus);
 
@@ -4001,10 +4011,8 @@ if (import.meta.main) {
   // the shared default. The hand run and the ladder row are one figure. It is
   // the first branch, so a wrapped command's closure is the wrapper's graph
   // loaded and nothing another mode reads (`RUNNER_SCRIPT`, ladder-closure.ts).
-  const runAt = process.argv.indexOf('--run');
-
-  if (runAt !== -1) {
-    const argv = process.argv.slice(runAt + 1);
+  if (cli.run !== undefined) {
+    const argv = cli.run;
 
     if (argv.length === 0) {
       console.error('usage: bun scripts/ladder.ts --run <command…>');
@@ -4015,14 +4023,14 @@ if (import.meta.main) {
     process.exit(outcome.exitCode);
   }
 
-  if (process.argv.includes('--matrix')) {
+  if (cli.matrix === true) {
     printMatrix();
     process.exit(0);
   }
 
   // The measured table as a reader sees it, heaviest first, with the two
   // figures the wave admits against.
-  if (process.argv.includes('--costs')) {
+  if (cli.costs === true) {
     const plan = deployPlan();
     const costs = readCosts();
     const width = Math.max(...plan.map((row) => row.label.length));
@@ -4065,7 +4073,7 @@ if (import.meta.main) {
   // remembered to run an installer. Proven: a probe hook placed in a
   // worktree's own .githooks ran and blocked a commit there, with the value set
   // only once, here.
-  if (process.argv.includes('--install-hooks')) {
+  if (cli['install-hooks'] === true) {
     const set = Bun.spawnSync(['git', 'config', 'core.hooksPath', HOOKS_DIR], { cwd: root });
 
     if (set.exitCode !== 0) {
@@ -4086,16 +4094,15 @@ if (import.meta.main) {
   // a finding. This is the measurement behind a `reads` declaration, and the
   // red direction of the cache's soundness: a closure that errs narrow is a
   // stale green, and this is the one place that can see it.
-  if (process.argv.includes('--audit-closure')) {
-    const flag = process.argv.find((argument) => argument.startsWith('--tier='));
-    const tier = TIERS.find((candidate) => candidate === flag?.slice('--tier='.length)) ?? 'push';
-    const named = process.argv.indexOf('--gate');
+  if (cli['audit-closure'] === true) {
+    const tier = TIERS.find((candidate) => candidate === cli.tier) ?? 'push';
+    const named = cli.gate;
     const repo = repoAt(root, (run, files) => claims(run, files));
     const tracked = trackedTestFiles();
 
-    const gates = named === -1
+    const gates = named === undefined
       ? tierRun(tier)
-      : LADDER.filter((gate) => gate.run === process.argv[named + 1]);
+      : LADDER.filter((gate) => gate.run === named);
 
     if (gates.length === 0) {
       console.error('ladder --audit-closure --gate: expected an exact command from the declared gate table');
@@ -4133,32 +4140,30 @@ if (import.meta.main) {
     }
 
     console.log(
-      `\naudit-closure ${named === -1 ? `--tier=${tier}` : '--gate'}: ${String(audited)} gate(s) audited, `
+      `\naudit-closure ${named === undefined ? `--tier=${tier}` : '--gate'}: ${String(audited)} gate(s) audited, `
       + `${String(holes)} with undeclared reads, ${String(unproven)} red under the trace`,
     );
     process.exit(holes === 0 && unproven === 0 ? 0 : 1);
   }
 
-  const gateAt = process.argv.indexOf('--gate');
-  const selectedGate = gateAt === -1 ? undefined : LADDER.find((gate) => gate.run === process.argv[gateAt + 1]);
+  const selectedGate = cli.gate === undefined ? undefined : LADDER.find((gate) => gate.run === cli.gate);
 
-  if (gateAt !== -1 && selectedGate === undefined) {
+  if (cli.gate !== undefined && selectedGate === undefined) {
     console.error('ladder --gate: expected an exact command from the declared gate table');
     process.exit(2);
   }
 
   // A changed run proves the native selection only; CI still runs every complete row.
-  const changedFrom = process.argv.find((argument) => argument.startsWith('--changed='))?.slice('--changed='.length);
+  const changedFrom = cli.changed;
   // `--deploy-phase=<phase>[,<phase>…]`: phases of the deploy, their plan rows through ONE wave, the way deploy.sh
   // runs them. Every row runs to its end whatever goes red, so one run reports every red (L18).
-  const phaseAsked = process.argv.find((argument) => argument.startsWith('--deploy-phase='))?.slice('--deploy-phase='.length);
+  const phaseAsked = cli['deploy-phase'];
   const phasesAsked = phaseAsked?.split(',') ?? [];
   const deployPhases = DEPLOY_PHASES.filter((candidate) => phasesAsked.includes(candidate));
   const deployPhase = phaseAsked === undefined || deployPhases.length !== phasesAsked.length ? undefined : deployPhases;
-  const flag = process.argv.find((argument) => argument.startsWith('--tier='));
 
   const asked = (selectedGate === undefined || changedFrom !== undefined) && phaseAsked === undefined
-    ? flag?.slice('--tier='.length) ?? (changedFrom === undefined ? undefined : 'commit')
+    ? cli.tier ?? (changedFrom === undefined ? undefined : 'commit')
     : 'deploy';
 
   const tier = TIERS.find((candidate) => candidate === asked);
@@ -4178,15 +4183,15 @@ if (import.meta.main) {
   const armadaRows = deployPhase === undefined || selectedGate !== undefined ? [] : phaseGates.filter(onArmada);
   const declared = selectedGate === undefined ? phaseGates.filter((gate) => !armadaRows.includes(gate)) : [selectedGate];
 
-  const verdictPath = process.argv.find((argument) => argument.startsWith('--verdicts='))?.slice('--verdicts='.length);
+  const verdictPath = cli.verdicts;
 
   if (verdictPath !== undefined && Bun.spawnSync(['git', 'status', '--porcelain'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim() !== '') {
     throw new Error('CI row verdicts require a clean full SHA; commit the tree first');
   }
 
-  const costs = ciPlanCosts();
+  const costs = ciPlanCosts(cli['ci-costs']);
   // `--ci-row`: one CI unit, as the container runner runs them, each in its own task.
-  const ciRow = process.argv.find((argument) => argument.startsWith('--ci-row='))?.slice('--ci-row='.length);
+  const ciRow = cli['ci-row'];
 
   // A deploy phase's armada job runs its rows the same way (`armadaPlan`).
   const rowGate = ciRow === undefined ? undefined
@@ -4196,7 +4201,7 @@ if (import.meta.main) {
 
   const evidenceDir = rowGate !== undefined && onArmada(rowGate) ? adoptDeployEntry(rowGate) : undefined;
   // The task's own artifacts directory (`.armada.json`'s `{artifacts}`), which armada keeps and hands the run back.
-  const artifactsDir = process.argv.find((argument) => argument.startsWith('--artifacts='))?.slice('--artifacts='.length);
+  const artifactsDir = cli.artifacts;
   const evidence = evidenceDir === undefined || artifactsDir === undefined ? undefined : { dir: evidenceDir, artifacts: artifactsDir };
 
   const chosen = rowGate === undefined ? declared : [rowGate];
@@ -4239,7 +4244,7 @@ if (import.meta.main) {
 
   // `--skip=<why>` with `--deploy-phase`: the deploy cannot run these rows (after a failed upload, nothing that reads
   // the deployment can test this build), so each is named, not run, and why, in its report.
-  const skipWhy = process.argv.find((argument) => argument.startsWith('--skip='))?.slice('--skip='.length);
+  const skipWhy = cli.skip;
 
   if (skipWhy !== undefined && deployPhase !== undefined) {
     for (const gate of [...gates, ...armadaRows]) {
@@ -4295,7 +4300,7 @@ if (import.meta.main) {
   // quiet one. A derived gate runs under exactly the environment its key
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
-  const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: process.argv.includes('--no-cache') });
+  const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: cli['no-cache'] === true });
   const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
   const store = storeAt(defaultStoreDirectory());
@@ -4360,7 +4365,7 @@ if (import.meta.main) {
   // costs, the box's caps and the one-at-a-time browser lane), each gate's output printed whole when it ends; in a
   // tier, a gate that declares a phase runs alone first, as the deploy's preflight does. One gate, or `--serial`, runs
   // in order with its output live, which is how `--gate` reads it.
-  const concurrent = pending.length > 1 && !process.argv.includes('--serial');
+  const concurrent = pending.length > 1 && cli.serial !== true;
   let stdio: 'inherit' | 'pipe' | 'tee' = 'inherit';
   // A CI row reports its output and each file's seconds in its verdict file.
   const verdictRows = rowGate !== undefined;

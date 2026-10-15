@@ -15,15 +15,27 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · turn-rated';
 
-const CASE = 'turn-rated' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The review of b53b8db77 (2026-10-02): production and staging rate turns through the Workers AI binding, '
+    + 'and the answer shape that path assumed ("bare, no usage") was never measured. Measured on a throwaway Worker '
+    + 'the same day, the binding answers `{ model, answers, usage }`.',
+  missedBecause: 'every rating test hands the decision port an answer the TEST author wrote, so a binding that '
+    + 'answers another shape, or refuses, rates nothing while every gate stays green.',
+  provedRedAt: null,
+  redDirection: 'Not yet run on a deployment: no build that rates turns is deployed. The red direction is any '
+    + 'deployed build before b53b8db77, where getQuality is no RPC, and a binding answer the port cannot read, '
+    + 'which leaves today\'s `rated` at 0 when the budget ends. The case waits on the `reads_changed` frame naming '
+    + 'getQuality, so a build that rates without announcing it is red the same way.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'rated');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -37,6 +49,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       genesis: false,
       purpose: 'A terse assistant. Reply with one short line and use no tools.',
       modelCalls: 'expected',
@@ -81,4 +94,3 @@ function aborted(signal: AbortSignal): Promise<void> {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the corpus and the
  *  defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

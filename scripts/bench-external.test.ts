@@ -17,8 +17,8 @@ import {
   admissibility, armSpend, flipAccounting, pairArms, readHarborJob,
 } from './bench-external';
 import type { Admissibility, AdmissibilityCondition } from './bench-external';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 /** The pre-registration this family's corpus check reads, and only the fields it
  *  reads. A `looseObject` because a ledger row carries a design's whole record and

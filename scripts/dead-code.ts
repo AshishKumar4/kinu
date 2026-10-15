@@ -100,16 +100,13 @@ import * as v from 'valibot';
 import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet';
 import { readAliases } from './import-graph';
 import { parseJsonc } from './jsonc';
-import {
-  isDocument, isLockfile, isManifest, isParseable, isProductSource, isStylesheet, isVendoredSource,
-  isTestScaffold, isTextSource, trackedFiles,
-} from './sources';
+import { isDocument, isLockfile, isManifest, isParseable, isProductSource, isStylesheet, isVendoredSource, isTestScaffold, isTextSource, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   declarationOf, declaredBindings, declaredName, exportedLocalNames,
   importedNames, isReExport, moduleSpecifiers, parse, requiredSpecifiers, walk, type SyntaxNode,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/dead-code.lock.json`;
 

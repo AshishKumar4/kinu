@@ -11,7 +11,7 @@ import {
   listThumbs, listTurnRatings, qualitySeries, qualityWindow, ratingOf, recordTurnRating, retractThumbs,
 } from '../src/evolution/ratings';
 import {
-  createDecisionPort, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
+  bindingDecisionRun, createDecisionPort, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
 } from '../src/providers/decision-model';
 import { tierRefusals } from '../src/profiles/tier-refusals';
 import { readActivityLog } from '../src/identity/activity-log';
@@ -195,6 +195,31 @@ describe('the decision model', () => {
       { source: 'rating', spec: 'workers-ai/@cf/cloudflare/clef', usage: { input: 406, output: 0 } },
       { source: 'rating', spec: 'workers-ai/@cf/cloudflare/clef', usage: { input: 1802, output: 0 } },
     ]);
+  });
+
+  // `Ai.run` rereads its options from the shared binding after awaiting, so a raw-response call made meanwhile (the
+  // binding's chat completions) hands a rating its Response, or that Response's body. The native suites logged "clef
+  // streamed instead of answering" for a Response whose body was Clef's whole answer, as application/json.
+  test("reads Clef's answer from every shape the binding can hand back, and a refusal in any of them as REST's", async () => {
+    const answers = [
+      () => ({ ...CLEF_BINDING_ANSWER }),
+      () => Response.json(CLEF_BINDING_ANSWER),
+      () => Response.json(CLEF_BINDING_ANSWER).body ?? new ReadableStream(),
+    ];
+
+    for (const answer of answers) {
+      const port = createDecisionPort({
+        run: bindingDecisionRun({ run: async () => answer() }), model: clef, report: () => {}, refusals: noticesOf(createTestRuntime().rt).refusals,
+      });
+
+      expect(await port({ state: 's', questions: QUESTIONS })).toMatchObject({ answers: { satisfaction: { score: 0.5407 } }, usage: { input: 406 } });
+    }
+
+    const refused = bindingDecisionRun({
+      run: async () => Response.json({ errors: [{ message: 'You have used up your daily free allocation of 10,000 neurons.' }] }, { status: 429 }),
+    });
+
+    await expect(refused('@cf/cloudflare/clef', {})).rejects.toThrow('@cf/cloudflare/clef answered 429: You have used up your daily free allocation');
   });
 
   test("sends its model, state and questions, as Clef's published schema requires, and refuses an answer that skips a question", async () => {

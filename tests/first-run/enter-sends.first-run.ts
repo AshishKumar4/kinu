@@ -35,13 +35,23 @@ import { type RunEvent } from '../../packages/core/src/index';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER } from '../../packages/core/src/tui/index';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
 import { firstRunSpliceStep, firstRunTurnSettlement } from './turn-settlement';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · enter-sends';
 
-const CASE = 'enter-sends' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Enter did not send in the composer on a real terminal: the draft stayed put and no '
+    + 'turn ran.',
+  missedBecause: 'the in-process renderer negotiates no keyboard protocol and delivered CR '
+    + 'only. A tty can deliver Enter as LF, and the LF spelling hit opentui\'s default table, '
+    + 'which opens a line.',
+  provedRedAt: 'daad4aeee',
+  redDirection: 'the parent of daad4aeee binds `return` only, so the LF run submits nothing '
+    + 'and the deployed workspace records no user turn.',
+};
 
 /** The product path this case drives, as a file a pty child can execute. */
 const ENTRY = resolve(import.meta.dirname, 'fixtures/pty-cloud-chat.ts');
@@ -71,7 +81,7 @@ const SPELLINGS: readonly Spelling[] = [
   { what: 'enter-as-lf', bytes: '\n', marker: 'KINU-FIRST-RUN-LF' },
 ];
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'enter');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -84,6 +94,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A terse assistant. Reply with one short line and use no tools.',
       async run({ session, plan }) {
@@ -246,5 +257,3 @@ async function turnSettled(
     await tick.promise;
   }
 }
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

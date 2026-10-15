@@ -22,8 +22,8 @@ import { resolveSpecifier } from './import-graph';
 import { parse, walk } from './syntax';
 import type { Parsed, SyntaxNode } from './syntax';
 import { isDocument, isParseable, isTestFile, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const GATE = 'core-layering';
 

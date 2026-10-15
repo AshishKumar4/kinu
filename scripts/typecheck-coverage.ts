@@ -15,8 +15,8 @@ import { childrenRunning, exitOf } from './deadline';
 import { assertMeasured, finding } from './gate-ratchet';
 import { allCommands, invocation, parseShell } from './shell-words';
 import { isRunnableSuite, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 type TestException =
   | {

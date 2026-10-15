@@ -14,7 +14,8 @@ import {
 import { RunEventRecorder, parseStoredRunEvent } from '../src/events/recorder';
 import { codemodeCapabilitiesFor, narrowToolSurface } from '../src/tools/registry';
 import { inWorkMode, providersInWorkMode } from '../src/execution/work-mode';
-import { archiveSqlFromDatabase, restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/index';
+import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/index';
+import { sqlStorageOver } from '../src/identity/inline-primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { RunEvent } from '../src/events/types';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
@@ -761,14 +762,14 @@ describe('agent data in the one workspace snapshot', () => {
       second.apply({ op: 'insert', table: 'notes', rows: [{ slug: 'k', body: 'scout row', rank: 2 }] });
       first.apply({ op: 'insert', table: 'findings', rows: [{ id: 'f1', note: 'shared' }] });
 
-      const lines = await writeWorkspaceArchive(archiveSqlFromDatabase(w.db), {
+      const lines = await writeWorkspaceArchive(sqlStorageOver(w.db), {
         workspace: 'db-archive', source: 'local', now: 1,
       });
 
       const target = new Database(':memory:');
 
       try {
-        await restoreWorkspaceArchive(archiveSqlFromDatabase(target), lines);
+        await restoreWorkspaceArchive(sqlStorageOver(target), lines);
         const restoredSql = makeSql(target);
         // Read through a production store bound to the restored db. `listTables` orders by creation time, so sort by name.
         const restoredActor = testActorHandle(restoredSql, { actorId: w.a.actorId });

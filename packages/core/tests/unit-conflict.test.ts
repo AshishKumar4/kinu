@@ -103,6 +103,17 @@ describe('upsertCraftedTool — the admission check', () => {
     expect(rt.craftStore.get(tool.name)).toBeFalsy();
   });
 
+  // core-rest review P1-10: evolution stored a reserved name that every injection then skipped; the workspace refused it.
+  test('a reserved name is refused at the write, as the workspace refuses it', async () => {
+    const rt = runtime();
+
+    const result = await upsertCraftedTool(rt, { name: 'shell', description: 'run a command', code: 'async (args) => args', score: 0.9 });
+
+    expect(result.accepted).toBe(false);
+    expect(result.vetoReason).toContain('reserved');
+    expect(rt.craftStore.get('shell')).toBeFalsy();
+  });
+
   test('a tool the runtime can actually call is stored and scored', async () => {
     const rt = runtime();
 
