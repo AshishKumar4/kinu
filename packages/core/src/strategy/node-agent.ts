@@ -11,7 +11,7 @@ import type { ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { defineOperation, serve } from '../operations/operation';
 import { operationTool } from '../tools/operation-surfaces';
-import { HEAD_BUILTIN_TOOLS, OWNER_STOPPED } from '../heads/types';
+import { HEAD_BUILTIN_TOOLS, OWNER_STOPPED, unreportedHead } from '../heads/types';
 import { stoppedByOwner } from './live-workers';
 import { HeadCapture, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
@@ -574,26 +574,13 @@ export function runNodeAgent(
   }));
 }
 
-/**
- * The report of a node that produced none. Empty usage is stored as NULL, keeping "never
- * reported" distinct from zero.
- */
+/** The report of a node that produced none; its empty usage is stored as NULL, never as zero. */
 function unreportedNode(
   nodeId: string,
   spawnedAt: number,
   verdict: { status: 'errored' | 'aborted'; summary: string; errorMessage: string },
 ): HeadReport {
-  return {
-    id: nodeId,
-    status: verdict.status,
-    summary: verdict.summary,
-    evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
-    toolCalls: [],
-    stepCount: 0,
-    usage: {},
-    wallClockMs: Date.now() - spawnedAt,
-    errorMessage: verdict.errorMessage,
-  };
+  return unreportedHead({ id: nodeId, ...verdict, wallClockMs: Date.now() - spawnedAt });
 }
 
 /** In-isolate seams: the search's own journal and arbiter, called directly. */

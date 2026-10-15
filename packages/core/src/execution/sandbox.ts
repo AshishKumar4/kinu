@@ -804,11 +804,10 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   };
 }
 
-/** Container files at absolute paths: one batched directory read, or one direct stat/lstat. */
 /**
- * The computer's files over its handle: the one path the agent's file tools reach them by, under `/computer`. `through`
- * carries each call, so the executor's retry of a dropped connection and its activity mark cover file calls as they
- * cover commands.
+ * The computer's files over its handle, at absolute paths: the one path the agent's file tools reach them by, under
+ * `/computer`. A directory is one batched read; a stat is one direct stat or lstat. `through` carries each call, so the
+ * executor's retry of a dropped connection and its activity mark cover file calls as they cover commands.
  */
 export function sandboxFiles(
   handle: SandboxHandle, through: <T>(call: () => Promise<T>) => Promise<T> = (call) => call(),

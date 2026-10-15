@@ -70,7 +70,19 @@ export class ModelCatalogSession {
 
   /** Await the selected operation's catalog, independent of the live chat cache. */
   async contextFor(spec: string): Promise<PromptModelContext & ModelWindow> {
-    return Object.freeze({ id: spec, ...await this.windowFor(spec) });
+    const context: PromptModelContext & ModelWindow = { id: spec, ...await this.windowFor(spec), callsTools: this.callsTools(spec) };
+
+    return Object.freeze(context);
+  }
+
+  /** Whether `spec` calls tools, as its catalog row says: a row listing capabilities names tool calling among them, or
+   *  the model calls none. Undefined while no row, or no list, says. */
+  callsTools(spec?: string): boolean | undefined {
+    return this.infoOf(spec ?? this.deps.effectiveSpec())?.capabilities?.includes('tools');
+  }
+
+  private infoOf(spec: string): ModelInfo | null {
+    return spec === this.deps.effectiveSpec() ? this.armed(spec).info : this.others.get(spec) ?? null;
   }
 
   /** As {@link contextFor}, the window alone: what a head or swarm node on `spec` is admitted against. */
@@ -115,9 +127,8 @@ export class ModelCatalogSession {
 
   /** The turn's model, or another `spec` once warmed, as `pricing` reads it. */
   acceptedMedia(spec?: string): ReadonlySet<MediaModality> {
-    const own = this.deps.effectiveSpec();
-    const named = spec ?? own;
-    const info = named === own ? this.armed(own).info : this.others.get(named) ?? null;
+    const named = spec ?? this.deps.effectiveSpec();
+    const info = this.infoOf(named);
     // Only the provider segment is read (it selects the transport ceiling).
     const [provider] = named.trim().split('/');
 

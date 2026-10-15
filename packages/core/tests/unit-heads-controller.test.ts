@@ -406,7 +406,7 @@ describe('HeadController.run', () => {
     expect(promptsSeen[2]).toContain('consensus');
   });
 
-  test('records the per-head step trace; listRuns round-trips it', async () => {
+  test('a finished report writes no steps: the trace lands per step, and listRuns finds the head', async () => {
     const { journal } = newJournal();
 
     // Report id must match the spawned `input.id` for `recordReport` to land.

@@ -1,12 +1,12 @@
 import { codenameFor } from '../identity/naming';
-import type { SubordinateRosterEntry } from '../protocol';
+import type { SubordinateView } from '../protocol';
 import type { SeekCursor } from '../session/page';
 import type { SubordinateChild, SubordinateInspectionRequest, SubordinateInspectionResult } from './inspection';
 
 /** How the web UI reaches an agent below a direct child: its row in its parent's roster, kept or live. */
 
 /** A blank name is a pre-codename row; it shows the word pair it would have been born with. */
-export function agentTitle(entry: Pick<SubordinateRosterEntry, "name" | "displayName">): string {
+export function agentTitle(entry: Pick<SubordinateView, "name" | "displayName">): string {
   return entry.displayName.trim() || codenameFor(entry.name);
 }
 

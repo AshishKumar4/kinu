@@ -6,8 +6,8 @@ import type { StepTelemetry } from './events/step-stats';
 import type { Usage } from './usage';
 import type { WorkspaceSpend } from './read-models/workspace-spend';
 import type { CommandResult } from './execution/exec-result';
-import type { JobOutputTail } from './jobs/live-output';
 import type { MemoryNote } from './memory/note';
+import type { SubordinateStatus } from './delegation/agents-tool';
 
 /** A journalled branch's lifecycle in the head journal's own vocabulary; distinct from the drawing vocabulary of {@link ForkNode.status}. */
 export type ForkNodeLifecycle = HeadReportStatus | HeadUnsettledStatus;
@@ -53,10 +53,10 @@ export interface ExecutorCommandResult {
 	refusal?: Exclude<CommandResult, string>;
 }
 
-export type SubordinateStatus = "idle" | "working" | "awaiting_input" | "dismissed";
+export type { SubordinateStatus };
 
-/** Parent-owned roster from listSubordinates. */
-export interface SubordinateRosterEntry {
+/** A parent's roster row as the client sees it, from listSubordinates; the store's row is `SubordinateRosterEntry`. */
+export interface SubordinateView {
 	name: string;
 	/** Actor whose conversation `getChatHistoryPage({ actor })` pages; null until birth confirms one. */
 	actorId: string | null;
@@ -72,11 +72,11 @@ export interface SubordinateRosterEntry {
 }
 
 /** Evolution and one-question helpers get no tab or list row. */
-export function ownerFacingSubordinate(entry: Pick<SubordinateRosterEntry, "origin" | "lifetime">): boolean {
+export function ownerFacingSubordinate(entry: Pick<SubordinateView, "origin" | "lifetime">): boolean {
 	return !evolutionHelper(entry) && entry.lifetime === "durable";
 }
 
-export function evolutionHelper(entry: Pick<SubordinateRosterEntry, "origin">): boolean {
+export function evolutionHelper(entry: Pick<SubordinateView, "origin">): boolean {
 	return entry.origin === "evolution";
 }
 
@@ -92,26 +92,8 @@ export interface SubordinateActivityEvent {
 	timestamp: number;
 }
 
-/** A background job (auto-detached >30s tool call), from listBackgroundJobs. */
-export interface BackgroundJob {
-	id: string;
-	kind: string;
-	label: string | null;
-	workMode: "plan" | "build";
-	/** `serving`: running, holding an exposed port. */
-	status: "running" | "serving" | "completed" | "failed" | "cancelled";
-	result: string | null;
-	error: string | null;
-	createdAt: number;
-	settledAt: number | null;
-	retriedBy?: string | null;
-	/** Times a platform interruption re-drove this job. */
-	resumeAttempts?: number;
-	/** When the next attempt may start; null while nothing is owed, including during a running attempt. */
-	resumeAfter?: number | null;
-	serves?: number | null;
-	output?: JobOutputTail;
-}
+/** A background job (auto-detached >30s tool call), as listBackgroundJobs answers it. */
+export type { ListedBackgroundJob as BackgroundJob } from "./read-models/background-jobs";
 
 /** A pending device request (method `connect` asks for a device to exist); `always` is the per-workspace binding. */
 export interface PendingConsent {

@@ -610,7 +610,7 @@ export class LocalAgentSession {
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
     // The next turn awaits this before admitting input.
-    this.chat.measureSessionStart({ restored: this.chat.restoreHistory(), measure: !this.oneShot });
+    this.chat.measureSessionStart({ restored: this.chat.restoreWorkingHistory(), measure: !this.oneShot });
     this.ensureModelState();
     this.rearmLocalAlarm();
   }

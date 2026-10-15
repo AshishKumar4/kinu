@@ -8,7 +8,7 @@ import {
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
-  type DeviceRpcOptions,
+  type HubDeviceCallOptions,
 } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import { machine, oneMachine } from '@kinu.run/test-utils';
@@ -17,7 +17,7 @@ const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;
 
 const caller = async () => FAKE_CALLER;
 
-type RpcCall = [method: string, params: JsonValue[], opts: DeviceRpcOptions | undefined, caller: UserCaller];
+type RpcCall = [method: string, params: JsonValue[], opts: HubDeviceCallOptions | undefined, caller: UserCaller];
 
 function fakeHub(status: () => DeviceStatus): DeviceHubClient & { rpcCalls: RpcCall[] } {
   const rpcCalls: RpcCall[] = [];

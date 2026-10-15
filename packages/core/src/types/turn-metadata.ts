@@ -4,8 +4,8 @@
  *
  * Two axes say who a turn is from, and both stamps live here. `kinuAuthor` is display: whose words the row shows (the
  * operator's, or the harness's card). `kinuAuthorship` is authority: whose reach the turn runs under (the owner's, or
- * the hirer's). They differ on purpose: an owner's answer to a question resumes as a harness-written row under the
- * owner's authority.
+ * the hirer's). They differ on purpose: `ChatSession.resumeAnswered` resumes an owner's answer as a harness-written row
+ * (its summary of the answers) under the owner's authority.
  */
 import * as v from 'valibot';
 import type { JsonObject } from '../utils/json';

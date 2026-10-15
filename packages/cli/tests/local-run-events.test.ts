@@ -5,7 +5,8 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { initWorkspaceSchema, parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { makeWorkspaceSchemaSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
+import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { stampSchemaGenesis } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -17,7 +18,7 @@ async function readLocal(expression: string): Promise<JsonValue> {
   // A workspace as `kinu create` leaves one: the whole schema, and `run_events` scoped by its main actor.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const actor = createTestActorsOver(db, { name: 'jarvis' }).main;
-  stampSchemaGenesis(db);
+  stampSchemaGenesis((ddl) => db.exec(ddl));
 
   const row = (index: number, type: string, extra: JsonObject = {}) => {
     const ts = new Date(1_700_000_000_000 + index * 1000).toISOString();

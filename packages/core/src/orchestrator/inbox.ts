@@ -400,6 +400,11 @@ export function signalCardId(idempotencyKey: string): string {
   return `sig:${idempotencyKey}`;
 }
 
+/** A delivery's card: its idempotency key's, so a redelivery shows the same card, or a fresh one. */
+function cardIdOf(signal: Pick<AgentSignal, 'idempotencyKey'>): string {
+  return signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}`;
+}
+
 export class Inbox {
   private pending: DeliveredSignal[] = [];
   private absorbed: DeliveredSignal[] = [];
@@ -447,7 +452,7 @@ export class Inbox {
    * queues as a turn of its own. The busy read and buffer push are synchronous.
    */
   send(words: UserWords): Promise<SendOutcome> {
-    const delivered: DeliveredUserSignal = { ...words, cardId: words.idempotencyKey ? signalCardId(words.idempotencyKey) : `sig-${nanoid()}` };
+    const delivered: DeliveredUserSignal = { ...words, cardId: cardIdOf(words) };
 
     if (!this.busy) return this.queueUsers([delivered], { idempotent: false });
     this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
@@ -462,7 +467,7 @@ export class Inbox {
   /** What a delivery hands a running turn, spliced at its next step; false with no turn running, when it waits for a
    *  turn of its own. Never opens one: its chat's admission does that. */
   landMidTurn(signal: AgentSignal): boolean {
-    const delivered: DeliveredSignal = { ...signal, cardId: signal.idempotencyKey ? signalCardId(signal.idempotencyKey) : `sig-${nanoid()}` };
+    const delivered: DeliveredSignal = { ...signal, cardId: cardIdOf(signal) };
 
     if (isUserSignal(delivered) || !this.busy) return false;
     this.splice(delivered);
@@ -743,18 +748,10 @@ export class Inbox {
           { signal: signal.kind },
         );
       } else {
-        diagnostics.failure(
-          'signal.preempted',
-          new KinuError('unavailable', 'the host pre-empted the signal turn'),
-          { signal: signal.kind },
-        );
+        preempted(signal.kind);
       }
     } catch (err) {
-      diagnostics.failure(
-        'signal.enqueue_failed',
-        toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }),
-        { signal: signal.kind },
-      );
+      enqueueFailed(toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }), signal.kind);
     }
 
     this.moveCard(signal.cardId, 'undelivered');
@@ -797,17 +794,9 @@ export class Inbox {
         return 'queued';
       }
 
-      diagnostics.failure(
-        'signal.preempted',
-        new KinuError('unavailable', 'the host pre-empted the signal turn'),
-        { signal: USER_MESSAGE_SIGNAL_KIND },
-      );
+      preempted(USER_MESSAGE_SIGNAL_KIND);
     } catch (err) {
-      diagnostics.failure(
-        'signal.enqueue_failed',
-        toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }),
-        { signal: USER_MESSAGE_SIGNAL_KIND },
-      );
+      enqueueFailed(toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }), USER_MESSAGE_SIGNAL_KIND);
     }
 
     return 'undelivered';
@@ -827,8 +816,21 @@ export class Inbox {
 
 const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text;
 
-/** Producer metadata spreads first so the inbox owns `kinuEvent`/`drainTurnId`; the author stamp goes last. */
-const turnMetadata = (signal: AgentSignal): JsonObject => {
+/** The host took a signal's turn and did not run it. */
+function preempted(kind: string): void {
+  diagnostics.failure('signal.preempted', new KinuError('unavailable', 'the host pre-empted the signal turn'), { signal: kind });
+}
+
+/** A signal's turn could not be enqueued. */
+function enqueueFailed(failure: KinuError, kind: string): void {
+  diagnostics.failure('signal.enqueue_failed', failure, { signal: kind });
+}
+
+/**
+ * The metadata a signal's own turn opens under: its event, its reply's drain, its author; a delivery's as the inbox's.
+ * Producer metadata spreads first so the inbox owns `kinuEvent`/`drainTurnId`; the author stamp goes last.
+ */
+export const turnMetadata = (signal: AgentSignal): JsonObject => {
   const metadata: JsonObject = { ...signal.metadata, kinuEvent: signal.kind };
 
   if (signal.replyTurnId) metadata.drainTurnId = signal.replyTurnId;
@@ -845,6 +847,3 @@ function reportRedeliveryFailure(kind: string) {
     );
   };
 }
-
-/** The metadata a signal's own turn opens under: its event, its reply's drain, its author; a delivery's as the inbox's. */
-export { turnMetadata };

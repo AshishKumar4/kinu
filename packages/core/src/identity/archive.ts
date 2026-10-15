@@ -18,6 +18,7 @@ import { KinuError } from '../obs/error';
 import { VfsExportPageSchema } from '../vfs/export-page';
 import { isNimbusTable } from '../vfs/nimbus-tables';
 import { isTreeRelativePath, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { FOLDER_SUBTREE } from '../vfs/resolve';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 
@@ -35,7 +36,7 @@ function bytesAsArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 /** Bumped only when a reader would misread an older archive. */
-const WORKSPACE_ARCHIVE_VERSION = 3;
+const WORKSPACE_ARCHIVE_VERSION = 4;
 
 export const WORKSPACE_ARCHIVE_EXTENSION = '.kinu.jsonl';
 
@@ -72,13 +73,6 @@ export interface ArchiveSqlCursor {
   rows: number;
 }
 
-export interface ArchiveFilesCursor {
-  phase: 'files';
-  after: string;
-  rows: number;
-  files: number;
-}
-
 export interface ArchiveAgentsCursor {
   phase: 'agents';
   actor: string;
@@ -96,7 +90,7 @@ interface ArchiveStoreCursor {
   files: number;
 }
 
-export type ArchiveCursor = ArchiveSqlCursor | ArchiveAgentsCursor | ArchiveFilesCursor | ArchiveStoreCursor;
+export type ArchiveCursor = ArchiveSqlCursor | ArchiveAgentsCursor | ArchiveStoreCursor;
 
 /** The only cursor wire schema: a copy's `v.object` would silently strip unknown keys such as `tables`. */
 export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
@@ -120,12 +114,6 @@ export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('ph
     rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   }),
   v.object({
-    phase: v.literal('files'),
-    after: v.pipe(v.string(), v.nonEmpty()),
-    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-    files: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-  }),
-  v.object({
     phase: v.literal('store'),
     pin: v.pipe(v.string(), v.startsWith(ARCHIVE_PIN_PREFIX)),
     root: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
@@ -135,21 +123,6 @@ export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('ph
     files: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   }),
 ]);
-
-export interface ArchiveFileEntry {
-  path: string;
-  type: 'file' | 'directory';
-}
-
-export interface ArchiveFileSource {
-  listEntries(): Promise<readonly ArchiveFileEntry[]>;
-  readFile(path: string): Promise<Uint8Array>;
-}
-
-export interface ArchiveFileTarget {
-  writeFile(path: string, data: Uint8Array): Promise<void>;
-  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
-}
 
 export interface ArchivePinnedStore {
   readdir(path: string): readonly string[];
@@ -183,17 +156,14 @@ export interface ArchiveExportOptions {
   /** Soft page budget; an oversized row is still emitted whole. */
   maxBytes?: number;
   now?: number;
-  /** Authoritative files outside `sql`; null declares a SQL-only workspace. */
-  files?: ArchiveFileSource | null;
-}
-
-/** Cloud-only: a local workspace keeps its files on disk and every actor's rows in `sql`. */
-interface CloudArchiveSources {
+  /** The workspace's files as one store, whichever backend keeps them: the cloud's own, a local disk's staged into one.
+   *  Absent declares a SQL-only workspace. */
   store?: ArchiveStoreSource | null;
+  /** Cloud-only: a local workspace keeps every actor's rows in `sql`. */
   agents?: ArchiveAgentSource | null;
 }
 
-type ExportOptions = ArchiveExportOptions & CloudArchiveSources;
+type ExportOptions = ArchiveExportOptions;
 
 /** One page of an agent's own rows: row records, then its section's close once `next` is null. */
 export interface ArchiveAgentPage {
@@ -251,17 +221,6 @@ interface AgentRecord {
   rows: number;
 }
 
-interface FileRecord {
-  t: 'file';
-  path: string;
-  data: string;
-}
-
-interface DirectoryRecord {
-  t: 'directory';
-  path: string;
-}
-
 interface PageRecord {
   t: 'page';
   page: VfsExportPage;
@@ -280,7 +239,7 @@ interface EndRecord {
   actors: number;
 }
 
-type ArchiveRecord = ArchiveHeader | SchemaRecord | RowRecord | AgentRecord | FileRecord | DirectoryRecord | PageRecord | ChunksRecord | EndRecord;
+type ArchiveRecord = ArchiveHeader | SchemaRecord | RowRecord | AgentRecord | PageRecord | ChunksRecord | EndRecord;
 
 const EncodedSqlValueSchema: v.GenericSchema<EncodedSqlValue> = v.union([
   v.string(), v.number(), v.boolean(), v.null(), v.object({ $b64: v.string() }),
@@ -311,8 +270,6 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
     agent: v.optional(v.string()),
   }),
   v.object({ t: v.literal('agent'), actor: v.string(), rows: v.number() }),
-  v.object({ t: v.literal('file'), path: v.string(), data: v.string() }),
-  v.object({ t: v.literal('directory'), path: v.string() }),
   v.object({ t: v.literal('page'), page: VfsExportPageSchema }),
   v.object({ t: v.literal('chunks'), chunks: v.array(v.object({ hash: v.string(), data: v.string() })) }),
   v.object({ t: v.literal('end'), rows: v.number(), files: v.number(), actors: v.number() }),
@@ -432,31 +389,6 @@ function withoutRowidKey(sql: SqlExec, table: SchemaObject): Effect.Effect<reado
   return columns.length === 0
     ? Effect.die(new Error(`Cannot order a WITHOUT ROWID export of "${table.name}": it has no primary key.`))
     : Effect.succeed(columns.map((column) => column.name));
-}
-
-function archivePath(path: string): Effect.Effect<string> {
-  return !isTreeRelativePath(path) ? Effect.die(new Error(`Invalid workspace archive path: ${JSON.stringify(path)}.`)) : Effect.succeed(path);
-}
-
-function archiveEntries(source: ArchiveFileSource): Effect.Effect<ArchiveFileEntry[]> {
-  return Effect.gen(function* () {
-    const listed = yield* Effect.promise(async () => [...await source.listEntries()]);
-    const entries = yield* Effect.forEach(listed, (entry) => Effect.map(archivePath(entry.path), (path) => ({ path, type: entry.type })));
-
-    entries.sort((a, b) => {
-      if (a.path === b.path) return 0;
-
-      return a.path < b.path ? -1 : 1;
-    });
-
-    for (let i = 1; i < entries.length; i++) {
-      if (entries[i - 1].path === entries[i].path) {
-        return yield* Effect.die(new Error(`Workspace archive file source listed ${JSON.stringify(entries[i].path)} more than once.`));
-      }
-    }
-
-    return entries;
-  });
 }
 
 interface PageSink {
@@ -729,30 +661,6 @@ function agentsPhase(source: ArchiveAgentSource, agents: readonly string[], { si
   });
 }
 
-function filesPhase(source: ArchiveFileSource, { sink, walk }: PageState, page: {
-  readonly cursor: ArchiveFilesCursor | null; readonly maxBytes: number; readonly count: { files: number };
-}): Effect.Effect<ArchivePage | null> {
-  return Effect.gen(function* () {
-    for (const entry of yield* archiveEntries(source)) {
-      if (page.cursor && entry.path <= page.cursor.after) continue;
-
-      if (entry.type === 'directory') {
-        emitTo(sink, { t: 'directory', path: entry.path });
-      } else {
-        emitTo(sink, { t: 'file', path: entry.path, data: bytesToBase64(yield* Effect.promise(() => source.readFile(entry.path))) });
-      }
-
-      page.count.files++;
-
-      if (sink.bytes >= page.maxBytes) {
-        return { lines: sink.lines, next: { phase: 'files', after: entry.path, rows: walk.rows, files: page.count.files } };
-      }
-    }
-
-    return null;
-  });
-}
-
 /** Runtimes reinstall on use. */
 const MAIN_HOME_NOT_CARRIED = { '.nimbus': true } satisfies Record<string, true>;
 
@@ -764,6 +672,8 @@ function carriedRoots(pinned: ArchivePinnedStore): string[] {
     ...under(WORKSPACE_ROOT, (name) => !Object.hasOwn(MAIN_HOME_NOT_CARRIED, name)),
     ...under('/home', (name) => `/home/${name}` !== WORKSPACE_ROOT),
     ...under(SLATES_ROOT, () => true),
+    // A local workspace's folder, whole, once it holds anything; a cloud workspace has none.
+    ...(pinned.readdir(FOLDER_SUBTREE).length > 0 ? [FOLDER_SUBTREE] : []),
   ];
 }
 
@@ -773,6 +683,8 @@ function isCarriedRoot(stored: string): boolean {
   const root = `/${normalizeVfsPath(stored)}`;
   const parent = root.slice(0, Math.max(0, root.lastIndexOf('/')));
   const name = root.slice(parent.length + 1);
+
+  if (root === FOLDER_SUBTREE) return true;
 
   if (!isTreeRelativePath(name)) return false;
 
@@ -833,14 +745,6 @@ function treePhases(opts: ExportOptions, state: PageState, page: {
   return Effect.gen(function* () {
     const { cursor, maxBytes, count } = page;
 
-    if (opts.files) {
-      const full = yield* filesPhase(opts.files, state, { cursor: cursor?.phase === 'files' ? cursor : null, maxBytes, count });
-
-      if (full !== null) return full;
-    } else if (cursor?.phase === 'files') {
-      return yield* cannotResume('its workspace file source is unavailable');
-    }
-
     if (opts.store) return yield* storePhase(opts.store, state, { cursor: cursor?.phase === 'store' ? cursor : null, maxBytes, count });
 
     return cursor?.phase === 'store' ? yield* cannotResume('its workspace store is unavailable') : null;
@@ -859,7 +763,7 @@ export function readWorkspaceArchivePage(
     const live = schema.filter((o) => o.dumpRows);
     const agents = opts.agents?.list() ?? [];
     const state: PageState = { sink: { lines: [], bytes: 0 }, walk: { index: 0, after: null, rows: cursor?.rows ?? 0 } };
-    const count = { files: cursor?.phase === 'files' || cursor?.phase === 'store' ? cursor.files : 0 };
+    const count = { files: cursor?.phase === 'store' ? cursor.files : 0 };
 
     if (cursor === null) emitHeader(state.sink, schema, opts, agents);
 
@@ -869,7 +773,7 @@ export function readWorkspaceArchivePage(
       if (full !== null) return full;
     }
 
-    if (cursor?.phase !== 'files' && cursor?.phase !== 'store') {
+    if (cursor?.phase !== 'store') {
       if (opts.agents) {
         const full = yield* agentsPhase(opts.agents, agents, state, { cursor: cursor?.phase === 'agents' ? cursor : null, maxBytes });
 
@@ -954,8 +858,7 @@ export interface ArchiveRestoreResult {
 }
 
 export interface ArchiveRestoreOptions {
-  /** Opened lazily at the first file record, after SQL has landed; required if the archive carries files. */
-  files?: () => ArchiveFileTarget;
+  /** Opened lazily at the first page, after SQL has landed; required if the archive carries files. */
   store?: () => ArchiveStoreTarget;
 }
 
@@ -978,8 +881,6 @@ function matchesEnd(sql: SqlExec, end: EndRecord | null, carried: { rows: number
     ? Effect.succeed(restoredActors)
     : Effect.die(new Error(`This archive is damaged: it declares ${end.actors} actors but restored ${restoredActors}.`));
 }
-
-const NO_FILE_TARGET = 'This archive contains workspace files, but no filesystem target was provided.';
 
 const NO_STORE_TARGET = 'This archive contains a workspace store, but no store target was provided.';
 
@@ -1009,14 +910,8 @@ export function restoreWorkspaceArchive(
     let rows = 0;
     let fileRecords = 0;
     let files = 0;
-    let fileTarget: ArchiveFileTarget | null = null;
+    let treeBegun = false;
     const store = storeRestore(opts.store);
-
-    const openFiles = (): Effect.Effect<ArchiveFileTarget> => {
-      fileTarget ??= opts.files?.() ?? null;
-
-      return fileTarget ? Effect.succeed(fileTarget) : Effect.die(new Error(NO_FILE_TARGET));
-    };
 
     const writer = new ArchiveRowWriter(sql);
 
@@ -1049,7 +944,7 @@ export function restoreWorkspaceArchive(
 
       if (end) return yield* Effect.die(new Error('This archive has records after its end marker.'));
 
-      if (fileRecords > 0 && SQL_RECORDS.has(record.t)) {
+      if (treeBegun && SQL_RECORDS.has(record.t)) {
         return yield* Effect.die(new Error('This archive has SQL records after its workspace files.'));
       }
 
@@ -1073,30 +968,9 @@ export function restoreWorkspaceArchive(
           writer.close(record);
           break;
 
-        case 'directory': {
-          const path = yield* archivePath(record.path);
-          finishSql();
-          const target = yield* openFiles();
-          yield* Effect.promise(() => target.mkdir(path, { recursive: true }));
-          fileRecords++;
-          break;
-        }
-
-        case 'file': {
-          const path = yield* archivePath(record.path);
-          finishSql();
-          const target = yield* openFiles();
-          const slash = path.lastIndexOf('/');
-
-          if (slash > 0) yield* Effect.promise(() => target.mkdir(path.slice(0, slash), { recursive: true }));
-          yield* Effect.promise(() => target.writeFile(path, base64ToBytes(record.data)));
-          fileRecords++;
-          files++;
-          break;
-        }
-
         case 'page':
         case 'chunks': {
+          treeBegun = true;
           finishSql();
           const taken = yield* store.take(record);
           fileRecords += taken.entries;

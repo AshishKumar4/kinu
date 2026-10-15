@@ -10,7 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -41,7 +41,7 @@ import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-se
 import { UserAccountMemory } from './account-memory';
 import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, SqlValue } from '@kinu.run/core';
 import {
-  UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
+  UserSessions, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
 
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
@@ -512,20 +512,13 @@ export class UserDO extends Agent<Env> {
 
   issueCliAgentConnectTicket(caller: UserCaller, input: {
     userId: string;
-    agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
     agentName: string;
     cliTokenHash: string;
-    capabilities?: Array<typeof CLI_AGENT_WEBSOCKET_CAPABILITY>;
   }): ReturnType<UserSessions['issueCliAgentConnectTicket']> {
     return this.sessions.issueCliAgentConnectTicket(caller, input);
   }
 
-  verifyCliAgentConnectTicket(caller: UserCaller, ticket: string, expected: {
-      userId: string;
-      agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
-      agentName: string;
-      capability: typeof CLI_AGENT_WEBSOCKET_CAPABILITY;
-    }): Promise<CliAgentConnectTicketVerification> {
+  verifyCliAgentConnectTicket(caller: UserCaller, ticket: string, expected: { userId: string; agentName: string }): Promise<CliAgentConnectTicketVerification> {
     return this.sessions.verifyCliAgentConnectTicket(caller, ticket, expected);
   }
 

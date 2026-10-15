@@ -47,7 +47,7 @@ test('a sweep between a turn\'s answer and its claim settle leaves the claim to 
     expect(swept.active).toEqual(['turn-settling']);
     expect(actor.stores.claims.read('turn-settling')?.status).toBe('admitted');
 
-    actor.session.settleTurnClaim(lease, 'completed');
+    actor.session.closeTurnClaim(lease, 'completed')();
     actor.session.finishTurn(lease);
     expect(actor.stores.claims.read('turn-settling')).toMatchObject({ status: 'settled', outcome: 'completed' });
   } finally {

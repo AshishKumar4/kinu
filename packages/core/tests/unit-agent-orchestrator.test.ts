@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
-import { recordedTurn } from '../src/orchestrator/evolution-lanes';
+import { improvementLanesOpen, recordedTurn } from '../src/orchestrator/evolution-lanes';
 import { WORKSPACE_CREATED_EVENT } from '../src/identity/soul';
 import { RUN_END_REASONS, creditedTurnId } from '../src/orchestrator/turn-lifecycle';
 import { declareTerminalRoster, type TerminalActor, type TerminalTurnFacts } from '../src/orchestrator/terminal-roster';
@@ -344,15 +344,24 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 describe('AgentOrchestrator — the settle’s claimable parts', () => {
   test('the lanes open only on a completed Build turn', () => {
     for (const workMode of ['build', 'plan'] as const) {
-      for (const status of RUN_END_REASONS) {
-        const { engine } = fakeEngine();
-        const { host } = fakeHost();
-        const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
-        orch.beginTurn(Date.now(), { kinuMode: workMode });
-
-        expect(orch.improvementLanesOpen(status)).toBe(status === 'completed' && workMode === 'build');
-      }
+      for (const status of RUN_END_REASONS) expect(improvementLanesOpen(status, workMode)).toBe(status === 'completed' && workMode === 'build');
     }
+  });
+
+  test("a turn's crafted-tool record observes its eval calls only while it evolves: not in Plan, nor once restricted to it", () => {
+    const { engine } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: newEventLog() }));
+
+    const recording = (metadata: JsonObject, restrict?: 'plan') => {
+      orch.beginTurn(Date.now(), metadata);
+
+      if (restrict !== undefined) orch.restrictTurnWorkMode(restrict);
+
+      return orch.acc.ledgers.craft.recording;
+    };
+
+    expect([recording({}), recording({ kinuMode: 'plan' }), recording({}, 'plan'), recording({})]).toEqual([engine.enabled, false, false, engine.enabled]);
   });
 
   test('the roster decides the title subject, the same for every backend', () => {

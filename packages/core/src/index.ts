@@ -160,16 +160,16 @@ export {
   WORKSPACE_ARCHIVE_EXTENSION,
   readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
   ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
-  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveFilesCursor, type ArchiveAgentPage,
-  type ArchiveExportOptions, type ArchivePage,
-  type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
+  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveAgentPage,
+  type ArchiveExportOptions, type ArchivePage, type ArchiveStoreSource,
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive';
 
 export { SCHEMA_STAMPS } from './identity/schema-genesis';
 
 export {
-  durableStamps, pragmaStamps, readStamp, requireSchemaStamp, StoragePredatesReleaseError, writeStamp, type SchemaClass, type StampReading, type StampStore,
+  durableStamps, pragmaStamps, readStamp, requireSchemaStamp, stampSchemaGenesis, StoragePredatesReleaseError, writeStamp,
+  type SchemaClass, type StampReading, type StampStore,
 } from './identity/schema-stamp';
 
 export {
@@ -559,7 +559,7 @@ export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorRefer
 
 export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './identity/actor-key';
 
-export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
+export { recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
 
 export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } from './types/subordinates';
 
@@ -569,7 +569,7 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun, type DeliveredRunPorts } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
@@ -805,7 +805,6 @@ export {
 export {
   assertToolsSupportedByModel,
   resolvePromptModelProfile,
-  type PromptModelCapability,
   type PromptModelContext,
   type PromptModelFamily,
   type PromptModelProfile,
@@ -1054,6 +1053,7 @@ export {
 } from './execution/toolchain';
 
 export {
+  WS_OPEN,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   WORKSPACE_HAS_NO_OWNER, isWorkspaceUnattachedError, SEVERAL_DEVICES_CONNECTED, isDeviceAmbiguityError, isSandboxUnavailableError, DEVICE_DUPLICATE_REQUEST,
   DeviceCancelResultSchema, nextDeviceRequestId, DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
@@ -1067,7 +1067,7 @@ export {
 } from './execution/device-protocol';
 
 export {
-  DeviceSocketHub, deviceIdFromSocket, WS_OPEN, type DeviceSocket,
+  DeviceSocketHub, deviceIdFromSocket, type DeviceSocket,
   type DeviceSocketCtx,
 } from './execution/device-hub';
 
@@ -1153,7 +1153,7 @@ export type {
 
 export {
   workspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
-  workspaceArchiveStore, workspaceArchiveTarget, archiveFileTree,
+  workspaceArchiveStore, workspaceArchiveTarget,
 } from './vfs/workspace-planes';
 
 
@@ -1702,9 +1702,11 @@ export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTur
 
 export {
   ChatSession, type ChatSessionOptions, type ChatSessionPorts, type OpenWork, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
-  type PreparedTurn, type TurnOpening, type TurnOpeningAsk, openingCacheCold, type OwedTerminalEffectsInput, type SessionEvent, type TurnEndEvent, type SendOptions, type SendLandingWaiter, type DeliveredRun,
+  type PreparedTurn, type TurnOpening, type TurnOpeningAsk, openingCacheCold, type OwedTerminalEffectsInput, type SessionEvent, type TurnEndEvent, type SendOptions, type SendLandingWaiter,
   STEP_CUT_CHUNK, StepCutDataSchema,
 } from './orchestrator/chat-session';
+
+export type { DeliveredRun } from './orchestrator/chat-queue';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
@@ -2563,7 +2565,7 @@ export {
 
 export {
   type DeviceHubClient,
-  type DeviceRpcOptions,
+  type HubDeviceCallOptions,
   type HubDeviceTransportOpts,
   createHubDeviceTransport,
 } from './execution/hub-device-transport';

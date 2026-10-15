@@ -25,7 +25,7 @@ import {
   DefaultExecutionRouter,
   adaptMemory,
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, createBashShell, holdsGrant, createInheritedApprovalPolicy,
-  initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, pragmaStamps, writeStamp, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
+  initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, bearWorkspaceIdentity, stampSchemaGenesis, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver,
@@ -216,32 +216,27 @@ function buildCLIRuntime(
   initFiberTable(execRaw);
 
   let actor: ActorHandle;
-  let agentId: string;
   let agentName: string;
 
   if (config.facet !== undefined) {
     if (!config.actorBinding) throw new KinuError('missing', 'A local facet requires its root-issued actor binding.');
     initActorStateSchema(makeWorkspaceSchemaSql(db));
     actor = config.actor ?? bindLocalActor(sql, config.actorBinding);
-    agentId = actor.actorId;
     agentName = config.actorBinding.name;
   } else {
     execRaw(WORKSPACE_IDENTITY_DDL);
     // The root's local tables, made with it so its stamp covers them; the lease and the job holders fill them on use.
     initDriverLeaseTable(execRaw);
     initJobHoldersTable(execRaw);
-    const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
+    const existing = sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0];
 
     if (existing) {
-      agentId = existing.id;
       agentName = existing.name;
     } else {
-      agentId = crypto.randomUUID();
       agentName = config.agentName ?? 'agent';
-      void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
-      writeStamp(pragmaStamps(makeSqlExec(db)), 'local');
+      stampSchemaGenesis(execRaw);
       initWorkspaceActorTable(execRaw);
-      new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
+      bearWorkspaceIdentity(sql, { name: agentName, createdAt: Date.now() });
     }
 
     actor = openLocalRootActor(sql);

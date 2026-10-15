@@ -16,7 +16,7 @@ const crypto = require('node:crypto');
 
 const {
   ISSUER, TOKEN_URL, REVOKE_URL, JWKS_URL, RESOURCE, SCOPES, DYNAMIC_AGENT_CLIENT, SPENT_REFRESH_CODES, tokenRefusal, scopesOf, grantsPlan,
-  expiring, refreshedTokens, signedInTokens, authorizeUrl, idTokenKeyId, idTokenSignatureVerifies, idTokenIdentity,
+  expiring, refreshedTokens, signedInTokens, authorizeUrl, idTokenKeyId, idTokenSignatureVerifies, idTokenIdentity, jwtSegmentText,
 } = require('../../core/src/providers/chatgpt-protocol.ts');
 
 const { refusalWords } = require('../../core/src/safety/provider-refusal.ts');
@@ -206,7 +206,7 @@ async function signingKey(kid, fetchImpl) {
 }
 
 function jwtPart(segment) {
-  const decoded = parseJson(Buffer.from(segment ?? '', 'base64url').toString('utf8'));
+  const decoded = parseJson(jwtSegmentText(segment ?? '') ?? '');
 
   if (decoded === null) throw new SiwcError('the ID token is not a JWT');
 

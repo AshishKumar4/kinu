@@ -5,7 +5,7 @@
 
 import type { SqlExecutor } from './types/primitives';
 import type { HeadInput, HeadReport, HeadRunHeadView, SerializedMessage } from './heads/types';
-import { forkMission, headStatusUnsettled, storedHeadReportStatus } from './heads/types';
+import { forkMission, headStatusUnsettled, storedHeadReportStatus, unreportedHead } from './heads/types';
 import type { HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
@@ -128,19 +128,15 @@ export async function startBranchHead(
     try {
       report = await spawned.run();
     } catch (cause) {
-      report = {
+      report = unreportedHead({
         id: headInput.id,
         status: stop.signal.aborted ? 'aborted' : 'errored',
         summary: stop.signal.aborted
           ? `Branch was aborted: ${renderThrownChain({ cause: stop.signal.reason })}`
           : 'Branch failed before producing an answer.',
-        evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
-        childHeadIds: [], toolCalls: [], stepCount: 0,
-        // `{}` rather than zeros: the branch may have spent unreported tokens.
-        usage: {},
         wallClockMs: Date.now() - spawnedAt,
         errorMessage: renderThrownChain({ cause }),
-      };
+      });
     }
 
     journal.recordReport(report);

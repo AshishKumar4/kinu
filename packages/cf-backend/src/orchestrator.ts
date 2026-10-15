@@ -96,7 +96,7 @@ import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
-import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import type { SubordinateView } from "@kinu.run/core/protocol";
 import { markStoreChanged, nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, armedWarms, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
@@ -237,7 +237,7 @@ import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
-  type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal,
+  type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal, bearWorkspaceIdentity,
   type DeviceConsentRequest, type PendingDeviceConsent,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, performBoundWrite, ParkedWriteFiles,
   reviewParkedWrite, type ParkedWriteReview,
@@ -365,9 +365,7 @@ export type RecentEventRow = Pick<
 >;
 
 function clampLimit(requested: number | undefined, max: number): number {
-  if (requested === undefined || !Number.isFinite(requested)) return max;
-
-  return Math.min(Math.max(Math.floor(requested), 1), max);
+  return boundedInt(requested, max, 1, max);
 }
 
 /** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
@@ -4307,9 +4305,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The first claim or fork. */
   protected bearWorkspace(identityName: string, ownerUserId: string): void {
     this.ctx.storage.transactionSync(() => {
-      void this.sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
-        VALUES (${this.ctx.id.toString()}, ${identityName}, ${ownerUserId}, ${Date.now()})`;
-      this.workspaceActors().createMain({ name: this.name });
+      // Through the bound handle, as the roster's own writes go: a read held on the actors sees main arrive.
+      bearWorkspaceIdentity(this.boundSql, { id: this.ctx.id.toString(), name: identityName, ownerUserId, createdAt: Date.now() });
     });
     this.registerCompactionExtension();
   }
@@ -6230,7 +6227,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Browser-only; delegates to the same orchestration policy as the model's agents tool. */
-  @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
+  @callable() async listSubordinates(): Promise<SubordinateView[]> {
     return this.subordinateViews();
   }
 
@@ -6242,7 +6239,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable() async createSubordinateAgent(opening?: string): Promise<{
     name: string;
     displayName: string;
-    subordinate: SubordinateRosterEntry;
+    subordinate: SubordinateView;
   }> {
     const result = await this.getTeamToolDeps().create({ ...(opening !== undefined && { brief: opening }) });
 
@@ -6258,7 +6255,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ok: true;
     name: string;
     displayName: string;
-    subordinate: SubordinateRosterEntry;
+    subordinate: SubordinateView;
   }> {
     const result = await this.getTeamToolDeps().rename({ name, displayName });
 

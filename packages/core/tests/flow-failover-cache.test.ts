@@ -97,7 +97,7 @@ test.each([...FAILOVERS])('a turn on $primary served by $fallback is cached for 
     model: resolve(primary),
     sources: {
       models: {
-        catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set() },
+        catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set(), callsTools: () => undefined },
         normalize: (spec) => spec,
         resolve,
         routed: {

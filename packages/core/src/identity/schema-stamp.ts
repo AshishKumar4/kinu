@@ -17,9 +17,14 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { SCHEMA_STAMPS } from './schema-genesis';
-import type { SqlExec } from '../types/primitives';
+import type { RawSqlExec, SqlExec } from '../types/primitives';
 
 export type SchemaClass = keyof typeof SCHEMA_STAMPS;
+
+/** Marks a local database as made by this build: the one writer of the stamp a local database is opened under. */
+export function stampSchemaGenesis(execRaw: RawSqlExec): void {
+  execRaw(`PRAGMA user_version = ${String(SCHEMA_STAMPS.local)}`);
+}
 
 /** The table each class's init makes first: a database without it was never made by that class. */
 const FIRST_TABLE = {

@@ -6,7 +6,7 @@
 
 import { Effect } from 'effect';
 import { settle, settleSync } from '../obs/effect';
-import type { ModelMessage, SystemModelMessage } from 'ai';
+import type { ModelMessage } from 'ai';
 import type { TurnContextMeter } from '../context-meter';
 import type { ExtensionHost } from '../extension';
 import { MissionBudgetExhausted, type SpendGate } from '../mission-budget';
@@ -16,11 +16,10 @@ import { normalizeReplayForDestination, type ReplayDestination, type ReplayProgr
 import type { DynamicContext, DynamicContextLedger, TurnInput } from './volatile-context';
 import type { ToolErrorStep } from './tool-error-feedback';
 
-/** `system`: cache-eligible system override for backends whose turn-level system
- *  channel is string-only (Think) and must re-ride every step; the CLI omits it. */
+/** The tail breakpoints each step re-rolls. The system prompt's own breakpoint rides the turn's `instructions`
+ *  (chat.ts), not the step. */
 export interface StepCachePlan {
   readonly strategy: PromptCacheStrategy;
-  readonly system?: string | SystemModelMessage;
 }
 
 export interface StepDynamicContext {
@@ -63,7 +62,7 @@ export interface StepPipeline {
 }
 
 export type StepPrepareResult =
-  | { system?: string | SystemModelMessage; messages: ModelMessage[] }
+  | { messages: ModelMessage[] }
   | undefined;
 
 export interface StepPrepareContext {
@@ -149,13 +148,8 @@ function finishPrepareStep(
   const rewritten = pipeline.context !== undefined || steered !== undefined || opened !== undefined
     || pruned !== undefined || woven !== undefined || replayed !== undefined;
 
-  let result: StepPrepareResult;
-
-  if (plan) {
-    result = plan.system === undefined ? { messages } : { system: plan.system, messages };
-  } else {
-    result = rewritten ? { messages } : undefined;
-  }
+  // A cache plan marks every step's tail, so a planned step always answers with its messages.
+  const result: StepPrepareResult = plan || rewritten ? { messages } : undefined;
 
   return consumed instanceof Promise ? consumed.then(() => result) : result;
 }

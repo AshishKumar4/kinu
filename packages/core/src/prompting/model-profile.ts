@@ -1,10 +1,9 @@
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
-import { specWithoutAccount, type ModelCapability } from '../providers/types';
+import { specWithoutAccount } from '../providers/types';
 
 export type PromptModelFamily = 'kimi' | 'gpt' | 'claude' | 'gemini' | 'muse' | 'generic';
 
-export type PromptModelCapability = ModelCapability;
 
 export interface PromptModelContext {
   id?: string;
@@ -15,32 +14,13 @@ export interface PromptModelContext {
   modelOutputLimit?: number | null;
   /** Whether it takes image input, as its catalog row says; absent counts as taking it, as the transport does. */
   seesImages?: boolean;
+  /** Whether it calls tools, as its catalog row says; absent when no row names it, which counts as calling them. */
+  callsTools?: boolean | undefined;
 }
 
 export interface PromptModelProfile {
   family: PromptModelFamily;
-  capabilities: ReadonlySet<PromptModelCapability>;
 }
-
-const TOOL_CAPABILITIES: PromptModelCapability[] = ['tools', 'streaming'];
-
-const GPT_REASONING_CAPABILITIES: PromptModelCapability[] = [
-  'tools',
-  'streaming',
-  'reasoning',
-  'vision',
-  'structured-outputs',
-  'json-mode',
-];
-
-const KIMI_CAPABILITIES: PromptModelCapability[] = [
-  'tools',
-  'streaming',
-  'reasoning',
-  'vision',
-  'structured-outputs',
-  'prompt-caching',
-];
 
 function resolveFamily(model?: PromptModelContext): PromptModelFamily {
   const text = `${model?.provider ?? ''} ${specWithoutAccount(model?.id ?? '')}`.toLowerCase();
@@ -58,33 +38,13 @@ function resolveFamily(model?: PromptModelContext): PromptModelFamily {
   return 'generic';
 }
 
-function inferredCapabilities(model: PromptModelContext | undefined, family: PromptModelFamily): PromptModelCapability[] {
-  const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
-
-  if (text.includes('o4-mini') || text.includes('deepseek-r1')) {
-    return ['streaming', 'reasoning'];
-  }
-
-  // Whole family: a new Kimi release must not drop to bare tools+streaming.
-  if (family === 'kimi') return KIMI_CAPABILITIES;
-
-  if (family === 'gpt') return GPT_REASONING_CAPABILITIES;
-
-  return TOOL_CAPABILITIES;
-}
-
 export function resolvePromptModelProfile(model?: PromptModelContext): PromptModelProfile {
-  const family = resolveFamily(model);
-
-  return { family, capabilities: new Set(inferredCapabilities(model, family)) };
+  return { family: resolveFamily(model) };
 }
 
-function modelSupportsTools(model?: PromptModelContext): boolean {
-  return resolvePromptModelProfile(model).capabilities.has('tools');
-}
-
+/** Refuses tools only where the model's catalog row says it calls none; a model no row names is given the benefit. */
 export function assertToolsSupportedByModel(model: PromptModelContext | undefined, toolNames: readonly string[]): void {
-  if (toolNames.length === 0 || modelSupportsTools(model)) return;
+  if (toolNames.length === 0 || model?.callsTools !== false) return;
   const id = model?.id ? `${model.provider ? `${model.provider}/` : ''}${model.id}` : 'selected model';
 
   return settleSync(Effect.die(new Error(`${id} does not support tool calling; choose a tool-capable model for agent mode.`)));

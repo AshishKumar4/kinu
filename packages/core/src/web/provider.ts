@@ -13,6 +13,7 @@ import { TAVILY_CRED_KEY } from '../credentials/validate';
 import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle, tolerate } from '../obs/index';
 import { Data, Effect } from 'effect';
 import type { JsonObject } from '../utils/json';
+import { boundedInt } from '../utils/bounds';
 
 
 
@@ -451,9 +452,7 @@ export interface BrowserSessions {
 }
 
 function clampLimit(limit: number | undefined): number {
-  if (!limit || !Number.isFinite(limit)) return DEFAULT_SEARCH_LIMIT;
-
-  return Math.max(1, Math.min(MAX_SEARCH_LIMIT, Math.floor(limit)));
+  return boundedInt(limit, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT);
 }
 
 function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResult[] {

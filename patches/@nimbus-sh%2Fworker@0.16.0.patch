@@ -24,6 +24,48 @@ index 886ad75..59d7045 100644
      // undici's fetch (bundled by e.g. create-cloudflare) detaches
      // performance.markResourceTiming and calls it with no receiver,
      // which workerd rejects with "Illegal invocation" and crashes the
+diff --git a/dist/facets/ws-terminal.d.ts b/dist/facets/ws-terminal.d.ts
+index 24211ba..708ae01 100644
+--- a/dist/facets/ws-terminal.d.ts
++++ b/dist/facets/ws-terminal.d.ts
+@@ -62,6 +62,10 @@ export declare class WebSocketTerminal {
+      */
+     flushNow(): void;
+     private flush;
++    /** Kinu patch (NIMBUS-ASKS #57): sends a reattached socket its screen without recording it again. */
++    replay(data: string): void;
++    /** Kinu patch (NIMBUS-ASKS #57): what is written but not yet flushed. */
++    get pending(): string;
+     onData(callback: (data: string, submission?: ShellInputSubmission) => void | Promise<void>): void;
+     onSubmission(callback: (data: string, id: string, deliver: (submission: ShellInputSubmission) => void | Promise<void>, repl: boolean) => void | Promise<void>): void;
+     shellIntegration(event: ShellIntegrationEvent): void;
+diff --git a/dist/facets/ws-terminal.js b/dist/facets/ws-terminal.js
+index 9dc5ca5..7b9714b 100644
+--- a/dist/facets/ws-terminal.js
++++ b/dist/facets/ws-terminal.js
+@@ -144,6 +144,22 @@ export class WebSocketTerminal {
+             }
+         });
+     }
++    /**
++     * Kinu patch (NIMBUS-ASKS #57): sends a reattached socket the screen it shows, in order with the shell's output,
++     * without the scrollback tee. It is the scrollback already; recording it again doubled it on every attach.
++     */
++    replay(data) {
++        if (data.length === 0)
++            return;
++        this.release(() => {
++            try {
++                this.ws?.send(JSON.stringify({ type: 'output', data }));
++            }
++            catch { }
++        });
++    }
++    /** Kinu patch (NIMBUS-ASKS #57): what is written but not yet flushed, which the screen shows next. */
++    get pending() { return this.buffer.join(''); }
+     onData(callback) { this.dataCallback = callback; }
+     onSubmission(callback) {
+         this.submissionCallback = callback;
 diff --git a/dist/hosted/commands.js b/dist/hosted/commands.js
 index b0688e5..1ab46e1 100644
 --- a/dist/hosted/commands.js
@@ -39,7 +81,7 @@ index b0688e5..1ab46e1 100644
                  exitCode = result.exitCode;
                  return result;
 diff --git a/dist/hosted/runtime.js b/dist/hosted/runtime.js
-index 1bd1b4d..c09fb3c 100644
+index 1bd1b4d..b876059 100644
 --- a/dist/hosted/runtime.js
 +++ b/dist/hosted/runtime.js
 @@ -4,7 +4,7 @@ import { SUPERVISOR_OP_ROUTES, createSupervisorBridgeStore } from '@nimbus-sh/co
@@ -68,6 +110,33 @@ index 1bd1b4d..c09fb3c 100644
          this.terminal = new WebSocketTerminal(null, (data) => {
              appendScrollback(options.ctx, data, Date.now());
              persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv() });
+@@ -261,17 +264,24 @@ class RuntimeOwner {
+         if (this.terminal.ws === ws)
+             return;
+         this.terminal.attach(ws);
++        // Kinu patch (NIMBUS-ASKS #57): the screen a pane shows is the scrollback as recorded. A reconnect is sent it
++        // without recording it again, and a prompt is printed only when that screen does not already end at one.
++        const recorded = loadScrollback(this.ctx);
++        const screen = recorded + this.terminal.pending;
+         if (resume === 'reconnect')
+-            this.terminal.write(loadScrollback(this.ctx));
++            this.terminal.replay(recorded);
++        let said = false;
+         if (this.recoveryNotice) {
+             this.terminal.write('\r\n[Runtime resumed; files and shell settings restored. Previous interpreter state was not retained.]\r\n');
+             this.recoveryNotice = false;
++            said = true;
+         }
+         if (this.legacyNotice) {
+             this.terminal.write(`\r\n[${this.legacyNotice}]\r\n`);
+             this.legacyNotice = null;
++            said = true;
+         }
+-        if (!this.shell.running)
++        if (!this.shell.running && (said || !screen.endsWith('\u001b]133;B\u0007')))
+             this.shell.printPrompt();
+         this.terminal.flushNow();
+         ws.send(JSON.stringify({ type: 'ready' }));
 diff --git a/dist/hosted/session.d.ts b/dist/hosted/session.d.ts
 index ea1c019..83dae14 100644
 --- a/dist/hosted/session.d.ts

@@ -40,7 +40,7 @@ async function workspaceSources(): Promise<TurnAssemblySources> {
     }),
     models: {
       ...sources.models,
-      catalog: { window: (spec) => known(spec ?? SMALL).window, windowFor: async (spec) => known(spec).window, warm: async () => {}, acceptedMedia: (spec) => new Set(known(spec ?? SMALL).media) },
+      catalog: { window: (spec) => known(spec ?? SMALL).window, windowFor: async (spec) => known(spec).window, warm: async () => {}, acceptedMedia: (spec) => new Set(known(spec ?? SMALL).media), callsTools: () => undefined },
     },
     toolset: () => ({}),
     externalTools: async () => ({}),

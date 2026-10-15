@@ -334,6 +334,8 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
     | { ok: true; frames: string[]; output: string }
     | { ok: false; error: string }
   >;
+  /** Types `line` on a fresh terminal socket; answers once `token` is printed and a prompt follows it. */
+  typeToPrompt(workspace: string, line: string, token: string): Promise<string>;
   reattachTerminal(workspace: string): Promise<{ frames: string[]; output: string }>;
   shellCalls(workspace: string, owner: string, calls: Array<{ command: string; cwd?: string; name?: string }>): Promise<string[]>;
   refusedTerminalFrame(workspace: string, frame: string): Promise<{ code: number; reason: string }>;

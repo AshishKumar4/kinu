@@ -169,14 +169,14 @@ const GATED_CALLS: GatedCall[] = [
     capability: 'auth_tokens',
     name: 'issueCliAgentConnectTicket',
     run: (u, c) => u.issueCliAgentConnectTicket(c, {
-      userId: USER_ID, agentClass: 'orchestrator-agent', agentName: WORKSPACE, cliTokenHash: TOKEN_HASH,
+      userId: USER_ID, agentName: WORKSPACE, cliTokenHash: TOKEN_HASH,
     }),
   },
   {
     capability: 'auth_tokens',
     name: 'verifyCliAgentConnectTicket',
     run: (u, c) => u.verifyCliAgentConnectTicket(c, `pat_${USER_ID}_${'x'.repeat(32)}`, {
-      userId: USER_ID, agentClass: 'orchestrator-agent', agentName: WORKSPACE, capability: 'agent.websocket',
+      userId: USER_ID, agentName: WORKSPACE,
     }),
   },
   {

@@ -21,6 +21,7 @@ import type { ListedAgent } from '../../src/agent-list';
 import type { TuiHubData } from '../../src/tui/hubs';
 import type { TuiAgentSource } from '../../src/tui/tui-shell';
 import { createMemoryTuiPreferenceStore } from './tui-preferences';
+import { endedNearSilence } from '../../../../scripts/row-verdicts';
 
 const EVOLUTION: EvolutionConfigView = {
   learning: true,
@@ -281,14 +282,19 @@ export async function mountChat(
     renderer.once('destroy', onDestroy);
   });
 
-  const waitFor = async (what: string, predicate: () => boolean) => {
+  /**
+   * Waits until `predicate` holds. A wait has no clock: one whose predicate never holds is reported when the runner says
+   * the run's silence nears its bound (`endedNearSilence`), naming what it waited on and showing the screen, so the case
+   * fails with a verdict before the runner's kill takes the whole run.
+   */
+  const waitFor = async (what: string, predicate: () => boolean) => endedNearSilence((async () => {
     await testRenderer.renderOnce();
 
     while (!predicate()) {
       await nextFrame(what);
       await new Promise<void>((resolve) => { process.nextTick(resolve); });
     }
-  };
+  })(), async () => {}, () => `${what}. The screen:\n${frame()}`);
 
   const composerFocused = () => renderer.currentFocusedRenderable instanceof TextareaRenderable
     && !(renderer.currentFocusedRenderable instanceof InputRenderable)

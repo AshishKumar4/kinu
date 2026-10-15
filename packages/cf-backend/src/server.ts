@@ -13,7 +13,7 @@ import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
   parseEgressParams, workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
-import { APP_ROUTES, ERROR_STATUS, ORCHESTRATOR_AGENT_SLUG, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
+import { APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
@@ -145,9 +145,7 @@ function authenticateCliAgentTicketRequest(
 
     const verified = yield* Effect.promise(async () => userDO.verifyCliAgentConnectTicket(await ownerCaller(env), ticket, {
       userId,
-      agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,
-      capability: 'agent.websocket',
     }));
 
     if (!verified.ok || !verified.user) {

@@ -5447,20 +5447,24 @@ const WORKSPACE_WORK = {
   ],
 };
 
-const BACKGROUND_JOBS = [
+/** A first drive: never interrupted, never retried, serving nothing. */
+const FIRST_DRIVE = { epoch: 0, resumeAttempts: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
+
+const BACKGROUND_JOBS: BackgroundJob[] = [
   {
     id: "bgjob-7c1e4a92", kind: "fork", label: "explore three coupon-lookup fixes",
-    workMode: "build" as const, status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
+    workMode: "build", status: "running", result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null,
+    ...FIRST_DRIVE,
   },
   {
     id: "bgjob-2f8b1d04", kind: "eval", label: "bun test packages/core",
-    workMode: "build" as const, status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
-    createdAt: NOW - 42e5, settledAt: NOW - 33e5,
+    workMode: "build", status: "completed", result: "2,633 pass · 0 fail · 187 files", error: null,
+    createdAt: NOW - 42e5, attemptStartedAt: NOW - 42e5, settledAt: NOW - 33e5, ...FIRST_DRIVE,
   },
   {
     id: "bgjob-9d3c6e11", kind: "shell", label: "wrangler deploy --dry-run",
-    workMode: "build" as const, status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
-    createdAt: NOW - 61e5, settledAt: NOW - 58e5,
+    workMode: "build", status: "failed", result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
+    createdAt: NOW - 61e5, attemptStartedAt: NOW - 61e5, settledAt: NOW - 58e5, ...FIRST_DRIVE,
   },
 ];
 
@@ -5711,7 +5715,7 @@ function buildTail(lines: number, lost: readonly number[]): JobOutputTail {
 function buildingJob(output: JobOutputTail): BackgroundJob {
   return {
     id: BUILD_JOB_ID, kind: "shell", label: "workspace: bun run build", workMode: "build", status: "running",
-    result: null, error: null, createdAt: NOW - 95e3, settledAt: null, output,
+    result: null, error: null, createdAt: NOW - 95e3, attemptStartedAt: NOW - 95e3, settledAt: null, ...FIRST_DRIVE, output,
   };
 }
 

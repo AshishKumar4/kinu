@@ -7,9 +7,7 @@ import * as v from 'valibot';
 import { ExecutorPortSchema } from '../execution/types';
 import { DESKTOP_INPUTS, WATCH_DEFAULT_FRAMES, watchSheet, type DesktopScreen } from '../execution/desktop';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
-import { defineOperation, type Impact, type Operation } from './operation';
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
+import { defineOperation, described, type Impact, type Operation } from './operation';
 
 const Path = described(v.pipe(v.string(), v.nonEmpty()), 'Relative paths resolve at the executor\'s home.');
 
