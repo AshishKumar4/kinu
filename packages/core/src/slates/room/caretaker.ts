@@ -8,7 +8,9 @@
  * while its request is, and a revoke reaches it through the generations it holds.
  */
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { KinuError } from '../../obs/error';
+import { settleSync } from '../../obs/effect';
 import type { RawSqlExec, SqlExec } from '../../types/primitives';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
 import type { RoomRole } from '../room-api';
@@ -145,7 +147,7 @@ const CodecSchema: v.GenericSchema<Codec> = v.variant('kind', [
 ]);
 
 /** The model's `dom.contains arg`. */
-export function codecAdmits(codec: Codec, input: JsonValue): boolean {
+function codecAdmits(codec: Codec, input: JsonValue): boolean {
   switch (codec.kind) {
     case 'none': return input === null;
     case 'enum': return codec.values.some((value) => value === input);
@@ -155,10 +157,6 @@ export function codecAdmits(codec: Codec, input: JsonValue): boolean {
   }
 }
 
-/** Takes free input: what someone types reaches the service. */
-export function codecIsFree(codec: Codec): boolean {
-  return codec.kind === 'text' || codec.kind === 'json';
-}
 
 const GrantRow = v.object({
   id: v.number(), holder: v.string(), personal: v.number(), server: v.string(), root: v.string(), tools: v.string(),
@@ -243,8 +241,9 @@ export type ToolVerdict =
   | { readonly kind: 'go' }
   | { readonly kind: 'wait'; readonly pending: PendingEffect };
 
-function fail(code: 'denied' | 'missing' | 'bad_input', message: string): never {
-  throw new KinuError(code, message);
+/** A refusal, as an Effect: every method runs its body once, at its edge. */
+function refused(code: 'denied' | 'missing' | 'bad_input', message: string): Effect.Effect<never, KinuError> {
+  return Effect.fail(new KinuError(code, message));
 }
 
 function parseElems(text: string): Elem[] {
@@ -309,7 +308,9 @@ export class RoomCaretaker {
   }
 
   room(): RoomRecord {
-    return this.maybeRoom() ?? fail('missing', 'This slate has no room');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      return this.maybeRoom() ?? (yield* refused('missing', 'This slate has no room'));
+    }));
   }
 
   /** A fresh generation or id: the model's counter, which only grows. */
@@ -397,31 +398,37 @@ export class RoomCaretaker {
 
   // ── The owner's ───────────────────────────────────────────────────────────────────────────────────────────────
 
-  private requireOwner(actor: string | null, doing: string): void {
-    if (actor === null || this.member(actor)?.role !== 'owner') fail('denied', `Only the slate's owner can ${doing}`);
+  private requireOwner(actor: string | null, doing: string): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (actor === null || this.member(actor)?.role !== 'owner') return yield* refused('denied', `Only the slate's owner can ${doing}`);
+    });
   }
 
   /** `share`: the link on or off, at a new generation, so no session of the old one is current again. */
   setLink(actor: string | null, on: boolean): void {
-    this.requireOwner(actor, 'change the link');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      yield* this.requireOwner(actor, 'change the link');
 
-    if (on && this.room().secret !== null) fail('denied', 'The code holds a secret: the link stays off until it is gone');
-    this.db.exec('UPDATE room SET link = ?, link_gen = ? WHERE id = 1', on ? 1 : 0, this.fresh());
+      if (on && this.room().secret !== null) return yield* refused('denied', 'The code holds a secret: the link stays off until it is gone');
+      this.db.exec('UPDATE room SET link = ?, link_gen = ? WHERE id = 1', on ? 1 : 0, this.fresh());
+    }));
   }
 
   /** `collaborate`: someone added, or their role changed, at a new generation. */
   invite(actor: string | null, email: string, role: RoomRole): void {
-    this.requireOwner(actor, 'add people');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      yield* this.requireOwner(actor, 'add people');
 
-    const address = v.safeParse(v.pipe(v.string(), v.email()), email);
+      const address = v.safeParse(v.pipe(v.string(), v.email()), email);
 
-    if (!address.success) fail('bad_input', `${email} is not an email address`);
+      if (!address.success) return yield* refused('bad_input', `${email} is not an email address`);
 
-    if (this.member(email)?.role === 'owner') fail('bad_input', 'The owner is already on the slate');
-    this.db.exec(
-      'INSERT INTO room_members (email, name, role, gen) VALUES (?, NULL, ?, ?) ON CONFLICT (email) DO UPDATE SET role = excluded.role, gen = excluded.gen',
-      email, role, this.fresh(),
-    );
+      if (this.member(email)?.role === 'owner') return yield* refused('bad_input', 'The owner is already on the slate');
+      this.db.exec(
+        'INSERT INTO room_members (email, name, role, gen) VALUES (?, NULL, ?, ?) ON CONFLICT (email) DO UPDATE SET role = excluded.role, gen = excluded.gen',
+        email, role, this.fresh(),
+      );
+    }));
   }
 
   /**
@@ -430,26 +437,28 @@ export class RoomCaretaker {
    * membership ends, and nothing else.
    */
   remove(actor: string | null, email: string): void {
-    if (actor === email) {
-      if (this.member(email)?.role === 'owner') fail('denied', 'The owner cannot leave their own slate');
-      this.db.exec("DELETE FROM room_members WHERE email = ? AND role IN ('edit', 'use')", email);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (actor === email) {
+        if (this.member(email)?.role === 'owner') return yield* refused('denied', 'The owner cannot leave their own slate');
+        this.db.exec("DELETE FROM room_members WHERE email = ? AND role IN ('edit', 'use')", email);
 
-      return;
-    }
+        return;
+      }
 
-    this.requireOwner(actor, 'remove people');
+      yield* this.requireOwner(actor, 'remove people');
 
-    if (this.member(email)?.role === 'owner') fail('denied', 'The owner cannot be removed');
-    const gen = this.fresh();
+      if (this.member(email)?.role === 'owner') return yield* refused('denied', 'The owner cannot be removed');
+      const gen = this.fresh();
 
-    this.db.exec(
-      "INSERT INTO room_members (email, name, role, gen) VALUES (?, NULL, 'removed', ?) ON CONFLICT (email) DO UPDATE SET role = 'removed', gen = excluded.gen",
-      email, gen,
-    );
-    this.db.exec('UPDATE room SET link_gen = ? WHERE id = 1', this.fresh());
-    // Their own grants and shows go with them.
-    this.db.exec('DELETE FROM room_grants WHERE holder = ?', email);
-    this.db.exec('DELETE FROM room_shows WHERE holder = ?', email);
+      this.db.exec(
+        "INSERT INTO room_members (email, name, role, gen) VALUES (?, NULL, 'removed', ?) ON CONFLICT (email) DO UPDATE SET role = 'removed', gen = excluded.gen",
+        email, gen,
+      );
+      this.db.exec('UPDATE room SET link_gen = ? WHERE id = 1', this.fresh());
+      // Their own grants and shows go with them.
+      this.db.exec('DELETE FROM room_grants WHERE holder = ?', email);
+      this.db.exec('DELETE FROM room_shows WHERE holder = ?', email);
+    }));
   }
 
   // ── Code ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -460,20 +469,22 @@ export class RoomCaretaker {
    * sighting is the new image's, set in the same statement.
    */
   publish(author: string, built: { readonly image: string; readonly title: string; readonly secret: SecretSighting | null }): void {
-    if (!this.canEdit(author)) fail('denied', `${author} cannot change this slate`);
-    const owner = this.owner();
-    const { image, title, secret } = built;
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (!this.canEdit(author)) return yield* refused('denied', `${author} cannot change this slate`);
+      const owner = this.owner();
+      const { image, title, secret } = built;
 
-    if (this.room().image === image) return;
-    this.db.exec(
-      'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
-      image, author, title, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
-    );
-    this.db.exec('UPDATE room_grants SET image = ? WHERE holder = ?', image, author);
+      if (this.room().image === image) return;
+      this.db.exec(
+        'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
+        image, author, title, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
+      );
+      this.db.exec('UPDATE room_grants SET image = ? WHERE holder = ?', image, author);
 
-    for (const show of this.shows().filter((each) => each.holder === author && each.fn !== null)) {
-      this.db.exec('UPDATE room_shows SET images = ? WHERE id = ?', JSON.stringify([...show.images ?? [], image]), show.id);
-    }
+      for (const show of this.shows().filter((each) => each.holder === author && each.fn !== null)) {
+        this.db.exec('UPDATE room_shows SET images = ? WHERE id = ?', JSON.stringify([...show.images ?? [], image]), show.id);
+      }
+    }));
   }
 
   // ── Grants ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -503,37 +514,41 @@ export class RoomCaretaker {
     readonly personal: boolean; readonly server: string; readonly root: Readonly<Record<string, string>>;
     readonly tools: readonly string[]; readonly fn: string; readonly domain: Codec; readonly effect: boolean; readonly sink: Audience;
   }): Grant {
-    if (actor === null) fail('denied', 'Sign in to connect anything to this slate');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (actor === null) return yield* refused('denied', 'Sign in to connect anything to this slate');
 
-    if (input.personal ? !this.hasAccess(actor) : !this.canEdit(actor)) {
-      fail('denied', input.personal ? 'Only someone who can open this slate can connect to it' : 'Only an editor can lend a function');
-    }
+      if (input.personal ? !this.hasAccess(actor) : !this.canEdit(actor)) {
+        return yield* refused('denied', input.personal ? 'Only someone who can open this slate can connect to it' : 'Only an editor can lend a function');
+      }
 
-    const image = this.room().image ?? fail('missing', 'The slate has not run yet');
-    const root = canonicalRoot(input.root);
+      const image = this.room().image ?? (yield* refused('missing', 'The slate has not run yet'));
+      const root = canonicalRoot(input.root);
 
-    this.db.exec('DELETE FROM room_grants WHERE holder = ? AND server = ? AND root = ? AND fn = ? AND personal = ?',
-      actor, input.server, root, input.fn, input.personal ? 1 : 0);
-    const id = this.fresh();
+      this.db.exec('DELETE FROM room_grants WHERE holder = ? AND server = ? AND root = ? AND fn = ? AND personal = ?',
+        actor, input.server, root, input.fn, input.personal ? 1 : 0);
+      const id = this.fresh();
 
-    this.db.exec(
-      'INSERT INTO room_grants (id, holder, personal, server, root, tools, fn, image, domain, effect, sink, gen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      id, actor, input.personal ? 1 : 0, input.server, root, JSON.stringify([...input.tools]), input.fn, image,
-      JSON.stringify(input.domain), input.effect ? 1 : 0, JSON.stringify(input.sink), id,
-    );
+      this.db.exec(
+        'INSERT INTO room_grants (id, holder, personal, server, root, tools, fn, image, domain, effect, sink, gen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        id, actor, input.personal ? 1 : 0, input.server, root, JSON.stringify([...input.tools]), input.fn, image,
+        JSON.stringify(input.domain), input.effect ? 1 : 0, JSON.stringify(input.sink), id,
+      );
 
-    return this.grant(id) ?? fail('missing', `Grant ${id} vanished`);
+      return this.grant(id) ?? (yield* refused('missing', `Grant ${id} vanished`));
+    }));
   }
 
   /** `setCap` off: the holder takes a grant back, or the owner ends a lend. Every run holding it stops at its next step. */
   revoke(actor: string | null, id: number): void {
-    const grant = this.grant(id) ?? fail('missing', `No grant ${id}`);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const grant = this.grant(id) ?? (yield* refused('missing', `No grant ${id}`));
 
-    if (actor !== grant.holder && !(actor !== null && !grant.personal && this.member(actor)?.role === 'owner')) {
-      fail('denied', 'Only its holder can take a grant back');
-    }
+      if (actor !== grant.holder && !(actor !== null && !grant.personal && this.member(actor)?.role === 'owner')) {
+        return yield* refused('denied', 'Only its holder can take a grant back');
+      }
 
-    this.db.exec('DELETE FROM room_grants WHERE id = ?', id);
+      this.db.exec('DELETE FROM room_grants WHERE id = ?', id);
+    }));
   }
 
   // ── Shows and readers ─────────────────────────────────────────────────────────────────────────────────────────
@@ -552,26 +567,30 @@ export class RoomCaretaker {
 
   /** `declassify`: only a tag's holder shows it, to an audience, for anything or for one function at its current image. */
   show(actor: string | null, tag: Tag, fn: string | null, audience: Audience): Show {
-    if (actor === null || actor !== tag.holder) fail('denied', 'Only the person whose data it is can show it');
-    const image = this.room().image;
-    const images = fn === null ? null : JSON.stringify(image === null ? [] : [image]);
-    const id = this.fresh();
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (actor === null || actor !== tag.holder) return yield* refused('denied', 'Only the person whose data it is can show it');
+      const image = this.room().image;
+      const images = fn === null ? null : JSON.stringify(image === null ? [] : [image]);
+      const id = this.fresh();
 
-    this.db.exec(
-      'INSERT INTO room_shows (id, holder, server, root, fn, images, audience) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      id, tag.holder, tag.server, tag.root, fn, images, JSON.stringify(audience),
-    );
-    this.db.exec('DELETE FROM room_asks WHERE holder = ? AND server = ? AND root = ?', tag.holder, tag.server, tag.root);
+      this.db.exec(
+        'INSERT INTO room_shows (id, holder, server, root, fn, images, audience) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        id, tag.holder, tag.server, tag.root, fn, images, JSON.stringify(audience),
+      );
+      this.db.exec('DELETE FROM room_asks WHERE holder = ? AND server = ? AND root = ?', tag.holder, tag.server, tag.root);
 
-    return this.shows().find((show) => show.id === id) ?? fail('missing', `Show ${id} vanished`);
+      return this.shows().find((show) => show.id === id) ?? (yield* refused('missing', `Show ${id} vanished`));
+    }));
   }
 
   /** `undeclassify`: its holder withdraws a show; what it let through renders as a placeholder from the next render. */
   unshow(actor: string | null, id: number): void {
-    const show = this.shows().find((each) => each.id === id) ?? fail('missing', `No show ${id}`);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const show = this.shows().find((each) => each.id === id) ?? (yield* refused('missing', `No show ${id}`));
 
-    if (actor !== show.holder) fail('denied', 'Only the person whose data it is can stop showing it');
-    this.db.exec('DELETE FROM room_shows WHERE id = ?', id);
+      if (actor !== show.holder) return yield* refused('denied', 'Only the person whose data it is can stop showing it');
+      this.db.exec('DELETE FROM room_shows WHERE id = ?', id);
+    }));
   }
 
   /** `readerCheck`: what the source's own check said, with the reader's own connection. */
@@ -594,12 +613,14 @@ export class RoomCaretaker {
 
   /** Someone asks the holders of what a part hides to show it: one ask each, kept until answered. */
   ask(asker: string | null, elems: readonly Elem[]): void {
-    if (asker === null) fail('denied', 'Sign in to ask');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (asker === null) return yield* refused('denied', 'Sign in to ask');
 
-    for (const elem of elems) {
-      this.db.exec('INSERT OR IGNORE INTO room_asks (asker, holder, server, root, fn) VALUES (?, ?, ?, ?, ?)',
-        asker, elem.holder, elem.server, elem.root, elem.fn);
-    }
+      for (const elem of elems) {
+        this.db.exec('INSERT OR IGNORE INTO room_asks (asker, holder, server, root, fn) VALUES (?, ?, ?, ?, ?)',
+          asker, elem.holder, elem.server, elem.root, elem.fn);
+      }
+    }));
   }
 
   asks(holder: string): { asker: string; tag: Tag; fn: string }[] {
@@ -611,9 +632,11 @@ export class RoomCaretaker {
   }
 
   dismissAsk(holder: string, asker: string, tag: Tag, fn: string): void {
-    if (holder !== tag.holder) fail('denied', 'Only the asked holder answers an ask');
-    this.db.exec('DELETE FROM room_asks WHERE asker = ? AND holder = ? AND server = ? AND root = ? AND fn = ?',
-      asker, tag.holder, tag.server, tag.root, fn);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (holder !== tag.holder) return yield* refused('denied', 'Only the asked holder answers an ask');
+      this.db.exec('DELETE FROM room_asks WHERE asker = ? AND holder = ? AND server = ? AND root = ? AND fn = ?',
+        asker, tag.holder, tag.server, tag.root, fn);
+    }));
   }
 
   // ── Runs ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -643,39 +666,44 @@ export class RoomCaretaker {
     readonly requester: Session | null; readonly fn: string; readonly input: JsonValue; readonly grants: readonly number[];
     readonly inputs: readonly string[]; readonly out: string;
   }): Run {
-    const { requester, fn } = input;
-    const image = this.room().image ?? fail('missing', 'The slate has not run yet');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const { requester, fn } = input;
+      const image = this.room().image ?? (yield* refused('missing', 'The slate has not run yet'));
 
-    if (requester !== null && !this.current(requester)) fail('denied', 'This session has ended');
+      if (requester !== null && !this.current(requester)) return yield* refused('denied', 'This session has ended');
 
-    const grants = input.grants.map((id) => {
-      const grant = this.grant(id);
+      const grants: Grant[] = [];
 
-      if (grant === null || !this.admits(grant, { requester, fn, input: input.input, image })) fail('denied', `Grant ${id} does not admit this call of ${fn}`);
+      for (const id of input.grants) {
+        const grant = this.grant(id);
 
-      return grant;
-    });
+        if (grant === null || !this.admits(grant, { requester, fn, input: input.input, image })) return yield* refused('denied', `Grant ${id} does not admit this call of ${fn}`);
+        grants.push(grant);
+      }
 
-    const inputLabels = input.inputs.flatMap((key) => (this.cell(key) ?? fail('missing', `No cell ${key}`)).label);
-    const label = dedup([...grants.map((grant) => capElem(grant, fn, image)), ...inputLabels]);
-    const id = this.fresh();
+      const inputLabels: Elem[] = [];
 
-    const visitor = requester?.email ?? null;
+      for (const key of input.inputs) inputLabels.push(...(this.cell(key) ?? (yield* refused('missing', `No cell ${key}`))).label);
+      const label = dedup([...grants.map((grant) => capElem(grant, fn, image)), ...inputLabels]);
+      const id = this.fresh();
 
-    if (visitor !== null && grants.some((grant) => !grant.personal)) this.used(fn, visitor);
-    this.db.exec(
-      'INSERT INTO room_cells (key, label, value) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET label = excluded.label, value = excluded.value',
-      input.out, JSON.stringify(label), 'null',
-    );
+      const visitor = requester?.email ?? null;
 
-    const run: Run = {
-      id, out: input.out, requester, fn, image, input: input.input,
-      caps: grants.map((grant) => ({ grant: grant.id, gen: grant.gen })), label, live: true, steps: 0,
-    };
+      if (visitor !== null && grants.some((grant) => !grant.personal)) this.used(fn, visitor);
+      this.db.exec(
+        'INSERT INTO room_cells (key, label, value) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET label = excluded.label, value = excluded.value',
+        input.out, JSON.stringify(label), 'null',
+      );
 
-    this.runs.set(id, run);
+      const run: Run = {
+        id, out: input.out, requester, fn, image, input: input.input,
+        caps: grants.map((grant) => ({ grant: grant.id, gen: grant.gen })), label, live: true, steps: 0,
+      };
 
-    return run;
+      this.runs.set(id, run);
+
+      return run;
+    }));
   }
 
   private used(fn: string, email: string): void {
@@ -701,12 +729,14 @@ export class RoomCaretaker {
     return run.caps.every((cap) => this.grant(cap.grant)?.gen === cap.gen);
   }
 
-  private liveRun(id: number): Run {
-    const run = this.runs.get(id) ?? fail('missing', `No run ${id}`);
+  private liveRun(id: number): Effect.Effect<Run, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const run = this.runs.get(id) ?? (yield* refused('missing', `No run ${id}`));
 
-    if (!this.runOk(run)) fail('denied', 'This call was revoked');
+      if (!this.runOk(run)) return yield* refused('denied', 'This call was revoked');
 
-    return run;
+      return run;
+    });
   }
 
   /**
@@ -716,30 +746,32 @@ export class RoomCaretaker {
    * data on its way to more people than may see it, which is the holder's to send.
    */
   toolStep(runId: number, grantId: number, tool: string, args: JsonValue): ToolVerdict {
-    const run = this.liveRun(runId);
-    const grant = this.grant(grantId) ?? fail('denied', 'This grant was taken back');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const run = yield* this.liveRun(runId);
+      const grant = this.grant(grantId) ?? (yield* refused('denied', 'This grant was taken back'));
 
-    if (!run.caps.some((cap) => cap.grant === grant.id)) fail('denied', 'This call holds no such grant');
+      if (!run.caps.some((cap) => cap.grant === grant.id)) return yield* refused('denied', 'This call holds no such grant');
 
-    if (!grant.tools.includes(tool)) fail('denied', `${tool} is not one of the tools this grant reaches`);
+      if (!grant.tools.includes(tool)) return yield* refused('denied', `${tool} is not one of the tools this grant reaches`);
 
-    if (!keepsRoot(grant.root, args)) fail('denied', `${tool} must keep to ${grant.root}`);
+      if (!keepsRoot(grant.root, args)) return yield* refused('denied', `${tool} must keep to ${grant.root}`);
 
-    if (grant.personal && run.requester?.email !== grant.holder) fail('denied', 'A person\'s own connection acts only in their own requests');
-    const step = run.steps;
-    run.steps += 1;
+      if (grant.personal && run.requester?.email !== grant.holder) return yield* refused('denied', 'A person\'s own connection acts only in their own requests');
+      const step = run.steps;
+      run.steps += 1;
 
-    if (!audienceFlows(this.facts(), run.label, observers(grant.holder, grant.sink))) {
-      const own = run.requester?.email === grant.holder && run.label.every((elem) => elem.holder === grant.holder);
+      if (!audienceFlows(this.facts(), run.label, observers(grant.holder, grant.sink))) {
+        const own = run.requester?.email === grant.holder && run.label.every((elem) => elem.holder === grant.holder);
 
-      if (!own) fail('denied', 'This call would send data to someone who cannot see it');
+        if (!own) return yield* refused('denied', 'This call would send data to someone who cannot see it');
 
-      return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'outflow' }) };
-    }
+        return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'outflow' }) };
+      }
 
-    if (grant.effect && run.requester?.email !== grant.holder) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'effect' }) };
+      if (grant.effect && run.requester?.email !== grant.holder) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'effect' }) };
 
-    return { kind: 'go' };
+      return { kind: 'go' };
+    }));
   }
 
   private wait(run: Run, grant: Grant, step: number, call: Pick<PendingEffect, 'tool' | 'args' | 'kind'>): PendingEffect {
@@ -766,16 +798,18 @@ export class RoomCaretaker {
    * sink, for that function at this image.
    */
   decide(actor: string | null, pendingId: string, approve: boolean): void {
-    const pending = this.pending.get(pendingId) ?? fail('missing', 'Nothing waits under that name');
-    const grant = this.grant(pending.grant) ?? fail('denied', 'This grant was taken back');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const pending = this.pending.get(pendingId) ?? (yield* refused('missing', 'Nothing waits under that name'));
+      const grant = this.grant(pending.grant) ?? (yield* refused('denied', 'This grant was taken back'));
 
-    if (actor !== grant.holder) fail('denied', 'Only the grant\'s holder decides');
-    pending.decided = approve ? 'approved' : 'declined';
-    const run = this.runs.get(pending.run);
+      if (actor !== grant.holder) return yield* refused('denied', 'Only the grant\'s holder decides');
+      pending.decided = approve ? 'approved' : 'declined';
+      const run = this.runs.get(pending.run);
 
-    if (approve && pending.kind === 'outflow' && run !== undefined) {
-      for (const tag of run.label.filter((elem) => elem.holder === grant.holder)) this.show(actor, tag, run.fn, grant.sink);
-    }
+      if (approve && pending.kind === 'outflow' && run !== undefined) {
+        for (const tag of run.label.filter((elem) => elem.holder === grant.holder)) this.show(actor, tag, run.fn, grant.sink);
+      }
+    }));
   }
 
   /**
@@ -783,67 +817,77 @@ export class RoomCaretaker {
    * generation the approval named; an outflow passes the sink check again with the holder's show in place.
    */
   resume(pendingId: string): void {
-    const pending = this.pending.get(pendingId) ?? fail('denied', 'This step was dropped');
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const pending = this.pending.get(pendingId) ?? (yield* refused('denied', 'This step was dropped'));
 
-    this.pending.delete(pendingId);
+      this.pending.delete(pendingId);
 
-    if (pending.decided !== 'approved') fail('denied', 'Its holder declined this step');
-    const run = this.liveRun(pending.run);
-    const grant = this.grant(pending.grant);
+      if (pending.decided !== 'approved') return yield* refused('denied', 'Its holder declined this step');
+      const run = yield* this.liveRun(pending.run);
+      const grant = this.grant(pending.grant);
 
-    if (grant === null || grant.gen !== pending.gen) fail('denied', 'This grant changed while the step waited');
+      if (grant === null || grant.gen !== pending.gen) return yield* refused('denied', 'This grant changed while the step waited');
 
-    if (!audienceFlows(this.facts(), run.label, observers(grant.holder, grant.sink))) {
-      fail('denied', 'This call would send data to someone who cannot see it');
-    }
+      if (!audienceFlows(this.facts(), run.label, observers(grant.holder, grant.sink))) {
+        return yield* refused('denied', 'This call would send data to someone who cannot see it');
+      }
+    }));
   }
 
   /** `observe`: a run reads a cell whose label lies inside its own. */
   observe(runId: number, key: string): JsonValue {
-    const run = this.liveRun(runId);
-    const cell = this.cell(key);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const run = yield* this.liveRun(runId);
+      const cell = this.cell(key);
 
-    if (cell === null) return null;
+      if (cell === null) return null;
 
-    if (!within(cell.label, run.label)) fail('denied', 'This call cannot read that');
+      if (!within(cell.label, run.label)) return yield* refused('denied', 'This call cannot read that');
 
-    return cell.value;
+      return cell.value;
+    }));
   }
 
   /** `write`: a run writes its own output cell, and only that. */
   write(runId: number, value: JsonValue): void {
-    const run = this.liveRun(runId);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const run = yield* this.liveRun(runId);
 
-    if (run.requester !== null && run.requester.email === null) fail('denied', 'Sign in to change this slate');
-    this.db.exec('UPDATE room_cells SET value = ? WHERE key = ?', JSON.stringify(value), run.out);
+      if (run.requester !== null && run.requester.email === null) return yield* refused('denied', 'Sign in to change this slate');
+      this.db.exec('UPDATE room_cells SET value = ? WHERE key = ?', JSON.stringify(value), run.out);
+    }));
   }
 
   /** `post`: only a run with an empty label adds or replaces public state. */
   post(runId: number | null, key: string, value: JsonValue): void {
-    if (runId !== null) {
-      const run = this.liveRun(runId);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (runId !== null) {
+        const run = yield* this.liveRun(runId);
 
-      if (run.label.length > 0) fail('denied', 'A part that read private data can only return its result');
+        if (run.label.length > 0) return yield* refused('denied', 'A part that read private data can only return its result');
 
-      if (run.requester !== null && run.requester.email === null) fail('denied', 'Sign in to change this slate');
-    }
+        if (run.requester !== null && run.requester.email === null) return yield* refused('denied', 'Sign in to change this slate');
+      }
 
-    const existing = this.cell(key);
+      const existing = this.cell(key);
 
-    if (existing !== null && existing.label.length > 0) fail('denied', `${key} holds a part's private result`);
-    this.db.exec(
-      "INSERT INTO room_cells (key, label, value) VALUES (?, '[]', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-      key, JSON.stringify(value),
-    );
+      if (existing !== null && existing.label.length > 0) return yield* refused('denied', `${key} holds a part's private result`);
+      this.db.exec(
+        "INSERT INTO room_cells (key, label, value) VALUES (?, '[]', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        key, JSON.stringify(value),
+      );
+    }));
   }
 
   /** `release`: what a run returns reaches a current session only if every element of its label may reach its person. */
   release(runId: number, to: Session): boolean {
-    const run = this.liveRun(runId);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const run = yield* this.liveRun(runId);
 
-    if (!this.current(to)) fail('denied', 'This session has ended');
+      if (!this.current(to)) return yield* refused('denied', 'This session has ended');
 
-    return flows(this.facts(), run.label, to.email);
+      return flows(this.facts(), run.label, to.email);
+    }));
   }
 
   /** `finish`. */
@@ -876,11 +920,13 @@ export class RoomCaretaker {
   }
 
   deleteCell(key: string): boolean {
-    const existing = this.cell(key);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const existing = this.cell(key);
 
-    if (existing !== null && existing.label.length > 0) fail('denied', `${key} holds a part's private result`);
+      if (existing !== null && existing.label.length > 0) return yield* refused('denied', `${key} holds a part's private result`);
 
-    return this.db.exec('DELETE FROM room_cells WHERE key = ? RETURNING key', key).toArray().length > 0;
+      return this.db.exec('DELETE FROM room_cells WHERE key = ? RETURNING key', key).toArray().length > 0;
+    }));
   }
 
   /**
@@ -888,11 +934,13 @@ export class RoomCaretaker {
    * they may not read, whose holders a placeholder asks.
    */
   render(key: string, to: Session): { readonly shown: true; readonly value: JsonValue } | { readonly shown: false; readonly hidden: Elem[] } {
-    if (!this.current(to)) fail('denied', 'This session has ended');
-    const cell = this.cell(key) ?? fail('missing', `No cell ${key}`);
-    const facts = this.facts();
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (!this.current(to)) return yield* refused('denied', 'This session has ended');
+      const cell = this.cell(key) ?? (yield* refused('missing', `No cell ${key}`));
+      const facts = this.facts();
 
-    return flows(facts, cell.label, to.email) ? { shown: true, value: cell.value } : { shown: false, hidden: hidden(facts, cell.label, to.email) };
+      return flows(facts, cell.label, to.email) ? { shown: true, value: cell.value } : { shown: false, hidden: hidden(facts, cell.label, to.email) };
+    }));
   }
 
   // ── Forks ─────────────────────────────────────────────────────────────────────────────────────────────────────

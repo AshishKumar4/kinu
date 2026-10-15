@@ -4,7 +4,9 @@
  * key signs the room's link generation: stopping the link and starting it again mints a new key, and an old one opens
  * nothing (`Revocation.lean`: `a_stopped_links_sessions_stay_ended`).
  */
-import { labelSigner, roomPagePath, sha256Hex, type LabelSignerEnv } from '@kinu.run/core';
+import { labelSigner, type LabelSignerEnv } from '../../utils/label-signer';
+import { sha256Hex } from '../../safety/argument-digest';
+import { roomPagePath } from '../room-api';
 
 /** 26 base32 characters: 130 bits, for a key that admits anyone who holds it. */
 const roomSigner = labelSigner('kinu.slate-room.salt', 'kinu.slate-room.v1', 26);
@@ -22,7 +24,7 @@ function linkMessage(workspace: string, slate: string, linkGen: number): string 
   return `kinu:slate-room-link:v1:${workspace}:${slate}:${linkGen}`;
 }
 
-export async function linkKey(env: LabelSignerEnv, workspace: string, slate: string, linkGen: number): Promise<string | null> {
+async function linkKey(env: LabelSignerEnv, workspace: string, slate: string, linkGen: number): Promise<string | null> {
   const secret = roomSigner.secret(env);
 
   return secret === undefined ? null : await roomSigner.token(secret, linkMessage(workspace, slate, linkGen));

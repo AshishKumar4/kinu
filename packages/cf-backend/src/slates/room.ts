@@ -14,9 +14,10 @@ import {
   RoomClientFrameSchema, type RoomAccess, type RoomAsk, type RoomAudience, type RoomCall, type RoomPerson, type RoomServerFrame,
   type RoomView, type SheetView,
 } from '@kinu.run/core';
-import { RoomCaretaker, initSlateRoomTables, type Access, type RoomMember, type Session } from '@kinu.run/core/slates';
-import { KinuError, toKinuError } from '@kinu.run/core/obs';
-import { linkKeyHolds, linkUrl } from './room-passes';
+import { RoomCaretaker, initSlateRoomTables, linkKeyHolds, linkUrl, type Access, type RoomMember, type Session } from '@kinu.run/core/slates';
+import { Effect, Result } from 'effect';
+import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+
 
 /** Who a request is, as the Worker's route proved it. */
 export interface RoomVisitor {
@@ -94,7 +95,7 @@ export class SlateRoom extends DurableObject<Env> {
 
   /** The owner's workspace makes its slate's room on the slate's first run; a second call changes nothing. */
   create(input: { readonly workspace: string; readonly slate: string; readonly title: string; readonly owner: string; readonly parent: string | null }): void {
-    if (this.storageRefusal !== undefined) throw this.storageRefusal;
+    if (this.storageRefusal !== undefined) return settleSync(Effect.fail(this.storageRefusal));
     const stamps = durableStamps(this.ctx.storage.kv);
 
     if (readStamp(stamps, this.ctx.storage.sql, 'room') === 'unmade') {
@@ -106,7 +107,7 @@ export class SlateRoom extends DurableObject<Env> {
   }
 
   exists(): boolean {
-    if (this.storageRefusal !== undefined) throw this.storageRefusal;
+    if (this.storageRefusal !== undefined) return settleSync(Effect.fail(this.storageRefusal));
     const made = this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'room'").toArray().length > 0;
 
     return made && this.ctx.storage.sql.exec('SELECT 1 FROM room WHERE id = 1').toArray().length > 0;
@@ -176,10 +177,11 @@ export class SlateRoom extends DurableObject<Env> {
     const frame = v.safeParse(RoomClientFrameSchema, JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message)));
 
     if (state === null || !frame.success) return;
-    const reply = await this.answer(ws, state, frame.output.id, frame.output.call);
 
-    ws.send(JSON.stringify(reply));
-    await this.broadcast();
+    return settle(Effect.gen({ self: this }, function* () {
+      ws.send(JSON.stringify(yield* this.answer(ws, state, frame.output.id, frame.output.call)));
+      yield* Effect.promise(async () => this.broadcast());
+    }));
   }
 
   override async webSocketClose(): Promise<void> {
@@ -192,46 +194,48 @@ export class SlateRoom extends DurableObject<Env> {
     return parsed.success ? parsed.output : null;
   }
 
-  private async answer(ws: WebSocket, state: SocketState, id: number, call: RoomCall): Promise<RoomServerFrame> {
-    try {
-      await this.call(ws, state, call);
-
-      return { id, ok: true };
-    } catch (cause) {
-      const error = toKinuError({ doing: `room ${call.op}`, cause, otherwise: 'io' });
+  /** A call's answer frame: done, or refused in the room's words. It never fails. */
+  private answer(ws: WebSocket, state: SocketState, id: number, call: RoomCall): Effect.Effect<RoomServerFrame> {
+    return Effect.map(Effect.result(this.call(ws, state, call)), (done): RoomServerFrame => {
+      if (Result.isSuccess(done)) return { id, refusal: null };
+      const error = done.failure;
       const reason = error.code === 'denied' || error.code === 'missing' || error.code === 'bad_input' ? error.code : 'unavailable';
 
-      return { id, ok: false, refusal: { reason, message: error.message } };
-    }
+      return { id, refusal: { reason, message: error.message } };
+    });
   }
 
-  private async call(ws: WebSocket, state: SocketState, call: RoomCall): Promise<void> {
-    const session: Session = { email: state.email, access: state.access };
+  /** One call of a session, as the caretaker allows it. */
+  private call(ws: WebSocket, state: SocketState, call: RoomCall): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const session: Session = { email: state.email, access: state.access };
 
-    if (!this.caretaker.current(session)) throw new KinuError('denied', 'This session has ended');
-    const actor = state.email;
+      if (!this.caretaker.current(session)) return yield* new KinuError('denied', 'This session has ended');
+      const actor = state.email;
+      const caretaking = (doing: string, body: () => void | Promise<void>) => attempt({ doing, otherwise: 'io' }, async () => body());
 
-    switch (call.op) {
-      case 'setAudience': return await this.setAudience(actor, call.audience);
-      case 'invite': return this.caretaker.invite(actor, call.email.trim().toLowerCase(), call.role);
-      case 'setRole': return this.caretaker.invite(actor, call.email, call.role);
-      case 'remove': return this.caretaker.remove(actor, call.email);
-      case 'leave': {
-        if (actor === null) throw new KinuError('denied', 'Sign in to leave a slate');
+      switch (call.op) {
+        case 'setAudience': return yield* caretaking('setting the audience', async () => this.setAudience(actor, call.audience));
+        case 'invite': return yield* caretaking('adding someone', () => { this.caretaker.invite(actor, call.email.trim().toLowerCase(), call.role); });
+        case 'setRole': return yield* caretaking('changing a role', () => { this.caretaker.invite(actor, call.email, call.role); });
+        case 'remove': return yield* caretaking('removing someone', () => { this.caretaker.remove(actor, call.email); });
+        case 'leave': {
+          if (actor === null) return yield* new KinuError('denied', 'Sign in to leave a slate');
 
-        return this.caretaker.remove(actor, actor);
+          return yield* caretaking('leaving', () => { this.caretaker.remove(actor, actor); });
+        }
+
+        case 'here': {
+          ws.serializeAttachment({ ...state, where: call.where, typing: call.typing } satisfies SocketState);
+
+          return;
+        }
+
+        case 'list': case 'unlist': case 'setLend': case 'setLendShown': case 'open': case 'ask': case 'check': case 'allow':
+        case 'show': case 'unshow': case 'showTo': case 'showToMembers': case 'approve': case 'send': case 'decline':
+          return yield* new KinuError('unsupported', `${call.op} is not available yet`);
       }
-
-      case 'here': {
-        ws.serializeAttachment({ ...state, where: call.where, typing: call.typing } satisfies SocketState);
-
-        return;
-      }
-
-      case 'list': case 'unlist': case 'setLend': case 'setLendShown': case 'open': case 'ask': case 'check': case 'allow':
-      case 'show': case 'unshow': case 'showTo': case 'showToMembers': case 'approve': case 'send': case 'decline':
-        throw new KinuError('unsupported', `${call.op} is not available yet`);
-    }
+    });
   }
 
   /** The sheet's three audiences, each one call: the link on, the link off, or the link off and everyone removed. */

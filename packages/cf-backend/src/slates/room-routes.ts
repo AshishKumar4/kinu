@@ -7,26 +7,23 @@ import { Hono, type Context } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
 import { RoomEntrySchema, type RoomEntry } from '@kinu.run/core';
-import { authenticateRequest, AuthError, type AuthIdentity } from '../auth/session';
+import { requestIdentity, type AuthIdentity } from '../auth/session';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { rawParam, type FamilyEnv } from '../api/context';
-import { roomHandle, roomObjectName } from './room-passes';
+import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
 import { ROOM_KEY_HEADER, ROOM_PERSON_HEADER, type RoomVisitor, type SlateRoom } from './room';
 
 export const roomRoutes = new Hono<FamilyEnv<Env, object>>();
 
 /** The session's person, or null for a request with no session or an expired one: a room treats both as signed out. */
 async function visitorOf(request: Request, env: Env): Promise<{ identity: AuthIdentity; visitor: RoomVisitor } | null> {
-  try {
-    const identity = await authenticateRequest(request, env);
-    const email = identity.email.trim().toLowerCase();
+  const identity = await requestIdentity(request, env);
 
-    return { identity, visitor: { email, name: identity.displayName ?? email.slice(0, email.indexOf('@')) } };
-  } catch (cause) {
-    if (cause instanceof AuthError && cause.status === 401) return null;
-    throw cause;
-  }
+  if (identity === null) return null;
+  const email = identity.email.trim().toLowerCase();
+
+  return { identity, visitor: { email, name: identity.displayName ?? email.slice(0, email.indexOf('@')) } };
 }
 
 function roomOf(env: Env, workspace: string, slate: string): DurableObjectStub<SlateRoom> {

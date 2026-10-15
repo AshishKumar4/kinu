@@ -326,9 +326,9 @@ export const RoomClientFrameSchema = v.object({ id: v.number(), call: RoomCallSc
 
 export type RoomClientFrame = v.InferOutput<typeof RoomClientFrameSchema>;
 
+/** A call's answer (`refusal` null: done) or a pushed view. */
 export const RoomServerFrameSchema = v.union([
-  v.object({ id: v.number(), ok: v.literal(true) }),
-  v.object({ id: v.number(), ok: v.literal(false), refusal: RoomRefusalSchema }),
+  v.object({ id: v.number(), refusal: v.nullable(RoomRefusalSchema) }),
   v.object({ view: RoomViewSchema }),
 ]);
 
