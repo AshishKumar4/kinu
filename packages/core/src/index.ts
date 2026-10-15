@@ -2644,8 +2644,8 @@ export {
 
 export {
   validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
-  McpServerSummarySchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput, type McpServerSummary,
-  type McpTransport,
+  McpServerSummarySchema, McpTransportSchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput,
+  type McpServerSummary, type McpTransport,
 } from './mcp/servers';
 
 export type {

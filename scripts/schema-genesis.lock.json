@@ -1561,9 +1561,6 @@
   ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
-    "name TEXT NOT NULL",
-    "server_url TEXT NOT NULL",
-    "transport TEXT NOT NULL",
     "headers TEXT",
     "allowed_tools TEXT",
     "preset_id TEXT"

@@ -130,24 +130,17 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // OAuth tokens live in separate DO storage keys. `headers` is sealed at rest like a credential.
+  // Kinu's half of each MCP server: what the Agents SDK cannot hold. Its name, endpoint and transport live in the SDK's
+  // own catalog (`cf_agents_mcp_servers`, read through `listServers`), under the same id; OAuth tokens live in separate
+  // DO storage keys. `headers` is sealed at rest like a credential.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_mcp_servers (
       id            TEXT PRIMARY KEY,
-      name          TEXT NOT NULL,
-      server_url    TEXT NOT NULL,
-      transport     TEXT NOT NULL,
       headers       TEXT,
       allowed_tools TEXT,
       -- The MCP_PRESETS entry the server was added from; null for a custom server.
       preset_id     TEXT
     )
-  `);
-
-  // Names address tools (`mcp_<server>_<tool>`), so one name, in any case, is one server.
-  sql.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_mcp_servers_name_unique
-      ON user_mcp_servers (lower(name))
   `);
 
   // Devices linked via `kinu connect`; only token hashes are stored. Tokens rotate on every connect

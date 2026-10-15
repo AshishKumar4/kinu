@@ -46,7 +46,7 @@ export interface McpServerInput {
   presetId?: McpPresetId;
 }
 
-const McpTransportSchema = v.picklist(['auto', 'sse', 'streamable-http']);
+export const McpTransportSchema = v.picklist(MCP_TRANSPORTS);
 
 function isJsonRecord<Value>(value: Value): value is Value & JsonObject {
   return !Array.isArray(value) && v.is(JsonObjectSchema, value);
