@@ -63,21 +63,23 @@ export class SlateRoom extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // Asked once, never caught, as every class's database is (core state/schema-repair.ts).
+    // Asked once, never caught, as every class's database is (core state/schema-repair.ts). A room is made only by
+    // `create`: one asked before that (the deploy's walk names every slate's) stays unmade, holding nothing.
     const stamps = durableStamps(ctx.storage.kv);
     const stamp = readStamp(stamps, ctx.storage.sql, 'room');
-    const init = () => { initSlateRoomTables((ddl) => { ctx.storage.sql.exec(ddl); }); };
 
     this.schemaRepair = repairSchema(ctx.storage.sql, {
-      schema: 'room', tables: SCHEMA_TABLES.room, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init,
+      schema: 'room', tables: SCHEMA_TABLES.room, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init: () => { this.initTables(); },
     }, `room ${ctx.id.toString()}`);
 
     if (this.schemaRepair?.refused != null) this.storageRefusal = new StoragePredatesReleaseError('room', this.schemaRepair.refused);
 
-    if (this.storageRefusal === undefined) init();
-
-    if (stamp === 'unmade') writeStamp(stamps, 'room');
+    if (this.storageRefusal === undefined && stamp !== 'unmade') this.initTables();
     this.caretaker = new RoomCaretaker({ db: ctx.storage.sql });
+  }
+
+  private initTables(): void {
+    initSlateRoomTables((ddl) => { this.ctx.storage.sql.exec(ddl); });
   }
 
   /** The deploy's walk: this room's tables and what its repair did. */
@@ -86,19 +88,28 @@ export class SlateRoom extends DurableObject<Env> {
 
     return {
       name: null, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
-      workspaces: [], accounts: [], agents: [],
+      workspaces: [], accounts: [], agents: [], rooms: [],
     };
   }
 
   /** The owner's workspace makes its slate's room on the slate's first run; a second call changes nothing. */
   create(input: { readonly workspace: string; readonly slate: string; readonly title: string; readonly owner: string; readonly parent: string | null }): void {
+    if (this.storageRefusal !== undefined) throw this.storageRefusal;
+    const stamps = durableStamps(this.ctx.storage.kv);
+
+    if (readStamp(stamps, this.ctx.storage.sql, 'room') === 'unmade') {
+      this.initTables();
+      writeStamp(stamps, 'room');
+    }
+
     this.caretaker.create(input);
   }
 
   exists(): boolean {
     if (this.storageRefusal !== undefined) throw this.storageRefusal;
+    const made = this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'room'").toArray().length > 0;
 
-    return this.ctx.storage.sql.exec('SELECT 1 FROM room WHERE id = 1').toArray().length > 0;
+    return made && this.ctx.storage.sql.exec('SELECT 1 FROM room WHERE id = 1').toArray().length > 0;
   }
 
   /** How a person would open the room now: the live page reads this before its socket, to say why it cannot. */

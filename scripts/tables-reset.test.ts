@@ -97,7 +97,7 @@ const REPAIR: Repair = {
   tables: [{ table: 'device_joins', before: 2, after: 2 }, { table: 'user_peer_grants', before: 1, after: null }], refused: null,
 };
 
-const answer = (over: Partial<TablesAnswer>): TablesAnswer => ({ name: null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [], ...over });
+const answer = (over: Partial<TablesAnswer>): TablesAnswer => ({ name: null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [], rooms: [], ...over });
 
 const ACCOUNT: Reached = { className: 'UserDO', id: 'a'.repeat(64), name: 'u1', answer: answer({ census: [{ table: 'user_profile', rows: 1 }, { table: 'device_joins', rows: 2 }], repair: REPAIR }) };
 
@@ -139,11 +139,14 @@ test('the walk names what each repair did, fails on a refused or a row-moving da
   expect(walkLines([moved], 0).failed).toEqual(['UserDO u1: device_joins 2 → 1']);
 });
 
-/** What the walk is led to from `name`: the directory names a builtin account, an account its workspace. */
+/** What the walk is led to from `name`: the directory names a builtin account, an account its workspace, a workspace
+ *  its slate's room. */
 function leadsOf(className: OpsBody['class'], name: string): Partial<TablesAnswer> {
   if (name === 'directory') return { accounts: ['u-builtin'] };
 
-  return className === 'UserDO' ? { workspaces: [`${name}-ws`] } : { name };
+  if (className === 'UserDO') return { workspaces: [`${name}-ws`] };
+
+  return className === 'OrchestratorAgent' ? { name, rooms: [`${name}/0123456789`] } : { name };
 }
 
 /** A deployment as the walk meets it: its roots, its accounts' workspaces and directory, Cloudflare's lists, an edge
@@ -199,9 +202,10 @@ test('the walk follows the roots to the directory\'s accounts and every account\
     'UserDO 50 id(s)',
     'UserDO 10 id(s)',
     'OrchestratorAgent u-seen-ws,u-builtin-ws',
+    'SlateRoom u-seen-ws/0123456789,u-builtin-ws/0123456789',
   ]);
   // `u-seen` was listed too, and named first: it is asked once.
-  expect({ reached: reached.length, listed }).toEqual({ reached: 65, listed: 61 });
+  expect({ reached: reached.length, listed }).toEqual({ reached: 67, listed: 61 });
   expect(forgotten).toEqual(admitted);
 });
 
@@ -224,7 +228,7 @@ test('an object that starts on the build before is asked again until it starts o
   const { target, asked } = deployment(0, 2);
   const { reached } = await walk(target);
 
-  expect(asked.slice(-2).map((body) => body.names)).toEqual([['u-builtin-ws'], ['u-builtin-ws']]);
+  expect(asked.filter((body) => body.class === 'OrchestratorAgent').slice(-2).map((body) => body.names)).toEqual([['u-builtin-ws'], ['u-builtin-ws']]);
   expect(reached.find((object) => object.name === 'u-builtin-ws')?.answer?.name).toBe('u-builtin-ws');
 });
 
