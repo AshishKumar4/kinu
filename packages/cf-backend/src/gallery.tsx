@@ -4119,8 +4119,22 @@ function explorationRead(
 
   // Both answer null; the panel must not render either as "recorded nothing".
   if (method === "getMctsNodeDetail") return null;
+  const transcript = TRANSCRIPT_BY_NODE.get(String(args[1])) ?? null;
 
-  return TRANSCRIPT_BY_NODE.get(String(args[1])) ?? null;
+  if (new URLSearchParams(location.search).get("olderSteps") === null) return transcript;
+  const request = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ after: v.string() })) })), args[2]);
+
+  return stepAtATime(transcript, request?.cursor?.after);
+}
+
+/** `&olderSteps=1`: a node's journal a step a page, newest first, as a long one is read: each older page by its cursor. */
+function stepAtATime(transcript: NodeTranscriptView | null, before: string | undefined): NodeTranscriptView | null {
+  if (transcript === null) return null;
+  const steps = transcript.steps.items;
+  const at = (before === undefined ? steps.length : Number(before)) - 1;
+  const step = steps.slice(at, at + 1);
+
+  return { ...transcript, steps: at > 0 ? { status: "more", items: step, next: { after: String(at) } } : { status: "end", items: step } };
 }
 
 const forkRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {

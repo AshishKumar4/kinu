@@ -982,3 +982,49 @@ test('a running head paints its arriving step, only its own, until the step land
     await page.close();
   });
 });
+
+/**
+ * A node's journal longer than a page reads its older steps a page at a time, above the newer, and a node chosen again
+ * starts its walk again: each step once, oldest first.
+ */
+test("a node's older steps load above its newer ones, each once, and again for a node chosen anew", async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    const node = (id: string) => `g.mcts-node[data-node="${id}"]`;
+
+    // The tree is drawn in SVG, panned and zoomed: a node is pressed as the element it is, never at a point on screen.
+    const choose = (id: string) => page.$eval(node(id), (drawn) => { drawn.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const steps = ['Reading the handler', 'Three readers, one shape', 'Guarding at the reader'];
+
+    // Where each step reads in the page, once all of them have: a walk that has read its last page draws no edge.
+    const walked = async (): Promise<number[][]> => {
+      await page.waitForFunction((said: string[]) => document.querySelector('[data-node-steps] [data-scroll-edge]') === null
+        && said.every((text) => document.querySelector('[data-node-steps]')?.textContent?.includes(text) === true), {}, steps);
+
+      return page.evaluate((said: string[]) => said.map((text) => {
+        const body = document.querySelector('[data-node-steps]')?.textContent ?? '';
+        const found: number[] = [];
+
+        for (let at = body.indexOf(text); at !== -1; at = body.indexOf(text, at + 1)) found.push(at);
+
+        return found;
+      }), steps);
+    };
+
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=forkexplorer&run=root-merge-1&olderSteps=1`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector(node('root-merge-1-h0'));
+
+    for (const round of [1, 2]) {
+      await choose('root-merge-1-h0');
+      const at = await walked();
+
+      expect({ round, once: at.every((found) => found.length === 1), inOrder: at.flat().every((found, index, all) => index === 0 || found > (all[index - 1] ?? 0)) })
+        .toEqual({ round, once: true, inOrder: true });
+      await choose('root-merge-1-h1');
+      await page.waitForFunction((first: string) => document.querySelector('[data-node-steps]')?.textContent?.includes(first) !== true, {}, steps[0] ?? '');
+    }
+
+    await page.close();
+  });
+});
