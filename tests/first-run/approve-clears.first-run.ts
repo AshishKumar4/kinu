@@ -24,7 +24,9 @@
  *   command is re-issued, and this case re-issues it and reads the bytes.
  *
  *   THE BUTTON, in a real browser — Chrome loads the deployed workspace, the
- *   parked card renders, the Approve button is clicked, and NO CHECKBOX IS LEFT
+ *   parked commands' card renders in its attention stack (where asks are
+ *   decided, 35495c16c: two or more parked commands are one card, chosen by
+ *   their boxes), the Approve button is clicked, and NO CHECKBOX IS LEFT
  *   CHECKED. That is the assertion the owner made by eye.
  *
  * THE GATED COMMAND IS REAL AND SAFE. `rm -r <this run's own scratch directory>`
@@ -36,7 +38,8 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, test } from 'vitest';
-import type { Browser, Page } from 'puppeteer';
+import type { Browser, ElementHandle, Page } from 'puppeteer';
+import * as v from 'valibot';
 
 import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import type { PublicSessionPlan } from '../../evals/src/session';
@@ -68,11 +71,13 @@ const DEFECT: FirstRunDefect = {
  *  the fleet is the next case's subject. */
 const MACHINE = 'kinu-first-run-approve';
 
-/** How long the browser waits for a deployed pane to paint. The app loads its
- *  bundle, opens a socket and reads the queue, so this is a page-load budget
- *  rather than a correctness deadline: what is asserted is what the pane shows
- *  once it has shown anything. */
-const PAINT_MS = 30_000;
+/** The most wall time the case may take once its session is open. A signed-in
+ *  page has no default timeout (`signedInPage`): each wait on it ends when the
+ *  card it waits for shows, or this budget ends the case with the evidence as it
+ *  stands. With neither, a card that never renders is a silent hang of the whole
+ *  tier, which is how the 7fecf0225 staging run ended. A green run takes well
+ *  under a minute. */
+const BUDGET_MS = 5 * 60_000;
 
 const PLAN = firstRunCasePlan(SUITE, 'approve');
 
@@ -103,6 +108,7 @@ describe(SUITE, () => {
         id: CASE,
         defect: DEFECT,
         modelCalls: 'expected',
+        budgetMs: BUDGET_MS,
         purpose: 'A careful assistant working on the owner\'s own machine.',
         async run({ session }) {
           const machine = await attachMachine({
@@ -148,17 +154,23 @@ describe(SUITE, () => {
           const gone = !existsSync(doomed);
 
           // ── the button ──────────────────────────────────────────────
-          // A second parked row, so the browser has something to approve that
-          // the RPC half did not already clear. Same command shape, different
-          // directory, same rule.
-          const alsoDoomed = join(machine.home, 'doomed-by-click');
-          mkdirSync(alsoDoomed, { recursive: true });
-          const clickCommand = `rm -r ${JSON.stringify(alsoDoomed)}`;
-          await session.execute('device', clickCommand);
+          // Two more parked rows, so the browser has something to approve that
+          // the RPC half did not already clear, and one card holds them with a
+          // box each: the stack batches two or more. Same command shape,
+          // different directories, same rule.
+          const clickCommands = ['doomed-by-click-a', 'doomed-by-click-b'].map((name) => {
+            const dir = join(machine.home, name);
+            mkdirSync(dir, { recursive: true });
+
+            return `rm -r ${JSON.stringify(dir)}`;
+          });
+
+          for (const clickCommand of clickCommands) await session.execute('device', clickCommand);
+          const clickIds = (await session.parkedCommands()).filter((entry) => clickCommands.includes(entry.command)).map((entry) => entry.id);
           const browser = await openBrowser();
           held.browser = browser;
-          const clicked = await approveThroughTheButton(browser.browser, PLAN, session.workspace, clickCommand);
-          const clickStillQueued = (await session.parkedCommands()).some((entry) => entry.command === clickCommand);
+          const clicked = await approveThroughTheButton(browser.browser, PLAN, session.workspace, clickIds);
+          const clickStillQueued = (await session.parkedCommands()).some((entry) => clickIds.includes(entry.id));
 
           // The RPC/browser work can finish before genesis makes its first
           // model call. Drain through an explicit turn before collecting spend.
@@ -210,7 +222,7 @@ describe(SUITE, () => {
               detail: clicked.approved
                 ? `after the click the card shows ${String(clicked.checkedAfter)} checked box(es) `
                   + `of ${String(clicked.boxesAfter)} (before: ${String(clicked.checkedBefore)} `
-                  + `of ${String(clicked.boxesBefore)}); command ${clickStillQueued ? 'remains queued' : 'left the queue'}`
+                  + `of ${String(clicked.boxesBefore)}); commands ${clickStillQueued ? 'remain queued' : 'left the queue'}`
                 : `the Approve button was never reached: ${clicked.why}`,
             },
           ] satisfies EvalSubgoal[];
@@ -247,129 +259,89 @@ interface ButtonRun {
 }
 
 /**
- * Load the deployed workspace in Chrome, click Approve, and count the boxes.
+ * Load the deployed workspace in Chrome, click Approve on the parked commands' card, and count the boxes.
  *
-
  * The counts come from the DOM rather than from React state, because the defect
  * was a rendered checkbox: a person saw ticks after clicking Approve, and what
  * the component believed about `selected` is not the claim.
  */
 async function approveThroughTheButton(
-  browser: Browser, plan: PublicSessionPlan, workspace: string, command: string,
+  browser: Browser, plan: PublicSessionPlan, workspace: string, ids: readonly string[],
 ): Promise<ButtonRun> {
   const empty = { boxesBefore: 0, checkedBefore: 0, boxesAfter: 0, checkedAfter: 0 };
+
+  if (ids.length < 2) return { approved: false, why: `the queue held ${String(ids.length)} of the two parked rows, so no card batches them`, ...empty };
   const page = await signedInPage(browser, plan);
 
   try {
-    return await drive({ page, origin: plan.origin, workspace, command, empty });
+    return await drive({ page, origin: plan.origin, workspace, ids, empty });
   } finally {
     await page.close();
   }
 }
 
-/** The page's own walk to the queue and back. Split out so the header, the
- *  navigation and the failure wording are one readable sequence. */
+/** The page's own walk to the card and back. Split out so the navigation and
+ *  the failure wording are one readable sequence. */
 interface DriveOptions {
   readonly page: Page;
   readonly origin: string;
   readonly workspace: string;
-  readonly command: string;
+  /** The parked rows the card must hold, by their queue ids. */
+  readonly ids: readonly string[];
   readonly empty: Omit<ButtonRun, 'approved' | 'why'>;
 }
 
-async function drive({ page, origin, workspace, command, empty }: DriveOptions): Promise<ButtonRun> {
-  await page.goto(`${origin}/workspace/${encodeURIComponent(workspace)}`, {
-    waitUntil: 'domcontentloaded',
-  });
-  // The tab exists offscreen while the inspector opens. The locator waits
-  // for stable click geometry; CSS visibility alone does not establish it.
-  await page.locator('button[aria-label="Work"]').setTimeout(PAINT_MS).click();
-  // A selector that never appears is this case's finding, not an error to
-  // propagate: "the parked card never rendered" is a product answer and the
-  // subgoal below states it. Anything that is NOT the wait expiring — a closed
-  // page, a navigation error — is rethrown, so a broken harness cannot read as
-  // an empty queue.
-  let button: Awaited<ReturnType<Page['waitForSelector']>> = null;
+/** Whether the stack's open card holds a box for every one of `ids`. */
+function cardHolds(ids: readonly string[]): boolean {
+  return ids.every((id) => document.querySelector(`[data-attention-card] [data-parked-command="${id}"] input[type="checkbox"]`) !== null);
+}
 
-  try {
-    const panel = await page.waitForFunction(parkedCommandPanel, {}, command);
-    const element = panel.asElement();
+/** Whether the card holds them, or waits behind another ask whose row names one of them. */
+function cardOrRowShown(ids: readonly string[]): boolean {
+  return ids.every((id) => document.querySelector(`[data-attention-card] [data-parked-command="${id}"] input[type="checkbox"]`) !== null)
+    || ids.some((id) => document.querySelector(`[data-attention-behind="action:${id}"]`) !== null);
+}
 
-    if (element !== null) {
-      for (const candidate of await element.$$('button')) {
-        const label = await candidate.evaluate((node) => node.textContent ?? '');
+/** The open card's boxes, and how many are ticked. */
+function cardBoxes() {
+  const boxes = [...document.querySelectorAll<HTMLInputElement>('[data-attention-card] [data-parked-command] input[type="checkbox"]')];
 
-        if (!isApprovalButtonLabel(label)) continue;
-        button = candidate;
-        break;
-      }
-    }
-  } catch (cause) {
-    // THE WAIT EXPIRING, and nothing else. Puppeteer names that one rejection
-    // `TimeoutError`; an expiry is a finding about the product's card, which
-    // the subgoal below states, while a closed page or a navigation fault is
-    // the harness breaking and must not read as an empty queue.
-    if (!(cause instanceof Error) || cause.name !== 'TimeoutError') throw cause;
+  return { boxes: boxes.length, checked: boxes.filter((box) => box.checked).length };
+}
+
+async function drive({ page, origin, workspace, ids, empty }: DriveOptions): Promise<ButtonRun> {
+  await page.goto(`${origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
+  // The parked card is the stack's open one, or waits behind another ask, whose row opens it. A card that never shows
+  // ends the case on its budget.
+  await page.waitForFunction(cardOrRowShown, {}, ids);
+
+  if (!v.parse(v.boolean(), await page.evaluate(cardHolds, ids))) {
+    const behind = await page.$(ids.map((id) => `[data-attention-behind="action:${id}"]`).join(', '));
+
+    await behind?.click();
+    await page.waitForFunction(cardHolds, {}, ids);
   }
 
-  if (button === null) {
-    return {
-      approved: false,
-      why: 'the parked-commands card never rendered an Approve button on '
-        + `${origin}/workspace/${workspace} within ${String(PAINT_MS)}ms`,
-      ...empty,
-    };
+  let approve: ElementHandle | null = null;
+
+  // The open card's Approve button: "Approve all" for a whole batch.
+  for (const candidate of await page.$$('[data-attention-card] button')) {
+    if (isApprovalButtonLabel(await candidate.evaluate((node) => node.textContent ?? ''))) approve = candidate;
   }
 
-  const before = await countBoxes(page, command);
-  await button.click();
+  if (approve === null) return { approved: false, why: `the parked commands' card on ${origin}/workspace/${workspace} holds no Approve button`, ...empty };
+  const before = v.parse(BoxCountSchema, await page.evaluate(cardBoxes));
+  await approve.click();
 
-  // The click issues an RPC and re-renders. Settling is observed on the CARD —
-  // the button leaves its busy state — rather than waited out on a timer.
-  // Settling is OBSERVED on the card — the busy state clearing — and a card
-  // that never settles is counted as it stands: the assertion is about which
-  // boxes are ticked, and a stuck button with every box ticked is the defect.
-  // The expiry is therefore tolerated by name and nothing else is.
-  try {
-    await page.waitForFunction(
-      () => document.querySelectorAll('input[type="checkbox"]:disabled').length === 0,
-    );
-  } catch (cause) {
-    // Same rule: a card that never settles is COUNTED as it stands, because the
-    // assertion is about which boxes are ticked and a stuck button with every
-    // box ticked is the defect itself.
-    if (!(cause instanceof Error) || cause.name !== 'TimeoutError') throw cause;
-  }
-
-  const after = await countBoxes(page, command);
+  // The click issues an RPC and re-renders. Settling is OBSERVED on the card —
+  // its boxes leave their busy state, or the card leaves with its rows.
+  await page.waitForFunction(() => document.querySelectorAll('[data-attention-card] [data-parked-command] input[type="checkbox"]:disabled').length === 0);
+  const after = v.parse(BoxCountSchema, await page.evaluate(cardBoxes));
 
   return {
-    approved: true,
-    why: '',
-    boxesBefore: before.boxes,
-    checkedBefore: before.checked,
-    boxesAfter: after.boxes,
-    checkedAfter: after.checked,
+    approved: true, why: '',
+    boxesBefore: before.boxes, checkedBefore: before.checked, boxesAfter: after.boxes, checkedAfter: after.checked,
   };
 }
 
-function parkedCommandPanel(command: string): HTMLElement | null {
-  const row = [...document.querySelectorAll('label')].find((label) => label.textContent?.includes(command)
-    && label.querySelector('input[type="checkbox"]') !== null);
-
-  return row?.closest('section') ?? null;
-}
-
-async function countBoxes(page: Page, command: string): Promise<{ boxes: number; checked: number }> {
-  const panel = await page.evaluateHandle(parkedCommandPanel, command);
-  const selected = panel.asElement();
-
-  if (selected === null) return { boxes: 0, checked: 0 };
-
-  return selected.evaluate((element) => {
-    const boxes = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .filter((box) => element.contains(box));
-
-    return { boxes: boxes.length, checked: boxes.filter((box) => box.checked).length };
-  });
-}
+const BoxCountSchema = v.object({ boxes: v.number(), checked: v.number() });
