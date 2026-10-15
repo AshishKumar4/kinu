@@ -280,25 +280,11 @@ class ClientSocketGate {
       return Effect.succeed('This connection carries no readable session. Reload the page to sign in again.');
     }
 
-    const verified = attempt({ doing: 'checking whether a websocket\'s browser session is still live', otherwise: 'unavailable' }, async () => {
-      const caller = await this.host.caller();
-
-      return await idempotent('verifySocketSession', () => this.host.ownerHub(),
-        (stub) => stub.verifySocketSession(caller, session.tokenHash), { onRetry: logDoCallRetry });
-    });
+    const verified = this.askOwner('verifySocketSession', (stub, caller) => stub.verifySocketSession(caller, session.tokenHash));
 
     return Effect.matchEffect(verified, {
       onSuccess: ({ live }) => Effect.succeed(live ? null : SESSION_AUTHORITY_REVOKED),
-      onFailure: (failure) => this.unconfirmed('auth.session_bearer_check_failed', failure, 'Reload the page to sign in again.'),
-    });
-  }
-
-  /** Authority that cannot be confirmed refuses, with what the client should do. */
-  private unconfirmed(event: `${string}.${string}`, failure: KinuError, instruction: string): Effect.Effect<string> {
-    return Effect.sync(() => {
-      diagnostics.failure(event, failure, { workspace: this.host.workspace() });
-
-      return `This connection's authorization could not be confirmed. ${instruction}`;
+      onFailure: (failure) => this.unconfirmed('session', failure),
     });
   }
 
@@ -306,19 +292,38 @@ class ClientSocketGate {
   private cliBearerDenial(bearer: CliSocketBearer): Effect.Effect<string | null> {
     if (!bearer.readable) return Effect.succeed('This connection carries no readable authorization. Reconnect with: kinu auth');
 
-    const verified = attempt({ doing: 'checking whether a websocket\'s CLI bearer is still live', otherwise: 'unavailable' }, async () => {
-      const caller = await this.host.caller();
-
-      return await idempotent('verifyCliSocketBearer', () => this.host.ownerHub(),
-        (stub) => stub.verifyCliSocketBearer(caller, bearer.tokenHash), { onRetry: logDoCallRetry });
-    });
+    const verified = this.askOwner('verifyCliSocketBearer', (stub, caller) => stub.verifyCliSocketBearer(caller, bearer.tokenHash));
 
     return Effect.matchEffect(verified, {
       onSuccess: ({ live, generation, error }) => Effect.succeed(live && generation <= bearer.generation ? null : error ?? CLI_AUTHORITY_REVOKED),
-      onFailure: (failure) => this.unconfirmed('auth.cli_bearer_check_failed', failure, 'Reconnect with: kinu auth'),
+      onFailure: (failure) => this.unconfirmed('cli', failure),
+    });
+  }
+
+  /** Authority that cannot be confirmed refuses, with what the client should do. */
+  private unconfirmed(bearer: keyof typeof UNCONFIRMED, failure: KinuError): Effect.Effect<string> {
+    return Effect.sync(() => {
+      diagnostics.failure(UNCONFIRMED[bearer].event, failure, { workspace: this.host.workspace() });
+
+      return `This connection's authorization could not be confirmed. ${UNCONFIRMED[bearer].instruction}`;
+    });
+  }
+
+  /** Whether a socket's authority is still live, asked of the owner's user object: retried, never cached. */
+  private askOwner<A>(check: 'verifySocketSession' | 'verifyCliSocketBearer', ask: (stub: UserHubClient, caller: UserCaller) => Promise<A>): Effect.Effect<A, KinuError> {
+    return attempt({ doing: `checking whether a websocket's authority is still live (${check})`, otherwise: 'unavailable' }, async () => {
+      const caller = await this.host.caller();
+
+      return await idempotent(check, () => this.host.ownerHub(), (stub) => ask(stub, caller), { onRetry: logDoCallRetry });
     });
   }
 }
+
+/** A bearer whose authority could not be confirmed: what is logged, and what its client is told to do. */
+const UNCONFIRMED = {
+  session: { event: 'auth.session_bearer_check_failed', instruction: 'Reload the page to sign in again.' },
+  cli: { event: 'auth.cli_bearer_check_failed', instruction: 'Reconnect with: kinu auth' },
+} as const;
 
 /** Validates the frame at the client boundary; a socket sending any other shape is closed with the reason. */
 async function forwardTerminalFrame(terminal: WorkspaceTerminal, connection: Pick<Connection, 'send' | 'close'>, message: WSMessage): Promise<void> {
