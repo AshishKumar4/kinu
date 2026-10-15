@@ -222,7 +222,10 @@ describe('grouped workspace navigator', () => {
       probe.renderer.keyInput.on('keypress', decoded);
       probe.mockInput.pressEscape();
       await escape.promise;
-      await probe.settle();
+      // A lone Escape is decoded by the input parser's timer, and the shell's close is a React update that commits in a
+      // later task; a frame timer due in the same timer phase can paint, and settle, before that commit. The commit
+      // returns focus in a layout effect, before the frame that first draws the overlay closed: read from that frame.
+      await probe.waitForFrame((painted) => !painted.includes('Workspaces · Esc close'));
       expect(probeTextarea?.focused).toBe(true);
       await probe.mockInput.typeText('focus returned');
       await probe.waitForFrame((painted) => painted.includes('focus returned'));
