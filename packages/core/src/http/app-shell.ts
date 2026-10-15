@@ -5,6 +5,7 @@ import { readBuildStamp, type AssetFetcher } from './deployed-assets';
 import { escapeHtml } from './http';
 import { PAGE_BUILD_META } from '../web/page-build';
 import { withAppSecurityHeaders } from './security-headers';
+import type { ThemeName } from '../web/theme';
 
 interface AppShellEnv extends PreviewSuffixEnv, PreviewPortEnv {
   readonly ASSETS: AssetFetcher;
@@ -44,7 +45,13 @@ function cached(response: Response, url: URL): Response {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-export async function serveApp(request: Request, env: AppShellEnv): Promise<Response> {
+/** A signed-in page's account: the theme it chose, read only when the answer is a page. */
+export interface ShellAccount {
+  readonly theme: () => Promise<ThemeName>;
+}
+
+/** With an `account`, the page names its theme on the root, so the first paint is already in it; without, the default. */
+export async function serveApp(request: Request, env: AppShellEnv, account?: ShellAccount): Promise<Response> {
   const suffix = previewHostSuffix(env);
   const asset = await env.ASSETS.fetch(request);
   const url = new URL(request.url);
@@ -52,8 +59,13 @@ export async function serveApp(request: Request, env: AppShellEnv): Promise<Resp
   if (!asset.headers.get('content-type')?.includes('text/html')) return cached(asset, url);
   // The page names the build that served it, from the stamp /api/health reads, so the two agree by construction.
   const build = await readBuildStamp(env, request.url);
+  const theme = await account?.theme();
 
-  const named = new HTMLRewriter().on('head', {
+  const named = new HTMLRewriter().on('html', {
+    element(element) {
+      if (theme !== undefined) element.setAttribute('data-theme', theme);
+    },
+  }).on('head', {
     element(element) {
       if (suffix) element.append(`<meta name="${previewSuffixMetaName()}" content="${suffix}">`, { html: true });
 

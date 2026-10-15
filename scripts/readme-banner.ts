@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { mark, THEME_TOKENS, type Mode } from '@kinu.run/core';
+import { DEFAULT_THEME, mark, THEME_TOKENS, type Mode } from '@kinu.run/core';
 import { withTestChrome } from './test-chrome';
 
 const REPO = join(import.meta.dir, '..');
@@ -31,7 +31,7 @@ function face(family: string, file: string, weight: string): string {
 }
 
 function page(mode: Mode): string {
-  const tokens = THEME_TOKENS[mode];
+  const tokens = THEME_TOKENS[DEFAULT_THEME][mode];
 
   return `<!doctype html><html><head><style>
 ${face('Schibsted Grotesk', 'schibsted-latin-var.woff2', '400 900')}

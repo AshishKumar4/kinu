@@ -244,7 +244,7 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
   const resize = new ResizeObserver(refit);
   const theme = new MutationObserver(onTheme);
   resize.observe(host);
-  theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode'] });
+  theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-theme'] });
   reduced.addEventListener('change', start);
   start();
 

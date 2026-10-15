@@ -2268,7 +2268,10 @@ export {
   type PublicPageOptions,
 } from './http/public-shell';
 
-export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
+export {
+  accountTheme, DEFAULT_THEME, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed, type ColourToken, type Mode, type RadiusRole, type ThemeName,
+  type TokenSet,
+} from './web/theme';
 
 export { hueStops, rankHue } from './web/agent-colour';
 

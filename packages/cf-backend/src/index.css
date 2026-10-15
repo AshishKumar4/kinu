@@ -83,29 +83,25 @@
    Kinu design language — the owner's app mock, applied to the app.
 
    The reference is `~/kinu-landing-design/Kinu App v2.dc.html`, drawn by
-   the owner himself: warm blacks (#0F0D0B ground, #181512 cards), solid
-   warm-brown hairlines (#262019) instead of alpha glows, one gold accent
-   (#E0A458) rationed to intent, silk (#E3D2AE) as the bright end of the
-   same thread, and three self-hosted faces — Schibsted Grotesk for
-   everything that reads, Newsreader for slates that ask for a serif,
-   Fragment Mono for labels and commands.
+   the owner himself: dark grounds, solid hairlines instead of alpha glows,
+   one gold accent rationed to intent, silk as the bright end of the same
+   thread, and three self-hosted faces — Schibsted Grotesk for everything
+   that reads, Newsreader for slates that ask for a serif, Fragment Mono
+   for labels and commands. Two palettes wear it (core's `web/theme.ts`):
+   Graphite, near-neutral so brass is the only colour on screen, and Warm,
+   the mock's umber at half its tint.
 
    Rules the tokens encode:
-   · Hairlines are SOLID colours from the ground's own family. The mock
-     draws its structure this way and it is what keeps the surface warm;
-     an alpha hairline composited over these grounds reads grey.
+   · Hairlines are SOLID colours from the ground's own family; an alpha
+     hairline composited over the grounds reads as a different hue.
    · Gold stays rationed: primary action, active nav, links, focus, live
      work. Silk is gold caught in light — links, brand ink, inline code —
      never a second accent.
-   · Surfaces are a warm ladder and dark hierarchy comes from steps plus
+   · Surfaces are an even ladder and dark hierarchy comes from steps plus
      hairlines, never shadows.
-   · LIGHT is the owner's own light theme from the same file, not a
-     derivation: tinted ground (#E9E2D3), paper cards (#F7F3E9), strong
-     visible rules (#D2C6AE family), gold deepened for text (#8F5C10).
    · Every text token meets WCAG AA (4.5:1+) on every surface it is
-     specced for, in both modes — enforced by scripts/palette-ux. Two
-     rungs are lifted a hair above the mock's literals for exactly this
-     gate and say so in their comments.
+     specced for, in every theme and mode — enforced by
+     tests/browser/palette-ux.
 
    The `.p-*` component classes live in `@layer components` so that any
    Tailwind utility written beside one wins. Unlayered, `.p-card`'s
@@ -128,10 +124,10 @@ html, body, #root {
      fields 8px; controls 6px; actions and chips are pills. `--r-card` and
      `--r-overlay` alias no Tailwind rung — the mock's two 14px measures sit
      between Tailwind's 12 and 16, and a role that means "outer card" should
-     not have to negotiate with a library scale to say so. The radii, the
-     grounds, surfaces, borders, text, accent, status, code and overlay
-     shadow are core's `web/theme.ts`, which the signed-out pages share;
-     they arrive through `virtual:kinu-theme.css`. The rest live here. */
+     not have to negotiate with a library scale to say so. The radii and
+     every colour and shadow token, for each theme and mode, are core's
+     `web/theme.ts`, which the signed-out pages share; they arrive through
+     `virtual:kinu-theme.css`. What lives here only points at them. */
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -141,62 +137,11 @@ html, body, #root {
   --dur-enter: 220ms;
   --dur-fold: 300ms;  /* a block that folds: longer than a control's change, since it moves a whole block */
 
-  /* ── DARK (default) — the owner's app mock, verbatim ───────────────
-     Every value below is the mock's own dark theme (Kinu App v2.dc.html,
-     `themes.dark`), mapped onto the app's role names. The mock's own
-     variable name is cited per token so an audit can trace each value
-     back to his file. ── */
-  --c-overlay:  #221C15;   /* dialogs — dark conflates the top two rungs, as the mock does */
-  /* mock --input — the composer well. It sits BELOW the canvas, a dark
-     inset inside the chrome strip, which is why it is not `--c-elevated`. */
-  --c-input-bg: #0B0A09;
-
-  /* Solid hairlines from the ground's own family. The mock draws every rule
-     as a solid warm brown and that is what keeps the surface warm — an
-     alpha hairline composited over these grounds reads grey. mock --line
-     for structural rules, --dash for separators inside a card, --line2 for
-     outlined controls (the composer, quiet buttons, the tab pill). */
-  --c-dash:          #2A241D;  /* mock --dash — dashed separators */
-
-  --c-text-4:   #8E8478;   /* mock --faint2 lifted from #8A7F72 for AA (4.6:1 worst) — micro labels */
-
-  --c-accent-mark:   var(--c-accent);  /* an icon that marks "here": the gold itself, where the ground is dark */
-
-  /* Status hues. good/bad are the mock's own; warning and info have no
-     mock literal and keep the family's tan and slate. */
-  --c-info:     #8FB6D6;   /* derived, 9.1:1 */
-
-  --c-success-tint: rgba(143, 188, 139, 0.14);
-  --c-warning-tint: rgba(232, 185, 122, 0.14);
-  --c-danger-tint:  rgba(201, 123, 107, 0.14);
-  --c-info-tint:    rgba(143, 182, 214, 0.14);
-  --c-neutral-tint: rgba(237, 229, 216, 0.06);
-
-  --c-user-bg:     #241E16;  /* mock --bubble */
-  --c-user-border: #3A3126;  /* mock --bubbleLine */
-
   /* The code surface: one silk tone on a recessed well rather than
-     syntax-coloured — the mock sets every inline identifier in its bright
-     thread colour, and CodeBlock in components/surfaces/shared.tsx does
-     the same. */
-  /* A code block is a well, which is what `--c-recessed` already means. */
+     syntax-coloured — CodeBlock in components/surfaces/shared.tsx sets every
+     inline identifier in the bright thread colour. A code block is a well,
+     which is what `--c-recessed` already means. */
   --c-code-bg:  var(--c-recessed);
-
-  /* One scrim behind every overlay — dialogs, drawers, sheets. Warm-black so
-     it deepens the umber ground instead of greying it. */
-  --c-scrim: rgba(10, 8, 5, 0.55);
-  --c-shadow-drop: rgba(0, 0, 0, 0.3);
-
-  /* elevation — role-named; dark = black-based, heavier */
-  /* Dark draws no card shadow at all (the rule above): a card is a rung of
-     the ladder plus a hairline. On paper that is not enough, so the token
-     exists and is `none` here. */
-  --shadow-card: none;
-  --shadow-menu:    0 10px 28px -10px rgba(0, 0, 0, 0.5);
-  --shadow-composer: 0 12px 32px -12px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.35);
-  --c-composer-bg: #1A1714;
-  --c-composer-line: rgba(237, 229, 216, 0.08);
-  --c-composer-line-focus: rgba(237, 229, 216, 0.16);
 
   /* ── Kumo, retoned ──────────────────────────────────────────────
      Kumo's components are compiled: their utilities (`bg-kumo-brand`,
@@ -210,11 +155,11 @@ html, body, #root {
      outranks both without needing higher specificity. The mapping must stay
      COMPLETE — Kumo's defaults are cool neutrals plus a blue brand
      (`oklch(0.5772 0.2324 260)`), and any token left unmapped shows up as
-     exactly that blue/grey against the umber ground. `scripts/palette-ux`
+     exactly that blue/grey against the ground. `scripts/palette-ux`
      fails when Kumo adds one we have not mapped.
 
-     Light mode needs no second copy: every value indirects through `--c-*`,
-     which the `[data-mode="light"]` block below re-points. ── */
+     No theme or mode needs a second copy: every value indirects through
+     `--c-*`, which each theme's blocks re-point. ── */
   --color-kumo-canvas: var(--c-bg);
   --color-kumo-base: var(--c-bg);
   --color-kumo-elevated: var(--c-elevated);
@@ -279,58 +224,6 @@ html, body, #root {
   --text-color-kumo-badge-neutral-subtle: var(--c-text-2);
   --text-color-kumo-badge-orange-subtle: var(--c-accent-fg);
   --text-color-kumo-badge-teal-subtle: var(--c-text-2);
-}
-
-[data-mode="light"] {
-  /* ── LIGHT — the owner's own light theme, verbatim ─────────────────
-     The mock carries a complete light face (`themes.light`), so this is
-     not a derivation: tinted ground, paper cards, strong visible rules,
-     gold deepened for text. Where the ladder needs a name:
-
-       ground   #E9E2D3  the canvas
-       chrome   #F1EBDD  sidebar, top bar, composer strip
-       paper    #F7F3E9  cards, composer well, dialogs
-       chip     #E5DCC8  planes inside a card
-       raise    #E8E0CE  row hover, menus
-       line     #D2C6AE  structural rules — 1.5:1 on paper, plainly visible
-
-     Gold splits in two on paper: the fill stays bright (#D90A44) while
-     text-grade gold deepens to #8F5C10, exactly as the mock does. ── */
-  --c-overlay:  #F7F3E9;   /* dialogs — paper, lifted by shadow */
-  --c-input-bg: #F7F3E9;   /* mock --input */
-
-  --c-dash:          #DBD1BE;  /* mock --dash */
-
-  --c-text-4:   #695C4C;   /* mock --faint2 lifted from #6F6252 for AA (4.6:1 worst) */
-
-  --c-accent-mark:   var(--c-accent-fg);  /* the gold is under 2:1 on the light wash; the ink is 4.9:1 */
-
-  --c-info:     #2F6289;
-
-  --c-success-tint: rgba(49, 101, 48, 0.11);
-  --c-warning-tint: rgba(126, 82, 5, 0.10);
-  --c-danger-tint:  rgba(150, 65, 44, 0.11);
-  --c-info-tint:    rgba(47, 98, 137, 0.08);
-  --c-neutral-tint: rgba(43, 36, 25, 0.07);
-
-  --c-user-bg:     #F2D9AC;  /* mock --bubble */
-  --c-user-border: #D9B573;  /* mock --bubbleLine */
-
-
-  /* On paper the scrim reads as ink pulled over the page, not a blackout. */
-  --c-scrim: rgba(43, 26, 4, 0.32);
-  --c-shadow-drop: rgba(43, 26, 4, 0.14);
-  /* The mock separates its planes with tone plus strong rules and casts no
-     card shadow; only floating layers get a lift. */
-  --shadow-card: none;
-  --shadow-menu:    0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06);
-  --shadow-composer: 0 12px 32px -14px rgba(43, 26, 4, 0.24), 0 1px 3px rgba(43, 26, 4, 0.07);
-  --c-composer-bg: #F8F4EB;
-  --c-composer-line: rgba(43, 36, 25, 0.10);
-  --c-composer-line-focus: rgba(43, 36, 25, 0.20);
-
-  /* Kumo follows the semantic shadow role in both modes. */
-  --color-kumo-shadow-drop: var(--c-shadow-drop);
 }
 
 body { background: var(--c-bg); color: var(--c-text); }
@@ -598,7 +491,7 @@ body { background: var(--c-bg); color: var(--c-text); }
    there is more content that way. `--scroll-ground` is the surface the
    scroller sits on, which is what the covers are painted in.
 
-   The mark is a hairline because the umber ground gives a soft one nothing to
+   The mark is a hairline because the dark ground gives a soft one nothing to
    resolve against. This was a radial shadow, and `farthest-side` over a
    `100%`-tall box made it an ellipse: a brass smear that faded down the block
    as well as across it, reading as banding on the near-black code well rather
