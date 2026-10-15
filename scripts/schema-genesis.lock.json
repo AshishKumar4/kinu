@@ -234,8 +234,8 @@
   ],
   "agent_tasks@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
     "seq INTEGER NOT NULL",
+    "id TEXT GENERATED ALWAYS AS ('t' || seq) VIRTUAL",
     "parent_id TEXT",
     "title TEXT NOT NULL",
     "status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlCheckList(TASK_STATUSES)}))",
@@ -244,7 +244,7 @@
     "plan_id TEXT",
     "revision INTEGER",
     "session_id TEXT",
-    "PRIMARY KEY (actor_id, id)"
+    "PRIMARY KEY (actor_id, seq)"
   ],
   "agent_turn_reports@packages/core/src/subordinates/turn-reports.ts": [
     "actor_id TEXT NOT NULL",
@@ -893,12 +893,12 @@
   ],
   "head_steps@packages/core/src/heads/schema.ts": [
     "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
     "head_id TEXT NOT NULL",
     "seq INTEGER NOT NULL",
+    "id TEXT GENERATED ALWAYS AS (head_id || '-s' || seq) VIRTUAL",
     "parts_json TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
+    "PRIMARY KEY (actor_id, head_id, seq)"
   ],
   "imported_experience@packages/core/src/experience/imports.ts": [
     "actor_id TEXT NOT NULL",
