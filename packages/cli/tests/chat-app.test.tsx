@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { KinuError } from '@kinu.run/core/obs';
 import { runToExit, scratchDir } from '@kinu.run/test-utils';
@@ -12,6 +12,7 @@ import { asFetchFunction } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
+import { SILENCE_NOTICE_ENV } from '../../../scripts/deadline';
 import { InputRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
 
@@ -666,6 +667,28 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.composerFocused()).toBe(true);
     expect(alpha.state.closed).toBe(1);
   });
+
+// 2026-10-14: a wait on text the chat never showed held its runner for 70 minutes and ended in a kill that named nothing.
+test('a wait that never holds is reported when the runner says its silence nears the bound, naming it beside the screen', async () => {
+  const inherited = process.env[SILENCE_NOTICE_ENV];
+  const notice = join(scratchDir('chat-silence'), 'notice');
+  writeFileSync(notice, '');
+  process.env[SILENCE_NOTICE_ENV] = notice;
+
+  try {
+    const screen = await mountChat(fakeClient({ name: 'silent-wait' }).client);
+    const waited = screen.waitFor('a line no chat shows', () => screen.frame().includes('a line no chat shows'));
+
+    // As the runner appends at three quarters of its bound.
+    appendFileSync(notice, 'near\n');
+
+    // The wait it was in, then the screen, which names the open workspace.
+    await expect(waited).rejects.toThrow(/while waiting for a line no chat shows\. The screen:\n[\s\S]*silent-wait/u);
+  } finally {
+    if (inherited === undefined) delete process.env[SILENCE_NOTICE_ENV];
+    else process.env[SILENCE_NOTICE_ENV] = inherited;
+  }
+});
 
 test('when a turn ends, the next keys still land in the composer', async () => {
   const agent = fakeClient({ name: 'keeps-typing' });
