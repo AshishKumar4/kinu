@@ -6,8 +6,6 @@ export const ARTIFACT_STATUSES = ['current', 'candidate', 'trial', 'rolled_back'
 
 const TRIAL_STATUSES = ['running', 'kept', 'reverted'] as const;
 
-export const ARMS = ['candidate', 'incumbent'] as const;
-
 export function initArtifactTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS artifact_versions (
     actor_id    TEXT NOT NULL,
@@ -43,7 +41,6 @@ export function initTrialTables(execRaw: RawSqlExec): void {
     trial_id   TEXT NOT NULL,
     turn_id    TEXT NOT NULL,
     segment_id TEXT NOT NULL,
-    arm        TEXT NOT NULL CHECK (arm IN (${sqlCheckList(ARMS)})),
     at         INTEGER NOT NULL,
     PRIMARY KEY (actor_id, trial_id, turn_id)
   )`);
