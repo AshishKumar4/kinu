@@ -210,7 +210,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {
-      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', budgetMs: 5 * 60_000, genesis: false,
       purpose: 'Disposable workspace-settings probe; no model task.',
       async run({ session, plan, budget }) {
         const subgoals: EvalSubgoal[] = [];

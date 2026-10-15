@@ -174,6 +174,7 @@ describe(SUITE, () => {
       id: CASE,
       defect: DEFECT,
       modelCalls: 'expected',
+      budgetMs: 5 * 60_000,
       genesis: false,
       purpose: 'An assistant that uses the search it is asked to use and reports what it found in one line.',
       async run({ session, plan, budget }) {

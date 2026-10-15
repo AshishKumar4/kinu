@@ -244,6 +244,7 @@ describe(SUITE, () => {
         id: CASE,
         defect: DEFECT,
         modelCalls: 'none',
+        budgetMs: 5 * 60_000,
         genesis: false,
         purpose: 'A workspace whose owner connects a machine from its Environment.',
         async run({ session, budget }) {

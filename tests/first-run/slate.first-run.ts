@@ -45,6 +45,7 @@ describe(SUITE, () => {
       id: CASE,
       defect: DEFECT,
       modelCalls: 'expected',
+      budgetMs: 5 * 60_000,
       purpose: 'A precise engineer who builds small TypeScript HTTP apps.',
       async run({ session }) {
         const before = await session.listSlates();

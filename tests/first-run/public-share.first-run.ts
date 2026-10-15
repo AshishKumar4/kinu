@@ -47,7 +47,7 @@ describe(SUITE, () => {
   test.skipIf(PLAN === null)('MEASURED: public-share', async () => {
     if (PLAN === null) throw new Error('Explicit operator plan required');
     await runFirstRunCase(PLAN, {
-      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false, purpose: 'Disposable public live-share probe; no model task.',
+      id: CASE, defect: DEFECT, modelCalls: 'none', budgetMs: 5 * 60_000, genesis: false, purpose: 'Disposable public live-share probe; no model task.',
       async run({ session }) {
         const setup = v.parse(Exec, await session.rpcAt(session.workspace, 'executeInExecutor', ['workspace', `mkdir -p /slates/${SLATE}
 cat > /slates/${SLATE}/package.json <<'END'
