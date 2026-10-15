@@ -835,9 +835,10 @@ cd "$KINU_ROOT" || { publish_red "cannot cd to $KINU_ROOT"; return 1; }
 
 # ── Step 3b: The tables walk ──────────────────────────────────
 # Every object opened once through the version just deployed, so each repairs itself before a user waits on it, and
-# what each repair did printed. Correctness never waits on it: an object it misses repairs at its first request. It
-# starts once this deploy's version answers (`ours`, as the smoke test reads it), and asks each batch again while an
-# edge still answers with the build before, for as long (KINU_PROPAGATION_SECONDS).
+# what each repair did printed. Correctness never waits on it: an object it misses repairs at its first request, so a
+# gap in its census is named and fails nothing; only a repair that refused, or one that moved rows, fails the deploy.
+# It starts once this deploy's version answers (`ours`, as the smoke test reads it), and asks a batch, or an object
+# that started on a machine still running the build before, again for as long (KINU_PROPAGATION_SECONDS).
 if [ "$KINU_RESET_TABLES" = "1" ]; then
   echo ""
   echo -e "${BOLD}Step 3b: Opening every object of $KINU_WORKER, so each repairs its tables${NC}"
@@ -851,7 +852,7 @@ if [ "$KINU_RESET_TABLES" = "1" ]; then
     return 1
   fi
   KINU_VERSION="$KINU_VERSION" KINU_PROPAGATION_SECONDS="$KINU_PROPAGATION_SECONDS" bun "$KINU_ROOT/scripts/reset.ts" tables "$KINU_ENV" "$KINU_TABLES_RECORD" \
-    || { publish_red "the tables walk found databases refused, unreached or moved (its lines name them); 'KINU_VERSION=$KINU_VERSION bun scripts/reset.ts tables $KINU_ENV $KINU_TABLES_RECORD' walks again"; return 1; }
+    || { publish_red "the tables walk found a repair that refused, or one that moved rows (its lines name them); 'KINU_VERSION=$KINU_VERSION bun scripts/reset.ts tables $KINU_ENV $KINU_TABLES_RECORD' walks again"; return 1; }
 fi
 
 # ── Step 4: Post-deploy smoke test ───────────────────────────────
