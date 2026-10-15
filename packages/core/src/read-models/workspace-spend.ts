@@ -100,7 +100,11 @@ export function spendLedger(events: RunEventRecorder, stepSources: readonly Step
 }
 
 export function headStepSources(sql: SqlExecutor): StepSpendSource[] {
-  return readHeadSpend(sql).flatMap((head): StepSpendSource[] => head.headActorId === null ? [] : [{
+  return stepSourcesOf(readHeadSpend(sql));
+}
+
+function stepSourcesOf(heads: readonly HeadSpendRow[]): StepSpendSource[] {
+  return heads.flatMap((head): StepSpendSource[] => head.headActorId === null ? [] : [{
     actorId: head.headActorId,
     source: 'head',
     coveredSince: head.completedAt !== null && usageReported(storedUsage(head))
@@ -112,7 +116,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
   deps.actor.assertCurrent();
   const tallies: Tallies = new Map();
   const heads = readHeadSpend(deps.sql);
-  const ledgers = [spendLedger(deps.events, headStepSources(deps.sql)), ...deps.others ?? []];
+  const ledgers = [spendLedger(deps.events, stepSourcesOf(heads)), ...deps.others ?? []];
 
   for (const { source, ...tally } of ledgers.flatMap((ledger) => ledger.producers)) {
     const held = tallies.get(source);
@@ -138,19 +142,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
     .sort((a, b) => (usageTotal(b.row.usage) ?? -1) - (usageTotal(a.row.usage) ?? -1))
     .map(({ source, row }) => ({ source, ...finishTotal(row) }));
 
-  const total: Tally = {
-    calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
-    unpricedCalls: 0,
-  };
-
-  for (const p of producers) {
-    total.calls += p.calls;
-    total.callsWithoutUsage += p.callsWithoutUsage;
-    total.unpricedCalls += p.unpricedCalls;
-    total.usage = addUsage(total.usage, p.usage);
-
-    if (p.usd !== undefined) total.usd = (total.usd ?? 0) + p.usd;
-  }
+  const total = producers.reduce<SpendTally>(addSpendTally, { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0 });
 
   const measured = total.calls - total.callsWithoutUsage;
   const measuredTokens = usageTotal(total.usage);
@@ -158,7 +150,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
 
   return {
     producers,
-    total: finishTotal(total),
+    total,
     coverage: {
       calls: total.calls,
       measured,

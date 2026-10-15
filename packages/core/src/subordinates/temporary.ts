@@ -9,12 +9,11 @@ import { settle } from '../obs/effect';
 import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
-import { finishSubordinateBirth, type SubordinateBirth } from './birth';
+import { admitSubordinateBirth, type SubordinateBirthRequest } from './birth';
 import { codenameFor } from '../identity/naming';
 import type { ActorReference } from '../identity/actor-handle';
 import {
   TEMPORARY_LIFETIME,
-  subordinateBirthContext,
   type TemporaryAgentPort, type TemporaryRunOutcome,
 } from '../types/subordinates';
 
@@ -189,27 +188,20 @@ export function createTemporaryAgentPort(deps: {
         status, agent: name, lifetime: TEMPORARY_LIFETIME, role: roleLabel, answer, transcript, ...(reason !== undefined && { reason }),
       });
 
-      const creationId = crypto.randomUUID();
-
-      const assignment: NonNullable<SubordinateBirth['assignment']> = {
-        body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
-      };
-
-      const inherited = subordinateBirthContext(request.inheritedContext);
-
-      if (inherited) assignment.inheritedContext = inherited;
-
       if (deps.roster.get(name)) return outcome('failed', 'The generated actor name is already in use.', 'none', 'denied');
 
       if (request.lane) deps.roster.helpers.record(name, request.lane, startedAt);
-      deps.roster.create({
-        name, actorReference: null, deleteRequested: false,
-        birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent' } },
-        status: 'working', currentTask: task, createdAt: startedAt,
-        dismissedAt: null, taskEventId: null,
-      });
 
-      const failure = yield* Effect.catchCause(Effect.as(Effect.promise(() => finishSubordinateBirth(deps.roster, deps.runtime, name)), null), (failed) => Effect.succeed(
+      const birth: SubordinateBirthRequest = {
+        seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent' },
+        assignment: {
+          body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
+          ...(request.inheritedContext !== undefined && { inheritedContext: request.inheritedContext }),
+        },
+        createdAt: startedAt,
+      };
+
+      const failure = yield* Effect.catchCause(Effect.as(Effect.promise(() => admitSubordinateBirth(deps.roster, deps.runtime, birth)), null), (failed) => Effect.succeed(
         toKinuError({ doing: 'completing an admitted temporary actor birth', cause: Cause.squash(failed), otherwise: 'unavailable' }),
       ));
 

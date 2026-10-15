@@ -364,9 +364,7 @@ export type RecentEventRow = Pick<
 >;
 
 function clampLimit(requested: number | undefined, max: number): number {
-  if (requested === undefined || !Number.isFinite(requested)) return max;
-
-  return Math.min(Math.max(Math.floor(requested), 1), max);
+  return boundedInt(requested, max, 1, max);
 }
 
 /** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */

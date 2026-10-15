@@ -125,19 +125,35 @@ export function isPreviewUrl(value: string, configuredSuffix: string | null = br
   if (url.username || url.password) return false;
 
   if (url.protocol !== 'https:') return false;
-  const suffix = previewHostSuffix({ PREVIEW_HOST_SUFFIX: configuredSuffix ?? undefined });
+  const label = previewHostLabel(url, { PREVIEW_HOST_SUFFIX: configuredSuffix ?? undefined });
 
-  if (!suffix) return false;
+  return label !== null && (sandboxLabel(label) !== null || parseWorkspacePreviewLabel(label) !== null);
+}
+
+/** The one label a preview host carries before the configured suffix; null for any other host. */
+function previewHostLabel(url: URL, env: PreviewSuffixEnv): string | null {
+  const suffix = previewHostSuffix(env);
+
+  if (!suffix) return null;
   const host = url.hostname.toLowerCase();
   const suffixWithDot = `.${suffix}`;
 
-  if (!host.endsWith(suffixWithDot)) return false;
+  if (!host.endsWith(suffixWithDot)) return null;
   const label = host.slice(0, -suffixWithDot.length);
 
-  if (!label || label.includes('.')) return false;
-  const sandbox = PREVIEW_HOST_LABEL.exec(label);
+  return label === '' || label.includes('.') ? null : label;
+}
 
-  return (sandbox !== null && validPort(sandbox[1])) || parseWorkspacePreviewLabel(label) !== null;
+/** A sandbox's preview label (`<port>-<sandbox>-<token>`) read into its parts; null for any other label. */
+function sandboxLabel(label: string): SandboxPreviewLabel | null {
+  const parsed = PREVIEW_HOST_LABEL.exec(label);
+
+  if (parsed === null || !validPort(parsed[1])) return null;
+  const [, port, sandboxId, token] = parsed;
+
+  if (port === undefined || sandboxId === undefined || token === undefined) return null;
+
+  return { port: Number(port), sandboxId, token };
 }
 
 /** Must segment exactly as `proxyToSandbox` does, so `getSandbox(ns, id, { normalizeId: true })` addresses
@@ -149,24 +165,9 @@ export interface SandboxPreviewLabel {
 }
 
 export function sandboxPreviewLabelOf(url: URL, env: PreviewSuffixEnv): SandboxPreviewLabel | null {
-  const suffix = previewHostSuffix(env);
+  const label = previewHostLabel(url, env);
 
-  if (!suffix) return null;
-  const host = url.hostname.toLowerCase();
-  const suffixWithDot = `.${suffix}`;
-
-  if (!host.endsWith(suffixWithDot)) return null;
-  const label = host.slice(0, -suffixWithDot.length);
-
-  if (label.includes('.')) return null;
-  const parsed = PREVIEW_HOST_LABEL.exec(label);
-
-  if (parsed === null || !validPort(parsed[1])) return null;
-  const [, port, sandboxId, token] = parsed;
-
-  if (port === undefined || sandboxId === undefined || token === undefined) return null;
-
-  return { port: Number(port), sandboxId, token };
+  return label === null ? null : sandboxLabel(label);
 }
 
 /** Tool output is agent-writable, so each candidate is validated with `isPreviewUrl`. */

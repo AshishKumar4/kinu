@@ -20,7 +20,7 @@ import { HealthAnswerSchema } from './update';
 import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { bytesToBase64 } from '../utils/base64';
-import type { ReleaseBinding, ReleaseManifest } from './manifest';
+import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
 
 export interface DeployStep {
   readonly id: string;
@@ -748,7 +748,7 @@ async function walkArtifact(context: DeployContext, manifest: ReleaseManifest, s
       modules.push({
         name: moduleName,
         filename: moduleName,
-        contentType: moduleName.endsWith('.wasm') ? 'application/wasm' : 'application/javascript+module',
+        contentType: releaseModuleKind(moduleName) === 'wasm' ? 'application/wasm' : 'application/javascript+module',
         body,
       });
       continue;

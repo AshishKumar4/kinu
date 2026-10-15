@@ -1,9 +1,10 @@
 import { scratchDir } from '../../test-utils/src/scratch';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, truncateSync } from 'node:fs';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, localPlanes } from '@kinu.run/core';
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, formatBytes, localPlanes } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/cli-backend';
 import {
   describePromptAttachment,
@@ -123,6 +124,18 @@ describe('resolvePromptAttachments', () => {
     ]);
     expect(result.text).toBe(`read ${notes}`);
     expect(describePromptAttachment(result.attached[0])).toContain('notes.txt');
+  });
+
+  // core-rest review P1-28: the CLI kept its own byte formatter, which had no gigabytes and read 1 GiB as "1024.0 MB".
+  test('a referenced file\'s size reads as the app reads it, gigabytes included', async () => {
+    const dir = makeDir();
+    const disk = join(dir, 'disk.img');
+    // Sparse: a gigabyte long, no gigabyte written.
+    writeFileSync(disk, '');
+    truncateSync(disk, 1024 ** 3);
+
+    const result = await resolvePromptAttachments(`inspect @${disk}`, { limitBytes: CAP, cwd: dir });
+    expect(describePromptAttachment(present(result.attached[0], 'the referenced disk'))).toBe(`disk.img (${formatBytes(1024 ** 3)}, referenced)`);
   });
 
   test('an over-cap image is left as a reference with a visible error', async () => {

@@ -34,6 +34,7 @@ import { describeActivationReason } from '../skills/render';
 import { compareCodeUnits } from '../utils/text';
 import type { ActiveRoster, DelegationChoices, DynamicApproval, MissingCapability, ShownLesson } from '../types/dynamic-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration, type ExternalToolDeclaration } from '../tools/sandbox-contract';
+import { formatByteCap } from '../utils/format';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
@@ -279,7 +280,7 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
 
   if (cpus !== undefined) parts.push(`cpus=${cpus}`);
 
-  if (memBytes !== undefined) parts.push(`mem=${formatBytes(memBytes)}`);
+  if (memBytes !== undefined) parts.push(`mem=${formatByteCap(memBytes)}`);
 
   return parts.length > 0 ? ` (${parts.join(' ')})` : '';
 }
@@ -325,19 +326,6 @@ function executorUnmeasuredSuffix(exec: PromptExecutorInfo): string {
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability));
 
   return ordered.length > 0 ? `, ${NOT_MEASURED_LABEL}: ${ordered.join(', ')}` : '';
-}
-
-/** At most one decimal, never rounded up: a cap must not read as more than it is. */
-function formatBytes(bytes: number): string {
-  for (const [unit, scale] of [['G', 1024 ** 3], ['M', 1024 ** 2], ['K', 1024]] as const) {
-    if (bytes >= scale) return `${trimZero(Math.floor((bytes / scale) * 10) / 10)}${unit}`;
-  }
-
-  return `${bytes}B`;
-}
-
-function trimZero(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 /** What a command on the user's machine gets (sandboxing, persistent directory):

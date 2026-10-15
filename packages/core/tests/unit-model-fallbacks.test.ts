@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { KinuError } from '../src/obs/error';
 import {
-  ModelCatalogSession, resolvePromptModelProfile, resolveEffectiveModelSpec,
+  ModelCatalogSession, assertToolsSupportedByModel, resolvePromptModelProfile, resolveEffectiveModelSpec,
   outputReserveTokens, stepContextLimit,
   type ModelInfo,
 } from '../src/index';
@@ -24,14 +24,27 @@ describe('a model window has one source', () => {
     expect([(await listed.resolved()).contextWindow, (await custom.resolved()).contextWindow]).toEqual([1_000_000, 180_000]);
   });
 
-  test('the whole Kimi family keeps reasoning + caching without a catalog', () => {
+  test('the whole Kimi family reads as Kimi without a catalog', () => {
     for (const id of ['moonshotai/kimi-k3', '@cf/moonshotai/kimi-k2.6', 'kimi-k2.7-code']) {
-      const profile = resolvePromptModelProfile({ id });
-      expect(profile.family).toBe('kimi');
-      expect([...profile.capabilities]).toContain('reasoning');
-      expect([...profile.capabilities]).toContain('prompt-caching');
-      expect([...profile.capabilities]).toContain('tools');
+      expect(resolvePromptModelProfile({ id }).family).toBe('kimi');
     }
+  });
+});
+
+// core-rest review P1-8: tools were refused by a name match ('o4-mini', 'deepseek-r1') whatever the catalog said.
+describe('whether a model calls tools is its catalog row\'s answer', () => {
+  const contextOf = async (spec: string, row: ModelInfo | null) =>
+    new ModelCatalogSession({ effectiveSpec: () => spec, lookup: async () => row, measured: () => null }).contextFor(spec);
+
+  test('a row listing tool calling admits tools, one without refuses them, and no row says nothing', async () => {
+    const listed = await contextOf('openai/o4-mini', { id: 'o4-mini', capabilities: ['tools', 'streaming', 'reasoning'] });
+    const refused = await contextOf('workers-ai/@cf/house/plain', { id: '@cf/house/plain', capabilities: ['streaming'] });
+    const unlisted = await contextOf('openai-compat:house/qwen', null);
+
+    expect([listed.callsTools, refused.callsTools, unlisted.callsTools]).toEqual([true, false, undefined]);
+    expect(() => assertToolsSupportedByModel(refused, ['shell'])).toThrow('does not support tool calling');
+    // o4-mini, once refused by its name, is admitted: the gate returns and throws nothing.
+    expect(assertToolsSupportedByModel(listed, ['shell'])).toBeUndefined();
   });
 });
 

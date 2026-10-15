@@ -39,7 +39,7 @@ import type { CompactionTriggerReader } from './turn-context';
 import { activatedSkillsBlock, filterToolSetBySkills, resolveTurnSkills, splitTurnSkills, type TurnSkillSurface, type TurnSkillsConfig } from './turn-surface';
 
 export interface TurnModelSources {
-  readonly catalog: Pick<ModelCatalogSession, 'window' | 'windowFor' | 'warm' | 'acceptedMedia'>;
+  readonly catalog: Pick<ModelCatalogSession, 'window' | 'windowFor' | 'warm' | 'acceptedMedia' | 'callsTools'>;
   normalize(spec: string): string;
   resolve(spec: string): LanguageModel;
   readonly routed?: {
@@ -253,7 +253,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     model: models.resolve(spec),
     modelSpec: spec,
     // Without `modelOutputLimit` the whole window reads as the answer's allowance.
-    modelContext: { id: spec, contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit },
+    modelContext: { id: spec, contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, callsTools: models.catalog.callsTools(spec) },
     system: systemPromptText(system),
     systemShared: system.shared.length,
     attachments: { accepts: models.catalog.acceptedMedia(spec), vfs: sources.rt.storage.vfs, budget: sources.attachmentBudget },
@@ -352,7 +352,7 @@ export interface TurnSourcesBundle {
   readonly memoryTail: string | null;
   readonly artifacts: ReturnType<TurnAssemblySources['artifacts']>;
   readonly conversationKey: string;
-  readonly models: Readonly<Record<string, { readonly window: ModelWindow; readonly media: readonly MediaModality[] }>>;
+  readonly models: Readonly<Record<string, { readonly window: ModelWindow; readonly media: readonly MediaModality[]; readonly callsTools: boolean | undefined }>>;
 }
 
 export async function materializeTurnSources(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<TurnSourcesBundle> {
@@ -363,7 +363,9 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
 
   const [skills, soul, identity, agentsMd, memoryTail, windows] = await Promise.all([
     sources.skills(request.userText, roleSkills, limits), sources.soul(), sources.identity(), sources.agentsMd(limits), sources.memoryTail(),
-    Promise.all(specs.map(async (spec) => [spec, { window: await models.catalog.windowFor(spec), media: [...models.catalog.acceptedMedia(spec)] }] as const)),
+    Promise.all(specs.map(async (spec) => [spec, {
+      window: await models.catalog.windowFor(spec), media: [...models.catalog.acceptedMedia(spec)], callsTools: models.catalog.callsTools(spec),
+    }] as const)),
   ]);
 
   return {
@@ -418,6 +420,13 @@ export function turnSourcesFromBundle(bundle: TurnSourcesBundle, local: LocalTur
       const model = read(spec);
 
       if (model !== undefined) return new Set(model.media);
+
+      return settleSync(Effect.fail(unread(spec)));
+    },
+    callsTools(spec) {
+      const model = read(spec);
+
+      if (model !== undefined) return model.callsTools;
 
       return settleSync(Effect.fail(unread(spec)));
     },

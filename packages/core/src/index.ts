@@ -554,7 +554,7 @@ export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorRefer
 
 export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './identity/actor-key';
 
-export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
+export { recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
 
 export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } from './types/subordinates';
 
@@ -800,7 +800,6 @@ export {
 export {
   assertToolsSupportedByModel,
   resolvePromptModelProfile,
-  type PromptModelCapability,
   type PromptModelContext,
   type PromptModelFamily,
   type PromptModelProfile,

@@ -1,5 +1,6 @@
 import { AgentCoreError, ContentRef, Digest } from '@agent-core/core';
 import { ByteRange, ContentStat, ContentStore, type ContentPutResult } from '@agent-core/core/content';
+import * as v from 'valibot';
 
 /** Under the kernel-owned /etc, never under an authored or user-owned parent. */
 const SLATE_CONTENT_ROOT = '/etc/kinu-slate-content';
@@ -86,4 +87,27 @@ export class WorkspaceSlateContentStore extends ContentStore {
 
     return stat;
   }
+}
+
+const TreePath = v.pipe(v.string(), v.check((path) => path.split('/').every((part) => part !== '' && part !== '.' && part !== '..')));
+
+const RetainedTreeEntrySchema = v.variant('kind', [
+  v.object({ path: TreePath, kind: v.literal('directory'), mode: v.number() }),
+  v.object({ path: TreePath, kind: v.literal('file'), mode: v.number(), content: v.string() }),
+  v.object({ path: TreePath, kind: v.literal('symlink'), target: v.string() }),
+]);
+
+/** A slate version's retained manifest: its root's mode and every entry under it, each file by the content it names. */
+export const RetainedTreeSchema = v.object({ mode: v.number(), entries: v.array(RetainedTreeEntrySchema) });
+
+export type RetainedTree = v.InferOutput<typeof RetainedTreeSchema>;
+
+export type RetainedTreeEntry = v.InferOutput<typeof RetainedTreeEntrySchema>;
+
+export function readRetainedTree(content: WorkspaceSlateContentStore, source: ContentRef): RetainedTree {
+  return v.parse(RetainedTreeSchema, JSON.parse(new TextDecoder().decode(content.read(source))));
+}
+
+export function retainTree(content: WorkspaceSlateContentStore, tree: RetainedTree): ContentRef {
+  return content.retain(new TextEncoder().encode(JSON.stringify(tree))).ref;
 }
