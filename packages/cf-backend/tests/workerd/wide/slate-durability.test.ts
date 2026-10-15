@@ -424,9 +424,17 @@ it('a line typed between attaches adds exactly itself, its output and one prompt
 
   await subject().typeToPrompt(workspace, 'echo hi', 'hi\r\n');
   const after = (await subject().reattachTerminal(workspace)).output;
+  const added = after.slice(before.length);
+  const ran = added.indexOf('\u001b]133;C\u0007');
+  const ended = added.indexOf('\u001b]133;D');
 
   expect(after.startsWith(before)).toBe(true);
-  expect(readable(after.slice(before.length))).toBe(`echo hi\nhi\n${readable(lastPrompt)}`);
+  // The line as typed (the line editor redraws it in place, on the prompt it sits on), then one command's run.
+  expect(added.slice(0, ran)).toContain('echo hi');
+  expect([added.split('\u001b]133;A').length - 1, added.split('\u001b]133;C').length - 1]).toEqual([1, 1]);
+  // Its output, then one prompt and nothing after it.
+  expect(added.slice(ran + '\u001b]133;C\u0007'.length, ended)).toBe('hi\r\n');
+  expect(readable(added.slice(ended))).toBe(readable(lastPrompt));
 });
 
 it("after its object restarts, a terminal's notice is said once however often a pane attaches", async () => {
