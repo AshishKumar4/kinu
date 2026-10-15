@@ -7,7 +7,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { getToolName, isToolUIPart } from 'ai';
 import type { MockLanguageModelV4 } from 'ai/test';
-import { scriptedTurnModel, unobservedSearchSeams, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSearchSeams, unobservedSpend, createRecordingLogger } from '@kinu.run/test-utils';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -18,7 +18,6 @@ import {
   createAgentsCodemodeProvider, type AgentsToolDeps,
 } from '../src/index';
 import type { AgentRuntime } from '../src/types/agent-runtime';
-import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { MctsSearchStore } from '../src/mcts/search-store';

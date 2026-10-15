@@ -1,8 +1,8 @@
 /** A rewind deletes the entry it names and everything after it, and records that it did. */
 import { Effect } from 'effect';
 import { describe, test, expect, afterEach } from 'bun:test';
-import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
-import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '../src/obs/index';
+import { seedTranscriptEntry, present, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
+import { setDiagnosticsSink } from '../src/obs/index';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { SessionHistory } from '../src/session/history';
 import type { SessionTranscript } from '../src/session/transcript';

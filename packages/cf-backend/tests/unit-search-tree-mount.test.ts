@@ -4,8 +4,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'b
 import { VGPUError as CoreVGPUError } from '@vgpu/core';
 import { SearchTree } from '@kinu.run/core/web/hero-art';
 import type { StrokeSurface } from '@kinu.run/core/web/hero-canvas';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { installFakeVgpu, lastFakeGpu, resetFakeVgpu } from './helpers/fake-vgpu';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 await installFakeVgpu();
 

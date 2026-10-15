@@ -14,7 +14,7 @@ import { APICallError, jsonSchema, streamText, tool, type ModelMessage } from 'a
 import * as v from 'valibot';
 import { createClaudeProvider, CLAUDE_CRED_KEY } from '../src/providers/claude';
 import { cacheableSystem, resolvePromptCacheStrategy } from '../src/prompting/cache-breakpoints';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import type { AuthResolution, ModelCallDeps, ProviderWaitInfo } from '../src/providers/types';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { parseJsonObject, type JsonObject } from '../src/utils/json';
@@ -22,6 +22,7 @@ import { callAccountOf, quotaWindowText } from '../src/providers/quota';
 import { claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn } from '../src/providers/claude-oauth';
 import { callRetries } from '../src/providers/middleware/retry';
 import { withModelStack } from '../src/providers/wire-model';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 interface Sent {
   readonly url: string;

@@ -5,11 +5,10 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV4 } from 'ai/test';
-import { handClock, scriptedTurnModel, type HandClock, unobservedSpend } from '@kinu.run/test-utils';
+import { handClock, scriptedTurnModel, type HandClock, unobservedSpend, createRecordingLogger } from '@kinu.run/test-utils';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
-import { createRecordingLogger } from '../src/obs/index';
 import type { Refusal } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runNodeAgent } from '../src/strategy/node-agent';

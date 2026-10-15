@@ -1,7 +1,8 @@
 import { Agent, callable, getCurrentAgent } from 'agents';
 import { Effect } from 'effect';
-import { attemptInItsWords, createRecordingLogger, KinuError, setDiagnosticsSink, settle, type Logger, type RecordedLog } from '@kinu.run/core/obs';
+import { attemptInItsWords, KinuError, setDiagnosticsSink, settle, type Logger } from '@kinu.run/core/obs';
 import { reportSocketCallFailures } from '../../src/activation-gate';
+import { type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils/recording';
 
 /** The refusal ironwood-cairn-6dbcb8de's owner met on 2026-09-29, whose Workers log line held only a stack. */
 export const PROBE_REFUSAL = 'Stop the turn that is running before you revert the conversation.';

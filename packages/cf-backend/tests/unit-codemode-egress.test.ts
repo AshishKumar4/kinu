@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '@kinu.run/core';
 import {
-  createRecordingLogger, setDiagnosticsSink, type RecordingLogger,
+  setDiagnosticsSink,
 } from '@kinu.run/core/obs';
 import { exports as workersExports } from 'cloudflare:workers';
 import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
@@ -14,6 +14,7 @@ import { nimbusPreviewUrl, type PreviewVisit } from '../src/nimbus-route';
 import { PREVIEW_SELF } from '../src/viewer-pass';
 import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
 
 /** The gate's two bindings, recording what reached them. */
 function browserEnv(owned: ReadonlySet<string>) {

@@ -1,7 +1,7 @@
 import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
-import { fakeMossaic, git, gitEnv, initRepo, runToExit, scratchDir, workspaceShell } from '@kinu.run/test-utils';
+import { fakeMossaic, git, gitEnv, initRepo, runToExit, scratchDir, workspaceShell, createRecordingLogger } from '@kinu.run/test-utils';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -24,7 +24,7 @@ import { withMountTable } from '../src/vfs/mounts';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { sharedDriveMount } from '../src/vfs/shared-drive';
 

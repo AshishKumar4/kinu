@@ -32,9 +32,10 @@ import {
   type SqlExec,
 } from '../src/index';
 import { stageImport } from '../src/experience/imports';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import { historyTurnPairs } from '../src/identity/conversation-store';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 function sqlExec(db: Database): SqlExec {
   return makeSqlExec(db);

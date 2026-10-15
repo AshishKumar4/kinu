@@ -7,9 +7,10 @@ import {
   asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, createProviderRegistry, generateReported, JsonObjectSchema, silenceBoundMs,
   type AuthRequest, type JsonObject, type ModelAffinity, type ModelCallDeps,
 } from '../src/index';
-import { KinuError, createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { KinuError, setDiagnosticsSink } from '../src/obs/index';
 import { withModelStack } from '../src/providers/wire-model';
 import { callRetries } from '../src/providers/middleware/retry';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 interface Sent {
   readonly url: string;

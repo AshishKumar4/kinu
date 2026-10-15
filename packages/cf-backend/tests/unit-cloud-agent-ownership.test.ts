@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import {
   actorScaffoldPath, asFetchFunction, BUILTIN_PROFILE_CATALOG, MAIN_AGENT, profileCatalogDigest, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
 import { userRoutes } from '../src/user/routes';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
@@ -23,6 +23,7 @@ import type { AuthIdentity } from '../src/auth/session';
 import type { IndexFeedSink } from '../src/control-plane/index-feed';
 import { bootstrappedProfile, userAccount, workspaceObject, workerContext } from './helpers/bindings';
 import { NO_RELAY_MACHINE } from './helpers/user-credentials';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 

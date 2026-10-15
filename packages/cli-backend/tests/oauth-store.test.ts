@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { lstatSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { present, scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir, createRecordingLogger } from '@kinu.run/test-utils';
 import { withConfigLock } from '../src/config-lock';
 import { createFileOAuthStore, signOutChatGptLogin } from '../src/oauth-store';
 import { asFetchFunction, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, JsonObjectSchema } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const savedConfigSchema = v.object({

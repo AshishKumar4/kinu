@@ -1,11 +1,10 @@
 /** One node run through `runNodeAgent`, asserted on what a caller sees. */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV4 } from 'ai/test';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend, createRecordingLogger } from '@kinu.run/test-utils';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
-import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import {
   PROPOSE_BRANCH_TOOL, readNodeReport, runNodeAgent,

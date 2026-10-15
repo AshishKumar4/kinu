@@ -13,7 +13,7 @@
 // would be worse than no instrument.
 import { describe, test, expect, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestRuntime, toolExecute, createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestRuntime, toolExecute, createTestActorsOver, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
 import {
   createAgentsTool,
   type AgentsToolDeps,
@@ -21,7 +21,7 @@ import {
   ROOT_DELEGATION_BUDGET,
   type SubordinateDelivery, type SubordinateRosterEntry,
 } from '../src/index';
-import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { receivePeerMessage } from '../src/events/ingress/peer';
 import { TurnFileLedger } from '../src/vfs/file-ledger';

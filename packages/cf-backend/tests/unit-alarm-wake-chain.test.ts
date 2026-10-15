@@ -5,7 +5,6 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
-import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
   agentWakes, armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
@@ -13,7 +12,7 @@ import {
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { cutNextDelivery } from './helpers/agent-facets';
-import { present } from '@kinu.run/test-utils';
+import { present, createRecordingLogger } from '@kinu.run/test-utils';
 import { answeringGateway, chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, type WakeJob } from '../src/wake-jobs';
 import type { OrchestratorAgent } from '../src/orchestrator';

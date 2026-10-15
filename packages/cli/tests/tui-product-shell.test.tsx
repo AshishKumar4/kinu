@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { canonicalProjectRoot } from '../src/config';
 import { type TuiPreferenceStore } from '../src/tui/preferences';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import {
   TuiProductProvider,
   TuiShell,
@@ -20,6 +20,7 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from '../src/tui/tui-shell';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const ROOT = canonicalProjectRoot();
 

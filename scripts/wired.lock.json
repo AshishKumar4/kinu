@@ -121,8 +121,6 @@
   "packages/core/src/memory/vector-store.ts#VECTOR_BACKEND_COOLDOWN_MS (unreached-export)",
   "packages/core/src/mission-budget.ts#MissionBudgetLedger (unreached-export)",
   "packages/core/src/obs/agent-tracing.ts#SPAN_ATTR_INVOCATION (unreached-export)",
-  "packages/core/src/obs/log.ts#createRecordingLogger (unreached-export)",
-  "packages/core/src/obs/tracer.ts#createRecordingTracer (unreached-export)",
   "packages/core/src/orchestrator/completion-gate.ts#COMPLETION_PROBE_COMMANDS (unreached-export)",
   "packages/core/src/orchestrator/drain-scheduler.ts#DRAIN_DEBOUNCE_MS (unreached-export)",
   "packages/core/src/orchestrator/heads-support.ts#inheritedContextOmissionNote (unreached-export)",

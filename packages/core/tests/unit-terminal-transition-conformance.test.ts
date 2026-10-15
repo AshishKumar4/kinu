@@ -18,11 +18,11 @@ import {
 import {
   claimToolEffect, initToolEffectClaimTable, type ToolEffectKey,
 } from '../src/tools/effect-claim';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, createRecordingLogger } from '@kinu.run/test-utils';
 
 const TRANSITION: TerminalTransition = { turnId: 'turn-conformance', messageId: 'msg-answer' };
 

@@ -5,7 +5,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { scriptedTurnModel, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { scriptedTurnModel, toolExecute, unobservedSearchSeams, createRecordingLogger } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { createTestRuntime } from './helpers';
 import { swarmSeats } from './helpers-actor-host';
@@ -18,7 +18,6 @@ import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import type { JsonObject } from '../src/utils/json';
 import { sharedPrefix } from '../src/strategy/swarm-expansion';
 import type { TreeNode } from '../src/strategy/swarm-tree';
-import { createRecordingLogger } from '../src/obs/index';
 
 const MARKER = 'COMPACTED-PREFIX-MARKER';
 

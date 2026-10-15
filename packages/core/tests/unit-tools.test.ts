@@ -1,7 +1,7 @@
 /** Unit tests for the canonical tool surface. `skills` is not a BuiltinToolDeps field. */
 
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { toolExecute, createRecordingLogger } from '@kinu.run/test-utils';
 import { asSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
@@ -25,7 +25,7 @@ import {
   TurnEscalationLedger,
 } from '../src/index';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { Fact, FactsStore } from '../src/memory/facts';
 

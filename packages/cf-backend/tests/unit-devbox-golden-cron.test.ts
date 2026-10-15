@@ -3,10 +3,11 @@
 import { expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { GOLDEN_NAME, type Devbox } from '@kinu.run/devbox';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { keepDevboxGolden } from '../src/devbox-golden';
 import { KinuDevbox } from '../src/kinu-devbox';
 import { harness, type TestEnv } from '../../devbox/tests/support/devbox-harness';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 test('snapshot deletion uses the deployment account even when its image is the managed base', async () => {
   const requests: Request[] = [];

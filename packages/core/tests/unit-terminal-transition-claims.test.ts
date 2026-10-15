@@ -6,8 +6,8 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { createTestActors } from '@kinu.run/test-utils';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { createTestActors, createRecordingLogger } from '@kinu.run/test-utils';
+import { setDiagnosticsSink } from '../src/obs/index';
 import { TerminalTransitions, TERMINAL_TRANSITION_CALL_ID } from '../src/orchestrator/terminal-transition';
 import {
   initTerminalEffectTable, terminalEffect, TerminalEffectInterrupt, TERMINAL_EFFECT_RETRY_CEILING_MS,

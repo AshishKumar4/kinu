@@ -4,8 +4,7 @@
 // from absent to called.
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { mcpToolKey } from '@kinu.run/core';
-import { createRecordingLogger } from '@kinu.run/core/obs';
-import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { scriptedTurnModel, type ScriptedTurnResult, createRecordingLogger } from '@kinu.run/test-utils';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   chatSessionTurns, fireSoonestWake, improvementLanesRan, mainDatabase, nextTurn, orchestratorHarness, tapDiagnostics, until, workspaceFiles, type RecordedUserPlaneCalls,

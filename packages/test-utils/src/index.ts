@@ -11,6 +11,8 @@ export * from './vfs';
 
 export * from './llm';
 
+export * from './recording';
+
 export * from './turn-model';
 
 export * from './runtime-context';
