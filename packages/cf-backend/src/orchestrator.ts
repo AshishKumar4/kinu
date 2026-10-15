@@ -74,6 +74,7 @@ import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WO
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
 import { WorkspaceSlates } from "./workspace-slates";
+import { OverviewPush } from "./overview-push";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
@@ -211,7 +212,7 @@ import {
   boundEventQuery,
   type WorkMode, WorkModeSchema,
   WORKSPACE_RUN_ID, activeOperationProfile, SLATES_ROOT,
-  buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview,
+  buildWorkspaceOverview, type WorkspaceOverview,
   projectJsonValue,
 } from "@kinu.run/core";
 import * as v from 'valibot';
@@ -2171,7 +2172,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Soonest instant a timed ledger (terminal retry, deferred job resume) owes a wake, or null.
    * Untimed owed work is excluded; it is {@link owedUntimedWork}. */
   protected override nextOwedAt(): number | null {
-    const at = Math.min(this.workOwedAt() ?? Infinity, this.overviewRetry?.at ?? Infinity, this.forkNotices.nextDueAt() ?? Infinity);
+    const at = Math.min(this.workOwedAt() ?? Infinity, this.overview.retryAt ?? Infinity, this.forkNotices.nextDueAt() ?? Infinity);
 
     return Number.isFinite(at) ? at : null;
   }
@@ -5833,7 +5834,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sharesChanged: async () => {
         this.overviewChanged(true);
 
-        return await this.overviewSettled() === null ? 'current' : 'pending';
+        return await this.overview.settled() === null ? 'current' : 'pending';
       },
     });
 
@@ -6464,79 +6465,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return ownsBrowserSession(this.ctx.storage.sql, actorId, sessionId);
   }
 
-  /** The owner's object ignores a repeat. */
-  private pushedOverview: string | null = null;
-  private overviewDirty = false;
-  private overviewPushing = false;
-  private readonly overviewSettlers: Array<(failure: KinuError | null) => void> = [];
-  /** Changes meanwhile ride its push. */
-  private overviewRetry: { readonly at: number; readonly attempts: number } | null = null;
+  /** The workspace's tile on its owner's roster (overview-push.ts). */
+  private readonly overview = new OverviewPush({
+    workspace: () => this.name,
+    ownerUserId: () => this.getOwnerUserId(),
+    fold: () => this.foldOverview(),
+    hasCapability: () => this.workspaceCapabilityToken() !== null,
+    deleting: () => this.deleting.signal.aborted,
+    put: async (overview) => {
+      const { stub, caller } = await this.userHub();
+
+      await stub.putWorkspaceOverview(caller, this.name, overview);
+    },
+    detach: (work) => { this.detachOwned(work); },
+    scheduleRetry: (at) => this.scheduleTerminalRetry(at),
+  });
 
   async requestOverviewPush(): Promise<void> {
     this.overviewChanged();
   }
 
   protected override overviewChanged(force = false): void {
-    this.overviewDirty = true;
-
-    if (this.overviewPushing || this.getOwnerUserId() === null) return;
-
-    const retry = this.overviewRetry;
-
-    if (!force && retry !== null && Date.now() < retry.at) return;
-    this.overviewPushing = true;
-
-    // In flight, it owes the wake a failure would arm.
-    if (retry !== null) this.overviewRetry = { at: Date.now() + recoveryBackoffMs(retry.attempts + 1), attempts: retry.attempts };
-    let failed: KinuError | null = null;
-
-    this.detachOwned(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
-      while (this.overviewDirty) {
-        this.overviewDirty = false;
-        const overview = yield* Effect.promise(() => this.foldOverview());
-        const pushed = JSON.stringify(overview);
-
-        if (pushed === this.pushedOverview) continue;
-
-        // Installing a token pushes.
-        if (this.workspaceCapabilityToken() === null) {
-          this.overviewDirty = true;
-          break;
-        }
-
-        // A workspace being deleted pushes no tile: its owner's roster drops it, and its capability is about to go.
-        if (this.deleting.signal.aborted) break;
-
-        const { stub, caller } = yield* Effect.promise(() => this.userHub());
-        yield* Effect.promise(() => stub.putWorkspaceOverview(caller, this.name, overview));
-        this.pushedOverview = pushed;
-      }
-
-      this.overviewRetry = null;
-    }), (cause) => Effect.gen({ self: this }, function* () {
-      this.overviewDirty = true;
-      const failure = toKinuError({ doing: "pushing this workspace's tile to its owner's roster", cause: Cause.squash(cause), otherwise: 'unavailable' });
-      const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
-      // A refusal meets the next push.
-      const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
-      failed = failure;
-      const next = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
-      this.overviewRetry = next;
-      diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
-
-      if (next !== null) yield* Effect.promise(() => this.scheduleTerminalRetry(next.at));
-    })), Effect.sync(() => {
-      this.overviewPushing = false;
-
-      for (const settleWaiter of this.overviewSettlers.splice(0)) settleWaiter(failed);
-    })));
-  }
-
-  /** Once its card moved, or the failure that left the list behind. */
-  private async overviewSettled(): Promise<KinuError | null> {
-    if (!this.overviewPushing) return null;
-
-    return await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
+    this.overview.changed(force);
   }
 
   /** The workspace's executors: a command, the file plane, the Files routes' transfers, terminals and ports. */
