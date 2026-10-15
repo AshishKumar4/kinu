@@ -4,11 +4,12 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type FinishReason } from 'ai';
+import * as v from 'valibot';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import {
   buildModelCallEvent, type ModelCallReport,
-  classifyRunEnd, RUN_END_REASONS, type RunEndReason,
+  classifyRunEnd,
   TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
   declareTerminalRoster,
   AgentOrchestrator, recordedTurn, type AgentOrchestratorDeps,
@@ -21,6 +22,8 @@ import {
   initEventsHubTables, EventLog,
   type ModelPricing, type CompletedTurn, type SqlExec,
   type BackendHost, type BroadcastEvent, type ProgrammaticTurn,
+  ExtensionHost, TerminalTransitions, chatTerminalEffects, terminalEffect, initTerminalEffectTable, initToolEffectClaimTable,
+  projectJsonValue,
 } from '../src/index';
 import { toCraftedToolSource } from '../src/tools/crafted-executor';
 import { makeSqlExec } from './helpers';
@@ -241,9 +244,13 @@ describe('a turn whose provider never named an end is not completed', () => {
 
 function seamOrchestrator(opts?: { enabled?: boolean }) {
   const recorded: CompletedTurn[] = [];
-  const { sql, execRaw } = createTestSql();
+  const testSql = createTestSql();
+  const { sql, execRaw, db } = testSql;
   initCompletedTurnTable(execRaw);
-  const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
+  initTerminalEffectTable(execRaw);
+  initToolEffectClaimTable(execRaw);
+  const actor = createTestActors(sql, execRaw).main;
+  const store = createCompletedTurnStore(sql, actor);
 
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
@@ -296,7 +303,7 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
   const eventActor = createTestActorsOver(eventDb).main;
   const orch = new AgentOrchestrator(withHostDeliveries({ host, engine, eventLog: new EventLog(eventSql, eventActor) }));
 
-  return { orch, recorded };
+  return { orch, recorded, sql, db, actor, close: () => { eventDb.close(); testSql.close(); } };
 }
 
 const settledTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
@@ -313,14 +320,6 @@ const QUIET_AGENT: Parameters<typeof declareTerminalRoster>[1] = {
 };
 
 describe('the settled turn’s recording — every settled turn is recorded', () => {
-  /** The rows a settled turn owes for the status under test (`turn_record`, `turn_end_extensions`). */
-  const roster = (status: RunEndReason, over: Partial<Parameters<typeof declareTerminalRoster>[0]> = {}) =>
-    declareTerminalRoster({
-      messageId: 'm1', status, workMode: 'build', continuity: 'independent_task',
-      completed: status === 'completed', userText: 'q', assistantText: 'a',
-      scopedTurn: {}, recordedAt: 1, evolutionEnabled: true, ...over,
-    }, QUIET_AGENT, { turnEndExtensions: true });
-
   // Failed turns are evidence: every status must reach the outcome-review buffer and the session
   // cadence, or evolution grades successes against successes.
   for (const status of ['error', 'aborted'] as const) {
@@ -332,13 +331,64 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
     });
   }
 
-  test('a FAILED turn still owes its extension end, and owes it before the recording', () => {
-    // Recorded after the hook, since its effects are part of the turn the review reads. Both rows are
-    // owed on every status.
-    for (const status of RUN_END_REASONS) {
-      const owed = roster(status).map((effect) => effect.name);
-      expect(owed).toContain('turn_end_extensions');
-      expect(owed.indexOf('turn_record')).toBeGreaterThan(owed.indexOf('turn_end_extensions'));
+  // Settled as a chat settles it: the turn's roster through the terminal transition and the chat's own effects. The
+  // extension end runs first on every ending, since its effects are part of the turn the review reads, and with
+  // evolution off too: extensions are not evolution, so `--no-auto-evolve` must not silence it.
+  test.each([
+    { ending: 'an errored', status: 'error', enabled: true, evolution: 'on' },
+    { ending: 'an aborted', status: 'aborted', enabled: true, evolution: 'on' },
+    { ending: 'a completed', status: 'completed', enabled: false, evolution: 'off' },
+  ] as const)('$ending turn with evolution $evolution ends its extensions before its recording', async ({ status, enabled }) => {
+    const fixture = seamOrchestrator({ enabled });
+    const { orch, recorded, sql, db, actor } = fixture;
+    const ended: string[] = [];
+
+    const extensions = new ExtensionHost().register({
+      name: 'recording-witness',
+      onTurnEnd: ({ text }) => {
+        expect(recorded).toEqual([]);
+        ended.push(text);
+      },
+    });
+
+    const terminal = new TerminalTransitions({
+      sql, actor, now: () => 1, transaction: (body) => db.transaction(body)(),
+      turnIsLive: () => false, scheduleRetry: async () => {}, settled: async () => {}, hold: (close) => close(),
+      effects: {
+        ...chatTerminalEffects({
+          orchestrator: () => orch,
+          chat: () => { throw new Error('this ending owes no follow-up turn'); },
+          engine: { learnFromTurn: async () => { throw new Error('this ending owes no lesson'); } },
+        }),
+        // The host's body (cf-backend actor-agent.ts): the turn's end, announced to its extensions.
+        turn_end_extensions: terminalEffect({
+          input: v.object({ messageId: v.string() }),
+          run: async () => {
+            await extensions.emitTurnEnd({ text: 'fixture answer', responseMessages: [] });
+
+            return { status: 'completed' };
+          },
+        }),
+        improvement_lanes: terminalEffect({ input: v.unknown(), runSync: () => ({ status: 'completed' }) }),
+      },
+    });
+
+    try {
+      await terminal.settle({
+        transition: { turnId: 'fixture-turn', messageId: 'fixture-answer' },
+        declare: () => declareTerminalRoster({
+          messageId: 'fixture-answer', status, workMode: 'build', continuity: 'independent_task',
+          completed: status === 'completed', userText: 'q', assistantText: 'fixture answer',
+          scopedTurn: projectJsonValue({ value: settledTurn() }), recordedAt: 1, evolutionEnabled: enabled,
+        }, QUIET_AGENT, { turnEndExtensions: true }),
+      });
+      await terminal.idle();
+
+      expect(ended).toEqual(['fixture answer']);
+      expect(recorded.map((turn) => turn.hadError)).toEqual(enabled ? [status === 'error'] : []);
+      expect(sql`SELECT effect_name FROM terminal_effects WHERE status != 'completed'`).toEqual([]);
+    } finally {
+      fixture.close();
     }
   });
 
@@ -361,14 +411,6 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
     });
   }
 
-  test('with evolution off nothing is recorded, and the extension end is still owed', () => {
-    const { orch, recorded } = seamOrchestrator({ enabled: false });
-    orch.recordTurn(recordedTurn('completed', settledTurn()), 'independent_task');
-    expect(recorded).toEqual([]);
-    // Extensions are not evolution: `--no-auto-evolve` must not silence the turn-end row.
-    expect(roster('completed', { evolutionEnabled: false }).map((effect) => effect.name))
-      .toContain('turn_end_extensions');
-  });
 });
 
 describe('providerSnapshotOf — one formula, deterministic', () => {
