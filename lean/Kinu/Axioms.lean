@@ -163,6 +163,88 @@ import Kinu
 #print axioms Kinu.Safety.DeviceToken.two_copies_cannot_alternate
 #print axioms Kinu.Safety.DeviceToken.one_holder_is_never_revoked
 
+/-! ## Kinu/Sharing/Model.lean -/
+
+#print axioms Kinu.Sharing.Model.step_core
+
+/-! ## Kinu/Sharing/Facts.lean -/
+
+#print axioms Kinu.Sharing.Facts.a_grant_keeps_its_identity
+#print axioms Kinu.Sharing.Facts.a_run_keeps_its_identity
+#print axioms Kinu.Sharing.Facts.a_cell_keeps_its_label
+#print axioms Kinu.Sharing.Facts.slate_lookup_through_a_map
+#print axioms Kinu.Sharing.Facts.a_cell_stays_where_it_is
+#print axioms Kinu.Sharing.Facts.the_counter_never_falls
+#print axioms Kinu.Sharing.Facts.fresh_init
+#print axioms Kinu.Sharing.Facts.every_id_is_below_the_counter
+
+/-! ## Kinu/Sharing/Confinement.lean -/
+
+#print axioms Kinu.Sharing.Confinement.exec_core
+#print axioms Kinu.Sharing.Confinement.confinement_is_kept
+#print axioms Kinu.Sharing.Confinement.every_run_holds_only_grants_of_its_own_slate_and_function
+#print axioms Kinu.Sharing.Confinement.a_grant_is_minted_by_its_holder
+#print axioms Kinu.Sharing.Confinement.another_persons_run_reaches_the_owner_only_through_a_lend
+#print axioms Kinu.Sharing.Confinement.a_personal_grant_acts_only_in_its_holders_requests
+#print axioms Kinu.Sharing.Confinement.every_admission_is_current_and_in_domain
+#print axioms Kinu.Sharing.Confinement.every_reachable_state_is_fresh_and_anchored
+#print axioms Kinu.Sharing.Confinement.a_fork_starts_with_its_code_alone
+#print axioms Kinu.Sharing.Confinement.a_listing_never_mints
+
+/-! ## Kinu/Sharing/Revocation.lean -/
+
+#print axioms Kinu.Sharing.Revocation.a_dead_run_is_refused_everything
+#print axioms Kinu.Sharing.Revocation.a_grants_generation_never_returns
+#print axioms Kinu.Sharing.Revocation.a_revoked_grant_never_acts_again
+#print axioms Kinu.Sharing.Revocation.a_removed_persons_sessions_stay_ended
+#print axioms Kinu.Sharing.Revocation.a_stopped_links_sessions_stay_ended
+#print axioms Kinu.Sharing.Revocation.a_withdrawn_declassification_stays_withdrawn
+
+/-! ## Kinu/Sharing/Origin.lean -/
+
+#print axioms Kinu.Sharing.Origin.output_cells_are_kept
+#print axioms Kinu.Sharing.Origin.one_step_keeps_q_blind
+#print axioms Kinu.Sharing.Origin.q_stays_blind
+#print axioms Kinu.Sharing.Origin.release_needs_every_contributing_tag_holder
+#print axioms Kinu.Sharing.Origin.a_hidden_runs_step_shows_q_nothing
+#print axioms Kinu.Sharing.Origin.a_hidden_runs_choices_show_q_nothing
+#print axioms Kinu.Sharing.Origin.only_a_tags_holder_declassifies_it
+
+/-! ## Kinu/Sharing/Attacks.lean -/
+
+#print axioms Kinu.Sharing.Attacks.the_owner_leaks_a_collaborators_repo_without_the_holder_check
+#print axioms Kinu.Sharing.Attacks.the_holder_check_keeps_a_collaborators_repo_private
+#print axioms Kinu.Sharing.Attacks.shared_state_launders_a_label_without_persisted_labels
+#print axioms Kinu.Sharing.Attacks.persisted_labels_keep_shared_state_private
+#print axioms Kinu.Sharing.Attacks.a_collaborator_drives_anothers_connection_without_the_requester_check
+#print axioms Kinu.Sharing.Attacks.the_requester_check_keeps_a_connection_its_holders
+#print axioms Kinu.Sharing.Attacks.a_revoked_call_resumes_without_generations
+#print axioms Kinu.Sharing.Attacks.generations_keep_a_revoked_call_dead
+#print axioms Kinu.Sharing.Attacks.a_lend_exfiltrates_a_collaborators_data_without_the_tool_flow_check
+#print axioms Kinu.Sharing.Attacks.the_tool_flow_check_keeps_arguments_readable
+#print axioms Kinu.Sharing.Attacks.an_editor_runs_the_owners_effect_without_revision_binding
+#print axioms Kinu.Sharing.Attacks.revision_binding_suspends_an_edited_lend
+#print axioms Kinu.Sharing.Attacks.a_fork_keeps_the_owners_lend_without_bare_forks
+#print axioms Kinu.Sharing.Attacks.bare_forks_hold_no_lend
+#print axioms Kinu.Sharing.Attacks.a_labelled_run_posts_a_secret_without_the_post_guard
+#print axioms Kinu.Sharing.Attacks.the_post_guard_hides_a_labelled_runs_choice
+
+/-! ## Kinu/Sharing/Friction.lean -/
+
+#print axioms Kinu.Sharing.Friction.a_granted_call_stays_admissible
+#print axioms Kinu.Sharing.Friction.a_grant_serves_only_its_function
+#print axioms Kinu.Sharing.Friction.a_placeholder_asks_exactly_the_holders_of_what_it_hides
+#print axioms Kinu.Sharing.Friction.the_holders_consent_shows_a_placeholder
+#print axioms Kinu.Sharing.Friction.connecting_admits_a_personal_part
+#print axioms Kinu.Sharing.Friction.adding_someone_lets_them_in
+#print axioms Kinu.Sharing.Friction.an_effect_waits_only_for_another_persons_call
+#print axioms Kinu.Sharing.Friction.a_team_board_asks_only_its_owner
+#print axioms Kinu.Sharing.Friction.a_public_dashboard_asks_visitors_nothing
+#print axioms Kinu.Sharing.Friction.a_fork_asks_its_forker_only_for_their_own
+#print axioms Kinu.Sharing.Friction.a_private_part_is_a_placeholder_and_no_prompt
+#print axioms Kinu.Sharing.Friction.the_owner_showing_it_is_one_decision
+#print axioms Kinu.Sharing.Friction.a_reader_of_the_source_sees_it_unasked
+
 /-! ## Kinu/Storage/FTS5Search.lean -/
 
 #print axioms Kinu.Storage.FTS5Search.index_includes_new
