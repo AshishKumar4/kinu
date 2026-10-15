@@ -1,13 +1,14 @@
 /**
  * Settings → Appearance: the account's theme, which the server names on every page it serves this account, and this
- * device's mode. Each theme is offered as a swatch drawn in its own tokens, in the mode the page is in.
+ * device's mode. Each theme is offered as a swatch drawn in its own tokens, in the mode the page is in. The section's
+ * own header titles it, so the card carries no header of its own.
  */
 import { useState } from "react";
 import { Effect } from "effect";
-import { MoonIcon, PaintBrushIcon, SunIcon } from "@phosphor-icons/react";
+import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
-import { Card, Field } from "@/components/ui/form";
+import { Field } from "@/components/ui/form";
 import { setMode, useTheme, wearTheme, type ThemeMode } from "@/hooks/use-theme";
 import { setAccountTheme } from "../../lib/user-api";
 
@@ -59,8 +60,8 @@ export function AppearanceCard() {
   };
 
   return (
-    <Card title="Appearance" icon={PaintBrushIcon} description="Your theme follows you to every device you sign in on. Light or dark is this device's own.">
-      <div className="space-y-6">
+    <section className="p-card overflow-hidden">
+      <div className="space-y-6 px-5 py-5">
         <Field label="Theme" hint={failure ?? (saving === null ? undefined : `Saving ${THEMES[saving].label}…`)}>
           <div role="radiogroup" aria-label="Theme" className="grid gap-3 sm:grid-cols-2">
             {THEME_NAMES.map((theme) => (
@@ -91,6 +92,6 @@ export function AppearanceCard() {
           </div>
         </Field>
       </div>
-    </Card>
+    </section>
   );
 }
