@@ -1686,8 +1686,6 @@
     "brief TEXT NOT NULL",
     "status TEXT NOT NULL DEFAULT 'pending'",
     "requested_at INTEGER NOT NULL",
-    "decided_at INTEGER",
-    "workspace TEXT",
-    "error TEXT"
+    "decided_at INTEGER"
   ]
 }

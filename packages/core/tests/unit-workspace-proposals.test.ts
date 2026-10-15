@@ -20,6 +20,8 @@ interface Harness {
   next: { name: string } | Error;
   /** Held until released, as a create still on the wire is. */
   hold: { readonly promise: Promise<void>; resolve(): void } | null;
+  /** Every stored proposal's id, decided or not. */
+  rows(): string[];
 }
 
 function harness(db = new Database(":memory:")): Harness {
@@ -29,6 +31,7 @@ function harness(db = new Database(":memory:")): Harness {
 
   const state: Omit<Harness, "proposals"> & { proposals?: WorkspaceProposals } = {
     store, created: [], woken: [], next: { name: "blue-river-1a2b" }, hold: null,
+    rows: () => db.query<{ id: string }, []>("SELECT id FROM workspace_proposals").all().map((row) => row.id),
   };
 
   const deps: WorkspaceProposalDeps = {
@@ -99,6 +102,8 @@ describe("a proposed workspace", () => {
       metadata: { proposal: "wsp-1", decision: "created", workspace: "blue-river-1a2b", url: "https://kinu.example/workspace/blue-river-1a2b" },
     })]);
     expect(h.proposals.open()).toEqual([]);
+    // schema audit: a settled proposal's row goes; its outcome lived in the answer and the wake, never read back.
+    expect(h.rows()).toEqual([]);
     // Decided once: a later answer decides nothing and wakes nobody.
     expect(await settle(h.proposals.decide("wsp-1", "decline"))).toBeNull();
     expect(h.woken).toHaveLength(1);
