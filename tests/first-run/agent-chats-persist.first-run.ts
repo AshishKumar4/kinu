@@ -46,9 +46,7 @@ import {
 import { tolerate } from '../../packages/core/src/obs/index';
 import type { Page } from 'puppeteer';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 import { type PublicSessionPlan } from '../../evals/src/session';
 import { webHeaders } from '../../evals/src/workspace-roster';
@@ -57,12 +55,32 @@ import type { TestChrome } from '../../scripts/test-chrome';
 
 const SUITE = 'First-run · agent-chats-persist';
 
-const CASE = 'agent-chats-persist' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Two subagents were told to build a chess app; coming back to the workspace, the chat '
+    + 'had been cleared and only the original message remained, and after visiting another '
+    + 'workspace every subagent chat had disappeared. Reopened: back in the workspace only Main '
+    + 'showed, in the tabs and the sidebar, until creating another agent brought the old one back.',
+  missedBecause: 'reachability was derived from employability — the roster read every chat '
+    + "surface makes filtered `status != 'dismissed'`, so a child's only route to a conversation "
+    + 'the dismiss copy promises to keep went with its employment — and `newestId()` returned a '
+    + 'stored `conversation_heads` row without asking whether it still named an entry. Reopened '
+    + 'because this row read the roster over the socket, which answered in full, while the page '
+    + 'threw that answer away: its reset effect bumped the roster read\'s generation after the '
+    + 'sibling effect had sent it.',
+  provedRedAt: 'a13e33514',
+  redDirection: 'the row drops EVERY socket between the sends and the reads, so the answers come '
+    + 'from durable rows rather than a live activation, then loads the page. RED by reading on '
+    + 'build a13e33514, measured 2026-09-23: roster-survives and chats-reachable green, and with '
+    + 'every read the page sent answered its strip and sidebar drew no agent at all.',
+};
 
 /** What each subagent is told, one word apiece so the readback is unambiguous. */
 const SAID = ['Reply with only the word ALPHA.', 'Reply with only the word BRAVO.'] as const;
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'chats');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -271,6 +289,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'Two subagents whose chats survive leaving the workspace and coming back.',
       budgetMs: 10 * 60_000,
@@ -481,4 +500,3 @@ describe(SUITE, () => {
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules
  *  (each of which resolves a live plan at import). */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

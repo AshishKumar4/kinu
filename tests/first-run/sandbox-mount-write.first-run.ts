@@ -29,18 +29,34 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import { MOUNT_ASK as ASK, MOUNT_BYTES as BYTES, MOUNT_TARGET as TARGET } from './asks';
 import type { RunEvent } from '../../packages/core/src/index';
 
 const SUITE = 'First-run · sandbox-mount-write';
 
-const CASE = 'sandbox-mount-write' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Writing a new file through the /computer mount was refused `io` — '
+    + '"FileNotFoundError: File not found: /workspace/broken.mjs" — while the same '
+    + 'container write through computer.writeFile in a program succeeded, and '
+    + 'computer.listFiles(\'\') refused on the SDK\'s ValidationFailedError.',
+  missedBecause: 'the conformance double answered a missing read with an exit code, the SDK\'s '
+    + 'old contract; the deployed SDK throws FileNotFoundError, which the file view passed '
+    + 'through unclassified, so the write path\'s create-vs-overwrite probe read a create as an '
+    + 'I/O failure. No test ever called listFiles with an empty path.',
+  provedRedAt: '96c3fa2b0',
+  redDirection: 'retained run bench-artifacts/trajectory-product-1789381033344/'
+    + 'public-failure-recovery/events.jsonl on 2026-09-14: event 9 is the refused create '
+    + '(reason io, FileNotFoundError on a path the list at event 7 showed absent), event 12 is '
+    + 'the namespace write succeeding where the mount write failed and listFiles(\'\') refusing '
+    + 'on ValidationFailedError.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'mount');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -73,6 +89,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A terse assistant that carries out file instructions verbatim.',
       async run({ session }) {
@@ -132,5 +149,3 @@ describe(SUITE, () => {
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

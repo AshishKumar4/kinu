@@ -23,7 +23,7 @@ import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { isBackgroundHandle, ORCHESTRATOR_AGENT_SLUG, type RunEvent } from '../../packages/core/src/index';
 import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase, type FirstRunSession,
+  firstRunCaseId, firstRunCasePlan, type FirstRunDefect, type FirstRunSession, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { SWARM_ASK as ASK } from './asks';
 import { openBrowser, signedInPage, type SignIn } from '../../evals/src/browser';
@@ -32,7 +32,21 @@ import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-so
 
 const SUITE = 'First-run · exploration';
 
-const CASE = 'exploration' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Exploration on the deployed product had no row that read the Swarms pane or asked '
+    + 'whether a swarm\'s nodes, which run as agents of the workspace, settled.',
+  missedBecause: 'the eval tier\'s swarm arm asserts a search row exists on the cloud target and reads '
+    + 'neither the pane nor the nodes\' settlement, so a canvas that lost the node transcripts, '
+    + 'or a node left running, passed it.',
+  provedRedAt: 'b220f59f8',
+  redDirection: 'RED on the deployed build: every node errored at its 60 s budget while waiting out the '
+    + 'provider\'s rate-limit backoff, which the budget counts; it stays red until a node\'s budget '
+    + 'stops counting provider-mandated waits. Also planted on loopback `vite dev`: a canvas read that '
+    + 'drops the node transcripts leaves `pane-shows-the-run` and `every-node-an-agent-that-settled` missed.',
+};
 
 /** The lowercase words of `text`. */
 function wordsOf(text: string): string[] {
@@ -42,7 +56,7 @@ function wordsOf(text: string): string[] {
 /** The words the ask itself put in every node's mouth, which prove nothing. */
 const ASKED = new Set(wordsOf(ASK));
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'swarm');
 
 const PanelAgentSchema = v.looseObject({
   key: v.string(), category: v.string(), activity: v.string(), tab: v.boolean(),
@@ -158,6 +172,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       genesis: false,
       purpose: 'An assistant that uses the search it is asked to use and reports what it found in one line.',
@@ -236,4 +251,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

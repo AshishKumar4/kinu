@@ -11,13 +11,24 @@ import * as v from 'valibot';
 import { callSharedSlate, consentToShare, type EvalObservation, type EvalSubgoal, type SlateViewerAnswer } from '@kinu.run/test-utils';
 import { JsonValueSchema, LiveShareCreatedSchema, ViewerRequestRecordSchema, type JsonValue } from '@kinu.run/core';
 import { ERROR_CODES } from '@kinu.run/core/obs';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · share-capability-cut';
 
-const CASE = 'share-capability-cut' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A public live share under a cut admitting one read member answered the read, refused the mutation with the grant code, left no owner-side effect, and refused an agent-namespace call outright.',
+  missedBecause: 'Unit and harness proofs cover the grant cut and the agent refusal in isolation; nothing drove the share origin signed out and read the owner tree plus the audit row for the same episode.',
+  provedRedAt: null,
+  redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation. '
+    + 'No deployed build carried a hole, and one carrying it fails the deploy\'s own source gates before it reaches staging, '
+    + 'so the red direction is proved at the grant itself: '
+    + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'cut');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -43,7 +54,7 @@ describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
       purpose: 'Disposable public live-share capability-cut probe; no model task.',
       async run({ session, plan }) {
         const goals: EvalSubgoal[] = [];
@@ -154,5 +165,3 @@ END`));
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

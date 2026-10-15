@@ -45,20 +45,36 @@ import * as v from 'valibot';
 
 import { hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG } from '../../packages/core/src/index';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 import { TAB_WHILE_WORKING, TAB_WORKING_ASK } from './asks';
 
 const SUITE = 'First-run · agent-tab';
 
-const CASE = 'agent-tab' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The "+" tab created the agent and then sat on "Disconnected · Untitled agent" over a '
+    + 'skeleton: the two reads the tab makes on mount, getActorSnapshot and listAgentTasks, '
+    + 'never answered.',
+  missedBecause: 'the workerd proof drives hosted actors through the object and the routing '
+    + 'pin proves the grammar over literals the test writes; nothing opens the actor\'s own '
+    + 'socket path the way the browser does, so a client-built dead facet path stayed invisible.',
+  provedRedAt: 'fddd4f9d6',
+  redDirection: 'RED by reading on build fddd4f9d6, measured 2026-09-17, on a different link of '
+    + 'the chain than reported: the transport-admitted actor path `/actor/<name>` upgraded and '
+    + 'BOTH mount reads answered — proving the socket grammar was never the server\'s defect and '
+    + 'B1 lives entirely in the client\'s address — but the hosted actor was already inside a '
+    + 'turn when the tab\'s message landed, the send spliced mid-turn and was never answered, '
+    + 'and the ledger recorded zero model calls. That is B10\'s self-feeding reactor keeping a '
+    + 'hosted actor permanently busy, which is also why the owner\'s tab showed a skeleton.',
+};
 
 /** What the tab says to the agent it just opened. */
 const TAB_HELLO = 'Reply with only the word READY.';
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'tab');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -145,6 +161,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A workspace whose new agent tab answers its own reads and one message.',
       budgetMs: 8 * 60_000,
@@ -275,4 +292,3 @@ describe(SUITE, () => {
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules
  *  (each of which resolves a live plan at import). */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

@@ -41,11 +41,29 @@ import {
 } from './device-session';
 import type { KinuPublicSession, PublicExecutorResult, PublicSessionPlan } from '../../evals/src/session';
 import { attachMachine, detachMachine, readDaemonLogTail, type AttachedMachine } from './daemon';
-import { firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · device-link';
 
-const CASE = 'device-link' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A linked machine\'s socket dropped about forty seconds after connect, every time: '
+    + 'the daemon\'s keepalive pings and the deployed hub never answers, so the daemon closes '
+    + 'the live socket and redials — and a command that lands in the gap is answered with a '
+    + '"needs a computer of yours" card no reconnect retires.',
+  missedBecause: 'every device test asserts the link at the moment it forms — connectDevice '
+    + 'waits for the first connected and stops — so a hub that cannot answer `ping` drops the '
+    + 'socket at +40 s in a window nothing ever measured.',
+  provedRedAt: '2fbe8695f',
+  redDirection: 'RED against the deployed 2fbe8695f on 2026-09-15: a real daemon under this '
+    + 'repo\'s bun, a real `POST /api/cli/devices` registration, and the devices route\'s own '
+    + 'stamps — `lastSeenAt` moves when the second accept lands and `connected` flickers '
+    + 'through the redial gap. Green requires the link to hold the whole 50 s window, a '
+    + 'command to reach the machine through a `once` consent answer, and revoke to end the '
+    + 'socket and the credential.',
+};
 
 /**
  * The machine label this row registers under. The fleet resolves calls by
@@ -100,7 +118,7 @@ const WARMUP_WORDS = /not available|no device connected|not known here yet|no co
  */
 const DAEMON_REJECTED_EXIT = 4;
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'link');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -294,6 +312,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         episode: 'device-link-holds',
         modelCalls: 'none',
         genesis: false,
@@ -367,6 +386,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         episode: 'device-link-command',
         modelCalls: 'none',
         genesis: false,
@@ -418,6 +438,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         episode: 'device-link-revoke',
         modelCalls: 'none',
         genesis: false,
