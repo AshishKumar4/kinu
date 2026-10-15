@@ -4,7 +4,7 @@ import { createTestActor, makeSqlExec } from './helpers';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { actorReferenceOf } from '../src/identity/actor-handle';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
-import { finishSubordinateBirth, recoverSubordinateLifecycles, type SubordinateBirth } from '../src/subordinates/birth';
+import { admitSubordinateBirth, recoverSubordinateLifecycles, type SubordinateBirthRequest } from '../src/subordinates/birth';
 import { admitSubordinateTask, describeSubordinateHandoff, type SubordinateRuntime } from '../src/subordinates/support';
 import { EventLog } from '../src/events/hub/log';
 import { initEventsHubTables } from '../src/events/hub/schema';
@@ -64,10 +64,10 @@ function setup() {
     },
   };
 
-  const admit = (creationId: string, assignment: SubordinateBirth['assignment'] = { body: 'Read the source.', mode: 'plan' }) => roster.create({
-    name: 'reader', actorReference: null, deleteRequested: false,
-    birth: { creationId, seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable', origin: 'agent' }, assignment },
-    status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, taskEventId: null,
+  const admit = (assignment: SubordinateBirthRequest['assignment'] = { body: 'Read the source.', mode: 'plan' }) => admitSubordinateBirth(roster, runtime, {
+    seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable', origin: 'agent' },
+    assignment,
+    createdAt: 100,
   });
 
   return { database, child, childActor, directory, main, roster, runtime, admit, events,
@@ -78,15 +78,11 @@ describe('admitted subordinate lifecycle', () => {
   test('a cold birth re-drive retains the fork and admits its first assignment once', async () => {
     const fixture = setup();
 
-    const assignment: NonNullable<SubordinateBirth['assignment']> = {
-      body: 'Read the source.', mode: 'plan', inheritedContext: { kind: 'fork', messages: [
-        { id: 'parent-1', role: 'user', content: 'The reader owns cancellation.', createdAt: 1 },
-      ] },
-    };
+    const messages = [{ id: 'parent-1', role: 'user' as const, content: 'The reader owns cancellation.', createdAt: 1 }];
+    const assignment = { body: 'Read the source.', mode: 'plan' as const, inheritedContext: { kind: 'fork' as const, messages } };
 
-    fixture.admit('fork-birth', assignment);
     fixture.interruptAssignment();
-    await expect(finishSubordinateBirth(fixture.roster, fixture.runtime, 'reader')).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(fixture.admit({ body: assignment.body, mode: assignment.mode, inheritedContext: messages })).rejects.toMatchObject({ code: 'unavailable' });
     const cold = new SubordinateRosterStore(makeSqlExec(fixture.database.db), fixture.main);
     expect(cold.requireExisting('reader').birth?.assignment).toEqual(assignment);
     await recoverSubordinateLifecycles(cold, fixture.runtime);
@@ -98,9 +94,8 @@ describe('admitted subordinate lifecycle', () => {
 
   test('a lost seed acknowledgement recovers the same actor after a cold roster open', async () => {
     const fixture = setup();
-    fixture.admit('birth-one');
     fixture.interruptSeed();
-    await expect(finishSubordinateBirth(fixture.roster, fixture.runtime, 'reader')).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(fixture.admit()).rejects.toMatchObject({ code: 'unavailable' });
     const issued = fixture.directory.resolveChild(fixture.main, 'reader');
 
     if (!issued) throw new Error('Registration did not land.');
@@ -113,9 +108,8 @@ describe('admitted subordinate lifecycle', () => {
 
   test('a lost first assignment acknowledgement does not admit the task twice', async () => {
     const fixture = setup();
-    fixture.admit('birth-one');
     fixture.interruptAssignment();
-    await expect(finishSubordinateBirth(fixture.roster, fixture.runtime, 'reader')).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(fixture.admit()).rejects.toMatchObject({ code: 'unavailable' });
     await recoverSubordinateLifecycles(new SubordinateRosterStore(makeSqlExec(fixture.database.db), fixture.main), fixture.runtime);
 
     const rows = fixture.child.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_log
@@ -128,16 +122,14 @@ describe('admitted subordinate lifecycle', () => {
 
   test('failed destructive cleanup keeps intent and removes only its old row after retry', async () => {
     const fixture = setup();
-    fixture.admit('birth-one');
-    const reference = await finishSubordinateBirth(fixture.roster, fixture.runtime, 'reader');
+    const reference = await fixture.admit();
     fixture.roster.requestDeletion('reader', reference, 101);
     fixture.interruptDeletion();
     await expect(recoverSubordinateLifecycles(fixture.roster, fixture.runtime)).rejects.toMatchObject({ code: 'unavailable' });
     expect(fixture.roster.requireExisting('reader').deleteRequested).toBe(true);
     await recoverSubordinateLifecycles(fixture.roster, fixture.runtime);
     expect(fixture.roster.get('reader')).toBeNull();
-    fixture.admit('birth-two');
-    const replacement = await finishSubordinateBirth(fixture.roster, fixture.runtime, 'reader');
+    const replacement = await fixture.admit();
     expect(replacement.actorId).not.toBe(reference.actorId);
     expect(() => fixture.roster.removeActor('reader', reference)).toThrow(expect.objectContaining({ code: 'denied' }));
     expect(fixture.roster.requireExisting('reader').actorReference).toEqual(replacement);

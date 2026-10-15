@@ -1,5 +1,5 @@
-import { Cause, Effect } from 'effect';
-import { settle } from '../obs/effect';
+import { Cause, Effect, type Exit } from 'effect';
+import { hold, settle } from '../obs/effect';
 import * as v from 'valibot';
 import { TierIdSchema, isValidRoleId } from '../types/profile';
 import { isWorkMode, type WorkMode } from '../types/turn';
@@ -8,7 +8,8 @@ import { diagnostics } from '../obs/index';
 import type { ActorReference } from '../identity/actor-handle';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
-import { SubordinateInheritedContextSchema } from '../types/subordinates';
+import { SubordinateInheritedContextSchema, subordinateBirthContext } from '../types/subordinates';
+import type { SerializedMessage } from '../types/heads';
 
 const SubordinateSeedSchema = v.strictObject({
   name: v.pipe(v.string(), v.nonEmpty()),
@@ -37,15 +38,44 @@ export const SubordinateBirthSchema = v.strictObject({
 
 export type SubordinateBirth = v.InferOutput<typeof SubordinateBirthSchema>;
 
-const inFlight = new WeakMap<SubordinateRosterStore, Map<string, Promise<ActorReference>>>();
+const inFlight = new WeakMap<SubordinateRosterStore, Map<string, Promise<Exit.Exit<ActorReference, KinuError>>>>();
+
+/** What a lifetime decides of a birth; the admission itself is the same for every lifetime. */
+export interface SubordinateBirthRequest {
+  readonly seed: SubordinateSeed;
+  /** Null for an owner's hire, which starts idle; else the work it is born to, with the parent's context if forked. */
+  readonly assignment: { readonly body: string; readonly mode: WorkMode; readonly inheritedContext?: SerializedMessage[] } | null;
+  readonly createdAt: number;
+}
+
+/**
+ * Admits `request.seed.name` to the roster under a fresh creation id, then completes its birth: the one admission
+ * every lifetime makes. The caller has already refused a name the roster holds, each in its own words.
+ */
+export function admitSubordinateBirth(roster: SubordinateRosterStore, runtime: SubordinateRuntime, request: SubordinateBirthRequest): Promise<ActorReference> {
+  const { seed, createdAt } = request;
+  const inheritedContext = subordinateBirthContext(request.assignment?.inheritedContext);
+
+  const assignment: SubordinateBirth['assignment'] = request.assignment === null ? null : {
+    body: request.assignment.body, mode: request.assignment.mode, ...(inheritedContext !== undefined && { inheritedContext }),
+  };
+
+  roster.create({
+    name: seed.name, actorReference: null, birth: { creationId: crypto.randomUUID(), seed, assignment }, deleteRequested: false,
+    status: assignment === null ? 'idle' : 'working', currentTask: assignment === null ? null : seed.mission,
+    createdAt, dismissedAt: null, taskEventId: null,
+  });
+
+  return settle(finishSubordinateBirth(roster, runtime, seed.name));
+}
 
 /** Resume only the request that the roster admitted before its first await. */
-export function finishSubordinateBirth(
+function finishSubordinateBirth(
   roster: SubordinateRosterStore,
   runtime: SubordinateRuntime,
   name: string,
-): Promise<ActorReference> {
-  return settle(Effect.gen(function* () {
+): Effect.Effect<ActorReference, KinuError> {
+  return Effect.gen(function* () {
     const entry = roster.requireExisting(name);
     const birth = entry.birth;
 
@@ -63,34 +93,33 @@ export function finishSubordinateBirth(
 
     const existing = pending.get(birth.creationId);
 
-    if (existing) return yield* Effect.promise(() => existing);
+    if (existing) return yield* Effect.flatten(Effect.promise(() => existing));
 
-    const work = ((): Promise<ActorReference> => {
-      return settle(Effect.gen(function* () {
-        const reference = yield* Effect.promise(() => runtime.spawn({ ...birth.seed, creationId: birth.creationId }));
-        roster.attachActor(name, birth.creationId, reference);
+    // Held, not run here: a second caller for this creation id joins this one run.
+    const work = hold(Effect.gen(function* () {
+      const reference = yield* Effect.promise(() => runtime.spawn({ ...birth.seed, creationId: birth.creationId }));
+      roster.attachActor(name, birth.creationId, reference);
 
-        if (roster.requireExisting(name).deleteRequested) return yield* new KinuError('cancelled', 'The admitted actor birth is cancelled.');
+      if (roster.requireExisting(name).deleteRequested) return yield* new KinuError('cancelled', 'The admitted actor birth is cancelled.');
 
-        const assignment = birth.assignment;
+      const assignment = birth.assignment;
 
-        if (assignment) {
-          const handoff = yield* Effect.promise(() => runtime.assign(name, { ...assignment, creationId: birth.creationId }));
+      if (assignment) {
+        const handoff = yield* Effect.promise(() => runtime.assign(name, { ...assignment, creationId: birth.creationId }));
 
-          if (roster.requireExisting(name).birth?.creationId !== birth.creationId) return yield* new KinuError('denied', 'The birth admission no longer owns this assignment.');
-          roster.recordAssignmentEvent(name, handoff.eventId);
-        }
+        if (roster.requireExisting(name).birth?.creationId !== birth.creationId) return yield* new KinuError('denied', 'The birth admission no longer owns this assignment.');
+        roster.recordAssignmentEvent(name, handoff.eventId);
+      }
 
-        roster.finishBirth(name, birth.creationId);
+      roster.finishBirth(name, birth.creationId);
 
-        return reference;
-      }));
-    })();
+      return reference;
+    }));
 
     pending.set(birth.creationId, work);
     const held = pending;
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.promise(() => work), (failed) => {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.flatten(Effect.promise(() => work)), (failed) => {
       const error = toKinuError({ doing: 'completing an admitted actor birth', cause: Cause.squash(failed), otherwise: 'unavailable' });
 
       if (error.code !== 'io' && error.code !== 'unavailable') roster.cancelBirth(name, birth.creationId);
@@ -99,7 +128,7 @@ export function finishSubordinateBirth(
     }), Effect.sync(() => {
       if (held.get(birth.creationId) === work) held.delete(birth.creationId);
     }));
-  }));
+  });
 }
 
 /** The existing maintenance owner resumes these intents after an interruption. */
@@ -125,7 +154,7 @@ export function recoverSubordinateLifecycles(roster: SubordinateRosterStore, run
 
     for (const entry of roster.pendingBirths()) {
       yield* Effect.catchCause(Effect.gen(function* () {
-        yield* Effect.promise(async () => finishSubordinateBirth(roster, runtime, entry.name));
+        yield* finishSubordinateBirth(roster, runtime, entry.name);
       }), (failed) => Effect.gen(function* () {
         const cause = Cause.squash(failed);
         const error = toKinuError({ doing: 'recovering an admitted actor birth', cause, otherwise: 'unavailable' });
