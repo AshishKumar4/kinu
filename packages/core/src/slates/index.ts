@@ -48,5 +48,5 @@ export {
 
 export {
   linkKeyHolds, linkUrl, roomHandle, roomObjectName, frameTicket, cookieForTicket, readPass, frameCookieHeader, frameCookieOf,
-  hostTokenHolds, slateHostOrigin, ROOM_ENTER_PATH, ROOM_FRAME_COOKIE, type FrameClaim,
+  ROOM_ENTER_PATH, type FrameClaim,
 } from './room/passes';

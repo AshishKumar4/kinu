@@ -3,7 +3,8 @@
  * origin to the one session its ticket names, in a frame that runs no script and reaches no network. The slate's own
  * code, on its own host, cannot read it; the person sees it. What a run returns is the slate author's text, so its
  * markup is cut down to a fixed set of elements with no links, no media and no resources (`HTMLRewriter`), and the
- * headers forbid what the cut might miss.
+ * headers forbid what the cut might miss. It stays in the cf closure: it is written against workerd's `HTMLRewriter`,
+ * whose element attributes Bun's declaration types differently.
  */
 import { escapeHtml, type JsonValue } from '@kinu.run/core';
 
@@ -17,8 +18,8 @@ const KEPT = new Set([
 /** Elements dropped with everything inside them. */
 const GONE = 'script, style, template, noscript, iframe, object, embed, svg, math, link, meta, base, form, input, button, textarea, select, img, video, audio, source, picture, canvas';
 
-/** Attributes kept on a kept element; `style` loses anything that names a resource. */
-const ATTRIBUTES = new Set(['colspan', 'rowspan', 'style']);
+/** Attributes kept on a kept element: none that styles or names anything; the page's own style is the part's look. */
+const ATTRIBUTES = new Set(['colspan', 'rowspan']);
 
 /** No script, no form, no resource, no navigation away: the sandbox CSP plus `default-src 'none'`. */
 const SEALED_HEADERS = {
@@ -51,8 +52,8 @@ export async function sealedPart(value: JsonValue | null): Promise<Response> {
           return;
         }
 
-        for (const [name, attributeValue] of element.attributes) {
-          if (!ATTRIBUTES.has(name) || (name === 'style' && /url\(|@import|expression\(/iu.test(attributeValue))) element.removeAttribute(name);
+        for (const [name] of element.attributes) {
+          if (!ATTRIBUTES.has(name)) element.removeAttribute(name);
         }
       },
     })

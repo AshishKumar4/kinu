@@ -5891,23 +5891,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
       messageBlock: (address) => this.answerBlock(address),
-      slateRoom: async (slate, title) => {
-        const owner = await this.getOwnerEmail();
-
-        if (owner === null) throw new KinuError('unavailable', 'This workspace has no owner to run its slates for');
+      slateRoom: async (slate, title, owner) => {
         const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate))));
 
-        await room.create({ workspace: this.name, slate, title, owner: owner.toLowerCase(), parent: null });
+        await room.create({ workspace: this.name, slate, title, owner, parent: null });
 
         return room;
       },
-      ownerEmail: async () => {
-        const owner = await this.getOwnerEmail();
-
-        if (owner === null) throw new KinuError('unavailable', 'This workspace has no owner');
-
-        return owner.toLowerCase();
-      },
+      ownerEmail: async () => (await this.getOwnerEmail())?.toLowerCase() ?? null,
     });
 
     return this._slates;

@@ -972,12 +972,12 @@ requirements:
       - Kinu.Sharing.Confinement.exec_core
       - Kinu.Sharing.Confinement.every_reachable_state_is_fresh_and_anchored
     tsRefs:
-      - packages/core/src/slates/sharing.ts#ShareGrantSchema
-      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore
-      - packages/core/src/slates/state.ts#SqliteSlateStateStore
+      - packages/core/src/slates/room/caretaker.ts#initSlateRoomTables
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.mint
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.admit
     remainingEvidence:
-      - The model is the sharing design (one live slate, lends, personal grants, labels), which is not built; today's code is the live share it replaces, so no fixture runs any of it
-      - Ids and generations are one counter; the build must mint them from one monotonic source per slate object
+      - The caretaker (packages/core/src/slates/room/caretaker.ts) is the model's step function on SQLite; unit-slate-room.test.ts replays the model's attacks against it, but no fixture is generated from the model yet
+      - Ids and generations come from one counter per room (`room.next`), as in the model
   PR-SHARE-002:
     statement: On one shared slate every grant a run holds was minted by its holder to that slate and function and admits the run's argument; a person's own connection is exercised only in that person's own requests, never another collaborator's, a link visitor's or the slate's own work; another person's run reaches the owner's authority only as a lend the owner minted; every admission holds each grant live at its current generation, bound to the code revision that runs, with the argument in the declared domain; an effect someone else's call asks for runs only on its holder's approval of that generation, argument and step; and removing the requester check, the revision binding or the one-step approval lets a collaborator drive another's connection, an editor run the owner's effect, or one approval repeat an effect.
     status: proved-in-abstract-model
@@ -996,13 +996,12 @@ requirements:
       - Kinu.Sharing.Attacks.one_approval_repeats_an_effect_without_binding_it_to_a_step
       - Kinu.Sharing.Attacks.an_approval_admits_one_effect
     tsRefs:
-      - packages/core/src/slates/caller.ts#shareCaller
-      - packages/core/src/slates/share-viewers.ts#SlateShareViewers.call
-      - packages/core/src/slates/capability-graph.ts#cutShareGrant
-      - packages/core/src/slates/surface.ts#SlateCallRequestSchema
-      - packages/cf-backend/src/slates/bindings.ts#SlateBinding
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.admit
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.toolStep
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.decide
+      - packages/cf-backend/src/slates/room-bindings.ts#RoomBinding
     remainingEvidence:
-      - Not built. Today's shareCaller resolves every viewer call as the owner's root, which this requirement replaces; the build adds per-run envs holding grant references, admission in one caretaker, and a refinement fixture of permits over admit and toolStep
+      - Built in the room: every run's env holds only stubs the room sealed with its run id (room-bindings.ts), and admission is the caretaker's; a refinement fixture of permits over admit and toolStep is not generated yet
       - Unforgeable references and the codec's soundness are premises; Workers RPC stubs with host-sealed props and the bounded codec are what the build must show satisfy them
       - Credentials are outside the model; that no credential byte enters a run's isolate is the reference premise, not a theorem
   PR-SHARE-003:
@@ -1034,10 +1033,11 @@ requirements:
       - Kinu.Sharing.Attacks.a_revoked_call_resumes_without_generations
       - Kinu.Sharing.Attacks.generations_keep_a_revoked_call_dead
     tsRefs:
-      - packages/core/src/slates/share-viewers.ts#SlateShareViewers.admit
-      - packages/cf-backend/src/slates/host.ts#SlateHost.surfaceCall
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.remove
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.revoke
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.runOk
     remainingEvidence:
-      - Not built. The build serializes grants, sessions and declassifications in one object and checks the generation at admission, after every wait, before each tool step and before each release; a workerd test must show a revoke between admission and a queued approval, between two tool steps and before release
+      - The room serializes grants, sessions and declassifications in one object and checks the generation at admission, after every wait, before each tool step and before each release (`runOk`); unit-slate-room.test.ts revokes between admission and a queued approval, between tool steps and before release, and no workerd test does yet
       - Bytes already released are not recalled, and remote work dispatched before a revocation may complete after it; dispatch is the boundary the caretaker controls, and the model claims nothing past it
   PR-SHARE-005:
     statement: Data origin on a shared slate. For any fixed history with no event opening a source to a principal (its holder declassifying it to them, or a reader check finding they read it), that principal is shown the same values and placeholders, in the same order, by releases, rendered shared state and tool arguments, whatever the source holds; inserting anywhere an action of a run that read the source changes nothing they are shown; only a tag's holder can declassify it; and without the per-tag holder check, labels on persisted state, the tool-flow check, the sink audience, or with labelled runs free to post shared state, someone's private data reaches a person who cannot read it.
@@ -1062,10 +1062,11 @@ requirements:
       - Kinu.Sharing.Attacks.a_labelled_run_posts_a_secret_without_the_post_guard
       - Kinu.Sharing.Attacks.the_post_guard_hides_a_labelled_runs_choice
     tsRefs:
-      - packages/core/src/slates/state.ts#slateStorageCall
-      - packages/core/src/slates/capability-graph.ts#grantAdmits
+      - packages/core/src/slates/room/labels.ts#flows
+      - packages/core/src/slates/room/labels.ts#audienceFlows
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.render
     remainingEvidence:
-      - Not built; Kinu has no labels today. The build labels each grant's source, fixes a run's label at admission, stores labels with shared state, and checks every release, render and tool argument; a refinement fixture of flows and of the label a run gets must be generated from this model
+      - Built in the room: each grant's source is a tag, a run's label is fixed at admission, labels are stored with shared state, and every release, render and tool argument is checked; a refinement fixture of flows and of the label a run gets is not generated from this model yet
       - Runtime isolation is a premise; one run is one isolate whose label covers its whole heap, so the shared slate server never holds labelled content, only opaque handles
       - Sealed rendering is a premise; labelled content reaches a screen in a frame the slate's own client code cannot read, so a request carries only what its person chose to send
       - Reader checks are a premise; a check run with the reader's own grant must answer yes only if the reader may see what the source held, then or since, and a grant's declared sink must include everyone its effect reaches
@@ -1082,10 +1083,10 @@ requirements:
       - Kinu.Sharing.Friction.connecting_admits_a_personal_part
       - Kinu.Sharing.Friction.adding_someone_lets_them_in
     tsRefs:
-      - packages/core/src/slates/share-viewers.ts#SlateShareViewers.admits
-      - packages/cf-backend/src/slates/host.ts#SlateHost.admitViewerRequest
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.open
+      - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.ask
     remainingEvidence:
-      - Not built. Prompts are UI acts outside the model; the model proves what each answer unlocks and what a person need not be asked again, and the design page names the prompt for each
+      - Prompts are UI acts outside the model; the model proves what each answer unlocks and what a person need not be asked again, and the room's view names the prompt for each
   PR-SHARE-007:
     statement: In the sharing model a grant serves only the function it was granted for, an effect waits for its holder only on someone else's call, and in the design scenarios (a team board, a public dashboard, a Gallery fork, a private repository shared with someone who cannot read it, a part over two people's sources) each person sees what the design page says and makes the decisions it counts.
     status: by-construction-witness

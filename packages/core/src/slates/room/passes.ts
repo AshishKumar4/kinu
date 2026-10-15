@@ -7,9 +7,6 @@
 import * as v from 'valibot';
 import { labelSigner, type LabelSignerEnv } from '../../utils/label-signer';
 import { sha256Hex } from '../../safety/argument-digest';
-import { buildSlateShareHost } from '../../preview/slate-share-host';
-import { previewHostSuffix, previewPortSuffix, type PreviewPortEnv, type PreviewSuffixEnv } from '../../preview/preview-origin';
-import { workspaceAddressRefusal } from '../../identity/naming';
 import { roomPagePath } from '../room-api';
 
 /** 26 base32 characters: 130 bits, for a key that admits anyone who holds it. */
@@ -52,14 +49,11 @@ export async function linkUrl(
 
 // ── The slate's own host ────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The host label's token: an HMAC of the workspace and handle, checked before the room is woken. */
-const hostSigner = labelSigner('kinu.slate-room-host.salt', 'kinu.slate-room-host.v1');
-
 /** A session's pass on the slate's host: who, and how they hold the slate, signed by the room that admitted them. */
 const frameSigner = labelSigner('kinu.slate-room-frame.salt', 'kinu.slate-room-frame.v1', 26);
 
 /** Host-only, so the slate's host alone carries it; the room re-checks the session it names on every request. */
-export const ROOM_FRAME_COOKIE = '__Host-kinu_room';
+const ROOM_FRAME_COOKIE = '__Host-kinu_room';
 
 /** The host's entry: a ticket becomes the cookie, then the slate's page. */
 export const ROOM_ENTER_PATH = '/__kinu/enter';
@@ -82,28 +76,8 @@ const FrameClaimSchema = v.object({
 
 export type FrameClaim = v.InferOutput<typeof FrameClaimSchema>;
 
-function hostMessage(workspace: string, handle: string): string {
-  return `kinu:slate-room-host:v1:${workspace}:${handle}`;
-}
-
 function frameMessage(workspace: string, handle: string, payload: string): string {
   return `kinu:slate-room-frame:v1:${workspace}:${handle}:${payload}`;
-}
-
-export async function hostTokenHolds(env: LabelSignerEnv, workspace: string, handle: string, token: string): Promise<boolean> {
-  return await hostSigner.verify(env, hostMessage(workspace, handle), token);
-}
-
-/** `https://<handle>-<token>-<workspace>.<suffix>`, or null where no host suffix or secret is configured. */
-export async function slateHostOrigin(env: LabelSignerEnv & PreviewSuffixEnv & PreviewPortEnv, workspace: string, handle: string): Promise<string | null> {
-  const suffix = previewHostSuffix(env);
-  const secret = hostSigner.secret(env);
-
-  if (suffix === null || secret === undefined || workspaceAddressRefusal(workspace) !== null) return null;
-  const token = await hostSigner.token(secret, hostMessage(workspace, handle));
-  const host = buildSlateShareHost({ handle, token, workspace, suffix });
-
-  return host === null ? null : `https://${host}${previewPortSuffix(env)}`;
 }
 
 async function signedPass(env: LabelSignerEnv, room: { workspace: string; handle: string }, claim: FrameClaim): Promise<string | null> {

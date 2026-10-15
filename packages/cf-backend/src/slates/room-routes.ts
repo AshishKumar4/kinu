@@ -6,13 +6,13 @@
 import { Hono, type Context } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
-import { parseSlateShareLabel, previewHostSuffix, RoomEntrySchema, type RoomEntry } from '@kinu.run/core';
+import { hostTokenHolds, parseSlateShareLabel, previewHostSuffix, RoomEntrySchema, type RoomEntry } from '@kinu.run/core';
 import { requestIdentity, type AuthIdentity } from '../auth/session';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { rawParam, type FamilyEnv } from '../api/context';
 import {
-  cookieForTicket, frameCookieHeader, frameCookieOf, hostTokenHolds, readPass, roomHandle, roomObjectName, ROOM_ENTER_PATH,
+  cookieForTicket, frameCookieHeader, frameCookieOf, readPass, roomHandle, roomObjectName, ROOM_ENTER_PATH,
 } from '@kinu.run/core/slates';
 import { ROOM_HOST_HEADER, ROOM_KEY_HEADER, ROOM_PERSON_HEADER, type RoomVisitor, type SlateRoom } from './room';
 

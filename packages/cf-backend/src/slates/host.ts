@@ -45,10 +45,10 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   /** The block an ephemeral slate's id names, and the author whose authority its page runs with; refused when no stored
    *  answer holds it. */
   messageBlock?(address: EphemeralSlateAddress): Promise<MessageBlock>;
-  /** The slate's room, made on its first need: every slate runs in its room (docs/SLATE-SHARING-SECURITY.md §2.7). */
-  slateRoom(id: string, title: string): Promise<SlateRoomStub>;
-  /** The workspace owner's email, as rooms name people. */
-  ownerEmail(): Promise<string>;
+  /** The slate's room, made on its first need by `owner`: every slate runs in its room (docs/SLATE-SHARING-SECURITY.md §2.7). */
+  slateRoom(id: string, title: string, owner: string): Promise<SlateRoomStub>;
+  /** The workspace owner's email, as rooms name people; null where the workspace has no owner with one. */
+  ownerEmail(): Promise<string | null>;
 }
 
 /** What the host asks of a slate's room. */
@@ -96,7 +96,7 @@ export class SlateHost {
         }
       },
       call: (request) => this.call(request),
-      frame: async (id) => (await this.room(id)).ownerFrame(),
+      frame: (id) => this.ownerFrame(id),
       catalog: () => deps.catalog(),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
@@ -219,13 +219,9 @@ export class SlateHost {
       if (!parsed.success) return yield* new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
 
       // The room needs the slate built and published first.
-      const room = yield* attempt({ doing: `slate ${id}`, otherwise: 'io' }, async () => {
-        await this.ensure(caller, id);
-
-        return this.room(id);
-      });
-
-      const email = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.deps.ownerEmail());
+      yield* attempt({ doing: `slate ${id}`, otherwise: 'io' }, async () => this.ensure(caller, id));
+      const email = yield* this.owner();
+      const room = yield* this.room(id, email);
       const answered = yield* attempt({ doing: `slate ${id}.${method}`, otherwise: 'io' }, async () => room.callAs(email, method, parsed.output));
 
       if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
@@ -251,10 +247,29 @@ export class SlateHost {
     })));
   }
 
-  private async room(id: string): Promise<SlateRoomStub> {
-    const source = await this.slateSources.resolve(CRED_SESSION_USER, id);
+  /** The slate's page in its room, entered as the workspace's owner: what a preview shows. */
+  ownerFrame(id: string): Promise<string> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const room = yield* this.room(id, yield* this.owner());
 
-    return await this.deps.slateRoom(id, slateTitle(source.project, id));
+      return yield* attempt({ doing: `slate ${id}'s page`, otherwise: 'unavailable' }, async () => room.ownerFrame());
+    }));
+  }
+
+  private owner(): Effect.Effect<string, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const owner = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.deps.ownerEmail());
+
+      return owner ?? (yield* new KinuError('unavailable', 'This workspace has no owner to run its slates for'));
+    });
+  }
+
+  private room(id: string, owner: string): Effect.Effect<SlateRoomStub, KinuError> {
+    return attempt({ doing: `slate ${id}'s room`, otherwise: 'unavailable' }, async () => {
+      const source = await this.slateSources.resolve(CRED_SESSION_USER, id);
+
+      return await this.deps.slateRoom(id, slateTitle(source.project, id), owner);
+    });
   }
 
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
@@ -265,18 +280,22 @@ export class SlateHost {
    * `launch` publishes: the slate's good build becomes its room's image, written by the workspace's owner, whose own
    * agent wrote it. The room runs it; nothing of the workspace's does.
    */
-  private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
+  launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
     const { id, source, image } = launch;
-    const title = slateTitle(source.project, id);
-    const room = await this.deps.slateRoom(id, title);
 
-    await room.publish({
-      author: await this.deps.ownerEmail(), image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title,
-      secret: await this.secretIn(source),
-    });
-    const elsewhere = async (): Promise<Response> => { throw new KinuError('unsupported', `Slate ${id} runs in its room`); };
+    return settle(Effect.gen({ self: this }, function* () {
+      const owner = yield* this.owner();
+      const room = yield* this.room(id, owner);
+      const secret = yield* attempt({ doing: `scanning slate ${id} for secrets`, otherwise: 'io' }, async () => this.secretIn(source));
 
-    return { id: `room:${id}`, port: null, methods: [], request: elsewhere, connect: elsewhere, isRunning: async () => true, stop: async () => {} };
+      yield* attempt({ doing: `publishing slate ${id}`, otherwise: 'unavailable' }, async () => room.publish({
+        author: owner, image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title: slateTitle(source.project, id), secret,
+      }));
+      // Nothing of the workspace's serves the slate: its URL and its socket are its room's.
+      const elsewhere = async (): Promise<Response> => new Response(`Slate ${id} runs in its room`, { status: 501 });
+
+      return { id: `room:${id}`, port: null, methods: [], request: elsewhere, connect: elsewhere, isRunning: async () => true, stop: async () => {} };
+    }));
   }
 
   /** The first secret-shaped text in the slate's files: while one is there, its room keeps its link off. */

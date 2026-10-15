@@ -50,8 +50,8 @@ const BODY = 'room-probe-ok';
 /** A room socket: calls answered by id, and every view the room pushed. */
 interface RoomSocket {
   call(call: RoomCall): Promise<RoomServerFrame>;
-  /** The first view the room pushed that `holds`, or null after five seconds. */
-  view(holds: (view: RoomView) => boolean): Promise<RoomView | null>;
+  /** The first view the room pushed that `holds`; the case's own deadline bounds the wait. */
+  view(holds: (view: RoomView) => boolean): Promise<RoomView>;
   close(): void;
 }
 
@@ -89,19 +89,15 @@ function openRoom(origin: string, headers: Readonly<Record<string, string>>, pat
         return await answered.promise;
       },
       view: async (holds) => {
-        const deadline = Date.now() + 5000;
-
         for (;;) {
           const found = views.find(holds);
 
           if (found !== undefined) return found;
-
-          if (Date.now() > deadline) return null;
+          // The next frame the room pushes.
           const woken = Promise.withResolvers<void>();
           const done = () => { waiting.delete(done); woken.resolve(); };
 
           waiting.add(done);
-          setTimeout(done, 250);
           await woken.promise;
         }
       },
@@ -145,8 +141,8 @@ interface HostSession {
   call(method: string, args: unknown[]): Promise<Response | null>;
 }
 
-async function enterHost(view: RoomView | null): Promise<HostSession> {
-  const frame = view?.session.frame ?? '';
+async function enterHost(view: RoomView): Promise<HostSession> {
+  const frame = view.session.frame;
   const entered = frame === '' ? null : await fetch(frame, { redirect: 'manual' });
   const cookie = entered?.headers.get('set-cookie')?.split(';')[0] ?? null;
   const host = frame === '' ? '' : new URL(frame).origin;
@@ -181,8 +177,8 @@ async function usedThenRemoved(room: Room, owner: RoomSocket, people: { recipien
     const afterEntry = await room.entry(people.recipient);
 
     return [used, {
-      what: 'removed-person-is-ended', reached: ended?.ended?.kind === 'removed' && after?.status === 403 && afterEntry.status === 403,
-      detail: JSON.stringify({ ended: ended?.ended ?? null, call: after?.status ?? null, entry: afterEntry.status }),
+      what: 'removed-person-is-ended', reached: ended.ended?.kind === 'removed' && after?.status === 403 && afterEntry.status === 403,
+      detail: JSON.stringify({ ended: ended.ended, call: after?.status ?? null, entry: afterEntry.status }),
     }];
   } finally {
     member.close();

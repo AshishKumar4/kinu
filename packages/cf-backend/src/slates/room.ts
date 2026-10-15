@@ -21,10 +21,10 @@ import {
   RoomClientFrameSchema,
   type JsonValue, type OpsCaller, type PartView, type Repair, type RoomAccess, type RoomAsk, type RoomAudience, type RoomCall,
   type RoomPerson, type RoomReach, type RoomServerFrame, type RoomService, type RoomSource, type RoomView, type SheetView,
-  type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, type TablesAnswer,
+  slateHostOrigin, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, type TablesAnswer,
 } from '@kinu.run/core';
 import {
-  frameTicket, linkKeyHolds, linkUrl, slateHostOrigin, ROOM_ENTER_PATH, type FrameClaim,
+  frameTicket, linkKeyHolds, linkUrl, ROOM_ENTER_PATH, type FrameClaim,
   RoomCaretaker, codecIsFree, flows, initSlateRoomTables, slateAnswer, ROOT_SLATE_CALLER,
   type Access, type Audience, type Codec, type Elem, type Grant, type RoomMember, type Run, type Session, type Tag,
 } from '@kinu.run/core/slates';
@@ -35,8 +35,8 @@ import { callUserMcpTool } from '../user-mcp-call';
 import { codemodeEgress } from '../codemode-egress';
 import { slateBatchStub } from './rpc-transport';
 import type { RoomBindingName, RoomBindingProps } from './room-bindings';
-import type { UserDO } from '../user/user-do';
 import { sealedPart } from './room-parts';
+import type { UserDO } from '../user/user-do';
 
 /** Who a request is, as the Worker's route proved it. */
 export interface RoomVisitor {
@@ -88,9 +88,14 @@ const WorkspaceBody = v.object({ path: v.array(v.string()), args: v.array(JsonVa
 
 const HereBody = v.object({ where: v.nullable(v.string()), typing: v.nullable(v.string()) });
 
-/** The process facet's surface: the runner's own boot, and its HTTP. */
+/** The runner's answer to its boot: its methods, or why its module would not start (`resident.ts`'s runner). */
+const Started = v.object({ methods: v.array(v.string()) });
+
+const NotStarted = v.object({ error: v.string() });
+
+/** The process facet's surface: the runner's own boot (parsed by `Started` or `NotStarted`), and its HTTP. */
 interface ProcessFacet extends Rpc.DurableObjectBranded {
-  startProcess(): Promise<{ ok: true; methods: string[] } | { ok: false; error: string }>;
+  startProcess(): Promise<JsonValue>;
   fetch(request: Request): Promise<Response>;
 }
 
@@ -351,7 +356,10 @@ export class SlateRoom extends DurableObject<Env> {
     return Effect.gen(function* () {
       const started = yield* attempt({ doing: 'starting the slate', otherwise: 'unavailable' }, async () => process.startProcess());
 
-      if (!started.ok) return yield* refuse('bad_input', started.error);
+      if (v.is(Started, started)) return;
+      const failed = v.safeParse(NotStarted, started);
+
+      return yield* refuse('bad_input', failed.success ? failed.output.error : 'The slate\'s runner answered its start with nothing it reads');
     });
   }
 
@@ -413,21 +421,29 @@ export class SlateRoom extends DurableObject<Env> {
     if (host !== null) return settle(this.hostRequest(request, v.parse(HostClaimHeader, JSON.parse(host))));
 
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('Not found', { status: 404 });
-    const header = request.headers.get(ROOM_PERSON_HEADER);
-    const visitor = header === null ? null : v.parse(RoomPersonHeader, JSON.parse(header));
-    const access = await this.access(visitor, request.headers.get(ROOM_KEY_HEADER));
 
-    if (access === null) return new Response('Not shared with you', { status: 403 });
+    return settle(this.socketFor(request));
+  }
 
-    if (visitor !== null && access.kind !== 'link') this.caretaker.named(visitor.email, visitor.name);
-    const pair = new WebSocketPair();
-    const state: SocketState = { email: visitor?.email ?? null, name: visitor?.name ?? null, access, parts: [], where: null, typing: null };
+  /** A person's socket on the room: refused unless they may open it, then every view pushed to it. */
+  private socketFor(request: Request): Effect.Effect<Response, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const header = request.headers.get(ROOM_PERSON_HEADER);
+      const visitor = header === null ? null : v.parse(RoomPersonHeader, JSON.parse(header));
+      const access = yield* Effect.promise(async () => this.access(visitor, request.headers.get(ROOM_KEY_HEADER)));
 
-    this.ctx.acceptWebSocket(pair[1]);
-    pair[1].serializeAttachment(state);
-    await settle(this.broadcast());
+      if (access === null) return new Response('Not shared with you', { status: 403 });
 
-    return new Response(null, { status: 101, webSocket: pair[0] });
+      if (visitor !== null && access.kind !== 'link') this.caretaker.named(visitor.email, visitor.name);
+      const pair = new WebSocketPair();
+      const state: SocketState = { email: visitor?.email ?? null, name: visitor?.name ?? null, access, parts: [], where: null, typing: null };
+
+      this.ctx.acceptWebSocket(pair[1]);
+      pair[1].serializeAttachment(state);
+      yield* this.broadcast();
+
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    });
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {

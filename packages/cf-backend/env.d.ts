@@ -10,7 +10,6 @@ import type { CodemodeEgress } from "./src/codemode-egress";
 import type { CodemodeLauncher } from "./src/codemode-sandbox";
 import type { KinuEgress } from "./src/server";
 import type { AgentIsolateTail, AgentWorkspaceRPC } from "./src/agent-facets";
-import type { SlateBinding } from "./src/slates/bindings";
 import type { RoomBinding } from "./src/slates/room-bindings";
 import type { MossaicShardDO, MossaicUserDO } from "./src/server";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
@@ -152,7 +151,6 @@ declare global {
         CodemodeEgress: typeof CodemodeEgress;
         CodemodeLauncher: typeof CodemodeLauncher;
         KinuEgress: typeof KinuEgress;
-        SlateBinding: typeof SlateBinding;
         RoomBinding: typeof RoomBinding;
         default: ExportedHandler<Env>;
       };

@@ -306,6 +306,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
 
     await userDO.registerWorkspace(caller, workspace, 'Durability Probe');
+    // Every slate runs in its room, which names its owner by email.
+    await userDO.ensureProfile(caller, `${owner}@probe.local`);
     const claim = await target.claimOwner(owner);
 
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);

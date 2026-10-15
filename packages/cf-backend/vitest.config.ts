@@ -260,6 +260,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           modules: probeModules('plan-announce-probe.ts', { ...probeRuntime, keepNames: true }),
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
             USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', useSQLite: true },
           },
@@ -302,6 +303,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -320,6 +322,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             HIRE_PROBE: { className: 'HireProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -343,6 +346,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -357,6 +361,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           // The probe is this script's account object, so its workspaces reach it as `env.UserDO`.
           UserDO: { className: 'UserDO', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
         }, })],
 ['account-reset-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-reset-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
         // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
@@ -367,6 +372,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         durableObjects: {
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
 ["store-reset-probe", async () => ({
@@ -382,6 +388,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -394,6 +401,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         durableObjects: {
           ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
 ['agent-facet-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('agent-facet-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
@@ -403,6 +411,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         durableObjects: {
           AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
 ['attribution-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('attribution-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YXR0cmlidXRpb24tcHJvYmUtY3JlZC1rZXktMzJieXQ=' },
@@ -410,6 +419,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         durableObjects: {
           ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
 ["public-surface-probe", async () => ({
@@ -429,6 +439,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           outboundService: probeOutbound,
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],

@@ -66,7 +66,6 @@ export { CodemodeEgress } from "./codemode-egress";
 
 export { CodemodeLauncher } from "./codemode-sandbox";
 
-export { SlateBinding } from "./slates/bindings";
 
 export { DevboxGateway } from '@kinu.run/devbox';
 

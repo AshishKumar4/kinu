@@ -2130,6 +2130,8 @@ export {
   buildSlateShareHost, parseSlateShareLabel,
 } from './preview/slate-share-host';
 
+export { hostTokenHolds, slateHostOrigin } from './preview/slate-room-host';
+
 export {
   PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
   isPreviewUrl, previewHostSuffix, previewPortSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,

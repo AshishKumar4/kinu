@@ -1162,6 +1162,10 @@
     "sink TEXT NOT NULL",
     "gen INTEGER NOT NULL"
   ],
+  "room_images@packages/core/src/slates/room/caretaker.ts": [
+    "image TEXT PRIMARY KEY",
+    "modules TEXT NOT NULL"
+  ],
   "room_lend_uses@packages/core/src/slates/room/caretaker.ts": [
     "fn TEXT NOT NULL",
     "email TEXT NOT NULL",

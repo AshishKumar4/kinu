@@ -28,12 +28,17 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
     link INTEGER NOT NULL,
     link_gen INTEGER NOT NULL,
     image TEXT,
-    modules TEXT,
     image_author TEXT,
     secret TEXT,
     foreign_code INTEGER NOT NULL,
     parent TEXT,
     next INTEGER NOT NULL
+  )`);
+  // Each image the slate was published at: its modules by content digest, as its workspace stores them. Keyed by the
+  // image, so the room's image and the modules it runs can never describe two builds.
+  execRaw(`CREATE TABLE IF NOT EXISTS room_images (
+    image TEXT PRIMARY KEY,
+    modules TEXT NOT NULL
   )`);
   // name: a display copy, written when the person opens the slate; NULL while only invited.
   execRaw(`CREATE TABLE IF NOT EXISTS room_members (
@@ -296,14 +301,14 @@ export class RoomCaretaker {
   }): void {
     if (this.maybeRoom() !== null) return;
     this.db.exec(
-      'INSERT INTO room (id, workspace, slate, title, link, link_gen, image, modules, image_author, secret, foreign_code, parent, next) VALUES (1, ?, ?, ?, 0, 0, NULL, NULL, NULL, NULL, ?, ?, 1)',
+      'INSERT INTO room (id, workspace, slate, title, link, link_gen, image, image_author, secret, foreign_code, parent, next) VALUES (1, ?, ?, ?, 0, 0, NULL, NULL, NULL, ?, ?, 1)',
       input.workspace, input.slate, input.title, input.parent === null ? 0 : 1, input.parent,
     );
     this.db.exec("INSERT INTO room_members (email, name, role, gen) VALUES (?, NULL, 'owner', 0)", input.owner);
   }
 
   private maybeRoom(): RoomRecord | null {
-    const row = this.db.exec('SELECT * FROM room WHERE id = 1').toArray()[0];
+    const row = this.db.exec('SELECT room.*, room_images.modules AS modules FROM room LEFT JOIN room_images ON room_images.image = room.image WHERE id = 1').toArray()[0];
 
     if (row === undefined) return null;
     const parsed = v.parse(RoomRow, row);
@@ -487,9 +492,10 @@ export class RoomCaretaker {
       const { image, title, secret } = built;
 
       if (this.room().image === image) return;
+      this.db.exec('INSERT OR IGNORE INTO room_images (image, modules) VALUES (?, ?)', image, JSON.stringify(built.modules));
       this.db.exec(
-        'UPDATE room SET image = ?, modules = ?, image_author = ?, title = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
-        image, JSON.stringify(built.modules), author, title, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
+        'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
+        image, author, title, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
       );
       this.db.exec('UPDATE room_grants SET image = ? WHERE holder = ?', image, author);
 

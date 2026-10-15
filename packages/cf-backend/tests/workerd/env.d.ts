@@ -29,7 +29,7 @@ import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { CodemodeLauncher } from '../../src/codemode-sandbox';
-import type { SlateBinding } from '../../src/slates/bindings';
+import type { RoomBinding } from '../../src/slates/room-bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
@@ -468,7 +468,7 @@ declare global {
     /** `exports.CodemodeEgress` is a loopback stub here as in production. */
     interface GlobalProps {
       mainModule: {
-        SlateBinding: typeof SlateBinding;
+        RoomBinding: typeof RoomBinding;
         CodemodeEgress: typeof CodemodeEgress;
         CodemodeLauncher: typeof CodemodeLauncher;
         SlateChainProbe: typeof SlateChainProbe;
