@@ -157,9 +157,8 @@ export {
   WORKSPACE_ARCHIVE_EXTENSION,
   readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
   ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
-  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveFilesCursor, type ArchiveAgentPage,
-  type ArchiveExportOptions, type ArchivePage,
-  type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
+  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveAgentPage,
+  type ArchiveExportOptions, type ArchivePage, type ArchiveStoreSource,
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive';
 
@@ -1148,7 +1147,7 @@ export type {
 
 export {
   workspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
-  workspaceArchiveStore, workspaceArchiveTarget, archiveFileTree,
+  workspaceArchiveStore, workspaceArchiveTarget,
 } from './vfs/workspace-planes';
 
 

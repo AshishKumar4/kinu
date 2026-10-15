@@ -22,8 +22,8 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import {
-  FloorBreachSchema, MeasuredValueSchema,
-  type FloorBreach, type MeasuredValue, type ParetoAxis, type ParetoEvidence, type PublicationState,
+  FloorBreachSchema, MeasuredValueSchema, isBetter,
+  type FloorBreach, type MeasuredValue, type ObjectiveDirection, type ParetoAxis, type ParetoEvidence, type PublicationState,
 } from './objective';
 import type { SwarmProfileSnapshot } from '../profiles';
 import type { SwarmCandidate } from './swarm';
@@ -95,6 +95,34 @@ export function outcomeFacts(outcome: SettledChildOutcome | null): Omit<SwarmCan
     rank: outcome?.kind === 'scored' ? outcome.measurement.value : score,
     ensemble: outcome?.kind === 'judged' ? outcome.ensemble : 0,
   };
+}
+
+/** A search's running verdict over its candidates: the seal, the winner and the rank it won on, the judge ensembles. */
+export interface CandidateFold {
+  publication: PublicationState;
+  best: { readonly candidate: SwarmCandidate; readonly rank: number } | null;
+  readonly ensembles: number[];
+}
+
+/** Folds one candidate's facts in: replay and live scoring both call it, so a re-entry continues the same verdict. */
+export function foldCandidate(
+  fold: CandidateFold,
+  candidate: SwarmCandidate,
+  facts: Pick<ReturnType<typeof outcomeFacts>, 'breach' | 'rank' | 'ensemble'>,
+  direction: ObjectiveDirection,
+): void {
+  if (facts.breach !== null) fold.publication = { kind: 'sealed', breach: facts.breach };
+
+  if (facts.ensemble > 0) fold.ensembles.push(facts.ensemble);
+
+  if (facts.rank !== null && (fold.best === null || isBetter(facts.rank, fold.best.rank, direction))) {
+    fold.best = { candidate, rank: facts.rank };
+  }
+}
+
+/** The fold's winning candidate, or null while none has ranked. */
+export function foldWinner(fold: CandidateFold): SwarmCandidate | null {
+  return fold.best === null ? null : fold.best.candidate;
 }
 
 /**

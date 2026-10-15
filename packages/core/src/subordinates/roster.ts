@@ -12,7 +12,7 @@ import { seekPage, StaleCursorError, type Page, type PageRequest } from '../sess
 import { boundedInt } from '../utils/bounds';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SubordinateReportOrigin } from './support';
-import type { SubordinateRosterEntry, SubordinateStatus } from '../delegation/agents-tool';
+import { SUBORDINATE_STATUSES, type SubordinateRosterEntry, type SubordinateStatus } from '../delegation/agents-tool';
 import { SUBORDINATE_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles, type TaskTurnEnding } from './temporary';
 import { ActorReferenceSchema, sameActorReference, type ActorReference } from '../identity/actor-handle';
 import { SubordinateBirthSchema } from './birth';
@@ -50,7 +50,7 @@ export const SubordinateRosterEntrySchema = v.object({
   birth: v.nullable(SubordinateBirthSchema),
   deleteRequested: v.boolean(),
   origin: v.picklist(['user', 'agent', 'evolution']),
-  status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
+  status: v.picklist(SUBORDINATE_STATUSES),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),
   dismissedAt: v.nullable(v.number()),

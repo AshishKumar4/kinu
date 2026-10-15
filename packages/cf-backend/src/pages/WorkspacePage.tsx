@@ -14,7 +14,7 @@ import {
 } from "@kinu.run/core";
 import type { OwedOwnerIntent, PlanReview, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
-import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import type { SubordinateView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
@@ -407,7 +407,7 @@ function planOwnerName(subName: string | undefined, agentId: string | undefined)
 function AgentChatColumn({ workspace, subName, subordinates, rpc, ids, input }: {
   workspace: string;
   subName: string;
-  subordinates: readonly SubordinateRosterEntry[];
+  subordinates: readonly SubordinateView[];
   rpc: WorkspaceRpc;
   ids: AgentLinkIds;
   input: boolean;

@@ -33,7 +33,7 @@ import type {
   PublishingCarry,
 } from './objective';
 import { isTreeAdvance } from './swarm';
-import { markSwarmNodeMerged } from './swarm-resume';
+import { foldWinner, markSwarmNodeMerged } from './swarm-resume';
 import { createLevelFanIn } from './fanin';
 import type {
   ResolvedSwarm, SwarmCandidate, SwarmResult,
@@ -253,12 +253,7 @@ export async function runSwarm(
   candidates.push(...seeded.candidates);
 
   /** The state `scoreExpansion` moves, seeded from the re-entry. */
-  const scoringState = {
-    publication: seeded.publication,
-    best: seeded.best,
-    bestValue: seeded.bestValue,
-    ensembles: [...seeded.ensembles],
-  };
+  const scoringState = seeded.fold;
 
   const { inheritedExpansions, inheritedTokens } = seeded;
   // Expansion budget in children: `depth` waves of `branches`, derived from the two declared caps.
@@ -601,7 +596,7 @@ export async function runSwarm(
   return settleRun({
     started, log, sql, actor: deps.rt.actor, resolved, rootId, maxDepth, branches, policy,
     paretoAxes: pareto?.axes ?? null, ctx, verifier, measured, baseline, identity,
-    publishing, archive, publication: scoringState.publication, candidates, best: scoringState.best,
+    publishing, archive, publication: scoringState.publication, candidates, best: foldWinner(scoringState),
     usage, judgeSamples, ensembles: scoringState.ensembles, spentBy, carriedIn, carriedBest,
     levelFanIn, reentry,
     aborted, missionSpent, lost, remainingBudget: budget.remaining, expansionBudget,
