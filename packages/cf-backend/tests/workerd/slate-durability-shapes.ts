@@ -8,11 +8,9 @@ export interface DurabilityReservation {
   readonly capability: string | null;
 }
 
+/** A slate served from its room: the address of its page in a frame, as the owner's preview shows it. */
 export interface ServedSlate {
   readonly url: string;
-  readonly port: number;
-  readonly capability: string;
-  readonly reservations: readonly DurabilityReservation[];
 }
 
 export interface PreviewAnswer {
@@ -20,7 +18,7 @@ export interface PreviewAnswer {
   readonly body: string;
 }
 
-/** One authored method called through the durable URL's `/__rpc` socket. */
+/** One authored method called from the slate's page, through its room. */
 export interface RpcAnswer {
   readonly ok: boolean;
   readonly value?: string;

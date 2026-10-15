@@ -89,6 +89,17 @@ roomRoutes.get('/api/rooms/:workspace/:slate', async (c) => {
   return await room.fetch(new Request(c.req.raw, { headers }));
 });
 
+/** The slate's page in a frame: the visitor, as the app knows them, sent on to the slate's own host with a ticket. */
+roomRoutes.get('/api/rooms/:workspace/:slate/frame', async (c) => {
+  const { workspace, slate } = addressOf(c);
+  const signed = await visitorOf(c.req.raw, c.env);
+  const entered = await roomOf(c.env, workspace, slate).ticketFor(signed?.visitor ?? null, new URL(c.req.url).searchParams.get('k'));
+
+  if (entered === null) return new Response(signed === null ? 'Sign in to open this slate.' : 'This slate is not shared with you.', { status: signed === null ? 401 : 403, headers: NO_STORE });
+
+  return new Response(null, { status: 303, headers: { ...NO_STORE, location: entered } });
+});
+
 /** A part's sealed content: the room renders what this ticket's session may see, with no script and nothing to reach. */
 roomRoutes.get('/api/rooms/:workspace/:slate/parts/:part/content', async (c) => {
   const { workspace, slate } = addressOf(c);

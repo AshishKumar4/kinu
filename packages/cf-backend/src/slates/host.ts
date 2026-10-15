@@ -41,6 +41,7 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   readonly apps: SlateApps;
   catalog(): Promise<SlateSurfaceCatalog>;
   forgetPicture?(slate: string): Promise<void>;
+  forgetRoom?(slate: string): Promise<void>;
   previewed?(slate: string): void;
   /** The block an ephemeral slate's id names, and the author whose authority its page runs with; refused when no stored
    *  answer holds it. */
@@ -56,7 +57,7 @@ export interface SlateRoomStub {
   publish(input: {
     readonly author: string; readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string;
     readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null;
-  }): Promise<void>;
+  }): Promise<{ readonly methods: readonly string[] }>;
   callAs(email: string | null, fn: string, args: JsonValue[]): Promise<SlateAnswer<RoomCallOutcome>>;
   ownerFrame(): Promise<string>;
 }
@@ -99,6 +100,7 @@ export class SlateHost {
       frame: (id) => this.ownerFrame(id),
       catalog: () => deps.catalog(),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
+      ...(deps.forgetRoom !== undefined && { forgetRoom: deps.forgetRoom.bind(deps) }),
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
     });
     this.resident = new ResidentSlateProcesses({
@@ -288,13 +290,14 @@ export class SlateHost {
       const room = yield* this.room(id, owner);
       const secret = yield* attempt({ doing: `scanning slate ${id} for secrets`, otherwise: 'io' }, async () => this.secretIn(source));
 
-      yield* attempt({ doing: `publishing slate ${id}`, otherwise: 'unavailable' }, async () => room.publish({
+      const { methods } = yield* attempt({ doing: `publishing slate ${id}`, otherwise: 'unavailable' }, async () => room.publish({
         author: owner, image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title: slateTitle(source.project, id), secret,
       }));
+
       // Nothing of the workspace's serves the slate: its URL and its socket are its room's.
       const elsewhere = async (): Promise<Response> => new Response(`Slate ${id} runs in its room`, { status: 501 });
 
-      return { id: `room:${id}`, port: null, methods: [], request: elsewhere, connect: elsewhere, isRunning: async () => true, stop: async () => {} };
+      return { id: `room:${id}`, port: null, methods: [...methods], request: elsewhere, connect: elsewhere, isRunning: async () => true, stop: async () => {} };
     }));
   }
 

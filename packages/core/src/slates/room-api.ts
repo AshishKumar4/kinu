@@ -366,6 +366,11 @@ export function roomForkPath(workspace: string, slate: string): string {
   return `${roomSocketPath(workspace, slate)}/fork`;
 }
 
+/** The slate's page in a frame: the app knows its visitor and sends them on to the slate's own host as themselves. */
+export function roomFramePath(workspace: string, slate: string): string {
+  return `${roomSocketPath(workspace, slate)}/frame`;
+}
+
 /** A part's frame: the app's page for one part, embedded by the slate's own page. */
 export function roomPartPath(workspace: string, slate: string, part: string): string {
   return `/s/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}/parts/${encodeURIComponent(part)}`;

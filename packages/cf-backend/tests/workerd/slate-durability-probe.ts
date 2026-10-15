@@ -4,19 +4,15 @@
  * trigger and the observation, and for the keep-alive its isolate's clock.
  */
 import { Agent, getAgentByName, type AgentContext } from 'agents';
-import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { newWebSocketRpcSession, type RpcStub } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
-import { handleNimbusPreviewHostRequest, previewEntry, previewRefusalText } from '../../src/nimbus-route';
-import { previewViewerKey, selfPreviewPass, viewerCookieResponse } from '../../src/viewer-pass';
-import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH } from '@kinu.run/core';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { cookieForTicket, frameTicket, roomHandle, roomObjectName, ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { handleSlateRoomHostRequest } from '../../src/slates/room-routes';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
@@ -38,13 +34,8 @@ import type {
 // probe that retargets the class measures its own fixture (as in slate-actor-probe.ts).
 export * from '../../src/server';
 
-// A build-mode resident refuses to boot without a `globalOutbound`: `CodemodeEgress` is that
-// loopback.
-
-
-export class CodemodeEgress extends WorkerEntrypoint {
-  override async fetch(): Promise<Response> { return new Response('network allowed'); }
-}
+// The production `CodemodeEgress` (through `export *` above): a slate's shared server fetches through the real policy,
+// over this worker's fake far side (vitest.config.ts `egressFake`).
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
@@ -204,33 +195,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
   readonly OrchestratorAgent: DurableObjectNamespace<ObservedOrchestrator>;
 }
 
-const PreviewValueSchema = v.object({ url: v.string(), port: v.number() });
-
-type PreviewRpc = Record<string, (...input: JsonValue[]) => Promise<JsonValue>>;
-
-/** A page's `/__rpc` socket through the preview edge, and the slate's methods over it. */
-interface PreviewSocket {
-  readonly socket: WebSocket;
-  readonly stub: RpcStub<PreviewRpc>;
-}
-
-async function calledOver(stub: RpcStub<PreviewRpc>, method: string, args: JsonValue[]): Promise<RpcAnswer> {
-  try {
-    const raw = await stub[method](...args);
-
-    return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
-  } catch (cause) {
-    return { ok: false, error: renderThrownChain({ cause }) };
-  }
-}
-
-/**
- * The clock this isolate's objects read, as a test moves it: Nimbus's keep-alive reads `Date.now()` and is handed no clock,
- * and the pool's fake timers reach only the runner's isolate.
- */
-const platformNow = Date.now.bind(Date);
-
-let advancedMs = 0;
+const PreviewValueSchema = v.object({ url: v.string() });
 
 /** The end of a shell prompt: its OSC 133;B semantic mark (FinalTerm), which the runtime shell writes after each. */
 const PROMPT_END_MARK = '\u001b]133;B\u0007';
@@ -294,6 +259,38 @@ const GraphValueSchema = v.object({
 
 /** Every call names the workspace, so nothing the test holds pins this object across
  *  `abortAllDurableObjects()`. */
+/** Fetches what it is asked to; `confined` reads the owner's workspace first, so the room runs it confined. */
+const EGRESS_SLATE = [
+  'import { SlateObject } from "kinu:slate";',
+  'async function fetched(target, redirect) {',
+  '  try {',
+  '    const response = await fetch(target, { redirect });',
+  '    return { status: response.status, location: response.headers.get("location"), body: await response.text() };',
+  '  } catch (cause) { return { error: String(cause) }; }',
+  '}',
+  'export class Slate extends SlateObject {',
+  '  async shared(target, redirect) { return fetched(target, redirect); }',
+  '  async confined(target, redirect) {',
+  '    await this.env.workspace.readFile("/slates/network/package.json");',
+  '    return fetched(target, redirect);',
+  '  }',
+  '}',
+].join('\n');
+
+/** A page's call answered through its room: a value, a part, or a refusal (`room.ts`). */
+const PageCallAnswer = v.union([
+  v.object({ ok: v.literal(true), value: v.union([v.object({ value: v.unknown() }), v.object({ part: v.unknown() })]) }),
+  v.object({ ok: v.literal(false), error: v.string() }),
+]);
+
+/** The host-only cookie a slate's host reads (`passes.ts`). */
+const ROOM_COOKIE = '__Host-kinu_room';
+
+/** A probe account's email, as its room names it. */
+function probeEmail(owner: string): string {
+  return `${owner}@probe.local`;
+}
+
 export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   private workspaceTarget(workspace: string): Promise<SlateTarget> {
     return getAgentByName<ProbeEnv, ObservedOrchestrator>(this.env.OrchestratorAgent, workspace);
@@ -307,7 +304,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     await userDO.registerWorkspace(caller, workspace, 'Durability Probe');
     // Every slate runs in its room, which names its owner by email.
-    await userDO.ensureProfile(caller, `${owner}@probe.local`);
+    await userDO.ensureProfile(caller, probeEmail(owner));
+    this.ctx.storage.kv.put(`owner:${workspace}`, probeEmail(owner));
     const claim = await target.claimOwner(owner);
 
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -364,20 +362,19 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: input.id });
 
     if (!preview.ok) throw new Error(`slate preview refused: ${preview.reason}: ${preview.error}`);
-    const value = v.parse(PreviewValueSchema, preview.value);
 
-    const held = (await target.portReservations()).find((row) => row.owner === input.id);
+    return { url: v.parse(PreviewValueSchema, preview.value).url };
+  }
 
-    if (held === undefined) throw new Error(`no port reservation for ${input.id}`);
+  /** The agent changes what a served slate's page says, reading its server first as an agent must; the next call builds it. */
+  async rebuildSlate(input: { workspace: string; id: string; body: string }): Promise<void> {
+    const path = `/slates/${input.id}/server.ts`;
 
-    if (held.capability === null) throw new Error(`the reservation for ${input.id} holds no capability`);
-
-    return {
-      url: value.url,
-      port: value.port,
-      capability: held.capability,
-      reservations: await target.portReservations(),
-    };
+    await (await this.workspaceTarget(input.workspace)).runProgram([
+      `const source = await workspace.readFile(${JSON.stringify(path)});`,
+      `await workspace.writeFile(${JSON.stringify(path)}, source.replace(/new Response\\(.*\\)/u, ${JSON.stringify(`new Response(${JSON.stringify(input.body)})`)}));`,
+      'return null;',
+    ].join('\n'));
   }
 
   /** Authors a whiteboard slate whose class stores strokes, then runs `program` through the workspace's `eval`. */
@@ -402,6 +399,38 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     ].join('\n'));
 
     return target.runProgram(input.program);
+  }
+
+  /**
+   * A slate whose methods fetch: from its shared server as they are, and from a confined run once a call has read the
+   * owner's workspace. Each answer is what the slate's own fetch saw.
+   */
+  async egressSlate(input: { workspace: string; owner: string; calls: readonly { method: 'shared' | 'confined'; target: string; redirect?: RequestRedirect }[] }): Promise<string[]> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/network/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Network' } }));
+    await this.writeSlateFile(target, '/slates/network/server.ts', EGRESS_SLATE);
+    const owned = workspaceOwner(this.env, input.workspace);
+    const answers: string[] = [];
+
+    for (const call of input.calls) {
+      const answered = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'network', method: call.method, args: [call.target, call.redirect ?? 'follow'] });
+
+      answers.push(JSON.stringify(answered.ok ? answered.value : { error: answered.error }));
+    }
+
+    return answers;
+  }
+
+  /** A Plan caller's call of a slate method: refused before anything runs. */
+  async planCall(input: { workspace: string; owner: string }): Promise<{ ok: boolean; reason: string | null }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    const answered = await workspaceOwner(this.env, input.workspace).slateAs({ ...ROOT_SLATE_CALLER, workMode: 'plan' }, { op: 'call', id: 'network', method: 'shared' });
+
+    return { ok: answered.ok, reason: answered.ok ? null : answered.reason };
   }
 
   /** The owner's program makes the crafted tool `helper`, then runs it through the `runner` slate's class. */
@@ -451,7 +480,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'lilt' });
     const shown = preview.ok ? v.parse(v.object({ url: v.string(), broken: v.optional(v.string()) }), preview.value) : null;
-    const client = shown === null ? null : await this.drivePreview(new URL('/__kinu/client.js', shown.url).href);
+    const client = shown === null ? null : await this.drivePreview(shown.url, '/__kinu/client.js');
 
     return {
       wrote, preview: shown === null ? `refused: ${preview.ok ? '' : preview.error}` : shown.broken ?? 'builds',
@@ -564,13 +593,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return { before, after, says: called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}` };
   }
 
-  async portReservations(workspace: string): Promise<DurabilityReservation[]> {
-    return (await this.workspaceTarget(workspace)).portReservations();
-  }
 
-  async forgetActivation(workspace: string): Promise<void> {
-    await (await this.workspaceTarget(workspace)).forgetActivation();
-  }
 
   async pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }> {
     return (await this.workspaceTarget(workspace)).pendingNimbusTasks();
@@ -580,153 +603,105 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return (await this.workspaceTarget(workspace)).executorRows();
   }
 
-  /** The workspace's own pass to its preview (`selfPreviewPass`): what its own browsers and fetches carry. */
-  private async selfPass(url: string): Promise<Record<string, string>> {
-    const at = new URL(url);
-    const workspace = parseWorkspacePreviewLabel(at.hostname.split('.')[0] ?? '')?.workspace ?? '';
-    const pass = await selfPreviewPass(this.env, workspace, at);
+  /** The room a frame address names, `/api/rooms/<workspace>/<slate>/frame`. */
+  private roomOf(url: string) {
+    const [, , , workspace = '', slate = ''] = new URL(url).pathname.split('/').map((part) => decodeURIComponent(part));
+    const owner = this.ctx.storage.kv.get(`owner:${workspace}`);
 
-    if (pass === null) throw new Error(`no pass of its own for ${url}`);
-
-    return { cookie: `${pass.name}=${pass.value}` };
+    return {
+      workspace, slate, owner: typeof owner === 'string' ? owner : null,
+      stub: this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, roomHandle(workspace, slate)))),
+    };
   }
 
-  /** The workspace itself reading its preview. A `null` answer is the edge declining the hostname, a fixture fault, so it throws. */
-  async drivePreview(url: string): Promise<PreviewAnswer> {
-    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers: await this.selfPass(url) }), this.env);
+  /** `email` entering the slate's own host as the app's frame route sends them: their ticket, then the host's cookie. */
+  private async enter(url: string, email: string | null): Promise<{ readonly host: string; readonly cookie: string } | { readonly refused: number }> {
+    const entered = await this.roomOf(url).stub.ticketFor(email === null ? null : { email, name: email }, null);
 
-    if (response === null) throw new Error(`the preview edge declined ${url}`);
+    if (entered === null) return { refused: email === null ? 401 : 403 };
+    const exchange = await handleSlateRoomHostRequest(new Request(entered), this.env);
+    const cookie = exchange?.headers.get('set-cookie')?.split(';')[0];
+
+    if (cookie === undefined) throw new Error(`the slate's host set no cookie for ${entered}`);
+
+    return { host: new URL(entered).origin, cookie };
+  }
+
+  /** The owner's page, or `path` on the slate's own host, as the owner's frame shows it. */
+  async drivePreview(url: string, path = '/'): Promise<PreviewAnswer> {
+    const entered = await this.enter(url, this.roomOf(url).owner);
+
+    if ('refused' in entered) return { status: entered.refused, body: '' };
+    const response = await handleSlateRoomHostRequest(new Request(`${entered.host}${path}`, { headers: { cookie: entered.cookie } }), this.env);
+
+    if (response === null) throw new Error(`the slate's host declined ${entered.host}`);
 
     return { status: response.status, body: await response.text() };
   }
 
-  /** A visitor's request to a preview that carries only `headers`: what someone who holds the URL alone is answered. */
+  /** Someone who holds the slate's host and nothing else: no ticket, no cookie. */
   async visitPreview(url: string, headers: Record<string, string>): Promise<PreviewAnswer & { location: string | null }> {
-    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers }), this.env);
+    const entered = await this.enter(url, this.roomOf(url).owner);
 
-    if (response === null) throw new Error(`the preview edge declined ${url}`);
+    if ('refused' in entered) throw new Error(`the owner could not enter ${url}`);
+    const response = await handleSlateRoomHostRequest(new Request(`${entered.host}/`, { headers }), this.env);
+
+    if (response === null) throw new Error(`the slate's host declined ${entered.host}`);
 
     return { status: response.status, body: await response.text(), location: response.headers.get('location') };
   }
 
-  /**
-   * `userId` opening the preview as their browser does: the preview's host sends them to the app's entry, which knows
-   * them (here, `userId` stands for the app's sign-in), and the entry's ticket becomes the host's cookie.
-   */
+  /** `userId`'s account opening the slate's frame: the room says whether they may, and their page if so. */
   async visitPreviewAs(url: string, userId: string): Promise<PreviewAnswer & { entry: number }> {
-    const entry = await previewEntry(new Request(`https://app.test${PREVIEW_ENTRY_PATH}?to=${encodeURIComponent(url)}`), this.env, userId);
-    const exchangeAt = entry.headers.get('location');
+    const entered = await this.enter(url, probeEmail(userId));
 
-    if (entry.status !== 303 || exchangeAt === null) return { entry: entry.status, status: entry.status, body: await entry.text() };
-    const exchange = await handleNimbusPreviewHostRequest(new Request(exchangeAt), this.env);
-    const cookie = exchange?.headers.get('set-cookie')?.split(';')[0];
-    const next = exchange?.headers.get('location');
+    if ('refused' in entered) return { entry: entered.refused, status: entered.refused, body: '' };
+    const page = await handleSlateRoomHostRequest(new Request(`${entered.host}/`, { headers: { cookie: entered.cookie } }), this.env);
 
-    if (cookie === undefined || next === null || next === undefined) throw new Error(`the exchange at ${exchangeAt} set no cookie`);
-    const page = await handleNimbusPreviewHostRequest(new Request(new URL(next, url), { headers: { cookie, 'sec-fetch-mode': 'navigate' } }), this.env);
+    if (page === null) throw new Error(`the slate's host declined ${entered.host}`);
 
-    if (page === null) throw new Error(`the preview edge declined ${url}`);
-
-    return { entry: entry.status, status: page.status, body: await page.text() };
+    return { entry: 303, status: page.status, body: await page.text() };
   }
 
-  /** What a preview tells a visitor it does not admit, as text and as the entry page writes it. */
-  refusalText(slate: boolean) {
-    return { text: previewRefusalText(slate), html: escapeHtml(previewRefusalText(slate)) };
-  }
-
-  /** A visitor carrying a valid viewer cookie for this preview minted for `userId`, as if they had once owned it. */
+  /** A well-signed cookie naming `userId` as a member, as if they once were: the room asks again and finds no such session. */
   async visitPreviewWithCookieOf(url: string, userId: string): Promise<PreviewAnswer> {
-    const at = new URL(url);
-    const preview = parseWorkspacePreviewLabel(at.hostname.split('.')[0] ?? '');
+    const owner = await this.enter(url, this.roomOf(url).owner);
 
-    if (preview === null) throw new Error(`${url} is no preview`);
-    const issued = await viewerCookieResponse(this.env, { workspace: preview.workspace, handle: previewViewerKey(preview.port, preview.handle), subject: userId }, '/');
-    const cookie = issued.headers.get('set-cookie')?.split(';')[0] ?? '';
-    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers: { cookie } }), this.env);
+    if ('refused' in owner) throw new Error(`the owner could not enter ${url}`);
+    const { workspace, slate } = this.roomOf(url);
+    const room = { workspace, handle: roomHandle(workspace, slate) };
+    const ticket = await frameTicket(this.env, room, { email: probeEmail(userId), access: { kind: 'member', gen: 0 } });
+    const cookie = ticket === null ? null : await cookieForTicket(this.env, room, ticket);
 
-    if (response === null) throw new Error(`the preview edge declined ${url}`);
+    if (cookie === null) throw new Error('no cookie could be signed');
+    const response = await handleSlateRoomHostRequest(new Request(`${owner.host}/`, { headers: { cookie: `${ROOM_COOKIE}=${cookie}` } }), this.env);
+
+    if (response === null) throw new Error(`the slate's host declined ${owner.host}`);
 
     return { status: response.status, body: await response.text() };
   }
 
-  /** Uses the WebSocket arm: a 101 cannot cross the RPC boundary the plain drive uses. */
+  /** The owner's page calling the slate's `method` through its room, as `slate.method(...args)` on the page does. */
   async rpcPreview(url: string, method: string, args: JsonValue[] = []): Promise<RpcAnswer> {
-    const opened = await this.previewSocket(url);
+    const entered = await this.enter(url, this.roomOf(url).owner);
 
-    if ('refused' in opened) return { ok: false, error: opened.refused };
+    if ('refused' in entered) return { ok: false, error: `refused ${String(entered.refused)}` };
 
-    try {
-      return await calledOver(opened.stub, method, args);
-    } finally {
-      opened.socket.close();
-    }
+    const response = await handleSlateRoomHostRequest(new Request(`${entered.host}/__kinu/call`, {
+      method: 'POST', headers: { cookie: entered.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ method, args }),
+    }), this.env);
+
+    const answer = v.parse(PageCallAnswer, await response?.json());
+
+    if (!answer.ok) return { ok: false, error: answer.error };
+
+    return 'value' in answer.value ? { ok: true, value: JSON.stringify(answer.value.value) } : { ok: false, error: 'answered a part' };
   }
 
-  /** A page's `/__rpc` socket held open across calls, as an open tab holds it. */
-  private heldPreview: PreviewSocket | undefined;
 
-  async holdPreview(url: string): Promise<RpcAnswer> {
-    const opened = await this.previewSocket(url);
-
-    if ('refused' in opened) return { ok: false, error: opened.refused };
-    this.heldPreview = opened;
-
-    return { ok: true };
-  }
-
-  async callHeldPreview(method: string): Promise<RpcAnswer> {
-    if (this.heldPreview === undefined) throw new Error('no preview socket is held');
-
-    return await calledOver(this.heldPreview.stub, method, []);
-  }
-
-  /** Closes the held socket as a closed tab does; answers once the far end's close has come back through the relay. */
-  async closeHeldPreview(): Promise<{ code: number }> {
-    if (this.heldPreview === undefined) throw new Error('no preview socket is held');
-    const { socket } = this.heldPreview;
-
-    const closed = new Promise<number>((resolve) => {
-      socket.addEventListener('close', (event) => { resolve(event.code); });
-    });
-
-    socket.close(1001, 'tab closed');
-    this.heldPreview = undefined;
-
-    return { code: await closed };
-  }
-
-  /** Moves this isolate's clock `ms` ahead, for every object in it; `restoreClock` puts it back. */
-  advanceClock(ms: number): void {
-    advancedMs += ms;
-    Date.now = () => platformNow() + advancedMs;
-  }
-
-  restoreClock(): void {
-    advancedMs = 0;
-    Date.now = platformNow;
-  }
 
   async wakeOnce(workspace: string): Promise<void> {
     await (await this.workspaceTarget(workspace)).wakeOnce();
-  }
-
-  private async previewSocket(url: string): Promise<PreviewSocket | { refused: string }> {
-    const endpoint = new URL(url);
-    endpoint.pathname = '/__rpc';
-
-    const response = await handleNimbusPreviewHostRequest(
-      new Request(endpoint.toString(), { headers: { Upgrade: 'websocket', ...await this.selfPass(url) } }), this.env);
-
-    if (response === null) throw new Error(`the preview edge declined ${endpoint.toString()}`);
-
-    const socket = response.webSocket;
-
-    if (socket === null || socket === undefined) return { refused: `upgrade refused: ${response.status} ${await response.text()}` };
-
-    socket.accept();
-
-    return { socket, stub: newWebSocketRpcSession<PreviewRpc>(socket) };
   }
 
   async removeSlate(workspace: string, id: string): Promise<RemovedSlate> {

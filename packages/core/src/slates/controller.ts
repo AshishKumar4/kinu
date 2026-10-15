@@ -81,6 +81,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   call(request: SlateAppCall): Promise<SlateCallResult>;
   catalog(): Promise<SlateSurfaceCatalog>;
   forgetPicture?(slate: string): Promise<void>;
+  /** The slate's room goes with it: its people, grants, state and sessions, so its pages answer nothing. */
+  forgetRoom?(slate: string): Promise<void>;
   previewed?(slate: string): void;
 }
 
@@ -398,7 +400,9 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       const root = slateDirectory(new SlateId(id));
 
       yield* Effect.promise(async () => this.processes.stopWhere((running) => running.id === id));
-      const removed = yield* Effect.promise(async () => this.ports.apps.remove(id));
+      // A slate built before rooms held an application of the workspace's; one built since holds none.
+      const held = [...(yield* Effect.promise(async () => this.ports.apps.owners())).values()].includes(id);
+      const removed = held ? yield* Effect.promise(async () => this.ports.apps.remove(id)) : { removed: false, port: null };
       const vfs = session.vfs.as(caller.cred);
 
       session.vfs.withTransaction(() => {
@@ -409,6 +413,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
         this.builds.forget(id);
       });
       yield* Effect.promise(async () => this.ports.forgetPicture?.(id));
+      yield* Effect.promise(async () => this.ports.forgetRoom?.(id));
 
       return { id, removed: removed.removed, port: removed.port };
     })));

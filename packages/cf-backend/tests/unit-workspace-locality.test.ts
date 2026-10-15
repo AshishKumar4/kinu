@@ -577,7 +577,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     (await workspace.facetManager()).manager.kill(pid);
   });
 
-  test('a page a person loads counts as a render of its slate; a capture\'s own load never does', async () => {
+  test('a page a person loads counts as a render of its slate; a script, an image or an answer does not', async () => {
     const actor = actorObject();
     const capability = 'abcdef0123456789abcdef01';
     const kv = new Map<string, JsonValue>();
@@ -590,7 +590,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       previewUrl: async () => ({ url: 'https://preview.test/' }),
       ensureSlate: async () => null,
       pictures: {
-        captures: (_port, handle) => handle === 'cafe012345',
         rendered: (slate, port) => { renders.push(`${slate}:${String(port)}`); },
       },
     });
@@ -615,12 +614,10 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect((await load(capability.slice(0, 10), 'document', '/api')).status).toBe(200);
     expect(renders).toEqual([`${owner}:3000`, `${owner}:3000`]);
 
-    // The capture's handle opens the page, and its load is not counted, or each picture would ask for the next.
-    expect((await load('cafe012345', 'document')).status).toBe(200);
-    expect(renders).toHaveLength(2);
+    // A handle the port was not exposed under opens nothing.
     expect((await load('0000000000', 'document')).status).toBe(404);
 
-    // A port no slate owns: a capture handle never opens it, and its pages make no picture.
+    // A port no slate owns: its pages make no picture.
     const shell = 'fedcba9876543210fedcba98';
     kv.set('nimbus_preview_capability:3001', { capability: shell, owner: await derivedOwner(workspace, ['b']), kind: 'derived' });
 
@@ -628,7 +625,6 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       handleHttpRequest: async () => new Response('<p>shell</p>', { headers: { 'content-type': 'text/html' } }),
     });
 
-    expect((await load('cafe012345', 'document', '/', 3001)).status).toBe(404);
     expect((await load(shell.slice(0, 10), 'document', '/', 3001)).status).toBe(200);
     expect(renders).toHaveLength(2);
 

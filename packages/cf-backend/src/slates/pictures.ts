@@ -3,7 +3,6 @@ import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
 import { markStoreChanged, sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
 import { diagnostics, recording, toKinuError, settle } from '@kinu.run/core/obs';
-import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
 
 const AFTER_LAST_RENDER_MS = 30_000;
 
@@ -66,19 +65,6 @@ export class SlatePictures {
     return this.db.exec(`SELECT 1 AS x FROM slate_pictures WHERE slate = ?`, slate).toArray().length === 0;
   }
 
-  captures(port: number, handle: string, now: number): boolean {
-    return this.db.exec(
-      `SELECT 1 AS x FROM slate_pictures WHERE port = ? AND capture_handle = ? AND capture_until > ?`, port, handle, now,
-    ).toArray().length > 0;
-  }
-
-  private openCapture(slate: string, handle: string, until: number): void {
-    this.db.exec(`UPDATE slate_pictures SET capture_handle = ?, capture_until = ? WHERE slate = ?`, handle, until, slate);
-  }
-
-  private closeCapture(slate: string): void {
-    this.db.exec(`UPDATE slate_pictures SET capture_handle = NULL, capture_until = NULL WHERE slate = ?`, slate);
-  }
 
   private stored(slate: string, digest: string): void {
     this.db.exec(`UPDATE slate_pictures SET digest = ?, due_at = NULL, due_since = NULL, attempts = 0 WHERE slate = ?`, digest, slate);
@@ -168,11 +154,8 @@ export class SlatePictures {
 
   private shoot(camera: Camera, capture: PictureCapture, picture: DuePicture): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
-      const token = captureToken();
-      this.openCapture(picture.slate, token.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH), Date.now() + CAPTURE_HANDLE_LIFE_MS);
-
-      return yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
-        const url = yield* Effect.promise(async () => capture.url(picture.port, token));
+      return yield* Effect.gen({ self: this }, function* () {
+        const url = yield* Effect.promise(async () => capture.url(picture.slate));
 
         if (url === null) return yield* Effect.die(new Error('this deployment has no preview host'));
         const shot = yield* Effect.promise(async () => camera.shoot(url));
@@ -197,9 +180,7 @@ export class SlatePictures {
         this.stored(picture.slate, digest);
 
         return changed;
-      }), Effect.sync(() => {
-        this.closeCapture(picture.slate);
-      }));
+      });
     });
   }
 }
@@ -219,7 +200,8 @@ export interface PictureBucket {
 export interface PictureCapture {
   readonly workspace: string;
   readonly bucket: PictureBucket;
-  url(port: number, token: string): Promise<string | null>;
+  /** The slate's page, entered as its owner; null where this deployment has no host for it. */
+  url(slate: string): Promise<string | null>;
   /** With broken ones. */
   slates(): Promise<ReadonlySet<string>>;
   camera(): Promise<Camera>;
@@ -235,9 +217,6 @@ export async function browserCamera(binding: Pick<BrowserRun, 'fetch'>): Promise
   return { shoot: (url) => photograph(browser, url), close: () => browser.close() };
 }
 
-function captureToken(): string {
-  return [...crypto.getRandomValues(new Uint8Array(12))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
 
 /** Waits on load, not the network: a streaming slate never idles. */
 async function photograph(browser: Browser, url: string): Promise<Uint8Array> {

@@ -52,7 +52,7 @@ const failing: Camera = {
 
 function capture(lens: Camera, bucket: MemoryBucket = memoryBucket(), live: readonly string[] = ['board']): PictureCapture {
   return {
-    workspace: 'ledger', bucket, url: async (port, token) => `https://${String(port)}-${token}.preview.test/`,
+    workspace: 'ledger', bucket, url: async (slate) => `https://${slate}.preview.test/`,
     slates: async () => new Set(live), camera: async () => lens,
   };
 }
@@ -133,33 +133,6 @@ describe('a shot', () => {
     expect(store.nextDueAt()).toBe(T0 + 90_000);
   });
 
-  test('opens its slate\'s port with a handle of its own, only while it shoots and for 2 minutes at most', async () => {
-    const store = pictures();
-    const handles: Array<{ handle: string; open: boolean; otherPort: boolean; pastItsLife: boolean }> = [];
-
-    const watching: Camera = {
-      async shoot(url) {
-        const handle = /^https:\/\/\d+-([a-f0-9]{24})\./u.exec(url)?.[1]?.slice(0, 10) ?? '';
-        handles.push({
-          handle,
-          open: store.captures(PORT, handle, T0 + 30_000),
-          otherPort: store.captures(PORT + 1, handle, T0 + 30_000),
-          pastItsLife: store.captures(PORT, handle, T0 + 150_000),
-        });
-
-        return A;
-      },
-      async close() {},
-    };
-
-    store.rendered('board', PORT, T0);
-    setSystemTime(T0 + 30_000);
-    await store.captureDue(capture(watching), T0 + 30_000);
-
-    const [shot] = handles;
-    expect(shot).toMatchObject({ open: true, otherPort: false, pastItsLife: false });
-    expect(store.captures(PORT, shot?.handle ?? '', T0 + 30_000)).toBe(false);
-  });
 
   test('is three a wake at most, oldest due first; the rest stay due for the next', async () => {
     const store = pictures();

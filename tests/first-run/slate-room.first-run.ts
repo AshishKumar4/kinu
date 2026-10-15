@@ -141,11 +141,14 @@ interface HostSession {
   call(method: string, args: unknown[]): Promise<Response | null>;
 }
 
-async function enterHost(view: RoomView): Promise<HostSession> {
+/** The person's frame, as their page loads it: the app's frame route knows them and sends them to the host's entry. */
+async function enterHost(view: RoomView, headers: Record<string, string>): Promise<HostSession> {
   const frame = view.session.frame;
-  const entered = frame === '' ? null : await fetch(frame, { redirect: 'manual' });
+  const routed = frame === '' ? null : await fetch(frame, { headers, redirect: 'manual' });
+  const entry = routed?.headers.get('location') ?? null;
+  const entered = entry === null ? null : await fetch(entry, { redirect: 'manual' });
   const cookie = entered?.headers.get('set-cookie')?.split(';')[0] ?? null;
-  const host = frame === '' ? '' : new URL(frame).origin;
+  const host = entry === null ? '' : new URL(entry).origin;
   const page = cookie === null ? null : await fetch(`${host}/`, { headers: { cookie } });
 
   return {
@@ -161,7 +164,7 @@ async function usedThenRemoved(room: Room, owner: RoomSocket, people: { recipien
   const member = await room.socket(people.recipient);
 
   try {
-    const host = await enterHost(await member.view((each) => each.session.frame !== ''));
+    const host = await enterHost(await member.view((each) => each.session.frame !== ''), people.recipient);
     const call = await host.call('add', ['member']);
     const called = call === null ? null : v.safeParse(Called, await call.json());
 

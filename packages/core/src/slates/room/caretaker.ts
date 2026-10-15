@@ -787,7 +787,9 @@ export class RoomCaretaker {
 
         if (!own) return yield* refused('denied', 'This call would send data to someone who cannot see it');
 
-        return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'outflow' }) };
+        // Their own data, in their own request, through code they wrote themselves: the request is their consent. Code
+        // someone else wrote waits for them to see where it sends their data (`Attacks.lean`, the sink audience).
+        if (this.room().imageAuthor !== grant.holder) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'outflow' }) };
       }
 
       if (grant.effect && run.requester?.email !== grant.holder) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'effect' }) };

@@ -259,6 +259,9 @@ const ORCHESTRATOR_METHODS = [
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',
+  // A slate's room, and the room reading its image back: DO-to-DO only.
+  'ensureSlateRoom',
+  'slateImageModules',
   'acceptEmailDelivery',
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',

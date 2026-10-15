@@ -640,7 +640,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slateInvocation: (port, socket) => this._slates?.slateInvocation(port, socket) ?? null,
       ...(this.pictureCapture() !== null && {
         pictures: {
-          captures: (port, handle) => this.pictures.captures(port, handle, Date.now()),
           rendered: (slate, port) => {
             this.pictures.rendered(slate, port, Date.now());
             this.armDurableWake();
@@ -667,7 +666,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return {
       workspace: this.name, bucket,
-      url: async (port, token) => (await nimbusPreviewUrl(this.env, this.name, port, token)).url ?? null,
+      url: async (slate) => {
+        const owner = await this.getOwnerEmail();
+
+        return owner === null ? null : await this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate))))
+          .ticketFor({ email: owner.toLowerCase(), name: owner }, null);
+      },
       slates: async () => {
         const listing = await (await this.slates()).controller.list(ROOT_SLATE_CALLER);
 
@@ -2048,12 +2052,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Reached by RPC, or via `fetch` for a WebSocket upgrade, which cannot cross RPC as a 101. A preview opens only for
-   * the workspace's owner, its own browsers and fetches ({@link PREVIEW_SELF}) and a slate picture's capture, so a
-   * slate's calls, which run as the owner, run for no one else; this is decided before anything of the slate starts.
+   * the workspace's owner and its own browsers and fetches ({@link PREVIEW_SELF}); this is decided before anything
+   * the preview serves starts.
    */
   async routeWorkspacePreview({ port, handle, pathname, viewer }: PreviewVisit, request: Request): Promise<Response> {
     const owner = this.getOwnerUserId();
-    const admitted = viewer === PREVIEW_SELF || (owner !== null && viewer === owner) || this.pictures.captures(port, handle, Date.now());
+    const admitted = viewer === PREVIEW_SELF || (owner !== null && viewer === owner);
 
     if (admitted) return await this.hostedWorkspace().routePreview(port, handle, request, pathname);
     diagnostics.event('preview.route.refused', { port, handle, reason: viewer === null ? 'no-viewer' : 'not-owner', owner: '', detail: '' });
@@ -5889,7 +5893,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
         this.armDurableWake();
       },
-      previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
+      previewed: (slate) => {
+        this.noteTurnSlates('shown', [slate]);
+
+        // Its room serves it now: its picture is taken from its page there, once it settles.
+        if (this.pictureCapture() !== null) {
+          this.pictures.rendered(slate, 0, Date.now());
+          this.armDurableWake();
+        }
+      },
       messageBlock: (address) => this.answerBlock(address),
       slateRoom: async (slate, title, owner) => {
         const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate))));
@@ -5899,6 +5911,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return room;
       },
       ownerEmail: async () => (await this.getOwnerEmail())?.toLowerCase() ?? null,
+      forgetRoom: async (slate) => {
+        await this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate)))).retire();
+      },
     });
 
     return this._slates;
