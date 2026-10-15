@@ -84,7 +84,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       compilePromptSurface: (opts) => {
         const surface = s.compilePromptSurface(opts);
 
-        return { ...surface, configuredExecutors: surface.executors };
+        return { ...surface, executors: [...opts.executors ?? []] };
       },
       buildSystemPromptSync: (opts) => s.buildSystemPromptSync({ ...opts, agentsMd: undefined }),
       admitAgentsMd: (candidates) => ({ admit: candidates, referenced: [] }),

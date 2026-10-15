@@ -260,7 +260,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'context-assembly/unconfigured-executors-excluded',
         asserts: 'an executor this workspace never configured is never described; an offline one still is',
         observe: (s) => s.compilePromptSurface({ executors: EXECUTORS })
-          .configuredExecutors.map((exec) => exec.name),
+          .executors.map((exec) => exec.name),
       },
       {
         id: 'context-assembly/system-prefix',

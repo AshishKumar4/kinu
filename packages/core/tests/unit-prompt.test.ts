@@ -56,8 +56,7 @@ describe('buildSystemPromptSync', () => {
       ],
     });
 
-    expect(surface.executors.map((exec) => exec.name)).toEqual(['device', 'computer', 'workspace']);
-    expect(surface.configuredExecutors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
+    expect(surface.executors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
   });
 
   // core-rest review P1-9: the prompt kept its own order, which knew no `parent` and sorted it among unknown names.
