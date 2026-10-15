@@ -13,7 +13,7 @@
 import * as v from 'valibot';
 
 /** Who someone is to a room. People are named by email: an account id is derived from it (`accountIdFor`). */
-export const RoomPersonSchema = v.object({
+const RoomPersonSchema = v.object({
   email: v.string(),
   /** Their display name, once they have opened the slate; null while only invited. */
   name: v.nullable(v.string()),
@@ -21,34 +21,34 @@ export const RoomPersonSchema = v.object({
 
 export type RoomPerson = v.InferOutput<typeof RoomPersonSchema>;
 
-export const ROOM_ROLES = ['edit', 'use'] as const;
+const ROOM_ROLES = ['edit', 'use'] as const;
 
 /** What the owner gives someone they add: Edit changes the code with their own agent; Use uses the slate. */
-export const RoomRoleSchema = v.picklist(ROOM_ROLES);
+const RoomRoleSchema = v.picklist(ROOM_ROLES);
 
 export type RoomRole = v.InferOutput<typeof RoomRoleSchema>;
 
 /** How this session holds the slate: as its owner, as someone the owner added, or through the link. */
-export const RoomAccessSchema = v.picklist(['owner', 'edit', 'use', 'link'] as const);
+const RoomAccessSchema = v.picklist(['owner', 'edit', 'use', 'link'] as const);
 
 export type RoomAccess = v.InferOutput<typeof RoomAccessSchema>;
 
 /** The sheet's three audiences: derived from the room's people and its link, and set in one call. */
-export const RoomAudienceSchema = v.picklist(['only-you', 'people', 'anyone'] as const);
+const RoomAudienceSchema = v.picklist(['only-you', 'people', 'anyone'] as const);
 
 export type RoomAudience = v.InferOutput<typeof RoomAudienceSchema>;
 
 // ── What a grant reaches ────────────────────────────────────────────────────────────────────────────────────────
 
 /** A connection as people know it: GitHub, an MCP server by its title, the workspace's own model. */
-export const RoomServiceSchema = v.object({
+const RoomServiceSchema = v.object({
   title: v.string(),
   kind: v.picklist(['github', 'mcp', 'ai', 'workspace'] as const),
 });
 
 export type RoomService = v.InferOutput<typeof RoomServiceSchema>;
 
-export const RoomToolSchema = v.object({
+const RoomToolSchema = v.object({
   name: v.string(),
   title: v.string(),
   /** Changes nothing, by the connection's own declaration. */
@@ -61,7 +61,7 @@ export type RoomTool = v.InferOutput<typeof RoomToolSchema>;
  * Where data comes from, as one tag of a label: whose connection read it, the service, and the scope it is fixed to
  * (`acme/secret`), null for the whole service. `label` is the words a person sees: the scope, else the service's title.
  */
-export const RoomSourceSchema = v.object({
+const RoomSourceSchema = v.object({
   holder: RoomPersonSchema,
   service: RoomServiceSchema,
   scope: v.nullable(v.string()),
@@ -73,7 +73,7 @@ export const RoomSourceSchema = v.object({
 export type RoomSource = v.InferOutput<typeof RoomSourceSchema>;
 
 /** What one grant reaches: a service, the tools it may call there, its scope, and whether any tool changes anything. */
-export const RoomReachSchema = v.object({
+const RoomReachSchema = v.object({
   service: RoomServiceSchema,
   tools: v.array(RoomToolSchema),
   scope: v.nullable(v.string()),
@@ -86,12 +86,12 @@ export type RoomReach = v.InferOutput<typeof RoomReachSchema>;
 
 export const GALLERY_CATEGORIES = ['work', 'money', 'home', 'developer', 'fun'] as const;
 
-export const GalleryCategorySchema = v.picklist(GALLERY_CATEGORIES);
+const GalleryCategorySchema = v.picklist(GALLERY_CATEGORIES);
 
 export type GalleryCategory = v.InferOutput<typeof GalleryCategorySchema>;
 
 /** A function the owner lends: anyone using the slate calls it, and it runs with the owner's grant in a run of its own. */
-export const SheetLendSchema = v.object({
+const SheetLendSchema = v.object({
   fn: v.string(),
   reach: RoomReachSchema,
   /** Someone types its input (its contract takes free text), and that input reaches the service. */
@@ -106,7 +106,7 @@ export const SheetLendSchema = v.object({
 export type SheetLend = v.InferOutput<typeof SheetLendSchema>;
 
 /** Who called a lent function, and how often. */
-export const SheetLendUseSchema = v.object({
+const SheetLendUseSchema = v.object({
   fn: v.string(),
   person: RoomPersonSchema,
   calls: v.number(),
@@ -115,14 +115,14 @@ export const SheetLendUseSchema = v.object({
 
 export type SheetLendUse = v.InferOutput<typeof SheetLendUseSchema>;
 
-export const SheetMemberSchema = v.object({
+const SheetMemberSchema = v.object({
   person: RoomPersonSchema,
   role: RoomRoleSchema,
 });
 
 export type SheetMember = v.InferOutput<typeof SheetMemberSchema>;
 
-export const SheetViewSchema = v.object({
+const SheetViewSchema = v.object({
   audience: RoomAudienceSchema,
   /** The link while it is on: open to anyone who has it. */
   url: v.nullable(v.string()),
@@ -141,7 +141,7 @@ export type SheetView = v.InferOutput<typeof SheetViewSchema>;
 
 // ── The live slate ──────────────────────────────────────────────────────────────────────────────────────────────
 
-export const RoomSessionSchema = v.object({
+const RoomSessionSchema = v.object({
   /** Null for a visitor who has not signed in. */
   me: v.nullable(RoomPersonSchema),
   access: RoomAccessSchema,
@@ -159,7 +159,7 @@ export const RoomSessionSchema = v.object({
 
 export type RoomSession = v.InferOutput<typeof RoomSessionSchema>;
 
-export const RoomPresenceSchema = v.object({
+const RoomPresenceSchema = v.object({
   /** People here now, signed in, the session's own person included. */
   here: v.array(v.object({
     person: RoomPersonSchema,
@@ -174,7 +174,7 @@ export const RoomPresenceSchema = v.object({
 export type RoomPresence = v.InferOutput<typeof RoomPresenceSchema>;
 
 /** The parts a holder is asked about: someone asks to see one, an effect waits, or their own data would leave them. */
-export const RoomAskSchema = v.variant('kind', [
+const RoomAskSchema = v.variant('kind', [
   v.object({
     kind: v.literal('show'),
     id: v.string(),
@@ -216,7 +216,7 @@ export const RoomAskSchema = v.variant('kind', [
 export type RoomAsk = v.InferOutput<typeof RoomAskSchema>;
 
 /** Why this session's slate is gone: the owner removed this person, or stopped sharing. */
-export const RoomEndedSchema = v.object({
+const RoomEndedSchema = v.object({
   kind: v.picklist(['removed', 'stopped'] as const),
   by: RoomPersonSchema,
 });
@@ -227,7 +227,7 @@ export type RoomEnded = v.InferOutput<typeof RoomEndedSchema>;
  * One part as this session sees it. A part is one function of the slate on one input; its key is the room's. Content
  * with a label reaches a person only in the script-free frame at `content`, never in the slate's own code.
  */
-export const PartViewSchema = v.variant('state', [
+const PartViewSchema = v.variant('state', [
   /** Computing. */
   v.object({ state: v.literal('running'), key: v.string(), fn: v.string() }),
   /** Shown. `from` names the others whose data it holds, shown to this person by them; empty for public data. */
@@ -277,7 +277,7 @@ export type RoomView = v.InferOutput<typeof RoomViewSchema>;
 // ── Calls ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** "Everyone here now" is the people added at that moment; "anyone" is anyone who can open the slate, link visitors too. */
-export const ShowScopeSchema = v.picklist(['members', 'anyone'] as const);
+const ShowScopeSchema = v.picklist(['members', 'anyone'] as const);
 
 export type ShowScope = v.InferOutput<typeof ShowScopeSchema>;
 
@@ -317,7 +317,7 @@ export const RoomCallSchema = v.variant('op', [
 export type RoomCall = v.InferOutput<typeof RoomCallSchema>;
 
 /** A refusal in the room's words, with a code the UI can act on. */
-export const RoomRefusalSchema = v.object({
+const RoomRefusalSchema = v.object({
   reason: v.picklist(['denied', 'missing', 'bad_input', 'unavailable'] as const),
   message: v.string(),
 });
@@ -366,15 +366,10 @@ export function roomForkPath(workspace: string, slate: string): string {
   return `${roomSocketPath(workspace, slate)}/fork`;
 }
 
-/** A part's frame: the app's page for one part, embedded by the slate's own page. */
-export function roomPartPath(workspace: string, slate: string, part: string): string {
-  return `/s/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}/parts/${encodeURIComponent(part)}`;
-}
-
 // ── Drive, Gallery, fork ────────────────────────────────────────────────────────────────────────────────────────
 
 /** A slate in someone's Drive that is not theirs: shared with them, or used through its link. */
-export const DriveRoomCardSchema = v.object({
+const DriveRoomCardSchema = v.object({
   workspace: v.string(),
   slate: v.string(),
   title: v.string(),
@@ -389,7 +384,7 @@ export const DriveRoomCardSchema = v.object({
 
 export type DriveRoomCard = v.InferOutput<typeof DriveRoomCardSchema>;
 
-export const GalleryListingSchema = v.object({
+const GalleryListingSchema = v.object({
   workspace: v.string(),
   slate: v.string(),
   title: v.string(),
@@ -405,14 +400,14 @@ export const GalleryListingSchema = v.object({
 
 export type GalleryListing = v.InferOutput<typeof GalleryListingSchema>;
 
-export const GALLERY_SORTS = ['trending', 'new', 'stars'] as const;
+const GALLERY_SORTS = ['trending', 'new', 'stars'] as const;
 
-export const GallerySortSchema = v.picklist(GALLERY_SORTS);
+const GallerySortSchema = v.picklist(GALLERY_SORTS);
 
 export type GallerySort = v.InferOutput<typeof GallerySortSchema>;
 
 /** A slate of this person's own, as the Drive lists it: its audience once its room has one. */
-export const DriveSlateSchema = v.object({
+const DriveSlateSchema = v.object({
   id: v.string(),
   title: v.string(),
   workspace: v.string(),
