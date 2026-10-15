@@ -7,7 +7,7 @@ import { env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 
 const REFUSED = 'This workspace was created before a storage reset, and this version cannot run it: its session_messages '
-  + 'table has no envelope_json, sealed_at, content_json, content_path, content_digest. Export the workspace, or create a new one.';
+  + 'table has no envelope_json, sealed_at, content_json, content_path. Export the workspace, or create a new one.';
 
 it('a store created before the conversation store reset is refused with one message, and still exports', async () => {
   const probe = env.STORE_RESET_PROBE.get(env.STORE_RESET_PROBE.idFromName('store-reset'));

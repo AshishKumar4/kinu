@@ -7,7 +7,7 @@ import { sha256Hex } from '../safety/argument-digest';
 import { encodeModelMessage, decodeModelMessageValues, decodeOwnModelMessage, recordCarries } from './message-codec';
 import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import { freezeTree } from '../utils/freeze';
-import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
+import { spilledDigest, type SessionPayloads, type SessionPayloadReader, type SessionPayload } from './payload';
 
 export interface MessageReference { readonly messageId: string }
 
@@ -74,11 +74,11 @@ export interface StreamPartInput {
 // UTF-16 units per segment; at most three UTF-8 bytes each keeps a row under the inline bound.
 const STREAM_SEGMENT_CHARS = 262_144;
 
-interface MessageRow { origin: MessageOrigin; role: string; native_content_kind: 'string' | 'parts'; envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null }
+interface MessageRow { origin: MessageOrigin; role: string; native_content_kind: 'string' | 'parts'; envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null }
 
 interface SealedMessage { readonly message: ModelMessage; readonly origin: MessageOrigin }
 
-interface StreamPartRow { part_no: number; segment: number; stream_order: number; descriptor_json: string | null; descriptor_path: string | null; descriptor_digest: string | null; text: string }
+interface StreamPartRow { part_no: number; segment: number; stream_order: number; descriptor_json: string | null; descriptor_path: string | null; text: string }
 
 export type ToolCallIndex = ReadonlyMap<string, { messageId: string; part: number }>;
 
@@ -153,7 +153,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   protected row(messageId: string): MessageRow {
     this.actor.assertCurrent();
 
-    const row = this.sql<MessageRow>`SELECT origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path,content_digest FROM session_messages
+    const row = this.sql<MessageRow>`SELECT origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path FROM session_messages
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`[0];
 
     if (row === undefined) throw new KinuError('missing', 'session message does not exist');
@@ -163,7 +163,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
 
   /** Segment 0 carries the descriptor; every segment carries its share of the text. */
   protected async streamed(messageId: string): Promise<StoredPart[]> {
-    const rows = this.sql<StreamPartRow>`SELECT part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text FROM stream_parts
+    const rows = this.sql<StreamPartRow>`SELECT part_no,segment,stream_order,descriptor_json,descriptor_path,text FROM stream_parts
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} ORDER BY part_no,segment`;
 
     const parts: StoredPart[] = [];
@@ -176,7 +176,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
         continue;
       }
 
-      const value = descriptorObject(await this.payloads.readStored(row.descriptor_json, row.descriptor_path, row.descriptor_digest));
+      const value = descriptorObject(await this.payloads.readStored(row.descriptor_json, row.descriptor_path));
 
       if (value.type === 'text' || value.type === 'reasoning' || row.text !== '') value.text = row.text;
       parts.push({ partNo: row.part_no, streamOrder: row.stream_order, replyTo: null, value });
@@ -201,7 +201,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     const row = this.row(reference.messageId);
 
     if (row.sealed_at === null) return { row, parts: await this.streamed(reference.messageId) };
-    const parts = storedParts(await this.payloads.readStored(row.content_json, row.content_path, row.content_digest));
+    const parts = storedParts(await this.payloads.readStored(row.content_json, row.content_path));
     this.actor.assertCurrent();
 
     return { row, parts };
@@ -211,7 +211,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   async materializePartsOf(messageIds: readonly string[]): Promise<Map<string, readonly StoredPart[]>> {
     this.actor.assertCurrent();
 
-    const rows = this.sql<MessageRow & { message_id: string }>`SELECT message_id,origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path,content_digest
+    const rows = this.sql<MessageRow & { message_id: string }>`SELECT message_id,origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path
       FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(messageIds)}))`;
 
     const parts = new Map<string, readonly StoredPart[]>();
@@ -219,7 +219,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     for (const row of rows) {
       parts.set(row.message_id, row.sealed_at === null
         ? await this.streamed(row.message_id)
-        : storedParts(await this.payloads.readStored(row.content_json, row.content_path, row.content_digest)));
+        : storedParts(await this.payloads.readStored(row.content_json, row.content_path)));
     }
 
     this.actor.assertCurrent();
@@ -384,7 +384,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     if (known !== undefined) return known;
     const prepared = await this.prepare(message, '');
     const { role, contentKind, envelope, content: { payload } } = prepared;
-    const render = { ...prepared, id: `render:${sha256Hex(`${role}\n${contentKind}\n${JSON.stringify(envelope)}\n${payload.json ?? payload.digest}`)}` };
+    const render = { ...prepared, id: `render:${sha256Hex(`${role}\n${contentKind}\n${JSON.stringify(envelope)}\n${payload.json ?? spilledDigest(payload.path)}`)}` };
 
     // A step resends the same render copies; an inline one is a pure function of its message, a spilled one is not.
     if (payload.path === null) this.renders.set(message, render);
@@ -401,8 +401,8 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     this.actor.assertCurrent();
     this.assertUnrecorded(prepared.id);
     const { payload } = prepared.content;
-    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,envelope_json,sealed_at,content_json,content_path,content_digest)
-      VALUES(${this.actor.actorId},${prepared.id},${prepared.role},${prepared.contentKind},${origin},${identity.requestId ?? null},${identity.slot ?? null},${identity.ingressId ?? null},${JSON.stringify(prepared.envelope)},${Date.now()},${payload.json},${payload.path},${payload.digest})`;
+    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,envelope_json,sealed_at,content_json,content_path)
+      VALUES(${this.actor.actorId},${prepared.id},${prepared.role},${prepared.contentKind},${origin},${identity.requestId ?? null},${identity.slot ?? null},${identity.ingressId ?? null},${JSON.stringify(prepared.envelope)},${Date.now()},${payload.json},${payload.path})`;
 
     return { messageId: prepared.id };
   }
@@ -430,8 +430,8 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     this.actor.assertCurrent();
     const [first = ''] = part.text === undefined ? [] : segmented(part.text);
 
-    const opened = this.sql<{ part_no: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
-      SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${part.descriptor.digest},${first},0
+    const opened = this.sql<{ part_no: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
+      SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${first},0
       FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING part_no`;
 
     if (opened.length === 0) throw new KinuError('denied', 'message is missing or sealed');
@@ -451,11 +451,11 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
       // one names the claim table itself, the one place the session does: one statement per flush, as the production
       // turn's statement count is measured (complexity.test.ts).
       const appended = fence === null
-        ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+        ? this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
           SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
           WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
           AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`
-        : this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+        : this.sql<{ segment: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,stream_order,descriptor_json,descriptor_path,text,ended)
           SELECT actor_id,message_id,part_no,segment + 1,stream_order,NULL,NULL,NULL,${piece},0 FROM stream_parts
           WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0
           AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo})
@@ -473,7 +473,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   streamMetadata(messageId: string, partNo: number, descriptor: SessionPayload): void {
     this.actor.assertCurrent();
 
-    const written = this.sql<{ segment: number }>`UPDATE stream_parts SET descriptor_json=${descriptor.json},descriptor_path=${descriptor.path},descriptor_digest=${descriptor.digest}
+    const written = this.sql<{ segment: number }>`UPDATE stream_parts SET descriptor_json=${descriptor.json},descriptor_path=${descriptor.path}
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND segment=0 RETURNING segment`;
 
     if (written.length === 0) throw new KinuError('denied', 'stream part is missing or sealed');
@@ -500,7 +500,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     const { payload } = content;
     const envelopeJson = envelope === undefined ? this.row(messageId).envelope_json : JSON.stringify(envelope);
 
-    const sealed = this.sql<{ message_id: string }>`UPDATE session_messages SET sealed_at=${Date.now()},content_json=${payload.json},content_path=${payload.path},content_digest=${payload.digest},envelope_json=${envelopeJson}
+    const sealed = this.sql<{ message_id: string }>`UPDATE session_messages SET sealed_at=${Date.now()},content_json=${payload.json},content_path=${payload.path},envelope_json=${envelopeJson}
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING message_id`;
 
     if (sealed.length === 0) {

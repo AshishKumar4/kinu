@@ -189,9 +189,9 @@ export function forkSessionMessageRow(
   return settleSync(Effect.gen(function* () {
     const row = sql<{
       message_id: string; role: string; native_content_kind: string; origin: string;
-      envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null;
+      envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null;
     }>`
-      SELECT message_id, role, native_content_kind, origin, envelope_json, sealed_at, content_json, content_path, content_digest
+      SELECT message_id, role, native_content_kind, origin, envelope_json, sealed_at, content_json, content_path
       FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
     `[0];
 
@@ -217,9 +217,9 @@ export function forkConversationEntryRow(
   return settleSync(Effect.gen(function* () {
     const row = sql<{
       id: string; position: number; role: string; turn_id: string | null; run_id: string | null;
-      metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null; recorded_at: number;
+      metadata_json: string | null; metadata_path: string | null; recorded_at: number;
     }>`
-      SELECT id, position, role, turn_id, run_id, metadata_json, metadata_path, metadata_digest, recorded_at
+      SELECT id, position, role, turn_id, run_id, metadata_json, metadata_path, recorded_at
       FROM conversation_entries
       WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${entryId}
     `[0];

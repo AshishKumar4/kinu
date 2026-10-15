@@ -244,9 +244,9 @@ test("a delivered run's kept end whose spilled file cannot be read is told as a 
 
     // One end spilled to a file since lost, one kept whole beside it.
     store.reserveTurn({ id: 'lost-end', text: 'Name one way.', metadata: { ...kept, kinuRun: 'run-lost' } });
-    store.recordRunEnd('lost-end', { json: null, path: 'payloads/gone.json', digest: 'sha256:gone' });
+    store.recordRunEnd('lost-end', { json: null, path: 'payloads/gone.json' });
     store.reserveTurn({ id: 'kept-end', text: 'Name another.', metadata: kept });
-    store.recordRunEnd('kept-end', { json: JSON.stringify({ refused: { code: 'cancelled', message: 'stopped' } }), path: null, digest: null });
+    store.recordRunEnd('kept-end', { json: JSON.stringify({ refused: { code: 'cancelled', message: 'stopped' } }), path: null });
 
     const owed = await fixture.chat.runEndsOwed();
 

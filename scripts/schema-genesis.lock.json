@@ -75,12 +75,11 @@
     "context_revision INTEGER NOT NULL",
     "metadata_json TEXT",
     "metadata_path TEXT",
-    "metadata_digest TEXT",
     "recorded_at INTEGER NOT NULL",
     "PRIMARY KEY(actor_id,request_id)",
     "UNIQUE(actor_id,turn_id,epoch,revision)",
     "FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision)",
-    "CHECK((metadata_json IS NOT NULL AND metadata_path IS NULL AND metadata_digest IS NULL) OR (metadata_json IS NULL AND metadata_path IS NOT NULL AND metadata_digest IS NOT NULL))"
+    "CHECK((metadata_json IS NULL) <> (metadata_path IS NULL))"
   ],
   "actor_subordinates@packages/core/src/subordinates/roster.ts": [
     "actor_id TEXT NOT NULL",
@@ -495,7 +494,6 @@
     "run_id TEXT",
     "metadata_json TEXT",
     "metadata_path TEXT",
-    "metadata_digest TEXT",
     "recorded_at INTEGER NOT NULL",
     "context_id TEXT",
     "context_revision INTEGER",
@@ -504,7 +502,7 @@
     "FOREIGN KEY(actor_id) REFERENCES workspace_actors(actor_id)",
     "FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision)",
     "CHECK((context_id IS NULL) = (context_revision IS NULL))",
-    "CHECK((metadata_json IS NULL AND metadata_path IS NULL AND metadata_digest IS NULL) OR (metadata_json IS NOT NULL AND metadata_path IS NULL AND metadata_digest IS NULL) OR (metadata_json IS NULL AND metadata_path IS NOT NULL AND metadata_digest IS NOT NULL))"
+    "CHECK(metadata_json IS NULL OR metadata_path IS NULL)"
   ],
   "conversation_entry_parts@packages/core/src/session/transcript-schema.ts": [
     "actor_id TEXT NOT NULL",
@@ -1095,9 +1093,8 @@
     "yields INTEGER NOT NULL DEFAULT 0",
     "run_end_json TEXT",
     "run_end_path TEXT",
-    "run_end_digest TEXT",
     "UNIQUE (actor_id, id)",
-    "CHECK((run_end_json IS NULL AND run_end_path IS NULL AND run_end_digest IS NULL) OR (run_end_json IS NOT NULL AND run_end_path IS NULL AND run_end_digest IS NULL) OR (run_end_json IS NULL AND run_end_path IS NOT NULL AND run_end_digest IS NOT NULL))"
+    "CHECK(run_end_json IS NULL OR run_end_path IS NULL)"
   ],
   "refinement_lane_holds@packages/core/src/evolution/refinement.ts": [
     "actor_id TEXT PRIMARY KEY",
@@ -1195,13 +1192,12 @@
     "sealed_at INTEGER",
     "content_json TEXT",
     "content_path TEXT",
-    "content_digest TEXT",
     "PRIMARY KEY(actor_id,message_id)",
     "UNIQUE(actor_id,request_id,output_slot)",
     "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
     "CHECK(output_slot IS NULL OR output_slot >= 0)",
     "CHECK((request_id IS NULL) = (output_slot IS NULL))",
-    "CHECK((sealed_at IS NULL AND content_json IS NULL AND content_path IS NULL AND content_digest IS NULL) OR (sealed_at IS NOT NULL AND ((content_json IS NOT NULL AND content_path IS NULL AND content_digest IS NULL) OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL))))"
+    "CHECK((sealed_at IS NULL AND content_json IS NULL AND content_path IS NULL) OR (sealed_at IS NOT NULL AND (content_json IS NULL) <> (content_path IS NULL)))"
   ],
   "share_cards_sent@packages/core/src/state/user-schema.ts": [
     "workspace TEXT NOT NULL",
@@ -1335,7 +1331,6 @@
     "stream_order INTEGER NOT NULL",
     "descriptor_json TEXT",
     "descriptor_path TEXT",
-    "descriptor_digest TEXT",
     "text TEXT NOT NULL DEFAULT ''",
     "ended INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY(actor_id,message_id,part_no,segment)",
@@ -1344,7 +1339,7 @@
     "CHECK(segment >= 0)",
     "CHECK(stream_order >= 0)",
     "CHECK(ended IN (0,1))",
-    "CHECK((segment > 0 AND descriptor_json IS NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL) OR (segment = 0 AND ((descriptor_json IS NOT NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL) OR (descriptor_json IS NULL AND descriptor_path IS NOT NULL AND descriptor_digest IS NOT NULL))))"
+    "CHECK((segment > 0 AND descriptor_json IS NULL AND descriptor_path IS NULL) OR (segment = 0 AND (descriptor_json IS NULL) <> (descriptor_path IS NULL)))"
   ],
   "swarm_node_records@packages/core/src/strategy/swarm-resume.ts": [
     "actor_id TEXT NOT NULL",

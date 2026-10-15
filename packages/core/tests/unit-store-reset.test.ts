@@ -73,7 +73,7 @@ describe('a store created before a storage reset', () => {
     expect(refusal).toMatchObject({
       code: 'unsupported',
       table: 'session_messages',
-      missing: ['envelope_json', 'sealed_at', 'content_json', 'content_path', 'content_digest'],
+      missing: ['envelope_json', 'sealed_at', 'content_json', 'content_path'],
     });
     // The index on a column the old table lacks never ran.
     expect(db.query(`SELECT name FROM sqlite_master WHERE name = 'session_open_messages'`).all()).toEqual([]);

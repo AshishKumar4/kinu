@@ -19,7 +19,6 @@ export function initSessionTranscriptTables(exec: RawSqlExec): void {
     run_id TEXT,
     metadata_json TEXT,
     metadata_path TEXT,
-    metadata_digest TEXT,
     recorded_at INTEGER NOT NULL,
     context_id TEXT,
     context_revision INTEGER,
@@ -28,9 +27,7 @@ export function initSessionTranscriptTables(exec: RawSqlExec): void {
     FOREIGN KEY(actor_id) REFERENCES workspace_actors(actor_id),
     FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision),
     CHECK((context_id IS NULL) = (context_revision IS NULL)),
-    CHECK((metadata_json IS NULL AND metadata_path IS NULL AND metadata_digest IS NULL)
-      OR (metadata_json IS NOT NULL AND metadata_path IS NULL AND metadata_digest IS NULL)
-      OR (metadata_json IS NULL AND metadata_path IS NOT NULL AND metadata_digest IS NOT NULL))
+    CHECK(metadata_json IS NULL OR metadata_path IS NULL)
   )`);
   exec(`CREATE TABLE IF NOT EXISTS conversation_entry_parts (
     actor_id TEXT NOT NULL,
