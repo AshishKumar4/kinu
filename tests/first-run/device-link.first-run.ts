@@ -65,6 +65,9 @@ const DEFECT: FirstRunDefect = {
     + 'socket and the credential.',
 };
 
+/** What the turn an owner's consent answer wakes opens with (`answerWakeMessage`, core/src/safety/device-consent.ts). */
+const DEVICE_USE_APPROVED = 'Device use APPROVED, still not run';
+
 /**
  * The machine label this row registers under. The fleet resolves calls by
  * LABEL, so the case's commands name this string the way the owner would tap
@@ -345,7 +348,9 @@ describe(SUITE, () => {
         id: CASE,
         defect: DEFECT,
         episode: 'device-link-command',
-        modelCalls: 'none',
+        // The owner's answer wakes the agent the call ran under, as a deferred approval's does (the park-and-wake
+        // contract): its turn is the one model call, drained below before the spend is read.
+        modelCalls: 'expected',
         genesis: false,
         purpose: 'A probe proving one command reaches a linked machine through the consent card.',
         async run({ session }) {
@@ -368,6 +373,10 @@ describe(SUITE, () => {
           const ran = run.result.exitCode === 0 && run.result.refusal === undefined
             && run.result.error === undefined && run.result.stdout?.trim() === want;
 
+          // A turn of its own, queued behind the turn the answer woke, so that turn has ended and its call is counted.
+          await session.prompt('The device check is finished. Reply with only OK. Do not run commands or use tools.');
+          const woke = (await session.history()).some((row) => row.text.includes(DEVICE_USE_APPROVED));
+
           return [
             { what: 'consent-card-answered-once', reached: run.cardId !== null,
               detail: run.cardId === null
@@ -378,6 +387,10 @@ describe(SUITE, () => {
             { what: 'command-ran-on-the-machine', reached: ran,
               detail: `expected ${JSON.stringify(want)} — the machine's own name by its own `
                 + `hand; the executor answered ${JSON.stringify(run.result)}` },
+            { what: 'answer-woke-the-agent', reached: woke,
+              detail: woke
+                ? 'the owner\'s answer opened a turn of the agent the call ran under, telling it the call is approved'
+                : `no turn told the agent ${JSON.stringify(DEVICE_USE_APPROVED)}: the answer reached nobody who could re-issue it` },
           ] satisfies EvalSubgoal[];
         },
       }, observations);
