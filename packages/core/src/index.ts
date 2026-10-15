@@ -306,7 +306,7 @@ export {
   RoomSessionSchema, RoomPresenceSchema, RoomAskSchema, RoomEndedSchema, PartViewSchema, RoomViewSchema, ShowScopeSchema,
   RoomCallSchema, RoomRefusalSchema, RoomClientFrameSchema, RoomServerFrameSchema,
   DriveRoomCardSchema, GalleryListingSchema, GallerySortSchema, ForkPreviewSchema, ForkedSchema,
-  roomPagePath, roomSocketPath, roomPartPath,
+  roomPagePath, roomSocketPath, roomPartPath, roomEntryPath, roomForkPath, RoomEntrySchema, type RoomEntry,
   type RoomPerson, type RoomRole, type RoomAccess, type RoomAudience, type RoomService, type RoomTool, type RoomSource,
   type RoomReach, type GalleryCategory, type SheetLend, type SheetLendUse, type SheetMember, type SheetView,
   type RoomSession, type RoomPresence, type RoomAsk, type RoomEnded, type PartView, type RoomView, type ShowScope,

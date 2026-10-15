@@ -151,6 +151,8 @@ export const RoomSessionSchema = v.object({
   mayEdit: v.boolean(),
   /** Anyone signed in may fork: a fork is the code alone. */
   mayFork: v.boolean(),
+  /** The people added, the owner included: "everyone here now" for a show. Empty for a link visitor. */
+  members: v.array(RoomPersonSchema),
   /** The slate's own page, for the live page's frame: its own host, entered as this session's person. */
   frame: v.string(),
 });
@@ -344,6 +346,24 @@ export function roomPagePath(workspace: string, slate: string, key?: string): st
 /** The room's socket on the app's origin: the session cookie names the person, `k` admits a link visitor. */
 export function roomSocketPath(workspace: string, slate: string): string {
   return `/api/rooms/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
+}
+
+/**
+ * Before the socket: whether this session may open the room. 200 answers a {@link RoomEntry}; 401 means sign in first,
+ * 403 that the slate is not shared with this signed-in person, 404 that no such slate or link exists, 410 that its link
+ * was stopped.
+ */
+export function roomEntryPath(workspace: string, slate: string): string {
+  return `${roomSocketPath(workspace, slate)}/entry`;
+}
+
+export const RoomEntrySchema = v.object({ title: v.string(), owner: RoomPersonSchema, access: RoomAccessSchema });
+
+export type RoomEntry = v.InferOutput<typeof RoomEntrySchema>;
+
+/** GET answers a {@link ForkPreview}; POST `{ workspace }` forks into that workspace of the caller's and answers {@link Forked}. */
+export function roomForkPath(workspace: string, slate: string): string {
+  return `${roomSocketPath(workspace, slate)}/fork`;
 }
 
 /** A part's frame: the app's page for one part, embedded by the slate's own page. */
