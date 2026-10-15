@@ -83,7 +83,7 @@ export function readSubordinateLiveStatus(
 }
 
 /** Read from the child's own `actor_config`, the single authority; never persisted elsewhere. */
-export interface SubordinateDescriptor {
+interface SubordinateDescriptor {
   displayName: string;
   nameOrigin: NameOrigin;
   role: RoleId;

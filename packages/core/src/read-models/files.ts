@@ -37,7 +37,6 @@ export interface EnvironmentInfo {
   reason: string | null;
 }
 
-export type MountInfo = EnvironmentInfo;
 
 interface RuntimeConsistency {
   [runtime: string]: EnvironmentInfo['policy']['consistency'];

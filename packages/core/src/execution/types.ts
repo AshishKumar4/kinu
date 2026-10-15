@@ -83,7 +83,7 @@ export type ExecutorCapability = (typeof EXECUTOR_CAPABILITIES)[number];
 
 export type ExecutorKind = 'workspace' | 'computer' | 'device' | 'parent';
 
-export type ExecutorLifecycleStatus =
+type ExecutorLifecycleStatus =
   | 'not_configured'
   | 'idle'
   | 'active'

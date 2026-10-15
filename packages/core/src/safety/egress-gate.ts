@@ -89,7 +89,7 @@ export interface EgressRequestFacts {
 }
 
 /** One placeholder to replace; the adapter fetches the secret by `bindingId`, so a plan is safe to log. */
-export interface EgressSubstitution {
+interface EgressSubstitution {
   readonly bindingId: string;
   readonly placeholder: string;
 }

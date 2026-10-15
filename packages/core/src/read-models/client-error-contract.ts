@@ -7,6 +7,7 @@
 import * as v from 'valibot';
 import { MAX_BLOB_BYTES } from "../obs/analytics/index";
 import { REPORTED_ROUTES } from "./app-routes";
+import { utf8Bytes } from '../utils/text';
 
 export const CLIENT_ERROR_ENDPOINT = '/api/client-errors';
 
@@ -74,15 +75,13 @@ export const ClientReportSchema = v.variant('event', [ClientErrorReportSchema, C
 /** `UIMessageStreamError`'s fields, when well-formed. */
 export const StreamPartErrorSchema = v.looseObject({ chunkType: PartTokenSchema, chunkId: PartTokenSchema });
 
-const ENCODER = new TextEncoder();
-
 function reportBytes(report: ClientErrorReport): number {
-  return ENCODER.encode(JSON.stringify(report)).byteLength;
+  return utf8Bytes(JSON.stringify(report));
 }
 
 /** JSON-encoded size minus the quotes the empty-field envelope already paid for. */
 function contentBytes(text: string): number {
-  return ENCODER.encode(JSON.stringify(text)).byteLength - 2;
+  return utf8Bytes(JSON.stringify(text)) - 2;
 }
 
 /** Longest leading run of whole lines fitting `budget`; a half frame would fail the schema. */
@@ -123,7 +122,7 @@ export function fitClientErrorReport(report: ClientErrorReport): ClientErrorRepo
 
 export function fitChatStreamFailureReport(report: ChatStreamFailureReport): ChatStreamFailureReport {
   const bare = { ...report, stack: '' };
-  const room = CLIENT_ERROR_MAX_REQUEST_BYTES - ENCODER.encode(JSON.stringify(bare)).byteLength;
+  const room = CLIENT_ERROR_MAX_REQUEST_BYTES - utf8Bytes(JSON.stringify(bare));
 
   return room <= 0 ? bare : { ...report, stack: fitFrames(report.stack.split('\n'), room) };
 }

@@ -58,27 +58,27 @@ const MAX_BINDINGS_PER_STATEMENT = 800;
 const SQLITE_REJECTED_VALUE = /\b(constraint failed|constraint|datatype mismatch)\b/iu;
 
 
-export type AppColumn = v.InferOutput<typeof ColumnSchema>;
+type AppColumn = v.InferOutput<typeof ColumnSchema>;
 
 export type AppTableSpec = v.InferOutput<typeof TableSpecSchema>;
 
-export type AppPredicate = v.InferOutput<typeof PredicateSchema>;
+type AppPredicate = v.InferOutput<typeof PredicateSchema>;
 
-export type AppWhere = v.InferOutput<typeof WhereSchema>;
+type AppWhere = v.InferOutput<typeof WhereSchema>;
 
-export type AppSelect = v.InferOutput<typeof SelectSchema>;
+type AppSelect = v.InferOutput<typeof SelectSchema>;
 
 export type AppOp = v.InferOutput<typeof OpSchema>;
 
 /** `blob` columns as base64, `json` columns decoded. */
-export type AppRow = Record<string, JsonValue>;
+type AppRow = Record<string, JsonValue>;
 
-export interface AppTableRecord extends AppTableSpec {
+interface AppTableRecord extends AppTableSpec {
   readonly createdBy: string;
   readonly createdAt: number;
 }
 
-export interface AppOpResult {
+interface AppOpResult {
   readonly op: AppOp['op'];
   readonly table: string;
   readonly rowsAffected: number;

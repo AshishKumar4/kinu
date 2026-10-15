@@ -15,7 +15,7 @@ import type {
   InstructionTrustResolver, VerifiedInstructionTrust,
 } from '../types/instruction-trust';
 
-export interface AgentsMdFile {
+interface AgentsMdFile {
   readonly path: string;
   readonly content: string;
   /** Whether the owner approved these bytes at this path. Assigned where the bytes are read (digest is free there). */
@@ -29,7 +29,7 @@ export interface AgentsMdReference {
 
 /** A path discovery declined to read (a link, a cycle, a swap after sizing). Never read,
  *  approvable, or turn-failing; the reason lets the owner see which file is inert. */
-export interface AgentsMdUnavailable {
+interface AgentsMdUnavailable {
   readonly path: string;
   /** One display-safe clause: never an errno dump or an escaping link's target. */
   readonly reason: string;

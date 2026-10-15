@@ -105,7 +105,7 @@ export type ChatEvent = (
   | { type: 'done'; text: string; responseMessages: ModelMessage[]; answer?: string }
 ) & { source?: 'native' | 'scaffold' };
 
-export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
+type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
 export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>) => Promise<void>;
 
@@ -203,15 +203,6 @@ export interface ChatOptions {
    *  `RunEventRecorder.unterminatedModelOperations`. */
   operations?: ModelOperationSink;
   trace?: TurnTrace;
-}
-
-/** Prefixes recorded in durable failure prose by the removed silence watchdog; the classifier below reads them. */
-const RATE_LIMITED_TURN_PREFIX = 'Turn ended by provider rate limiting:';
-
-/** Whether a recorded failure is a provider rate limit rather than silence. `includes`, because the reason is
- *  a wrapped chain with the prefix inside it. */
-export function isRateLimitedTurnError(message: string): boolean {
-  return message.includes(RATE_LIMITED_TURN_PREFIX);
 }
 
 /** Thrown after the turn's `done` event, so the interrupted turn's history is kept but recorded as unfinished. */

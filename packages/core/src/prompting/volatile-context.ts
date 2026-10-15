@@ -31,7 +31,7 @@ import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
-import { compareCodeUnits } from '../utils/text';
+import { compareCodeUnits, oneLineClip } from '../utils/text';
 import type { ActiveRoster, DelegationChoices, DynamicApproval, MissingCapability, ShownLesson } from '../types/dynamic-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration, type ExternalToolDeclaration } from '../tools/sandbox-contract';
 import { formatByteCap } from '../utils/format';
@@ -39,14 +39,14 @@ import { formatByteCap } from '../utils/format';
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
 /** One row of the background-job registry (jobs/store.ts). */
-export interface DynamicJob {
+interface DynamicJob {
   readonly id: string;
   readonly kind: string;
   readonly label: string | null;
 }
 
 /** One agent_tasks row (tools/task-store.ts), flattened: a subtask follows its parent and names it. */
-export interface DynamicTask {
+interface DynamicTask {
   readonly id: string;
   readonly title: string;
   readonly status: string;
@@ -396,9 +396,7 @@ const RECOVERY_ENTRY_CHARS = 480;
 const ENTRY_CHARS = 120;
 
 function clip(text: string, max = ENTRY_CHARS): string {
-  const oneLine = text.replace(/\s+/g, ' ').trim();
-
-  return oneLine.length > max ? `${oneLine.slice(0, max - 3).trimEnd()}...` : oneLine;
+  return oneLineClip(text, max);
 }
 
 interface SectionRow {

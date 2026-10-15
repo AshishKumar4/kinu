@@ -25,7 +25,6 @@ export interface WorkspaceBirthConfig {
   /** The human name heading SOUL.md and MEMORY.md; never the slug. Set later by `planWorkspaceTitle` if absent. */
   title?: string;
   purpose: string;
-  scaffold?: string;
   /** Main's home, where the seeds land as files: SOUL.md, the first memory note and the scaffold. */
   home: VFS & Required<Pick<VFS, 'readRange'>>;
 }
@@ -98,7 +97,7 @@ export async function createWorkspace(
   const rt = buildComponents({ db, sql, execRaw, transactionSync, home, actor });
 
   // The loop's versioned source, its pointer and its live view, through the one writer every reopen heals with.
-  await bootstrapScaffold(rt, config.scaffold);
+  await bootstrapScaffold(rt);
 
   return rt;
 }

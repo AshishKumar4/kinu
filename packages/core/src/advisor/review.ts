@@ -28,7 +28,7 @@ export const ADVISOR_SEVERITY_LABEL = {
  *  a capability the turn had and did not use. */
 const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
 
-export type AdvisorNoteClass = (typeof ADVISOR_NOTE_CLASSES)[number];
+type AdvisorNoteClass = (typeof ADVISOR_NOTE_CLASSES)[number];
 
 function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteClass {
   return ADVISOR_NOTE_CLASSES.some((noteClass) => noteClass === value);
@@ -62,7 +62,7 @@ export type AdvisorRowData = v.InferOutput<typeof AdvisorRowDataSchema>;
 
 /** The guard is code, not prompt rules: one oh-my-pi session logged 309 `advise` calls, 114 of them "Stop."
  *  (`https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/advisor/emission-guard.ts#L9-L16`). */
-export type SuppressionRule = 'duplicate' | 'content-free' | 'gate-open' | 'below-floor';
+type SuppressionRule = 'duplicate' | 'content-free' | 'gate-open' | 'below-floor';
 
 export type AdvisorDisposition =
   | 'deliver'

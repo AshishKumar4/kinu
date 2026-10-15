@@ -85,7 +85,7 @@ export function initTaskListTable(execRaw: RawSqlExec): void {
 }
 
 /** The model gets the reason, never a silent drop. */
-export interface TaskAddRejection {
+interface TaskAddRejection {
   readonly title: string;
   readonly reason: string;
 }
@@ -96,7 +96,7 @@ export interface TaskAddResult {
 }
 
 /** Titles arrive from the model; bounded to stay one line in the live context block. */
-export const MAX_TASK_TITLE_CHARS = 200;
+const MAX_TASK_TITLE_CHARS = 200;
 
 export class TaskListStore {
   private readonly actorId: string;

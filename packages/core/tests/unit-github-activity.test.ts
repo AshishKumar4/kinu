@@ -23,10 +23,10 @@ describe('the workspace\'s GitHub record, as the overview reads it', () => {
     const { sql } = workspace();
 
     recordGitHubActivity(sql, [{ action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41, title: 'SAVE20 500s', state: 'open' }],
-      { actorId: 'main', source: 'mcp', at: 1 });
-    recordGitHubActivity(sql, [{ action: 'touched', subject: 'issue', repo: 'acme/checkout', number: 41 }], { actorId: 'scout', source: 'mcp', at: 2 });
-    recordGitHubActivity(sql, [{ action: 'touched', subject: 'issue', repo: 'acme/checkout', number: 41 }], { actorId: 'main', source: 'mcp', at: 3 });
-    recordGitHubActivity(sql, [{ action: 'closed', subject: 'issue', repo: 'acme/checkout', number: 41, state: 'closed' }], { actorId: null, source: 'egress', at: 4 });
+      { actorId: 'main', at: 1 });
+    recordGitHubActivity(sql, [{ action: 'touched', subject: 'issue', repo: 'acme/checkout', number: 41 }], { actorId: 'scout', at: 2 });
+    recordGitHubActivity(sql, [{ action: 'touched', subject: 'issue', repo: 'acme/checkout', number: 41 }], { actorId: 'main', at: 3 });
+    recordGitHubActivity(sql, [{ action: 'closed', subject: 'issue', repo: 'acme/checkout', number: 41, state: 'closed' }], { actorId: null, at: 4 });
 
     expect(readGitHubActivity(sql, []).items).toEqual([{
       subject: 'issue', repo: 'acme/checkout', number: 41, title: 'SAVE20 500s', url: 'https://github.com/acme/checkout/issues/41',
@@ -38,7 +38,7 @@ describe('the workspace\'s GitHub record, as the overview reads it', () => {
     const { sql } = workspace();
 
     recordGitHubActivity(sql, [{ action: 'opened', subject: 'pr', repo: 'acme/checkout', number: 42, title: 'Guard archived coupons', ref: 'fix/guard' }],
-      { actorId: 'main', source: 'egress', at: 10 });
+      { actorId: 'main', at: 10 });
     recordGitHubObservations(sql, [{ subject: 'pr', repo: 'acme/checkout', number: 42, state: 'merged', title: 'Guard archived coupons (#42)' }], 20);
 
     const [pr] = readGitHubActivity(sql, []).items;
@@ -50,10 +50,10 @@ describe('the workspace\'s GitHub record, as the overview reads it', () => {
   test('an issue closed by its node id lands on the issue its lookup named; an unknown node records nothing', () => {
     const { sql } = workspace();
 
-    recordGitHubActivity(sql, [{ action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41, title: 'SAVE20 500s' }], { actorId: 'main', source: 'mcp', at: 1 });
-    recordGitHubActivity(sql, [{ action: 'identified', subject: 'issue', repo: 'acme/checkout', number: 41, node: 'I_kw41' }], { actorId: null, source: 'egress', at: 2 });
-    recordGitHubActivity(sql, [{ action: 'closed', subject: 'issue', node: 'I_kw41', state: 'closed' }], { actorId: null, source: 'egress', at: 3 });
-    recordGitHubActivity(sql, [{ action: 'closed', subject: 'issue', node: 'I_unknown', state: 'closed' }], { actorId: null, source: 'egress', at: 4 });
+    recordGitHubActivity(sql, [{ action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41, title: 'SAVE20 500s' }], { actorId: 'main', at: 1 });
+    recordGitHubActivity(sql, [{ action: 'identified', subject: 'issue', repo: 'acme/checkout', number: 41, node: 'I_kw41' }], { actorId: null, at: 2 });
+    recordGitHubActivity(sql, [{ action: 'closed', subject: 'issue', node: 'I_kw41', state: 'closed' }], { actorId: null, at: 3 });
+    recordGitHubActivity(sql, [{ action: 'closed', subject: 'issue', node: 'I_unknown', state: 'closed' }], { actorId: null, at: 4 });
 
     expect(readGitHubActivity(sql, []).items).toEqual([expect.objectContaining({ repo: 'acme/checkout', number: 41, state: 'closed', lastAt: 3, unattributed: true })]);
   });
@@ -61,8 +61,8 @@ describe('the workspace\'s GitHub record, as the overview reads it', () => {
   test('a push and an agent\'s issue stay on the record however many refreshes follow', () => {
     const { sql } = workspace();
 
-    recordGitHubActivity(sql, [{ action: 'pushed', subject: 'repo', repo: 'acme/checkout', ref: 'fix/guard' }], { actorId: 'main', source: 'egress', at: 1 });
-    recordGitHubActivity(sql, [{ action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41 }], { actorId: 'scout', source: 'mcp', at: 2 });
+    recordGitHubActivity(sql, [{ action: 'pushed', subject: 'repo', repo: 'acme/checkout', ref: 'fix/guard' }], { actorId: 'main', at: 1 });
+    recordGitHubActivity(sql, [{ action: 'opened', subject: 'issue', repo: 'acme/checkout', number: 41 }], { actorId: 'scout', at: 2 });
 
     for (let at = 3; at < 2600; at += 1) recordGitHubObservations(sql, [{ subject: 'repo', repo: 'acme/checkout', ref: 'fix/guard', ci: 'pending' }], at);
 
@@ -75,10 +75,10 @@ describe('the workspace\'s GitHub record, as the overview reads it', () => {
   test('a repository shows its last push, its CI and whether it is a remote; one only cloned or only a remote still shows', () => {
     const { sql } = workspace();
 
-    recordGitHubActivity(sql, [{ action: 'fetched', subject: 'repo', repo: 'acme/checkout' }], { actorId: null, source: 'egress', at: 1 });
-    recordGitHubActivity(sql, [{ action: 'pushed', subject: 'repo', repo: 'acme/checkout', ref: 'fix/guard' }], { actorId: null, source: 'egress', at: 5 });
+    recordGitHubActivity(sql, [{ action: 'fetched', subject: 'repo', repo: 'acme/checkout' }], { actorId: null, at: 1 });
+    recordGitHubActivity(sql, [{ action: 'pushed', subject: 'repo', repo: 'acme/checkout', ref: 'fix/guard' }], { actorId: null, at: 5 });
     recordGitHubObservations(sql, [{ subject: 'repo', repo: 'acme/checkout', ref: 'fix/guard', ci: 'failure' }], 6);
-    recordGitHubActivity(sql, [{ action: 'fetched', subject: 'repo', repo: 'acme/docs' }], { actorId: null, source: 'egress', at: 7 });
+    recordGitHubActivity(sql, [{ action: 'fetched', subject: 'repo', repo: 'acme/docs' }], { actorId: null, at: 7 });
     recordGitHubObservations(sql, [{ subject: 'repo', repo: 'acme/docs', ref: 'main', ci: 'success' }], 8);
 
     expect(readGitHubActivity(sql, ['acme/checkout', 'acme/infra']).repos).toEqual([

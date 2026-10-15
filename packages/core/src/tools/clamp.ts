@@ -19,7 +19,6 @@ import { imageCarrier } from '../types/tool-images';
 import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import { successfulToolOutcome } from './outcome';
 
-export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;
 
 /** Estimated tokens (`estimateTokens` chars-per-token), not a tokenizer count. */
 const DEFAULT_TOOL_RESULT_MAX_TOKENS = 2_000;
@@ -46,7 +45,7 @@ type Offload = { readonly path: string } | { readonly failure: KinuError };
 
 /** The marker promises a path only after the write resolves. */
 function offload(files: Pick<Storage, 'vfs' | 'home'>, text: string): Effect.Effect<Offload> {
-  const directory = `${files.home}/${TOOL_OUTPUT_DIR}`;
+  const directory = `${files.home}/${SPILL_DIRS.toolOutput}`;
   const path = `${directory}/${nanoid(10)}.log`;
 
   return Effect.tryPromise({

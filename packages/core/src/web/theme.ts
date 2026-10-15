@@ -27,7 +27,7 @@ export function accountTheme(stored: string | null): ThemeName {
   return themeNamed(stored) ?? DEFAULT_THEME;
 }
 
-export type ColourToken =
+type ColourToken =
   | '--c-recessed' | '--c-bg' | '--c-sidebar' | '--c-surface' | '--c-elevated' | '--c-fill' | '--c-overlay'
   | '--c-border' | '--c-border-strong' | '--c-input-border' | '--c-dash'
   | '--c-text' | '--c-text-2' | '--c-text-3' | '--c-text-4'

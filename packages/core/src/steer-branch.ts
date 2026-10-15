@@ -81,7 +81,6 @@ export interface BranchStartInput {
   /** The live turn's mission scope (`MissionGovernor.scope`), read when the owner branches. */
   missionLabels: readonly string[];
   id?: string;
-  model?: string;
 }
 
 export interface SteerBranchHandle {
@@ -111,7 +110,6 @@ export async function startBranchHead(
     rationale: BRANCH_RATIONALE,
     inheritedContext: input.inheritedContext,
     budget: { ...BRANCH_HEAD_BUDGET, spawnedAt },
-    model: input.model,
     mergeStrategy: 'best_of',
     loop: defaultLoopOrigin('swarm'),
     ...forkMission(input.missionLabels),

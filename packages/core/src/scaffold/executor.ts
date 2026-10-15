@@ -73,7 +73,7 @@ export const SCAFFOLD_HOST_TYPES = `declare namespace host {
 
 export type ScaffoldToolOutput = Extract<UIMessageChunk, { type: 'tool-output-available' | 'tool-output-error' }>;
 
-export type ScaffoldModelEvent = ChatEvent | { type: 'native-tool-output'; output: ScaffoldToolOutput };
+type ScaffoldModelEvent = ChatEvent | { type: 'native-tool-output'; output: ScaffoldToolOutput };
 
 export type ScaffoldEvent =
   | { type: 'text_delta'; text: string }
@@ -100,7 +100,7 @@ export interface ScaffoldRunResult {
   finalResult?: JsonValue;
 }
 
-export type ScaffoldJsonEvent = Exclude<ScaffoldEvent, { type: 'chat_chunk' | 'model_chunk' | 'model_output' }>;
+type ScaffoldJsonEvent = Exclude<ScaffoldEvent, { type: 'chat_chunk' | 'model_chunk' | 'model_output' }>;
 
 /** A run result for crossing a process boundary; native chunks are only counted. */
 export interface ScaffoldRunReport extends Omit<ScaffoldRunResult, 'events'> {

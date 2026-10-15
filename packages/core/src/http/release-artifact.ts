@@ -5,7 +5,7 @@
 import { err } from './http';
 
 /** Structural slice of an R2 bucket, so the handler compiles in either backend. */
-export interface ReleaseArtifactObject {
+interface ReleaseArtifactObject {
   readonly size: number;
   readonly httpEtag: string;
   readonly body?: ReadableStream | null;

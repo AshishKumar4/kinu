@@ -19,16 +19,16 @@ const PROVEN_LABELS: readonly EvidenceLabel[] = [
   'observed-in-production',
 ];
 
-export type LimitUnit = 'bytes' | 'ms' | 'count';
+type LimitUnit = 'bytes' | 'ms' | 'count';
 
 /** Base unit only; call sites must not convert. */
-export interface PlatformQuantity {
+interface PlatformQuantity {
   readonly value: number;
   readonly unit: LimitUnit;
 }
 
 /** Copied verbatim, never paraphrased. */
-export interface PlatformObservable {
+interface PlatformObservable {
   readonly context: string;
   readonly message: string;
 }
@@ -38,9 +38,9 @@ export const BOUNDS_KINDS = [
   'peak-resident', 'wire', 'row', 'query', 'response', 'storage', 'bundle', 'duration', 'concurrency', 'count', 'silence',
 ] as const;
 
-export type BoundsKind = (typeof BOUNDS_KINDS)[number];
+type BoundsKind = (typeof BOUNDS_KINDS)[number];
 
-export interface PlatformMeasurement {
+interface PlatformMeasurement {
   readonly scenario: string;
   readonly value: number;
   readonly unit: LimitUnit;

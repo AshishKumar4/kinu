@@ -149,7 +149,7 @@ export interface AgentReview {
   readonly mode: WorkMode;
 }
 
-export interface AgentCaptureDelta {
+interface AgentCaptureDelta {
   readonly evidence: HeadCapture['evidence'];
   readonly decisions: HeadCapture['decisions'];
   readonly artifacts: HeadCapture['artifacts'];
