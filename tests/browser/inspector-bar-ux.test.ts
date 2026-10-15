@@ -366,6 +366,25 @@ describe('the Environment panel', () => {
     });
   });
 
+  // Staging fcc2e05d6: the computer-sessions row read the first session's line and terminal, kept mounted out of sight
+  // since D99, for a new session's; it waited 128 s for that shell and never saw the new folder.
+  test("the flows' reader reads the session shown, not one kept out of sight", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await openTheComputer(page, origin);
+        await (await required(page, '#inspector', 'tab', 'dev server')).click();
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace/storefront', ports: [':5173'] });
+
+        await page.click('#inspector button[aria-label="New session"]');
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 3, SOON);
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace', ports: [] });
+      } finally { await page.close(); }
+    });
+  });
+
   test('a session closed out of sight takes its kept terminal with it', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

@@ -2711,8 +2711,25 @@ export interface DesktopSwitchVerdict {
   readonly keptReturned: boolean;
 }
 
-/** The terminal a person sees in the inspector: the one shown, of every one the column keeps open. */
+/**
+ * The terminal a person sees in the inspector: the one shown, of every one the column keeps open (D99). The first in
+ * the document is the oldest kept out of sight: staging fcc2e05d6's computer-sessions row read it for a new session's.
+ */
 const SHOWN_TERMINAL = `[...document.querySelectorAll('#inspector .xterm-rows')].find((rows) => rows.checkVisibility({ visibilityProperty: true }))`;
+
+/** The shown terminal's screen, where a person clicks to type. */
+const SHOWN_SCREEN = `${SHOWN_TERMINAL}?.closest('.xterm')?.querySelector('.xterm-screen')`;
+
+/** Clicks the shown terminal's screen as a person does, so what is typed next reaches that terminal. */
+async function clickShownTerminal(page: Page): Promise<void> {
+  const middle = v.parse(v.nullable(v.object({ x: v.number(), y: v.number() })), await page.evaluate(`(() => {
+    const box = ${SHOWN_SCREEN}?.getBoundingClientRect();
+    return box === undefined ? null : { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  })()`));
+
+  if (middle === null) throw new Error('no terminal shown to type into');
+  await page.mouse.click(middle.x, middle.y);
+}
 
 /** The desktop's client document, marked so a reopened one is told apart from the one left. */
 const DESKTOP_WINDOW = `document.querySelector('#inspector [data-desktop-frame] iframe')?.contentWindow`;
@@ -2832,11 +2849,11 @@ export async function agentJobIsAnsweredInItsSession(target: FlowTarget): Promis
     await until(page, 'the job marked as waiting for input', `document.querySelector('#inspector [data-session-waiting]') !== null`);
     const markedWaiting = true;
 
-    await until(page, "the job's prompt on its screen", `(document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('Release to production?')`);
-    await page.click('#inspector .xterm-screen');
+    await until(page, "the job's prompt on its screen", `(${SHOWN_TERMINAL}?.textContent ?? '').includes('Release to production?')`);
+    await clickShownTerminal(page);
     await page.keyboard.type('y');
     await page.keyboard.press('Enter');
-    await until(page, "the job's answer on its screen", `(document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('release answered y')`);
+    await until(page, "the job's answer on its screen", `(${SHOWN_TERMINAL}?.textContent ?? '').includes('release answered y')`);
     await until(page, 'the wait mark gone', `document.querySelector('#inspector [data-session-waiting]') === null`);
     await page.close();
 
@@ -2857,13 +2874,18 @@ export interface SessionsVerdict {
 }
 
 /**
- * The open session's details line under `scope`: its folder and the ports under it. The folder is the one its element
- * names: its text holds the whole path for a wide pane and the last part for a narrow one (staging f1f0b451b).
+ * The shown session's details line under `scope`: its folder and the ports under it. The folder is the one its element
+ * names: its text holds the whole path for a wide pane and the last part for a narrow one (staging f1f0b451b). Only the
+ * shown pane's: the column keeps every opened session's pane mounted out of sight (D99).
  */
-export const sessionLine = (scope: string) => `(() => ({
-  folder: document.querySelector('${scope} [data-session-cwd]')?.getAttribute('data-session-cwd') ?? '',
-  ports: [...document.querySelectorAll('${scope} [data-session-port]')].map((port) => (port.textContent ?? '').trim()),
-}))()`;
+export const sessionLine = (scope: string) => `(() => {
+  const shown = (each) => each.checkVisibility({ visibilityProperty: true });
+
+  return {
+    folder: [...document.querySelectorAll('${scope} [data-session-cwd]')].find(shown)?.getAttribute('data-session-cwd') ?? '',
+    ports: [...document.querySelectorAll('${scope} [data-session-port]')].filter(shown).map((port) => (port.textContent ?? '').trim()),
+  };
+})()`;
 
 const SESSION_LINE = sessionLine('#inspector');
 
@@ -2892,8 +2914,8 @@ export async function computerSessionsComeBackByName(target: FlowTarget): Promis
     await until(page, "the computer's first session", `${SESSION_TABS}.length === 1`);
     await page.click('#inspector button[aria-label="New session"]');
     await until(page, 'a second session, open', `${SESSION_TABS}.length === 2 && document.querySelector('#inspector [role="tab"][aria-selected="true"]')?.textContent?.trim() === ${SESSION_TABS}[1]`);
-    await until(page, "the new session's shell", `document.querySelector('#inspector .xterm-rows') !== null && (document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('#')`);
-    await page.click('#inspector .xterm-screen');
+    await until(page, "the new session's shell", `(${SHOWN_TERMINAL}?.textContent ?? '').includes('#')`);
+    await clickShownTerminal(page);
     await page.keyboard.type('mkdir -p /workspace/flow-web && cd /workspace/flow-web && python3 -m http.server 8765');
     await page.keyboard.press('Enter');
     await until(page, "the session's line naming its folder and port", `(() => { const line = ${SESSION_LINE}; return line.folder === '/workspace/flow-web' && line.ports.includes(':8765'); })()`);
@@ -2916,7 +2938,7 @@ export async function computerSessionsComeBackByName(target: FlowTarget): Promis
     await until(page, 'the size choices', `document.querySelector('[role="option"][aria-selected="false"]') !== null`);
     await (await page.$('[role="option"][aria-selected="false"]'))?.click();
     await until(page, 'the computer restarting', `document.querySelector('#inspector .xterm-rows') === null`);
-    await until(page, "the restarted computer's sessions", `${SESSION_TABS}.includes('web') && document.querySelector('#inspector .xterm-rows') !== null`);
+    await until(page, "the restarted computer's sessions", `${SESSION_TABS}.includes('web') && ${SHOWN_TERMINAL} !== undefined`);
     await page.evaluate(`[...document.querySelectorAll('#inspector [role="tab"]')].find((tab) => (tab.textContent ?? '').trim() === 'web').click()`);
     await until(page, "the renamed session's fresh shell in its folder", `(${SESSION_LINE}).folder === '/workspace/flow-web'`);
 
