@@ -20,7 +20,7 @@ import { initSearchTables } from '../mcts/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { JsonValueSchema } from '../utils/json';
 import {
   FloorBreachSchema, MeasuredValueSchema, isBetter,
   type FloorBreach, type MeasuredValue, type ObjectiveDirection, type ParetoAxis, type ParetoEvidence, type PublicationState,
@@ -430,25 +430,6 @@ export function readStartedSwarmProfile(storage: {
   return newest ? ledger.readSwarmProfile(newest.rootId) : null;
 }
 
-/** One reader per envelope version; each parses the whole envelope under its own schema. */
-const RECORD_READERS = {
-  1(nodeId: string, decoded: JsonValue): Effect.Effect<SwarmNodeRecord, KinuError> {
-    const parsed = v.safeParse(StoredSwarmNodeRecordSchema, decoded);
-
-    if (!parsed.success) {
-      return Effect.fail(new KinuError('io',
-        `the durable record for node ${nodeId} of this search will not read back under its own `
-        + 'schema version 1: '
-        + `${parsed.issues.map((issue) => issue.message).join('; ')}. This engine writes that `
-        + 'version itself, so it is corruption rather than an old shape.'));
-    }
-
-    const { v: _version, ...record } = parsed.output;
-
-    return Effect.succeed(record);
-  },
-} satisfies Record<number, (nodeId: string, decoded: JsonValue) => Effect.Effect<SwarmNodeRecord, KinuError>>;
-
 /**
  * A stored record, or a throw naming the node. Never a default: this row ranks the winner and
  * holds the seal. A missing stamp is corruption.
@@ -465,7 +446,19 @@ function parseRecord(nodeId: string, json: string): Effect.Effect<SwarmNodeRecor
         + 'engine, and continuing would rank candidates against rows this build cannot read.');
     }
 
-    return yield* RECORD_READERS[RECORD_SCHEMA_VERSION](nodeId, decoded);
+    const parsed = v.safeParse(StoredSwarmNodeRecordSchema, decoded);
+
+    if (!parsed.success) {
+      return yield* new KinuError('io',
+        `the durable record for node ${nodeId} of this search will not read back under its own `
+        + `schema version ${String(RECORD_SCHEMA_VERSION)}: `
+        + `${parsed.issues.map((issue) => issue.message).join('; ')}. This engine writes that `
+        + 'version itself, so it is corruption rather than an old shape.');
+    }
+
+    const { v: _version, ...record } = parsed.output;
+
+    return record;
   });
 }
 
