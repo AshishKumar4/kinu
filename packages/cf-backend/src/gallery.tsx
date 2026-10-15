@@ -91,7 +91,7 @@ import {
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory, ownerAsks,
-  parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
+  FILES_PAGE_ENTRIES, parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
@@ -5903,6 +5903,7 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
     ]],
     ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
     ["/home/main", [
+      { name: "logs", type: "dir", mtimeMs: NOW - 60e3 },
       { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
       { name: "skills", type: "dir", mtimeMs: NOW - 20 * 864e5 },
       { name: "AGENTS.md", type: "file", size: 2_148, mtimeMs: NOW - 3 * 864e5 },
@@ -5911,6 +5912,10 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       { name: "binary-weights.bin", type: "file", size: 4_089_446, mtimeMs: NOW - 6 * 864e5 },
     ]],
     ["/home/main/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
+    // More than two pages: the folder lists its first, and Load more the rest.
+    ["/home/main/logs", Array.from({ length: 1_234 }, (_, at) => ({
+      name: `run-${String(at).padStart(4, "0")}.log`, type: "file" as const, size: 2_048 + at, mtimeMs: NOW - at * 60e3,
+    }))],
     ["/home/main/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
     ["/computer", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
     ["/computer/workspace", [
@@ -5931,6 +5936,13 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   }
 
   return tree;
+}
+
+/** A page of `entries` from `from`, as `getExecutorFiles` answers one: `next` while more follow. */
+function filesPage(dir: string, entries: readonly DirEntry[], from = 0) {
+  const end = from + FILES_PAGE_ENTRIES;
+
+  return { path: dir, entries: entries.slice(from, end), ...(end < entries.length && { next: end }) };
 }
 
 /** As `deviceMountSegment` keys a fleet of one. */
@@ -5997,7 +6009,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
     if (method === "listMounts") return rpcResult(v.parse(JsonValueSchema, mounts)).json<T>();
 
     if (method === "getExecutorFiles") {
-      const [execName, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      const [execName, path, from] = v.parse(v.tuple([v.string(), v.string(), v.optional(v.number())]), args ?? []);
 
       noteListing(path);
 
@@ -6007,7 +6019,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
       const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
-      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, { path: dir, entries })).json<T>();
+      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, filesPage(dir, entries, from))).json<T>();
 
       // In the words of `deviceFiles`' path guard.
       const error = dir.startsWith(PC_MOUNT)

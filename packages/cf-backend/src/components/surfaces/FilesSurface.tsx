@@ -54,6 +54,88 @@ const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
 
 
 
+/** A folder's page as the server answers it: `next` is where the following page starts, absent after the last. */
+interface FolderPage { readonly path: string; readonly entries: DirEntry[]; readonly next?: number }
+
+/**
+ * The folder at `path`, a page at a time: the first as the path opens, each following one on `more`. A bare mount
+ * point's answer names the folder it landed on, which `adopt` makes the path; `cache` hears each first page.
+ */
+function useFolder(rpc: WorkspaceRpc, path: string, adopt: (path: string) => void, cache: (dir: string, entries: DirEntry[]) => void) {
+  const listDir = useCallback((dir: string, from?: number): Promise<FolderPage> => settle(Effect.gen(function* () {
+    const r = yield* Effect.promise(async () => rpc("getExecutorFiles", from === undefined ? [PLANE, dir] : [PLANE, dir, from]));
+
+    if (r.error) return yield* Effect.die(new Error(r.error));
+    const listed = r.entries ?? [];
+    const at = r.path ?? dir;
+
+    if (from === undefined) cache(at, listed);
+
+    return { path: at, entries: listed, ...(r.next !== undefined && { next: r.next }) };
+  })), [cache, rpc]);
+
+  /** A bare mount point's listing, answered for the directory it landed on: written as that listing adopts the
+   *  landed path, taken by the load the adoption starts, which then asks for nothing. */
+  const landed = useRef<FolderPage | null>(null);
+
+  // Keyed on `path` so an old directory's listing never renders under the new breadcrumb.
+  const loadListing = useCallback((): Promise<FolderPage> => settle(Effect.catchCause(Effect.gen(function* () {
+    const held = landed.current;
+
+    landed.current = null;
+
+    if (held?.path === path) return held;
+    const listed = yield* Effect.promise(async () => listDir(path));
+
+    // A bare mount point lists the consented directory; adopt the returned path so child paths resolve.
+    if (listed.path !== path) {
+      landed.current = listed;
+      adopt(listed.path);
+    }
+
+    return listed;
+  }), (failed) => Effect.gen(function* () {
+    const e = Cause.squash(failed);
+
+    return yield* Effect.die(new Error(renderThrownChain({ cause: e }), { cause: e }));
+  }))), [adopt, listDir, path]);
+
+  const { resource: listing, reload } = useAsyncResource(loadListing, undefined, path);
+  // The pages read after the first, dropped whenever the first is read again.
+  const [later, setLater] = useState<FolderPage | null>(null);
+
+  useEffect(() => { setLater(null); }, [listing]);
+
+  const first = lastValue(listing);
+  const shown = later?.path === first?.path ? later : null;
+  const next = shown === null ? first?.next : shown.next;
+
+  const more = useCallback(async () => {
+    if (first === null || next === undefined) return;
+    const page = await listDir(first.path, next);
+
+    setLater({ path: first.path, entries: [...(shown?.entries ?? []), ...page.entries], ...(page.next !== undefined && { next: page.next }) });
+  }, [first, listDir, next, shown]);
+
+  return {
+    listing, listDir, reload, more, next,
+    entries: [...(first?.entries ?? []), ...(shown?.entries ?? [])],
+    loading: listing.status === "loading",
+    err: listing.status === "error" ? listing.message : null,
+  };
+}
+
+/** The row under a folder's loaded entries while it has more: pressed, the next page joins them. */
+function MoreRow({ more }: { more: (() => Promise<void>) | null }) {
+  if (more === null) return null;
+
+  return (
+    <button type="button" data-files-more onClick={() => detach(Effect.promise(more))}
+      className="flex items-center gap-2 w-full text-left px-3 py-1.5 p-text-3 hover:p-text p-row-hover"
+    ><CaretDownIcon size={12} className="shrink-0" /><span>Load more</span></button>
+  );
+}
+
 export interface FilesSurfaceProps {
   rpc: WorkspaceRpc;
   executors: ExecutorInfo[];
@@ -89,47 +171,9 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const { resource: mountsResource, reload: reloadMounts } = useMounts(rpc, executors);
   const mounts = lastValue(mountsResource) ?? [];
 
-  const listDir = useCallback((dir: string): Promise<{ path: string; entries: DirEntry[] }> => settle(Effect.gen(function* () {
-    const r = yield* Effect.promise(async () => rpc("getExecutorFiles", [PLANE, dir]));
-
-    if (r.error) return yield* Effect.die(new Error(r.error));
-    const listed = r.entries ?? [];
-    const at = r.path ?? dir;
-    setTreeCache((prev) => nextTreeCache(prev, at, listed));
-
-    return { path: at, entries: listed };
-  })), [rpc]);
-
-  /** A bare mount point's listing, answered for the directory it landed on: written as that listing adopts the
-   *  landed path, taken by the load the adoption starts, which then asks for nothing. */
-  const landed = useRef<{ readonly path: string; readonly entries: DirEntry[] } | null>(null);
-
-  // Keyed on `path` so an old directory's listing never renders under the new breadcrumb.
-  const loadListing = useCallback((): Promise<DirEntry[]> => settle(Effect.catchCause(Effect.gen(function* () {
-    const held = landed.current;
-
-    landed.current = null;
-
-    if (held?.path === path) return held.entries;
-    const listed = yield* Effect.promise(async () => listDir(path));
-
-    // A bare mount point lists the consented directory; adopt the returned path so child paths resolve.
-    if (listed.path !== path) {
-      landed.current = listed;
-      setPath(listed.path);
-    }
-
-    return listed.entries;
-  }), (failed) => Effect.gen(function* () {
-    const e = Cause.squash(failed);
-
-    return yield* Effect.die(new Error(renderThrownChain({ cause: e }), { cause: e }));
-  }))), [listDir, path]);
-
-  const { resource: listing, reload: reloadListing } = useAsyncResource(loadListing, undefined, path);
-  const entries = lastValue(listing) ?? [];
-  const loading = listing.status === "loading";
-  const err = listing.status === "error" ? listing.message : null;
+  const cacheListing = useCallback((dir: string, listed: DirEntry[]) => setTreeCache((prev) => nextTreeCache(prev, dir, listed)), []);
+  const folder = useFolder(rpc, path, setPath, cacheListing);
+  const { listing, entries, loading, err, listDir, reload: reloadListing } = folder;
 
   useEffect(() => {
     if (listing.status === "ready") setSelected(0);
@@ -449,6 +493,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               </div>
             );
           })}
+          {!loading && <MoreRow more={folder.next === undefined ? null : () => run(Effect.promise(folder.more))} />}
           {!loading && filtered.length === 0 && entries.length > 0 && (
             <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
           )}
@@ -458,6 +503,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           {!loading && filtered.length > 0 && (
             <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta tabular-nums border-t p-border mt-1">
               {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount)}
+              {folder.next !== undefined && <span className="p-text-4">, more below</span>}
               <span className="ml-2 hidden @[44rem]:inline p-text-4">↑↓ move · Enter open · Backspace up · F2 rename · Del delete</span>
             </div>
           )}
