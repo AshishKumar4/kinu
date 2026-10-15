@@ -43,8 +43,6 @@ export const REFINEMENT_EDIT_KINDS = [
   'fact', 'prompt_section', 'skill', 'subagent_spec',
 ] as const;
 
-export type RefinementEditKind = (typeof REFINEMENT_EDIT_KINDS)[number];
-
 /** Exported so the refiner's brief states the same floor the parse enforces. */
 export const MIN_EDIT_RATIONALE = 40;
 
@@ -296,7 +294,7 @@ export function nextEvolutionAnswerAt(sql: SqlExecutor, actorId: string): number
   return v.parse(EvolutionAnswerAtSchema, row ?? { at: null }).at;
 }
 
-export interface OpenRefinementInput {
+interface OpenRefinementInput {
   readonly trigger: RefinementTrigger;
   readonly scope: RefinementScope;
   readonly turnIds: readonly string[];

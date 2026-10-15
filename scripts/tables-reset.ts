@@ -1,44 +1,37 @@
 /**
- * A tables reset: a release that reshaped or removed some tables, and no others, drops just those on every object
- * that holds them, and each object's own init makes them in the new shape. Every other table, and every workspace's
- * chat and files, stays as it was. A full reset (`reset.ts wipe`) deletes every object; this is for a release that
- * changes so little that wiping would cost every workspace for it.
+ * A release that reshapes tables. Each Durable Object repairs its own database the first time the new build opens it,
+ * before any call reads it (core state/schema-repair.ts), so no step here is needed for a database to be right. This is
+ * the deploy's view of those repairs, before and after the upload.
  *
- * WHICH TABLES. The genesis lock (scripts/schema-genesis.lock.json) of the build the deployment served before, diffed
- * against the candidate's: a table the candidate no longer declares is `removed`, one whose genesis moved is
- * `reshaped`, one only the candidate declares needs nothing (its object's init makes it). No list is written by hand.
- * Each database rebuilds a reshaped table keeping its rows where a rolled-back trial finds it can, and drops it only
- * where the copy fails (core state/tables-reset.ts).
+ * THE PLAN, before the upload. The genesis lock (scripts/schema-genesis.lock.json) of the build the deployment serves,
+ * diffed against the candidate's: each table that changed, the class whose init makes it (scripts/schema-classes.json),
+ * and what its repair does. A reshaped table is rebuilt keeping its rows; a removed one is dropped where it is held; one
+ * gaining a NOT NULL column with no default cannot keep its rows, which a regenerable cache (its DDL says so, and what
+ * refills it) gives up and any other table refuses. A changed table no class makes is repaired by no object, so it must
+ * take this build's writes as it is. Every refusal stops the deploy before the upload; production confirms, in words
+ * naming them, the tables whose rows go.
  *
- * WHICH DATABASES. Every object Cloudflare lists in the UserDO and OrchestratorAgent namespaces
- * (`/workers/durable_objects/namespaces/{id}/objects`), reached by id through the candidate's `/ops/tables` route,
- * which asks each what it holds; each workspace asks every agent database it keeps (`workspace/agent`), a retired
- * agent's too. Which class holds a table is what the databases answer: measured, never assumed. A changed table no
- * database holds is said so (a CLI-local table is one), and an object that could not answer is named with why.
+ * THE WALK, after the upload: every object opened once under the candidate, so each repairs itself before a user waits
+ * on it, and its census read back with what its repair did. It starts from the accounts `/ops/roots` names (the builtin
+ * sign-in directory, every user the control plane has seen, the eval service's own), follows each account to its
+ * workspaces and each workspace to its agents, and reaches besides every object Cloudflare lists, which names only
+ * objects holding KV data and so misses a database that holds only SQL. A refused or row-losing database fails the
+ * walk; one it could not reach is a gap in the census, named with why. The census goes beside the record.
  *
- * STAMPS. Each database carries its class's stamp (core identity/schema-stamp.ts); one behind it answers every call
- * but this step's with why, so the step also brings up databases whose class's tables moved without a change it
- * drops, and stamps each it reaches.
+ * THE PASS. `/ops/tables` and `/ops/roots` admit a one-time pass this step writes into the deployment's AUTH_KV with
+ * wrangler, the authority `reset.ts wipe` deletes with, and deletes when it is done; no session reaches them.
  *
- * THE PASS. `/ops/tables` admits a one-time pass this step writes into the deployment's AUTH_KV with wrangler, the
- * authority `reset.ts wipe` deletes with, and deletes when it is done; no session reaches the route.
- *
- * SAFE TO STOP AND RUN AGAIN. A reshaped table is rebuilt only while its CREATE statement is not the candidate's, and a
- * removed one dropped only while it exists, so a rerun changes nothing a finished run made.
- *
- *   bun scripts/reset.ts census <environment> <out>             every table's rows per object, one line each, sorted
- *   bun scripts/reset.ts tables <environment> <record> [--from <sha>]
- *                                                             the plan, then the drops; production asks for the typed
- *                                                             confirmation that names the tables
+ *   bun scripts/reset.ts tables-plan <environment> <record> [--from <sha>]   the plan, and production's confirmation
+ *   bun scripts/reset.ts tables <environment> <record>                      the walk
  */
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import * as v from 'valibot';
-import { OPS_OBJECTS_PER_REQUEST, sha256Hex, type ChangedTable, type TablesAnswer, type TablesRequest } from '@kinu.run/core';
+import { OPS_OBJECTS_PER_REQUEST, REGENERABLE, sha256Hex, type TablesAnswer } from '@kinu.run/core';
 import { restCall } from './cloudflare-rest';
 import type { GenesisLock } from './schema-drift';
 
-/** The classes a tables reset reaches, as `/ops/tables` names them. */
+/** The classes the walk reaches, as `/ops/tables` names them. */
 export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent'] as const;
 
 export type ResetClass = (typeof RESET_CLASSES)[number];
@@ -46,29 +39,35 @@ export type ResetClass = (typeof RESET_CLASSES)[number];
 /** AUTH_KV's propagation: a pass written now may not be read at the edge for up to a minute. */
 const PASS_PROPAGATION_MS = 90_000;
 
-/** What changed between two locks: the tables to drop or mend, and those only the candidate declares. */
+/** A table the release changed: `removed` from the candidate, or `reshaped` in it. */
+export interface ChangedTable {
+  readonly table: string;
+  readonly change: 'removed' | 'reshaped';
+}
+
+/** What changed between two locks: the tables that changed, and those only the candidate declares. */
 export interface ReleaseTables {
   readonly changed: ChangedTable[];
   readonly added: readonly string[];
 }
 
-/** Every table's genesis by name. A name two files declare differently is two tables in two databases, which a
- *  change to either could not be told apart in: it is named, and the step refuses it. */
+/** Every table's genesis by name, and the file that declares it. A name two files declare differently is two tables
+ *  in two databases, which a change to either could not be told apart in: it is named, and the plan refuses it. */
 interface LockTables {
-  readonly tables: Map<string, readonly string[]>;
+  readonly tables: Map<string, { readonly parts: readonly string[]; readonly file: string }>;
   readonly ambiguous: Set<string>;
 }
 
 function byTable(lock: GenesisLock): LockTables {
-  const tables = new Map<string, readonly string[]>();
+  const tables = new Map<string, { readonly parts: readonly string[]; readonly file: string }>();
   const ambiguous = new Set<string>();
 
   for (const [key, parts] of Object.entries(lock)) {
     const table = key.slice(0, key.indexOf('@'));
     const held = tables.get(table);
 
-    if (held !== undefined && !sameParts(held, parts)) ambiguous.add(table);
-    tables.set(table, parts);
+    if (held !== undefined && !sameParts(held.parts, parts)) ambiguous.add(table);
+    tables.set(table, { parts, file: key.slice(key.indexOf('@') + 1) });
   }
 
   return { tables, ambiguous };
@@ -86,11 +85,11 @@ export function changedTables(from: GenesisLock, to: GenesisLock): ReleaseTables
   const ambiguous = [...before.ambiguous, ...after.ambiguous].filter((table, at, all) => all.indexOf(table) === at);
   const changed: ChangedTable[] = [];
 
-  for (const [table, parts] of [...before.tables].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [table, { parts }] of [...before.tables].sort(([a], [b]) => a.localeCompare(b))) {
     const now = after.tables.get(table);
 
     if (now === undefined) changed.push({ table, change: 'removed' });
-    else if (!sameParts(now, parts)) changed.push({ table, change: 'reshaped' });
+    else if (!sameParts(now.parts, parts)) changed.push({ table, change: 'reshaped' });
   }
 
   const added = [...after.tables.keys()].filter((table) => !before.tables.has(table)).sort();
@@ -98,198 +97,356 @@ export function changedTables(from: GenesisLock, to: GenesisLock): ReleaseTables
 
   if (touched.length > 0) {
     throw new Error(`${touched.join(', ')} is declared differently by two files, two tables in two databases, and changed: `
-      + 'this step cannot tell which store holds which; that needs a full reset (deploy --reset)');
+      + 'no repair can tell which store holds which; that needs a full reset (deploy --reset)');
   }
 
   return { changed, added };
 }
 
-/** One object as a run reached it. */
+/** The word a genesis part starts with when it constrains the table, rather than declaring a column. */
+const TABLE_CONSTRAINT = /^(?:PRIMARY|UNIQUE|CHECK|FOREIGN|CONSTRAINT)\b/iu;
+
+/** A part's column, or null for a table constraint. */
+function columnOf(part: string): string | null {
+  return TABLE_CONSTRAINT.test(part) ? null : (part.split(/\s+/u)[0] ?? '').replaceAll('"', '');
+}
+
+/** A column a row cannot be written without: NOT NULL, no default (or a NULL one), not generated, not a rowid alias. */
+function required(part: string): boolean {
+  const defaulted = /\bDEFAULT\b/iu.test(part) && !/\bDEFAULT\s+\(?\s*NULL\b/iu.test(part);
+
+  return /\bNOT NULL\b/iu.test(part) && !defaulted && !/\bGENERATED\b|^\S+\s+INTEGER\s+PRIMARY KEY\b/iu.test(part);
+}
+
+/** One changed table as the plan finds it. */
+export interface TableVerdict {
+  readonly table: string;
+  /** The classes whose init makes it, in the candidate. */
+  readonly classes: readonly string[];
+  readonly does: 'rebuild' | 'retire' | 'refill' | 'as-is' | 'local' | 'refuse';
+  /** For `refill`, what refills it; for `refuse`, why. */
+  readonly why?: string;
+}
+
+/** What each repair does to `table`, from its genesis in both locks: `regenerable` is what refills it, when its
+ *  candidate DDL declares it a cache. */
+export function verdictOf(table: ChangedTable, at: { from: GenesisLock; to: GenesisLock; classes: Readonly<Record<string, readonly string[]>>; regenerable: string | null }): TableVerdict {
+  const classes = Object.entries(at.classes).filter(([, tables]) => tables.includes(table.table)).map(([name]) => name);
+  const before = byTable(at.from).tables.get(table.table)?.parts ?? [];
+  const after = byTable(at.to).tables.get(table.table)?.parts ?? [];
+  const held = new Set(before.map(columnOf));
+  const added = after.filter((part) => columnOf(part) !== null && !held.has(columnOf(part)));
+  const unfillable = added.filter(required).map(columnOf);
+  const verdict = { table: table.table, classes };
+
+  if (table.change === 'removed') return { ...verdict, does: 'retire' };
+
+  if (classes.length > 0 && classes.every((name) => name === 'local')) return { ...verdict, does: 'local' };
+
+  // A view holds no rows: its class's repair makes it again from the init; none makes one no class's init does.
+  if (after.length === 1 && /^SELECT\b/iu.test(after[0] ?? '')) {
+    return classes.length > 0 ? { ...verdict, does: 'rebuild', why: 'a view, made again by its init' }
+      : { ...verdict, does: 'refuse', why: 'a view no class\'s init makes, so no repair makes it again' };
+  }
+
+  if (classes.length === 0) {
+    // No object repairs it: it stays as the build before made it, which must take this build's writes.
+    const kept = new Set(after.map(columnOf));
+    const dropped = before.filter((part) => columnOf(part) !== null && !kept.has(columnOf(part)) && required(part)).map(columnOf);
+
+    const reasons = [
+      ...added.length > 0 ? [`it lacks this build's new column(s) ${added.map(columnOf).join(', ')}`] : [],
+      ...dropped.length > 0 ? [`its old column(s) ${dropped.join(', ')} refuse this build's rows`] : [],
+      ...after.some((part) => columnOf(part) === null && !before.includes(part)) ? ['its constraints changed'] : [],
+      ...after.some((part) => columnOf(part) !== null && held.has(columnOf(part)) && !before.includes(part)) ? ['a column it keeps changed'] : [],
+    ];
+
+    return reasons.length === 0 ? { ...verdict, does: 'as-is' }
+      : { ...verdict, does: 'refuse', why: `no class's init makes it, so no repair reaches it, and as the build before left it ${reasons.join('; ')}` };
+  }
+
+  if (unfillable.length === 0) return { ...verdict, does: 'rebuild' };
+
+  return at.regenerable === null
+    ? { ...verdict, does: 'refuse', why: `its new column(s) ${unfillable.join(', ')} have no default, so its rows cannot be kept, and its DDL does not declare it a regenerable cache` }
+    : { ...verdict, does: 'refill', why: at.regenerable };
+}
+
+/** What refills `table`, read off its CREATE statement in `source` (its declaring file), or null for no cache. */
+export function regenerableIn(source: string, table: string): string | null {
+  const start = new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(([^\\n]*)`, 'u').exec(source);
+
+  return start === null ? null : REGENERABLE.exec(start[1] ?? '')?.[1] ?? null;
+}
+
+/** The plan's lines: what each changed table's repair does, grouped, the tables whose rows go named first. */
+export function planLines(verdicts: readonly TableVerdict[], added: readonly string[]): string[] {
+  const named = (does: TableVerdict['does']) => verdicts.filter((verdict) => verdict.does === does);
+  const line = (verdict: TableVerdict) => `  ${verdict.table} [${verdict.classes.join(', ') || 'no class'}]${verdict.why === undefined ? '' : `: ${verdict.why}`}`;
+  const section = (title: string, does: TableVerdict['does']) => (named(does).length === 0 ? [] : [title, ...named(does).map(line)]);
+
+  return [
+    ...section('REFUSED (the deploy stops here):', 'refuse'),
+    ...section('LOSES DATA, a regenerable cache made anew empty where its rows cannot be copied, then refilled by:', 'refill'),
+    ...section('LOSES DATA, dropped where held (no build reads it):', 'retire'),
+    ...section('rebuilt where held, every row kept:', 'rebuild'),
+    ...section('left as the build before made it, which takes this build\'s writes (no class makes it):', 'as-is'),
+    ...section('CLI-local, outside this deploy:', 'local'),
+    ...added.length === 0 ? [] : [`added, made by each database's init: ${added.join(', ')}`],
+  ];
+}
+
+/** The words a production deploy that loses rows is confirmed with, naming every table whose rows go; null where
+ *  none does. */
+export function confirmation(verdicts: readonly TableVerdict[]): string | null {
+  const named = (does: TableVerdict['does']) => verdicts.filter((verdict) => verdict.does === does).map(({ table }) => table).sort().join(',');
+  const refill = named('refill');
+  const retire = named('retire');
+
+  return refill === '' && retire === '' ? null : `repair tables refill ${refill || '-'} retire ${retire || '-'}`;
+}
+
+/** One object as the walk reached it. */
 export interface Reached {
   readonly className: ResetClass;
   readonly id: string;
+  readonly name?: string;
   readonly answer?: TablesAnswer;
   readonly error?: string;
 }
 
-/** One database a run reached: an account's, a workspace's, or one of a workspace's agents' (`workspace/agent`). */
+/** One database the walk reached: an account's, a workspace's, or one of a workspace's agents' (`workspace/agent`). */
 export interface Store {
   readonly kind: ResetClass | 'agent';
   readonly label: string;
-  readonly answer: Omit<TablesAnswer, 'name' | 'agents'>;
+  readonly answer: Pick<TablesAnswer, 'census' | 'repair' | 'refused'>;
 }
 
 /** Every database the answers name, a workspace's agents after it; an object that gave none is not one. */
 export function storesOf(reached: readonly Reached[]): Store[] {
   return reached.flatMap((object) => {
     if (object.answer === undefined) return [];
-    const label = object.answer.name ?? object.id;
+    const label = object.answer.name ?? object.name ?? object.id;
 
     return [
       { kind: object.className, label, answer: object.answer },
-      ...(object.answer.agents ?? []).map((agent): Store => ({ kind: 'agent', label: `${label}/${agent.name}`, answer: agent })),
+      ...object.answer.agents.map((agent): Store => ({ kind: 'agent', label: `${label}/${agent.name}`, answer: agent })),
     ];
   });
 }
 
 /** Every table's rows per database, one tab-separated line each, sorted: two of these diff line by line. */
 export function censusLines(reached: readonly Reached[]): string[] {
-  const unreachable = reached.filter((object) => object.answer === undefined).map((object) => `${object.className}\t${object.id}\t!unreachable\t${object.error ?? ''}`);
+  const unreachable = reached.filter((object) => object.answer === undefined).map((object) => `${object.className}\t${object.name ?? object.id}\t!unreachable\t${object.error ?? ''}`);
 
   return [...unreachable, ...storesOf(reached).flatMap((store) => store.answer.census.map((row) => `${store.kind}\t${store.label}\t${row.table}\t${String(row.rows)}`))].sort();
 }
 
-/** One changed table as the databases hold it: who holds it in the build before's form, and with how many rows. */
-function holdersOf(table: ChangedTable, stores: readonly Store[]) {
-  return stores.flatMap((store) => {
-    const held = store.answer.held.find((entry) => entry.table === table.table);
-
-    return held === undefined ? [] : [{ store, held }];
-  });
+/** What the walk found, to print, and the databases that fail it: a repair that refused, or one whose rebuilt table's
+ *  rows moved. An object the walk did not reach is a gap in its census, never a failure: it repairs at its first
+ *  request, which correctness waits on, and the walk only warms. */
+export interface WalkReport {
+  readonly lines: string[];
+  readonly failed: string[];
 }
 
-/** What a run changes, lossless first, then what loses rows, then the stamps it brings up: each table with its class,
- *  and per database. */
-export function planLines(changed: readonly ChangedTable[], added: readonly string[], reached: readonly Reached[]): string[] {
+/** What the walk found: each repair, each refusal, each object that did not answer, and each rebuilt table whose rows
+ *  moved, which no repair should do. */
+export function walkLines(reached: readonly Reached[], listed: number): WalkReport {
   const stores = storesOf(reached);
-  const lossless: string[] = [];
-  const losing: string[] = [];
-  const nobody: string[] = [];
+  const repaired = stores.filter((store) => store.answer.repair !== null && store.answer.refused === null);
+  const refused = stores.filter((store) => store.answer.refused !== null).map((store) => `${store.kind} ${store.label}: ${store.answer.refused ?? ''}`);
+  const unreached = reached.filter((object) => object.answer === undefined).map((object) => `${object.className} ${object.name ?? object.id}: ${object.error ?? ''}`);
 
-  for (const table of changed) {
-    const holders = holdersOf(table, stores);
-    const classes = [...new Set(holders.map(({ store }) => store.kind))].join(', ');
+  const moved = repaired.flatMap((store) => (store.answer.repair?.tables ?? [])
+    .filter((row) => store.answer.repair?.rebuilt.includes(row.table) === true && row.before !== row.after)
+    .map((row) => `${store.kind} ${store.label}: ${row.table} ${String(row.before)} → ${String(row.after)}`));
 
-    if (holders.length === 0) nobody.push(`  ${table.table} (${table.change})`);
+  const unchecked = stores.flatMap((store) => ((store.answer.repair?.unchecked.length ?? 0) > 0 ? [`${store.kind} ${store.label}: ${store.answer.repair?.unchecked.join(', ') ?? ''}`] : []));
 
-    for (const { store, held } of holders.filter((holder) => holder.held.stale)) {
-      const where = `${store.kind} ${store.label}`;
+  const did = (store: Store) => {
+    const repair = store.answer.repair;
+    const parts = [['rebuilt', repair?.rebuilt], ['refilled', repair?.refilled], ['retired', repair?.retired]] as const;
 
-      if (held.keepsRows) lossless.push(`  ${table.table} [${classes}]: rebuild on ${where}; its ${String(held.rows)} row(s) kept`);
-      else {
-        losing.push(`  ${table.table} [${classes}]: ${table.change === 'removed' ? 'drop the table' : 'drop and remake the table'} on ${where}: `
-          + `${String(held.rows)} row(s) lost${held.refused === undefined ? '' : ` (${held.refused})`}`);
-      }
-    }
-  }
+    return `  ${store.kind} ${store.label}: ${parts.filter(([, tables]) => (tables?.length ?? 0) > 0).map(([what, tables]) => `${what} ${tables?.join(', ') ?? ''}`).join('; ') || 'stamped'}`;
+  };
 
-  const behind = stores.filter((store) => store.answer.stamp === 'behind');
-  const unreachable = reached.filter((object) => object.answer === undefined).map((object) => `  ${object.className} ${object.id}: ${object.error ?? ''}`);
+  const section = (title: string, lines: readonly string[]) => (lines.length === 0 ? [] : [title, ...lines.map((line) => `  ${line}`)]);
 
-  return [
-    `LOSSLESS (rebuild, rows kept): ${lossless.length === 0 ? 'none' : ''}`, ...lossless,
-    `LOSES DATA (tables dropped): ${losing.length === 0 ? 'none' : ''}`, ...losing,
-    `STAMPED (behind this build, refused until reached): ${behindCounts(behind)}`,
-    ...nobody.length === 0 ? [] : ['held by no account, workspace or agent database (a CLI-local table is outside this step):', ...nobody],
-    ...added.length === 0 ? [] : [`added, made by each database's init: ${added.join(', ')}`],
-    ...unreachable.length === 0 ? [] : ['UNREACHED:', ...unreachable],
-  ];
+  return {
+    lines: [
+      `${String(stores.length)} database(s) in ${String(reached.length)} object(s), ${String(listed)} of them listed by Cloudflare; `
+        + `${String(repaired.length)} repaired by this walk (the rest were already at this build, or repaired by a request first)`,
+      ...repaired.map(did),
+      ...section('UNCHECKED (held, but the init made no shape to compare; left as they are):', unchecked),
+      ...section('REFUSED (kept as they are, refusing every call with why):', refused),
+      ...section('ROWS MOVED in a rebuild:', moved),
+      ...section('UNREACHED, a gap in this census (each repairs at its first request on this build):', unreached),
+    ],
+    failed: [...refused, ...moved],
+  };
 }
 
-/** How many databases of each class are behind this build's stamp. */
-function behindCounts(behind: readonly Store[]): string {
-  const counts = new Map<string, number>();
-
-  for (const store of behind) counts.set(store.kind, (counts.get(store.kind) ?? 0) + 1);
-
-  return counts.size === 0 ? 'none' : [...counts].map(([kind, count]) => `${String(count)} ${kind}`).join(', ');
-}
-
-/** Each stale table whose drop would reach rows of a table the release did not change, where: never dropped. */
-export function cascadingDrops(reached: readonly Reached[]): string[] {
-  return storesOf(reached).flatMap((store) => store.answer.held.filter((held) => (held.cascades?.length ?? 0) > 0)
-    .map((held) => `${held.table} on ${store.kind} ${store.label}, whose rows ${held.cascades?.join(', ') ?? ''} refer to`));
-}
-
-/** A changed table some database holds that no class's stamp covers: made lazily, after its object started, so a
- *  database holding its old genesis is never refused, and this step cannot tell when it is done. */
-export function unstampedTables(changed: readonly ChangedTable[], classes: Readonly<Record<string, readonly string[]>>, reached: readonly Reached[]): string[] {
-  const stamped = new Set(Object.values(classes).flat());
-  const stores = storesOf(reached);
-
-  return changed.filter((table) => table.change !== 'removed' && !stamped.has(table.table) && holdersOf(table, stores).length > 0).map((table) => table.table);
-}
-
-/** The words a production tables reset is confirmed with: every table it rebuilds, and every one whose rows it drops. */
-export function confirmation(reached: readonly Reached[]): string {
-  const held = storesOf(reached).flatMap((store) => store.answer.held.filter((table) => table.stale));
-  const named = (keeps: boolean) => [...new Set(held.filter((table) => table.keepsRows === keeps).map((table) => table.table))].sort().join(',') || '-';
-
-  return `reset tables rebuild ${named(true)} drop ${named(false)}`;
-}
-
-/** What a tables reset reads and changes outside this file; a test passes its own. */
+/** What the walk reads and changes outside this file; a test passes its own. */
 export interface TablesTarget {
   /** Every object id with stored data in `className`'s namespace, as Cloudflare lists them. */
   objects: (className: ResetClass) => Promise<readonly string[]>;
-  /** Writes the pass's digest to AUTH_KV for minutes; `forget` deletes it. */
+  /** Writes the pass's digest to AUTH_KV for hours; `forget` deletes it. */
   admit: (digest: string) => void;
   forget: (digest: string) => void;
-  /** One `/ops/tables` call; answers its status and body. */
-  ops: (pass: string, body: { readonly class: ResetClass; readonly ids: readonly string[]; readonly request: TablesRequest }) => Promise<{ status: number; text: string }>;
+  /** One `/ops/<path>` call; answers its status, body, and the version that answered (`x-kinu-version`). */
+  ops: (pass: string, path: 'tables' | 'roots', body: OpsBody | null) => Promise<{ status: number; text: string; version: string | null }>;
+  /** The version the walk must be answered by, and how long another may still answer at an edge after the upload
+   *  (scripts/deploy-smoke.sh `ours`): null asks any. */
+  candidate: { readonly version: string; readonly propagationMs: number } | null;
+  /** How the walk waits between asks. */
+  pause: (ms: number) => Promise<void>;
 }
 
-const StoreAnswerEntries = {
-  stamp: v.picklist(['current', 'unmade', 'behind']),
+/** One `/ops/tables` batch. */
+export interface OpsBody {
+  readonly class: ResetClass;
+  readonly ids: readonly string[];
+  readonly names: readonly string[];
+}
+
+const RepairSchema = v.object({
+  schema: v.picklist(['account', 'workspace', 'agent', 'local']),
   rebuilt: v.array(v.string()),
+  refilled: v.array(v.string()),
+  retired: v.array(v.string()),
+  unchecked: v.array(v.string()),
+  tables: v.array(v.object({ table: v.string(), before: v.nullable(v.number()), after: v.nullable(v.number()) })),
+  refused: v.nullable(v.string()),
+});
+
+const StoreEntries = {
   census: v.array(v.object({ table: v.string(), rows: v.number() })),
-  held: v.array(v.object({
-    table: v.string(), rows: v.number(), stale: v.boolean(), keepsRows: v.boolean(), refused: v.optional(v.string()), cascades: v.optional(v.array(v.string())),
-  })),
-  dropped: v.array(v.string()),
+  repair: v.nullable(RepairSchema),
+  refused: v.nullable(v.string()),
 };
 
 const OpsAnswerSchema = v.object({
   objects: v.array(v.object({
     id: v.string(),
+    name: v.optional(v.string()),
     answer: v.optional(v.object({
       name: v.nullable(v.string()),
-      ...StoreAnswerEntries,
-      agents: v.optional(v.array(v.object({ name: v.string(), ...StoreAnswerEntries }))),
+      ...StoreEntries,
+      workspaces: v.array(v.string()),
+      accounts: v.array(v.string()),
+      agents: v.array(v.object({ name: v.string(), ...StoreEntries })),
     })),
     error: v.optional(v.string()),
   })),
 });
 
-/** Every object of both classes asked `request`, under a pass written for this run and deleted after it: those the
- *  listing names, and every one in `met` besides, which an earlier pass reached and a later listing may not name. */
-export async function reachAll(target: TablesTarget, request: TablesRequest, met: readonly Reached[] = []): Promise<Reached[]> {
+const RootsSchema = v.object({ accounts: v.array(v.string()) });
+
+/** One call, asked again while the pass has not reached the edge that answers, and while a version other than the
+ *  candidate answers (the build before has no `/ops`, so it answers 404). */
+async function askAdmitted<T>(target: TablesTarget, pass: string, call: { path: 'tables' | 'roots'; body: OpsBody | null; schema: v.GenericSchema<T> }): Promise<T> {
+  const started = Date.now();
+
+  for (;;) {
+    const { status, text, version } = await target.ops(pass, call.path, call.body);
+    const elsewhere = target.candidate !== null && version !== target.candidate.version;
+    const waited = Date.now() - started;
+
+    if (status === 200 && !elsewhere) return v.parse(call.schema, JSON.parse(text));
+
+    if (elsewhere && waited < (target.candidate?.propagationMs ?? 0)) {
+      await target.pause(2_000);
+      continue;
+    }
+
+    if (status !== 401 || waited > PASS_PROPAGATION_MS) {
+      throw new Error(`/ops/${call.path} answered ${String(status)} from version ${version ?? 'none'}${target.candidate === null ? '' : `, not the candidate ${target.candidate.version}`}: ${text.slice(0, 300)}`);
+    }
+
+    await target.pause(5_000);
+  }
+}
+
+/** One walk: the deployment, the pass it was admitted under, and every object it reached, by id. */
+interface Walking {
+  readonly target: TablesTarget;
+  readonly pass: string;
+  readonly reached: Map<string, Reached>;
+}
+
+/** What an object answers while its host still runs the build before, which has no `opsTables`: a new version reaches
+ *  each machine on its own, so an object can start on the old one seconds after every edge serves the new (staging,
+ *  2026-10-15: a workspace started on the build before 6 s after the edge served the candidate, in the very batch whose
+ *  other workspaces started on the candidate). */
+const BUILD_BEFORE = /does not implement the method "opsTables"/u;
+
+/** How long the walk waits before asking such an object again. */
+const ASK_AGAIN_MS = 2_000;
+
+/** `asked` of `className`, in batches; each answer kept, over any earlier one for the same object. */
+async function askEach({ target, pass, reached }: Walking, className: ResetClass, asked: { names: readonly string[]; ids: readonly string[] }): Promise<void> {
+  const batches: OpsBody[] = [];
+
+  for (let at = 0; at < asked.names.length; at += OPS_OBJECTS_PER_REQUEST) batches.push({ class: className, ids: [], names: asked.names.slice(at, at + OPS_OBJECTS_PER_REQUEST) });
+
+  for (let at = 0; at < asked.ids.length; at += OPS_OBJECTS_PER_REQUEST) batches.push({ class: className, ids: asked.ids.slice(at, at + OPS_OBJECTS_PER_REQUEST), names: [] });
+
+  for (const body of batches) {
+    const answer = await askAdmitted(target, pass, { path: 'tables', body, schema: OpsAnswerSchema });
+
+    for (const object of answer.objects) reached.set(object.id, { className, ...object });
+  }
+}
+
+/** The objects of `className` named or listed and not yet asked, asked in batches; each answer's leads, kept. One that
+ *  started on the build before is asked again, for as long as a version may take to reach every machine (the smoke
+ *  test's bound); past it, it is a gap in the census, which repairs at its first request on the candidate. */
+async function reachEach(walking: Walking, className: ResetClass, asked: { names: readonly string[]; ids: readonly string[] }): Promise<void> {
+  const { target, reached } = walking;
+  const names = [...new Set(asked.names)].filter((name) => ![...reached.values()].some((object) => object.className === className && object.name === name));
+
+  await askEach(walking, className, { names, ids: [...new Set(asked.ids)].filter((id) => !reached.has(id)) });
+
+  for (let left = Math.ceil((target.candidate?.propagationMs ?? 0) / ASK_AGAIN_MS); left > 0; left -= 1) {
+    const behind = [...reached.values()].filter((object) => object.className === className && BUILD_BEFORE.test(object.error ?? ''));
+
+    if (behind.length === 0) return;
+    await target.pause(ASK_AGAIN_MS);
+    await askEach(walking, className, { names: behind.flatMap((object) => object.name ?? []), ids: behind.flatMap((object) => (object.name === undefined ? [object.id] : [])) });
+  }
+}
+
+/** The walk: every account the roots and the builtin directory name, each one's workspaces, and every object
+ *  Cloudflare lists besides, each opened once under a pass written for this run and deleted after it. */
+export async function walk(target: TablesTarget): Promise<{ readonly reached: Reached[]; readonly listed: number }> {
   const pass = randomBytes(32).toString('base64url');
   const digest = sha256Hex(pass);
 
   target.admit(digest);
 
   try {
-    const reached: Reached[] = [];
+    const reached = new Map<string, Reached>();
+    const walking: Walking = { target, pass, reached };
+    const answers = () => [...reached.values()].flatMap((object) => (object.answer === undefined ? [] : [object.answer]));
+    const listed = { UserDO: await target.objects('UserDO'), OrchestratorAgent: await target.objects('OrchestratorAgent') };
+    let accounts = (await askAdmitted(target, pass, { path: 'roots', body: null, schema: RootsSchema })).accounts;
 
-    for (const className of RESET_CLASSES) {
-      const listed = await target.objects(className);
-      const ids = [...new Set([...listed, ...met.filter((object) => object.className === className).map((object) => object.id)])];
+    // The builtin directory names accounts no other root may: asked until no answer names a new one.
+    while (accounts.length > 0) {
+      const before = reached.size;
 
-      for (let at = 0; at < ids.length; at += OPS_OBJECTS_PER_REQUEST) {
-        const answer = await askAdmitted(target, pass, { class: className, ids: ids.slice(at, at + OPS_OBJECTS_PER_REQUEST), request });
-
-        reached.push(...answer.objects.map((object) => ({ className, ...object })));
-      }
+      await reachEach(walking, 'UserDO', { names: accounts, ids: [] });
+      accounts = reached.size === before ? [] : answers().flatMap((answer) => answer.accounts);
     }
 
-    return reached;
+    await reachEach(walking, 'UserDO', { names: [], ids: listed.UserDO });
+    await reachEach(walking, 'OrchestratorAgent', { names: answers().flatMap((answer) => answer.workspaces), ids: [] });
+    await reachEach(walking, 'OrchestratorAgent', { names: [], ids: listed.OrchestratorAgent });
+
+    return { reached: [...reached.values()], listed: listed.UserDO.length + listed.OrchestratorAgent.length };
   } finally {
     target.forget(digest);
-  }
-}
-
-/** One batch, asked again while the pass has not reached the edge that answers. */
-async function askAdmitted(target: TablesTarget, pass: string, body: Parameters<TablesTarget['ops']>[1]): Promise<v.InferOutput<typeof OpsAnswerSchema>> {
-  const until = Date.now() + PASS_PROPAGATION_MS;
-
-  for (;;) {
-    const { status, text } = await target.ops(pass, body);
-
-    if (status === 200) return v.parse(OpsAnswerSchema, JSON.parse(text));
-
-    if (status !== 401 || Date.now() > until) throw new Error(`/ops/tables answered ${String(status)}: ${text.slice(0, 300)}`);
-    await Bun.sleep(5_000);
   }
 }
 
@@ -312,35 +469,6 @@ export async function listedObjects(account: string, namespace: string, token: s
   } while (cursor !== undefined && cursor !== '');
 
   return ids;
-}
-
-/** The census lines two runs disagree on, as `table: before → after` per database; `changed` names the tables the
- *  release meant to change, so every other line is one it should not have moved. */
-export interface CensusDiff {
-  readonly meant: string[];
-  readonly unmeant: string[];
-}
-
-export function censusDiff(before: readonly string[], after: readonly string[], changed: ReadonlySet<string>): CensusDiff {
-  const rows = (lines: readonly string[]) => new Map(lines.map((line) => {
-    const [kind, label, table, count] = line.split('\t');
-
-    return [`${kind ?? ''}\t${label ?? ''}\t${table ?? ''}`, count ?? ''];
-  }));
-
-  const was = rows(before);
-  const now = rows(after);
-  const meant: string[] = [];
-  const unmeant: string[] = [];
-
-  for (const key of [...new Set([...was.keys(), ...now.keys()])].sort()) {
-    if (was.get(key) === now.get(key)) continue;
-    const line = `${key.replaceAll('\t', ' ')}: ${was.get(key) ?? '-'} → ${now.get(key) ?? '-'}`;
-
-    (changed.has(key.split('\t')[2] ?? '') ? meant : unmeant).push(line);
-  }
-
-  return { meant, unmeant };
 }
 
 /** Writes `lines` to `file`, newline-ended. */

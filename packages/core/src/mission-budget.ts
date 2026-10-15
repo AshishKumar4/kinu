@@ -21,7 +21,7 @@ export interface MissionBudgetLimits {
   tokens?: number;
 }
 
-export interface MissionSpendProvenance {
+interface MissionSpendProvenance {
   blendedTokens: number;
   source: 'catalog' | 'blended' | 'mixed';
 }

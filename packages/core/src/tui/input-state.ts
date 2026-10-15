@@ -1,7 +1,7 @@
 // Keyboard and client events both dispatch through this reducer.
 
 /** Esc pressed again within this window of the arming Esc opens walk-back. */
-export const ESC_ESC_BEAT_MS = 750;
+const ESC_ESC_BEAT_MS = 750;
 
 export interface InputState {
   /** turn-start minus turn-end; > 0 means processing. */

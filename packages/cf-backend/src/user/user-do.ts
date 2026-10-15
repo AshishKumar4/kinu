@@ -10,6 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
+  objectNamed,
   ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
@@ -21,8 +22,8 @@ export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  durableStamps, ERROR_STATUS, readStamp, requireOps, resetTables, StoragePredatesReleaseError, TablesRequestSchema, writeStamp,
-  type OpsCaller, type TablesAnswer, type TablesRequest,
+  censusOf, durableStamps, ERROR_STATUS, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
+  type OpsCaller, type Repair, type TablesAnswer,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
@@ -37,7 +38,7 @@ import { UserDevices, type DeviceCancellationOutcome } from './devices';
 import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
-import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-servers';
+import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall, type McpToolSurface } from './mcp-servers';
 import { UserAccountMemory } from './account-memory';
 import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, SqlValue } from '@kinu.run/core';
 import {
@@ -52,7 +53,7 @@ import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 import {
-  type Admission, type AttemptBucket, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
+  initBuiltinAccounts, type Admission, type AttemptBucket, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 
 const ROSTER_NUDGE_LANES = 4;
@@ -75,12 +76,25 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
-    // Asked once, never caught: storage a release's tables step has not reached is read by that step alone, and every
-    // other call is refused with why (identity/schema-stamp.ts).
+    // Asked once, never caught: storage a release left behind is brought to this build here, before any event reads it
+    // (core state/schema-repair.ts), and one that cannot be answers every call with why.
     const stamps = durableStamps(this.ctx.storage.kv);
     const stamp = readStamp(stamps, this.ctx.storage.sql, 'account');
+    const { storage } = this.ctx;
 
-    if (stamp === 'behind') this.storageRefusal = new StoragePredatesReleaseError('account', stamps.read());
+    // The builtin sign-in directory makes its tables when first asked; it repairs them as every account does its own.
+    const directory = storage.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = 'builtin_accounts'`).toArray().length > 0;
+
+    this.schemaRepair = repairSchema(storage.sql, {
+      schema: 'account', tables: SCHEMA_TABLES.account, stamps, transactionSync: (write) => storage.transactionSync(write),
+      init: () => {
+        this.initTables();
+
+        if (directory) initBuiltinAccounts((query, ...values) => this.sql(query, ...values));
+      },
+    }, `account ${ctx.id.toString()}`);
+
+    if (this.schemaRepair?.refused != null) this.storageRefusal = new StoragePredatesReleaseError('account', this.schemaRepair.refused);
     const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
@@ -89,13 +103,16 @@ export class UserDO extends Agent<Env> {
     installAnalyticsDiagnostics(this.env);
 
     // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.
-    if (stamp !== 'behind') this.initTables();
+    if (this.storageRefusal === undefined) this.initTables();
 
     if (stamp === 'unmade') writeStamp(stamps, 'account');
   }
 
-  /** Why this account's storage may not be read: a release's tables step has not reached it yet. */
-  private storageRefusal: StoragePredatesReleaseError | undefined;
+  /** Why this account's storage may not be read: its repair could not bring it to this build. */
+  private readonly storageRefusal: StoragePredatesReleaseError | undefined;
+
+  /** What this activation's repair did, for the deploy's walk; null where the storage was at this build. */
+  private readonly schemaRepair: Repair | null;
 
   /** Every gated RPC waits for this (`startBeforeRpc`); the MCP dials it starts are not awaited. */
   override onStart(): void {
@@ -123,7 +140,7 @@ export class UserDO extends Agent<Env> {
   private readonly shareCards = new ShareCardJobs({
     sql: this.ctx.storage.sql,
     owner: () => ({ userId: this.name, email: this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '' }),
-    recipient: (userId) => this.env.UserDO.get(this.env.UserDO.idFromName(userId)),
+    recipient: (userId) => objectNamed(this.env.UserDO, userId),
     accountOf: (email) => accountIdFor(this.env, email),
     caller: () => ownerCaller(this.env),
   });
@@ -570,7 +587,7 @@ export class UserDO extends Agent<Env> {
     return this.mcpServers.userMcp_remove(caller, id);
   }
 
-  userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
+  userMcp_toolDescriptors(caller: UserCaller): Promise<McpToolSurface> {
     return this.mcpServers.userMcp_toolDescriptors(caller);
   }
 
@@ -775,21 +792,22 @@ export class UserDO extends Agent<Env> {
     return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
-  /** A release's tables reset (`scripts/reset.ts tables`): what this account holds of the changed tables, and with
-   *  `drop`, those still in the old shape dropped and made again. Only `/ops/tables` holds the capability. */
-  async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
+  /** The deploy's walk (`scripts/reset.ts tables`): this account's tables and their rows, what its repair did, and the
+   *  objects it leads the walk to, its workspaces and (the builtin directory's) accounts. Only `/ops/tables` holds the
+   *  capability. */
+  async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
     await requireOps(this.env, caller);
-    const { tables, drop } = v.parse(TablesRequestSchema, request);
-    const { sql } = this.ctx.storage;
+    const census = censusOf(this.ctx.storage.sql);
+    const open = this.storageRefusal === undefined;
+    const workspaces = open ? this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces WHERE create_pending = 0`) : [];
+    // The builtin sign-in directory is an account object too, and the one that knows every builtin account.
+    const directory = open && census.some(({ table }) => table === 'builtin_accounts');
+    const accounts = directory ? this.sqlx<{ user_id: string }>(`SELECT user_id FROM builtin_accounts`) : [];
 
-    const answer = resetTables(sql, { tables, drop }, {
-      schema: 'account', stamps: durableStamps(this.ctx.storage.kv), transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { this.initTables(); },
-    });
-
-    // Brought to this build and stamped: open to every call from here.
-    if (drop) this.storageRefusal = undefined;
-
-    return { name: null, ...answer };
+    return {
+      name: null, census, repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
+      workspaces: workspaces.map(({ name }) => name), accounts: accounts.map(({ user_id }) => user_id), agents: [],
+    };
   }
 
   /** Once per activation, from the constructor. Claims live in isolate memory, so any claim in storage
@@ -842,7 +860,7 @@ export class UserDO extends Agent<Env> {
           this.sqlx(`INSERT INTO workspace_overview_nudges (name, attempts, next_at) VALUES (?, ?, ?)
             ON CONFLICT (name) DO UPDATE SET attempts = excluded.attempts, next_at = excluded.next_at`,
           name, attempts, Date.now() + recoveryBackoffMs(attempts));
-          await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)).requestOverviewPush();
+          await objectNamed(this.env.OrchestratorAgent, name).requestOverviewPush();
         } catch (cause) {
           diagnostics.failure('roster.overview_nudge_failed', toKinuError({
             doing: 'asking a workspace with no tile for its first one', cause, otherwise: 'unavailable',

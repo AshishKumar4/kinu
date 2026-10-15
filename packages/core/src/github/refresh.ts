@@ -12,7 +12,7 @@ const REPO_LIMIT = 10;
 
 const READ_CONCURRENCY = 6;
 
-export type GitHubRefreshOutcome = 'refreshed' | 'denied' | 'unreachable';
+type GitHubRefreshOutcome = 'refreshed' | 'denied' | 'unreachable';
 
 /** What the overview reads: the record, and whether this reading asked GitHub first. */
 export interface WorkspaceGitHubView extends WorkspaceGitHub {

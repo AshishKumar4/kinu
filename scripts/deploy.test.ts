@@ -485,8 +485,8 @@ describe("deploy gate", () => {
       .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
   });
 
-  // A build that moves a class's stamp refuses every database of that class until the tables step reaches it, so it
-  // never deploys without the step (scripts/reset.ts stamps).
+  // A build that moves a class's stamp repairs every database of that class at first contact, so it never deploys
+  // without its plan having been printed (scripts/reset.ts stamps).
   test('a build that moves a stamp is refused without --reset-tables, before anything runs', async () => {
     const moved = await runDeploy({ stampsMoved: true });
     const plain = await runDeploy({});
@@ -770,10 +770,10 @@ describe("deploy gate", () => {
     const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, phaseGates(phase)]));
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.upload).toEqual(["bun scripts/secret-scan.ts", "bun run gate:infra"]);
-    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh"]);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun scripts/upgrade-fixtures.ts", "bash scripts/product-flows-tier.sh"]);
     expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
     expect(byPhase.soak).toEqual(["bash scripts/eval-pass-tier.sh"]);
-    expect(byPhase.source?.length).toBe(PLAN.length - 7);
+    expect(byPhase.source?.length).toBe(PLAN.length - 8);
 
     for (const gate of LADDER) {
       if (gate.phase === undefined) {

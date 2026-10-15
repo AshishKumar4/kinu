@@ -191,13 +191,28 @@ const exploration: Script = (request) => latest(request) !== SWARM_ASK ? null : 
     : `The swarm is running in the background as ${job}; I will report what it returns.`;
 });
 
-/** machine-consent: the same ask twice, before and after a machine is connected. */
-const machineConsent: Script = (request) => latest(request) !== CONSENT_ASK ? null : steps(request, [
+/** How the turn an owner's device-consent answer opens begins (`answerWakeMessage`, core/src/safety/device-consent.ts):
+ *  each call it approves on its own line, `  <machine>: <command>`, before any it denies. */
+const DEVICE_USE_APPROVED = 'Device use APPROVED, still not run: re-issue once:';
+
+/** Whether the ask is the owner's approval of `command`, which this conversation's agent asked to run and which parked
+ *  NOT RUN on its consent card: the agent re-issues it once, as the woken agent does. */
+function approvedAgain(request: ScriptedRequest, opening: string, command: string): boolean {
+  const [approved = ''] = latest(request).split('\nDevice use DENIED');
+
+  return request.userTexts[0] === opening && approved.startsWith(DEVICE_USE_APPROVED)
+    && approved.split('\n').some((line) => line.endsWith(`: ${command}`));
+}
+
+/** machine-consent: the same ask twice, before and after a machine is connected, and the call the owner's answer
+ *  approves re-issued. */
+const machineConsent: Script = (request) => latest(request) !== CONSENT_ASK && !approvedAgain(request, CONSENT_ASK, 'hostname') ? null : steps(request, [
   call('shell', { runtime: 'device', command: 'hostname', why }),
 ], ([shell]) => `HOST ${oneLine(shell?.result).slice(0, 300)}`);
 
-/** device-job-output: the one command, answered with the job it detached into. */
-const deviceJob: Script = (request) => latest(request) !== DEVICE_JOB_ASK ? null : steps(request, [
+/** device-job-output: the one command, re-issued once the owner's answer approves it, answered with the job it detached
+ *  into. */
+const deviceJob: Script = (request) => latest(request) !== DEVICE_JOB_ASK && !approvedAgain(request, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND) ? null : steps(request, [
   call('shell', { runtime: 'device', command: DEVICE_JOB_COMMAND, why }),
 ], ([shell]) => `JOB ${/bgjob-[\w-]+/.exec(shell?.result ?? '')?.[0] ?? 'NONE'}`);
 

@@ -13,7 +13,7 @@ import {
   WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  formatBytes, joinDir, parentDir, shortAge, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
+  formatBytes, joinDir, parentDir, shortAge, MOUNT_EXECUTORS, type DirEntry, type EnvironmentInfo,
 } from "@kinu.run/core";
 import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
@@ -104,7 +104,7 @@ function saveAs(href: string): void {
 
 
 /** The root's machines as Files shows them: a live one's own name beside its folder, and one that is away as a row. */
-function useMachines(executors: readonly ExecutorInfo[], mounts: readonly MountInfo[], onConnectDevice: () => void) {
+function useMachines(executors: readonly ExecutorInfo[], mounts: readonly EnvironmentInfo[], onConnectDevice: () => void) {
   const deviceLabel = executors.find((e) => e.name === "device")?.label;
 
   return useMemo(() => {

@@ -208,8 +208,6 @@ function routeCheck(gates: PreviewGates): PreviewRouteCheck {
     : { reached: false, gate: gates.refused.gate, detail: gates.refused.detail };
 }
 
-/** Rows carry the recipe, never the inputs: the slate host re-drives through its own boot and the row is
- * released by answering null. An interpreter resident is never an embedder's launch. */
 /** A throw inside `waitUntil` would otherwise vanish. */
 async function redriveSlate(ensuring: Promise<Refusal | null>, owner: string): Promise<void> {
   try {

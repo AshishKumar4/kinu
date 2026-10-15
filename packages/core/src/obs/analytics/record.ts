@@ -1,6 +1,6 @@
 /**
- * Named row adapters: fill every slot, digest identifiers, never throw. They take `env` rather
- * than an installed sink because a DO is a separate isolate where the Worker's sink is absent.
+ * Named row adapters: fill every slot, digest identifiers, never throw. They take `env`, which holds the
+ * datasets they write, rather than the diagnostics sink, so a row lands whatever sink its isolate installed.
  */
 import type { Usage } from '../../usage';
 import { Effect } from 'effect';

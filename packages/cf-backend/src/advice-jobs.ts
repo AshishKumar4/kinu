@@ -4,11 +4,9 @@
  * them re-delivers on the next alarm and the note's turn key keeps it to one.
  */
 import * as v from 'valibot';
-import {
-  LifecycleCapability, type DurableObjectCapability, type LifecycleJobContext, type LifecycleJobOutcome,
-} from 'agents/lifecycle';
+import { LifecycleCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
 import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { retriedLater } from './wake-jobs';
 
 const ADVICE_JOB = 'advisor-answer';
 
@@ -44,13 +42,4 @@ export class AdviceJobs extends LifecycleCapability {
 
   /** A delivery that failed every retry comes back later; the answer is still stored. */
   readonly onJobError = retriedLater('delivering an advisor answer');
-}
-
-/** A job that failed every retry comes back a lap later rather than ending: what it was for is still stored. */
-export function retriedLater(doing: string): NonNullable<DurableObjectCapability['onJobError']> {
-  return ({ job }, cause) => {
-    diagnostics.failure('schedule.job_failed', toKinuError({ doing, cause, otherwise: 'io' }), { job: job.id });
-
-    return { rescheduleAt: Date.now() + RECOVERY_BACKOFF_CEILING_MS };
-  };
 }

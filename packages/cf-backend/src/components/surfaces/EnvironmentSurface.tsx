@@ -10,7 +10,7 @@ import {
   ArrowsInIcon, ArrowsOutIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, PlusIcon,
   SplitHorizontalIcon, SquaresFourIcon, XIcon, type Icon,
 } from "@phosphor-icons/react";
-import { EXECUTOR_MOUNTS, desktopClientUrl, type MountInfo } from "@kinu.run/core";
+import { EXECUTOR_MOUNTS, desktopClientUrl, type EnvironmentInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult } from "@kinu.run/core";
 import {
   executorLabel,
@@ -84,7 +84,7 @@ function environmentOf(name: string): { readonly Icon: Icon; readonly about: str
  */
 interface Machine {
   readonly key: string;
-  readonly mount: MountInfo;
+  readonly mount: EnvironmentInfo;
   /** The account's machine, for a PC; null for the workspace, the computer and the rest. */
   readonly device: AccountMachine | null;
 }
@@ -94,7 +94,7 @@ interface Machine {
  * account says it is connected and held here: the executor's own reading follows a grant only after the hub's next
  * status push, and the terminal and every command check the grant themselves.
  */
-function machinesOf(mounts: readonly MountInfo[], account: readonly AccountMachine[] | null): Machine[] {
+function machinesOf(mounts: readonly EnvironmentInfo[], account: readonly AccountMachine[] | null): Machine[] {
   const pc = mounts.find((mount) => mount.name === "device");
 
   return [
@@ -129,7 +129,7 @@ type Tone = "working" | "ready" | "attention" | "off" | "danger";
 interface StatusReading { readonly word: string; readonly tone: Tone }
 
 /** A machine's state: ready to run commands, or why not. "Running" is a command's word, not a machine's. */
-function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReading {
+function statusOf(mount: EnvironmentInfo, exec: ExecutorInfo | undefined): StatusReading {
   // Reach before liveness, but only for a live row: `granted` is answered only while
   // the machine is connected, so a not-live mount stays offline.
   if (mount.live && mount.name === "device" && exec?.granted === false) return { word: "Needs approval", tone: "attention" };
@@ -145,7 +145,7 @@ function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReadi
  * The computer's state: restarting under a resize, waiting on a session's prompt, asleep while stopped (it wakes when
  * used), else as any machine. A session open on it says it woke since its size was read.
  */
-function computerStatus(mount: MountInfo, exec: ExecutorInfo | undefined, size: ComputerSizeControl, seen: { waiting: boolean; awake: boolean }): StatusReading {
+function computerStatus(mount: EnvironmentInfo, exec: ExecutorInfo | undefined, size: ComputerSizeControl, seen: { waiting: boolean; awake: boolean }): StatusReading {
   if (size.pending === "resize") return { word: "Restarting", tone: "working" };
 
   if (seen.waiting) return { word: "Needs input", tone: "attention" };
@@ -440,7 +440,7 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
 
 /** The chosen machine's head: its name and state, what it is, and its actions. */
 function Head({ mount, name, status, specs, size, onOpenFiles }: {
-  mount: MountInfo;
+  mount: EnvironmentInfo;
   name: string;
   status: StatusReading;
   specs: string | null;
@@ -480,7 +480,7 @@ function Head({ mount, name, status, specs, size, onOpenFiles }: {
 
 /** Under the head: the machine's absence, its restart, or its tabs and its terminal or screen. */
 function EnvironmentView({ mount, machineKey, device, exec, name, workspace, restartingTo, executorOutputs, onExecute, sessions, shown, wide }: {
-  mount: MountInfo;
+  mount: EnvironmentInfo;
   /** The machine's key in the column: its tabs are kept under it. */
   machineKey: string;
   /** The PC's id, so its terminal opens on it when several are connected; null for any other machine. */
@@ -747,7 +747,7 @@ function Absence({ icon: Mark, title, children }: { icon: Icon; title: string; c
 
 const EXECUTION_DOCS = "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md";
 
-function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
+function UnavailableMount({ mount, exec }: { mount: EnvironmentInfo; exec: ExecutorInfo | undefined }) {
   const text = mount.name === "computer"
     ? "This deployment has no computer. Use the Workspace shell instead."
     : mount.reason ?? exec?.reason ?? "This environment is not enabled here.";

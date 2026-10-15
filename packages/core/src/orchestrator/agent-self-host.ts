@@ -8,7 +8,7 @@ import type { BackgroundJobStore } from '../jobs/store';
 import { createTimerTrigger } from '../events/ingress/triggers';
 import { listProposedTasks, updateProposedTaskStatus } from '../curriculum/proposer';
 import { proposeCurriculumTasks } from '../read-models/evolution-views';
-import { jobResult, listBackgroundJobs } from '../read-models/background-jobs';
+import { listBackgroundJobs } from '../read-models/background-jobs';
 import { listScaffoldVersions, proposeScaffold, type ScaffoldControl } from '../evolution/control';
 import { qualitySeries } from '../evolution/ratings';
 
@@ -42,7 +42,7 @@ export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
     createTimerTrigger: (opts) => createTimerTrigger(ports.triggers(), opts, Date.now()),
     get budget() { return ports.budget(); },
     cancelTrigger: ports.cancelTrigger,
-    jobResult: async (jobId) => jobResult(ports.jobs(), jobId),
+    jobResult: async (jobId) => ports.jobs().get(jobId),
     listBackgroundJobs: async (limit) => listBackgroundJobs(ports.jobs(), limit),
     getQuality: async (days) => qualitySeries(rt.storage.sql, rt.actor, days === undefined ? {} : { days }),
     armCompactNow: ports.armCompactNow,

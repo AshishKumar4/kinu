@@ -13,7 +13,7 @@ import { evidenceWindow } from '../utils/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { sqlCheckList } from '../identity/schema';
 import { nanoid } from '../utils/nanoid';
-import { nowMs } from '../utils/date';
+import { nowMs, isoDate } from '../utils/date';
 import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats';
 import { KinuError, settle } from '../obs/index';
 import type { QualityDay, QualityWindow } from '../types/quality';
@@ -373,8 +373,6 @@ export function renderQualitySeries(days: readonly QualityDay[]): string {
 
 const DAY_MS = 86_400_000;
 
-const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
-
 /** The first instant of the UTC day `days - 1` days before `now`'s, so the window is `days` UTC days, today included. */
 function windowStart(now: number, days: number): number {
   return Math.floor(now / DAY_MS) * DAY_MS - (days - 1) * DAY_MS;
@@ -388,7 +386,7 @@ function reviewedTurns(sql: SqlExecutor, actor: ActorHandle, since: number): Map
 
   const turns = new Map<string, number>();
 
-  for (const row of reviewed) turns.set(dayOf(row.created_at), (turns.get(dayOf(row.created_at)) ?? 0) + 1);
+  for (const row of reviewed) turns.set(isoDate(row.created_at), (turns.get(isoDate(row.created_at)) ?? 0) + 1);
 
   return turns;
 }
@@ -403,13 +401,13 @@ export function qualitySeries(
   const byDay = new Map<string, TurnRating[]>();
 
   for (const rating of listTurnRatings(sql, actor, { since })) {
-    const day = dayOf(rating.createdAt);
+    const day = isoDate(rating.createdAt);
     byDay.set(day, [...byDay.get(day) ?? [], rating]);
   }
 
   const turns = reviewedTurns(sql, actor, since);
 
-  return Array.from({ length: days }, (_unused, index) => dayOf(since + index * DAY_MS)).map((day) => {
+  return Array.from({ length: days }, (_unused, index) => isoDate(since + index * DAY_MS)).map((day) => {
     const ratings = byDay.get(day) ?? [];
     const corrected = ratings.reduce((sum, rating) => sum + rating.corrected, 0);
 
@@ -435,8 +433,8 @@ export function qualityWindow(
   const turns = [...reviewedTurns(sql, actor, since).values()].reduce((sum, count) => sum + count, 0);
 
   return {
-    from: dayOf(since),
-    to: dayOf(now),
+    from: isoDate(since),
+    to: isoDate(now),
     satisfaction: satisfactionInterval(ratings.map((rating) => rating.score)),
     corrected: wilsonInterval(ratings.reduce((sum, rating) => sum + rating.corrected, 0), ratings.length),
     rated: ratings.length,

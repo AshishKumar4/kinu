@@ -2,6 +2,7 @@
  * The account-delete sweep of shares an account has given: every account it sent a card is told to forget them.
  * The account's own record of what it sent names them, so no workspace is woken to list its shares.
  */
+import { objectNamed } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
@@ -19,7 +20,7 @@ export interface SharesGivenEnv<Id> {
  * are withdrawn first, so none lands after the forget. Idempotent, so a retried delete does no harm here.
  */
 export async function forgetSharesGiven<Id>(env: SharesGivenEnv<Id>, userId: string, owner: UserCaller): Promise<{ recipients: number }> {
-  const recipients = await env.UserDO.get(env.UserDO.idFromName(userId)).shareCards_withdraw(owner);
+  const recipients = await objectNamed(env.UserDO, userId).shareCards_withdraw(owner);
 
   for (const recipientId of recipients) {
     const recipient = env.UserDO.idFromName(recipientId);

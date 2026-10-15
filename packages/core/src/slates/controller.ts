@@ -305,13 +305,19 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     }));
   }
 
-  liveShareAdmitsUser(share: string, userId: string): boolean {
-    return this.viewers.admits(share, userId);
-  }
+  /** A live share's tree, for a user forking it: its row read live (a revoked share is refused), a `users` share only
+   *  for a user it admits, `public` for anyone signed in, and none whose grant forbids forking. */
+  liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return settle(answer(`exporting live share ${share}`, Effect.gen({ self: this }, function* () {
+      const record = this.live.live(share);
 
-  /** Admission is checked only by the caller. */
-  liveShareBundle(record: LiveShareRecord): Promise<SlateAnswer<BlueprintBundle>> {
-    return settle(this.blueprintAnswer(`exporting live share ${record.id}`, (blueprints) => blueprints.liveBundle(record.slate)));
+      if (record.visibility === 'users' && !this.viewers.admits(record.id, userId)) return yield* new KinuError('missing', 'No such share');
+
+      if (record.grant.fork === false) return yield* new KinuError('denied', 'This share does not allow forking');
+      const blueprints = yield* this.blueprints();
+
+      return yield* Effect.promise(async () => blueprints.liveBundle(record.slate));
+    })));
   }
 
   shareLive(share: string): Promise<SlateAnswer<{ share: LiveShareRecord; url: string | null }>> {

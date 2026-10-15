@@ -6,7 +6,7 @@ import { inheritedDescriptor, type RpcSurfaceSubject } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 
 export class ActivationGate extends LifecycleCapability {
-  /** `refused`: why this object's storage may not be read now (a release's tables step has not reached it), which
+  /** `refused`: why this object's storage may not be read (its repair could not bring it to this build), which
    *  every gated call answers with instead of starting. */
   constructor(private readonly refused: () => KinuError | undefined = () => undefined) {
     super('kinu-activation-gate');

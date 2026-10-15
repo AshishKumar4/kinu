@@ -77,8 +77,16 @@ export async function readBoundedStream(
   const declared = Number(request.headers.get('content-length'));
 
   if (Number.isFinite(declared) && declared > limit) return 'too_large';
-  const body = request.body;
 
+  return await drainBounded(request.body, limit, sink);
+}
+
+/** `body` pulled under `limit` into `sink`, as {@link readBoundedStream} pulls a request's, with no length declared. */
+async function drainBounded(
+  body: ReadableStream<Uint8Array> | null,
+  limit: number,
+  sink: (chunk: Uint8Array) => Promise<void> | void,
+): Promise<'ok' | 'too_large' | KinuError> {
   if (body === null) return 'ok';
   const reader = body.getReader();
   let total = 0;
@@ -107,18 +115,20 @@ export async function readBoundedStream(
   }
 }
 
-/** The whole body, bounded, or the classified reason there is not one. */
+/** The whole body, a request's or a bare stream's, bounded, or the classified reason there is not one. */
 export async function readBounded(
-  request: Request,
+  source: Request | ReadableStream<Uint8Array>,
   limit: number,
 ): Promise<Uint8Array | 'too_large' | KinuError> {
   const chunks: Uint8Array[] = [];
   let total = 0;
 
-  const outcome = await readBoundedStream(request, limit, (chunk) => {
+  const keep = (chunk: Uint8Array) => {
     chunks.push(chunk);
     total += chunk.byteLength;
-  });
+  };
+
+  const outcome = source instanceof Request ? await readBoundedStream(source, limit, keep) : await drainBounded(source, limit, keep);
 
   if (outcome !== 'ok') return outcome;
   const bounded = new Uint8Array(total);

@@ -64,7 +64,6 @@ export interface AgentWorkspace {
    *  Opens no turn and holds none: an isolate adopted between turns asks it before its chat exists. */
   scaffold(): Promise<StoredRow>;
   chatEvent(event: SessionEvent): Promise<void>;
-  /** The turn's end, with the agent's figures as it ends. */
   /** `ended` names the execution it closes. `activity`: the lines its turn logged that no tool call took. `window`: the
    *  transcript's newest messages as it ended, the frame its room is sent. */
   turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]): Promise<void>;
@@ -91,8 +90,6 @@ export interface AgentWorkspace {
   /** Any other agent's run settled: the workspace drops the receipts its tools kept under it. Repeatable. */
   runSettled(run: SettledRun): Promise<void>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
-  /** A facet sets no alarm: the instant it next needs waking, or none, and whether it holds owed work at all (a parked
-   *  effect needs no wake but is still owed), replacing what it said before. */
   /** `report`: its standing and its delivered runs' ends not yet told, each told again until a report reached. */
   owes(seq: number, next: number | null, holds: boolean, report: AgentReport): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;

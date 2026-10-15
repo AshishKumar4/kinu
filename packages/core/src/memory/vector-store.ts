@@ -29,7 +29,7 @@ export interface VectorRecord {
   readonly metadata?: JsonObject;
 }
 
-export interface VectorMatch {
+interface VectorMatch {
   readonly id: string;
   readonly score: number;
   readonly metadata?: JsonObject;

@@ -7,7 +7,7 @@ export type Credential =
   | OAuthCredential
   | OpenAICompatCredential;
 
-export interface BearerCredential {
+interface BearerCredential {
   kind: 'bearer';
   token: string;
   /** Sent here instead of the provider's own endpoint (a proxy). */

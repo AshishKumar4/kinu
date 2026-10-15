@@ -105,7 +105,7 @@ export function persistGepaCandidate(
 }
 
 
-/** Mid-run, so a hibernating DO can resume. */
+/** Mid-run, so the runs list shows a run's progress while it runs. */
 function updateGepaRunCounters(
   sql: SqlExecutor,
   actor: ActorHandle,

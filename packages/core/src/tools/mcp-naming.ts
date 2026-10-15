@@ -1,4 +1,5 @@
 /** MCP tool key for both backends: `<server>/<tool>`, keyed on the user-chosen server name (unique per agent), never the registration id. */
+import { fnv1a32Hex } from '../utils/fnv1a';
 
 /** Characters outside `[A-Za-z0-9_-]` (accepted by every target provider) become `_`. */
 function sanitizeSegment(segment: string): string {
@@ -15,10 +16,7 @@ export function mcpToolKey(serverName: string, toolName: string): string {
 
 export function suffixedMcpToolKey(serverName: string, toolName: string): string {
   const key = `mcp_${sanitizeSegment(serverName)}_${sanitizeSegment(toolName)}`;
-  let hash = 0x811C9DC5;
-
-  for (const byte of new TextEncoder().encode(`${serverName}\u0000${toolName}`)) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
-  const suffix = hash.toString(16).padStart(8, '0');
+  const suffix = fnv1a32Hex(`${serverName}\u0000${toolName}`);
 
   return `${key.slice(0, TOOL_NAME_MAX - suffix.length - 1)}_${suffix}`;
 }

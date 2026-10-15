@@ -127,6 +127,7 @@ describe(SUITE, () => {
         id: CASE,
         defect: DEFECT,
         modelCalls: 'expected',
+        budgetMs: 5 * 60_000,
         genesis: false,
         purpose: 'An assistant that runs long commands on the owner\'s own machine when asked to.',
         async run({ session, plan, budget }) {

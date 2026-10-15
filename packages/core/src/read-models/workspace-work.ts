@@ -33,7 +33,7 @@ export interface OwnedPlan {
   readonly tasks: AgentTaskTree[];
 }
 
-export interface OwnedTask {
+interface OwnedTask {
   readonly owner: WorkspaceWorkOwner;
   readonly plan: null;
   readonly tasks: AgentTaskTree[];

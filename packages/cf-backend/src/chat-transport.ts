@@ -208,7 +208,6 @@ function transcriptFrame(history: readonly UIMessage[]): string {
   return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history });
 }
 
-/** `error` and `landed` only when they are facts: the client paints a present `undefined` key as a failure. */
 /** `owed`: an owner's intent the request carried, on its way to the agent's wake. */
 function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: string; owed?: string }): string {
   return JSON.stringify({

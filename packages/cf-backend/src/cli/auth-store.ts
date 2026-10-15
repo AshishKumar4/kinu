@@ -5,7 +5,7 @@ import { Cause, Effect, Result } from 'effect';
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { randomToken, sha256Hex } from '@kinu.run/core';
+import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { parseAccessTokenUserId, type AccessTokenScope } from '@kinu.run/core';
@@ -159,7 +159,7 @@ export async function authenticateCliToken<Id, Authority extends CliAuthAuthorit
   const bearer = parseCliBearer(token);
 
   if (!bearer) return Result.fail('Malformed CLI token');
-  const userDO = env.UserDO.get(env.UserDO.idFromName(bearer.userId));
+  const userDO = objectNamed(env.UserDO, bearer.userId);
 
   const verified = bearer.kind === 'session'
     ? await userDO.verifyCliToken(await ownerCaller(env), token)
@@ -283,7 +283,7 @@ export function pollCliAuth<Id>(
       env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS - now,
     ));
 
-    const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId));
+    const userDO = objectNamed(env.UserDO, record.userId);
     const userId = record.userId;
 
     const minted = yield* Effect.catchCause(
@@ -346,7 +346,7 @@ export function approveCliAuth<Id>(
       return yield* Effect.die(new CliAuthCodeError('CLI auth code expired. Run kinu auth again.'));
     }
 
-    const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));
+    const userDO = objectNamed(env.UserDO, identity.userId);
     yield* Effect.promise(async () => userDO.ensureProfile(await ownerCaller(env), identity.email));
     yield* Effect.promise(async () => writeKvJson(env.AUTH_KV, deviceKey(deviceHash), {
       ...record,

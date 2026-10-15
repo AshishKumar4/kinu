@@ -395,6 +395,11 @@ export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page
   }));
 }
 
+/** Every user id the index holds. */
+export function userIds(sql: ControlPlaneSql): string[] {
+  return select(sql, v.object({ user_id: v.string() }), `SELECT user_id FROM cp_users ORDER BY user_id`).map((row) => row.user_id);
+}
+
 export function getUser(sql: ControlPlaneSql, userId: string): ControlUserRow | null {
   const row = select(sql, UserSqlRowSchema,
     `SELECT u.user_id, u.email, u.display_name, u.first_seen_at, u.last_seen_at,

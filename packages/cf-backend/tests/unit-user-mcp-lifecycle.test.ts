@@ -19,9 +19,9 @@ import type { UserCaller } from '@kinu.run/core';
 import { refusedSseConnect, refusedToolCall } from './helpers/mcp-transport';
 import * as v from 'valibot';
 
-/** The descriptor surface, parsed by `McpToolSurfaceSchema`, the contract the orchestrator's cache validates. */
+/** The descriptor surface, held to `McpToolSurfaceSchema`, the contract the orchestrator's cache reads. */
 async function readSurface(h: TestUserDO, owner: UserCaller): Promise<McpToolSurface> {
-  return v.parse(McpToolSurfaceSchema, JSON.parse(await h.userDO.userMcp_toolDescriptors(owner)));
+  return v.parse(McpToolSurfaceSchema, await h.userDO.userMcp_toolDescriptors(owner));
 }
 
 /**

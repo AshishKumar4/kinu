@@ -1,5 +1,5 @@
-import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
+import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
+import { objectNamed, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
@@ -35,13 +35,15 @@ import {
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
   type LoopOrigin, type NodeHomeHost,
-  type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
+  type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   actorStanding, isSubordinateOrigin,
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
-import { durableStamps, requireOps, resetTables, TablesRequestSchema, type OpsCaller, type TablesAnswer, type TablesRequest } from '@kinu.run/core';
+import { censusOf, requireOps, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
+import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
+import { HeldRead } from "./account-reads";
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import type { AnswerMetadataReply } from "./agent-facet/agent-turn";
@@ -58,7 +60,7 @@ import { callOperation, listOperations, type OperationCaller, type OperationList
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
-import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
+import { ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
   AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
@@ -71,9 +73,11 @@ import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } f
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
+import { WorkspaceSlates } from "./workspace-slates";
+import type { McpToolSurface } from "./user/mcp-servers";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
-import { initSlateBuildTable, SlateBuilds } from "@kinu.run/core/slates";
+import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
 import {
@@ -120,7 +124,7 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type SlateSurfaceCatalog, type LiveShareRecord,
+  type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
@@ -168,7 +172,6 @@ import {
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
-  EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
   type EmailAdmission, type IncomingEmail,
   PeerHub, type PeerMessage, type ReceiveResult,
   getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
@@ -185,19 +188,17 @@ import {
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, connectedDevices, sameDeviceStatus, type LiveRead,
+  LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
   initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, authoredTurnMetadata, type ActorReach, type ChatTurnInput,
   type ChangeNote, type ChangeNotesResult, type NotedChanges,
   diffLines, type DiffLine,
-  getExecutorFiles, readExecutorFile, listEnvironments,
-  renameExecutorPathOp, deleteExecutorPathOp,
-  ExecutorFileUpload, ExecutorFileDownload,
+  listEnvironments,
   type ExecutorTextFile, type FilesPage, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
-  jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
+  listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
@@ -211,7 +212,7 @@ import {
   boundEventQuery,
   type WorkMode, WorkModeSchema,
   WORKSPACE_RUN_ID, activeOperationProfile, SLATES_ROOT,
-  buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview,
+  buildWorkspaceOverview, OverviewPush, type WorkspaceOverview,
   projectJsonValue,
 } from "@kinu.run/core";
 import * as v from 'valibot';
@@ -223,7 +224,6 @@ import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
   EVOLUTION_LANE_FIBER,
-  HeldRead,
   readTurnContinuity,
   unownedWorkspace,
   type ActorDynamicContextExtras,
@@ -252,11 +252,8 @@ import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold,
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
-import { agentEmailAddress } from "./email/inbound";
-import {
-  createEmailThreadDispatcher,
-  sendInboundEmailReceipt, sendOwnerEmail,
-} from "./email/outbound";
+import { createEmailThreadDispatcher } from "./email/outbound";
+import { WorkspaceEmail } from "./workspace-email";
 import { EmailOutbox } from "@kinu.run/core";
 import {
   acceptSandboxLifecycleIncident, initSandboxLifecycleTable,
@@ -294,26 +291,6 @@ const SANDBOX_REFUSED = 'sandbox_refused';
 /** Smaller than the fiber sweep's row budget: each sealed head or re-pended lease costs a write and an event.
  *  A pass that fills a budget arms the maintenance wake. */
 const ORPHAN_SEAL_MAX_ROWS = 256;
-
-/** Transfer id is fresh per transfer, so two readers of one path cannot replace
- *  each other's snapshot. */
-export interface ExecutorFileChunkRead {
-  executorId: string;
-  path: string;
-  transferId: string;
-  offset: number;
-  length: number;
-}
-
-export interface ExecutorFileChunkWrite {
-  executorId: string;
-  path: string;
-  transferId: string;
-  offset: number;
-  chunk: Uint8Array;
-  final: boolean;
-  expectedRevision?: VfsRevision;
-}
 
 const WAKE_ARM_FAILURE = {
   reconcile: {
@@ -364,10 +341,6 @@ export type RecentEventRow = Pick<
   | 'payload_visibility' | 'payload' | 'received_at'
 >;
 
-function clampLimit(requested: number | undefined, max: number): number {
-  return boundedInt(requested, max, 1, max);
-}
-
 /** agents 0.26's Lifecycle reads this back when `ctx.id` has no name; it outlives `destroy()`, so an alarm still owed builds the object. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
@@ -383,22 +356,6 @@ function phaseFailed(
   });
 }
 
-/** A terminal step's refusal as the pane reads it, or null once the step is done. */
-function terminalStep(step: Effect.Effect<unknown>, doing: string): Effect.Effect<{ error: string } | null> {
-  return Effect.matchCause(step, {
-    onSuccess: () => null,
-    onFailure: (failed) => ({ error: terminalRefusal({ doing, cause: Cause.squash(failed) }) }),
-  });
-}
-
-/** A terminal that cannot open: the owner's pane reads the whole chain. */
-function terminalRefusal(failure: { doing: string; cause: unknown }): string {
-  const error = authoredRefusal({ ...failure });
-  diagnostics.failure('terminal.prepare_failed', error);
-
-  return renderThrownChain({ cause: error });
-}
-
 type SandboxBox = ReturnType<NonNullable<Env['KinuDevbox']>['getByName']>;
 
 interface HostedTarget {
@@ -406,7 +363,6 @@ interface HostedTarget {
   readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
 }
 
-/** The crossings an agent's sources read that wait on nothing of its turn's own, in flight from the moment they start. */
 /** A turn's surface as its factory opened it, with what it reaches. */
 interface OpenedSurface {
   readonly surface: TurnSurface;
@@ -421,7 +377,7 @@ type AssembledSurfaceParts = Omit<ActorSurface, 'surface' | 'descriptors' | 'dig
 
 interface SourcePlanes {
   /** The owner's MCP descriptors, settled; null where no turn reaches them. */
-  readonly descriptors: Promise<PromiseSettledResult<string>> | null;
+  readonly descriptors: Promise<PromiseSettledResult<McpToolSurface>> | null;
   /** The hub's device check, which never rejects: a failure keeps the last snapshot. */
   readonly device: Promise<unknown>;
   /** The account's facts its turn reads once, which never rejects (a failed read is logged and answers none); null with
@@ -471,6 +427,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     this.addressedName = name;
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
+
+    // Storage a release left behind is brought to this build first, by the root's whole init: the webhook secrets too,
+    // which a workspace makes at its first trigger.
+    const secrets = tableExists(this.boundSql, 'webhook_secrets');
+
+    this.repairStorage(() => {
+      this.initBaseTables();
+
+      if (this.nimbusSibling) return;
+      this.initTables();
+
+      if (secrets) createWebhookSecretStore(this.ctx.storage.sql);
+    });
 
     // Tables only, so a call after `destroyAgent` makes no workspace. Native RPC runs no `onStart`.
     if (!this.nimbusSibling && this.storageRefusal === undefined) {
@@ -611,7 +580,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.changes.touched(paths);
         this.liveReadsMoved(readsMovedByFiles(paths));
         // With no slate host loaded, no slate process or build runs here: the change moves only the build records.
-        const ids = this._slates?.controller.filesChanged(paths) ?? this.slateBuilds.filesChanged(paths);
+        const ids = this.slateHosting.filesChanged(paths);
 
         if (ids.length === 0) return;
         markStoreChanged(this.ctx.storage.sql);
@@ -626,7 +595,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       ensureSlate: async (owner) => (await this.slates()).controller.ensureDurable(owner),
       // A process holds a port only once the host that runs it is loaded.
-      slateInvocation: (port, socket) => this._slates?.slateInvocation(port, socket) ?? null,
+      slateInvocation: (port, socket) => this.slateHosting.loaded?.slateInvocation(port, socket) ?? null,
       ...(this.pictureCapture() !== null && {
         pictures: {
           captures: (port, handle) => this.pictures.captures(port, handle, Date.now()),
@@ -986,7 +955,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       accounts: () => this.config.getProviderAccounts(),
       noteRequest: (actorId, lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       openWork: (actorId) => this.openWorkOf(actorId),
-      credentialsRevision: () => this.openedCredentialsRevision(),
+      credentialsRevision: () => this.account.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
       advisor: (actor) => this.actorAdvisor(actor),
@@ -1035,12 +1004,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       // Its own named shell, never the agent's: the session user's identity must not reach the agent's commands.
       stateSession: async () => await this.hostedWorkspace().session({ shellId: agentStateShellId(this.actingAgentOf(actorId).storageKey) }),
-      memory: () => new AgentMemory(async () => {
-        const reference = actorReferenceOf(this.actingAgentOf(actorId));
-        const actor = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
-
-        return actor.runtime.memory;
-      }),
+      memory: () => new AgentMemory(async () => (await this.agentSeat(actorId)).runtime.memory),
       program: async (bound, ...args) => {
         this.admitWork();
 
@@ -1095,9 +1059,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // What its turns are built on, seeded as a turn's preparation seeds it; no surface is built for no turn.
       scaffold: async () => {
         this.admitWork();
-        const reference = actorReferenceOf(this.actingAgentOf(actorId));
-        // The seat it holds, which a run of its may have taken, as its turn's preparation reads it; else its own.
-        const actor = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
+        const actor = await this.agentSeat(actorId);
 
         // As its turn's sources ask it first: the workspace agent's program is installed before it is read.
         if (actorReach(actorPolicy(actor.record)).kind === 'workspace') await this.ensureOwnedScaffold();
@@ -1137,12 +1099,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       runSettled: async (run) => { this.runSettled(actorId, run); },
       hireAdvisor: async (advisor) => {
         if (this.effectEnded(actorId, 'advisor_review')) return;
-        const reference = actorReferenceOf(this.actingAgentOf(actorId));
-
-        await this.actorAdvisor(this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' })).hire(advisor);
+        await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor);
       },
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
-      birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.boundExec(), this.agentBound(actorId).handle), drainTurnId),
+      birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
         vfs: this.rt.storage.vfs,
         config: this.agentBound(actorId).stores.config,
@@ -1155,7 +1115,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Asked only by a turn that never prepared: one that did reads what its preparation and its tools answered.
       openWork: async () => this.openWorkOf(actorId),
-      enqueueTurn: (input) => this.enqueueHostedTurn(this.actorHost().bindStores(actorReferenceOf(this.actingAgentOf(actorId))), input),
+      enqueueTurn: (input) => this.enqueueHostedTurn(this.agentBound(actorId), input),
       executeTool: (call) => {
         this.admitWork();
         this.agentActivity(actorId, call.activity);
@@ -1202,6 +1162,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.actorHost().bindStores(actorReferenceOf(this.actingAgentOf(actorId)));
   }
 
+  /** The seat an agent holds, which a run of its may have taken, as its turn's preparation reads it; else its own. */
+  private async agentSeat(actorId: string): Promise<SeatedActor> {
+    const reference = actorReferenceOf(this.actingAgentOf(actorId));
+
+    return this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
+  }
+
   /** The tile reads an agent's chat turn as its room hears it open and close. */
   private async hostedChatEvent(actorId: string, event: SessionEvent): Promise<void> {
     if (event.type === 'turn-start') {
@@ -1237,8 +1204,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (actorPolicy(this.agentOf(actorId)).workspaceAgent) this.turnClaimChanged();
   }
 
-  /** An end delayed past the agent's later opening, a later turn's or its Retry's, is that earlier run's: it closes
-   *  nothing of the run now open, in its room or here. */
   /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. */
   private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
     const runId = event.type === 'turn-end' ? event.runId : '';
@@ -1390,15 +1355,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.workspaceActors();
   }
 
-  /**
-   * Immutable catalogs are shared by value; per-actor state (event log, governor, broadcast)
-   * is built per actor in `actor-hosting.ts` and is never this object's own.
-   */
-  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`; its writes name the reads they move. */
-  protected boundExec(): SqlExec {
-    return this.watchedExec;
-  }
-
+  /** Immutable catalogs are shared by value; per-actor state (event log, governor, broadcast) is built per actor in
+   *  `actor-hosting.ts` and is never this object's own. */
   private workspaceHostSeams(): WorkspaceHostSeams {
     return {
       env: this.env,
@@ -1406,7 +1364,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       agent: this,
       holdLane: (body) => this.holdLane(body),
       currentTurn: (reference) => this.currentTurnOf(reference),
-      exec: this.boundExec(),
+      exec: this.watchedExec,
       sql: this.boundSql,
       directory: this.workspaceActors(),
       workspaceName: this.workspaceName(),
@@ -1466,7 +1424,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected hostedSeams(): HostedActorSeams {
     return {
       host: this.actorHost(),
-      exec: this.boundExec(),
+      exec: this.watchedExec,
       directory: this.workspaceActors(),
       turnInFlight: (reference) => this.hostedTurnInFlight(reference),
       sources: async (actor) => await this.actorSources(actor, actorReach(actorPolicy(actor.record)), null),
@@ -1730,7 +1688,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const { runtime } = actor;
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     // The workspace's own agent reads the account's memory whoever owns it; a hire, only once it is owned.
-    const account = reach.actor.kind === 'workspace' ? this.accountMemory({ by: 'agent', agent: actor.record.name }) : this.accountMemoryFor(actor.record.name);
+    const proposer = { by: 'agent', agent: actor.record.name } as const;
+    const account = reach.actor.kind === 'workspace' ? this.account.memory(proposer) : this.account.ownedMemory(proposer);
     const { report } = scope;
 
     const codemode = (finished: CodemodeSurface) => {
@@ -1779,7 +1738,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The workspace agent's own tools in `mode` outside any turn of its: a scaffold's rollout, a slate's call, a retry. */
   protected override ownTools(mode: WorkMode, scope: string | null): ActorToolsets {
-    const root = this.actorHost().bindStores(actorReferenceOf(this.actorHandle()));
+    const root = this.rootBound();
     const operation = () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
 
     return this.actorTools({ ...root, runtime: this.rt }, surfaceReach(actorPolicy(root.record), { authorship: 'owner', mode, awaitsReply: false }, true), mode, {
@@ -1791,7 +1750,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps {
-    const root = this.actorHost().bindStores(actorReferenceOf(this.actorHandle()));
+    const root = this.rootBound();
 
     return this.actorAgentsToolDeps({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), mode, () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null);
   }
@@ -1894,7 +1853,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private settingsAtOpen(): Promise<Exit.Exit<void, KinuError>> {
-    return hold(attempt({ doing: "reading the account's settings as an agent's work opens", otherwise: 'unavailable' }, () => this.accountSettingsAtOpen()));
+    return hold(attempt({ doing: "reading the account's settings as an agent's work opens", otherwise: 'unavailable' }, () => this.account.settingsAtOpen()));
   }
 
   /** A preparation's account reads: those its admission started, or started now; a run's surface takes no planes. Its
@@ -1931,7 +1890,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       descriptors: turn && reach.kind === 'workspace' ? this.userMcpDescriptors() : null,
       device: reach.kind === 'workspace' ? runtime.deviceTransport.refreshStatus() : Promise.resolve(),
-      facts: turn ? this.accountFactsForTurn() : null,
+      facts: turn ? this.account.factsForTurn(this.actorHandle().name) : null,
     };
   }
 
@@ -2011,7 +1970,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
-      accountFacts: () => planes.facts ?? this.accountFactsForTurn(),
+      accountFacts: () => planes.facts ?? this.account.factsForTurn(this.actorHandle().name),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       operation: (profile, operationInputs) => captureOperationProfile({
         actor: actor.handle, profile, inputs: operationInputs, runId: turn?.surface.key.runId ?? WORKSPACE_RUN_ID, turnId: turn?.surface.key.turnId ?? null,
@@ -2114,10 +2073,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override async terminalFor(connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null> {
     if (!isWorkspaceTerminal(connection.tags)) return null;
-    // Building the root runtime registers the mount table this shell serves.
-    void this.rt;
+    this.mountRootFiles();
 
     return await this.hostedWorkspace().terminal();
+  }
+
+  /** The root's file plane registers the mount table a shell serves, and it is made with the root's runtime. */
+  private mountRootFiles(): void {
+    void this.rt;
   }
 
   /** Send the replies a drained turn owes, then close its delivery leases.
@@ -2152,10 +2115,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * One `LIMIT 1` read per store, all read so the wake can name them. Runs in the init gate;
-   * interpreting a lease is left to {@link owedDeliveryWork}.
-   */
-  /**
    * The owed-work probes over this object's own tables, held across a turn's wake decisions (the open, each report and
    * the rest ask all of them). Each names its table's writers; their statements pass `sql` or `watchedExec`, which drop it.
    */
@@ -2175,6 +2134,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     changeNotes: this.held.hold(['change_notes_outbox'], () => owesChangeNotes(this.rt)),
   };
 
+  /**
+   * One `LIMIT 1` read per store, all read so the wake can name them. Runs in the init gate;
+   * interpreting a lease is left to {@link owedDeliveryWork}.
+   */
   protected override owedUntimedArms(): Required<UntimedArms> {
     const probes = this.owedProbes;
 
@@ -2197,7 +2160,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Soonest instant a timed ledger (terminal retry, deferred job resume) owes a wake, or null.
    * Untimed owed work is excluded; it is {@link owedUntimedWork}. */
   protected override nextOwedAt(): number | null {
-    const at = Math.min(this.workOwedAt() ?? Infinity, this.overviewRetry?.at ?? Infinity, this.forkNotices.nextDueAt() ?? Infinity);
+    const at = Math.min(this.workOwedAt() ?? Infinity, this.overview.retryAt ?? Infinity, this.forkNotices.nextDueAt() ?? Infinity);
 
     return Number.isFinite(at) ? at : null;
   }
@@ -2272,7 +2235,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private reactionsDueAt(now: number): number | null {
     const due = this.reactingAgents()
-      .map((record) => new EventLog(this.boundExec(), this.actorHost().bindStores(actorReferenceOf(record)).handle).nextPendingDrainAt(now) ?? Infinity);
+      .map((record) => new EventLog(this.watchedExec, this.actorHost().bindStores(actorReferenceOf(record)).handle).nextPendingDrainAt(now) ?? Infinity);
 
     const at = Math.min(Infinity, ...due);
 
@@ -2283,7 +2246,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Effect.gen({ self: this }, function* () {
       for (const record of this.reactingAgents()) {
         const reference = actorReferenceOf(record);
-        const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
+        const log = new EventLog(this.watchedExec, this.actorHost().bindStores(reference).handle);
         const dueAt = log.nextPendingDrainAt(now);
 
         if (dueAt === null || dueAt > now) continue;
@@ -2297,8 +2260,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
     });
   }
-
-  /** Each delivered run's caller, awaiting the end its agent reports; one this activation never delivered is no one's. */
 
   /** One agent's due reactions; failure rejects with a classified error. */
   drainAgent(reference: ActorReference): Promise<void> {
@@ -2444,11 +2405,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return { items, total: items.length };
       },
       extraMissingCapabilities: () => {
-        const deafInbox = this.emailInbox.dropNotice(Date.now());
+        const deafInbox = this.email.inbox.dropNotice(Date.now());
 
         return deafInbox ? [deafInbox] : [];
       },
-      failingSlates: () => this.slateBuilds.failing(ROOT_SLATE_CALLER.cred).map(({ slate, failure }) => `${slate}: ${failure}`),
+      failingSlates: () => this.slateHosting.builds.failing(ROOT_SLATE_CALLER.cred).map(({ slate, failure }) => `${slate}: ${failure}`),
     };
   }
 
@@ -2459,7 +2420,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private _replyChannels: ReplyChannelStore | null = null;
   private readonly warmingLanes = new Map<string, CacheWarmingLane>();
 
-  /** Wakes go through the Kinu timer job, never `setTimeout`: nothing in the isolate survives hibernation. */
   /** The lane keeping an agent's prompt cache warm, keyed by the agent: its own row, its own wake. */
   private warmingOf(actorId: string): CacheWarmingLane {
     const held = this.warmingLanes.get(actorId);
@@ -2635,7 +2595,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;
-        this.emailOwnerNotification('Evolution changelog digest', event.message);
+        this.email.ownerNotification('Evolution changelog digest', event.message);
       });
     }
 
@@ -2752,16 +2712,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The edge's one resolution of a name or `/`-joined path to the actor id everything downstream keys on. */
   resolveHostedActorRoute(target: string): Promise<{ ok: true; actorId: string } | Refusal> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        yield* this.owner();
-        const actor = this.hostedTarget(target);
-
-        if (actor === null) return yield* new KinuError('missing', 'The actor is not available for client execution.');
-
-        return { ok: true as const, actorId: actor.handle.actorId };
-      }), refusing('resolving a hosted actor chat path', 'io'));
-    }));
+    return settle(Effect.catchCause(
+      Effect.map(this.hostedChild(target), ({ child }) => ({ ok: true as const, actorId: child.handle.actorId })),
+      refusing('resolving a hosted actor chat path', 'io'),
+    ));
   }
 
   /** Each step a live subordinate its parent's roster still employs: a dismissal keeps rows, not chat. */
@@ -2841,7 +2795,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.agentDeliveries(this.actorHandle().actorId);
   }
 
-  /** An agent's deliveries, whichever agent: its signals, and its pending events bound to their turn as it is written. */
   /** An agent's deliveries as its orchestrator sends signals through them: each a delivery its room hears carded. */
   private agentDeliveries(actorId: string): AgentOrchestratorDeps['deliveries'] {
     return this.coordinator.port(actorId, (event) => { this.detachOwned(Effect.promise(() => this.hostedChatEvent(actorId, { type: 'broadcast', event }))); });
@@ -2998,8 +2951,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return land ? await this.agentCall(actorId, (isolate, snapshot) => isolate.landing(snapshot, delivery.id)) : null;
   }
 
-  /** Armed before anything crosses into the agent: a delivery, or a decision taken in its own store (an answer, a
-   *  dismissal), so the turn it owes is driven even if its isolate ends before it reports (design v3 A). */
   /**
    * The agents whose newest report said their chat holds a turn owed or running: from the input it took, before its turn
    * opens here, to its rest. Written by each accepted report (`agentOwes`), which replaces the agent's answer; dropped by
@@ -3008,7 +2959,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly agentsWorking = new Set<string>();
 
-  /** One report of an agent's, told or carried by its admission's answer (taken rides admit). */
   /** An agent's open work: its tasks tool and its jobs run here, over its own rows, main's as any agent's. */
   private openWorkOf(actorId: string): OpenWork {
     const reads = this.dynamicReadsOf(actorReferenceOf(this.actingAgentOf(actorId)));
@@ -3383,7 +3333,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected notifyOwner(subject: string, body: string): void {
-    this.emailOwnerNotification(subject, body);
+    this.email.ownerNotification(subject, body);
   }
 
   /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision. */
@@ -3495,19 +3445,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { owesNarration: false, metadata: kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept } };
   }
 
-  /**
-   * Readings this root's settled response owes; all taken now, before any effect runs, since the
-   * list is claimed up front. Row order, lanes and gates belong to {@link declareTerminalRoster}.
-   */
   /** What main's turns left here, from their preparation to their handoff. */
   private get turnBranches(): TurnBranchesStore {
     return new TurnBranchesStore(this.boundSql, this.actorHandle().actorId);
   }
 
-  /**
-   * Main's settled turn, handed from its own isolate: the lanes it owes are this object's (its evolution, event log,
-   * titles, replies and branches), declared and owed here once per turn, however often the handoff is repeated.
-   */
   /**
    * Every agent's one settle here, as its isolate's terminal transition tells it: the receipts its tools kept under the
    * settled run go. Its answer is committed, so nothing runs under that run again and its close paired every call it
@@ -3518,6 +3460,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     pruneTurnReceipts(this.boundSql, this.agentBound(actorId).handle, run);
   }
 
+  /**
+   * Main's settled turn, handed from its own isolate: the lanes it owes are this object's (its evolution, event log,
+   * titles, replies and branches), declared and owed here once per turn, however often the handoff is repeated.
+   */
   private async mainTurnSettled(settled: HandedOffTurn): Promise<void> {
     // What the workspace decided as the turn opened, as main's isolate froze it then and handed it over.
     const held = settled.facts;
@@ -3556,7 +3502,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
       armWake: () => { this.armDurableWake(); }, workspace: this.name,
       // Reads the account and proposes to it; the owner accepts what is kept.
-      account: () => (this.getOwnerUserId() === null ? undefined : this.accountMemory({ by: 'background' })),
+      account: () => this.account.ownedMemory({ by: 'background' }),
     });
   }
 
@@ -3657,13 +3603,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A sandbox that died mid-restore sends no settle. */
   private recheckSandboxRestore(): void {
-    const namespace = this.env.KinuDevbox;
+    const box = this.computerBox();
 
-    if (namespace === undefined) return;
+    if (box === undefined) return;
 
     if (this.config.get(SANDBOX_STARTING) == null && this.config.get(SANDBOX_REFUSED) == null) return;
     this.detachOwned(logged('computer.restore_recheck_failed', { doing: "reading the computer's restore state", otherwise: 'unavailable' }, async () => {
-      await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
+      await this.sandboxRestore(await box.restoreStatus());
     }, { workspace: this.name }));
   }
 
@@ -3779,16 +3725,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { workspace: await this.workspaceTitle() };
   }
 
-  /**
-   * Eval-only: aborts this activation as the platform would; schedule rows stand. Sealed in
-   * `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`). ARCHITECTURE-DECISIONS
-   * C3.
-   */
   /** The kept activations, oldest first: how often this workspace started, and on which build. */
   activations(): Activation[] {
     return this.storageRefusal === undefined ? listActivations(this.boundSql) : [];
   }
 
+  /**
+   * Eval-only: aborts this activation as the platform would; schedule rows stand. Sealed in
+   * `rpc-surface.ts`, eval-service identity only (`eval/abort-route.ts`). ARCHITECTURE-DECISIONS
+   * C3.
+   */
   evalAbortActivation(): void {
     this.ctx.abort('eval-service: the activation was aborted on request');
   }
@@ -3816,7 +3762,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobAuthorities.owning(jobId)?.store ?? this.jobs, jobId);
+    return (this.jobAuthorities.owning(jobId)?.store ?? this.jobs).get(jobId);
   }
 
   @callable()
@@ -3974,7 +3920,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */
   async recordGitHubEgress(facts: readonly GitHubFact[], actorId: string | null): Promise<void> {
-    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, source: 'egress', at: Date.now() });
+    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, at: Date.now() });
   }
 
   @callable() getWorkspaceGitHub(refresh = false): Promise<WorkspaceGitHubView> {
@@ -4229,36 +4175,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // per-agent verifies, attaches, issues or lists a device token.
 
   /**
-   * A release's tables reset (`scripts/reset.ts tables`): what this workspace and each agent whose database it keeps
-   * (a retired one's too) hold of the changed tables, and with `drop`, each brought to this build: what is stale
-   * dropped, made again by its own init, and stamped. The agents go first, while the directory that names them is as
-   * the build before left it. Only `/ops/tables` holds the capability. A Nimbus sibling holds no workspace table.
+   * The deploy's walk (`scripts/reset.ts tables`): this workspace's tables and their rows and what its repair did, and,
+   * once it is born, each agent whose database it keeps (a retired one's too), opened so it repairs itself, with the
+   * same. A wiped or unborn workspace answers for itself alone: it has no agents. Only `/ops/tables` holds the
+   * capability. A Nimbus sibling holds no workspace table.
    */
-  async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
+  async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
     await requireOps(this.env, caller);
-    const { tables, drop } = v.parse(TablesRequestSchema, request);
+    const reached = !this.nimbusSibling && this.storageRefusal === undefined && this.workspaceBorn() ? this.keptAgents() : [];
+    const agents = await Promise.all(reached.map(async ({ name, placement }) => ({ name, ...await (await agentFacet(this.ctx, this.env, placement)).opsTables() })));
 
-    const agents = this.nimbusSibling ? [] : await Promise.all(this.keptAgents().map(async ({ name, placement }) => ({
-      name, ...await (await agentFacet(this.ctx, this.env, placement)).opsTables({ tables, drop }),
-    })));
-
-    const answer = resetTables(this.ctx.storage.sql, { tables, drop }, {
-      schema: 'workspace', stamps: durableStamps(this.ctx.storage.kv), transactionSync: (write) => this.ctx.storage.transactionSync(write),
-      init: () => {
-        this.initBaseTables();
-
-        if (!this.nimbusSibling) this.initTables();
-      },
-    });
-
-    // Brought to this build and stamped: open to every call from here, as one constructed now would be.
-    if (drop && this.storageRefusal !== undefined) {
-      this.storageRefusal = undefined;
-
-      if (!this.nimbusSibling && this.workspaceBorn()) this.registerCompactionExtension();
-    }
-
-    return { name: this.addressedName, ...answer, agents };
+    return {
+      name: this.addressedName, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
+      workspaces: [], accounts: [], agents,
+    };
   }
 
   private initTables(): void {
@@ -4515,7 +4445,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A search's actor outlives its run until {@link reclaimSettledExplorationActors} retires it. */
   private hasExplorationActors(): boolean {
-    return this.boundExec().exec(
+    return this.watchedExec.exec(
       `SELECT 1 FROM workspace_actors WHERE origin = 'swarm' AND deleted_at IS NULL AND retiring_at IS NULL LIMIT 1`,
     ).toArray().length > 0;
   }
@@ -5235,7 +5165,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return sendChangeNotes(this.rt, { value: set }, this.changeNotesChat);
   }
 
-  /** Main's chat, in its own isolate, holds the card under the message's id; one it holds already is not sent again. */
   /** Main's chat, which notes cross to as one card under their message's id. */
   private get changeNotesChat(): ChangeNotesChat {
     const main = this.actorHandle().actorId;
@@ -5295,16 +5224,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * `publishHeadStreamFrame` is reached in-process via `reportNodeDelta` and
-   * `HostedActorSeams.publishDelta`; the RPC allowlist exposes only required remote capabilities.
-   */
-
-  /**
-   * The parent's turn profile for a facet; facets must not resolve their own (they lack the role/turn,
-   * and a later resolution can land a different digest). Resolves one if no turn is open.
-   */
-
-  /**
    * One page of the portable archive (format `kinu import` reads); walk `next` until null.
    * Owner-scoped ('interactive'); workspace capability tiers do not gate it.
    */
@@ -5324,25 +5243,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** Retired ones hold their stores until destroyed; main's isolate, once it ran a turn, and not opened for none. A store
-   *  this version refuses never ran one: its conversation is the workspace's own, old, table. */
-  /** The agents whose databases this workspace keeps, by name, and where each lives, read over storage the tables step
-   *  has not brought up yet: its refusal stands aside for this one synchronous read alone, so no other call is served
-   *  past it. */
+  /** The agents whose databases this workspace keeps, by name, and where each lives. */
   private keptAgents(): Array<{ readonly name: string; readonly placement: AgentFacetPlacement }> {
-    const refusal = this.storageRefusal;
-
-    this.storageRefusal = undefined;
-
-    const agents = this.agentsWithStores().map((actorId) => ({
+    return this.agentsWithStores().map((actorId) => ({
       name: this.actorDirectoryStore().retained(actorId)?.name ?? actorId, placement: this.agentPlacement(actorId),
     }));
-
-    this.storageRefusal = refusal;
-
-    return agents;
   }
 
+  /** Retired ones hold their stores until destroyed; main's isolate, once it ran a turn, and not opened for none. A store
+   *  this version refuses never ran one: its conversation is the workspace's own, old, table. */
   private agentsWithStores(): string[] {
     const mainHolds = (): boolean => this.storageRefusal === undefined && this.config.getHoldsTurns();
 
@@ -5404,9 +5313,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ).revokeAll();
     }
 
-    if (this.env.KinuDevbox) {
-      const sb = this.env.KinuDevbox.getByName(sandboxIdForWorkspace(this.name));
+    const sb = this.computerBox();
 
+    if (sb !== undefined) {
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.
       await sb.discardState();
@@ -5593,10 +5502,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /**
-   * One hosted actor's identity, program and open work. Read-only: `bindStores`, never `acquire`,
-   * so inspecting a retained actor starts nothing. Owner-gated and resolved through the directory.
-   */
   /** Resolved through the directory under this root's handle, so a name only reaches this root's children. */
   private hostedChild(target: string) {
     return Effect.gen({ self: this }, function* () {
@@ -5701,8 +5606,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {
-    const windowLimit = clampLimit(opts?.steps, ACTIVITY_STEP_WINDOW);
-    const logLimit = clampLimit(opts?.logs, ACTIVITY_LOG_WINDOW);
+    const windowLimit = boundedInt(opts?.steps, ACTIVITY_STEP_WINDOW, 1, ACTIVITY_STEP_WINDOW);
+    const logLimit = boundedInt(opts?.logs, ACTIVITY_LOG_WINDOW, 1, ACTIVITY_LOG_WINDOW);
     // Main's steps are its own isolate's; warms are this object's lane.
     const { steps, newestMeasured } = await this.mainCall((isolate, snapshot) => isolate.steps(snapshot, windowLimit));
 
@@ -5851,50 +5756,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await this.slates()).controller.build(caller, slate);
   }
 
-  /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */
-  protected async slateSurfaceCatalog(): Promise<SlateSurfaceCatalog> {
-    const descriptors = await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller());
-    const mcp = v.parse(McpToolSurfaceSchema, JSON.parse(descriptors));
-    const mcpServers = new Map<string, { title: string; tools: { name: string; readOnly: boolean }[] }>();
+  private _slateHosting: WorkspaceSlates | undefined;
 
-    for (const descriptor of mcp.descriptors) {
-      const group = mcpServers.get(descriptor.serverName) ?? { title: descriptor.serverName, tools: [] };
-      group.tools.push({ name: descriptor.name, readOnly: descriptor.readOnly === true });
-      mcpServers.set(descriptor.serverName, group);
-    }
-
-    return {
-      mcp: [...mcpServers.entries()].map(([server, group]) => ({ server, title: group.title, tools: group.tools })),
-      slates: Object.keys(await (await this.slates()).controller.projects(ROOT_SLATE_CALLER)),
-    };
-  }
-
-  private _slates: SlateHost | undefined;
-
-  private _slatesLoad: Promise<SlateHost> | undefined;
-
-  private _slateBuilds: SlateBuilds | undefined;
-
-  /** The slates' build records: a turn's every step reads them and a file change moves them, host loaded or not. */
-  private get slateBuilds(): SlateBuilds {
-    this._slateBuilds ??= new SlateBuilds(this.ctx.storage.sql);
-
-    return this._slateBuilds;
-  }
-
-  /**
-   * The slate host, loaded at its first use: it and the agent-core runtime its stores run on were most of the startup
-   * every isolate of the Worker paid, a workspace's own or not (L27).
-   */
-  protected slates(): Promise<SlateHost> {
-    this._slatesLoad ??= import("./slates/host").then(({ SlateHost }) => this.slateHost(SlateHost));
-
-    return this._slatesLoad;
-  }
-
-  private slateHost(Host: typeof SlateHost): SlateHost {
-    this._slates = new Host({
-      ctx: this.ctx, workspace: this.name, builds: this.slateBuilds,
+  /** The workspace's slates, made at their first use (workspace-slates.ts). */
+  private get slateHosting(): WorkspaceSlates {
+    this._slateHosting ??= new WorkspaceSlates({
+      ctx: this.ctx, workspace: this.name,
       session: () => this.hostedWorkspace().bundle.session(),
       facetManager: () => this.hostedWorkspace().facetManager(),
       bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
@@ -5907,7 +5774,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
         owners: async () => new Map([...await listPortReservations(this.ctx)].flatMap(([port, held]) => (held.owner === null ? [] : [[port, held.owner] as const]))),
       },
-      catalog: () => this.slateSurfaceCatalog(),
+      ownerMcpSurface: async () => await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
       shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
       shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
       kv: this.env.AUTH_KV,
@@ -5923,11 +5790,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sharesChanged: async () => {
         this.overviewChanged(true);
 
-        return await this.overviewSettled() === null ? 'current' : 'pending';
+        return await this.overview.settled() === null ? 'current' : 'pending';
       },
     });
 
-    return this._slates;
+    return this._slateHosting;
+  }
+
+  private slates(): Promise<SlateHost> {
+    return this.slateHosting.load();
   }
 
   /**
@@ -6011,26 +5882,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await this.slates()).controller.readLiveShareRecord(share);
   }
 
-  /**
-   * Share row re-read through the S6 gate (revoked answers 'missing'); a `users` share forks for whom it admits,
-   * `public` for anyone signed in. Skeleton is the running slate's tree.
-   */
+  /** A live share's tree, for a user forking it, held to the share's admission and grant. */
   async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
-    const record = await (await this.slates()).controller.readLiveShareRecord(share);
-
-    if (!record.ok) return { ok: false, success: false, reason: record.reason, error: record.error };
-    const { record: row } = record.value;
-
-    if (row.visibility === 'users' && !(await this.slates()).controller.liveShareAdmitsUser(row.id, userId)) {
-      return { ok: false, success: false, reason: 'missing', error: 'No such share' };
-    }
-
-    if (row.grant.fork === false) {
-      return { ok: false, success: false, reason: 'denied', error: 'This share does not allow forking' };
-    }
-
-    return (await this.slates()).controller.liveShareBundle(row);
+    return (await this.slates()).controller.liveShareBundle(share, userId);
   }
+
 
   /** DO-only, like the blueprint twin, for the same reason. */
   async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
@@ -6197,13 +6053,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.computerBox()?.closeTerminalSession(id);
   }
 
+  /** The workspace's computer, where this deployment binds one. */
   private computerBox(): SandboxBox | undefined {
     return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
   }
 
   /** The box keeps the account default its next start uses, so every read and change pushes the owner's current one. */
   private async withSizedBox(act: (box: SandboxBox) => Promise<void>): Promise<ComputerSizeState | null> {
-    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
+    const box = this.computerBox();
 
     if (box === undefined) return null;
     const account = await this.accountComputerSize();
@@ -6425,10 +6282,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  /**
-   * Durable "is a turn running" answer. `unsettled()` is the only record that outlives the isolate;
-   * a claim this isolate is not executing is stranded and nothing else will settle it.
-   */
   /** Main's turn as its room heard it open; its isolate recovers a turn a reset cut, so none here is stranded. */
   private turnClaimState(): TurnClaimState {
     const turnId = this.mainChatTurn();
@@ -6531,8 +6384,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return inputs;
   }
 
-  /** Both an agent's report and its retirement publish a changed settings-wait obligation. */
-
   /** A local parked refusal or an agent's own owed work can depend on changed settings. One read, only while idle. */
   private awaitsSettings(): boolean {
     return this.sql<{ awaits: number }>`SELECT EXISTS (SELECT 1 FROM terminal_effects WHERE status = 'parked')
@@ -6565,329 +6416,98 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return ownsBrowserSession(this.ctx.storage.sql, actorId, sessionId);
   }
 
-  /** The owner's object ignores a repeat. */
-  private pushedOverview: string | null = null;
-  private overviewDirty = false;
-  private overviewPushing = false;
-  private readonly overviewSettlers: Array<(failure: KinuError | null) => void> = [];
-  /** Changes meanwhile ride its push. */
-  private overviewRetry: { readonly at: number; readonly attempts: number } | null = null;
+  /** The workspace's tile on its owner's roster (overview-push.ts). */
+  private readonly overview = new OverviewPush({
+    workspace: () => this.name,
+    ownerUserId: () => this.getOwnerUserId(),
+    fold: () => this.foldOverview(),
+    hasCapability: () => this.workspaceCapabilityToken() !== null,
+    deleting: () => this.deleting.signal.aborted,
+    put: async (overview) => {
+      const { stub, caller } = await this.userHub();
+
+      await stub.putWorkspaceOverview(caller, this.name, overview);
+    },
+    detach: (work) => { this.detachOwned(work); },
+    scheduleRetry: (at) => this.scheduleTerminalRetry(at),
+  });
 
   async requestOverviewPush(): Promise<void> {
     this.overviewChanged();
   }
 
   protected override overviewChanged(force = false): void {
-    this.overviewDirty = true;
-
-    if (this.overviewPushing || this.getOwnerUserId() === null) return;
-
-    const retry = this.overviewRetry;
-
-    if (!force && retry !== null && Date.now() < retry.at) return;
-    this.overviewPushing = true;
-
-    // In flight, it owes the wake a failure would arm.
-    if (retry !== null) this.overviewRetry = { at: Date.now() + recoveryBackoffMs(retry.attempts + 1), attempts: retry.attempts };
-    let failed: KinuError | null = null;
-
-    this.detachOwned(Effect.ensuring(Effect.catchCause(Effect.gen({ self: this }, function* () {
-      while (this.overviewDirty) {
-        this.overviewDirty = false;
-        const overview = yield* Effect.promise(() => this.foldOverview());
-        const pushed = JSON.stringify(overview);
-
-        if (pushed === this.pushedOverview) continue;
-
-        // Installing a token pushes.
-        if (this.workspaceCapabilityToken() === null) {
-          this.overviewDirty = true;
-          break;
-        }
-
-        // A workspace being deleted pushes no tile: its owner's roster drops it, and its capability is about to go.
-        if (this.deleting.signal.aborted) break;
-
-        const { stub, caller } = yield* Effect.promise(() => this.userHub());
-        yield* Effect.promise(() => stub.putWorkspaceOverview(caller, this.name, overview));
-        this.pushedOverview = pushed;
-      }
-
-      this.overviewRetry = null;
-    }), (cause) => Effect.gen({ self: this }, function* () {
-      this.overviewDirty = true;
-      const failure = toKinuError({ doing: "pushing this workspace's tile to its owner's roster", cause: Cause.squash(cause), otherwise: 'unavailable' });
-      const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
-      // A refusal meets the next push.
-      const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
-      failed = failure;
-      const next = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
-      this.overviewRetry = next;
-      diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
-
-      if (next !== null) yield* Effect.promise(() => this.scheduleTerminalRetry(next.at));
-    })), Effect.sync(() => {
-      this.overviewPushing = false;
-
-      for (const settleWaiter of this.overviewSettlers.splice(0)) settleWaiter(failed);
-    })));
+    this.overview.changed(force);
   }
 
-  /** Once its card moved, or the failure that left the list behind. */
-  private async overviewSettled(): Promise<KinuError | null> {
-    if (!this.overviewPushing) return null;
-
-    return await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
-  }
+  /** The workspace's executors: a command, the file plane, the Files routes' transfers, terminals and ports. */
+  private readonly executors = new WorkspaceExecutors({
+    runtime: () => this.rt,
+    workspaceTerminal: async () => await this.hostedWorkspace().terminal(),
+    computerState: () => ({ refused: this.config.get(SANDBOX_REFUSED) ?? null, starting: this.config.get(SANDBOX_STARTING) != null }),
+    heldPorts: async () => await (await this.slates()).controller.heldPorts(),
+    recordOutput: (executorId, command, output) => { this.recordExecutorOutput(executorId, command, output); },
+    broadcast: (frame) => { this.broadcast(frame); },
+    ownerUserId: () => this.getOwnerUserId(),
+    openOwnerTerminal: async (window, device) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, device),
+  });
 
   @callable() executeInExecutor(executorId: string, command: string, device?: string) {
-    return settle(Effect.gen({ self: this }, function* () {
-      const router = this.rt.executionRouter;
-
-      if (!router) return { error: 'no execution router' };
-      const run = yield* Effect.promise(() => runOnExecutor(router, executorId, command, device));
-
-      if (run.kind === 'refused') return { error: run.error, refusal: run.refusal };
-
-      const output = run.kind === 'ran'
-        ? { stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, ...(run.refusal && { refusal: run.refusal }) }
-        : { stdout: '', stderr: run.error, exitCode: 1, refusal: run.refusal };
-
-      this.recordExecutorOutput(executorId, command, run.kind === 'ran' ? output : { stdout: null, stderr: run.error, exitCode: 1 });
-      // The UI terminal renders only from broadcasts, so a failure is broadcast too.
-      this.broadcast(JSON.stringify({ type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now() }));
-
-      return run.kind === 'ran' ? output : { error: run.error, exitCode: 1, refusal: run.refusal };
-    }));
+    return this.executors.execute(executorId, command, device);
   }
 
-  /** Directory listing read off each executor's own raw handle, in that environment's paths. */
-  /** A page of the folder from `from`; its answer names where the next starts. */
+  /** A page of the folder from `from`, read off the executor's own raw handle; its answer names where the next starts. */
   @callable() async getExecutorFiles(executorId: string, path: string, from?: number): Promise<FilesPage> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-
-    return getExecutorFiles(this.rt.executionRouter, executorId, path, from);
+    return await this.executors.files(executorId, path, from);
   }
 
   @callable() async readExecutorFile(executorId: string, path: string): Promise<ExecutorTextFile> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-
-    return readExecutorFile(this.rt.executionRouter, executorId, path);
+    return await this.executors.readFile(executorId, path);
   }
 
-  /** Native rename where the plane supports it, byte carry for files elsewhere, refusal for
-   * directories that only bytes could carry. Never overwrites. */
   @callable() async renameExecutorFile(executorId: string, from: string, to: string): Promise<ExecutorWriteResult> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-
-    return renameExecutorPathOp(this.rt.executionRouter, executorId, from, to);
+    return await this.executors.rename(executorId, from, to);
   }
 
-  /** Directories use the plane's native tree removal where it exists, entry by entry elsewhere. */
   @callable() async deleteExecutorFile(executorId: string, path: string): Promise<ExecutorWriteResult> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-
-    return deleteExecutorPathOp(this.rt.executionRouter, executorId, path);
+    return await this.executors.remove(executorId, path);
   }
 
-  // Chunked transfer for files-routes.ts keeps each payload under `do.facet.rpc_bytes`.
-  // The actor is single-threaded, so these maps need no lock.
-  private readonly executorFileUploads = new Map<string, {
-    readonly executorId: string;
-    readonly path: string;
-    readonly expectedRevision: VfsRevision | undefined;
-    readonly upload: ExecutorFileUpload;
-  }>();
-  private readonly executorFileDownloads = new Map<string, ExecutorFileDownload>();
-
-  async startExecutorFileDownload(
-    executorId: string,
-    path: string,
-    transferId: string,
-  ): Promise<
-    { size: number }
-    | { error: string; reason: 'too_large' | 'unavailable' }
-  > {
-    const router = this.rt.executionRouter;
-
-    if (!router) return { error: 'no execution router', reason: 'unavailable' };
-
-    if (!transferId) return { error: 'download transfer id required', reason: 'unavailable' };
-    const download = new ExecutorFileDownload(router, executorId, path);
-    this.executorFileDownloads.set(transferId, download);
-    const opened = await download.open();
-
-    if ('error' in opened) this.executorFileDownloads.delete(transferId);
-
-    return opened;
+  async startExecutorFileDownload(executorId: string, path: string, transferId: string) {
+    return await this.executors.startDownload(executorId, path, transferId);
   }
 
-  /** The route supplies a fresh transfer id per GET, so readers never share or reuse stale bytes. */
   async readExecutorFileChunk(read: ExecutorFileChunkRead): Promise<{ bytes: Uint8Array } | { error: string }> {
-    const { executorId, path, transferId, offset, length } = read;
-    const router = this.rt.executionRouter;
-
-    if (!router) return { error: 'no execution router' };
-
-    if (!transferId) return { error: 'download transfer id required' };
-    const download = this.executorFileDownloads.get(transferId);
-
-    if (!download || !download.serves(executorId, path)) {
-      return { error: 'file transfer out of sync: no matching open download' };
-    }
-
-    const result = await download.range(offset, length);
-
-    if ('error' in result || download.completeAfter(offset + result.bytes.byteLength)) {
-      this.executorFileDownloads.delete(transferId);
-    }
-
-    return result;
+    return await this.executors.readChunk(read);
   }
 
   async abortExecutorFileDownload(transferId: string): Promise<void> {
-    this.executorFileDownloads.delete(transferId);
+    this.executors.abortDownload(transferId);
   }
 
-  /** An `offset === 0` chunk (re)starts the transfer so retries self-heal; ordering and
-   * continuity are enforced inside the transfer, not trusted from the caller. */
   async writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
-    const { executorId, path, transferId, offset, chunk, final, expectedRevision } = write;
-    const router = this.rt.executionRouter;
-
-    if (!router) return { error: 'no execution router' };
-
-    if (!path) return { error: 'file path required' };
-
-    if (!transferId) return { error: 'upload transfer id required' };
-    let row = this.executorFileUploads.get(transferId);
-
-    if (offset === 0) {
-      row = {
-        executorId,
-        path,
-        expectedRevision,
-        upload: new ExecutorFileUpload(router, executorId, path, { expectedRevision }),
-      };
-      this.executorFileUploads.set(transferId, row);
-    } else if (!row || row.executorId !== executorId || row.path !== path) {
-      return { error: 'file transfer out of sync: no matching open upload' };
-    } else if (row.expectedRevision !== expectedRevision) {
-      return { error: 'file transfer out of sync: expected revision does not match the first chunk' };
-    }
-
-    const result = await row.upload.chunk(offset, chunk, final);
-
-    if (row.upload.done) this.executorFileUploads.delete(transferId);
-
-    return result;
+    return await this.executors.writeChunk(write);
   }
 
   async abortExecutorFileWrite(transferId: string): Promise<void> {
-    this.executorFileUploads.get(transferId)?.upload.abort();
-    this.executorFileUploads.delete(transferId);
+    this.executors.abortWrite(transferId);
   }
 
-  /** Terminal preflight via the sandbox lane's own `ensureReady` (egress grants, /workspace).
-   * Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
+  /** Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
   prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
-    return settle(Effect.gen({ self: this }, function* () {
-    // The owner's machine has no container to warm; it only needs to be attached.
-      if (executorId === 'device') {
-        const { devices } = this.rt.deviceTransport.status();
-
-        if (connectedDevices(devices).length > 0) return { ok: true };
-
-        if ((devices?.length ?? 0) > 0) return { error: 'That machine is offline. Run `kinu connect` on it.' };
-
-        return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
-      }
-
-      if (executorId === 'workspace') {
-        return (yield* terminalStep(Effect.promise(async () => this.hostedWorkspace().terminal()), 'composing the workspace runtime for a terminal')) ?? { ok: true };
-      }
-
-      if (executorId !== 'computer') return { error: `${executorId} has no terminal` };
-      const handle = this.rt.sandboxHandle;
-
-      if (!handle) return { error: 'this workspace has no computer configured' };
-
-      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the computer for a terminal')) ?? { ok: true };
-    }));
+    return this.executors.prepareTerminal(executorId);
   }
 
   /**
    * Opens via this object because only it holds the workspace capability token the hub needs.
-   * `user` is the object holding both sockets; the route sends the pane's upgrade there.
+   * `device`: the PC the pane names, when the account has several connected; the one connected without it.
    */
-  openDeviceTerminal(
-    window: { cols: number; rows: number },
-    /** The PC the pane names, when the account has several connected; the one connected without it. */
-    device?: string,
-  ): Promise<{ session: string; user: string } | { error: string }> {
-    return settle(Effect.suspend(() => {
-      const user = this.getOwnerUserId();
-
-      if (!user) return Effect.succeed({ error: unownedWorkspace().message });
-
-      // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
-      return Effect.matchCause(Effect.promise(async () => this.requireOwnerUserDO().openDeviceTerminal(
-        await this.userCaller(), this.workspaceName(), window, device,
-      )), {
-        onSuccess: (opened) => ({ session: opened.session, user }),
-        onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),
-      });
-    }));
+  openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
+    return this.executors.openDeviceTerminal(window, device);
   }
 
-  /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
   @callable() async getExposedPorts(executorId: string): Promise<ExposedPortList> {
-    const refused = executorId === 'computer' ? this.config.get(SANDBOX_REFUSED) : null;
-
-    if (refused != null) return { ports: [], error: refused };
-
-    if (executorId === 'computer' && this.config.get(SANDBOX_STARTING) != null) {
-      return { ports: [], pending: "the computer is still restoring" };
-    }
-
-    const provider = this.rt.executionRouter?.getProvider(executorId);
-
-    if (!provider) {
-      return executorId === 'computer'
-        ? { ports: [] }
-        : { ports: [], error: `${executorId} preview provider is unavailable` };
-    }
-
-    const status = provider.getStatus?.();
-
-    if (status && !status.active && provider.kind !== 'workspace') {
-      return { ports: [] };
-    }
-
-    if (!provider.listExposedPorts) {
-      return { ports: [], error: `${executorId} cannot list exposed ports` };
-    }
-
-    const listing = provider.listExposedPorts;
-    // A port a slate's application holds is called by the slate's title, never by its number; an answer's page is the
-    // chat's until it is saved.
-    const held = executorId === 'workspace' ? this.slates().then((slates) => slates.controller.heldPorts()) : Promise.resolve(null);
-
-    return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), held])), {
-      onSuccess: ([ports, slates]) => ({
-        ports: ports.filter(({ port }) => slates?.pages.has(port) !== true).map(({ port, name, url }) => ({ port, url, name: name ?? slates?.titles.get(port) })),
-      }),
-      onFailure: (failed) => {
-        const error = Cause.squash(failed);
-
-        return {
-          ports: [],
-          error: error instanceof Error && error.message
-            ? error.message
-            : `Couldn't list ${executorId} preview ports`,
-        };
-      },
-    }));
+    return await this.executors.exposedPorts(executorId);
   }
 
   /** `actor` names a child of this workspace: the read is its own config. */
@@ -7016,8 +6636,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Reaches a not-yet-existing workspace DO by name and carries the snapshot via raw-copy RPC. */
   private get forkTransport(): ForkTransport {
-    const ns = this.env.OrchestratorAgent;
-    const stubFor = (name: string) => ns.get(ns.idFromName(name));
+    const stubFor = (name: string) => objectNamed(this.env.OrchestratorAgent, name);
 
     return {
       occupied: async (name) => {
@@ -7281,97 +6900,53 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.peerHub.receive(msg);
   }
 
-  /** Null means unclaimed or no profile email. A failed lookup must throw, not read as null
-   * and silently refuse the owner's own mail. */
-  private async getOwnerEmail(): Promise<string | null> {
-    if (!this.getOwnerUserId()) return null;
-    const { stub, caller } = await this.userHub();
-
-    return (await stub.getProfile(caller))?.email ?? null;
-  }
-
-  private _emailInbox: EmailInbox | null = null;
-  /** Held across the activation, like the in-memory inbound rate window it owns. */
-  private get emailInbox(): EmailInbox {
-    this._emailInbox ??= new EmailInbox({
+  private _email: WorkspaceEmail | null = null;
+  /** Held across the activation, like the in-memory inbound rate window its inbox owns. */
+  private get email(): WorkspaceEmail {
+    this._email ??= new WorkspaceEmail({
       log: this.eventLog,
       replies: this.replyChannels,
       triggers: this.triggerRegistry,
       vfs: () => this.rt.storage.vfs,
       sql: this.ctx.storage.sql,
-      ownerEmail: () => this.getOwnerEmail(),
       onAdmitted: () => { this.armDurableWake(); },
+      env: this.env,
+      name: this.name,
+      outbox: () => this.emailOutbox,
+      displayName: () => this.safeDisplayName(),
+      notifications: () => this.config.getEmailNotificationsEnabled(),
+      setNotifications: (enabled) => { this.config.setEmailNotificationsEnabled(enabled); },
+      operatorConnected: () => this.ctx.getWebSockets().length > 0,
+      owned: () => this.getOwnerUserId() !== null,
+      hub: () => this.userHub(),
+      detach: (work) => { this.detachOwned(work); },
     });
 
-    return this._emailInbox;
+    return this._email;
   }
 
   /** Pre-parse sender check so unauthorized senders cannot force a MIME parse; admits nothing,
    * the delivery re-checks. */
   async authorizeEmailSender(from: string): Promise<{ authorized: boolean; reason?: string }> {
-    return this.emailInbox.authorizes(from);
+    return this.email.inbox.authorizes(from);
   }
 
-  /** Email counterpart of acceptWebhookDelivery: trust gate, publish, and reply thread run here
-   * atomically. Receipt is awaited (floating promises die on eviction) and sent only on fresh admission. */
+  /** Email counterpart of acceptWebhookDelivery: trust gate, publish, and reply thread run here atomically. */
   async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
-    const admission = await this.emailInbox.accept(opts);
-
-    if (admission.admitted && !admission.duplicate && admission.thread && admission.event_id) {
-      await sendInboundEmailReceipt({
-        email: this.env.EMAIL,
-        agentDisplayName: this.safeDisplayName(),
-        outbox: this.emailOutbox,
-      }, admission.thread, admission.event_id);
-    }
-
-    return admission;
+    return await this.email.accept(opts);
   }
 
   async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
-    const domain = this.env.EMAIL_DOMAIN;
-
-    return {
-      address: domain ? agentEmailAddress(this.name, domain) : null,
-      allowlist: readEmailAllowlist(this.triggerRegistry),
-      notifications: this.config.getEmailNotificationsEnabled(),
-    };
+    return this.email.ingress();
   }
 
-  /** Owner's verified address is always allowed; an empty list revokes the email_route trigger.
-   * Reached only through the owner-authenticated + step-up route. */
+  /** Reached only through the owner-authenticated + step-up route. */
   async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
-    return setEmailAllowlist(this.triggerRegistry, allow, Date.now());
+    return await this.email.allow(allow);
   }
 
   async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {
-    this.config.setEmailNotificationsEnabled(enabled);
-
-    return { notifications: this.config.getEmailNotificationsEnabled() };
-  }
-
-  /** Skipped when notifications are off, platform pieces are missing, or an operator socket is live
-   * (email is the away channel, not a duplicate feed). */
-  private emailOwnerNotification(subject: string, text: string): void {
-    const notification = planOwnerNotification({
-      enabled: this.config.getEmailNotificationsEnabled(),
-      operatorConnected: this.ctx.getWebSockets().length > 0,
-      subject,
-      text,
-    });
-
-    if (!notification) return;
-    this.detachOwned(logged('email.owner_notification_failed', { doing: 'sending the owner an away-channel notification', otherwise: 'unavailable' },
-      async () => {
-        await sendOwnerEmail({
-          email: this.env.EMAIL,
-          emailDomain: this.env.EMAIL_DOMAIN,
-          agentName: this.name,
-          agentDisplayName: this.safeDisplayName(),
-          ownerEmail: await this.getOwnerEmail(),
-          outbox: this.emailOutbox,
-        }, notification);
-      }, { subject }));
+    return this.email.notify(enabled);
   }
 
   /** Newest first; returns bare rows, not an envelope. Reachable via CLI RPC with no route in the

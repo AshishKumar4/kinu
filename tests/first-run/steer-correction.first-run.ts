@@ -46,6 +46,7 @@ describe(SUITE, () => {
       genesis: false,
       purpose: 'A senior engineer who follows the latest instruction and keeps files where asked.',
       modelCalls: 'expected',
+      budgetMs: 5 * 60_000,
       async run({ session }) {
         // The composer's race, driven on purpose: the turn is submitted and the correction goes in
         // while it is open. The DO answers `mid-turn` or `turn`, and both are correct.

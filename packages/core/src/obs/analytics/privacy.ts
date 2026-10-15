@@ -27,7 +27,8 @@ export function assertPublishableNames(where: string, names: readonly string[]):
 }
 
 /**
- * Stable non-reversing hex digest: 64-bit FNV-1a over UTF-8, synchronous because
+ * Stable non-reversing hex digest: two FNV-1a/32 lanes over UTF-8 (one over each byte, one over each byte plus its
+ * position), sixteen hex digits; not 64-bit FNV-1a, whose prime this never multiplies by. Synchronous because
  * `crypto.subtle.digest` is async and writes here are fire-and-forget. `''` stays `''`.
  */
 export function analyticsDigest(value: string): string {

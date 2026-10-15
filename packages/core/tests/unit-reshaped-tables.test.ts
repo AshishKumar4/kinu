@@ -1,10 +1,10 @@
-// This release's lossless reshapes, as the tables step carries them out over a database the build before left: each
+// This release's lossless reshapes, as its object repairs a database the build before left at first contact: each
 // table is rebuilt in the shape this build declares, keeping its rows, and every row reads back through the product
 // path as it did before. The old shapes below are the statements the build before declared, verbatim but for spacing.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { readTranscriptRows, seedTranscriptEntry } from '@kinu.run/test-utils';
-import { pragmaStamps, resetTables, type TableWrites } from '../src/index';
+import { pragmaStamps, repairSchema, type TableWrites } from '../src/index';
 import { sqlStorageOver } from '../src/identity/inline-primitives';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { initPendingSendTables, PendingSendStore } from '../src/orchestrator/inbox';
@@ -35,9 +35,9 @@ function workspace() {
 
   init();
   const actor = createTestActor(ws.sql, ws.execRaw, 'w1', 'scout');
-  const writes: TableWrites = { schema: 'workspace', stamps: pragmaStamps(sqlStorageOver(ws.db)), transactionSync, init };
+  const stamps = pragmaStamps(sqlStorageOver(ws.db));
 
-  return { ws, actor, writes };
+  return { ws, actor, writes: { schema: 'workspace' as const, stamps, transactionSync, init } };
 }
 
 /** `table` as the build before declared it, holding the rows it holds now; `derived` names each column only that
@@ -56,13 +56,16 @@ function asBuiltBefore(db: Database, table: string, ddl: string, derived: Record
   db.exec('PRAGMA foreign_keys = ON');
 }
 
-/** The tables step over `tables`, which must each keep their rows. */
+/** The object's first contact with a database a release left behind, over `tables`, which must each keep their rows. */
 function rebuild(world: ReturnType<typeof workspace>, tables: readonly string[]) {
-  const answer = resetTables(sqlStorageOver(world.ws.db), { tables: tables.map((table) => ({ table, change: 'reshaped' as const })), drop: true }, world.writes);
+  const sql = sqlStorageOver(world.ws.db);
 
-  expect(answer.held.filter(({ table }) => tables.includes(table))).toEqual(tables.map((table) => expect.objectContaining({ table, stale: true, keepsRows: true })));
-  expect(answer.rebuilt).toEqual(expect.arrayContaining([...tables]));
-  expect(answer.dropped).toEqual([]);
+  sql.exec('PRAGMA user_version = 1');
+  const writes: TableWrites = { ...world.writes, tables };
+  const repair = repairSchema(sql, writes, 'reshaped-tables');
+
+  expect({ rebuilt: repair?.rebuilt, refused: repair?.refused }).toEqual({ rebuilt: expect.arrayContaining([...tables]), refused: null });
+  expect(repair?.tables.filter(({ table }) => tables.includes(table)).every(({ before, after }) => before === after)).toBe(true);
 }
 
 // A spilled payload's file is `<directory>/<sha256 hex>.json`: the build before stored that digest beside the path.

@@ -364,13 +364,11 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
       readOrigin,
       applyMember: singlePathApply(measureIn.vfs),
       reverify,
+      // No spawner when the budget cannot pay; merge-back records the conflict as ungraded.
+      spawnMergeNode: deps.budget.remaining > 0 ? spawnMergeNode : undefined,
     };
 
-    const report = await mergeBack(
-      { policy: 'sequential-rebase', members, settled: [...landed] },
-      // No spawner when the budget cannot pay; merge-back records the conflict as ungraded.
-      deps.budget.remaining > 0 ? { ...merging, spawnMergeNode } : merging,
-    );
+    const report = await mergeBack({ policy: 'sequential-rebase', members, settled: [...landed] }, merging);
 
     fanInLevels += 1;
     mergeOrder.push(...report.order);

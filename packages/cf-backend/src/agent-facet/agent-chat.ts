@@ -1,4 +1,4 @@
-/** A non-main agent's chat in its own isolate (D9). */
+/** An agent's chat in its own isolate (D9), the workspace agent's included. */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TRANSCRIPT_WINDOW, TerminalTransitions,
@@ -38,7 +38,6 @@ const AnswerSlatesSchema = v.object({ turnId: v.string(), runId: v.string(), epo
 
 type AnswerSlates = v.InferOutput<typeof AnswerSlatesSchema>;
 
-/** A hire's turn's report, owed once its answer committed: what decides it, and the key and mode it is relayed under. */
 /** Owed by a turn that committed an answer: the workspace saw its slates change, and they are stamped on that answer. */
 function answerSlatesEffect(close: TurnBound, messageId: string): OwedEffect[] {
   return messageId === '' ? [] : [{ name: 'answer_slates', scope: messageId, lane: 'detached', input: { ...close, messageId } }];
@@ -96,9 +95,6 @@ export class FacetChat {
   /** The chat turn this isolate assembled last, and what its preparation and tools told it: written as a turn is
    *  assembled, read by its task reminder ({@link ChatSessionPorts.openWork}) only while that turn is the current one. */
   private liveTurn: { readonly turnId: string; readonly live: LiveTurn } | null = null;
-
-  /** The ending the settling turn owes its hirer a report of, from the chat's `owedReport` port until its roster declares
-   *  the row that reports it after the commit (`owedTerminalEffects`, which drops it). */
 
   /** The wake the workspace holds for this agent as this isolate's newest report named it (`next`; null for none):
    *  written as each report leaves, a told one once the workspace took it; read by an arm it may already cover (`tell`). */
@@ -495,7 +491,6 @@ export class FacetChat {
     ));
   }
 
-  /** At rest once no turn runs or waits and no close is held, and each rest is told once. */
   /** At rest, it tells its workspace what it owes, and then lets go of what it held open on it: an object an isolate
    *  holds a capability into cannot hibernate (#69). A turn that opened meanwhile is working, and keeps it. */
   private atRest(): void {

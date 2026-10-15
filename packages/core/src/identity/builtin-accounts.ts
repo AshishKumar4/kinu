@@ -102,7 +102,7 @@ export function isBuiltinOwner(sql: BuiltinSql, userId: string): boolean {
   return sql`SELECT 1 FROM builtin_accounts WHERE user_id = ${userId} AND role = 'owner'`.length > 0;
 }
 
-export const NOT_ADMITTED = 'This sign-up link is not valid. Ask the owner of this deployment for an invite.';
+const NOT_ADMITTED = 'This sign-up link is not valid. Ask the owner of this deployment for an invite.';
 
 /** No email lookup until a seat or invite admits. */
 export function builtinAdmission(sql: BuiltinSql, request: Pick<NewBuiltinAccount, 'email' | 'grant'>, now: number): Admission {

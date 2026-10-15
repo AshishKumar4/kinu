@@ -91,6 +91,7 @@ describe(SUITE, () => {
       id: CASE,
       defect: DEFECT,
       modelCalls: 'expected',
+      budgetMs: 5 * 60_000,
       purpose: 'A terse assistant that carries out file instructions verbatim.',
       async run({ session }) {
         const landing = await session.prompt(ASK);

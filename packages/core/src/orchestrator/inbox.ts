@@ -66,21 +66,8 @@ export function steerUserMessage(drained: ReadonlyArray<UserSteer>): ModelMessag
 /** Marks a durable user row as a landed steer. */
 export const STEER_METADATA_KEY = 'kinuSteer';
 
-/** Step index the steer was spliced into; durable half of {@link SteerStatusEvent}. */
+/** Step index the steer was spliced into; durable half of the `steer_status` event both backends broadcast. */
 export const STEER_STEP_METADATA_KEY = 'kinuSteerAtStep';
-
-export type SteerStatusDetail =
-  /** Lands at the running turn's next step boundary. */
-  | { status: 'queued'; steerId: string; text: string }
-  /** Spliced into the step `atStep` started, so a surface draws it inside the in-progress message. */
-  | { status: 'landed'; steerId: string; text: string; atStep: number }
-  /** An interrupt dropped it; the composer takes it back. */
-  | { status: 'returned'; steerId: string; text: string }
-  /** Ran as its own turn; that turn's opening row, same id, is its record. */
-  | { status: 'turn'; steerId: string; text: string };
-
-/** Broadcast by both backends for a user steer. */
-export type SteerStatusEvent = SteerStatusDetail & { type: 'steer_status' };
 
 export interface LandedSteerRow {
   readonly id: string;

@@ -15,7 +15,6 @@ import {
   isSafeUrl,
   UnsafeUrlError,
   stripBase64Images,
-  TOOL_OUTPUT_DIR,
   decodeJsonValue,
   projectJsonValue,
   type CodemodeProvider,
@@ -23,6 +22,7 @@ import {
   type JsonValue,
   type WebSearchProvider,
   type QuickActionTransport,
+  SPILL_DIRS,
 } from '../src/index';
 import { imageCarrier } from '../src/types/tool-images';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
@@ -531,11 +531,11 @@ describe('web builtin', () => {
 
     expect(out).toContain('Source: https://example.com/big');
     expect(out).toContain('[truncated;');
-    expect(out).toContain(`${TOOL_OUTPUT_DIR}/`);
+    expect(out).toContain(`${SPILL_DIRS.toolOutput}/`);
     expect(out.length).toBeLessThanOrEqual(8_000);
 
     const savedPath = /full result at (\S+)\]/.exec(out)?.[1];
-    expect(savedPath).toContain(TOOL_OUTPUT_DIR);
+    expect(savedPath).toContain(SPILL_DIRS.toolOutput);
 
     if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out}`);
     const saved = await readText(rt.storage.vfs, savedPath);

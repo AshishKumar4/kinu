@@ -8,7 +8,7 @@ export const ESCALATION_OUTCOMES = ['ok', 'failed', 'refused'] as const;
 
 export type EscalationOutcome = (typeof ESCALATION_OUTCOMES)[number];
 
-export interface EscalationDecision {
+interface EscalationDecision {
   /** Never `workspace`: that is the default, not an escalation. */
   readonly runtime: string;
   /** Null when the model gave no reason; never fabricated, so unreasoned escalation stays measurable. */

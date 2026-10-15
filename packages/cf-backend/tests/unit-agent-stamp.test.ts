@@ -1,10 +1,11 @@
-// An agent's database a release's tables step has not reached is refused at its first open, with why, and the step's
-// own call through its workspace brings it to this build and stamps it (identity/schema-stamp.ts).
+// An agent's database a release left behind is repaired at its first open, before anything reads it: its retired
+// tables dropped and its stale ones rebuilt keeping their rows, then stamped (core state/schema-repair.ts). The
+// workspace's walk opens it the same way, and reads back what the repair did.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { SCHEMA_STAMPS, WORKSPACE_ROOT } from '@kinu.run/core';
 import { AgentFacet, type AgentFacetEnv } from '../src/agent-facet/agent-facet';
-import { openAgentDatabase } from '../src/agent-facet/agent-database';
+import { openAgentDatabase, repairAgentDatabase } from '../src/agent-facet/agent-database';
 import { kvOf, makeCtx } from './helpers/platform-context';
 
 function unreachable(): never {
@@ -16,26 +17,38 @@ const WORKSPACE = {
   turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable,
 };
 
-test('an agent database behind this build is refused at its first open, and its workspace\'s step brings it up', async () => {
+/** An agent database as a build before this one left it: a table this release removed, a column it dropped, and
+ *  another stamp. */
+function leftBehind(): Database {
   const db = new Database(':memory:');
 
-  openAgentDatabase(makeCtx(db, 'stamp-agent').storage, WORKSPACE);
+  openAgentDatabase(makeCtx(db, 'stamp-agent').storage, null, WORKSPACE);
   expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.agent);
-  // As a build before this one left it, with a table this release removed.
   kvOf(db).set('kinu.schema_stamp', 0);
-  db.exec('CREATE TABLE device_consent_requests (consent_id TEXT PRIMARY KEY)');
-  db.exec("INSERT INTO device_consent_requests VALUES ('c-1')");
+  db.exec("CREATE TABLE device_consent_requests (consent_id TEXT PRIMARY KEY); INSERT INTO device_consent_requests VALUES ('c-1')");
+  db.exec('ALTER TABLE lessons ADD COLUMN status TEXT');
 
-  expect(() => openAgentDatabase(makeCtx(db, 'stamp-agent').storage, WORKSPACE)).toThrow("This agent's storage was made before this release changed its tables");
+  return db;
+}
 
-  // The step's call reaches no workspace: it reads and repairs the agent's own SQLite alone.
+test('an agent database behind this build is repaired at its first open, and opens', () => {
+  const db = leftBehind();
+  const { storage } = makeCtx(db, 'stamp-agent');
+  const repair = repairAgentDatabase(storage, 'stamp-agent');
+
+  expect({ rebuilt: repair?.rebuilt, retired: repair?.retired, refused: repair?.refused }).toEqual({ rebuilt: ['lessons'], retired: ['device_consent_requests'], refused: null });
+  expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.agent);
+  openAgentDatabase(storage, repair, WORKSPACE);
+});
+
+test('the workspace\'s walk opens an agent\'s database so it repairs itself, reaching no workspace', async () => {
+  const db = leftBehind();
   // SAFETY: constructed here with every member answering `unreachable`, which throws: a call into it fails the test.
   const workspace = new Proxy({}, { get: () => unreachable }) as AgentFacetEnv['WORKSPACE'];
   const env: AgentFacetEnv = { WORKSPACE: workspace, WORKSPACE_NAME: 'stamp-workspace', HOME: WORKSPACE_ROOT };
-  const facet = new AgentFacet(makeCtx(db, 'stamp-agent'), env);
-  const answer = await facet.opsTables({ tables: [{ table: 'device_consent_requests', change: 'removed' }], drop: true });
+  const answer = await new AgentFacet(makeCtx(db, 'stamp-agent'), env).opsTables();
 
-  expect({ stamp: answer.stamp, dropped: answer.dropped }).toEqual({ stamp: 'behind', dropped: ['device_consent_requests'] });
+  expect({ retired: answer.repair?.retired, refused: answer.refused }).toEqual({ retired: ['device_consent_requests'], refused: null });
+  expect(answer.census.some(({ table }) => table === 'device_consent_requests')).toBe(false);
   expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.agent);
-  openAgentDatabase(makeCtx(db, 'stamp-agent').storage, WORKSPACE);
 });

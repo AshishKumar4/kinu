@@ -1,5 +1,6 @@
 import { parseCliTokenUserId } from '../cli/auth-store';
 import {
+  objectNamed,
   getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
@@ -280,8 +281,7 @@ export class UserSessions {
        WHERE delete_pending = 0 AND create_pending = 0`,
     ).map((row) => row.name);
 
-    const settled = await Promise.allSettled(workspaces.map((name) => fanOut.push(this.host.env.OrchestratorAgent
-      .get(this.host.env.OrchestratorAgent.idFromName(name)))));
+    const settled = await Promise.allSettled(workspaces.map((name) => fanOut.push(objectNamed(this.host.env.OrchestratorAgent, name))));
 
     for (const [index, outcome] of settled.entries()) {
       const workspace = workspaces[index];
@@ -392,8 +392,6 @@ export class UserSessions {
     return { ok: true };
   }
 
-  /** Revoke every active CLI session token, for orphans the caller cannot name.
-   * One generation rise covers every socket at once. */
   /** Ends every browser session and CLI token of this account, and refuses any session of a lower generation. */
   async raiseCredentialFloor(caller: UserCaller, generation: number): Promise<void> {
     await this.host.requireTier(caller, 'auth_tokens');

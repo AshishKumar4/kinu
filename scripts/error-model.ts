@@ -240,8 +240,10 @@ export const DECLARED = byFile([
   // Wire shapes: each `ok`/`success` here is read by a caller that does not share this process (RPC, HTTP, a
   // model or the program it wrote, stdout) or mirrors one in a fixture; changing it changes that contract.
   ...([
-    ['packages/cf-backend/src/actor-agent.ts', ['installWorkspaceCapability', 'onModelSettingsChanged', 'cancelCurrentWork', 'installClientMessageGate', 'refuseRevokedSocketAuthority'],
-      'DO RPC answers (capability install, model-settings fan-out, cancel) and the Agents SDK\'s `{ success: false }` socket denial, read across the isolate'],
+    ['packages/cf-backend/src/actor-agent.ts', ['installWorkspaceCapability', 'onModelSettingsChanged', 'cancelCurrentWork'],
+      'DO RPC answers (capability install, model-settings fan-out, cancel), read across the isolate'],
+    ['packages/cf-backend/src/client-socket-gate.ts', ['admittedMessage', 'refusedUnavailable', 'refuseRevokedAuthority', 'authorityDenial'],
+      'the Agents SDK\'s `{ success: false }` RPC denial a client gate sends over the socket'],
     ['packages/cf-backend/src/cli/routes.ts', ['body'],
       'the CLI routes\' HTTP JSON bodies, read by the CLI\'s fetch'],
     ['packages/cli-backend/src/host-mount.ts', ['replaceNow'],
@@ -286,6 +288,8 @@ export const DECLARED = byFile([
       '`SlateCallResult`, a slate storage call\'s answer over DO RPC'],
     ['packages/cf-backend/src/terminal-route.ts', ['deviceTerminal', 'workspaceTerminal', 'sandboxCommand'],
       'the terminal routes\' HTTP JSON bodies'],
+    ['packages/cf-backend/src/workspace-executors.ts', ['prepareTerminal'],
+      'a terminal\'s preflight, the workspace object\'s RPC answer the terminal route reads'],
     ['packages/cf-backend/src/user/routes.ts', ['body'],
       'the user routes\' HTTP JSON bodies, read by the browser'],
     ['packages/cf-backend/src/user/account-api.ts', ['body'],

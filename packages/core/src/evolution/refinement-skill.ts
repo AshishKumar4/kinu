@@ -222,7 +222,7 @@ function locate(
 
 export const REFINEMENT_DECISIONS = ['approve', 'reject'] as const;
 
-export type RefinementDecision = (typeof REFINEMENT_DECISIONS)[number];
+type RefinementDecision = (typeof REFINEMENT_DECISIONS)[number];
 
 export type RefinementDecisionResult =
   | { readonly ok: true; readonly request: RefinementRequestView; readonly detail: string }

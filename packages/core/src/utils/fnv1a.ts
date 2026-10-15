@@ -55,3 +55,12 @@ export class Fnv1a64 {
     );
   }
 }
+
+/** FNV-1a, 32 bits, over UTF-8 bytes, as eight hex digits: a short stable name suffix. */
+export function fnv1a32Hex(text: string): string {
+  let hash = 0x811c9dc5;
+
+  for (const byte of new TextEncoder().encode(text)) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+
+  return hash.toString(16).padStart(8, '0');
+}

@@ -23,7 +23,7 @@ import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSy
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { durableStamps, readStamp, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
+import { durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, type Repair } from '@kinu.run/core';
 import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
 
@@ -80,12 +80,12 @@ const IdentitySchema = v.object({
 });
 
 /** Tagged statements over an agent's own SQLite, its rows for a read. */
-export function agentSql(sql: SqlStorage): SqlExecutor {
+function agentSql(sql: SqlStorage): SqlExecutor {
   return <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
 }
 
-/** The tables an agent's database is made with: its constructor's, and the tables step's once it repaired them. */
-export function initAgentDatabaseTables(storage: DurableObjectStorage, over: { sql: SqlExecutor; exec: SqlExec }): void {
+/** The tables an agent's database is made with: its constructor's, and its repair's. */
+function initAgentDatabaseTables(storage: DurableObjectStorage, over: { sql: SqlExecutor; exec: SqlExec }): void {
   initAgentIsolateSchema({
     execRaw: (ddl) => { storage.sql.exec(ddl); },
     sql: over.sql,
@@ -96,14 +96,23 @@ export function initAgentDatabaseTables(storage: DurableObjectStorage, over: { s
   initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
 }
 
-/** An agent's database, asked its stamp first (identity/schema-stamp.ts): one a release's tables step has not reached
- *  is refused, and every call that would read it answers with why, until the step brings it to this build. */
-export function openAgentDatabase(storage: DurableObjectStorage, workspace: ConstructorParameters<typeof AgentDatabase>[1]): AgentDatabase {
+/** An agent's database brought to this build where a release left it behind, before anything reads it (core
+ *  state/schema-repair.ts): what that repair did, or null where it was at this build. */
+export function repairAgentDatabase(storage: DurableObjectStorage, database: string): Repair | null {
+  return repairSchema(storage.sql, {
+    schema: 'agent', tables: SCHEMA_TABLES.agent, stamps: durableStamps(storage.kv),
+    transactionSync: (write) => storage.transactionSync(write),
+    init: () => { initAgentDatabaseTables(storage, { sql: agentSql(storage.sql), exec: storage.sql }); },
+  }, database);
+}
+
+/** An agent's database, once its repair ran: one the repair could not bring up is refused, and every call that would
+ *  read it answers with why. */
+export function openAgentDatabase(storage: DurableObjectStorage, repair: Repair | null, workspace: ConstructorParameters<typeof AgentDatabase>[1]): AgentDatabase {
   return settleSync(Effect.suspend(() => {
+    if (repair?.refused != null) return Effect.fail(new StoragePredatesReleaseError('agent', repair.refused));
     const stamps = durableStamps(storage.kv);
     const stamp = readStamp(stamps, storage.sql, 'agent');
-
-    if (stamp === 'behind') return Effect.fail(new StoragePredatesReleaseError('agent', stamps.read()));
     const database = new AgentDatabase(storage, workspace);
 
     if (stamp === 'unmade') writeStamp(stamps, 'agent');
@@ -570,7 +579,6 @@ export class AgentDatabase {
     return Object.fromEntries(await answersForDrainTurns(this.readable().transcript, drainTurnIds));
   }
 
-  /** Its conversation's newest rows first, projected as a lane reads them. */
   /** Its conversation as a fork of its workspace reads it. */
   forkSource(): ForkConversationSource {
     return localForkConversationSource(this.sql, this.readable().actor);
@@ -586,6 +594,7 @@ export class AgentDatabase {
     });
   }
 
+  /** Its conversation's newest rows first, projected as a lane reads them. */
   async newestFirst(limit: number): Promise<readonly ConversationProjection[]> {
     return await this.readable().transcript.newestFirst(limit);
   }

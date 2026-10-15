@@ -2,7 +2,7 @@
 import { Hono } from 'hono';
 import { decisionRunOf, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
 import type { OwnerCapabilityEnv, ProviderEnv, WorkersAIRunBinding } from '@kinu.run/core';
-import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
+import { objectNamed, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
 import { MY_GATEWAY_PROVIDER_ID, SESSION_AFFINITY_HEADER, sessionAffinityOf, workersAiSpec, DECISION_MODELS, USER_AI_RUN_PATH, decodeJsonValue } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
@@ -49,7 +49,7 @@ aiProxyRoutes.post(`${USER_AI_RUN_PATH}/*`, async (c) => {
 
   if (body === null) return errorResponse(400, 'Body must be a JSON object.');
   const userId = c.get('cli').userId;
-  const run = decisionRunOf({ env: c.env, userDO: userCredentials(() => c.env.UserDO.get(c.env.UserDO.idFromName(userId)), await ownerCaller(c.env)) });
+  const run = decisionRunOf({ env: c.env, userDO: userCredentials(() => objectNamed(c.env.UserDO, userId), await ownerCaller(c.env)) });
 
   return json({ body: decodeJsonValue({ value: await run(spec.slice('workers-ai/'.length), body) }) });
 });
@@ -104,7 +104,7 @@ function proxyCompletion<Id>(
     const aiFetch = createCloudflareAIFetch({
       credKey: workersAI ? CLOUDFLARE_OAUTH_CRED_KEY : CLOUDFLARE_AI_GATEWAY_CRED_KEY,
       provider: workersAI ? 'workers-ai' : 'my-gateway',
-      getAuth: userCredentials(() => env.UserDO.get(env.UserDO.idFromName(userId)), yield* Effect.promise(() => ownerCaller(env))).getAuth,
+      getAuth: userCredentials(() => objectNamed(env.UserDO, userId), yield* Effect.promise(() => ownerCaller(env))).getAuth,
       placeholder: PROXY_PLACEHOLDER,
       missingCredentialMessage: workersAI
         ? 'Connect Cloudflare in your Kinu user settings before using Workers AI models.'

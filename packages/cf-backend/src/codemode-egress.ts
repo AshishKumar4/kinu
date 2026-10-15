@@ -10,7 +10,7 @@
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { KITESURF_SESSION_ID, parseWorkspacePreviewLabel, previewHostSuffix, refusedHostname, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
+import { objectNamed, KITESURF_SESSION_ID, parseWorkspacePreviewLabel, previewHostSuffix, refusedHostname, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
 import { selfPreviewPass } from './viewer-pass';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
@@ -59,7 +59,7 @@ async function browserGate(request: Request, env: EgressEnv, props: CodemodeEgre
   if (id === KITESURF_SESSION_ID) return await env.BROWSER.fetch(KITESURF_CONNECT, upgrade);
 
   const owned = props.workspace !== null && props.actor !== null
-    && await env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(props.workspace)).ownsBrowserSession(props.actor, id);
+    && await objectNamed(env.OrchestratorAgent, props.workspace).ownsBrowserSession(props.actor, id);
 
   if (!owned) {
     diagnostics.failure('egress.browser_refused', new KinuError('denied', 'a browser session the caller did not open'), { seam: 'codemode' });

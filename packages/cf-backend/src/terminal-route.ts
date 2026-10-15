@@ -9,7 +9,7 @@ import { getAgentByName } from "agents";
 import { diagnostics, renderThrownChain, toKinuError, type KinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 
-import { err, json } from "@kinu.run/core";
+import { objectNamed, err, json } from "@kinu.run/core";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
@@ -204,9 +204,8 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
   const socketUrl = new URL(request.url);
   socketUrl.pathname = DEVICE_TERMINAL_PATH;
   socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
-  const namespace = deps.UserDO;
 
-  return namespace.get(namespace.idFromName(opened.user)).fetch(new Request(socketUrl, request));
+  return objectNamed(deps.UserDO, opened.user).fetch(new Request(socketUrl, request));
 }
 
 /** The shell is the runtime's, inside the workspace object; keepalive/reset are guards as for a device. */

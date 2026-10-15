@@ -358,7 +358,8 @@ function expiresAtFromToken(token: CloudflareTokenPayload): number | undefined {
   return Date.now() + Math.max(0, seconds - 30) * 1000;
 }
 
-function scopeList(input: { value: unknown }): string[] | undefined {
+/** An OAuth `scope` as a server answers it, space-separated or a list, as its scopes; undefined for none. */
+export function scopeList(input: { value: unknown }): string[] | undefined {
   const { value } = input;
 
   if (v.is(v.string(), value)) {
@@ -368,7 +369,7 @@ function scopeList(input: { value: unknown }): string[] | undefined {
   }
 
   if (Array.isArray(value)) {
-    const scopes = value.filter((item): item is string => v.is(v.string(), item) && item.trim().length > 0);
+    const scopes = value.filter((item): item is string => v.is(v.string(), item) && item.trim().length > 0).map((item) => item.trim());
 
     return scopes.length ? scopes : undefined;
   }

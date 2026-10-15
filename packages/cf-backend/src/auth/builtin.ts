@@ -4,7 +4,7 @@
  */
 import { Hono, type Context } from 'hono';
 import { AssertionSchema, AttestationSchema, answeredChallenge, verifyNewPasskey, verifyPasskeyAnswer } from './passkeys';
-import { base64Url, json, ownerCaller, randomToken, sha256Hex } from '@kinu.run/core';
+import { objectNamed, base64Url, json, ownerCaller, randomToken, sha256Hex } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { sessionCookie } from './cookies';
@@ -13,7 +13,7 @@ import { sanitizeReturnTo } from '@kinu.run/core';
 import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {
-  attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS, NOT_ADMITTED,
+  attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS,
   type AttemptBucket, type ChallengePurpose, type Grant, type InvitePurpose, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
@@ -34,7 +34,7 @@ export interface BuiltinAuthEnv<Id = DurableObjectId> extends Omit<AuthRoutesEnv
 const RP_NAME = 'Kinu';
 
 export function builtinAccounts<Id, Authority>(env: { UserDO: ObjectNamespace<Id, Authority> }): Authority {
-  return env.UserDO.get(env.UserDO.idFromName(BUILTIN_ACCOUNTS_OBJECT));
+  return objectNamed(env.UserDO, BUILTIN_ACCOUNTS_OBJECT);
 }
 
 const accounts = <Id>(env: BuiltinAuthEnv<Id>): BuiltinAuthority => builtinAccounts(env);
@@ -279,7 +279,7 @@ async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Omi
   if (current === null) return resetRefused(reset.grant);
   const ended = current.generation + 1;
 
-  await env.UserDO.get(env.UserDO.idFromName(current.userId)).raiseCredentialFloor(caller, ended);
+  await objectNamed(env.UserDO, current.userId).raiseCredentialFloor(caller, ended);
   const account = await accounts(env).builtinApplyReset(caller, { ...reset, ended });
 
   if (account === null) return resetRefused(reset.grant);
@@ -374,8 +374,6 @@ async function ownerLink(c: Context<SettingsEnv>, purpose: InvitePurpose): Promi
 builtinAccountRoutes.post('/api/user/builtin-auth/invites', async (c) => ownerLink(c, 'join'));
 
 builtinAccountRoutes.post('/api/user/builtin-auth/resets', async (c) => ownerLink(c, 'reset'));
-
-export { NOT_ADMITTED };
 
 
 builtinAccountRoutes.get('/api/user/builtin-auth/accounts', async (c) => {

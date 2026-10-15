@@ -39,4 +39,4 @@ export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type
 
 export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, type ViewerRun } from './share-viewers';
 
-export { SlateController, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
+export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';

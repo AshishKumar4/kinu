@@ -7,7 +7,7 @@ import {
   DeploymentRecordSchema, ReleaseManifestSchema, SELF_UPDATE_RUN_ID, buildOf, updateOffer,
   type DeploymentRecord, type UpdateBuild, type UpdateOffer,
 } from '@kinu.run/core/deploy';
-import { err, json, readBuildStamp } from '@kinu.run/core';
+import { objectNamed, err, json, readBuildStamp } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
@@ -73,7 +73,7 @@ function ownedBy(record: DeploymentRecord | null, identity: AuthIdentity): boole
 }
 
 function runStub(env: Env): DurableObjectStub<DeployRunDO> {
-  return env.DeployRunDO.get(env.DeployRunDO.idFromName(SELF_UPDATE_RUN_ID));
+  return objectNamed(env.DeployRunDO, SELF_UPDATE_RUN_ID);
 }
 
 /** This deployment's stamp (read as `/api/health` does) beside the one its channel publishes. */

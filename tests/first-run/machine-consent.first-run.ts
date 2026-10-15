@@ -55,6 +55,9 @@ const MACHINE = 'kinu-first-run-consent';
 /** The broadcast the chat renders a consent card from (the orchestrator's `consents` announce). */
 const CONSENT_REQUESTED = 'device_consent';
 
+/** A turn that does nothing, sent so the turn before it has ended when the case reads what it did. */
+const DRAIN_ASK = 'The machine check is finished. Reply with only OK. Do not run commands or use tools.';
+
 /** What the refusal names when no machine is connected: where the owner connects one. */
 const CONNECT_PROMPT = 'kinu connect';
 
@@ -163,6 +166,7 @@ describe(SUITE, () => {
         id: CASE,
         defect: DEFECT,
         modelCalls: 'expected',
+        budgetMs: 5 * 60_000,
         genesis: false,
         purpose: 'An assistant that uses the owner\'s own machine when asked to.',
         async run({ session, plan, budget }) {
@@ -202,6 +206,9 @@ describe(SUITE, () => {
             const card = cardShown ? (await session.pendingConsents()).find((pending) => pending.deviceId === machine.deviceId) : undefined;
             const decided = card === undefined ? null : await session.resolveConsent(card.consentId, 'once');
             await turn;
+            // The call parked NOT RUN, and the answer woke the agent, which re-issues it once (the park-and-wake contract,
+            // c66751bf2): a turn of the case's own, queued behind the woken one, so the re-issue has run when it is read.
+            await session.prompt(DRAIN_ASK);
 
             subgoals.push({
               what: 'consent-requested',

@@ -327,7 +327,7 @@ function pick(tools: ToolSet, allowed: ReadonlySet<string>): ToolSet {
 }
 
 /** Pins as values, so they cross an isolate. */
-export interface PinValues {
+interface PinValues {
   readonly roleSelection: ReturnType<PinnedProfile['getRoleSelection']>;
   readonly assignedTier: ReturnType<PinnedProfile['getAssignedTier']>;
   readonly model: ReturnType<PinnedProfile['getModel']>;

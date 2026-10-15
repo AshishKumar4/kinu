@@ -57,9 +57,9 @@ export const FactRevisionSchema = v.object({
   at: v.number(),
 });
 
-export type FactRevision = Readonly<v.InferOutput<typeof FactRevisionSchema>>;
+type FactRevision = Readonly<v.InferOutput<typeof FactRevisionSchema>>;
 
-export type FactUpsertResult = 'created' | 'changed' | 'unchanged';
+type FactUpsertResult = 'created' | 'changed' | 'unchanged';
 
 /** Revisions kept per key; older ones go as a new one lands. */
 const HISTORY_KEPT = 20;
@@ -97,7 +97,7 @@ export function initFactsTable(execRaw: (ddl: string) => void): void {
   `);
 }
 
-export interface FactWrite {
+interface FactWrite {
   confidence?: number;
   source?: string;
   importance?: number;

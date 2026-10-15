@@ -13,7 +13,7 @@ import { ingressAdmitted, ingressDenied, peerIp } from './ingress-budget';
 import type { KvStore } from "@kinu.run/agent-utils";
 import * as v from "valibot";
 
-export interface PcUserStub {
+interface PcUserStub {
   issueDeviceConnectTicket(
     caller: UserCaller,
     token: string,
@@ -31,6 +31,12 @@ export interface PcUserStub {
 export interface ObjectNamespace<Id, Stub> {
   idFromName(name: string): Id;
   get(id: Id): Stub;
+}
+
+/** The object `name` names in `namespace`: the platform's `getByName`, spelled over the two calls every namespace port
+ *  (a test's included) answers. */
+export function objectNamed<Id, Stub>(namespace: ObjectNamespace<Id, Stub>, name: string): Stub {
+  return namespace.get(namespace.idFromName(name));
 }
 
 export type PcUserNamespace<Id> = ObjectNamespace<Id, PcUserStub>;

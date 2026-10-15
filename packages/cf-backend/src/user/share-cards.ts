@@ -7,7 +7,7 @@
 import * as v from 'valibot';
 import { LifecycleCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
 import { ShareCardSchema, type ShareCard, type SqlExec, type UserCaller, type WorkspaceOverviewShare } from '@kinu.run/core';
-import { retriedLater } from '../advice-jobs';
+import { retriedLater } from '../wake-jobs';
 
 const SHARE_CARD_JOB = 'share-card';
 

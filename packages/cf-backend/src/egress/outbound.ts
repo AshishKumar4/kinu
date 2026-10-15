@@ -8,6 +8,7 @@ import * as v from 'valibot';
 import { Hono } from 'hono';
 import { rawPath, rethrow, type FamilyEnv } from '../api/context';
 import {
+  objectNamed,
   createScrubStream,
   egressPlaceholdersIn,
   scrubBytes,
@@ -155,7 +156,7 @@ export function handleContainerEgress<Id>(
     if (egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], workspace.github);
 
     // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
-    const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
+    const vault: EgressVaultClient = objectNamed(env.UserDO, params.ownerUserId);
 
     // The workspace's grants and the vault's secrets as they stand; the vault plans, so an unbound placeholder is refused there.
     const resolved = yield* Effect.matchCause(Effect.promise(async (): Promise<EgressInjectionResult> => vault.resolveEgressInjection(

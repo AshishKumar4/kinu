@@ -3,8 +3,6 @@ import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { GitHubFact, GitHubSubjectFact } from './recognize';
 
-export type GitHubSource = 'egress' | 'mcp' | 'refresh';
-
 export function initGitHubActivityTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS github_items (
     repo         TEXT NOT NULL,
@@ -77,7 +75,7 @@ function recordItem(sql: SqlExecutor, fact: GitHubSubjectFact & { readonly numbe
 export function recordGitHubActivity(
   sql: SqlExecutor,
   facts: readonly GitHubFact[],
-  origin: { readonly actorId: string | null; readonly source: GitHubSource; readonly at: number },
+  origin: { readonly actorId: string | null; readonly at: number },
 ): void {
   for (const each of facts) {
     if (each.action === 'identified') {
@@ -135,7 +133,7 @@ export function recordGitHubObservations(sql: SqlExecutor, observed: readonly Gi
   }
 }
 
-export interface GitHubItem {
+interface GitHubItem {
   readonly subject: 'issue' | 'pr';
   readonly repo: string;
   readonly number: number;
@@ -150,7 +148,7 @@ export interface GitHubItem {
   readonly lastAt: number;
 }
 
-export interface GitHubRepo {
+interface GitHubRepo {
   readonly repo: string;
   /** One of the workspace's git remotes. */
   readonly remote: boolean;
