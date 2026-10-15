@@ -291,6 +291,8 @@ export const DECLARED = byFile([
       '`SlateCallResult`, a slate storage call\'s answer over DO RPC'],
     ['packages/cf-backend/src/terminal-route.ts', ['deviceTerminal', 'workspaceTerminal', 'sandboxCommand'],
       'the terminal routes\' HTTP JSON bodies'],
+    ['packages/cf-backend/src/workspace-executors.ts', ['prepareTerminal'],
+      'a terminal\'s preflight, the workspace object\'s RPC answer the terminal route reads'],
     ['packages/cf-backend/src/user/routes.ts', ['body'],
       'the user routes\' HTTP JSON bodies, read by the browser'],
     ['packages/cf-backend/src/user/account-api.ts', ['body'],

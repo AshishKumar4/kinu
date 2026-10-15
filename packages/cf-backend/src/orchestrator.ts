@@ -1,5 +1,5 @@
-import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
-import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, runOnExecutor, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
+import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
+import { PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
@@ -41,6 +41,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
+import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import type { AnswerMetadataReply } from "./agent-facet/agent-turn";
@@ -184,16 +185,14 @@ import {
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, connectedDevices, sameDeviceStatus, type LiveRead,
+  LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes, deliverOwedChangeNotes, owesChangeNotes, type ChangeNotesChat,
   initTurnBranchesTable, TurnBranchesStore, branchHeadId, TurnSurface, authoredTurnMetadata, type ActorReach, type ChatTurnInput,
   type ChangeNote, type ChangeNotesResult, type NotedChanges,
   diffLines, type DiffLine,
-  getExecutorFiles, readExecutorFile, listEnvironments,
-  renameExecutorPathOp, deleteExecutorPathOp,
-  ExecutorFileUpload, ExecutorFileDownload,
+  listEnvironments,
   type DirEntry, type ExecutorTextFile, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
@@ -294,26 +293,6 @@ const SANDBOX_REFUSED = 'sandbox_refused';
  *  A pass that fills a budget arms the maintenance wake. */
 const ORPHAN_SEAL_MAX_ROWS = 256;
 
-/** Transfer id is fresh per transfer, so two readers of one path cannot replace
- *  each other's snapshot. */
-export interface ExecutorFileChunkRead {
-  executorId: string;
-  path: string;
-  transferId: string;
-  offset: number;
-  length: number;
-}
-
-export interface ExecutorFileChunkWrite {
-  executorId: string;
-  path: string;
-  transferId: string;
-  offset: number;
-  chunk: Uint8Array;
-  final: boolean;
-  expectedRevision?: VfsRevision;
-}
-
 const WAKE_ARM_FAILURE = {
   reconcile: {
     event: 'event.delivery_reconcile_failed',
@@ -382,22 +361,6 @@ function phaseFailed(
     span.fail(failure);
     record(failure);
   });
-}
-
-/** A terminal step's refusal as the pane reads it, or null once the step is done. */
-function terminalStep(step: Effect.Effect<unknown>, doing: string): Effect.Effect<{ error: string } | null> {
-  return Effect.matchCause(step, {
-    onSuccess: () => null,
-    onFailure: (failed) => ({ error: terminalRefusal({ doing, cause: Cause.squash(failed) }) }),
-  });
-}
-
-/** A terminal that cannot open: the owner's pane reads the whole chain. */
-function terminalRefusal(failure: { doing: string; cause: unknown }): string {
-  const error = authoredRefusal({ ...failure });
-  diagnostics.failure('terminal.prepare_failed', error);
-
-  return renderThrownChain({ cause: error });
 }
 
 type SandboxBox = ReturnType<NonNullable<Env['KinuDevbox']>['getByName']>;
@@ -6599,253 +6562,73 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
   }
 
+  /** The workspace's executors: a command, the file plane, the Files routes' transfers, terminals and ports. */
+  private readonly executors = new WorkspaceExecutors({
+    runtime: () => this.rt,
+    workspaceTerminal: async () => await this.hostedWorkspace().terminal(),
+    computerState: () => ({ refused: this.config.get(SANDBOX_REFUSED) ?? null, starting: this.config.get(SANDBOX_STARTING) != null }),
+    heldPorts: async () => await (await this.slates()).controller.heldPorts(),
+    recordOutput: (executorId, command, output) => { this.recordExecutorOutput(executorId, command, output); },
+    broadcast: (frame) => { this.broadcast(frame); },
+    ownerUserId: () => this.getOwnerUserId(),
+    openOwnerTerminal: async (window, device) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, device),
+  });
+
   @callable() executeInExecutor(executorId: string, command: string, device?: string) {
-    return settle(Effect.gen({ self: this }, function* () {
-      const router = this.rt.executionRouter;
-
-      if (!router) return { error: 'no execution router' };
-      const run = yield* Effect.promise(() => runOnExecutor(router, executorId, command, device));
-
-      if (run.kind === 'refused') return { error: run.error, refusal: run.refusal };
-
-      const output = run.kind === 'ran'
-        ? { stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, ...(run.refusal && { refusal: run.refusal }) }
-        : { stdout: '', stderr: run.error, exitCode: 1, refusal: run.refusal };
-
-      this.recordExecutorOutput(executorId, command, run.kind === 'ran' ? output : { stdout: null, stderr: run.error, exitCode: 1 });
-      // The UI terminal renders only from broadcasts, so a failure is broadcast too.
-      this.broadcast(JSON.stringify({ type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now() }));
-
-      return run.kind === 'ran' ? output : { error: run.error, exitCode: 1, refusal: run.refusal };
-    }));
+    return this.executors.execute(executorId, command, device);
   }
 
-  /** Directory listing read off each executor's own raw handle, in that environment's paths. */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-
-    return getExecutorFiles(this.rt.executionRouter, executorId, path);
+    return await this.executors.files(executorId, path);
   }
 
   @callable() async readExecutorFile(executorId: string, path: string): Promise<ExecutorTextFile> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-
-    return readExecutorFile(this.rt.executionRouter, executorId, path);
+    return await this.executors.readFile(executorId, path);
   }
 
-  /** Native rename where the plane supports it, byte carry for files elsewhere, refusal for
-   * directories that only bytes could carry. Never overwrites. */
   @callable() async renameExecutorFile(executorId: string, from: string, to: string): Promise<ExecutorWriteResult> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-
-    return renameExecutorPathOp(this.rt.executionRouter, executorId, from, to);
+    return await this.executors.rename(executorId, from, to);
   }
 
-  /** Directories use the plane's native tree removal where it exists, entry by entry elsewhere. */
   @callable() async deleteExecutorFile(executorId: string, path: string): Promise<ExecutorWriteResult> {
-    if (!this.rt.executionRouter) return { error: 'no execution router' };
-
-    return deleteExecutorPathOp(this.rt.executionRouter, executorId, path);
+    return await this.executors.remove(executorId, path);
   }
 
-  // Chunked transfer for files-routes.ts keeps each payload under `do.facet.rpc_bytes`.
-  // The actor is single-threaded, so these maps need no lock.
-  private readonly executorFileUploads = new Map<string, {
-    readonly executorId: string;
-    readonly path: string;
-    readonly expectedRevision: VfsRevision | undefined;
-    readonly upload: ExecutorFileUpload;
-  }>();
-  private readonly executorFileDownloads = new Map<string, ExecutorFileDownload>();
-
-  async startExecutorFileDownload(
-    executorId: string,
-    path: string,
-    transferId: string,
-  ): Promise<
-    { size: number }
-    | { error: string; reason: 'too_large' | 'unavailable' }
-  > {
-    const router = this.rt.executionRouter;
-
-    if (!router) return { error: 'no execution router', reason: 'unavailable' };
-
-    if (!transferId) return { error: 'download transfer id required', reason: 'unavailable' };
-    const download = new ExecutorFileDownload(router, executorId, path);
-    this.executorFileDownloads.set(transferId, download);
-    const opened = await download.open();
-
-    if ('error' in opened) this.executorFileDownloads.delete(transferId);
-
-    return opened;
+  async startExecutorFileDownload(executorId: string, path: string, transferId: string) {
+    return await this.executors.startDownload(executorId, path, transferId);
   }
 
-  /** The route supplies a fresh transfer id per GET, so readers never share or reuse stale bytes. */
   async readExecutorFileChunk(read: ExecutorFileChunkRead): Promise<{ bytes: Uint8Array } | { error: string }> {
-    const { executorId, path, transferId, offset, length } = read;
-    const router = this.rt.executionRouter;
-
-    if (!router) return { error: 'no execution router' };
-
-    if (!transferId) return { error: 'download transfer id required' };
-    const download = this.executorFileDownloads.get(transferId);
-
-    if (!download || !download.serves(executorId, path)) {
-      return { error: 'file transfer out of sync: no matching open download' };
-    }
-
-    const result = await download.range(offset, length);
-
-    if ('error' in result || download.completeAfter(offset + result.bytes.byteLength)) {
-      this.executorFileDownloads.delete(transferId);
-    }
-
-    return result;
+    return await this.executors.readChunk(read);
   }
 
   async abortExecutorFileDownload(transferId: string): Promise<void> {
-    this.executorFileDownloads.delete(transferId);
+    this.executors.abortDownload(transferId);
   }
 
-  /** An `offset === 0` chunk (re)starts the transfer so retries self-heal; ordering and
-   * continuity are enforced inside the transfer, not trusted from the caller. */
   async writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
-    const { executorId, path, transferId, offset, chunk, final, expectedRevision } = write;
-    const router = this.rt.executionRouter;
-
-    if (!router) return { error: 'no execution router' };
-
-    if (!path) return { error: 'file path required' };
-
-    if (!transferId) return { error: 'upload transfer id required' };
-    let row = this.executorFileUploads.get(transferId);
-
-    if (offset === 0) {
-      row = {
-        executorId,
-        path,
-        expectedRevision,
-        upload: new ExecutorFileUpload(router, executorId, path, { expectedRevision }),
-      };
-      this.executorFileUploads.set(transferId, row);
-    } else if (!row || row.executorId !== executorId || row.path !== path) {
-      return { error: 'file transfer out of sync: no matching open upload' };
-    } else if (row.expectedRevision !== expectedRevision) {
-      return { error: 'file transfer out of sync: expected revision does not match the first chunk' };
-    }
-
-    const result = await row.upload.chunk(offset, chunk, final);
-
-    if (row.upload.done) this.executorFileUploads.delete(transferId);
-
-    return result;
+    return await this.executors.writeChunk(write);
   }
 
   async abortExecutorFileWrite(transferId: string): Promise<void> {
-    this.executorFileUploads.get(transferId)?.upload.abort();
-    this.executorFileUploads.delete(transferId);
+    this.executors.abortWrite(transferId);
   }
 
-  /** Terminal preflight via the sandbox lane's own `ensureReady` (egress grants, /workspace).
-   * Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
+  /** Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
   prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
-    return settle(Effect.gen({ self: this }, function* () {
-    // The owner's machine has no container to warm; it only needs to be attached.
-      if (executorId === 'device') {
-        const { devices } = this.rt.deviceTransport.status();
-
-        if (connectedDevices(devices).length > 0) return { ok: true };
-
-        if ((devices?.length ?? 0) > 0) return { error: 'That machine is offline. Run `kinu connect` on it.' };
-
-        return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
-      }
-
-      if (executorId === 'workspace') {
-        return (yield* terminalStep(Effect.promise(async () => this.hostedWorkspace().terminal()), 'composing the workspace runtime for a terminal')) ?? { ok: true };
-      }
-
-      if (executorId !== 'computer') return { error: `${executorId} has no terminal` };
-      const handle = this.rt.sandboxHandle;
-
-      if (!handle) return { error: 'this workspace has no computer configured' };
-
-      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the computer for a terminal')) ?? { ok: true };
-    }));
+    return this.executors.prepareTerminal(executorId);
   }
 
   /**
    * Opens via this object because only it holds the workspace capability token the hub needs.
-   * `user` is the object holding both sockets; the route sends the pane's upgrade there.
+   * `device`: the PC the pane names, when the account has several connected; the one connected without it.
    */
-  openDeviceTerminal(
-    window: { cols: number; rows: number },
-    /** The PC the pane names, when the account has several connected; the one connected without it. */
-    device?: string,
-  ): Promise<{ session: string; user: string } | { error: string }> {
-    return settle(Effect.suspend(() => {
-      const user = this.getOwnerUserId();
-
-      if (!user) return Effect.succeed({ error: unownedWorkspace().message });
-
-      // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
-      return Effect.matchCause(Effect.promise(async () => this.requireOwnerUserDO().openDeviceTerminal(
-        await this.userCaller(), this.workspaceName(), window, device,
-      )), {
-        onSuccess: (opened) => ({ session: opened.session, user }),
-        onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),
-      });
-    }));
+  openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
+    return this.executors.openDeviceTerminal(window, device);
   }
 
-  /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
   @callable() async getExposedPorts(executorId: string): Promise<ExposedPortList> {
-    const refused = executorId === 'computer' ? this.config.get(SANDBOX_REFUSED) : null;
-
-    if (refused != null) return { ports: [], error: refused };
-
-    if (executorId === 'computer' && this.config.get(SANDBOX_STARTING) != null) {
-      return { ports: [], pending: "the computer is still restoring" };
-    }
-
-    const provider = this.rt.executionRouter?.getProvider(executorId);
-
-    if (!provider) {
-      return executorId === 'computer'
-        ? { ports: [] }
-        : { ports: [], error: `${executorId} preview provider is unavailable` };
-    }
-
-    const status = provider.getStatus?.();
-
-    if (status && !status.active && provider.kind !== 'workspace') {
-      return { ports: [] };
-    }
-
-    if (!provider.listExposedPorts) {
-      return { ports: [], error: `${executorId} cannot list exposed ports` };
-    }
-
-    const listing = provider.listExposedPorts;
-    // A port a slate's application holds is called by the slate's title, never by its number; an answer's page is the
-    // chat's until it is saved.
-    const held = executorId === 'workspace' ? this.slates().then((slates) => slates.controller.heldPorts()) : Promise.resolve(null);
-
-    return settle(Effect.matchCause(Effect.promise(async () => Promise.all([listing.call(provider), held])), {
-      onSuccess: ([ports, slates]) => ({
-        ports: ports.filter(({ port }) => slates?.pages.has(port) !== true).map(({ port, name, url }) => ({ port, url, name: name ?? slates?.titles.get(port) })),
-      }),
-      onFailure: (failed) => {
-        const error = Cause.squash(failed);
-
-        return {
-          ports: [],
-          error: error instanceof Error && error.message
-            ? error.message
-            : `Couldn't list ${executorId} preview ports`,
-        };
-      },
-    }));
+    return await this.executors.exposedPorts(executorId);
   }
 
   /** `actor` names a child of this workspace: the read is its own config. */
