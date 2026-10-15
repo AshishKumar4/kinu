@@ -587,7 +587,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           id: textColumn(row.id), kind: textColumn(row.kind), status: textColumn(row.status),
           result: row.result === null ? null : textColumn(row.result), settledAt: row.settled_at === null ? null : Number(row.settled_at),
         })),
-      runs: (await this.mainRows("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid"))
+      runs: (await this.mainRows("SELECT run_id, type, json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid"))
         .reduce<Array<{ runId: string; userMessage: string; reason: string | null }>>((runs, row) => {
           const payload = v.parse(v.looseObject({ userMessage: v.optional(v.string()), reason: v.optional(v.string()) }), JSON.parse(textColumn(row.payload)));
 
@@ -656,7 +656,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** The public `busy` getter `routeBusyChat` consults. */
   /** A run the loop continues after a reset closes exactly once, by the loop. */
   async runEnds(): Promise<Array<{ runId: string; reason: string }>> {
-    return (await this.mainRows(`SELECT run_id, payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`))
+    return (await this.mainRows(`SELECT run_id, json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`))
       .map((row) => ({
         runId: textColumn(row.run_id),
         reason: v.parse(v.object({ reason: v.string() }), JSON.parse(textColumn(row.payload))).reason,
@@ -685,7 +685,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           seq: Number(row.seq), input: textColumn(row.input_json), lane: textColumn(row.lane), status: textColumn(row.status),
           attempts: Number(row.attempts),
         })),
-      runEvents: (await this.mainRows("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid"))
+      runEvents: (await this.mainRows("SELECT run_id, type, json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid"))
         .map((row) => ({ runId: textColumn(row.run_id), type: textColumn(row.type), payload: textColumn(row.payload) })),
       canonicalParts: (await this.mainRows(`SELECT message_id, json_extract(part.value, '$.partNo') AS part_no,
         json_extract(part.value, '$.value') AS value FROM session_messages, json_each(content_json) part
@@ -778,7 +778,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const closed = new Set((await this.mainRows("SELECT run_id FROM run_events WHERE type = 'run_end'"))
       .map((row) => textColumn(row.run_id)));
 
-    return (await this.mainRows("SELECT run_id, payload FROM run_events WHERE type = 'run_start' ORDER BY rowid"))
+    return (await this.mainRows("SELECT run_id, json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload FROM run_events WHERE type = 'run_start' ORDER BY rowid"))
       .map((row) => ({
         cause: v.parse(
           v.fallback(v.looseObject({ caused_by: v.fallback(v.string(), '') }), { caused_by: '' }),
