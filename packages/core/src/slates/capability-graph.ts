@@ -6,8 +6,8 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import type { Impact } from '@agent-core/core/facets';
-import { slateAddressImpact, slateOwnerOnly } from './members';
-import type { ShareGrant, ShareGrantMember, SlateCapabilityGraph, SlateGraphMember, SlateGraphNamespace } from './sharing';
+import { slateAddressImpact } from './members';
+import type { SlateCapabilityGraph, SlateGraphMember, SlateGraphNamespace } from './sharing';
 
 /** What the owner's workspace offers now; a namespace naming something absent becomes a `problem` row, never a blank. */
 export interface SlateSurfaceCatalog {
@@ -162,51 +162,4 @@ function capabilityGraph(input: Parameters<typeof slateCapabilityGraph>[0]): Eff
   walk(slate);
 
   return Effect.succeed({ slate, slates, namespaces });
-}
-
-/** Every observing member plus each approved one that acts; approving an unknown or observing member refuses. */
-export function cutShareGrant(
-  graph: SlateCapabilityGraph,
-  approved: readonly { slate: string; namespace: string; member: string }[],
-): ShareGrant {
-  return settleSync(shareGrant(graph, approved));
-}
-
-function shareGrant(graph: SlateCapabilityGraph, approved: Parameters<typeof cutShareGrant>[1]): Effect.Effect<ShareGrant, KinuError> {
-  const members: ShareGrantMember[] = [];
-  const seen = new Set<string>();
-
-  const admit = (slate: string, namespace: string, member: string, impact: Impact): void => {
-    const key = JSON.stringify([slate, namespace, member]);
-
-    if (seen.has(key)) return;
-    seen.add(key);
-    members.push({ slate, namespace, member, impact });
-  };
-
-  for (const row of graph.namespaces) {
-    for (const member of row.members) {
-      if (member.impact === 'observe' && !slateOwnerOnly({ namespace: row.namespace, member: member.member })) admit(row.slate, row.namespace, member.member, 'observe');
-    }
-  }
-
-  for (const entry of approved) {
-    if (slateOwnerOnly(entry)) return Effect.fail(new KinuError('bad_input', `${entry.namespace}.${entry.member} runs only in its owner's own slate; a share cannot grant it`));
-
-    const member = graph.namespaces
-      .find((row) => row.slate === entry.slate && row.namespace === entry.namespace)
-      ?.members.find((candidate) => candidate.member === entry.member);
-
-    if (member === undefined || member.impact === 'observe') {
-      return Effect.fail(new KinuError('bad_input', `${entry.namespace}.${entry.member} is not a member of slate ${entry.slate} that acts`));
-    }
-
-    admit(entry.slate, entry.namespace, entry.member, member.impact);
-  }
-
-  return Effect.succeed({ slates: [...graph.slates], members });
-}
-
-export function grantAdmits(grant: ShareGrant, slate: string, namespace: string, member: string): ShareGrantMember | null {
-  return grant.members.find((entry) => entry.slate === slate && entry.namespace === namespace && entry.member === member) ?? null;
 }

@@ -23,9 +23,6 @@ export const APP_ROUTES = {
   /** The Drive's Slates: every slate across the owner's workspaces. */
   slates: '/slates',
   shared: '/shared',
-  sharedBlueprint: '/shared/blueprint/:id',
-  /** Where a person a live share names enters it: signed in, they are handed the share's ticket. */
-  sharedLive: '/shared/live/:workspace/:share',
   /** A shared slate, live: everyone it is shared with uses it together here. `?k=` the link's key. */
   liveSlate: '/s/:workspace/:slate',
   /** One part of a shared slate, in its own frame inside the slate's page. */

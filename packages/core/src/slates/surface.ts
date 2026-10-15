@@ -9,10 +9,8 @@ import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { isSlateMethodName } from './rpc';
 import { SLATE_READ_MODELS, type SlateReadModel } from './read-models';
-import { grantAdmits } from './capability-graph';
 import { AGENT_ASK_MEMBER, AI_RUN_MEMBER, AI_STREAM_MEMBER, slateAddressImpact, slateOwnerOnly } from './members';
 import type { Impact } from '@agent-core/core/facets';
-import type { ShareGrant } from './sharing';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
 
 /** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.readFile` is in a program. */
@@ -49,13 +47,6 @@ export type SlateCallRequest = v.InferOutput<typeof SlateCallRequestSchema>;
 export interface SlateInvocation {
   readonly id: string;
   readonly chain: readonly string[];
-  readonly viewer?: SlateViewer;
-}
-
-export interface SlateViewer {
-  readonly share: string;
-  readonly subject: string;
-  readonly request: number;
 }
 
 /** Resolved from the host's own record, never off the wire: retired or foreign ids are refused. */
@@ -92,7 +83,7 @@ export type SlateRoute =
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
   | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject; readonly readOnly?: true }
   /** `ask`: the answer carries a stream of the agent's own reply, the text of the turn the message lands in. */
-  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue; readonly viewer?: string; readonly ask?: true }
+  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue; readonly ask?: true }
   /** `stream`: the answer is its text as a byte stream, written as the model writes it, not one value at the end. */
   | { readonly kind: 'ai'; readonly prompt: string; readonly system?: string; readonly tier?: string; readonly stream?: true }
   | {
@@ -254,55 +245,4 @@ export function routeSlateCall(input: SlateCallInput & { readonly hosted?: boole
   return settleSync(Effect.flatMap(routed(input.id, input.request, input.chain), (call) => (input.hosted === true && slateOwnerOnly(call.address)
     ? Effect.fail(new KinuError('denied', `${call.address.namespace}.${call.address.member} runs only in the workspace owner's own slate`))
     : Effect.succeed(call))));
-}
-
-interface ViewerCallInput extends SlateCallInput {
-  readonly viewer: SlateViewer;
-  readonly grant: ShareGrant;
-}
-
-/** Routed as the owner's call is, then held to the grant: a read grant admits only what reads. */
-export function routeViewerCall(input: ViewerCallInput): SlateCall {
-  return settleSync(Effect.flatMap(routed(input.id, input.request, input.chain), (call) => admitViewer(call, input)));
-}
-
-function admitViewer(call: SlateCall, input: ViewerCallInput): Effect.Effect<SlateCall, KinuError> {
-  const { id, grant } = input;
-  const { route: found, address } = call;
-  const refused = new KinuError('denied', `Slate ${id} does not grant ${address.namespace}.${address.member} to viewers`);
-
-  if (slateOwnerOnly(address)) return Effect.fail(new KinuError('denied', `${address.namespace}.${address.member} runs only in its owner's own slate, never for a share's viewer`));
-
-  if (found.kind === 'app') return grant.slates.includes(found.id) ? Effect.succeed(call) : Effect.fail(refused);
-  const entry = grantAdmits(grant, id, address.namespace, address.member);
-
-  if (entry === null) return Effect.fail(refused);
-
-  // Granted as observing because its server marks it read-only; the actor holds the call to that.
-  if (found.kind === 'mcp') return Effect.succeed(entry.impact === 'observe' ? { ...call, route: { ...found, readOnly: true }, impact: 'observe' } : call);
-
-  if (found.kind === 'agent') return Effect.succeed({ ...call, route: { ...found, viewer: input.viewer.subject } });
-
-  // A share's daily spend is debited from the answer's own usage, which a streamed answer has only once it drains.
-  if (found.kind === 'ai' && found.stream === true) {
-    return Effect.fail(new KinuError('unsupported', `A share's viewer asks ai.${AI_RUN_MEMBER}: a streamed answer cannot be held to the share's daily spend`));
-  }
-
-  return entry.impact === call.impact ? Effect.succeed(call) : Effect.fail(refused);
-}
-
-/**
- * A member a granted call reaches inside itself, as a crafted tool's program does: admitted only as the grant names
- * it at the impact the surface gives it, and never a member the surface refuses outright.
- */
-export function admitNestedViewerCall(grant: ShareGrant, slate: string, address: SlateAddress): void {
-  return settleSync(nestedViewerCall(grant, slate, address));
-}
-
-function nestedViewerCall(grant: ShareGrant, slate: string, address: SlateAddress): Effect.Effect<void, KinuError> {
-  const impact = slateExcludes(address) ? null : slateAddressImpact(address);
-
-  return impact !== null && grantAdmits(grant, slate, address.namespace, address.member)?.impact === impact
-    ? Effect.void
-    : Effect.fail(new KinuError('denied', `Slate ${slate} does not grant ${address.namespace}.${address.member} to viewers`));
 }

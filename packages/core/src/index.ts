@@ -285,18 +285,8 @@ export { parseSlateProject, slateTitle, type SlateProject } from './slates/proje
 export { slateAuthority } from './slates/authority';
 
 export {
-  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
-  formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
-  BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
-  SharedLibrarySchema, SlateShareRecordSchema,
-  ShareGrantSchema, SlateCapabilityGraphSchema, ShareCardSchema,
-  LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
-  type ShareKind, type LiveShareVisibility, type BlueprintInspection, type BlueprintView,
-  type BlueprintFork, type BlueprintBundle,
-  type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,
-  type ShareGrantMember, type ShareGrant, type ShareCard,
-  type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
-  type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
+  SHARE_VIEWER_REQUESTS_PER_MINUTE, VIEWER_EXCHANGE_PATH, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH, BlueprintBundleSchema, ShareCardSchema,
+  type LiveShareVisibility, type BlueprintFork, type BlueprintBundle, type SlateCapabilityGraph, type ShareCard, type SlateShareCard,
 } from './slates/sharing';
 
 export {
@@ -313,12 +303,12 @@ export {
 export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 
 export {
-  slateCapabilityGraph, cutShareGrant, grantAdmits, type SlateSurfaceCatalog, type SlateUsage,
+  slateCapabilityGraph, type SlateSurfaceCatalog, type SlateUsage,
 } from './slates/capability-graph';
 
 export {
-  SlateCallRequestSchema, SLATE_DRIVEN_MEMBERS, routeSlateCall, issuedSlateInvocation, routeViewerCall, admitNestedViewerCall, slateCallAddress,
-  type SlateCallRequest, type SlateRoute, type SlateInvocation, type SlateViewer,
+  SlateCallRequestSchema, SLATE_DRIVEN_MEMBERS, routeSlateCall, issuedSlateInvocation, slateCallAddress,
+  type SlateCallRequest, type SlateRoute, type SlateInvocation,
 } from './slates/surface';
 
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';

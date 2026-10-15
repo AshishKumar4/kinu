@@ -26,10 +26,10 @@ export const PAGE_ROWS = {
   home: ['workspace-title', 'agent-chats-persist'],
   welcome: ['account-settings'],
   workspaces: ['workspace-title'],
-  plugins: ['blueprint-fork'],
+  plugins: ['slate-room'],
   devices: ['device-link', 'two-machines'],
   userSettings: ['account-settings'],
-  userMcp: ['blueprint-fork'],
+  userMcp: ['slate-room'],
   workspace: ['snapshot-after-turn', 'approve-clears', 'enter-sends'],
   workspaceAgent: ['agent-tab', 'agent-chats-persist', 'agent-dismissed-chat'],
   workspaceAgentPath: ['agent-nested-chat'],
@@ -39,11 +39,9 @@ export const PAGE_ROWS = {
   drive: ['drive'],
   driveFolder: ['drive'],
   slates: ['slate'],
-  shared: ['blueprint-fork'],
-  sharedBlueprint: ['blueprint-fork'],
-  sharedLive: ['users-share'],
-  liveSlate: ['slate'],
-  liveSlatePart: ['slate'],
+  shared: ['slate-room'],
+  liveSlate: ['slate-room'],
+  liveSlatePart: ['slate-room'],
   deploy: ['deploy-door'],
   updates: { unreachable: 'the update offer answers only the deployment\'s recorded owner and 404s everyone else (updates/routes.ts), and the eval identity is not the owner' },
   connected: { unreachable: 'only a provider sign-in ends here, in a window it opened, and a deployed row signs in with a minted session, never through a provider' },
@@ -58,7 +56,7 @@ export const STRIP_ROWS = {
   Agent: ['snapshot-after-turn', 'every-tool'],
   Environment: ['sandbox-mount-write', 'sandbox-exec-output', 'device-link'],
   Activity: ['every-tool', 'codemode-craft'],
-  slate: ['slate', 'public-share', 'share-capability-cut', 'blueprint-fork', 'slate-browser'],
+  slate: ['slate', 'slate-browser'],
   preview: ['preview-address', 'slate'],
 } as const satisfies Record<(typeof SURFACES)[number] | 'Activity' | 'slate' | 'preview', Rows>;
 
@@ -67,7 +65,7 @@ export const ENTRY_ROWS = {
   tui: ['enter-sends'],
   cli: ['workspace-title', 'preview-address', 'command-refusal', 'multi-account'],
   daemon: ['device-link', 'device-join', 'two-machines', 'approve-clears'],
-  shareHost: ['public-share', 'share-capability-cut', 'users-share'],
+  slateHost: ['slate-room'],
 } as const satisfies Record<string, Rows>;
 
 /** What the owner asked a deployed proof of, beyond a page answering. */

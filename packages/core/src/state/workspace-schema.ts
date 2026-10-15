@@ -14,8 +14,6 @@ import { initActorDdl, initWorkspaceOwnershipTables } from '../identity/schema';
 import { initCodemodeStateTable } from '../identity/program-state';
 import { initSearchTables } from '../mcts/schemas';
 import { initScaffoldTables } from '../scaffold/schemas';
-import { initSlateShareTables } from '../slates/shares';
-import { initSlateLiveShareTables } from '../slates/live-shares';
 import { initWorkspaceActorTable } from '../identity/workspace-actors';
 import { initEffectTombstoneTable } from '../identity/effect-tombstones';
 import { initAgentConfigTable } from '../config/store';
@@ -154,8 +152,6 @@ function createAgentTables(db: WorkspaceSchemaSql): void {
     recorded_at INTEGER NOT NULL,
     PRIMARY KEY (slate_id, path)
   )`);
-  initSlateShareTables(execRaw);
-  initSlateLiveShareTables(execRaw);
 }
 
 export function initActorStateSchema(db: WorkspaceSchemaSql): void {

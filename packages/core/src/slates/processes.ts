@@ -175,7 +175,7 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
 
       // Only the root's build process is the durable application; shares and Plan roots are private and must never
       // attach to its facet. A block is only ever seen through its preview, so it always has one.
-      const app = source.kind === 'message' || (caller.share === undefined && caller.path.length === 0 && caller.workMode === 'build')
+      const app = source.kind === 'message' || (caller.path.length === 0 && caller.workMode === 'build')
         ? await this.ports.apps.ensure({ owner: id, preferredPort: source.project.slate.port })
         : null;
 

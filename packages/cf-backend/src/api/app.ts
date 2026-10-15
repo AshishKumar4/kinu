@@ -19,7 +19,7 @@ import { accountRoutes } from '../user/account-routes';
 import { userRoutes } from '../user/routes';
 import { deployRoutes } from '../deploy/routes';
 import { updatesRoutes } from '../updates/routes';
-import { sharedPublicRoutes, sharedRoutes } from '../shared/routes';
+import { sharedRoutes } from '../shared/routes';
 import { roomRoutes } from '../slates/room-routes';
 import { driveRoutes } from '../drive/routes';
 import { feedbackRoutes } from '../feedback/routes';
@@ -61,8 +61,6 @@ mount(cliRoutes);
 mount(deployRoutes);
 
 app.get('/api/health', async (c) => healthResponse(c.req.raw, c.env));
-
-mount(sharedPublicRoutes);
 
 mount(roomRoutes);
 

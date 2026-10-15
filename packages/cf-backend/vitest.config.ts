@@ -346,17 +346,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
-["slate-share-probe", async () => ({
-          // `SlateBinding` resolves `env.OrchestratorAgent`, so the probe class is bound under that name too.
-           ...workerCompatibility, workerLoaders: { LOADER: {} },
-          modules: probeModules('slate-share-probe.ts', probeRuntime),
-          // The egress gate's Browser Run: a session answers where its CDP socket would.
-          serviceBindings: { ASSETS: nimbusAssets, BROWSER: { name: 'slate-share-probe', entrypoint: 'FakeBrowserRun' } },
-          durableObjects: {
-            SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', useSQLite: true },
-            OrchestratorAgent: { className: 'SlateShareProbeDO', useSQLite: true },
-          },
-        })],
 ['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('delete-all-probe.ts'),
         durableObjects: { DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', useSQLite: true } } })],
 ['device-user-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('device-user-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'ZGV2aWNlLXVzZXItcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
@@ -534,7 +523,6 @@ const runnerOptions = {
           EFFECT_ATOMICITY_PROBE: { className: 'EffectAtomicityProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
-          SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', scriptName: 'slate-share-probe', useSQLite: true },
           SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', scriptName: 'slate-actor-probe', useSQLite: true },
           PLAN_ANNOUNCE_ROOT: { className: 'OrchestratorAgent', scriptName: 'plan-announce-probe', useSQLite: true },
           USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', scriptName: 'plan-announce-probe', useSQLite: true },

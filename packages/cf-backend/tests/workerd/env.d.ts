@@ -308,7 +308,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   slateImport(input: { workspace: string; owner: string; word: string; first: boolean }): Promise<string>;
   slateExports(input: { workspace: string; owner: string; entry: 'a.js' | 'b.js'; first: boolean }): Promise<string>;
   slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<{ before: string; after: string; says: string }>;
-  craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }>;
+  craftedToolInSlate(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[] }>;
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
@@ -345,30 +345,6 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
 /** Spelled flat: the recursive `JsonValue` makes the stub's serializability check exceed the instantiation budget. */
 type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; error?: string };
 
-interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
-  start(): Promise<void>;
-  authorTriage(): Promise<void>;
-  operationAs(as: 'root' | 'plan' | 'hire', input: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
-  unnamedShareCall(share: string): Promise<ProbeAnswer>;
-  previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
-  share(approved?: readonly { namespace: string; member: string }[]): Promise<ProbeAnswer>;
-  liveShares(): Promise<ProbeAnswer>;
-  importBlueprint(): Promise<{ fork: string; running: number }>;
-  viewerHop(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<string>;
-  viewerSocketAcross(
-    handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string, change: 'revoke' | 'spend',
-  ): Promise<{ before: string | null; after: string; late: string }>;
-  viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ status: number; body: string }>;
-  viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
-  viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
-  replay(share: string): Promise<ProbeAnswer>;
-  requests(share: string): Promise<ProbeAnswer>;
-  revoke(share: string): Promise<ProbeAnswer>;
-  stopped(): Promise<boolean>;
-  drive(session: string): Promise<string>;
-  typed(say: string, via?: 'stream' | 'ask'): Promise<string>;
-  driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
-}
 
 
 /** Declared, not imported: the probe compiles under the production project. */
@@ -460,7 +436,6 @@ declare global {
       EFFECT_ATOMICITY_PROBE: DurableObjectNamespace<EffectAtomicityProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeRpc>;
-      SLATE_SHARE_PROBE: DurableObjectNamespace<SlateShareProbeRpc>;
       SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
