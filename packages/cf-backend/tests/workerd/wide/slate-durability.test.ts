@@ -398,35 +398,46 @@ function readable(screen: string): string {
 
 // Production (the owner, 2026-10-14; Nimbus ask 57): each reattach recorded its own replay and a new prompt into the
 // scrollback, so the prompts on screen doubled per attach (2, 4 … 128 on staging 0e094da7d) and a resume's notice repeated.
-it('a reattached terminal shows its screen as it was: no copy of it, no extra prompt, its notice once', async () => {
-  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('reattach'));
-  const workspace = 'durability-reattach';
-  await subject().serveSlate({ workspace, owner: 'durability-owner', id: 'beside-reattach', body: 'served' });
+/** A workspace's terminal, a line run in it, and the screen a pane attaching then is shown. */
+async function settledTerminal(name: string) {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName(name));
+  const workspace = `durability-${name}`;
+
+  await subject().serveSlate({ workspace, owner: 'durability-owner', id: `beside-${name}`, body: 'served' });
   await subject().typeToPrompt(workspace, 'echo ready-$((40+2))', 'ready-42');
 
+  return { subject, workspace };
+}
+
+it('a terminal attached again and again with no input shows the same screen, byte for byte', async () => {
+  const { subject, workspace } = await settledTerminal('reattach-same');
   const screens: string[] = [];
 
   for (let attach = 0; attach < 4; attach += 1) screens.push((await subject().reattachTerminal(workspace)).output);
-  // N attaches with no input leave the same screen, byte for byte.
   expect(new Set(screens).size, screens.map((screen) => JSON.stringify(screen.slice(-160))).join('\n')).toBe(1);
+});
 
-  // A typed line adds exactly itself, its output and one prompt.
-  const before = screens[0] ?? '';
+it('a line typed between attaches adds exactly itself, its output and one prompt', async () => {
+  const { subject, workspace } = await settledTerminal('reattach-typed');
+  const before = (await subject().reattachTerminal(workspace)).output;
   const lastPrompt = before.slice(before.lastIndexOf('\u001b]133;A\u0007'));
 
   await subject().typeToPrompt(workspace, 'echo hi', 'hi\r\n');
   const after = (await subject().reattachTerminal(workspace)).output;
+
   expect(after.startsWith(before)).toBe(true);
   expect(readable(after.slice(before.length))).toBe(`echo hi\nhi\n${readable(lastPrompt)}`);
+});
 
-  // After the object restarts, its notice is said once, however often a pane attaches.
+it("after its object restarts, a terminal's notice is said once however often a pane attaches", async () => {
+  const { subject, workspace } = await settledTerminal('reattach-notice');
+
   await abortAllDurableObjects();
-  const notice = 'Runtime resumed';
 
   for (let attach = 0; attach < 4; attach += 1) {
     const screen = (await subject().reattachTerminal(workspace)).output;
 
-    expect(screen.split(notice).length - 1).toBe(1);
+    expect(screen.split('Runtime resumed').length - 1, `attach ${String(attach + 1)}`).toBe(1);
   }
 });
 
