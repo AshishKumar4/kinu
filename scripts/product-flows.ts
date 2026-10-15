@@ -2722,10 +2722,13 @@ const SHOWN_SCREEN = `${SHOWN_TERMINAL}?.closest('.xterm')?.querySelector('.xter
 
 /** Clicks the shown terminal's screen as a person does, so what is typed next reaches that terminal. */
 async function clickShownTerminal(page: Page): Promise<void> {
-  const screen = (await page.evaluateHandle(SHOWN_SCREEN)).asElement();
+  const middle = v.parse(v.nullable(v.object({ x: v.number(), y: v.number() })), await page.evaluate(`(() => {
+    const box = ${SHOWN_SCREEN}?.getBoundingClientRect();
+    return box === undefined ? null : { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  })()`));
 
-  if (screen === null) throw new Error('no terminal shown to type into');
-  await screen.click();
+  if (middle === null) throw new Error('no terminal shown to type into');
+  await page.mouse.click(middle.x, middle.y);
 }
 
 /** The desktop's client document, marked so a reopened one is told apart from the one left. */
