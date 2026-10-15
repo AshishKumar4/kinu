@@ -316,7 +316,7 @@ export type RoomCall = v.InferOutput<typeof RoomCallSchema>;
 
 /** A refusal in the room's words, with a code the UI can act on. */
 export const RoomRefusalSchema = v.object({
-  reason: v.picklist(['denied', 'missing', 'bad_input', 'conflict'] as const),
+  reason: v.picklist(['denied', 'missing', 'bad_input', 'unavailable'] as const),
   message: v.string(),
 });
 

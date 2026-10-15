@@ -40,3 +40,14 @@ export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type
 export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, type ViewerRun } from './share-viewers';
 
 export { SlateController, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
+
+export {
+  RoomCaretaker, initSlateRoomTables, codecAdmits, codecIsFree,
+  type Access, type Cell, type Codec, type Grant, type PendingEffect, type RoomCaretakerDeps, type RoomMember, type RoomRecord,
+  type Run, type SecretSighting, type Session, type ToolVerdict,
+} from './room/caretaker';
+
+export {
+  audienceFlows, canRead, canonicalRoot, covers, dedup, flows, hidden, mayRead, observers, sameElem, sameTag, showsElem, within,
+  type Audience, type Elem, type LabelFacts, type Show, type Tag,
+} from './room/labels';
