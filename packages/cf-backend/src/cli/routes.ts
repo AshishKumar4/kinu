@@ -642,6 +642,8 @@ NO_SETUP=0
 CONNECT=0
 CONNECT_LABEL=""
 CONNECT_DEVICE=""
+CONNECT_JOIN=""
+CONNECT_ROOT=""
 UNINSTALL=0
 PURGE=0
 
@@ -662,6 +664,18 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -gt 0 ] || { echo "--device requires a value" >&2; exit 2; }
       CONNECT=1
       CONNECT_DEVICE="$1"
+      ;;
+    --join)
+      shift
+      [ "$#" -gt 0 ] || { echo "--join requires a value" >&2; exit 2; }
+      CONNECT=1
+      CONNECT_JOIN="$1"
+      ;;
+    --root)
+      shift
+      [ "$#" -gt 0 ] || { echo "--root requires a value" >&2; exit 2; }
+      CONNECT=1
+      CONNECT_ROOT="$1"
       ;;
     --origin)
       shift
@@ -743,10 +757,13 @@ run_connect_if_requested() {
   set -- connect
   if [ -n "$CONNECT_LABEL" ]; then set -- "$@" --label "$CONNECT_LABEL"; fi
   if [ -n "$CONNECT_DEVICE" ]; then set -- "$@" --device "$CONNECT_DEVICE"; fi
+  if [ -n "$CONNECT_JOIN" ]; then set -- "$@" --join "$CONNECT_JOIN"; fi
+  if [ -n "$CONNECT_ROOT" ]; then set -- "$@" --root "$CONNECT_ROOT"; fi
+  # The machine joins the deployment that served this script, not the CLI's default.
   if has_tty; then
-    run_on_tty "$BIN_PATH" "$@"
+    run_on_tty env KINU_ORIGIN="$KINU_ORIGIN" "$BIN_PATH" "$@"
   else
-    KINU_HOME="$KINU_HOME" "$BIN_PATH" "$@"
+    KINU_HOME="$KINU_HOME" KINU_ORIGIN="$KINU_ORIGIN" "$BIN_PATH" "$@"
   fi
 }
 

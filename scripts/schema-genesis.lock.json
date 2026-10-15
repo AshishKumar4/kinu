@@ -647,6 +647,8 @@
   ],
   "device_joins@packages/core/src/state/user-schema.ts": [
     "device_id TEXT PRIMARY KEY",
+    "ticket_hash TEXT NOT NULL UNIQUE",
+    "workspace TEXT",
     "expires_at INTEGER NOT NULL"
   ],
   "device_notice_pending@packages/core/src/state/user-schema.ts": [

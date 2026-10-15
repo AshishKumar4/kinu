@@ -118,7 +118,10 @@ export class UserDO extends Agent<Env> {
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
 
-  private readonly devices = new UserDevices({ ...this.host, chatgptSignIns: () => this.chatgpt.chatgptSignIns() });
+  private readonly devices = new UserDevices({
+    ...this.host, chatgptSignIns: () => this.chatgpt.chatgptSignIns(), accountName: () => this.name,
+    workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name),
+  });
 
   private readonly chatgpt = new UserChatGptSignIn({ ...this.host, devices: this.devices, vault: this.credentials });
 
@@ -606,8 +609,12 @@ export class UserDO extends Agent<Env> {
     return this.terminals.openDeviceTerminal(caller, agentName, window, deviceId);
   }
 
-  issueDeviceJoin(caller: UserCaller): ReturnType<UserDevices['issueDeviceJoin']> {
-    return this.devices.issueDeviceJoin(caller);
+  issueDeviceJoin(caller: UserCaller, workspace: string | null): ReturnType<UserDevices['issueDeviceJoin']> {
+    return this.devices.issueDeviceJoin(caller, workspace);
+  }
+
+  joinDevice(caller: UserCaller, ticket: string, label?: string, replaces?: string): ReturnType<UserDevices['joinDevice']> {
+    return this.devices.joinDevice(caller, ticket, label, replaces);
   }
 
   registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): ReturnType<UserDevices['registerDevice']> {
@@ -676,6 +683,10 @@ export class UserDO extends Agent<Env> {
 
   listDeviceConsents(caller: UserCaller): ReturnType<UserDevices['listDeviceConsents']> {
     return this.devices.listDeviceConsents(caller);
+  }
+
+  grantDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserDevices['grantDeviceConsent']> {
+    return this.devices.grantDeviceConsent(caller, agentName, deviceId);
   }
 
   revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserDevices['revokeDeviceConsent']> {

@@ -96,6 +96,7 @@ export const FIRST_RUN_CASES = [
   'users-share',
   'drive',
   'device-link',
+  'device-join',
   'background-settle',
   'background-wake',
   'delegation',
@@ -361,6 +362,19 @@ export const FIRST_RUN_DEFECTS = {
       + 'through the redial gap. Green requires the link to hold the whole 50 s window, a '
       + 'command to reach the machine through a `once` consent answer, and revoke to end the '
       + 'socket and the credential.',
+  },
+  'device-join': {
+    id: 'device-join',
+    found: 'The command Environment → Connect device hands out installed the CLI, then printed "Not signed in. Starting '
+      + 'Kinu sign-in…" and waited on a device-code page, though the owner was signed in to the browser that issued it: '
+      + 'the command carried the device it named and no authority. The device it registered was rooted at /tmp, the '
+      + 'directory it ran in.',
+    missedBecause: 'every device row registers its machine through the CLI\'s own POST /api/cli/devices with a bearer the '
+      + 'tier already holds, so no row ran the command a person is given.',
+    provedRedAt: '0e094da7d',
+    redDirection: 'RED against staging serving 0e094da7d on 2026-10-14: the issued command, run in a fresh home under a '
+      + 'terminal, asked for a sign-in instead of linking. Green requires it to link with no sign-in, the device to read '
+      + 'connected, the issuing workspace to hold it as allow, and device.json to root it at the machine\'s home.',
   },
   'background-settle': {
     id: 'background-settle',
@@ -782,6 +796,7 @@ const SHORT_SUBJECT = {
   'users-share': 'named',
   'drive': 'drive',
   'device-link': 'link',
+  'device-join': 'join',
   'background-settle': 'wake',
   'background-wake': 'bgwake',
   'delegation': 'deleg',

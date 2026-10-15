@@ -321,6 +321,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     renameDevice: refuse('renameDevice'),
     listDeviceConsents: refuse('listDeviceConsents'),
     setDeviceTier: refuse('setDeviceTier'),
+    grantDeviceConsent: refuse('grantDeviceConsent'),
     revokeDeviceConsent: refuse('revokeDeviceConsent'),
     listCredentials: refuse('listCredentials'),
     setCredential: refuse('setCredential'),
