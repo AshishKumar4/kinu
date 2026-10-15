@@ -38,6 +38,8 @@ function account(holds: readonly string[]) {
           return holds.includes(name);
         },
         async ensureWorkspaceCapability() {},
+        // The page's shell names the account's theme; this account chose none.
+        async getConfig() { return null; },
       }),
     },
     OrchestratorAgent: { idFromName: (name: string) => name, get: (name: string) => workspace(name) },

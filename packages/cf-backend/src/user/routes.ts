@@ -6,10 +6,9 @@ import { ROSTER_SOCKET_PATH } from './roster';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { pictureKey, type PictureBucket } from '../slates/pictures';
 import { SlateDirectoryName } from '@kinu.run/core/slates';
-import { PROFILE_CATALOG_CONFIG_KEY, themeNamed } from '@kinu.run/core';
+import { PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
-import { THEME_CHOICES, THEME_CONFIG_KEY } from '../account-theme';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, authoredRefusal, toKinuError, settle, type KinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
@@ -496,7 +495,7 @@ userRoutes.put('/api/user/config/:key', async (c) => {
     return err(400, `${SANDBOX_SIZE_CONFIG_KEY} must be one of ${BOX_SIZE_ORDER.join(', ')}.`);
   }
 
-  if (c.get('key') === THEME_CONFIG_KEY && themeNamed(body.value) === null) return err(400, `${THEME_CONFIG_KEY} must be one of ${THEME_CHOICES}.`);
+  if (c.get('key') === THEME_CONFIG_KEY && themeNamed(body.value) === null) return err(400, `${THEME_CONFIG_KEY} must be one of ${THEME_NAMES.join(', ')}.`);
 
   await c.get('stub').setConfig(c.get('owner'), c.get('key'), body.value);
 

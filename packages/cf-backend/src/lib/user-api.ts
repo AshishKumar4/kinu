@@ -26,9 +26,8 @@ import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { ApiError, request } from './http';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
-import type { ThemeName } from '@kinu.run/core';
+import { THEME_CONFIG_KEY, type ThemeName } from '@kinu.run/core';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
-import { THEME_CONFIG_KEY } from '../account-theme';
 
 export type UserProfile = NonNullable<v.InferOutput<typeof AccountProfileSchema>>;
 

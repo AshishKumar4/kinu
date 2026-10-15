@@ -40,8 +40,7 @@ import {
 } from "./auth/session";
 import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
-import { ownerCaller } from "@kinu.run/core";
-import { accountTheme, THEME_CONFIG_KEY } from "./account-theme";
+import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { ownedWorkspace } from "./api/workspace";
 import { err } from "@kinu.run/core";
@@ -312,12 +311,21 @@ function mount<Bindings extends object, Variables extends object>(
 
 const appShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env);
 
-/** Behind sign-in: the page names the account's theme, so it paints in it on any device it opens on. */
+/**
+ * Behind sign-in: the page names the account's theme, so it paints in it on any device it opens on. The theme is only
+ * a look: a read that fails is logged and the page is served in the default, never refused.
+ */
 const accountShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env, {
   theme: async () => {
-    const account = c.env.UserDO.get(c.env.UserDO.idFromName(c.get('identity').userId));
+    let theme: ThemeName = DEFAULT_THEME;
 
-    return accountTheme(await account.getConfig(await ownerCaller(c.env), THEME_CONFIG_KEY));
+    await settleLogged('app.theme_read_failed', { doing: "reading the account's theme for its page", otherwise: 'unavailable' }, async () => {
+      const account = c.env.UserDO.get(c.env.UserDO.idFromName(c.get('identity').userId));
+
+      theme = accountTheme(await account.getConfig(await ownerCaller(c.env), THEME_CONFIG_KEY));
+    });
+
+    return theme;
   },
 });
 

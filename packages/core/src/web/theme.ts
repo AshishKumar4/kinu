@@ -19,6 +19,14 @@ export function themeNamed(value: string | null | undefined): ThemeName | null {
   return THEME_NAMES.find((name) => name === value) ?? null;
 }
 
+/** The user config row an account's theme is kept in; the server names it on every page it serves the account. */
+export const THEME_CONFIG_KEY = 'theme';
+
+/** A stored value the table names; the default for no choice or any other. */
+export function accountTheme(stored: string | null): ThemeName {
+  return themeNamed(stored) ?? DEFAULT_THEME;
+}
+
 export type ColourToken =
   | '--c-recessed' | '--c-bg' | '--c-sidebar' | '--c-surface' | '--c-elevated' | '--c-fill' | '--c-overlay'
   | '--c-border' | '--c-border-strong' | '--c-input-border' | '--c-dash'

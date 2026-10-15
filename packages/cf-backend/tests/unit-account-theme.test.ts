@@ -14,16 +14,20 @@ const EMAIL = 'owner@example.com';
 /** The client build's shell: what the assets service answers for any page. */
 const SHELL = '<!doctype html><html lang="en"><head></head><body><div id="root"></div></body></html>';
 
-/** The signed-in owner on this machine, through the Worker's own entry: the dev identity stands for the browser. */
-async function account() {
+/**
+ * The signed-in owner on this machine, through the Worker's own entry: the dev identity stands for the browser. With
+ * `unreadable`, the account's store fails every config read, as an unreachable object does.
+ */
+async function account(unreadable = false) {
   const harness = createTestUserDO({ durableObjectId: await accountIdFor({}, EMAIL) });
   const env: Partial<Env> = {};
+  const store = unreadable ? Object.assign(Object.create(harness.userDO), { getConfig: async () => { throw new Error('the account object is unreachable'); } }) : harness.userDO;
 
   Object.assign(env, {
     AUTH_KV: makeKv(),
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     DEV_USER_EMAIL: EMAIL,
-    UserDO: { idFromName: (name: string) => name, get: () => harness.userDO },
+    UserDO: { idFromName: (name: string) => name, get: () => store },
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     ASSETS: { fetch: async () => new Response(SHELL, { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
   });
@@ -32,17 +36,21 @@ async function account() {
   // identity signs the request in.
   const fetch = async (path: string, init: RequestInit = {}) => worker.fetch(new Request(`http://localhost${path}`, init), env as Env, workerContext());
 
+  const owner = async (path: string): Promise<{ status: number; theme: string | null }> => {
+    let theme: string | null = null;
+    const answer = await fetch(path, { headers: { accept: 'text/html' } });
+
+    await new HTMLRewriter().on('html', { element(element) { theme = element.getAttribute('data-theme'); } }).transform(answer).text();
+
+    return { status: answer.status, theme };
+  };
+
   return {
     harness,
     /** The theme a page's root names, or null for none. */
-    page: async (path: string): Promise<string | null> => {
-      let theme: string | null = null;
-      const answer = await fetch(path, { headers: { accept: 'text/html' } });
-
-      await new HTMLRewriter().on('html', { element(element) { theme = element.getAttribute('data-theme'); } }).transform(answer).text();
-
-      return theme;
-    },
+    page: async (path: string): Promise<string | null> => (await owner(path)).theme,
+    /** A page's status and the theme its root names. */
+    answer: async (path: string) => owner(path),
     choose: async (value: string) => (await fetch('/api/user/config/theme', {
       method: 'PUT', headers: { 'content-type': 'application/json', origin: 'http://localhost' }, body: JSON.stringify({ value }),
     })).status,
@@ -65,6 +73,13 @@ describe("the account's theme", () => {
     await owner.choose('warm');
 
     expect({ refused: await owner.choose('sepia'), worn: await owner.page('/user/settings') }).toEqual({ refused: 400, worn: 'warm' });
+    owner.harness.close();
+  });
+
+  test("a page whose account cannot be read is still served, in the default theme", async () => {
+    const owner = await account(true);
+
+    expect(await owner.answer('/user/settings')).toEqual({ status: 200, theme: 'graphite' });
     owner.harness.close();
   });
 
