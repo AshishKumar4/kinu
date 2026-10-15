@@ -18,15 +18,16 @@
  * refuses a tier outside its vocabulary, answers 404 for a machine it does not
  * know, and the per-workspace consent-tier route is gone.
  *
- * NO CLOCK. The card is awaited on the broadcast the chat renders it from, and
- * each turn settles on its own done frame.
+ * NO CLOCK. The card is awaited on the broadcast the chat renders it from,
+ * each turn settles on its own done frame, and the run the owner's answer woke
+ * on its own end.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import { infraBoundary, scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { webHeaders } from '../../evals/src/workspace-roster';
 import { ORCHESTRATOR_AGENT_SLUG, type JsonValue, type RunEvent } from '../../packages/core/src/index';
-import type { DeviceAccount } from './device-session';
+import { consentWakeEnded, type DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, type AttachedMachine } from './daemon';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { openPublicSocket } from './public-socket';
@@ -54,9 +55,6 @@ const MACHINE = 'kinu-first-run-consent';
 
 /** The broadcast the chat renders a consent card from (the orchestrator's `consents` announce). */
 const CONSENT_REQUESTED = 'device_consent';
-
-/** A turn that does nothing, sent so the turn before it has ended when the case reads what it did. */
-const DRAIN_ASK = 'The machine check is finished. Reply with only OK. Do not run commands or use tools.';
 
 /** What the refusal names when no machine is connected: where the owner connects one. */
 const CONNECT_PROMPT = 'kinu connect';
@@ -200,15 +198,17 @@ describe(SUITE, () => {
             held.machine = machine;
 
             const raised = socket.broadcast(CONSENT_REQUESTED);
+            const closed = socket.turnClosed();
             const turn = session.prompt(ASK);
             // A turn that ends first raised no card; one that fails fails the case.
             const cardShown = await Promise.race([raised, turn.then(() => false)]);
             const card = cardShown ? (await session.pendingConsents()).find((pending) => pending.deviceId === machine.deviceId) : undefined;
             const decided = card === undefined ? null : await session.resolveConsent(card.consentId, 'once');
             await turn;
+
             // The call parked NOT RUN, and the answer woke the agent, which re-issues it once (the park-and-wake contract,
-            // c66751bf2): a turn of the case's own, queued behind the woken one, so the re-issue has run when it is read.
-            await session.prompt(DRAIN_ASK);
+            // c66751bf2): what it ran is read once that run has ended.
+            if (card !== undefined) await consentWakeEnded(session, socket, closed);
 
             subgoals.push({
               what: 'consent-requested',
