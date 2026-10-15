@@ -17,20 +17,30 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { ORCHESTRATOR_AGENT_SLUG, type JsonValue } from '../../packages/core/src/index';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 import { PANES_ASK as ASK, PANES_PROBE as PROBE } from './asks';
 
 const SUITE = 'First-run · workspace-panes';
 
-const CASE = 'workspace-panes' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The Diffs and Supervise panes (Supervise since removed) read a workspace\'s review baseline, run list and '
+    + 'triggers, and no deployed row asked any of them anything.',
+  missedBecause: 'the rows that write files read them back through the Files pane and the ledger, so a '
+    + 'baseline that stopped seeing a write or a run list that lost a settled turn '
+    + 'passed them all.',
+  provedRedAt: null,
+  redDirection: 'Planted on a loopback `vite dev` build of this tree: a review diff that reports no files '
+    + 'leaves `diff-shows-the-write` missed.',
+};
 
 /** The agent's own executor, which the Changes pane opens on. */
 const WORKSPACE_EXECUTOR = 'workspace';
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'panes');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -69,6 +79,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       genesis: false,
       purpose: 'A terse assistant that does the one thing asked and reports it in one line.',
@@ -135,4 +146,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

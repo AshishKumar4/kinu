@@ -1,10 +1,18 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation } from '@kinu.run/test-utils';
-import { FIRST_RUN_DEFECTS, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
 
-const CASE = 'preview-address';
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Production admitted a workspace name whose length prevented every workspace preview URL.',
+  missedBecause: 'Creation tests used short names; preview-only tests refused the long name after the unusable workspace already existed.',
+  provedRedAt: '4d119fec2',
+  redDirection: 'Non-model CLI creation must reject a fresh 32-character address with the 31-character limit, while a fresh 31-character address must serve actual preview HTTP.',
+};
 
 const SUITE = 'First-run · preview-address (CLI operator, no model)';
 
@@ -22,7 +30,7 @@ describe(SUITE, () => {
   test.skipIf(PLAN === null)('MEASURED: preview-address', async () => {
     if (PLAN === null) throw new Error('Explicit operator plan required');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false, purpose: 'Disposable preview address admission verification; no model task.',
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false, purpose: 'Disposable preview address admission verification; no model task.',
       async run({ session }) {
         const suffix = crypto.randomUUID().replaceAll('-', '');
         const longName = 'first-run-address-' + suffix.slice(0, 14);
@@ -62,5 +70,3 @@ END`]));
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

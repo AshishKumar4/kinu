@@ -22,13 +22,26 @@ import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } fro
 import { JOB_OUTPUT_EVENT, JobOutputFrameSchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT } from '../../packages/core/src/index';
 import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, type AttachedMachine } from './daemon';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { openPublicSocket, type HeardBroadcast, type PublicSocket } from './public-socket';
 import { DEVICE_JOB_ASK as ASK, DEVICE_JOB_COMMAND, DEVICE_JOB_TICKS } from './asks';
 
 const SUITE = 'First-run · device-job-output';
 
-const CASE = 'device-job-output' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: '2026-10-02: a command on the owner\'s machine that outlasted its call\'s foreground window became a job '
+    + 'whose output reached the workspace only as its settled result, so a build that ran for minutes showed nothing.',
+  missedBecause: 'machine-consent and two-machines run `hostname`, which answers inside the window, so no device '
+    + 'job ever formed; the device suites drive the daemon, the hub and the tunnel in-process against doubles.',
+  provedRedAt: null,
+  redDirection: 'Run on a loopback `vite dev` build of this tree with the daemon from 0be36f6fa^, before the device '
+    + 'leg streamed: the job reads completed with all 45 ticks in its result, but no job_output frame arrives, so '
+    + '`frames-in-order`, `every-tick-heard` and `heard-before-settle` are missed; the current daemon reaches all five '
+    + 'with 15 frames.',
+};
 
 const MACHINE = 'kinu-first-run-devjob';
 
@@ -38,7 +51,7 @@ const CONSENT_REQUESTED = 'device_consent';
 /** The jobs read the Work tab lists from, and the one its `reads_changed` names. */
 const JOBS_READ = 'listBackgroundJobs';
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'devjob');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -112,6 +125,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         modelCalls: 'expected',
         genesis: false,
         purpose: 'An assistant that runs long commands on the owner\'s own machine when asked to.',
@@ -199,4 +213,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

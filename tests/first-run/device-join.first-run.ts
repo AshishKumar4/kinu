@@ -25,11 +25,25 @@ import { webHeaders } from '../../evals/src/workspace-roster';
 import type { JsonValue } from '../../packages/core/src/index';
 import type { DeviceAccount } from './device-session';
 import { detachMachine, readDaemonLogTail } from './daemon';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · device-join';
 
-const CASE = 'device-join' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The command Environment → Connect device hands out installed the CLI, then printed "Not signed in. Starting '
+    + 'Kinu sign-in…" and waited on a device-code page, though the owner was signed in to the browser that issued it: '
+    + 'the command carried the device it named and no authority. The device it registered was rooted at /tmp, the '
+    + 'directory it ran in.',
+  missedBecause: 'every device row registers its machine through the CLI\'s own POST /api/cli/devices with a bearer the '
+    + 'tier already holds, so no row ran the command a person is given.',
+  provedRedAt: '0e094da7d',
+  redDirection: 'RED against staging serving 0e094da7d on 2026-10-14: the issued command, run in a fresh home under a '
+    + 'terminal, asked for a sign-in instead of linking. Green requires it to link with no sign-in, the device to read '
+    + 'connected, the issuing workspace to hold it as allow, and device.json to root it at the machine\'s home.',
+};
 
 /** The name the command links this machine under. */
 const MACHINE = 'kinu-first-run-join';
@@ -43,7 +57,7 @@ const SIGN_IN = 'Not signed in';
 /** The question the command asks before it links anything. */
 const CONFIRM = 'Link and start the daemon?';
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'join');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -228,6 +242,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         modelCalls: 'none',
         genesis: false,
         purpose: 'A workspace whose owner connects a machine from its Environment.',
@@ -275,4 +290,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

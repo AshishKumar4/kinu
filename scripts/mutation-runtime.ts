@@ -7,8 +7,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { gitIn } from '../packages/test-utils/src/git-env';
 import { moduleSpecifiers, parse } from './syntax';
+import { REPO_ROOT as root } from './repo-root';
 
-export const root = new URL('..', import.meta.url).pathname;
 
 /**
  * Refuse to run anywhere a concurrent reader could load a mutant.

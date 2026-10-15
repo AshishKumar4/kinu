@@ -13,13 +13,28 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import { firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · snapshot-after-turn';
 
-const CASE = 'snapshot-after-turn' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'After the first answer, the workspace would not open: "Couldn\'t open this workspace. '
+    + 'SQL query failed: no such column: actor_id", and the composer showed no model beside a '
+    + 'turn that had just run.',
+  missedBecause: 'the transcript table is the Agents SDK\'s, created and written by Think with no '
+    + 'actor column, and Kinu read it with one. Every suite built the table from Kinu\'s own '
+    + 'copy of the DDL, so the reads were never run over the shape the deployment has; nothing '
+    + 'sent a turn through the product and then made the read the web app makes on open.',
+  provedRedAt: 'cc82601c4',
+  redDirection: 'one real turn over the public socket, then `getWorkspaceSnapshot` as the web app '
+    + 'calls it: it must answer, count both messages, and name a model. RED at cc82601c4 on the '
+    + 'first of the three.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'snapshot');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -33,6 +48,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A terse assistant. Reply with one short line and use no tools.',
       async run({ session }) {

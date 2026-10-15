@@ -27,8 +27,8 @@ import {
 import type { JsonValue, PairedOutcome, Usage } from '../packages/core/src/index';
 import { openRunRetention, resolveArtifactRoot } from './bench-retention';
 import { parseArgv } from './bench';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 /** Only the fields a score depends on. Harbor's `result.json` carries far more;
  *  a loose parse here would let a schema change quietly redefine the number. */

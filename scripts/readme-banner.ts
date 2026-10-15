@@ -10,8 +10,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DEFAULT_THEME, mark, THEME_TOKENS, type Mode } from '@kinu.run/core';
 import { withTestChrome } from './test-chrome';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = join(import.meta.dir, '..');
 
 const FONTS = join(REPO, 'packages', 'cf-backend', 'public', 'assets', 'fonts');
 

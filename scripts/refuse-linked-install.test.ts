@@ -16,8 +16,8 @@ import {
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { childEnv, runToExit, scratchDir } from '@kinu.run/test-utils';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = join(import.meta.dir, '..');
 
 /** What an install reads of this tree before it resolves anything: the config
  *  naming the scanner, the scanner, and the program the root `preinstall` runs. */

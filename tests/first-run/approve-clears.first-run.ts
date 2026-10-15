@@ -45,13 +45,24 @@ import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine 
 import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
 import { openBrowser, signedInPage } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · approve-clears';
 
-const CASE = 'approve-clears' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Approving the parked commands re-ticked every checkbox instead of clearing them, so '
+    + 'the queue looked like it had refilled itself.',
+  missedBecause: 'the queue\'s own tests drive the RPC and the read model, where the decided '
+    + 'row does disappear. Nothing clicked the button, and the re-tick is in the component: '
+    + 'selection is `null`-means-everything and the decision resets it to `null`.',
+  provedRedAt: null,
+  redDirection: 'both halves are asserted — the RPC half (the decided row is gone and the '
+    + 'approved command then runs) and the UI half (no checkbox is left checked after the '
+    + 'click). The UI half is the one that was red by hand.',
+};
 
 /** The machine this case attaches. One is enough: the subject is the queue, and
  *  the fleet is the next case's subject. */
@@ -63,7 +74,7 @@ const MACHINE = 'kinu-first-run-approve';
  *  once it has shown anything. */
 const PAINT_MS = 30_000;
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'approve');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -90,6 +101,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         modelCalls: 'expected',
         purpose: 'A careful assistant working on the owner\'s own machine.',
         async run({ session }) {
@@ -361,5 +373,3 @@ async function countBoxes(page: Page, command: string): Promise<{ boxes: number;
     return { boxes: boxes.length, checked: boxes.filter((box) => box.checked).length };
   });
 }
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

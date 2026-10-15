@@ -30,8 +30,8 @@ import { declaredSettings } from './browser-declarations';
 import { signalGroup } from './process-group';
 import { withTestChrome } from './test-chrome';
 import { devPreviewTlsDir } from '../packages/cf-backend/vite-preview-zone';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = join(import.meta.dirname, '..');
 
 const CF = join(REPO, 'packages', 'cf-backend');
 

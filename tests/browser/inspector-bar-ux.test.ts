@@ -9,7 +9,7 @@ import type { ElementHandle, Page } from 'puppeteer';
 import { detach } from '@kinu.run/core/obs';
 import { DESKTOP_CLIENT_ROOT } from '../../packages/core/src/http/desktop-client';
 import { withGallery } from '../../scripts/gallery-harness';
-import { openInspectorPage, sessionLine } from '../../scripts/product-flows';
+import { openInspectorPage, sessionLine } from '../../scripts/browser-page';
 
 declare global {
   interface Window {

@@ -26,12 +26,12 @@ import { FAILURE_SURFACES, failureSurface } from '../tools/oxlint/anti-slop/rule
 
 import { assertMeasured, finding, refuseLock, shrinkOnly, type LockRefusal, type LockedNumber } from './gate-ratchet';
 import { readSources } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   declaredName, functionOwner, identifierCalleeName, isFunctionLike, literalString, memberCalleeName, parse, superClassName, walk,
   type SyntaxNode,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/error-model.lock.json`;
 

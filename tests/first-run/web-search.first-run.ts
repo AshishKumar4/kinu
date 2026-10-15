@@ -19,16 +19,27 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import type { JsonValue, RunEvent } from '../../packages/core/src/index';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { SEARCH_ASK as ASK } from './asks';
 
 const SUITE = 'First-run · web-search';
 
-const CASE = 'web-search' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The owner asked for an end-to-end pass of the web search capability, and no deployed row '
+    + 'ever asked the agent to search: `every-tool` fetches the product\'s own health route.',
+  missedBecause: 'the search provider (Tavily with a key, DuckDuckGo without) is unit-tested over '
+    + 'fixture pages, so a provider the deployment cannot reach, or a layout it no longer parses, '
+    + 'is invisible until a user asks the agent to look something up.',
+  provedRedAt: 'b220f59f8',
+  redDirection: 'RED on the deployed build: DuckDuckGo answers the Worker 522 or rate-limits it, so every '
+    + 'search fails; it stays red until the search provider serves Worker egress. Also planted on '
+    + 'loopback `vite dev`: an endpoint that does not answer leaves `searched` and `results-returned` missed.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'search');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -68,6 +79,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       genesis: false,
       purpose: 'A terse assistant that uses the tool it is asked to use and reports the result in one line.',
@@ -119,4 +131,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

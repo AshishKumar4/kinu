@@ -16,8 +16,8 @@ import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from '.
 import { drainArmadaProgress } from './armada-progress';
 import { LOCAL_CHECK, processEvals } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
+import { REPO_ROOT as ROOT } from './repo-root';
 
-const ROOT = join(import.meta.dirname, '..');
 
 /** Keep each cell's whole matrix for trialSlot: selection does not renumber its account. */
 export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, origins: readonly { leg: 'candidate' | 'baseline'; origin: string }[], pass: boolean): TrialItem[] {

@@ -59,8 +59,8 @@ import {
   RAW_NODE_MODULE,
 } from '../tools/oxlint/anti-slop/rules/require-runtime-import-extension.ts';
 import * as v from 'valibot';
+import { REPO_ROOT } from './repo-root.ts';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** Backend and core product code. */
 const PRODUCT_SOURCE = /^packages\/[^/]+\/src\/.+\.tsx?$/;
@@ -193,7 +193,7 @@ export function ignoredFilesUnder(repoRoot: string, directory: string): string[]
 /** Every file in this repository a gate may hold to a standard, memoised over
  *  the repository this module sits in. */
 export function trackedFiles(): readonly string[] {
-  enumerated ??= enumerateRepository(root).files;
+  enumerated ??= enumerateRepository(REPO_ROOT).files;
 
   return enumerated;
 }
@@ -220,7 +220,7 @@ export function workspaceScope(): string {
 
   for (const file of trackedFiles()) {
     if (!/^packages\/[^/]+\/package\.json$/.test(file) || file === 'packages/agent-core/package.json') continue;
-    const { name } = v.parse(PackageNameSchema, JSON.parse(readRepositoryFile(root, file)));
+    const { name } = v.parse(PackageNameSchema, JSON.parse(readRepositoryFile(REPO_ROOT, file)));
 
     if (name === undefined || !name.startsWith('@')) continue;
     found.add(name.slice(0, name.indexOf('/')));
@@ -393,7 +393,7 @@ let lintIgnoreRoots: readonly string[] | undefined;
 /** The exact literal-root policy that the live Oxlint invocation applies. */
 export function isLintSource(file: string): boolean {
   if (!isParseable(file)) return false;
-  lintIgnoreRoots ??= v.parse(LintConfigSchema, JSON.parse(readRepositoryFile(root, '.oxlintrc.json'))).ignorePatterns;
+  lintIgnoreRoots ??= v.parse(LintConfigSchema, JSON.parse(readRepositoryFile(REPO_ROOT, '.oxlintrc.json'))).ignorePatterns;
 
   return !lintIgnoreRoots.some(ignored => file === ignored || file.startsWith(`${ignored}/`));
 }
@@ -493,7 +493,7 @@ export function readRepositoryFile(repoRoot: string, file: string): string {
 export function readMatching(predicate: (file: string) => boolean): Map<string, string> {
   const files = trackedFiles().filter(predicate);
 
-  return new Map(files.map((f) => [f, readRepositoryFile(root, f)]));
+  return new Map(files.map((f) => [f, readRepositoryFile(REPO_ROOT, f)]));
 }
 
 /** Product source: the files a gate holds to the standard. */

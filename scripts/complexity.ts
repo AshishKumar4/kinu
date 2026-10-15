@@ -93,9 +93,9 @@ import {
   type LockedNumber, type LockRefusal,
 } from './gate-ratchet';
 import { isParseable, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { declaredName, parse, type SyntaxNode } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/complexity.lock.json`;
 

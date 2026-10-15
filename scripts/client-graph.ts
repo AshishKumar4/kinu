@@ -24,10 +24,10 @@ import type { Alias } from './import-graph';
 import { moduleEdges } from './module-edges';
 import type { ModuleEdge } from './module-edges';
 import { isClientDocument, isManifest, readMatching, readRepositoryFile, readSources } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { parse } from './syntax';
 import type { Parsed } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const GATE = 'client-graph';
 

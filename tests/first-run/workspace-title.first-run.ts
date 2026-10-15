@@ -7,9 +7,17 @@ import { JsonValueSchema } from '@kinu.run/core';
 import { callAgentRpc, listCloudAgents } from '../../packages/cli/src/cloud-api';
 import { sessionExpired } from '../../packages/cli/src/config';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
-import { expectReached, FIRST_RUN_DEFECTS } from './first-run';
+import { expectReached, firstRunCaseId, type FirstRunDefect } from './first-run';
 
-const CASE = 'workspace-title';
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The owned workspace registry held its generated display title, but the loaded actor status returned the workspace ID.',
+  missedBecause: 'Warm or locally initialized status fixtures did not read a generated title from the real owner registry on a cold actor.',
+  provedRedAt: '82ea0d9e3',
+  redDirection: 'Read-only production mismatch retained by the title owner in workspace-title-production-before.json. This case selects an explicitly owned workspace with a distinct registry title, reads its loaded snapshot first, and compares without writes, eviction or model/spend claims.',
+};
 
 const StoredSession = v.pipe(v.string(), v.parseJson(), v.object({
   origin: v.string(), accessToken: v.pipe(v.string(), v.minLength(1)), tokenExpiresAt: v.optional(v.string()),
@@ -94,9 +102,7 @@ describe('First-run · workspace-title (owned workspace, read-only)', () => {
       statusTitle, statusWorkspace, matches: statusTitle === owned.displayName && statusWorkspace === workspace }] };
 
     writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n');
-    expectReached(CASE, { what: 'loaded-snapshot-uses-owned-registry-title', reached: receipt.receipts[0]?.matches === true,
+    expectReached(CASE, DEFECT, { what: 'loaded-snapshot-uses-owned-registry-title', reached: receipt.receipts[0]?.matches === true,
       detail: JSON.stringify({ workspace, registryTitle: owned.displayName, statusTitle, statusWorkspace, deployedSha: build.sha }) });
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

@@ -42,8 +42,8 @@ import {
   pristineTree,
   type PatchedDependency,
 } from './patch-parity';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const MARKER = '// patch-parity fixture drift';
 

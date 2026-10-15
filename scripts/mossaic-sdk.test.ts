@@ -20,9 +20,9 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { MOSSAIC_MANIFEST, MOSSAIC_ROOT, MOSSAIC_SDK } from './sources';
+import { REPO_ROOT } from './repo-root';
 import { bindPinnedCompiler, verifyPinnedSource } from './mossaic-sdk';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const ManifestPaths = v.object({ vendored: v.record(v.string(), v.string()) });
 

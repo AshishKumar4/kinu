@@ -49,10 +49,10 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join, resolve } from 'node:path';
 import { trackedTestFiles, bunWouldSkip } from './ladder';
 import { isAntiSlopRuleSuite, isBunDiscoverableSuite, isPythonSuite, isVitestEvalSuite, packageOf } from './sources';
+import { REPO_ROOT as ROOT } from './repo-root';
 import { parseLcov, mergeLcov } from './coverage-lcov';
 import type { LcovRecord } from './coverage-lcov';
 
-const ROOT = new URL('..', import.meta.url).pathname;
 
 /** One runner's suite group: what it runs, where its lcov lands, and the
  *  command that owns it — named so the summary can say WHO claimed a suite

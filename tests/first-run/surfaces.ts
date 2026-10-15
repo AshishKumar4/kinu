@@ -13,9 +13,9 @@
  */
 import type { APP_ROUTES } from '../../packages/core/src/read-models/app-routes';
 import type { SURFACES } from '@kinu.run/core';
-import type { FirstRunCase } from './first-run';
 
-type Rows = readonly FirstRunCase[];
+/** Case ids, each a tracked `<id>.first-run.ts` (`wiring.test.ts` holds every row to one). */
+type Rows = readonly string[];
 
 interface Unreachable {
   readonly unreachable: string;

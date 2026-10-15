@@ -45,12 +45,13 @@ import * as v from 'valibot';
 
 import { withLiveApp, type LiveApp } from './live-app-harness';
 import { createWorkspace, deleteWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
-import { PLAN_MISSION, SLATE_TITLE, countingScript, planWalkthrough, registerScriptedModel, startScriptedModel } from './scripted-model';
+import { countingScript, registerScriptedModel, startScriptedModel } from './scripted-model';
+import { PLAN_MISSION, SLATE_TITLE, planWalkthrough } from './live-app-scripts';
 import type { ScriptedModel } from './scripted-protocol';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = resolve(import.meta.dir, '..');
 
 /** Where the README reads the animation from. */
 export const DEFAULT_OUT = resolve(REPO, 'docs/assets/kinu-plan-demo.gif');

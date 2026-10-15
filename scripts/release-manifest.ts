@@ -30,8 +30,8 @@ import type {
   BindingKind, ReleaseBinding, ReleaseFile, ReleaseManifest, ReleaseMigration,
   ReleaseSecret, ReleaseSeed, ReleaseVar, ReleaseVectorIndex, VarPolicy,
 } from '../packages/core/src/deploy/manifest';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 /** Where a deployment pulls its next version from, and where the CLI artifacts
  *  a self-hosted instance does not carry are served from: production. */

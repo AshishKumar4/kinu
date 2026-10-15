@@ -22,8 +22,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { parseResults, summarizePromptUsage, trials, type Assertion, type UsageMetadata } from '../evals/src/results';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** Where every deploy's report lives, one directory per environment: gitignored and durable, never the swept temp
  *  directory. */

@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import {
   BUNDLE_BANNER, SCANNER_BUNDLE, SCANNER_SOURCE, buildScannerBundle, judgeBundle,
 } from './scanner-bundle-gate';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const WIRED_BUNFIG = `[install.security]\nscanner = "./${SCANNER_BUNDLE}"\n`;
 

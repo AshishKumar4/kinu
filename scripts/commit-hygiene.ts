@@ -77,9 +77,9 @@ import { readFileSync } from 'node:fs';
 import { gitEnv, gitIn } from '../packages/test-utils/src/git-env';
 import { assertMeasured, finding, type Finding } from './gate-ratchet';
 import { isParseable, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { identifierText, parse, walk } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** This file, so the convention's start point is derived from the commit that
  *  added it rather than recorded as a SHA nobody can verify later. */

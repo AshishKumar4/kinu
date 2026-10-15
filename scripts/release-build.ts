@@ -9,8 +9,8 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { connect } from 'armada';
 import { drainArmadaProgress } from './armada-progress';
+import { REPO_ROOT as ROOT } from './repo-root';
 
-const ROOT = join(import.meta.dir, '..');
 
 const BACKEND = join(ROOT, 'packages', 'cf-backend');
 

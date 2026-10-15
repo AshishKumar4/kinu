@@ -33,9 +33,9 @@ import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/co
 import { hostedCodemodeTool } from '../../packages/cli-backend/src/head-runtime';
 import { liveModelCallSink } from '@kinu.run/test-utils';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { REPO_ROOT } from '../../scripts/repo-root';
 
 /** The repository this suite runs from: an episode's folder is never it, nor a folder above it. */
-const REPO_ROOT = resolve(import.meta.dir, '..', '..');
 
 /**
  * THE EVAL AGENT'S SURFACE, BUILT BY THE PRODUCTION ROOTS.

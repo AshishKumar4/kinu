@@ -7,14 +7,22 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { HELLO_SLATE_ASK as ASK, HELLO_SLATE_ID as ID } from './asks';
 
 const SUITE = 'First-run · slate';
 
-const CASE = 'slate';
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'An agent-built slate appears in the tab strip but its HTTP preview cannot answer.',
+  missedBecause: 'Lower-level suites run projects written by test authors. They do not check '
+    + 'whether files authored by the model produce a working preview.',
+  provedRedAt: null,
+  redDirection: 'Not proved red against a deployed sha. The first deployed tier run must '
+    + 'measure listing, preview startup, and the authored HTTP response.',
+};
 
 const ExpectedResponse = v.strictObject({
   message: v.literal('pong'),
@@ -22,7 +30,7 @@ const ExpectedResponse = v.strictObject({
   path: v.literal('/ping'),
 });
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'slate');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -35,6 +43,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A precise engineer who builds small TypeScript HTTP apps.',
       async run({ session }) {

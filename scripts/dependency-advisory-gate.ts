@@ -53,8 +53,8 @@ import {
 } from './security-scanner';
 import { SCANNER_BUNDLE } from './scanner-bundle-gate';
 import { childEnv } from '../packages/test-utils/src/ambient-env';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 export const GATE = 'dependency-advisories';
 

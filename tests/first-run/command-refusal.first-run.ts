@@ -2,10 +2,18 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import { ERROR_CODES } from '@kinu.run/core/obs';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import { FIRST_RUN_DEFECTS, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
 
-const CASE = 'command-refusal';
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A production slate binding and workspace executor reported a command that never ran as ordinary exit-one prose, losing the denied or waiting-for-approval class.',
+  missedBecause: 'Tests checked NOT RUN prose and queue state rather than structural producer refusals; generic stdout interpretation also mistakes successful business data for errors.',
+  provedRedAt: '4d119fec2',
+  redDirection: 'Non-model CLI REST and AgentClient calls require producer-owned refusal metadata and no execution for denied/parked commands. Executed exit-one failures and successful JSON-looking stdout are independent controls. Original 4d119fec2 RED receipts remain retained unchanged.',
+};
 
 const SUITE = 'First-run · command-refusal (CLI operator, no model)';
 
@@ -31,7 +39,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('Explicit operator plan required');
     let calls = 0;
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false, purpose: 'Disposable command-boundary verification; no model task.', calls: () => calls,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false, purpose: 'Disposable command-boundary verification; no model task.', calls: () => calls,
       async run({ session }) {
         const exec = async (command: string) => {
           calls += 1;
@@ -108,5 +116,3 @@ END`);
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

@@ -9,7 +9,7 @@ import { expect, test } from 'bun:test';
 import type { Browser, Page } from 'puppeteer';
 import * as v from 'valibot';
 import { withBrowser } from '../../scripts/live-app-harness';
-import { INSPECTOR_PANEL, INSPECTOR_WIDTH, settled } from '../../scripts/product-flows';
+import { INSPECTOR_PANEL, INSPECTOR_WIDTH, settled } from '../../scripts/browser-page';
 
 /** The shell's shape: the rail beside `main`, which holds the chat column and the inspector. */
 const SHELL = `<style>

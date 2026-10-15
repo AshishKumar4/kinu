@@ -2,6 +2,7 @@
  * and none during the idle tail. Account lease beats update only UserDO's roster, not the workspace object. */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { parseArgs } from 'node:util';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 import { resolvePublicSessionPlan, type KinuPublicSession } from '../evals/src/session';
 import { BACKGROUND_POLICY } from '../packages/core/src/index';
@@ -26,19 +27,25 @@ const RECHECK = 15 * MINUTE;
 
 const iso = (at: number): string => new Date(at).toISOString();
 
-function flag(name: string, fallback: string): string {
-  const at = process.argv.indexOf(`--${name}`);
+const { values: options } = parseArgs({
+  options: {
+    steps: { type: 'string', default: '540' },
+    sleep: { type: 'string', default: '20' },
+    'helper-steps': { type: 'string', default: '540' },
+    jobs: { type: 'string', default: '3' },
+    'job-sleep': { type: 'string', default: '900' },
+    'tail-minutes': { type: 'string', default: '60' },
+    'margin-minutes': { type: 'string', default: '10' },
+    'max-recheck-minutes': { type: 'string', default: '60' },
+    out: { type: 'string' },
+    plan: { type: 'boolean', default: false },
+  },
+});
 
-  if (at < 0) return fallback;
-  const value = process.argv[at + 1];
+type CountOption = 'steps' | 'sleep' | 'helper-steps' | 'jobs' | 'job-sleep' | 'tail-minutes' | 'margin-minutes' | 'max-recheck-minutes';
 
-  if (value === undefined || value.startsWith('--')) throw new Error(`--${name} requires a value`);
-
-  return value;
-}
-
-function numberFlag(name: string, fallback: string): number {
-  const value = Number(flag(name, fallback));
+function numberFlag(name: CountOption): number {
+  const value = Number(options[name]);
 
   if (!Number.isFinite(value) || value < 0) throw new Error(`--${name} requires a non-negative finite number`);
 
@@ -46,8 +53,8 @@ function numberFlag(name: string, fallback: string): number {
 }
 
 const load: CanaryLoad = {
-  steps: numberFlag('steps', '540'), sleepSeconds: numberFlag('sleep', '20'),
-  helperSteps: numberFlag('helper-steps', '540'), jobs: numberFlag('jobs', '3'), jobSleepSeconds: numberFlag('job-sleep', '900'),
+  steps: numberFlag('steps'), sleepSeconds: numberFlag('sleep'),
+  helperSteps: numberFlag('helper-steps'), jobs: numberFlag('jobs'), jobSleepSeconds: numberFlag('job-sleep'),
 };
 
 if (Object.values(load).some((value) => !Number.isSafeInteger(value))) throw new Error('canary load knobs must be integers (the deployed script parses integer loads)');
@@ -56,11 +63,11 @@ if (load.steps < 1 || load.helperSteps < 1 || load.sleepSeconds < 1 || load.slee
   throw new Error('root/helper steps must be positive, inline sleep must be 1..29 s, and job sleep must be past 30 s');
 }
 
-const tailMs = numberFlag('tail-minutes', '60') * MINUTE;
+const tailMs = numberFlag('tail-minutes') * MINUTE;
 
-const marginMs = numberFlag('margin-minutes', '10') * MINUTE;
+const marginMs = numberFlag('margin-minutes') * MINUTE;
 
-const recheckCapMs = numberFlag('max-recheck-minutes', '60') * MINUTE;
+const recheckCapMs = numberFlag('max-recheck-minutes') * MINUTE;
 
 if (tailMs <= TELEMETRY_LAG) throw new Error('--tail-minutes must exceed 2 so the idle window after the settling margin is nonempty');
 
@@ -73,7 +80,7 @@ const worker = deploymentAt(target.origin)?.worker;
 
 if (worker === undefined) throw new Error(`${target.origin} is no deployment wrangler.jsonc declares, so the canary has no telemetry to read`);
 
-const out = flag('out', `/mnt/local/kinu/logs/bg-canary-${iso(Date.now()).replaceAll(':', '-')}.json`);
+const out = options.out ?? `/mnt/local/kinu/logs/bg-canary-${iso(Date.now()).replaceAll(':', '-')}.json`;
 
 const detachMs = BACKGROUND_POLICY.interactive.detachAfterMs;
 
@@ -107,7 +114,7 @@ const plan = {
   out,
 };
 
-if (process.argv.includes('--plan')) {
+if (options.plan) {
   console.log(JSON.stringify(plan, null, 2));
   process.exit(0);
 }
