@@ -42,7 +42,7 @@ import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, turnRows } fro
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
-import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
+import { SLATE_PREFIX, agentTitle, mainPanelAgent, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { FileLinkContext } from "@/components/surfaces/shared";
@@ -219,10 +219,8 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
 /** The workspace's own chat, where its answers' blocks resolve. */
 const WORKSPACE_CHAT = { actorId: null } as const;
 
-const MAIN_AGENT: PanelAgent = {
-  colour: 0, key: "main", label: "Main", category: "main", activity: "idle", parent: null,
-  open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
-};
+/** Main's row before the roster is read. */
+const MAIN_UNREAD = mainPanelAgent({ activity: "idle" });
 
 function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench }: {
   listed: readonly PanelAgent[] | null;
@@ -235,7 +233,7 @@ function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench
   const navigate = useNavigate();
 
   const agents = useMemo((): readonly PanelAgent[] => {
-    const main = listed?.find((agent) => agent.category === "main") ?? MAIN_AGENT;
+    const main = listed?.find((agent) => agent.category === "main") ?? MAIN_UNREAD;
 
     return [{ ...main, activity: mainActivity(main.activity, live) }, ...(listed ?? []).filter((agent) => agent.category !== "main")];
   }, [listed, live]);
@@ -331,7 +329,7 @@ function MainClearDialog({ open, agents, onClear, onClose }: {
 }) {
   if (!open) return null;
 
-  return <DeleteChatDialog title={agents.find((agent) => agent.key === MAIN_AGENT.key)?.label ?? MAIN_AGENT.label} clears onConfirm={onClear} onClose={onClose} />;
+  return <DeleteChatDialog title={agents.find((agent) => agent.key === MAIN_UNREAD.key)?.label ?? MAIN_UNREAD.label} clears onConfirm={onClear} onClose={onClose} />;
 }
 
 /** The workspace's own pages share the chat route's key, so the socket and the bar stay mounted across them. */

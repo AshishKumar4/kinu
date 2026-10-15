@@ -3,8 +3,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import {
-  diffLines, fileDiff, inNoteOrder, parseGitDiff, type ChangeNotesCard, type ChangeSet, type DiffAnchor, type FileDiff, type FileStatus,
-  type PanelAgent, type ChangeNote, type TurnLiveness,
+  diffLines, fileDiff, inNoteOrder, mainPanelAgent, parseGitDiff, type ChangeNotesCard, type ChangeSet, type DiffAnchor, type FileDiff, type FileStatus,
+  type ChangeNote, type TurnLiveness,
 } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
@@ -606,9 +606,7 @@ function DesignSelection({ kind }: { kind: string | null }) {
   return null;
 }
 
-const MAIN_CHAT: PanelAgent = {
-  colour: 0, key: "main", label: "Main", category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
-};
+const MAIN_CHAT = mainPanelAgent({ activity: "idle" });
 
 function Workspace({ wide, chatPane, inspector, chat, panel }: { wide: boolean; chatPane: boolean; inspector: number; chat: ReactNode; panel: ReactNode }) {
   return (

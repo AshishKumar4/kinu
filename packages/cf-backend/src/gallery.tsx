@@ -8,7 +8,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { mainPanelAgent, restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
@@ -2837,8 +2837,7 @@ const GALLERY_GITHUB: WorkspaceGitHubView = {
 };
 
 const GALLERY_AGENTS: PanelAgent[] = [
-  { colour: 0, key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
-    actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },
+  mainPanelAgent({ activity: "working", actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } }),
   { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
     figures: { tokens: 12_400, usd: 0.03, activeMs: 3 * 60_000, cacheEma: 0.88 } },
   { colour: 2, key: galleryActorId("perf"), label: "Should checkout support gift cards?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
@@ -2875,7 +2874,7 @@ function galleryWorkspaceAgents(): PanelAgent[] {
     open: { kind: "chat", path: sub.name }, tab: true, input: true, actorId: sub.actorId, figures: NO_GALLERY_FIGURES,
   }));
 
-  const main: PanelAgent = { colour: 0, key: "main", label: GALLERY_MAIN_TITLE.value, category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: NO_GALLERY_FIGURES };
+  const main = mainPanelAgent({ label: GALLERY_MAIN_TITLE.value, activity: "idle", figures: NO_GALLERY_FIGURES });
 
   return AGENTS_PANEL ? [...GALLERY_AGENTS, ...created.filter((agent) => !GALLERY_AGENTS.some((fixed) => fixed.key === agent.key))] : [main, ...created];
 }
@@ -4266,7 +4265,7 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 
 /** The bar over fixture chats: working, waiting, failed. */
 const GALLERY_CHATS: readonly PanelAgent[] = [
-  { colour: 0, key: "main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  mainPanelAgent({ activity: "working" }),
   { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
   { colour: 2, key: galleryActorId("agent-4f2c"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
   { colour: 3, key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },

@@ -207,6 +207,20 @@ function swarmAgents({ sql, root, actors, paths, handleOf }: Walk): Uncoloured[]
 
 type Uncoloured = Omit<PanelAgent, 'colour'>;
 
+/** The workspace's own chat as the roster lists it, first and in the first colour: the read model's row, and the one a
+ *  page shows before the roster is read. */
+export function mainPanelAgent({ label = 'Main', activity, actorId, figures = NO_FIGURES }: {
+  readonly label?: string;
+  readonly activity: AgentActivity;
+  readonly actorId?: string;
+  readonly figures?: AgentFigures;
+}): PanelAgent {
+  return {
+    colour: 0, key: 'main', label, category: 'main', parent: null, activity,
+    open: { kind: 'chat', path: null }, tab: true, input: true, figures, ...(actorId !== undefined && { actorId }),
+  };
+}
+
 /** Each agent's birth rank ({@link PanelAgent.colour}); a swarm worker takes its search owner's. */
 function coloured(actors: readonly WorkspaceActor[], agents: readonly Uncoloured[]): PanelAgent[] {
   // Every chat and hire ever born here, retired ones too, so a rank never moves once given.
@@ -251,12 +265,11 @@ export async function readWorkspaceAgents(input: {
   const hired = rosterAgents(walk);
   const swarms = swarmAgents(walk);
 
-  const main: Uncoloured = {
-    key: 'main', label: root.config.getChatTitle() ?? 'Main', category: 'main', parent: null,
+  const main: Uncoloured = mainPanelAgent({
+    label: root.config.getChatTitle() ?? 'Main', actorId: root.actorId,
     // A device's consent request names no actor: it is the workspace's, so Main is the chat that needs the person.
     activity: deviceAsks(sql) ? 'waiting' : chatActivity(walk, root.actorId, turnOwed(walk, root)),
-    open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
-  };
+  });
 
   const listed = coloured(input.actors, [main, ...hired, ...swarms]);
   const figures = await input.figures(listed.flatMap((agent) => (agent.actorId === undefined ? [] : [agent.actorId])));
