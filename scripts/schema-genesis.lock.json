@@ -358,8 +358,7 @@
     "credential_id TEXT PRIMARY KEY",
     "user_id TEXT NOT NULL",
     "public_key TEXT NOT NULL",
-    "counter INTEGER NOT NULL",
-    "transports TEXT NOT NULL"
+    "counter INTEGER NOT NULL"
   ],
   "cache_warm@packages/core/src/providers/cache-warming.ts": [
     "actor_id TEXT PRIMARY KEY",
