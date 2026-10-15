@@ -30,3 +30,12 @@ it('a workspace behind its stamp is refused with one message until the tables st
   expect((await probe.seed(workspace)).status).toBe(200);
   expect(await probe.exported(workspace)).toMatch(/^\d+ line\(s\)$/u);
 });
+
+it('a reshaped table is rebuilt on a Durable Object keeping its rows, its rowids and the rows that refer to it', async () => {
+  const probe = env.STORE_RESET_PROBE.get(env.STORE_RESET_PROBE.idFromName('store-rebuild'));
+  const { answer, notes, children } = await probe.rebuilt();
+
+  expect(answer).toEqual({ held: [{ table: 'notes', rows: 1, stale: true, keepsRows: true }], rebuilt: ['notes', 'notes_children'], dropped: [] });
+  expect(notes).toEqual([{ r: 7, id: 'a', body: 'kept' }]);
+  expect(children).toEqual([{ id: 'c', note: 'a' }]);
+});

@@ -4246,9 +4246,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await requireOps(this.env, caller);
     const { tables, drop } = v.parse(TablesRequestSchema, request);
 
-    const agents = this.nimbusSibling ? [] : await Promise.all(this.agentsWithStores(true).map(async (actorId) => ({
-      name: this.actorDirectoryStore().retained(actorId)?.name ?? actorId,
-      ...await this.isolateCall(actorId, (isolate) => isolate.opsTables({ tables, drop })),
+    const agents = this.nimbusSibling ? [] : await Promise.all(this.keptAgents().map(async ({ name, placement }) => ({
+      name, ...await (await agentFacet(this.ctx, this.env, placement)).opsTables({ tables, drop }),
     })));
 
     const answer = resetTables(this.ctx.storage.sql, { tables, drop }, {
@@ -5336,9 +5335,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Retired ones hold their stores until destroyed; main's isolate, once it ran a turn, and not opened for none. A store
    *  this version refuses never ran one: its conversation is the workspace's own, old, table. */
-  /** `behind`: asked by the tables step of storage it has not brought to this build yet, which no other call reads. */
-  private agentsWithStores(behind = false): string[] {
-    const mainHolds = (): boolean => (behind || this.storageRefusal === undefined) && this.config.getHoldsTurns();
+  /** The agents whose databases this workspace keeps, by name, and where each lives, read over storage the tables step
+   *  has not brought up yet: its refusal stands aside for this one synchronous read alone, so no other call is served
+   *  past it. */
+  private keptAgents(): Array<{ readonly name: string; readonly placement: AgentFacetPlacement }> {
+    const refusal = this.storageRefusal;
+
+    this.storageRefusal = undefined;
+
+    const agents = this.agentsWithStores().map((actorId) => ({
+      name: this.actorDirectoryStore().retained(actorId)?.name ?? actorId, placement: this.agentPlacement(actorId),
+    }));
+
+    this.storageRefusal = refusal;
+
+    return agents;
+  }
+
+  private agentsWithStores(): string[] {
+    const mainHolds = (): boolean => this.storageRefusal === undefined && this.config.getHoldsTurns();
 
     return this.actorDirectoryStore().list({ retired: true })
       .filter((record) => (record.parentActorId === null ? mainHolds() : hostedActorPlacement(record).homeName !== null))

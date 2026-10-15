@@ -294,6 +294,7 @@ interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
   wake(workspace: string): Promise<string>;
   exported(workspace: string): Promise<string>;
   repaired(workspace: string): Promise<string>;
+  rebuilt(): Promise<{ readonly answer: { readonly held: unknown[]; readonly rebuilt: readonly string[]; readonly dropped: readonly string[] }; readonly notes: unknown[]; readonly children: unknown[] }>;
 }
 
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {

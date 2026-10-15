@@ -1070,8 +1070,9 @@ export class UserDO extends Agent<Env> {
 
     await this.destroy();
     // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
-    // again, empty, and answers as the new account.
+    // again, empty, and answers as the new account. They are this build's, so they carry its stamp.
     this.initTables();
+    writeStamp(durableStamps(this.ctx.storage.kv), 'account');
 
     return { ok: true, workspaces: workspaces.length };
   }

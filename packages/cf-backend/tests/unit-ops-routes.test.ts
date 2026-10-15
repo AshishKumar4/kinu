@@ -21,7 +21,7 @@ function world(written: readonly string[]) {
 
         if (id.toString().startsWith('f')) throw new Error('reached by id before any named start');
 
-        return { name: null, stamp: 'current', census: [], held: [], dropped: [] };
+        return { name: null, stamp: 'current', census: [], held: [], dropped: [], rebuilt: [] };
       },
     }),
   });

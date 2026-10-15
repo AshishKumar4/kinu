@@ -44,7 +44,7 @@ import {
 import { servedHealth } from './served-health';
 import { readGenesisLockText } from './schema-drift';
 import {
-  cascadingDrops, censusDiff, censusLines, changedTables, confirmation, listedObjects, storesOf, undetectableChanges, unstampedTables, planLines, reachAll, RESET_CLASSES, writeLines,
+  cascadingDrops, censusDiff, censusLines, changedTables, confirmation, listedObjects, storesOf, unstampedTables, planLines, reachAll, RESET_CLASSES, writeLines,
   type Reached, type TablesTarget,
 } from './tables-reset';
 import { OPS_PASS_PREFIX } from '@kinu.run/core';
@@ -68,7 +68,7 @@ export const ResetSchema = v.object({
   /** `tables`: a tables reset (scripts/tables-reset.ts), which deletes no class: only `tables`, on every object holding
    *  them. Absent in a full reset's record. Either is a barrier: no build older than the candidate runs the new shape. */
   kind: v.optional(v.picklist(['objects', 'tables'])),
-  tables: v.optional(v.array(v.object({ table: v.string(), change: v.picklist(['removed', 'columns', 'remade']), classes: v.array(v.string()) }))),
+  tables: v.optional(v.array(v.object({ table: v.string(), change: v.picklist(['removed', 'reshaped']), classes: v.array(v.string()) }))),
   /** A tables reset's builds: the one the deployment served before, and the candidate. */
   from: v.optional(v.string()),
   candidate: v.optional(v.string()),
@@ -554,15 +554,8 @@ function releaseTables(from: string): ReturnType<typeof changedTables> {
   const before = readGenesisLockText(fromLock.stdout.toString());
   // The candidate's lock as committed: the worktree's file may say what no uploaded build does.
   const candidate = Bun.spawnSync(['git', 'show', 'HEAD:scripts/schema-genesis.lock.json']);
-  const tables = changedTables(before, readGenesisLockText(candidate.stdout.toString()));
-  const undetectable = undetectableChanges(tables.changed, before);
 
-  if (undetectable.length > 0) {
-    throw new Error(`${undetectable.join(', ')} kept every column name and changed a type, default or constraint, which no object's columns `
-      + 'can tell from the new shape: that needs a full reset (deploy --reset); nothing was dropped');
-  }
-
-  return tables;
+  return changedTables(before, readGenesisLockText(candidate.stdout.toString()));
 }
 
 /** The tables each class's init makes, as the candidate commit measured them. */
@@ -625,8 +618,8 @@ async function resetChangedTables(input: { environment: InfraEnvironment; record
   for (const line of planLines(changed, added, asked)) console.log(`tables: ${line}`);
   console.log(`tables: ${shareCardsNote(asked)}`);
 
-  if (environment === 'production' && !await confirmedAtTerminal(confirmation(changed), 'drop exactly these tables on every object of production that holds them')) {
-    console.error(`tables: not confirmed at a terminal with '${confirmation(changed)}'; nothing was dropped.`);
+  if (environment === 'production' && !await confirmedAtTerminal(confirmation(asked), 'rebuild and drop exactly these tables on every database of production that holds them')) {
+    console.error(`tables: not confirmed at a terminal with '${confirmation(asked)}'; nothing was changed.`);
 
     return 1;
   }
@@ -643,8 +636,10 @@ async function resetChangedTables(input: { environment: InfraEnvironment; record
   record({ putRecord: tablesRecordPut(config) }, recordFile, started);
   const dropped = await reachAll(target, { tables: changed, drop: true });
 
-  for (const object of dropped.filter((each) => (each.answer?.dropped.length ?? 0) > 0)) {
-    console.log(`tables: dropped ${object.answer?.dropped.join(', ') ?? ''} on ${object.className} ${object.answer?.name ?? object.id}`);
+  for (const store of storesOf(dropped)) {
+    if (store.answer.rebuilt.length > 0) console.log(`tables: rebuilt ${store.answer.rebuilt.join(', ')} on ${store.kind} ${store.label}`);
+
+    if (store.answer.dropped.length > 0) console.log(`tables: dropped ${store.answer.dropped.join(', ')} on ${store.kind} ${store.label}`);
   }
 
   // Every object either pass met is asked again, though a listing may have dropped it since.

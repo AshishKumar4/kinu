@@ -7,7 +7,7 @@
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { opsCaller, ownerCaller } from '@kinu.run/core';
+import { opsCaller, ownerCaller, resetTables, type TablesAnswer } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
@@ -154,6 +154,35 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
     } catch (cause) {
       return renderThrownChain({ cause });
     }
+  }
+
+  /**
+   * A reshaped table rebuilt on this object's own SQLite, as the tables step rebuilds one on a Durable Object: what the
+   * platform admits of it (the deferred foreign keys, `table_info`, `foreign_key_check`, a rowid copied back) is only
+   * seen here. Its rows, a referring table's, and the rowids must all survive.
+   */
+  async rebuilt(): Promise<{ readonly answer: Pick<TablesAnswer, 'held' | 'rebuilt' | 'dropped'>; readonly notes: unknown[]; readonly children: unknown[] }> {
+    const { sql } = this.ctx.storage;
+
+    sql.exec(`CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL, digest TEXT, CHECK (digest IS NULL OR length(digest) = 4))`);
+    sql.exec(`CREATE INDEX notes_digest ON notes(digest)`);
+    sql.exec(`CREATE TABLE notes_children (id TEXT PRIMARY KEY, note TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE)`);
+    sql.exec(`INSERT INTO notes (rowid, id, body, digest) VALUES (7, 'a', 'kept', 'abcd')`);
+    sql.exec(`INSERT INTO notes_children VALUES ('c', 'a')`);
+
+    const answer = resetTables(sql, { tables: [{ table: 'notes', change: 'reshaped' }], drop: true }, {
+      schema: 'agent', stamps: { read: () => 0, write: () => {} }, transactionSync: this.ctx.storage.transactionSync.bind(this.ctx.storage),
+      init: () => {
+        sql.exec(`CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, body TEXT NOT NULL)`);
+        sql.exec(`CREATE TABLE IF NOT EXISTS notes_children (id TEXT PRIMARY KEY, note TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE)`);
+      },
+    });
+
+    return {
+      answer: { held: answer.held, rebuilt: answer.rebuilt, dropped: answer.dropped },
+      notes: sql.exec('SELECT rowid AS r, id, body FROM notes').toArray(),
+      children: sql.exec('SELECT id, note FROM notes_children').toArray(),
+    };
   }
 
   /** The tables step's own call: what it found of the stamp, before it brought the storage to this build. */

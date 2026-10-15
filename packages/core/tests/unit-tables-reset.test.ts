@@ -1,85 +1,144 @@
-// A release's tables reset as one object carries it out: only the changed tables, and only while they hold the old
-// shape, are dropped, and the object's init makes them anew; every other table keeps its rows, and a rerun drops
-// nothing a finished run made. Reached only with the capability `/ops/tables` mints.
+// A release's tables reset as one object carries it out: a reshaped table is rebuilt keeping its rows wherever a
+// rolled-back trial finds the copy holds, with its referrers rebuilt alongside and its indexes, triggers and views made
+// again after the copy; it loses its rows only where the copy fails, and says why. A removed table is dropped unless
+// that would reach rows the release did not change. A rerun changes nothing, and only `/ops/tables`' capability is
+// admitted.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { initUserTables, opsCaller, pragmaStamps, requireOps, resetTables, type ChangedTable, type TableWrites } from '../src/index';
+import { opsCaller, pragmaStamps, requireOps, resetTables, type ChangedTable, type TableWrites } from '../src/index';
 import { sqlStorageOver } from '../src/identity/inline-primitives';
 import type { SqlExec } from '../src/types/primitives';
 
 const KEY = { CREDENTIAL_ENCRYPTION_KEY: 'a'.repeat(64) };
 
-const CHANGED: readonly ChangedTable[] = [
-  { table: 'device_joins', change: 'remade', columns: ['device_id', 'ticket_hash', 'workspace', 'expires_at'], dropped: [] },
-  { table: 'device_consent_requests', change: 'removed', columns: [], dropped: [] },
-  { table: 'device_connect_tickets', change: 'columns', columns: ['ticket_hash', 'device_id', 'token_was_current', 'expires_at'], dropped: ['used_at'] },
-  // A column SQLite will not drop: it is in the table's key.
-  { table: 'pinned', change: 'columns', columns: ['id'], dropped: ['part'] },
-];
-
-/** An account as the build before this release left it: an old device_joins, a removed table, a column the release
- *  dropped, one SQLite cannot drop, and a profile. */
-function previousAccount() {
+/** A database as the build before left it, and the candidate's init, which makes each table as it declares it now. */
+function world(before: string, candidate: string) {
   const db = new Database(':memory:');
   const sql = sqlStorageOver(db);
 
-  sql.exec('CREATE TABLE device_joins (device_id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)');
-  sql.exec("INSERT INTO device_joins VALUES ('dev-old', 1)");
-  sql.exec('CREATE TABLE device_consent_requests (consent_id TEXT PRIMARY KEY)');
-  sql.exec("INSERT INTO device_consent_requests VALUES ('c-1'), ('c-2')");
-  sql.exec('CREATE TABLE device_connect_tickets (ticket_hash TEXT PRIMARY KEY, device_id TEXT NOT NULL, token_was_current INTEGER, expires_at INTEGER NOT NULL, used_at INTEGER)');
-  sql.exec("INSERT INTO device_connect_tickets VALUES ('h-1', 'dev-1', 1, 9, NULL), ('h-2', 'dev-1', 1, 9, 5)");
-  sql.exec('CREATE TABLE pinned (id TEXT NOT NULL, part TEXT NOT NULL, PRIMARY KEY (id, part))');
-  sql.exec("INSERT INTO pinned VALUES ('a', 'b')");
-  initUserTables(sql);
-  sql.exec("INSERT INTO user_profile (id, email) VALUES (1, 'owner@example.com')");
+  db.exec('PRAGMA foreign_keys = ON');
+  db.exec(before);
+  const writes: TableWrites = { schema: 'agent', stamps: pragmaStamps(sql), transactionSync: (write) => db.transaction(write)(), init: () => { db.exec(candidate); } };
 
-  return { db, sql };
+  return { db, sql, writes };
 }
 
-const writes = (db: Database, sql: SqlExec): TableWrites => ({ schema: 'account', stamps: pragmaStamps(sql), transactionSync: (write) => db.transaction(write)(), init: () => { initUserTables(sql); } });
+const altered = (...tables: string[]): ChangedTable[] => tables.map((table) => ({ table, change: 'reshaped' }));
 
-const columnsOf = (sql: SqlExec, table: string) => sql.exec(`PRAGMA table_info(${table})`).toArray().map((row) => v.parse(ColumnSchema, row).name);
+const RowSchema = v.record(v.string(), v.unknown());
 
-const ColumnSchema = v.object({ name: v.string() });
+const rows = (sql: SqlExec, query: string) => sql.exec(query).toArray().map((row) => v.parse(RowSchema, row));
 
-test('a census names every table and its rows, which changed tables are as the build before left them, and which keep their rows', () => {
-  const { db, sql } = previousAccount();
-  const answer = resetTables(sql, { tables: [...CHANGED], drop: false }, writes(db, sql));
+test('a removed column SQLite refuses to drop is rebuilt away, every row and rowid kept, and a rerun changes nothing', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL, digest TEXT, CHECK (digest IS NULL OR length(digest) = 4));
+    CREATE INDEX notes_digest ON notes(digest);
+    INSERT INTO notes (rowid, id, body, digest) VALUES (7, 'a', 'kept', 'abcd'), (9, 'b', 'also kept', NULL);`, `
+    CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS notes_body ON notes(body);`);
 
-  expect(answer.held).toEqual([
-    { table: 'device_joins', rows: 1, stale: true, keepsRows: false },
-    { table: 'device_consent_requests', rows: 2, stale: true, keepsRows: false },
-    { table: 'device_connect_tickets', rows: 2, stale: true, keepsRows: true },
-    { table: 'pinned', rows: 1, stale: true, keepsRows: false, refused: expect.stringContaining('pinned.part') },
-  ]);
-  expect(answer.dropped).toEqual([]);
-  // The trial drop was rolled back: the column is still there.
-  expect(columnsOf(sql, 'device_connect_tickets')).toContain('used_at');
-  expect(answer.census).toContainEqual({ table: 'user_profile', rows: 1 });
-  expect(answer.census.map((row) => row.table)).toEqual(answer.census.map((row) => row.table).slice().sort());
+  const planned = resetTables(sql, { tables: altered('notes'), drop: false }, writes);
+
+  expect(planned.held).toEqual([{ table: 'notes', rows: 2, stale: true, keepsRows: true }]);
+  expect(rows(sql, "SELECT name FROM sqlite_master WHERE name = 'notes_digest'")).toHaveLength(1);
+
+  const done = resetTables(sql, { tables: altered('notes'), drop: true }, writes);
+
+  expect({ rebuilt: done.rebuilt, dropped: done.dropped }).toEqual({ rebuilt: ['notes'], dropped: [] });
+  expect(rows(sql, 'SELECT rowid AS r, id, body FROM notes ORDER BY id')).toEqual([{ r: 7, id: 'a', body: 'kept' }, { r: 9, id: 'b', body: 'also kept' }]);
+  expect(rows(sql, "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'notes' AND sql IS NOT NULL")).toEqual([{ name: 'notes_body' }]);
+
+  const again = resetTables(sql, { tables: altered('notes'), drop: true }, writes);
+
+  expect({ held: again.held, rebuilt: again.rebuilt }).toEqual({ held: [{ table: 'notes', rows: 2, stale: false, keepsRows: true }], rebuilt: [] });
 });
 
-test('a drop drops a column keeping its rows, drops and remakes the rest, and a rerun changes nothing', () => {
-  const { db, sql } = previousAccount();
-  const dropped = resetTables(sql, { tables: [...CHANGED], drop: true }, writes(db, sql));
+test('a relaxed constraint and a re-key from columns the table holds are rebuilt, and the view over it made again', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE tasks (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, seq INTEGER NOT NULL, task TEXT NOT NULL);
+    CREATE VIEW open_tasks AS SELECT id, task FROM tasks;
+    INSERT INTO tasks VALUES ('main:1', 'main', 1, 'write'), ('main:2', 'main', 2, 'read');`, `
+    CREATE TABLE IF NOT EXISTS tasks (actor_id TEXT NOT NULL, seq INTEGER NOT NULL, task TEXT,
+      id TEXT GENERATED ALWAYS AS (actor_id || ':' || seq) VIRTUAL, PRIMARY KEY (actor_id, seq)) WITHOUT ROWID;
+    CREATE VIEW IF NOT EXISTS open_tasks AS SELECT id, task, seq FROM tasks;`);
 
-  expect(dropped.dropped).toEqual(['device_joins', 'device_consent_requests', 'device_connect_tickets.used_at', 'pinned']);
-  expect(columnsOf(sql, 'device_joins')).toContain('ticket_hash');
-  expect(sql.exec("SELECT name FROM sqlite_master WHERE name IN ('device_consent_requests', 'pinned')").toArray()).toEqual([]);
-  expect(columnsOf(sql, 'device_connect_tickets')).not.toContain('used_at');
-  expect(sql.exec('SELECT COUNT(*) AS n FROM device_connect_tickets').toArray()).toEqual([{ n: 2 }]);
+  const done = resetTables(sql, { tables: altered('tasks'), drop: true }, writes);
 
-  const again = resetTables(sql, { tables: [...CHANGED], drop: true }, writes(db, sql));
+  expect(done.rebuilt).toEqual(['tasks']);
+  expect(rows(sql, 'SELECT id, task, seq FROM open_tasks ORDER BY seq')).toEqual([{ id: 'main:1', task: 'write', seq: 1 }, { id: 'main:2', task: 'read', seq: 2 }]);
+  sql.exec("INSERT INTO tasks (actor_id, seq, task) VALUES ('main', 3, NULL)");
+});
 
-  expect(again.held).toEqual([
-    { table: 'device_joins', rows: 0, stale: false, keepsRows: true },
-    { table: 'device_connect_tickets', rows: 2, stale: false, keepsRows: true },
-  ]);
-  expect(again.dropped).toEqual([]);
-  // What no release changed keeps its rows.
-  expect(again.census).toContainEqual({ table: 'user_profile', rows: 1 });
+test('a table whose rows refer to a rebuilt one is rebuilt alongside, so no cascade takes its rows', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE parents (id TEXT PRIMARY KEY, old TEXT);
+    CREATE TABLE children (id TEXT PRIMARY KEY, parent TEXT NOT NULL REFERENCES parents(id) ON DELETE CASCADE);
+    INSERT INTO parents VALUES ('p', 'x');
+    INSERT INTO children VALUES ('c', 'p');`, `
+    CREATE TABLE IF NOT EXISTS parents (id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS children (id TEXT PRIMARY KEY, parent TEXT NOT NULL REFERENCES parents(id) ON DELETE CASCADE);`);
+
+  const done = resetTables(sql, { tables: altered('parents'), drop: true }, writes);
+
+  expect(done.rebuilt).toEqual(['parents', 'children']);
+  expect(rows(sql, 'SELECT id, parent FROM children')).toEqual([{ id: 'c', parent: 'p' }]);
+});
+
+test('a trigger the candidate makes does not run on the rows the rebuild copies back', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE entries (id INTEGER PRIMARY KEY, text TEXT, digest TEXT);
+    CREATE TABLE entry_log (id INTEGER);
+    CREATE TRIGGER entries_ai AFTER INSERT ON entries BEGIN INSERT INTO entry_log VALUES (new.id); END;
+    INSERT INTO entries VALUES (1, 'one', 'x'), (2, 'two', 'y');`, `
+    CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, text TEXT);
+    CREATE TABLE IF NOT EXISTS entry_log (id INTEGER);
+    CREATE TRIGGER IF NOT EXISTS entries_ai AFTER INSERT ON entries BEGIN INSERT INTO entry_log VALUES (new.id); END;`);
+
+  expect(rows(sql, 'SELECT COUNT(*) AS n FROM entry_log')).toEqual([{ n: 2 }]);
+  resetTables(sql, { tables: altered('entries'), drop: true }, writes);
+
+  expect(rows(sql, 'SELECT COUNT(*) AS n FROM entry_log')).toEqual([{ n: 2 }]);
+  sql.exec("INSERT INTO entries (id, text) VALUES (3, 'three')");
+  expect(rows(sql, 'SELECT COUNT(*) AS n FROM entry_log')).toEqual([{ n: 3 }]);
+});
+
+test('a new NOT NULL column with no default and no source loses the rows, in SQLite\'s words, and only then', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE heads (id TEXT PRIMARY KEY);
+    INSERT INTO heads VALUES ('h');`, `
+    CREATE TABLE IF NOT EXISTS heads (id TEXT PRIMARY KEY, seq INTEGER NOT NULL);`);
+
+  const planned = resetTables(sql, { tables: altered('heads'), drop: false }, writes);
+
+  expect(planned.held).toEqual([{ table: 'heads', rows: 1, stale: true, keepsRows: false, refused: expect.stringContaining('NOT NULL constraint failed: heads.seq') }]);
+
+  const done = resetTables(sql, { tables: altered('heads'), drop: true }, writes);
+
+  expect({ dropped: done.dropped, rebuilt: done.rebuilt }).toEqual({ dropped: ['heads'], rebuilt: [] });
+  expect(rows(sql, 'SELECT COUNT(*) AS n FROM heads')).toEqual([{ n: 0 }]);
+  sql.exec("INSERT INTO heads VALUES ('h', 1)");
+});
+
+test('a removed table whose drop would reach rows of a table the release did not change is left, and says which', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE gone (id TEXT PRIMARY KEY);
+    CREATE TABLE stays (id TEXT PRIMARY KEY, gone TEXT REFERENCES gone(id) ON DELETE CASCADE);
+    INSERT INTO gone VALUES ('g');
+    INSERT INTO stays VALUES ('s', 'g');`, `
+    CREATE TABLE IF NOT EXISTS stays (id TEXT PRIMARY KEY, gone TEXT REFERENCES gone(id) ON DELETE CASCADE);`);
+
+  const done = resetTables(sql, { tables: [{ table: 'gone', change: 'removed' }], drop: true }, writes);
+
+  expect(done.held).toEqual([{ table: 'gone', rows: 1, stale: true, keepsRows: false, cascades: ['stays'] }]);
+  expect(done.dropped).toEqual([]);
+  expect(rows(sql, 'SELECT COUNT(*) AS n FROM stays')).toEqual([{ n: 1 }]);
+});
+
+test('a census names every table and its rows, sorted', () => {
+  const { sql, writes } = world(`CREATE TABLE b (id TEXT); CREATE TABLE a (id TEXT); INSERT INTO a VALUES ('x');`, '');
+
+  expect(resetTables(sql, { tables: [], drop: false }, writes).census).toEqual([{ table: 'a', rows: 1 }, { table: 'b', rows: 0 }]);
 });
 
 test('only the capability /ops/tables mints is admitted', async () => {
@@ -87,20 +146,4 @@ test('only the capability /ops/tables mints is admitted', async () => {
   await expect(requireOps(KEY, { opsToken: 'b'.repeat(64) })).rejects.toThrow('only through the deployment\'s /ops/tables route');
   await expect(requireOps(KEY, null)).rejects.toThrow('/ops/tables');
   await expect(requireOps({}, await opsCaller(KEY))).rejects.toThrow('CREDENTIAL_ENCRYPTION_KEY');
-});
-
-test('a table whose drop would reach rows of a table the release did not change is not dropped, and says which', () => {
-  const db = new Database(':memory:');
-  const sql = sqlStorageOver(db);
-
-  sql.exec('CREATE TABLE parents (id TEXT PRIMARY KEY, old INTEGER)');
-  sql.exec('CREATE TABLE children (id TEXT PRIMARY KEY, parent TEXT REFERENCES parents(id) ON DELETE CASCADE)');
-  sql.exec("INSERT INTO parents VALUES ('p', 1)");
-  sql.exec("INSERT INTO children VALUES ('c', 'p')");
-  const remade: ChangedTable = { table: 'parents', change: 'remade', columns: ['id', 'fresh'], dropped: [] };
-  const answer = resetTables(sql, { tables: [remade], drop: true }, { schema: 'account', stamps: pragmaStamps(sql), transactionSync: (write) => db.transaction(write)(), init: () => {} });
-
-  expect(answer.held).toEqual([{ table: 'parents', rows: 1, stale: true, keepsRows: false, cascades: ['children'] }]);
-  expect(answer.dropped).toEqual([]);
-  expect(sql.exec('SELECT COUNT(*) AS n FROM children').toArray()).toEqual([{ n: 1 }]);
 });

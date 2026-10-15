@@ -230,7 +230,7 @@ describe('a reset stopped anywhere can be finished', () => {
 
     const tables: Reset = {
       environment: 'staging', worker, tag: 'tables-1', at: '2026-10-15T00:00:00Z', placeholderVersion: '', classes: [], applications: [],
-      state: 'started', kind: 'tables', from: 'f9c17ac7b', candidate: 'abcdef123', tables: [{ table: 'device_joins', change: 'remade', classes: ['UserDO'] }],
+      state: 'started', kind: 'tables', from: 'f9c17ac7b', candidate: 'abcdef123', tables: [{ table: 'device_joins', change: 'reshaped', classes: ['UserDO'] }],
     };
 
     expect(pendingReset(worker, { versionId: 'v', bound: new Map() }, tables)).toBeUndefined();
