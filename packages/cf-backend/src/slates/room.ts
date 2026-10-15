@@ -134,6 +134,9 @@ function care<A>(body: () => A): Effect.Effect<A, KinuError> {
 /** How many of their own connections one call of someone's own code may come to hold before it answers a part. */
 const OWN_GRANTS_PER_CALL = 8;
 
+/** What the room records and carries on past: a Drive card it could not write, a Gallery picture it could not take. */
+const RECORDED = { card: 'slate.card_failed', picture: 'slate.gallery_picture_failed' } as const;
+
 /** What a personal grant made for its holder's own code admits: any input up to this size. */
 const OWN_GRANT_INPUT_BYTES = 256 * 1024;
 
@@ -274,14 +277,14 @@ export class SlateRoom extends DurableObject<Env> {
 
   /** A Drive card the room could not write is recorded, not fatal: the slate itself is unchanged by it. */
   private cardOrRecord(email: string, card: { readonly role?: 'edit' | 'use'; readonly url?: string } | null): Effect.Effect<void> {
-    return this.recorded('slate.card_failed', this.card(email, card));
+    return this.recorded('card', this.card(email, card));
   }
 
-  /** Work whose failure leaves the slate as it was: recorded under `event`, and not the caller's failure. */
-  private recorded(event: `${string}.${string}`, work: Effect.Effect<void, KinuError>): Effect.Effect<void> {
+  /** Work whose failure leaves the slate as it was: recorded as `RECORDED[kind]`, and not the caller's failure. */
+  private recorded(kind: keyof typeof RECORDED, work: Effect.Effect<void, KinuError>): Effect.Effect<void> {
     const room = this.caretaker.room();
 
-    return Effect.catch(work, (failure) => Effect.sync(() => { diagnostics.failure(event, failure, { workspace: room.workspace, slate: room.slate }); }));
+    return Effect.catch(work, (failure) => Effect.sync(() => { diagnostics.failure(RECORDED[kind], failure, { workspace: room.workspace, slate: room.slate }); }));
   }
 
   /** The room's one alarm: the listing's picture, taken again once a sync asked for it (`repicture`). */
@@ -679,7 +682,7 @@ export class SlateRoom extends DurableObject<Env> {
     if (browser === undefined || bucket === undefined || !room.link || this.caretaker.listing() === null) return Effect.void;
     const at = { workspace: room.workspace, handle: this.handle() };
 
-    return this.recorded('slate.gallery_picture_failed', Effect.gen({ self: this }, function* () {
+    return this.recorded('picture', Effect.gen({ self: this }, function* () {
       const origin = yield* Effect.promise(async () => slateHostOrigin(this.env, at.workspace, at.handle));
       const ticket = yield* Effect.promise(async () => frameTicket(this.env, at, { email: null, access: { kind: 'link', gen: room.linkGen } }));
 

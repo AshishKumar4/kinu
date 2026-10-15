@@ -217,32 +217,11 @@ class Replay {
 
         return { ok };
       });
-      case 'release': return this.onRun(event.run, (room, run, slate) => {
-        let flows = false;
-        const ok = through(() => { flows = room.release(run, this.session(slate, event.q, event.acc)); });
-
-        return { ok: ok && flows };
-      });
-      case 'render': {
-        const slate = this.cells.get(event.cell);
-
-        if (slate === undefined) return { ok: false };
-        let shown = false;
-        const ok = through(() => { shown = this.room(slate).render(cellKey(event.cell), this.session(slate, event.q, event.acc)).shown; });
-
-        return ok ? { ok, shown } : { ok };
-      }
+      case 'release': return this.releasing(event);
+      case 'render': return this.rendering(event);
 
       case 'finish': return this.onRun(event.run, (room, run) => ({ ok: through(() => { room.finish(run); }) }));
-      case 'editCode': {
-        const ok = through(() => {
-          this.room(event.slate).publish(address(event.actor), { image: image(event.rev), modules: {}, title: 'Slate', secret: null });
-        });
-
-        if (ok) this.revs.set(event.slate, event.rev);
-
-        return { ok };
-      }
+      case 'editCode': return this.editing(event);
 
       case 'fork': return this.forking(at, event);
       case 'publish': return { ok: through(() => { this.room(event.slate).list(email(event.actor), { line: 'A slate', category: 'fun' }, 0); }) };
@@ -255,6 +234,35 @@ class Replay {
         return { ok: true };
       }
     }
+  }
+
+  private releasing(event: Extract<Event, { ev: 'release' }>): Seen {
+    return this.onRun(event.run, (room, run, slate) => {
+      let flows = false;
+      const ok = through(() => { flows = room.release(run, this.session(slate, event.q, event.acc)); });
+
+      return { ok: ok && flows };
+    });
+  }
+
+  private rendering(event: Extract<Event, { ev: 'render' }>): Seen {
+    const slate = this.cells.get(event.cell);
+
+    if (slate === undefined) return { ok: false };
+    let shown = false;
+    const ok = through(() => { shown = this.room(slate).render(cellKey(event.cell), this.session(slate, event.q, event.acc)).shown; });
+
+    return ok ? { ok, shown } : { ok };
+  }
+
+  private editing(event: Extract<Event, { ev: 'editCode' }>): Seen {
+    const ok = through(() => {
+      this.room(event.slate).publish(address(event.actor), { image: image(event.rev), modules: {}, title: 'Slate', secret: null });
+    });
+
+    if (ok) this.revs.set(event.slate, event.rev);
+
+    return { ok };
   }
 
   private onRun(model: number, act: (room: RoomCaretaker, run: number, slate: number) => Seen): Seen {
