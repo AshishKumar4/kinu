@@ -739,7 +739,8 @@ describe('LocalAgentHost', () => {
     const config = main.config;
     expect(sessions).toEqual([{ session_id: 'default' }]);
     expect(rows?.n).toBe(4);
-    expect(config.get('conversation.id')).toBe('default');
+    // schema audit: the session is the chat-session constant, never a stored key.
+    expect(config.get('conversation.id')).toBeNull();
     db.close();
     await host.close();
   });

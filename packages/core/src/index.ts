@@ -244,7 +244,6 @@ export { DEFAULT_CONFIG } from './config';
 
 export {
   createAgentConfigStore, initAgentConfigTable, holdConfig,
-  canonicalConversationId,
   AGENT_CONFIG_KEYS,
   type AgentConfigStore, type ShellApprovalMode,
 } from './config/index';

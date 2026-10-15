@@ -105,7 +105,7 @@ import { ActorSession, type ActorTurnLease,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
-  changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
+  changeRoleAsOwner, agentsProfileContext,
   resolveModelRoute, completeOnRoute,
   resolveRoutingProfile, currentOperationProfile, captureOperationProfile, ancestorPins,
   type PinnedProfile,
@@ -467,7 +467,7 @@ export class LocalAgentSession {
     this.headJournal = new LiveHeadJournal(this.rt.storage.sql, this.rt.actor, this.headActivity);
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
-    this.sessionId = canonicalConversationId(this.config);
+    this.sessionId = CHAT_SESSION_ID;
 
     // Refine the runtime's profile authority rather than install a second resolver, so lanes and turns agree.
     const refinement: ProfileAuthorityRefinement = {
