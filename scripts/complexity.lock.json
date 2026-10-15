@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-14",
+  "measuredAt": "2026-10-15",
   "files": 3314,
-  "functions": 86718,
+  "functions": 86703,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -254,10 +254,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
-      "complexity": 27
-    },
-    {
       "key": "packages/core/src/vfs/context-plane.ts#localContextTree>document",
       "complexity": 27
     },
@@ -359,6 +355,10 @@
     },
     {
       "key": "packages/core/src/orchestrator/terminal-effects.ts#TerminalEffectLedger.attempt",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
       "complexity": 26
     },
     {
