@@ -45,6 +45,15 @@ export const CLOSED: Record<Exclude<RoomClosed, "sign-in">, { said: string; deta
   stopped: { said: "This link was stopped" },
 };
 
+/** This page again with its fork picker open (`?fork=1`): where a visitor who pressed Fork lands once signed in. */
+function forkHere(): string {
+  const here = new URL(window.location.href);
+
+  here.searchParams.set("fork", "1");
+
+  return here.pathname + here.search;
+}
+
 /** What a live page opens with: a gallery frame's sheet, picker or decision. */
 export interface LiveOpened {
   readonly sheet?: boolean;
@@ -64,7 +73,8 @@ export function LiveSlate({ room, entry, linkKey, live, opened = {}, workspaces 
   const { view, call } = useRoom({ workspace: room.workspace, slate: room.slate, linkKey, live });
   const { deciding, done } = useRoomFrames({ view, call, opened: opened.decide ?? null });
   const [sharing, setSharing] = useState(opened.sheet ?? false);
-  const [picking, setPicking] = useState<"fork" | "edit" | null>(opened.pick ?? null);
+  const [search] = useSearchParams();
+  const [picking, setPicking] = useState<"fork" | "edit" | null>(opened.pick ?? (search.has("fork") ? "fork" : null));
   const [failure, setFailure] = useState<string | null>(null);
 
   // A call this page makes itself: its refusal shows here.
@@ -82,7 +92,7 @@ export function LiveSlate({ room, entry, linkKey, live, opened = {}, workspaces 
     <div className="flex h-screen w-screen flex-col p-bg p-text">
       <LiveBar session={session} presence={view.presence} onShare={view.sheet === null ? null : () => setSharing(true)}
         onEdit={() => (owner ? window.location.assign(`/workspace/${encodeURIComponent(room.workspace)}?slate=${encodeURIComponent(room.slate)}`) : setPicking("edit"))}
-        onFork={() => setPicking("fork")} />
+        onFork={() => (session.me === null ? signInAndReturn(forkHere()) : setPicking("fork"))} />
       <main className="relative min-h-0 flex-1">
         <iframe src={session.frame} title={session.title} data-live-frame className="block size-full border-0" />
         {view.ended !== null && <Ended ended={view.ended} slate={session.title} onAsk={() => { if (view.ended !== null) emailTo(view.ended.by); }} />}

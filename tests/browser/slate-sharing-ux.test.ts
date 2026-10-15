@@ -147,15 +147,32 @@ describe('a shared slate', () => {
             await edited.close();
           }
 
-          // Signed out, by the link: every part says what signing in would let them do; no Fork until signed in.
+          // Signed out, by the link: every part says what signing in would let them do; Fork signs them in, then picks.
           const signedOut = await freshPage(gallery, 'room&state=live-signed-out', theme, viewport);
 
           try {
             expect(await stateOf(await partFrame(signedOut, 'prs'))).toBe('needs-sign-in');
             expect(await (await partFrame(signedOut, 'notes')).$('[data-part-sign-in]')).not.toBeNull();
-            expect(await signedOut.$('[data-live-fork]')).toBeNull();
+
+            const [request] = await Promise.all([
+              signedOut.waitForRequest((sent) => new URL(sent.url()).pathname === '/login', SOON),
+              signedOut.click('[data-live-fork]'),
+            ]);
+
+            const login = new URL(request.url());
+
+            expect(new URL(login.searchParams.get('return_to') ?? '', login.origin).searchParams.get('fork')).toBe('1');
           } finally {
             await signedOut.close();
+          }
+
+          // Back from signing in: the fork picker is open.
+          const forking = await freshPage(gallery, 'room&state=live&fork=1', theme, viewport);
+
+          try {
+            await forking.waitForSelector('input[name="fork-target"]', SOON);
+          } finally {
+            await forking.close();
           }
 
           // Removed, and a stopped link: the session ends under them at once, with a way to reach the owner.

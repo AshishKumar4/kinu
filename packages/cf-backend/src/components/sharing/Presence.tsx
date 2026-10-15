@@ -1,6 +1,6 @@
 /**
- * Who is in a shared slate with you: an avatar each, ringed in their own colour, then how many people view it signed
- * out. Signed-out visitors change nothing, so they are counted, never named (security §2.5).
+ * Who is in a shared slate with you: an avatar each, ringed in their own colour, then "+3 viewing" for the people who
+ * view it signed out. Signed-out visitors change nothing, so they are counted, never named (security §2.5).
  */
 import { Avatar, presenceColor } from "@/components/ui/Avatar";
 
@@ -14,7 +14,11 @@ export function Presence({ here, viewing }: { here: readonly string[]; viewing: 
           <Avatar name={name} size={22} />
         </span>
       ))}
-      {viewing > 0 && <span data-presence-viewing className="hidden whitespace-nowrap p-meta p-text-3 md:inline">{viewing === 1 ? "1 person viewing" : `${String(viewing)} people viewing`}</span>}
+      {viewing > 0 && (
+        <span data-presence-viewing={viewing} title={viewing === 1 ? "1 person signed out" : `${String(viewing)} people signed out`} className="whitespace-nowrap p-meta p-text-3">
+          {here.length > 0 ? "+" : ""}{viewing} viewing
+        </span>
+      )}
     </span>
   );
 }
