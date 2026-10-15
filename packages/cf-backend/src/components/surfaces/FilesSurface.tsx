@@ -125,9 +125,9 @@ function useFolder(rpc: WorkspaceRpc, path: string, adopt: (path: string) => voi
   };
 }
 
-/** The row under a folder's loaded entries while it has more: pressed, the next page joins them. */
-function MoreRow({ more }: { more: (() => Promise<void>) | null }) {
-  if (more === null) return null;
+/** The row under a folder's loaded entries while it has more (`next`): pressed, the next page joins them. */
+function MoreRow({ next, more }: { next: number | undefined; more: () => Promise<void> }) {
+  if (next === undefined) return null;
 
   return (
     <button type="button" data-files-more onClick={() => detach(Effect.promise(more))}
@@ -143,11 +143,12 @@ export interface FilesSurfaceProps {
   onConnectDevice: () => void;
 }
 
-/** "3 folders, 2 files", naming only what the folder holds. */
-function folderCount(folders: number, files: number): string {
+/** "3 folders, 2 files", naming only what the folder holds, and that more follow when they do. */
+function folderCount(folders: number, files: number, more: boolean): string {
   const said = [
     ...(folders > 0 ? [`${String(folders)} ${folders === 1 ? "folder" : "folders"}`] : []),
     ...(files > 0 || folders === 0 ? [`${String(files)} ${files === 1 ? "file" : "files"}`] : []),
+    ...(more ? ["more below"] : []),
   ];
 
   return said.join(", ");
@@ -493,7 +494,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               </div>
             );
           })}
-          {!loading && <MoreRow more={folder.next === undefined ? null : () => run(Effect.promise(folder.more))} />}
+          {!loading && <MoreRow next={folder.next} more={() => run(Effect.promise(folder.more))} />}
           {!loading && filtered.length === 0 && entries.length > 0 && (
             <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
           )}
@@ -502,8 +503,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           )}
           {!loading && filtered.length > 0 && (
             <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta tabular-nums border-t p-border mt-1">
-              {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount)}
-              {folder.next !== undefined && <span className="p-text-4">, more below</span>}
+              {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount, folder.next !== undefined)}
               <span className="ml-2 hidden @[44rem]:inline p-text-4">↑↓ move · Enter open · Backspace up · F2 rename · Del delete</span>
             </div>
           )}
