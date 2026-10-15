@@ -361,7 +361,7 @@ export {
 
 // Chat engine
 export {
-  runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
+  runChat, INTERRUPTED_TURN,
   type ChatEvent, type ChatFallback, type ChatOptions, type ObserveStream,
 } from './chat';
 
