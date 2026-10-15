@@ -313,8 +313,7 @@ describe('two actors, one database: gepa_runs and gepa_candidates', () => {
 
     const candidate = (source: string) => ({
       id: 'cand-1', parentId: null, source,
-      scores: new Map([['i1', 1]]), feedback: new Map<string, string>(),
-      aggregateScore: 1, createdAt: 1,
+      scores: new Map([['i1', 1]]), feedback: new Map<string, string>(), createdAt: 1,
     });
 
     persistGepaCandidate(w.sql, w.a, { runId: runA, candidate: candidate('from-a'), iteration: 0 });

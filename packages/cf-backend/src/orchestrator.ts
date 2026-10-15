@@ -139,7 +139,7 @@ import {
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, aggregateScore, type GepaRunSummary,
   qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -5168,7 +5168,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
           id: c.id, parentId: c.parentId, source: c.source,
           scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
-          aggregateScore: c.aggregateScore, createdAt: c.createdAt,
+          aggregateScore: aggregateScore(c), createdAt: c.createdAt,
         }));
 
         // The membership table is core's; no raw SELECT across the package boundary.

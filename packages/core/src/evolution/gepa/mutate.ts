@@ -5,6 +5,7 @@ import { MetricOutcomeSchema } from './types';
 import type {
   EvalInstance, GepaCandidate, GepaMetric, MetricOutcome, ReflectionLM,
 } from './types';
+import { aggregateScore } from './pareto';
 import { renderInput, truncate } from './text';
 import { stripMarkdownFences } from '../../providers/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../../utils/evidence-window';
@@ -83,7 +84,7 @@ Current ${desc}:
 ${truncate(opts.parent.source, EVIDENCE_BUDGETS.gepaParentSource)}
 \`\`\`
 
-Aggregate score on the full eval set: ${opts.parent.aggregateScore.toFixed(3)}
+Aggregate score on the full eval set: ${aggregateScore(opts.parent).toFixed(3)}
 
 Recent rollouts on minibatch:
 ${traceLines.join('\n')}

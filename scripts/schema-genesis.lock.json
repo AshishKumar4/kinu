@@ -804,7 +804,6 @@
     "source TEXT NOT NULL",
     "scores_json TEXT NOT NULL",
     "feedback_json TEXT NOT NULL",
-    "aggregate REAL NOT NULL",
     "created_at INTEGER NOT NULL",
     "iteration INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"

@@ -58,7 +58,6 @@ export function runGepa<I = unknown, E = unknown>(
     charge(config.evalSet.length);
     yield* Effect.promise(() => Promise.resolve(config.onCandidate?.({ candidate: seed, iteration: 0 })));
     const pool: GepaCandidate[] = [seed];
-    const history: GepaCandidate[] = [seed];
 
     // The front and the best change only when the pool grows.
     let standing: { readonly size: number; readonly paretoFront: GepaCandidate[]; readonly bestSoFar: GepaCandidate } | null = null;
@@ -175,7 +174,6 @@ export function runGepa<I = unknown, E = unknown>(
       yield* Effect.promise(() => Promise.resolve(config.onCandidate?.({ candidate: cand, iteration: iter + 1 })));
 
       pool.push(cand);
-      history.push(cand);
       consecutiveRejections = 0;
 
       yield* emitIteration(config.onIteration, {
@@ -192,7 +190,7 @@ export function runGepa<I = unknown, E = unknown>(
     const result: GepaResult = {
       winner: final.bestSoFar,
       paretoFront: final.paretoFront,
-      history,
+      history: pool,
       metricCallsUsed,
       iterationsRun,
       stopReason,
@@ -210,16 +208,12 @@ async function scoreCandidate<I, E>(args: {
 }): Promise<GepaCandidate> {
   const scores = new Map<string, number>();
   const feedback = new Map<string, string>();
-  let total = 0;
 
   for (const inst of args.evalSet) {
     const o = v.parse(MetricOutcomeSchema, await args.metric(args.source, inst));
     scores.set(inst.id, o.score);
     feedback.set(inst.id, o.feedback);
-    total += o.score;
   }
-
-  const aggregateScore = args.evalSet.length === 0 ? 0 : total / args.evalSet.length;
 
   return {
     id: nanoid(),
@@ -227,7 +221,6 @@ async function scoreCandidate<I, E>(args: {
     source: args.source,
     scores,
     feedback,
-    aggregateScore,
     createdAt: nowMs(),
   };
 }

@@ -1869,7 +1869,7 @@ export {
   runGepa,
   DEFAULT_GEPA_BUDGET,
   initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks, aggregateScore,
 } from './evolution/gepa/index';
 
 export type {
