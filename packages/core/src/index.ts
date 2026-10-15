@@ -300,13 +300,9 @@ export {
 } from './slates/sharing';
 
 export {
-  ROOM_ROLES, GALLERY_CATEGORIES, GALLERY_SORTS,
-  RoomPersonSchema, RoomRoleSchema, RoomAccessSchema, RoomAudienceSchema, RoomServiceSchema, RoomToolSchema, RoomSourceSchema,
-  RoomReachSchema, GalleryCategorySchema, SheetLendSchema, SheetLendUseSchema, SheetMemberSchema, SheetViewSchema,
-  RoomSessionSchema, RoomPresenceSchema, RoomAskSchema, RoomEndedSchema, PartViewSchema, RoomViewSchema, ShowScopeSchema,
-  RoomCallSchema, RoomRefusalSchema, RoomClientFrameSchema, RoomServerFrameSchema,
-  DriveRoomCardSchema, DriveSlateSchema, DriveLibrarySchema, GalleryListingSchema, GallerySortSchema, ForkPreviewSchema, ForkedSchema,
-  roomPagePath, roomSocketPath, roomPartPath, roomEntryPath, roomForkPath, RoomEntrySchema, type RoomEntry,
+  GALLERY_CATEGORIES, RoomViewSchema, RoomCallSchema, RoomClientFrameSchema, RoomServerFrameSchema,
+  DriveLibrarySchema, ForkPreviewSchema, ForkedSchema,
+  roomPagePath, roomSocketPath, roomEntryPath, roomForkPath, RoomEntrySchema, type RoomEntry,
   type RoomPerson, type RoomRole, type RoomAccess, type RoomAudience, type RoomService, type RoomTool, type RoomSource,
   type RoomReach, type GalleryCategory, type SheetLend, type SheetLendUse, type SheetMember, type SheetView,
   type RoomSession, type RoomPresence, type RoomAsk, type RoomEnded, type PartView, type RoomView, type ShowScope,
