@@ -675,7 +675,13 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     await owner.call({ op: 'setLend', fn: 'deploy', on: true });
     const before = SlateDurabilityProbeRoot.count(people.sam, 'deploy');
     const edited = await room.editorEdit(people.ben, { 'server.ts': ATTACK_SLATE.replace('Ops.deploy({ week })', 'Ops.deploy({ week: week + 100 })') });
-    const sam = await asOwner('deploy', [5]);
+    const own = asOwner('deploy', [5]);
+    // Admitted with his own grant, Ben's code would wait for Sam to let it send: that ask is what is then seen.
+    const samAsked = await SlateDurabilityProbeRoot.askedOrEnded(owner, (each) => each.asks.some((ask) => ask.kind === 'outflow'), own);
+    const outflow = samAsked?.asks.find((ask) => ask.kind === 'outflow')?.id ?? null;
+
+    if (outflow !== null) await owner.call({ op: 'decline', ask: outflow });
+    const sam = outflow === null ? await own : 'asked to let Ben\'s code send';
     const call = room.callAs(people.bob, 'deploy', [4]);
     // Admitted with Sam's lend, it would wait for Sam at its deploy: the ask is then what is seen.
     const asked = await SlateDurabilityProbeRoot.askedOrEnded(owner, (each) => each.asks.some((ask) => ask.kind === 'effect'), call);
@@ -687,7 +693,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     void at;
 
-    return { edited: edited?.ok === true ? 'ok' : 'refused', bob, sam: sam.startsWith('value') ? 'deployed' : 'stopped', deploysAfterEdit: SlateDurabilityProbeRoot.count(people.sam, 'deploy') - before };
+    return { edited: edited?.ok === true ? 'ok' : 'refused', bob, sam: sam.startsWith('value') || sam.startsWith('asked') ? sam.replace(/^value .*/u, 'deployed') : 'stopped', deploysAfterEdit: SlateDurabilityProbeRoot.count(people.sam, 'deploy') - before };
   }
 
   /** Attacks 2 and 8, persisted labels and the post guard: a run that read Alice's repository cannot post it publicly. */

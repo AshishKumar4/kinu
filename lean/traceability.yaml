@@ -1082,6 +1082,7 @@ requirements:
       - Reader checks are a premise; a check run with the reader's own grant must answer yes only if the reader may see what the source held, then or since, and a grant's declared sink must include everyone its effect reaches
       - The schedule is a premise; a confined run cannot request admissions, mint, declassify, approve or edit code, so its own choices are only the actions the insertion theorem covers
       - Timing, termination and refusal channels and relaying by a recipient are outside the model
+      - packages/cf-backend/tests/workerd/room-attacks.test.ts replays the attacks of Attacks.lean against a built room in workerd, with MCP servers faked at their accounts; removing each guard turns its attack red (/mnt/local/kinu/tmp/sharing/mutations/, cited in docs/SLATE-SHARING-SECURITY.md §8)
     refinement:
       - lean/fixtures/sharing-traces.json :: packages/core/tests/refinement-sharing.test.ts
   PR-SHARE-006:

@@ -378,6 +378,19 @@ Build step 3b (`/mnt/local/kinu/tmp/sharing/plan-3b.md`, on hold) is redone agai
   - the eight attack traces and the four scenarios, replayed end to end against the built room, each attack red when
     its guard is removed (`PR-SHARE-005`, `PR-SHARE-007`).
 
+**Built, 2026-10-15.**
+- **Model refinement.** `lean/fixtures/sharing-traces.json` holds 400 generated traces of model events. The traces cover a slate and its forks, signed-out visitors and approvals. `packages/core/tests/refinement-sharing.test.ts` replays every trace against the caretaker, one room per slate, and agrees on every step. It allows one documented exception: a person's own data, in their own request, waits for them as an outflow.
+- **The ten guards' attacks, end to end.** `packages/cf-backend/tests/workerd/room-attacks.test.ts` runs each attack in workerd against a built room. Rooms, sockets, grants, sealed bindings and confined runs are real. Only the people's MCP servers are faked, at their own accounts, and every call that reaches an account is logged.
+- **Mutation evidence.** Each guard was removed one at a time, and each removal turned its attack red: `/mnt/local/kinu/tmp/sharing/mutations/` (README, diffs, logs). The exception is the bare-fork guard. A fork is a room of its own and holds none of its parent's grants, so there is no guard to remove.
+- **Defects found along the way, all fixed:**
+  - reader checks matched by source alone;
+  - one isolate per confined run, never another run's;
+  - a sealed part with attributes threw;
+  - a confined run's storage stub was refused for every call;
+  - a holder could not decline a waiting step;
+  - a revoked grant left its step waiting.
+- **The four scenarios.** These are the kernel-evaluated traces of `Friction.lean`. They are not yet replayed in workerd.
+
 ## 9. Step 0, measured
 
 The question the build plan left open: can an object that is not the workspace host a slate's server with its own
