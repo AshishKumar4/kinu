@@ -184,8 +184,8 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
 
 /** By outcome; `inline` carries the result to an agent without `agent.jobResult`. */
 export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent'): string {
-  const generation = job.resumeAttempts > 0
-    ? ` (generation ${String(job.resumeAttempts + 1)}: it was interrupted and re-driven)`
+  const generation = job.epoch > 0
+    ? ` (generation ${String(job.epoch + 1)}: it was interrupted and re-driven)`
     : '';
 
   if (job.status === 'completed') {
@@ -611,7 +611,7 @@ export class BackgroundJobRunner {
         partial: true,
         why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
           + 'finished answer: say so if you use it.',
-        generation: (job?.resumeAttempts ?? 0) + 1,
+        generation: (job?.epoch ?? 0) + 1,
         result: harvested.value,
       } }), now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial: ${why}`);
@@ -856,8 +856,8 @@ export class BackgroundJobRunner {
 
       if (!claim) return { state: 'none' }; // lost the race — another activation reclaimed it
       // Armed before the drive: an eviction during it cannot write the wait afterwards.
-      this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
-      this.deps.logActivity?.('bg_job_resume', `${job.kind} -> ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
+      this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.epoch - 1));
+      this.deps.logActivity?.('bg_job_resume', `${job.kind} -> ${jobId} (attempt ${claim.epoch})`);
       this.driveResume(job, this.deps.resume);
 
       return { state: 'redriven', job };
@@ -872,11 +872,11 @@ export class BackgroundJobRunner {
   private async deferRecovery(job: BackgroundJob, at: number): Promise<JobRecoveryOutcome> {
     const delayMs = at - Date.now();
     diagnostics.event('jobs.resume_deferred', {
-      jobId: job.id, kind: job.kind, attempts: job.resumeAttempts, delayMs, resumeAfter: at,
+      jobId: job.id, kind: job.kind, attempts: job.epoch, delayMs, resumeAfter: at,
     });
     this.deps.logActivity?.(
       'bg_job_resume_deferred',
-      `${job.kind} -> ${job.id} was interrupted ${String(job.resumeAttempts)} time(s); `
+      `${job.kind} -> ${job.id} was interrupted ${String(job.epoch)} time(s); `
       + `next attempt in ${String(Math.ceil(delayMs / 1000))}s`,
     );
     await this.deps.scheduleResume?.(at);

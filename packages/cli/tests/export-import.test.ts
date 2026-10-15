@@ -7,19 +7,20 @@ import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync, symlinkSync, utimesSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import {
-  ArchiveCursorSchema, archiveSqlFromDatabase, initActorClaimTables, initWorkspaceActorTable, readWorkspaceArchivePage, workspaceArchiveStore,
+  ArchiveCursorSchema, initActorClaimTables, initWorkspaceActorTable, readWorkspaceArchivePage, workspaceArchiveStore,
   type ArchiveCursor,
 } from '@kinu.run/core';
 import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { stampSchemaGenesis } from '@kinu.run/cli-backend';
+import { stampSchemaGenesis } from '@kinu.run/core';
 import { createMemoryVfs, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
+import { sqlStorageOver } from '@kinu.run/core/identity';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -64,16 +65,16 @@ function seedWorkspace(path: string): void {
     // The roster every workspace's genesis gives it.
     initWorkspaceActorTable((ddl) => { db.exec(ddl); });
     initActorClaimTables((ddl) => { db.exec(ddl); });
-    db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
+    db.exec(`CREATE TABLE binary_rows (path TEXT PRIMARY KEY, data BLOB)`);
     db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);
-    stampSchemaGenesis(db);
+    stampSchemaGenesis((ddl) => db.exec(ddl));
 
     for (let i = 0; i < 300; i++) seedEntry(db, `m${i}`, `note ${i} with "quotes"`, i);
 
     const bytes = new Uint8Array(256);
 
     for (let i = 0; i < bytes.length; i++) bytes[i] = i;
-    db.query(`INSERT INTO vfs_files (path, data) VALUES (?, ?)`).run('logo.bin', bytes);
+    db.query(`INSERT INTO binary_rows (path, data) VALUES (?, ?)`).run('logo.bin', bytes);
     // Multi-byte text long enough that the reader's 64 KiB chunks land mid-character.
     seedEntry(db, 'unicode', '→ café 🌍 '.repeat(9000), 300);
   })();
@@ -119,6 +120,9 @@ function placedWorkspace() {
   return { home, project };
 }
 
+/** A store page as the archive carries it: its root and each row's path, relative to the root. */
+const ArchivedPageSchema = v.looseObject({ root: v.string(), rows: v.array(v.looseObject({ path: v.string() })) });
+
 describe('kinu export / import', () => {
   // Release review, 2026-10-05: export walked only the folder and import wrote it into the database's Nimbus files,
   // which a local workspace no longer reads, so its own space (slates) was lost and its folder was unreadable.
@@ -136,10 +140,11 @@ describe('kinu export / import', () => {
     expect(exported.exitCode).toBe(0);
     const records = readFileSync(archive, 'utf8').trim().split('\n').map(parseJsonObject);
 
-    // As vfs:// names them: the own space at the root, the folder under local/; never the database or the archive.
-    expect(records.filter((row) => row.t === 'file').map((row) => row.path))
-      .toEqual(['local/bytes.bin', 'local/docs/note.txt', 'slates/board/index.ts']);
-    expect(records.filter((row) => row.t === 'directory').map((row) => row.path)).toEqual(['local', 'local/docs', 'local/empty', 'slates', 'slates/board']);
+    // As vfs:// names them, in the store pages a cloud archive writes: the slate under slates/, the folder as local/;
+    // never the database or the archive.
+    const pages = records.flatMap((record) => (record.t === 'page' ? [v.parse(ArchivedPageSchema, record.page)] : []));
+    expect([...new Set(pages.map((page) => page.root))].sort()).toEqual(['local', 'slates/board']);
+    expect(pages.flatMap((page) => page.rows.map((row) => row.path)).filter((path) => /agent\.db|backup\.kinu/.test(path))).toEqual([]);
 
     const folder = scratch('kinu-import-folder-');
     const imported = await result(runCli(home, ['import', archive, '--name', 'restored-files'], {}, folder));
@@ -170,16 +175,25 @@ describe('kinu export / import', () => {
     expect([existsSync(join(home, 'clash')), readdirSync(home).filter((name) => name.startsWith('.importing'))]).toEqual([false, []]);
   });
 
-  test('a local archive refuses unsupported symlinks instead of exporting their targets', async () => {
+  // core-rest review P1-33: a local archive refused a symlink, so a folder with one could not be exported at all.
+  test('a folder\'s link travels as a link, never its target, and a file keeps its mode and time', async () => {
     const { home, project } = placedWorkspace();
     const outside = join(scratch('kinu-export-outside-'), 'outside.txt');
     writeFileSync(outside, 'not part of this workspace');
     symlinkSync(outside, join(project, 'link'));
-    const archive = join(project, 'backup.kinu.jsonl');
+    writeFileSync(join(project, 'run.sh'), 'echo ran\n', { mode: 0o750 });
+    utimesSync(join(project, 'run.sh'), 1_000, 2_000);
+    const archive = join(scratch('kinu-export-link-out-'), 'scout.kinu.jsonl');
     const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
-    expect(exported.exitCode).not.toBe(0);
-    expect(exported.stderr).toContain('cannot preserve symlink entry');
-    expect(exported.stdout).not.toContain('Exported');
+    expect(exported.exitCode).toBe(0);
+    expect(readFileSync(archive, 'utf8')).not.toContain(Buffer.from('not part of this workspace').toString('base64'));
+
+    const folder = scratch('kinu-import-link-');
+    const imported = await result(runCli(home, ['import', archive, '--name', 'linked'], {}, folder));
+    expect(imported.exitCode).toBe(0);
+    const script = lstatSync(join(folder, 'run.sh'));
+    expect({ link: readlinkSync(join(folder, 'link')), mode: script.mode & 0o7777, mtime: Math.round(script.mtimeMs) })
+      .toEqual({ link: outside, mode: 0o750, mtime: 2_000_000 });
   });
 
   test('a local workspace round-trips through an archive', async () => {
@@ -201,7 +215,7 @@ describe('kinu export / import', () => {
     expect(db.query(`SELECT COUNT(*) AS n FROM conversation_entries`).get()).toEqual({ n: 301 });
     expect(db.query(`SELECT name FROM workspace_identity`).get()).toEqual({ name: 'scout' });
     expect(entryText(db, 'unicode')).toBe('→ café 🌍 '.repeat(9000));
-    const blob = db.query<{ data: Uint8Array }, []>(`SELECT data FROM vfs_files WHERE path = 'logo.bin'`).get();
+    const blob = db.query<{ data: Uint8Array }, []>(`SELECT data FROM binary_rows WHERE path = 'logo.bin'`).get();
 
     if (!blob) throw new Error('restored logo missing');
     expect(Array.from(new Uint8Array(blob.data)).slice(0, 4)).toEqual([0, 1, 2, 3]);
@@ -212,7 +226,7 @@ describe('kinu export / import', () => {
     const cloudDir = scratch('kinu-export-cloud-db-');
     const cloudDb = join(cloudDir, 'cloud.db');
     seedWorkspace(cloudDb);
-    const source = archiveSqlFromDatabase(new Database(cloudDb, { readonly: true }));
+    const source = sqlStorageOver(new Database(cloudDb, { readonly: true }));
 
     const calls: Array<{ method: string; cursor: ArchiveCursor | null }> = [];
 
@@ -287,7 +301,6 @@ describe('kinu export / import', () => {
 
     await createWorkspace(db, {
       name: 'skywriter', purpose: 'archive restart proof',
-      llm: { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
       // In memory, a workspace has no space: its home is a map.
       home: createMemoryVfs().vfs,
     });
@@ -299,7 +312,7 @@ describe('kinu export / import', () => {
     await writeText(bundle.vfs, 'memory/MEMORY.md', '- kept as agent state');
     let restarted = false;
     let starts = 0;
-    const sql = archiveSqlFromDatabase(db);
+    const sql = sqlStorageOver(db);
 
     const server = Bun.serve({
       hostname: '127.0.0.1', port: 0,
@@ -356,33 +369,17 @@ describe('kinu export / import', () => {
     }
   });
 
-  test('a bare workspace database file imports, not only an archive', async () => {
-    const home = scratch('kinu-export-bare-db-');
-    const out = scratch('kinu-export-bare-db-out-');
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {} }));
-    const bareDatabase = join(out, 'oldbot.agent.db');
-    seedWorkspace(bareDatabase);
-
-    const imported = await result(runCli(home, ['import', bareDatabase]));
-    expect(imported.stderr).toBe('');
-    expect(imported.exitCode).toBe(0);
-
-    const db = restoredDb(home, 'oldbot');
-    expect(db.query(`SELECT COUNT(*) AS n FROM conversation_entries`).get()).toEqual({ n: 301 });
-    db.close();
-  });
-
   // 2026-10-04: a restored copy works in the folder it was imported from, so a name it cannot hold is refused first.
   test('an import under a name a cloud workspace holds is refused, and no workspace is written', async () => {
+    const { home: source } = placedWorkspace();
+    const archive = join(scratch('kinu-export-claimed-out-'), 'oldbot.kinu.jsonl');
+    expect((await result(runCli(source, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
     const home = scratch('kinu-export-claimed-');
-    const out = scratch('kinu-export-claimed-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {
       oldbot: { name: 'oldbot', mode: 'cloud', cloudName: 'oldbot', displayName: 'Oldbot', createdAt: '', updatedAt: '' },
     } }));
-    const bareDatabase = join(out, 'oldbot.agent.db');
-    seedWorkspace(bareDatabase);
 
-    const imported = await result(runCli(home, ['import', bareDatabase]));
+    const imported = await result(runCli(home, ['import', archive, '--name', 'oldbot']));
     expect(imported.exitCode).not.toBe(0);
     expect(imported.stderr).toContain('"oldbot" already names a cloud workspace');
     expect(existsSync(join(home, 'oldbot', 'agent.db'))).toBe(false);
@@ -405,7 +402,7 @@ describe('kinu export / import', () => {
     expect(v.parse(v.array(v.object({ path: v.string() })), JSON.parse(found.stdout)).map((hit) => hit.path)).toEqual(['memory/MEMORY.md']);
   });
 
-  test('a database or an archive an older Kinu made is refused by name, and no workspace is written', async () => {
+  test('an archive or a workspace an older Kinu made is refused by name, and no workspace is written', async () => {
     const { home } = placedWorkspace();
     const out = scratch('kinu-export-genesis-out-');
     const current = join(home, 'scout', 'agent.db');
@@ -414,29 +411,25 @@ describe('kinu export / import', () => {
     expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
     const [header, ...records] = readFileSync(archive, 'utf8').split('\n');
     const unstamped = { ...parseJsonObject(header ?? '') };
-    Reflect.deleteProperty(unstamped, 'schema_genesis');
+    Reflect.deleteProperty(unstamped, 'schema_stamp');
     writeFileSync(archive, [JSON.stringify(unstamped), ...records].join('\n'));
 
-    const older = join(out, 'older.agent.db');
-    seedWorkspace(older);
-    const aged = workspaceDatabase(older);
-    aged.exec('PRAGMA user_version = 0');
-    aged.close();
     const agedHere = workspaceDatabase(current);
     agedHere.exec('PRAGMA user_version = 0');
     agedHere.close();
 
     const commands = [
-      ['import', archive, '--name', 'from-archive'], ['import', older], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')],
-      ['memory', 'scout', 'wrangler'],
+      ['import', archive, '--name', 'from-archive'], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')],
+      ['memory', 'scout', 'wrangler'], ['executors', 'scout', 'workspace', 'true'],
     ];
 
     for (const args of commands) {
       const refused = await result(runCli(home, args));
 
       expect(refused.exitCode).toBe(1);
-      expect(refused.stderr).toContain('made by an older Kinu');
-      expect(refused.stderr).toContain('kinu create');
+      // The workspace by the name the user gave it, and the one command that starts fresh.
+      expect(refused.stderr).toContain('"scout" was made by an older version of Kinu');
+      expect(refused.stderr).toContain('kinu create <new-name>');
     }
 
     expect(() => restoredDb(home, 'from-archive')).toThrow('unable to open database file');

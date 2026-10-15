@@ -13,6 +13,11 @@ export type CraftedSourceAdmission =
   | { readonly ok: true; readonly code: string }
   | { readonly ok: false; readonly error: string };
 
+/** Whether `source` holds no code, comments and whitespace aside: a retired row's marker (`// retired: …`), not a tool. */
+export function holdsNoCode(source: string): boolean {
+  return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '').trim() === '';
+}
+
 /** Whether `source` parses as exactly one JavaScript expression. */
 export function parsesAsExpression(source: string): string | null {
   return settleSync(Effect.try({ try: () => acorn.parse(`(${source}\n)`, ECMA), catch: (cause) => ({ cause }) }).pipe(

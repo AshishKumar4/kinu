@@ -17,13 +17,14 @@ import {
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
+import type { SessionEvent } from '@kinu.run/core';
 import {
   LocalAgentHost,
   makeWorkspaceSchemaSql,
   openWorkspaceCLI,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
-  type SessionEvent, workspaceHome,
+  workspaceHome,
 } from '@kinu.run/cli-backend';
 // The v2 fixture model is a test helper, not a package export: reuse it rather than keep a second copy.
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
@@ -118,7 +119,7 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
   const db = workspaceDatabase(dbPath);
 
   try {
-    const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM, home: workspaceHome(db) });
+    const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     rt.actor.config.setDisplayNameOrigin('', 'auto');
   } finally {

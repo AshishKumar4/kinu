@@ -65,7 +65,7 @@
  * Object namespace and is forbidden from trying.
  *
  * It needs a Cloudflare session, so it runs at the deploy tier and carries a
- * `CI_EXEMPT` entry. Without a session the whole assertion is unreachable, which
+ * `ciExempt` reason. Without a session the whole assertion is unreachable, which
  * is `blocked()`: non-zero by default, because a gate that prints "skipped" and
  * exits 0 is read as a pass by every human and every CI badge that sees it.
  */

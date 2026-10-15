@@ -17,14 +17,14 @@ import {
   inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
-  resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
+  durableStamps, readStamp, StoragePredatesReleaseError, writeStamp, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, AccountProposer, Fact } from '@kinu.run/core';
-import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
+import type { SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,
@@ -86,7 +86,6 @@ import {
   type AgentsToolDeps,
   type AgentsSwarmDeps,
   BUILTIN_TOOLS,
-  type TurnReason,
   type PromptModelContext,
   type WorkMode, isWorkMode,
   nanoid,
@@ -132,7 +131,7 @@ import {
   // One minting rule for every subordinate, on either backend
   agentNamer,
   // Subordinate tree depth cap: derived per child, never stated by one
-  delegationExhausted, type DelegationBudget,
+  type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, specModelInfo, assembleActorTurn,
@@ -147,7 +146,7 @@ import {
   type InstructionSourceRow, type InstructionSourceView,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
+  resolveTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   activeOperationProfile, captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
   inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
@@ -157,8 +156,8 @@ import {
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
-  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
-  type ResolvedTurnProfile, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
+  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission,
+  type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   childContextResolver,
 } from "@kinu.run/core";
@@ -185,7 +184,9 @@ import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codem
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
-import type { AgentStoreBroker } from "./agent-facets";
+import { AgentStoreBroker } from "./agent-facets";
+import type { AgentFacetCalls } from "./agent-facet/agent-facet";
+import type { AgentSnapshot } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel, SlateSurfaceValue } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
@@ -431,8 +432,13 @@ async function reachedIn<A>(
 /** The evolution lane's `fibers` row name. */
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 
+/** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
+export function unownedWorkspace(): KinuError {
+  return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
+}
+
 /** One read held until dropped; a failed read is not held, so the next need asks again. */
-class HeldRead<A> {
+export class HeldRead<A> {
   #held: Promise<A> | null = null;
   #value: A | undefined = undefined;
 
@@ -447,7 +453,14 @@ class HeldRead<A> {
     ));
   }
 
-  /** What it holds once read; none while unread or still reading. */
+  /** Reads again, holding what it held until the new read answers; a failed read leaves that standing. */
+  again(read: () => Promise<A>): Promise<A> {
+    this.#held = null;
+
+    return this.get(read);
+  }
+
+  /** What it holds once read; none until a first read answers. */
   get current(): A | undefined {
     return this.#value;
   }
@@ -595,33 +608,43 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Created in the constructor: the only point guaranteed to precede every access on both cf roots
-   * (`onStart` may follow an RPC). Per-root by design; `core/conformance/manifest.ts` marks it
-   * absent for cli.
+   * (`onStart` may follow an RPC). Per-root by design; `test-utils/src/conformance/manifest.ts` marks it
+   * absent for cli. The storage is asked its stamp first (identity/schema-stamp.ts): storage a release's tables step
+   * has not reached gets no init, and every call but that step's is refused with why.
    */
   private initCapabilitySchema(): void {
-    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_capability (
+    const stamps = durableStamps(this.ctx.storage.kv);
+    const stamp = readStamp(stamps, this.ctx.storage.sql, 'workspace');
+
+    if (stamp === 'behind') {
+      this.storageRefusal = new StoragePredatesReleaseError('workspace', stamps.read());
+      diagnostics.failure('workspace.storage_predates_release', this.storageRefusal);
+
+      return;
+    }
+
+    this.initBaseTables();
+
+    if (stamp === 'unmade') writeStamp(stamps, 'workspace');
+  }
+
+  /** The tables a root makes before anything reads it; the tables step runs this again once it repaired the storage. */
+  protected initBaseTables(): void {
+    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
+
+    execRaw(`CREATE TABLE IF NOT EXISTS workspace_capability (
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       token TEXT NOT NULL
     )`);
     // Pending-send ledger is declared once in core (`initPendingSendTables`) because the CLI
     // backend shares the table names with a nullable `turn_id`; one writer keeps creation order
     // from picking the shape.
-    initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
-
+    initPendingSendTables(execRaw);
     // Per-actor admission ledger (one workspace-wide pointer cannot distinguish concurrent actors).
     // In the base constructor: the SDK's fiber recovery reads it before any subclass constructor body.
-    try {
-      initActorClaimTables(resetGuardedExec((ddl: string) => this.ctx.storage.sql.exec(ddl), this.ctx.storage.sql));
-    } catch (cause) {
-      if (!(cause instanceof StoragePredatesResetError)) throw cause;
-      this.storageRefusal = cause;
-      diagnostics.failure('workspace.storage_predates_reset', cause, { table: cause.table });
-
-      return;
-    }
-
+    initActorClaimTables(execRaw);
     // Same reason.
-    initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
+    initTerminalEffectTable(execRaw);
   }
 
   /** Spliced between `agents` and `web` so provider order (and the LLM-visible type description)
@@ -761,14 +784,6 @@ export abstract class ActorAgent extends Agent<Env> {
    * Each actor's home is provisioned in this isolate by the host (`actor-hosting.ts` →
    * `hostedHomeName`); its identity is its `workspace_actors` row, so there is no facet port.
    */
-
-  /**
-   * At the depth cap the team deps are absent, so the tools cannot be attempted. Core's classified
-   * refusal covers a cached ToolSet built before a facet's identity was seeded.
-   */
-  protected teamProfile(): { readonly team?: TeamToolDeps } {
-    return delegationExhausted(this.delegationBudget()) ? {} : { team: this.getTeamToolDeps() };
-  }
 
   private _subordinateRoster: SubordinateRosterStore | null = null;
 
@@ -933,7 +948,7 @@ export abstract class ActorAgent extends Agent<Env> {
   });
 
   // The bare prototype must read as sound.
-  protected storageRefusal?: StoragePredatesResetError;
+  protected storageRefusal?: StoragePredatesReleaseError;
 
   /** Kinu's two durable wakes; see wake-jobs.ts. */
   protected readonly wakes = new WakeJobs({
@@ -1967,11 +1982,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
           this.noteGitHubCall(d, args, rawResult, this.actorHandle().actorId);
 
-          const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
-
-          if (v.is(McpProtocolFailureSchema, response)) throw new McpToolError(response);
-
-          return response;
+          return v.parse(JsonValueSchema, JSON.parse(rawResult));
         },
         effectClaims: {
           actor: this.actorHandle(),
@@ -2958,7 +2969,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const scope = record === null ? null : actorReach(actorPolicy(record));
 
     // A hire reaches its own confined surface; an agent whose programs reach the workspace's program surface, that one.
-    if (scope === null || scope.surface === 'confined') {
+    if (scope === null || scope.kind === 'confined') {
       return await this.withHostedActor(actor, async (hosted) => {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
@@ -2974,10 +2985,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const providers = actorNamespaces(this.surfaceActor(requested), SURFACE_POLICY.operations);
 
-    // Its external tools, where it reaches the workspace's.
-    const mcp = scope.external ? await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog)) : {};
+    // The workspace's own agent, which reaches its external tools.
+    const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
-    const external = scope.external ? { ...this.extensions.tools(), ...mcp } : {};
+    const external = { ...this.extensions.tools(), ...mcp };
 
     return await reachedIn(authority, providers, { ...external, ...this.getRawToolsForWorkMode(authority.mode) }, use);
   }
@@ -3082,12 +3093,26 @@ export abstract class ActorAgent extends Agent<Env> {
     return stub;
   }
 
+  /** The owner's user id; a workspace no one has claimed is refused (`unownedWorkspace`). */
+  protected requireOwner(): string {
+    const userId = this.getOwnerUserId();
+
+    if (!userId) throw unownedWorkspace();
+
+    return userId;
+  }
+
+  /** `requireOwner` as an effect, for the paths that refuse in one. */
+  protected owner(): Effect.Effect<string, KinuError> {
+    return Effect.suspend(() => {
+      const userId = this.getOwnerUserId();
+
+      return userId ? Effect.succeed(userId) : Effect.fail(unownedWorkspace());
+    });
+  }
+
   protected requireOwnerUserDO(): UserHubClient {
-    const stub = this.getOwnerUserDO();
-
-    if (!stub) throw new KinuError('unavailable', 'Agent has no owner yet. Open it through the authenticated app or CLI first.');
-
-    return stub;
+    return this.env.UserDO.get(this.env.UserDO.idFromName(this.requireOwner()));
   }
 
   /** Throws when no capability token exists; an unclaimed workspace reaches nothing. */
@@ -3203,10 +3228,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.heldRevision.get(() => this.askAccount((stub, caller) => stub.getCredentialsRevision(caller)));
   }
 
-  protected resolvedTurnProfile(): ResolvedTurnProfile | null {
-    return this.operationProfile()?.profile ?? null;
-  }
-
   /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
    * parent stub can reach them. */
   async readWorkspaceFile(path: string): Promise<Uint8Array> {
@@ -3263,12 +3284,17 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
       transcriptFor: (actor) => this.transcriptFor(actor),
-      ownRows: (actor, own) => this.agentStores(actor.actorId).inspect(own),
+      ownRows: (actor, own) => this.agentCall(actor.actorId, (isolate, snapshot) => isolate.inspect(snapshot, own)),
     }, request, authority);
   }
 
-  /** Every read or write of an agent's own stores goes here (D9). */
-  protected abstract agentStores(actorId: string): AgentStoreBroker;
+  /** Every read or write of an agent's own stores goes here (D9): a call into its isolate, bound to its snapshot. */
+  protected abstract agentCall<A>(actorId: string, call: (isolate: AgentFacetCalls, snapshot: AgentSnapshot) => Promise<A>): Promise<A>;
+
+  /** An agent's own stores as core's ports read them. */
+  protected agentStores(actorId: string): AgentStoreBroker {
+    return new AgentStoreBroker((call) => this.agentCall(actorId, call));
+  }
 
   /** Main's conversations are its own isolate's. */
   protected ownConversations(): ConversationRecall {
@@ -3285,10 +3311,9 @@ export abstract class ActorAgent extends Agent<Env> {
       // Strict: a dropped id cursor from an old client re-reads the newest page forever.
       const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
-      if (actor === undefined) return yield* Effect.promise(async () => this.agentStores(this.actorHandle().actorId).historyPage(page));
-      yield* this.requireSubordinateChat(actor);
+      if (actor !== undefined) yield* this.requireSubordinateChat(actor);
 
-      return yield* Effect.promise(async () => this.agentStores(actor).historyPage(page));
+      return yield* Effect.promise(async () => this.agentCall(actor ?? this.actorHandle().actorId, (isolate, snapshot) => isolate.historyPage(snapshot, page)));
     }));
   }
 
@@ -3560,7 +3585,10 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Every agent's turn surface (design v2 §2, §9), from the one factory. */
   protected abstract actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface>;
 
-  /** "Beta: swarms" as the workspace agent's tools last read it; null until read and after a catalog write. */
+  /**
+   * "Beta: swarms" as the workspace agent's tools last read it; null until read and after a catalog write. Not the held
+   * catalog's: a recovered turn's tools offer what its frozen catalog said, and a turn's stay as it opened them.
+   */
   private _accountSwarms: boolean | null = null;
 
   /** "Beta: swarms" as held, read once when nothing holds it. */
@@ -3700,12 +3728,6 @@ export abstract class ActorAgent extends Agent<Env> {
       stored: () => this.getStoredModelId(),
       normalize: (spec) => (spec === null ? '' : this.providerRegistry().normalizeSpecSync(spec)),
     });
-  }
-
-  /** Uses the resolved spec: the raw stored id is null on default-configured agents,
-   *  which would leave model-family guidance inert. */
-  protected promptModelContext(): PromptModelContext {
-    return this.promptModelContextFor(this.effectiveModelSpec());
   }
 
   private promptModelContextFor(named: string): PromptModelContext {
@@ -3898,10 +3920,10 @@ export abstract class ActorAgent extends Agent<Env> {
   }): DynamicContext {
     const { memoryTail, accountFacts, activeSkills } = step.reads;
     const held = this.heldDynamicOf(actor.reference);
-    const extras = reach.lanes ? this.extraDynamicContext() : {};
+    const extras = reach.kind === 'workspace' ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
-    const turn = reach.lanes && step.surface !== null ? turnTags(step.surface.item).reason : undefined;
-    const model = reach.lanes ? this.promptModelContextFor(step.profile.tier.model) : { id: step.profile.tier.model };
+    const turn = reach.kind === 'workspace' && step.surface !== null ? turnTags(step.surface.item).reason : undefined;
+    const model = reach.kind === 'workspace' ? this.promptModelContextFor(step.profile.tier.model) : { id: step.profile.tier.model };
 
     return collectDynamicContext({
       rt: actor.runtime,
@@ -3916,7 +3938,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(activeSkills !== null && activeSkills !== undefined && { activeSkills }),
       memoryTail,
       ...(accountFacts !== undefined && { accountFacts }),
-      ...(reach.external && { unavailableMcp: this._mcpUnavailable }),
+      ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: held.delegates,
       approvals: extras.approvals,
@@ -3955,11 +3977,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.workModeForMetadata(await this.mainLastUserMetadata());
   }
 
-  /** Read from the event alone, never from the work mode stamped beside it. */
-  protected turnReason(): TurnReason {
-    return turnTags({ metadata: this.turnDrivingMetadata() }).reason;
-  }
-
   /** Author-stamped, so the plan hold tells the owner's turn from the harness's. */
   protected turnDrivingMetadata(): JsonObject | undefined {
     const metadata = this.turnUserMetadata();
@@ -3989,7 +4006,7 @@ export abstract class ActorAgent extends Agent<Env> {
       resolve: async () => {
         const inputs = await this.profileInputs();
 
-        return resolveAgentTurnProfile({
+        return resolveTurnProfile({
           ...inputs,
           ...ownProfileChoices(this.config, inputs),
           workMode: preparedMode ?? await this.preparedWorkMode(),
@@ -4010,7 +4027,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const inputs = await this.profileInputs();
 
     return {
-      profile: resolveAgentTurnProfile({
+      profile: resolveTurnProfile({
         ...inputs,
         ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), {
           explicitTier: input.explicitTier,
@@ -4032,24 +4049,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return parent === null ? null : { parentActorId: parent.parentActorId, pins: createAgentConfigStore(this.boundSql, id, actor.assertCurrent) };
     });
-  }
-
-  /**
-   * Model, pricing spec and effort options are one decision, returned together so callers cannot
-   * re-derive a disagreeing one; `unit-turn-pipeline-correctness.test.ts` pins the invariant.
-   */
-  protected async modelForSource(source: SpendSource): Promise<{
-    model: LanguageModel;
-    spec: string;
-    providerOptions: ReturnType<OwnedModelServices['resolveModelWithEffort']>['providerOptions'];
-  }> {
-    const route = resolveModelRoute(source, await this.routingProfile());
-
-    if (!route) {
-      throw new KinuError('unsupported', `${source} is platform-routed: it has no model in the turn profile`);
-    }
-
-    return this.modelForResolution(route);
   }
 
   /** One model of a side route or of its chain, resolved the one way every side model is. */

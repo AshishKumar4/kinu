@@ -19,8 +19,8 @@ import { resolve } from 'node:path';
 
 import { FENCES, fenceFindings, snippetSitsExactlyOnce, type FenceResult } from './mutation-fences';
 import { trackedFiles } from './sources';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = resolve(import.meta.dir, '..');
 
 describe('the declaration is measurable', () => {
   test('there are fences, and each names a tracked file and a tracked owner', () => {

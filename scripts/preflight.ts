@@ -52,10 +52,10 @@ import { BROWSER_PROFILE_PARENT, SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@
 import { reapAbandonedRoots } from './process-owner';
 import { procFile, procStat } from './proc';
 import { signalGroup } from './process-group';
+import { REPO_ROOT as repo } from './repo-root';
 
 /** This checkout, so the merge-state probe reads THIS tree's git directory
  *  rather than whatever directory the gate happened to be invoked from. */
-const repo = new URL('..', import.meta.url).pathname;
 
 /**
  * What one full suite sweep costs the temp filesystem.

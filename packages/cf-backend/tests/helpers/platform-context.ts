@@ -6,6 +6,18 @@ import { present } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../../core/tests/helpers';
 import { SCRIPT_EXPORTS } from './programmatic-host';
 
+/** Each database's synchronous KV, as the platform keeps it beside the SQL: every activation over the database reads
+ *  the pairs the last one wrote (a schema stamp, a recorded name), as a SQLite-backed object's does. */
+const durableKv = new WeakMap<Database, Map<string, JsonValue>>();
+
+export function kvOf(db: Database): Map<string, JsonValue> {
+  const held = durableKv.get(db) ?? new Map<string, JsonValue>();
+
+  durableKv.set(db, held);
+
+  return held;
+}
+
 /** The Durable Object state every fixture here constructs; shared with
  *  `helpers/hosted-workspace.ts` so the platform surface cannot drift. */
 export function makeCtx(db: Database, id = 'harness-actor', objectName = id): AgentContext {
@@ -26,7 +38,7 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
 
   // Real KV storage: `_cf_initAsFacet` puts `cf_agents_parent_path` here and the
   // owner's inspection reads it back before traversing the hop.
-  const kv = new Map<string, JsonValue>();
+  const kv = kvOf(db);
   // This activation's alarm, as the object last set it: a later activation over the same rows starts with none, as one
   // whose alarm a reset kept from being set does.
   let alarm: number | null = null;

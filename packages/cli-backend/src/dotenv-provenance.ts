@@ -1,20 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
+import { launchDotenv, launchDotenvFiles, type LaunchDotenv } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 
-export function dotenvLoadedNames(dir: string, source: Readonly<Record<string, string | undefined>>): Set<string> {
-  const mode = source.NODE_ENV ?? 'development';
-  const files = ['.env', `.env.${mode}`, ...(mode === 'test' ? [] : ['.env.local']), `.env.${mode}.local`, '.dev.vars'];
-  const names = new Set<string>();
-
-  for (const file of files) {
+/** The dotenv files this process loaded at launch from `dir`, as Bun read them; a file that is there but cannot be
+ *  read stops the shell, which could otherwise pass on what it held. */
+export function readLaunchDotenv(dir: string, nodeEnv: string | undefined): LaunchDotenv {
+  return launchDotenv(launchDotenvFiles(nodeEnv).flatMap((file) => {
     const text = tolerate(() => readFileSync(join(dir, file), 'utf8'), 'enoent');
 
-    for (const [name, value] of Object.entries(text === undefined ? {} : parseEnv(text))) {
-      if (source[name] === value) names.add(name);
-    }
-  }
-
-  return names;
+    return text === undefined ? [] : [parseEnv(text)];
+  }));
 }

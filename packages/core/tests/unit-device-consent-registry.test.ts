@@ -1,241 +1,267 @@
-/** The device-consent registry through its public seam; `announce` is the only platform-shaped piece. */
+/** The device-consent registry through its public seam; `announce` and `wake` are the only platform-shaped pieces. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { Effect } from 'effect';
 import {
-  DeviceConsentRegistry, DeviceConsentStore, initDeviceConsentRequestsTable,
-  type DeviceConsentNotice,
-  type DeviceConsentRequest,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, DENIAL_STANDING_MS,
+  type AgentSignal, type DeviceConsentNotice, type DeviceConsentRequest,
 } from '../src/index';
+import { KinuError } from '../src/obs/index';
+import { initDeviceConsentAsksTable } from '../src/safety/device-consent';
+import { createTestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql } from './helpers';
 
-const REQUEST: DeviceConsentRequest = {
-  deviceId: 'dev-1',
-  deviceLabel: "ashish's device",
-  method: 'exec',
-  command: 'git status',
-};
+const T0 = 1_700_000_000_000;
 
-/** One registry's durable half over an in-memory database, in the DO workspace schema's shape. */
-function consentStore(): DeviceConsentStore {
+const LABEL = "ashish's device";
+
+/**
+ * One registry over an in-memory database, in the DO workspace schema's shape: its asks come from the workspace's
+ * main agent (`root`) and one hire (`hire`), and its clock and wakes are in the test's hands.
+ */
+function registry(failWakes = false) {
   const db = new Database(':memory:');
-  initDeviceConsentRequestsTable(makeExecRaw(db));
-
-  return new DeviceConsentStore(makeSql(db));
-}
-
-function registry(timeoutMs = 10_000) {
+  const execRaw = makeExecRaw(db);
+  initDeviceConsentAsksTable(execRaw);
+  const actors = createTestActors(makeSql(db), execRaw);
+  const root = actors.main.actorId;
+  const hire = actors.sibling('courier').actorId;
   const notices: DeviceConsentNotice[] = [];
+  const woken: Array<{ readonly actorId: string; readonly signal: AgentSignal }> = [];
+  const clock = { now: T0 };
   let n = 0;
 
   const reg = new DeviceConsentRegistry({
-    store: consentStore(),
+    store: new DeviceConsentStore(makeSql(db)),
     announce: (notice) => { notices.push(notice); },
     newId: () => `cons-${++n}`,
-    timeoutMs,
-    now: () => 1_700_000_000_000,
+    wake: (actorId, signal) => {
+      woken.push({ actorId, signal });
+
+      return failWakes && actorId === hire ? Effect.fail(new KinuError('unavailable', 'the hire is retired')) : Effect.void;
+    },
+    now: () => clock.now,
   });
 
-  return { reg, notices };
+  /** `git status` on the device by the main agent, under the hub's first epoch, unless overridden. */
+  const req = (over: Partial<DeviceConsentRequest> = {}): DeviceConsentRequest => ({
+    deviceId: 'dev-1', deviceLabel: LABEL, method: 'exec', command: 'git status', actorId: root, epoch: 0, ...over,
+  });
+
+  const retire = (actorId: string) => {
+    db.query('UPDATE workspace_actors SET retiring_at = ? WHERE actor_id = ?').run(T0, actorId);
+  };
+
+  return { reg, notices, woken, clock, root, hire, req, retire };
 }
 
-describe('DeviceConsentRegistry', () => {
-  test('a raised prompt is announced, listed, and settles on the answer', async () => {
-    const { reg, notices } = registry();
-    const pending = reg.request(REQUEST);
+describe('an ask parks on the owner, as a deferred approval does', () => {
+  test('the call that raises it is NOT RUN at once, and the card is announced and listed until answered', async () => {
+    const { reg, notices, woken, root, req } = registry();
 
-    expect(notices).toEqual([{
-      kind: 'raised',
-      consent: { ...REQUEST, consentId: 'cons-1', createdAt: 1_700_000_000_000 },
-    }]);
-    expect(reg.list()).toEqual([{ ...REQUEST, consentId: 'cons-1', createdAt: 1_700_000_000_000 }]);
+    expect(reg.ask(req())).toBe('queued');
 
-    expect(reg.resolve('cons-1', 'always')).toBe(true);
-    expect(await pending).toBe('always');
-    expect(notices[1]).toEqual({ kind: 'settled', consentId: 'cons-1' });
-    // Settled prompts leave the list, so a reloading client re-renders nothing.
+    const card = { deviceId: 'dev-1', deviceLabel: LABEL, method: 'exec', command: 'git status', consentId: 'cons-1', createdAt: T0 };
+
+    expect(notices).toEqual([{ kind: 'raised', consent: card }]);
+    expect(reg.list()).toEqual([card]);
+    expect(await reg.resolve('cons-1', 'once')).toBe(true);
+    expect(notices.at(-1)).toEqual({ kind: 'settled', consentId: 'cons-1' });
+    // Answered asks leave the list, so a reloading client re-renders nothing.
     expect(reg.list()).toEqual([]);
+    expect(woken.map(({ actorId, signal }) => [actorId, signal.kind, signal.text])).toEqual([
+      [root, 'device_consent', `Device use APPROVED, still not run: re-issue once:\n  ${LABEL}: git status`],
+    ]);
   });
 
-  test('an unanswered prompt expires as `timeout`, never as `deny`', async () => {
-    // Telling the model it was refused turns the owner stepping away into a permanent capability loss.
-    const { reg, notices } = registry(1);
-    const decision = await reg.request(REQUEST);
-    expect(decision).toBe('timeout');
-    expect(reg.list()).toEqual([]);
-    expect(notices.map((n) => n.kind)).toEqual(['raised', 'settled']);
+  test('no ask lapses: it waits on the owner however long they take', () => {
+    const { reg, clock, req } = registry();
+
+    reg.ask(req());
+    clock.now += 30 * 24 * 60 * 60 * 1000;
+
+    expect(reg.list().map((pending) => pending.consentId)).toEqual(['cons-1']);
+    expect(reg.ask(req())).toBe('queued');
   });
 
-  test('an answer that arrives after the prompt expired is refused, not double-settled', async () => {
-    const { reg } = registry(1);
-    const decision = await reg.request(REQUEST);
-    expect(decision).toBe('timeout');
-    expect(reg.resolve('cons-1', 'once')).toBe(false);
+  test('a re-issue before the answer joins its ask: one id, one card', () => {
+    const { reg, notices, req } = registry();
+
+    expect([reg.ask(req()), reg.ask(req({ deviceLabel: 'renamed' }))]).toEqual(['queued', 'queued']);
+    expect(notices.filter((notice) => notice.kind === 'raised')).toHaveLength(1);
   });
 
-  test('an unknown consent id is refused', () => {
-    const { reg } = registry();
-    expect(reg.resolve('cons-nope', 'once')).toBe(false);
+  test('the re-issue an approval wakes runs on it once; the next call asks again', async () => {
+    const { reg, req } = registry();
+
+    reg.ask(req());
+    await reg.resolve('cons-1', 'once');
+
+    expect(reg.ask(req())).toBe('once');
+    expect(reg.ask(req())).toBe('queued');
+    expect(reg.list().map((pending) => pending.consentId)).toEqual(['cons-2']);
   });
 
-  test('resolving one prompt leaves its siblings waiting', async () => {
-    const { reg } = registry();
-    const first = reg.request(REQUEST);
-    const sibling = reg.request({ ...REQUEST, command: 'rm -rf build' });
-    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-1', 'cons-2']);
+  test('an approval is its own asker\'s: another agent\'s identical call asks for itself', async () => {
+    const { reg, hire, req } = registry();
 
-    reg.resolve('cons-1', 'deny');
-    expect(await first).toBe('deny');
-    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
-    expect(reg.resolve('cons-2', 'deny')).toBe(true);
-    expect(await sibling).toBe('deny');
+    reg.ask(req());
+    await reg.resolve('cons-1', 'once');
+
+    expect(reg.ask(req({ actorId: hire }))).toBe('queued');
+    expect(reg.ask(req())).toBe('once');
   });
 
-  test('waiting prompts appear in the per-step dynamic context', async () => {
-    const { reg } = registry();
-    const pending = reg.request(REQUEST);
-    expect(reg.approvals()).toEqual([{
-      id: 'cons-1',
-      kind: 'device consent',
-      detail: "ashish's device: git status",
-    }]);
-    expect(reg.resolve('cons-1', 'deny')).toBe(true);
-    expect(await pending).toBe('deny');
+  test('a denial stands for its re-issues, then is swept and asked again', async () => {
+    const { reg, woken, clock, req } = registry();
+
+    reg.ask(req());
+    await reg.resolve('cons-1', 'deny');
+
+    expect(woken.map(({ signal }) => signal.text)).toEqual([`Device use DENIED: do not re-issue:\n  ${LABEL}: git status`]);
+    expect(reg.ask(req())).toBe('denied');
+    clock.now += DENIAL_STANDING_MS;
+    expect(reg.ask(req())).toBe('queued');
+  });
+
+  test('a second answer, or an answer to an unknown id, decides nothing', async () => {
+    const { reg, woken, req } = registry();
+
+    reg.ask(req());
+
+    expect(await reg.resolve('cons-1', 'once')).toBe(true);
+    expect(await reg.resolve('cons-1', 'deny')).toBe(false);
+    expect(await reg.resolve('cons-404', 'once')).toBe(false);
+    expect(woken).toHaveLength(1);
+  });
+
+  test("the owner's own call is asked like any other, and its answer wakes nobody", async () => {
+    const { reg, woken, req } = registry();
+    const { actorId: _actorId, ...owners } = req();
+
+    reg.ask(owners);
+
+    expect(await reg.resolve('cons-1', 'once')).toBe(true);
+    expect(woken).toEqual([]);
+    expect(reg.ask(owners)).toBe('once');
+  });
+
+  test('waiting asks appear in the per-step dynamic context', () => {
+    const { reg, req } = registry();
+
+    reg.ask(req());
+
+    expect(reg.approvals()).toEqual([{ id: 'cons-1', kind: 'device consent', detail: `${LABEL}: git status` }]);
+  });
+
+  test("a retired agent's ask leaves the owner's list: nobody it could wake is left; the owner's own stays", () => {
+    const { reg, hire, req, retire } = registry();
+    const { actorId: _actorId, ...owners } = req({ command: 'ls' });
+
+    reg.ask(req({ actorId: hire }));
+    reg.ask(owners);
+    retire(hire);
+
+    expect(reg.list().map((pending) => pending.command)).toEqual(['ls']);
   });
 });
 
-/** One logical grant is one card: the registry, not each caller, dedups a re-asked question. */
-describe('DeviceConsentRegistry identity', () => {
-  test('an identical re-ask joins the waiting prompt: one id, one card, one answer', async () => {
-    const { reg, notices } = registry();
-    const first = reg.request(REQUEST);
-    const retry = reg.request({ ...REQUEST });
+describe('a revocation voids the approvals given before it', () => {
+  test('an approval answers no call made under a later epoch, which asks again', async () => {
+    const { reg, req } = registry();
 
-    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-1']);
-    expect(notices.filter((n) => n.kind === 'raised')).toHaveLength(1);
+    reg.ask(req());
+    await reg.resolve('cons-1', 'always');
 
-    expect(reg.resolve('cons-1', 'always')).toBe(true);
-    expect(await first).toBe('always');
-    expect(await retry).toBe('always');
-    expect(notices.filter((n) => n.kind === 'settled')).toHaveLength(1);
+    expect(reg.ask(req({ epoch: 1 }))).toBe('queued');
+    expect(reg.ask(req())).toBe('queued');
+    expect(reg.list().map((pending) => pending.consentId)).toEqual(['cons-2']);
   });
 
-  test('a refreshed device label joins the pending action on that device', async () => {
-    const { reg } = registry();
-    const first = reg.request(REQUEST);
-    const retry = reg.request({ ...REQUEST, deviceLabel: 'Ashish’s device' });
+  test('an always that answered a waiting sibling restores nothing after the binding is revoked', async () => {
+    const { reg, req } = registry();
 
-    expect(reg.list()).toHaveLength(1);
-    reg.resolve('cons-1', 'once');
-    expect(await first).toBe('once');
-    expect(await retry).toBe('once');
-  });
+    reg.ask(req());
+    reg.ask(req({ command: 'ls' }));
+    await reg.resolve('cons-1', 'always');
 
-  test('a joined caller hears a refusal too — it asked the same question', async () => {
-    const { reg } = registry();
-    const first = reg.request(REQUEST);
-    const retry = reg.request({ ...REQUEST });
-    reg.resolve('cons-1', 'deny');
-    expect(await first).toBe('deny');
-    expect(await retry).toBe('deny');
-  });
-
-  test('a request differing in anything the card shows gets its own card', async () => {
-    const { reg } = registry();
-
-    const pending = [
-      reg.request(REQUEST),
-      reg.request({ ...REQUEST, command: 'rm -rf build' }),
-      reg.request({ ...REQUEST, method: 'readRange' }),
-      reg.request({ ...REQUEST, deviceId: 'dev-2' }),
-      reg.request({ ...REQUEST, workspaceName: 'notes' }),
-    ];
-
-    // One card per question the owner would read differently, so none join.
-    expect(reg.list()).toHaveLength(5);
-
-    for (const consent of reg.list()) {
-      expect(reg.resolve(consent.consentId, 'deny')).toBe(true);
-    }
-
-    await Promise.all(pending);
-  });
-
-  test('an answer arriving with the raised notice is accepted, not called unknown', async () => {
-    // Announcing before the id can be answered would tell a synchronous surface it is unknown.
-    const answered: boolean[] = [];
-
-    const reg = new DeviceConsentRegistry({
-      store: consentStore(),
-      announce: (notice) => {
-        if (notice.kind === 'raised') answered.push(reg.resolve(notice.consent.consentId, 'once'));
-      },
-      newId: () => 'cons-1',
-      timeoutMs: 10_000,
-    });
-
-    const decision = await reg.request(REQUEST);
-    expect(answered).toEqual([true]);
-    expect(decision).toBe('once');
+    // The first re-issue spends its always and binds; the owner then revokes the binding.
+    expect(reg.ask(req())).toBe('always');
+    expect(reg.ask(req({ command: 'ls', epoch: 1 }))).toBe('queued');
   });
 });
 
-/** "always" is a policy: pending prompts the new grant covers settle with it. */
-describe('DeviceConsentRegistry always-grant coverage', () => {
-  test('an always grant settles the other prompts on that device it covers', async () => {
-    const { reg, notices } = registry();
-    const granted = reg.request(REQUEST);
-    const sibling = reg.request({ ...REQUEST, command: 'rm -rf build' });
-    const otherDevice = reg.request({ ...REQUEST, deviceId: 'dev-2' });
+describe('an always answer binds the device for the workspace', () => {
+  test('it answers every other ask waiting on that device for that workspace, whatever the command, and each asker once', async () => {
+    const { reg, woken, root, hire, req } = registry();
 
-    reg.resolve('cons-1', 'always');
-    expect(await granted).toBe('always');
-    // Covered, so allowed — but the remembering was the one "always" answer.
-    expect(await sibling).toBe('once');
-    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-3']);
-    expect(notices.filter((n) => n.kind === 'settled').map((n) => n.kind === 'settled' && n.consentId))
-      .toEqual(['cons-1', 'cons-2']);
+    reg.ask(req({ workspaceName: 'ws' }));
+    reg.ask(req({ workspaceName: 'ws', command: 'ls' }));
+    reg.ask(req({ workspaceName: 'ws', actorId: hire, command: 'pwd' }));
+    reg.ask(req({ workspaceName: 'other' }));
+    reg.ask(req({ workspaceName: 'ws', deviceId: 'dev-2' }));
 
-    reg.resolve('cons-3', 'deny');
-    expect(await otherDevice).toBe('deny');
+    expect(await reg.resolve('cons-1', 'always')).toBe(true);
+    expect(reg.list().map((pending) => pending.consentId)).toEqual(['cons-4', 'cons-5']);
+    expect(woken.map(({ actorId, signal }) => [actorId, signal.metadata?.ids])).toEqual([
+      [root, ['cons-1', 'cons-2']],
+      [hire, ['cons-3']],
+    ]);
+    expect(reg.ask(req({ workspaceName: 'ws', command: 'ls' }))).toBe('always');
   });
 
-  test('an always grant settles every other prompt for that machine, whatever the command', async () => {
-    // One rule: same machine and workspace, one answer, whatever the command; there is no consent scope.
-    const { reg } = registry();
-    const asked = reg.request(REQUEST);
-    const wider = reg.request({ ...REQUEST, command: 'cat /etc/shadow' });
-    const read = reg.request({ ...REQUEST, method: 'readRange', command: 'readRange(/etc/shadow, 0, 64)' });
+  test('a denial answers only the ask it was given on', async () => {
+    const { reg, req } = registry();
 
-    reg.resolve('cons-1', 'always');
-    expect(await asked).toBe('always');
-    // Bound, so allowed — but the remembering was the one "always" answer.
-    expect(await wider).toBe('once');
-    expect(await read).toBe('once');
+    reg.ask(req());
+    reg.ask(req({ command: 'ls' }));
+    await reg.resolve('cons-1', 'deny');
+
+    expect(reg.list().map((pending) => pending.consentId)).toEqual(['cons-2']);
+  });
+
+  test("one asker's failed wake is the answer's failure, after every other asker is told", async () => {
+    const { reg, woken, root, hire, req } = registry(true);
+
+    reg.ask(req({ actorId: hire }));
+    reg.ask(req({ command: 'ls' }));
+
+    await expect(reg.resolve('cons-1', 'always')).rejects.toThrow('the hire is retired');
+    expect(woken.map(({ actorId }) => actorId).sort()).toEqual([root, hire].sort());
     expect(reg.list()).toEqual([]);
   });
+});
 
-  test('one workspace\'s binding never settles another workspace\'s card', async () => {
-    const { reg } = registry();
-    const mine = reg.request({ ...REQUEST, workspaceName: 'notes' });
-    const sibling = reg.request({ ...REQUEST, workspaceName: 'inbox' });
+describe("a device call's consent, as the binding rule decides it", () => {
+  const outcome = async (bound: 'allow' | 'deny' | null, verdict: ReturnType<DeviceConsentRegistry['ask']> | KinuError) => {
+    const bindings: string[] = [];
 
-    reg.resolve('cons-1', 'always');
-    expect(await mine).toBe('always');
-    // A binding is per (workspace, device). The sibling still has to be asked.
-    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
-    reg.resolve('cons-2', 'deny');
-    expect(await sibling).toBe('deny');
+    const answer = await Effect.runPromise(deviceConsentOutcome({
+      bound, deviceLabel: 'the laptop',
+      ask: verdict instanceof KinuError ? Effect.fail(verdict) : Effect.succeed(verdict),
+      bind: Effect.sync(() => { bindings.push('bound'); }),
+    }));
+
+    return { answer, bound: bindings };
+  };
+
+  const refused = { allowed: false, code: 'denied', reason: 'device use was not approved: the owner declined' } as const;
+
+  test('a standing binding decides without asking', async () => {
+    expect(await outcome('allow', 'queued')).toEqual({ answer: { allowed: true }, bound: [] });
+    expect(await outcome('deny', 'once')).toEqual({ answer: refused, bound: [] });
   });
 
-  test('a denial settles only the card it was given on', async () => {
-    const { reg } = registry();
-    const first = reg.request(REQUEST);
-    const sibling = reg.request({ ...REQUEST, command: 'rm -rf build' });
-    reg.resolve('cons-1', 'deny');
-    expect(await first).toBe('deny');
-    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
-    reg.resolve('cons-2', 'once');
-    expect(await sibling).toBe('once');
+  test('an always the call spends is bound, a once runs this call alone, and a parked ask did not start', async () => {
+    expect(await outcome(null, 'always')).toEqual({ answer: { allowed: true }, bound: ['bound'] });
+    expect(await outcome(null, 'once')).toEqual({ answer: { allowed: true }, bound: [] });
+    expect((await outcome(null, 'queued')).answer).toMatchObject({ allowed: false, code: 'unavailable', reason: expect.stringContaining('NOT RUN') });
+    expect(await outcome(null, 'denied')).toEqual({ answer: refused, bound: [] });
+  });
+
+  test('an ask that could not be raised is unanswered, never a refusal', async () => {
+    expect((await outcome(null, new KinuError('unavailable', 'the workspace is gone'))).answer)
+      .toMatchObject({ allowed: false, code: 'unavailable', reason: expect.stringContaining('nobody decided') });
   });
 });

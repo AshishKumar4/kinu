@@ -236,6 +236,18 @@ describe('the device sandbox, as the kernel enforces it', () => {
     });
   });
 
+  // The CLI's shell withheld a value any launch file gave; the daemon only the last file's. One policy now (core).
+  test('a value any launch dotenv file gave reaches no command, though a later file gave another', () => {
+    const project = scratchDir('launch-dotenv-layers');
+    fs.writeFileSync(path.join(project, '.env'), 'API_TOKEN=from-env\n');
+    fs.writeFileSync(path.join(project, '.dev.vars'), 'API_TOKEN=from-dev-vars\n');
+
+    const dotenv = sandbox.launchDotenv(project, 'development');
+
+    expect(sandbox.rawEnvironment({ PATH: '/usr/bin', API_TOKEN: 'from-env' }, dotenv)).toEqual({ PATH: '/usr/bin' });
+    expect(sandbox.rawEnvironment({ PATH: '/usr/bin', API_TOKEN: 'from-the-shell' }, dotenv)).toEqual({ PATH: '/usr/bin', API_TOKEN: 'from-the-shell' });
+  });
+
   test('the raw tier is the machine as it was, minus Kinu\'s own directory', () => {
     const view = sandbox.rawViewFor({ deviceHome: '/home/dev/.kinu', platform: 'linux' });
     expect(view.resolvePath('/etc/hosts', 'read')).toBe('/etc/hosts');

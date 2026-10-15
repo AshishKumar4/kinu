@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { FactsStore } from '../memory/facts';
+import { renderFactValue, type FactsStore } from '../memory/facts';
 import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/versions';
 import { rollbackScaffold } from '../scaffold/rollback';
@@ -25,14 +25,14 @@ import {
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
-import { KinuError, renderThrownChain, settle, settleSync, tolerate } from '../obs/index';
+import { KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.number(),
   toVersion: v.number(),
 });
 
-export const CHANGELOG_ENTRY_KINDS = [
+const CHANGELOG_ENTRY_KINDS = [
   'scaffold', 'tool', 'fact', 'gepa', 'ratings', 'artifact', 'refinement',
 ] as const;
 
@@ -67,6 +67,28 @@ export interface ChangelogEntry {
   /** Child rows of an aggregate card. */
   items?: ChangelogEntry[];
 }
+
+/** A revert as a client reads it over the wire. */
+const ChangelogRevertActionSchema: v.GenericSchema<ChangelogRevertAction> = v.variant('type', [
+  v.object({ type: v.literal('scaffold_rollback'), target: v.string() }),
+  v.object({ type: v.literal('fact_forget'), target: v.string() }),
+  v.object({ type: v.literal('fact_forget_many'), targets: v.array(v.string()) }),
+  v.object({ type: v.literal('artifact_revert'), target: v.string() }),
+]);
+
+/** A changelog entry as a client reads it over the wire, its aggregate's rows within it. */
+export const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.object({
+  id: v.string(),
+  kind: v.picklist(CHANGELOG_ENTRY_KINDS),
+  at: v.number(),
+  summary: v.string(),
+  evidence: v.string(),
+  revert: v.optional(ChangelogRevertActionSchema),
+  scaffoldVersion: v.optional(v.number()),
+  decision: v.optional(v.object({ requestId: v.string(), routeIndex: v.number() })),
+  noChange: v.optional(v.boolean()),
+  items: v.optional(v.array(ChangelogEntrySchema)),
+}));
 
 export interface BuildChangelogOptions {
   since?: number;
@@ -198,17 +220,6 @@ type FactChangelogEntry = ChangelogEntry & {
   revert: Extract<ChangelogRevertAction, { type: 'fact_forget' }>;
 };
 
-/** Facts predating JSON encoding are raw text. */
-function factValueText(valueJson: string): string {
-  const decoded = tolerate(() => parseJsonValue(valueJson), 'malformed-input');
-  const text = v.safeParse(v.string(), decoded);
-
-  if (text.success) return text.output;
-
-  if (decoded === undefined) return valueJson;
-
-  return JSON.stringify(decoded);
-}
 
 function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactChangelogEntry[] {
   actor.assertCurrent();
@@ -222,7 +233,8 @@ function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactC
     ORDER BY last_observed_at DESC LIMIT ${limit}`;
 
   return rows.map((r) => {
-    const value = factValueText(r.value_json);
+    // FactsStore writes every value as JSON: a row that does not parse is corruption, and says so.
+    const value = renderFactValue(parseJsonValue(r.value_json));
 
     return {
       id: `fact:${r.key}`,
@@ -517,6 +529,12 @@ export interface ChangelogRevertResult {
   detail?: string;
   error?: string;
 }
+
+export const ChangelogRevertResultSchema: v.GenericSchema<ChangelogRevertResult> = v.object({
+  ok: v.boolean(),
+  detail: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
 
 async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: ScaffoldDecisionEvents): Promise<ChangelogRevertResult> {
   const sql = rt.storage.sql;

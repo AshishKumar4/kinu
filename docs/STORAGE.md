@@ -280,7 +280,7 @@ agent's own database (`~/.kinu/<name>/agent.db`). There it holds the agent's
 state; the agent's own space is real files beside it and the project folder is
 where it works (see "Local and cloud construction").
 
-Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
+Nimbus owns those bytes and their tables. `test-utils/src/conformance/manifest.ts`
 declares the exact set; an addition means the dependency changed its storage
 contract. At `@nimbus-sh/core` 0.14.0 the set is `vfs_state`, `vfs_inodes`,
 `vfs_chunks`, `vfs_contents`, `vfs_content_chunks`, `vfs_inode_history`,
@@ -534,7 +534,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Task list | `agent_tasks` (one plan per actor; note and plan link are columns) | `core/src/tools/task-store.ts` |
-| Approvals | `deferred_approvals`, `device_consent_requests`, `instruction_approvals`, `workspace_proposals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts`, `workspace-proposals.ts` |
+| Approvals | `deferred_approvals`, `device_consent_asks` (a device call's ask, then the owner's answer until the call it answers spends it), `instruction_approvals`, `workspace_proposals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts`, `workspace-proposals.ts` |
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
@@ -560,7 +560,7 @@ the first queue or drain: `outbox_peer` for the peer transport and
 `outbox_email` for outbound mail. Their schema belongs to the library.
 `core/src/events/outbox.ts` supplies the SQL handle and the alarm.
 
-`core/src/conformance/manifest.ts` declares every table per root
+`test-utils/src/conformance/manifest.ts` declares every table per root
 (`cf-orchestrator`, `cf-subordinate`, `cli`) as wired, lazy, or absent with a
 stated reason. The conformance suite compares that declaration with the real
 `sqlite_master`. The manifest is the complete list; this page describes it.

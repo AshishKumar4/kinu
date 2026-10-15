@@ -131,6 +131,88 @@ function useMachines(executors: readonly ExecutorInfo[], mounts: readonly MountI
   }, [deviceLabel, mounts, onConnectDevice]);
 }
 
+/** A folder's page as the server answers it: `next` is where the following page starts, absent after the last. */
+interface FolderPage { readonly path: string; readonly entries: DirEntry[]; readonly next?: number }
+
+/**
+ * The folder at `path`, a page at a time: the first as the path opens, each following one on `more`. A bare mount
+ * point's answer names the folder it landed on, which `adopt` makes the path; `cache` hears each first page.
+ */
+function useFolder(rpc: WorkspaceRpc, path: string, adopt: (path: string) => void, cache: (dir: string, entries: DirEntry[]) => void) {
+  const listDir = useCallback((dir: string, from?: number): Promise<FolderPage> => settle(Effect.gen(function* () {
+    const r = yield* Effect.promise(async () => rpc("getExecutorFiles", from === undefined ? [PLANE, dir] : [PLANE, dir, from]));
+
+    if (r.error) return yield* Effect.die(new Error(r.error));
+    const listed = r.entries ?? [];
+    const at = r.path ?? dir;
+
+    if (from === undefined) cache(at, listed);
+
+    return { path: at, entries: listed, ...(r.next !== undefined && { next: r.next }) };
+  })), [cache, rpc]);
+
+  /** A bare mount point's listing, answered for the directory it landed on: written as that listing adopts the
+   *  landed path, taken by the load the adoption starts, which then asks for nothing. */
+  const landed = useRef<FolderPage | null>(null);
+
+  // Keyed on `path` so an old directory's listing never renders under the new breadcrumb.
+  const loadListing = useCallback((): Promise<FolderPage> => settle(Effect.catchCause(Effect.gen(function* () {
+    const held = landed.current;
+
+    landed.current = null;
+
+    if (held?.path === path) return held;
+    const listed = yield* Effect.promise(async () => listDir(path));
+
+    // A bare mount point lists the consented directory; adopt the returned path so child paths resolve.
+    if (listed.path !== path) {
+      landed.current = listed;
+      adopt(listed.path);
+    }
+
+    return listed;
+  }), (failed) => Effect.gen(function* () {
+    const e = Cause.squash(failed);
+
+    return yield* Effect.die(new Error(renderThrownChain({ cause: e }), { cause: e }));
+  }))), [adopt, listDir, path]);
+
+  const { resource: listing, reload } = useAsyncResource(loadListing, undefined, path);
+  // The pages read after the first, dropped whenever the first is read again.
+  const [later, setLater] = useState<FolderPage | null>(null);
+
+  useEffect(() => { setLater(null); }, [listing]);
+
+  const first = lastValue(listing);
+  const shown = later?.path === first?.path ? later : null;
+  const next = shown === null ? first?.next : shown.next;
+
+  const more = useCallback(async () => {
+    if (first === null || next === undefined) return;
+    const page = await listDir(first.path, next);
+
+    setLater({ path: first.path, entries: [...(shown?.entries ?? []), ...page.entries], ...(page.next !== undefined && { next: page.next }) });
+  }, [first, listDir, next, shown]);
+
+  return {
+    listing, listDir, reload, more, next,
+    entries: [...(first?.entries ?? []), ...(shown?.entries ?? [])],
+    loading: listing.status === "loading",
+    err: listing.status === "error" ? listing.message : null,
+  };
+}
+
+/** The row under a folder's loaded entries while it has more (`next`): pressed, the next page joins them. */
+function MoreRow({ next, more }: { next: number | undefined; more: () => Promise<void> }) {
+  if (next === undefined) return null;
+
+  return (
+    <button type="button" data-files-more onClick={() => detach(Effect.promise(more))}
+      className={`grid ${COLUMNS} ${ROW_HEIGHT} w-full text-left p-text-3 hover:p-text p-row-hover`}
+    ><CaretDownIcon size={16} /><span className="p-row-text">Load more</span></button>
+  );
+}
+
 export interface FilesSurfaceProps {
   rpc: WorkspaceRpc;
   executors: ExecutorInfo[];
@@ -138,11 +220,12 @@ export interface FilesSurfaceProps {
   onConnectDevice: () => void;
 }
 
-/** "3 folders, 2 files", naming only what the folder holds. */
-function folderCount(folders: number, files: number): string {
+/** "3 folders, 2 files", naming only what the folder holds, and that more follow when they do. */
+function folderCount(folders: number, files: number, more: boolean): string {
   const said = [
     ...(folders > 0 ? [`${String(folders)} ${folders === 1 ? "folder" : "folders"}`] : []),
     ...(files > 0 || folders === 0 ? [`${String(files)} ${files === 1 ? "file" : "files"}`] : []),
+    ...(more ? ["more below"] : []),
   ];
 
   return said.join(", ");
@@ -166,47 +249,9 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const { resource: mountsResource, reload: reloadMounts } = useMounts(rpc, executors);
   const mounts = lastValue(mountsResource) ?? [];
 
-  const listDir = useCallback((dir: string): Promise<{ path: string; entries: DirEntry[] }> => settle(Effect.gen(function* () {
-    const r = yield* Effect.promise(async () => rpc("getExecutorFiles", [PLANE, dir]));
-
-    if (r.error) return yield* Effect.die(new Error(r.error));
-    const listed = r.entries ?? [];
-    const at = r.path ?? dir;
-    setTreeCache((prev) => nextTreeCache(prev, at, listed));
-
-    return { path: at, entries: listed };
-  })), [rpc]);
-
-  /** A bare mount point's listing, answered for the directory it landed on: written as that listing adopts the
-   *  landed path, taken by the load the adoption starts, which then asks for nothing. */
-  const landed = useRef<{ readonly path: string; readonly entries: DirEntry[] } | null>(null);
-
-  // Keyed on `path` so an old directory's listing never renders under the new breadcrumb.
-  const loadListing = useCallback((): Promise<DirEntry[]> => settle(Effect.catchCause(Effect.gen(function* () {
-    const held = landed.current;
-
-    landed.current = null;
-
-    if (held?.path === path) return held.entries;
-    const listed = yield* Effect.promise(async () => listDir(path));
-
-    // A bare mount point lists the consented directory; adopt the returned path so child paths resolve.
-    if (listed.path !== path) {
-      landed.current = listed;
-      setPath(listed.path);
-    }
-
-    return listed.entries;
-  }), (failed) => Effect.gen(function* () {
-    const e = Cause.squash(failed);
-
-    return yield* Effect.die(new Error(renderThrownChain({ cause: e }), { cause: e }));
-  }))), [listDir, path]);
-
-  const { resource: listing, reload: reloadListing } = useAsyncResource(loadListing, undefined, path);
-  const entries = lastValue(listing) ?? [];
-  const loading = listing.status === "loading";
-  const err = listing.status === "error" ? listing.message : null;
+  const cacheListing = useCallback((dir: string, listed: DirEntry[]) => setTreeCache((prev) => nextTreeCache(prev, dir, listed)), []);
+  const folder = useFolder(rpc, path, setPath, cacheListing);
+  const { listing, entries, loading, err, listDir, reload: reloadListing } = folder;
 
   useEffect(() => {
     if (listing.status === "ready") setSelected(0);
@@ -493,6 +538,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                 />
               );
             })}
+            {!loading && <MoreRow next={folder.next} more={() => run(Effect.promise(folder.more))} />}
             {!loading && filtered.length === 0 && offline.length === 0 && entries.length > 0 && (
               <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
             )}
@@ -501,7 +547,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             )}
             {!loading && filtered.length > 0 && (
               <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta border-t p-border mt-1">
-                {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount)}
+                {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount, folder.next !== undefined)}
                 <span className="ml-2 hidden @[44rem]:inline p-text-4">↑↓ move · Enter open · Backspace up · F2 rename · Del delete</span>
               </div>
             )}

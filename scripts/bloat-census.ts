@@ -11,26 +11,23 @@
  * measurement: nothing is locked and no finding fails the run.
  */
 
-import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { type Expression, parseSync } from 'oxc-parser';
 
-import { gitEnv } from '../packages/test-utils/src/git-env';
+import { gitIn } from '../packages/test-utils/src/git-env';
 import { type DuplicateGroup, findDuplicateGroups } from './ast-duplication';
 import { canonical, commentCharacters } from './comment-only';
 import { measureFile } from './complexity';
 import { exportedDeclarations, inScope } from './dead-code';
 import { assertMeasured } from './gate-ratchet';
-import { readMatching, readSources, readTests } from './sources';
+import { packageOf, readMatching, readSources, readTests } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   classMembers, declarationOf, declaredBindings, declaredName, identifierText, memberCalleeName, ownerName,
   parse, referencedNames, type SyntaxNode, walk,
 } from './syntax';
 import { buildGraph, builtinToolNames, findEntrypoints, findUnreached, isReacher, measureReach } from './wired';
 
-const packageOf = (file: string): string => file.split('/')[1] ?? file;
-
-const root = new URL('..', import.meta.url).pathname;
 
 /**
  * The smallest function body the clone search reads. Measured at 1dd25b3ad:
@@ -584,10 +581,6 @@ const emptyRow = (name: string): PackageRow => ({
   wrappers: 0, singleCallers: 0, clones: 0, repeats: 0, unreachedValues: 0, unreachedTypes: 0,
 });
 
-function git(...args: readonly string[]): string {
-  return execFileSync('git', ['-C', root, ...args], { env: gitEnv(), encoding: 'utf8' }).trim();
-}
-
 function table(rows: readonly (readonly string[])[]): string {
   const widths = rows[0]?.map((_, column) => Math.max(...rows.map((row) => row[column]?.length ?? 0))) ?? [];
 
@@ -681,8 +674,8 @@ if (import.meta.main) {
   total.repeats = repeats.length;
 
   const seconds = (performance.now() - started) / 1000;
-  const revision = git('rev-parse', 'HEAD');
-  const dirty = git('status', '--porcelain').length > 0;
+  const revision = gitIn(root, 'rev-parse', 'HEAD');
+  const dirty = gitIn(root, 'status', '--porcelain').length > 0;
 
   writeFileSync(out, `${JSON.stringify({
     revision, dirty, measured, seconds: Math.round(seconds * 10) / 10,

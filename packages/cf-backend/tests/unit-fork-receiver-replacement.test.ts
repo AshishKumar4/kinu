@@ -69,7 +69,7 @@ const HEAD = { source: { workspaceId: 'S', workspaceName: 'source' }, cut: { mes
 
 const CUT: FrameBody = {
   kind: 'conversationEntries',
-  rows: [{ id: 'm1', position: 0, role: 'user', turn_id: null, run_id: null, metadata_json: null, metadata_path: null, metadata_digest: null, recorded_at: 1 }],
+  rows: [{ id: 'm1', position: 0, role: 'user', turn_id: null, run_id: null, metadata_json: null, metadata_path: null, recorded_at: 1 }],
 };
 
 const COUNTS = {

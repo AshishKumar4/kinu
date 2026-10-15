@@ -4,9 +4,12 @@
  * a PC that is not connected offered rather than listed.
  */
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 import type { ElementHandle, Page } from 'puppeteer';
+import { detach } from '@kinu.run/core/obs';
+import { DESKTOP_CLIENT_ROOT } from '../../packages/core/src/http/desktop-client';
 import { withGallery } from '../../scripts/gallery-harness';
-import { openInspectorPage, sessionLine } from '../../scripts/product-flows';
+import { openInspectorPage, sessionLine } from '../../scripts/browser-page';
 
 declare global {
   interface Window {
@@ -27,6 +30,57 @@ const TOOL_NAMES = ['Work', 'Changes', 'Files', 'Swarms', 'Agent', 'Environment'
 
 /** The harness waits forever by default; a control that never comes fails here instead. */
 const SOON = { timeout: 10_000 };
+
+/** The terminal shown in the inspector, of every one it keeps open. */
+const SHOWN_TERMINAL = `[...document.querySelectorAll('#inspector .xterm-rows')].find((rows) => rows.checkVisibility({ visibilityProperty: true }))`;
+
+/** The desktop's client document, which a reopened client replaces. */
+const DESKTOP_WINDOW = `document.querySelector('#inspector [data-desktop-frame] iframe').contentWindow`;
+
+/** The desktop shown with its session up: no veil of Kinu's over it. */
+const DESKTOP_UP = `(() => {
+  const screen = document.querySelector('#inspector [data-desktop-frame]');
+  return screen !== null && screen.checkVisibility({ visibilityProperty: true }) && screen.querySelector('[role="status"]') === null;
+})()`;
+
+/** The share of the workspace area the desktop's screen spans on the axis it fills; its shape letterboxes the other. */
+const DESKTOP_FILL = `(() => {
+  const screen = document.querySelector('#inspector [data-desktop-frame]').getBoundingClientRect();
+  const area = document.querySelector('main').getBoundingClientRect();
+  return Math.max(screen.width / area.width, screen.height / area.height);
+})()`;
+
+/** The owner's PC, by the label the gallery's account gives it. */
+const PC = "Ashish's MacBook";
+
+/** The control `required` names, once it has rendered: a chip or a button that arrives with a read. */
+async function waitForControl(page: Page, scope: string, role: string, name: string): Promise<ElementHandle> {
+  await page.waitForFunction((where, wanted) => [...document.querySelectorAll(`${where} button`)].some((button) => button.textContent?.trim() === wanted), SOON, scope, name);
+
+  return await required(page, scope, role, name);
+}
+
+/** The workspace shell's computer in its Environment panel, at its first session's terminal. */
+async function openTheComputer(page: Page, origin: string): Promise<void> {
+  await page.setViewport({ width: 1440, height: 900 });
+  await page.goto(`${origin}/gallery.html?frame=workspaceshell&env=computer`, { waitUntil: 'networkidle0' });
+  await page.click('#inspector button[aria-label="Environment"]');
+  await page.waitForFunction((name) => [...document.querySelectorAll('#inspector button')].some((chip) => chip.textContent?.trim() === name), SOON, COMPUTER);
+  await (await required(page, '#inspector', 'button', COMPUTER)).click();
+  await page.waitForSelector('#inspector .xterm-rows', SOON);
+}
+
+/** A desktop client that says its session is up, as KasmVNC's own says it to the screen that frames it (DesktopScreen). */
+const DESKTOP_CLIENT = `<script>parent.postMessage({ action: 'connection_state', value: 'connected' }, location.origin);</script>`;
+
+/** The desktop's client, answered by that one: the gallery has no computer for the real one to reach. */
+async function answerTheDesktop(page: Page): Promise<void> {
+  await page.setRequestInterception(true);
+  page.on('request', (request) => detach(Effect.promise(async () => {
+    if (new URL(request.url()).pathname !== `${DESKTOP_CLIENT_ROOT}vnc.html`) await request.continue();
+    else await request.respond({ status: 200, contentType: 'text/html', body: DESKTOP_CLIENT });
+  })));
+}
 
 /**
  * The control in `scope` that the accessibility tree names `name` with `role`, or null. Read from the tree itself:
@@ -242,16 +296,17 @@ describe('the Environment panel', () => {
     });
   });
 
-  test('a PC that is not connected is offered, not listed, and the offer opens the connect panel in place', async () => {
+  // Every machine on the owner's account shows in every workspace (the owner, 2026-10-14): one that is offline says so
+  // in its place, and the panel still offers to connect another.
+  test('a PC on the account that is offline shows in its place, and Connect a PC opens the connect panel there', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
       try {
         await page.setViewport({ width: 1100, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=environment&offline=device`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="workspace"]', SOON);
-
-        expect(await page.$('[data-env-card="device"]')).toBeNull();
+        await (await waitForControl(page, '[data-env-card="device"]', 'button', PC)).click();
+        await page.waitForFunction((name) => document.querySelector('#inspector, body')?.textContent?.includes(`${name} is offline`) === true, SOON, PC);
         await (await required(page, 'body', 'button', 'Connect a PC')).click();
         await page.waitForSelector('[role="dialog"]', SOON);
         expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
@@ -259,29 +314,94 @@ describe('the Environment panel', () => {
     });
   });
 
-  test('the computer\'s desktop shows in a frame, and opens in a tab of its own', async () => {
+  // Production f9c17ac7b (the owner, 2026-10-14): a PC connected to the account but not yet held by this workspace was
+  // listed nowhere and offered nothing; the owner could reach it only through an agent's approval box.
+  test('a PC this workspace does not hold shows with one click to give it access, and then its terminal', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
       try {
-        await page.setViewport({ width: 1280, height: 1000 });
-        await page.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="computer"]', SOON);
-        await (await required(page, '[data-env-card="computer"]', 'button', COMPUTER)).click();
-        await (await required(page, 'body', 'tab', 'Desktop')).click();
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell&pc=ungranted`, { waitUntil: 'networkidle0' });
+        await page.click('#inspector button[aria-label="Environment"]');
+        await (await waitForControl(page, '#inspector', 'button', PC)).click();
+        await (await waitForControl(page, '#inspector', 'button', 'Give this workspace access')).click();
+        await page.waitForSelector('#inspector .xterm-rows', SOON);
+        expect(await page.$('#inspector [data-env-give-access]')).toBeNull();
+      } finally { await page.close(); }
+    });
+  });
 
-        const frame = await page.waitForSelector(`iframe[title="${COMPUTER}'s desktop"]`, SOON);
-        const link = await required(page, 'body', 'link', `Open ${COMPUTER}'s desktop in a new tab`);
+  // Production f9c17ac7b (the owner, 2026-10-14): each switch reopened the pane it showed, and the desktop's full screen
+  // was a second client in a new tab.
+  test("the computer's terminal and desktop switch without reopening, and the desktop expands over the workspace and back", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
 
-        if (frame === null) throw new Error('the desktop is not framed');
+      try {
+        await answerTheDesktop(page);
+        await openTheComputer(page, origin);
+        await page.evaluate(`window.__terminalLeft = ${SHOWN_TERMINAL}`);
 
-        const [src, target] = await Promise.all([
-          frame.evaluate((element) => (element instanceof HTMLIFrameElement ? element.src : '')),
-          link.evaluate((element) => element.getAttribute('target')),
-        ]);
+        await (await required(page, '#inspector', 'tab', 'Desktop')).click();
+        await page.waitForFunction(DESKTOP_UP, SOON);
+        await page.evaluate(`Object.assign(${DESKTOP_WINDOW}, { __left: true })`);
 
-        expect(src).toContain('/kasmvnc/vnc.html?');
-        expect(target).toBe('_blank');
+        const shell = await page.$$eval('#inspector [role="tab"]', (tabs) => (tabs[0]?.textContent ?? '').trim());
+
+        await (await required(page, '#inspector', 'tab', shell)).click();
+        expect(await page.evaluate(`${SHOWN_TERMINAL} === window.__terminalLeft`)).toBe(true);
+        await (await required(page, '#inspector', 'tab', 'Desktop')).click();
+        // Up at once, in the client it was left in: no veil while a new one opens.
+        expect(await page.evaluate(`[${DESKTOP_UP}, ${DESKTOP_WINDOW}.__left === true]`)).toEqual([true, true]);
+
+        await page.click('[data-desktop-expand]');
+        await page.waitForFunction(`${DESKTOP_FILL} > 0.9 && document.querySelector('[data-rail-collapsed]') !== null`, SOON);
+        expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
+
+        await page.click('[data-desktop-return]');
+        await page.waitForFunction(`${DESKTOP_FILL} < 0.9 && document.querySelector('[data-rail]') !== null`, SOON);
+        expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
+      } finally { await page.close(); }
+    });
+  });
+
+  // Staging fcc2e05d6: the computer-sessions row read the first session's line and terminal, kept mounted out of sight
+  // since D99, for a new session's; it waited 128 s for that shell and never saw the new folder.
+  test("the flows' reader reads the session shown, not one kept out of sight", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await openTheComputer(page, origin);
+        await (await required(page, '#inspector', 'tab', 'dev server')).click();
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace/storefront', ports: [':5173'] });
+
+        await page.click('#inspector button[aria-label="New session"]');
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 3, SOON);
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace', ports: [] });
+      } finally { await page.close(); }
+    });
+  });
+
+  test('a session closed out of sight takes its kept terminal with it', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await openTheComputer(page, origin);
+
+        const [first, second] = await page.$$eval('#inspector [role="tab"]', (tabs) => tabs.map((tab) => (tab.textContent ?? '').trim()));
+
+        if (first === undefined || second === undefined) throw new Error('the computer has fewer than two sessions');
+        await (await required(page, '#inspector', 'tab', second)).click();
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
+        // A tab's close shows under the pointer.
+        await (await required(page, '#inspector', 'tab', first)).hover();
+        await (await required(page, '#inspector', 'button', `Close ${first}`)).click();
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 1, SOON);
+        expect(await page.evaluate(`${SHOWN_TERMINAL} !== undefined`)).toBe(true);
       } finally { await page.close(); }
     });
   });

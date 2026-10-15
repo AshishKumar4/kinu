@@ -5,13 +5,15 @@
 
 import * as v from 'valibot';
 import { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
-import { decodeEntities, htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
+import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
+import { decodeEntities, HTML_ENTITIES } from '../utils/text';
 import { quickAction, type BrowserRunAccess, type QuickActionEngine, type QuickActionTransport } from './browser-run';
 import type { AuthResolution, AuthResolver } from '../providers/types';
 import { TAVILY_CRED_KEY } from '../credentials/validate';
 import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle, tolerate } from '../obs/index';
 import { Data, Effect } from 'effect';
 import type { JsonObject } from '../utils/json';
+import { boundedInt } from '../utils/bounds';
 
 
 
@@ -450,9 +452,7 @@ export interface BrowserSessions {
 }
 
 function clampLimit(limit: number | undefined): number {
-  if (!limit || !Number.isFinite(limit)) return DEFAULT_SEARCH_LIMIT;
-
-  return Math.max(1, Math.min(MAX_SEARCH_LIMIT, Math.floor(limit)));
+  return boundedInt(limit, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT);
 }
 
 function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResult[] {
@@ -463,14 +463,14 @@ function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResult[] {
   const snippets: string[] = [];
   let sm: RegExpExecArray | null;
 
-  while ((sm = snippetRe.exec(html)) !== null) snippets.push(decodeEntities(stripTags(sm[1])));
+  while ((sm = snippetRe.exec(html)) !== null) snippets.push(decodeEntities(stripTags(sm[1]), HTML_ENTITIES));
 
   let m: RegExpExecArray | null;
   let i = 0;
 
   while ((m = linkRe.exec(html)) !== null && results.length < limit) {
-    const url = unwrapDuckUrl(decodeEntities(m[1]));
-    const title = decodeEntities(stripTags(m[2])).trim();
+    const url = unwrapDuckUrl(decodeEntities(m[1], HTML_ENTITIES));
+    const title = decodeEntities(stripTags(m[2]), HTML_ENTITIES).trim();
 
     if (!url || !title || !isSafeUrl(url)) {
       i++;
@@ -505,7 +505,7 @@ function unwrapDuckUrl(href: string): string {
 function extractTitle(html: string): string {
   const m = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html);
 
-  return m ? decodeEntities(stripTags(m[1])).trim().slice(0, 300) : '';
+  return m ? decodeEntities(stripTags(m[1]), HTML_ENTITIES).trim().slice(0, 300) : '';
 }
 
 /** Frontmatter `title:`, else the first `# heading`. */

@@ -4,5 +4,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/repo-runtime.sh
-export KINU_EVAL_ORIGIN="${KINU_EVAL_ORIGIN:-${KINU_ORIGIN:-https://staging.kinu.run}}"
 exec bun scripts/evals-map.ts --pass --out="${BENCH_ARTIFACTS:-$PWD/bench-artifacts/evals-pass}"

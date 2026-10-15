@@ -13,7 +13,7 @@ import { parseJsonValue } from '../utils/json';
 
 /** Lesson sources in canonical order; the table's CHECK constraint derives from
  *  this list. `execution_recovery` is bound to no turn, so it is never corroborated;
- *  `import` is born corroborated. Corroboration lives only in the row's status. */
+ *  `import` is born corroborated. Corroboration is the row's `corroborated_at`: provisional while it is null. */
 const LESSON_SOURCES = [
   'turn_reflection', 'session_reflection', 'execution_recovery', 'import',
 ] as const;
@@ -28,7 +28,6 @@ const LESSONS_DDL = `(
     turn_ids TEXT NOT NULL,
     text TEXT NOT NULL,
     source TEXT NOT NULL CHECK (source IN (${sqlCheckList(LESSON_SOURCES)})),
-    status TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
     created_at INTEGER NOT NULL,
     corroborated_at INTEGER,
     PRIMARY KEY (actor_id, id)
@@ -75,17 +74,16 @@ export function recordLesson(sql: SqlExecutor, actor: ActorHandle, input: {
   actor.assertCurrent();
   const id = input.key === undefined ? `lsn-${nanoid()}` : `lsn-${input.key}`;
   const now = input.now ?? nowMs();
-  void sql`INSERT INTO lessons (actor_id, id, turn_ids, text, source, status, created_at, corroborated_at)
+  void sql`INSERT INTO lessons (actor_id, id, turn_ids, text, source, created_at, corroborated_at)
       VALUES (${actor.actorId}, ${id}, ${JSON.stringify(input.turnIds)}, ${input.text}, ${input.source},
-              ${input.status}, ${now}, ${input.status === 'corroborated' ? now : null})
+              ${now}, ${input.status === 'corroborated' ? now : null})
       ON CONFLICT(actor_id, id) DO NOTHING`;
 
   return id;
 }
 
 interface RawLessonRow {
-  id: string; turn_ids: string; text: string; source: LessonSource;
-  status: LessonStatus; created_at: number; corroborated_at: number | null;
+  id: string; turn_ids: string; text: string; source: LessonSource; created_at: number; corroborated_at: number | null;
 }
 
 function toLessonRow(r: RawLessonRow): LessonRow {
@@ -93,7 +91,7 @@ function toLessonRow(r: RawLessonRow): LessonRow {
   const turnIds = v.parse(v.array(v.string()), parseJsonValue(r.turn_ids));
 
   return {
-    id: r.id, turnIds, text: r.text, source: r.source, status: r.status,
+    id: r.id, turnIds, text: r.text, source: r.source, status: r.corroborated_at === null ? 'provisional' : 'corroborated',
     createdAt: r.created_at, corroboratedAt: r.corroborated_at,
   };
 }
@@ -109,7 +107,7 @@ export function listLessons(
 
   const rows = sql<RawLessonRow>`SELECT * FROM lessons
     WHERE actor_id = ${actor.actorId}
-      AND (${status} IS NULL OR status = ${status})
+      AND (${status} IS NULL OR (corroborated_at IS NULL) = (${status} = 'provisional'))
       AND (${source} IS NULL OR source = ${source})
     ORDER BY created_at DESC LIMIT ${opts.limit ?? 100}`;
 
@@ -140,7 +138,7 @@ export function corroborateLessonsForTurn(
   const matched = provisional.filter((l) => l.turnIds.includes(turnId));
 
   for (const lesson of matched) {
-    void sql`UPDATE lessons SET status = 'corroborated', corroborated_at = ${now}
+    void sql`UPDATE lessons SET corroborated_at = ${now}
       WHERE actor_id = ${actor.actorId} AND id = ${lesson.id}`;
   }
 

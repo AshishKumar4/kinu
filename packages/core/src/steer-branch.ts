@@ -5,12 +5,13 @@
 
 import type { SqlExecutor } from './types/primitives';
 import type { HeadInput, HeadReport, HeadRunHeadView, SerializedMessage } from './heads/types';
-import { forkMission, headStatusUnsettled, storedHeadReportStatus } from './heads/types';
+import { forkMission, headStatusUnsettled, storedHeadReportStatus, unreportedHead } from './heads/types';
 import type { HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
 import { Effect, Result } from 'effect';
+import * as v from 'valibot';
 import { KinuError, renderThrownChain, settle } from './obs/index';
 import { defaultLoopOrigin } from './scaffold/loop-origin';
 import type { ActorHandle } from './identity/actor-handle';
@@ -32,6 +33,12 @@ export type BranchStatusEvent =
 export type BranchTurnResult =
   | { readonly accepted: true; readonly branchId: string }
   | { readonly accepted: false; readonly reason: string };
+
+/** A branch admission as a client reads it over the wire. */
+export const BranchTurnResultSchema: v.GenericSchema<BranchTurnResult> = v.variant('accepted', [
+  v.object({ accepted: v.literal(true), branchId: v.string() }),
+  v.object({ accepted: v.literal(false), reason: v.string() }),
+]);
 
 /** Only a running Build turn branches: the head gets every mutating tool. */
 export function admitBranch(
@@ -121,19 +128,15 @@ export async function startBranchHead(
     try {
       report = await spawned.run();
     } catch (cause) {
-      report = {
+      report = unreportedHead({
         id: headInput.id,
         status: stop.signal.aborted ? 'aborted' : 'errored',
         summary: stop.signal.aborted
           ? `Branch was aborted: ${renderThrownChain({ cause: stop.signal.reason })}`
           : 'Branch failed before producing an answer.',
-        evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
-        childHeadIds: [], toolCalls: [], stepCount: 0,
-        // `{}` rather than zeros: the branch may have spent unreported tokens.
-        usage: {},
         wallClockMs: Date.now() - spawnedAt,
         errorMessage: renderThrownChain({ cause }),
-      };
+      });
     }
 
     journal.recordReport(report);

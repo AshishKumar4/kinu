@@ -29,8 +29,8 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const MODULES = join(REPO_ROOT, 'node_modules');
 

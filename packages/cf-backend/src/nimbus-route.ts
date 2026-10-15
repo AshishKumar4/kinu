@@ -155,6 +155,15 @@ function ownRequest(request: Request, origin: string, self: boolean): boolean {
   return stated === origin || (self && stated === null);
 }
 
+/**
+ * The local dev server's preview zone (`vite dev`, `*.preview.localhost`): a name only this machine resolves, as the
+ * dev identity's loopback is (`auth/session.ts`). Its app is `http://localhost`, another site, so no cookie its entry
+ * mints is kept in the app's frame; the machine itself is the one asking, so every visit there is the workspace's own.
+ */
+function localDevPreview(suffix: string): boolean {
+  return suffix === 'localhost' || suffix.endsWith('.localhost');
+}
+
 /** The preview host's ticket exchange: the owner's ticket becomes the host's viewer cookie, then their page. */
 async function exchangePreviewTicket(
   request: Request, env: NimbusPreviewEnv<unknown>, workspace: string, key: string,
@@ -247,7 +256,8 @@ export async function handleNimbusPreviewHostRequest<Id>(
   // Read before the sanitizer strips the cookie. A consent cookie is a live share's, never a preview's, and another
   // site's request names no one, whatever cookie it carries.
   const cookie = await viewerCookie(env, workspace, key, request.headers.get('cookie'));
-  const viewer = cookie === null || cookie.consented || !ownRequest(request, url.origin, cookie.subject === PREVIEW_SELF) ? null : cookie.subject;
+  const signed = cookie === null || cookie.consented || !ownRequest(request, url.origin, cookie.subject === PREVIEW_SELF) ? null : cookie.subject;
+  const viewer = localDevPreview(suffix) ? PREVIEW_SELF : signed;
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
 

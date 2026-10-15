@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { scratchPath } from '@kinu.run/test-utils';
 import { asFetchFunction, createProviderRegistry, JsonObjectSchema, type ModelCallDeps } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createOpenCodeProvider, OPENCODE_PROVIDER_ID } from '../src/opencode-provider';
+import { createOpenCodeProvider } from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
 
 /** A model as the registry resolves it: the provider's, inside the one stack, on the provider's own lane. */
@@ -13,7 +13,7 @@ function throughStack(provider: ReturnType<typeof createOpenCodeProvider>, model
 
   registry.register(provider);
 
-  return registry.resolve(`${OPENCODE_PROVIDER_ID}/${modelId}`, deps);
+  return registry.resolve(`opencode/${modelId}`, deps);
 }
 
 function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {

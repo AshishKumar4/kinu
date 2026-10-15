@@ -1,0 +1,608 @@
+/**
+ * Durable teardown and the C1–C7 cleanup gates.
+ *
+ * Every external resource a benchmark run creates is written into a teardown
+ * manifest on disk the moment it is planned, BEFORE anything is created. A run
+ * killed by a signal therefore leaves behind not just resources but the exact
+ * list of what must be deleted, and `replayTeardown` deletes it idempotently:
+ * each entry's status is persisted to disk as soon as it is done, so an
+ * interrupted replay continues where it stopped instead of starting over, and a
+ * completed replay performs nothing.
+ *
+ * A failed check fails the run's teardown; it never touches a measured number.
+ */
+
+import { tolerate } from '@kinu.run/core/obs';
+import { currentOwner, ownerAlive, ProcessOwnerSchema, type ProcessOwner } from './process-owner';
+import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import * as v from 'valibot';
+
+export const TEARDOWN_MANIFEST_SCHEMA = 'storage-matrix/teardown@1';
+
+export type TeardownKind
+  = 'worker'
+    | 'container-app'
+    | 'r2-bucket'
+    | 'object-prefix'
+    | 'do-state'
+    | 'local-path'
+    | 'process-marker'
+    | 'alarm'
+    | 'mount';
+
+export interface TeardownEntry {
+  readonly kind: TeardownKind;
+  /** The resource's name, path, or `bucket#prefix` key. */
+  readonly name: string;
+  detail: string;
+  /** The platform ids the resource is known by, written before anything is deleted: a container application's, which
+   *  find its snapshots once the application, or the Worker that owned it, is gone. */
+  ids: string[];
+  /** Persisted after every successful deletion attempt, so recovery resumes. */
+  done: boolean;
+  attempts: number;
+  lastError: string | null;
+}
+
+export interface TeardownManifest {
+  readonly schema: typeof TEARDOWN_MANIFEST_SCHEMA;
+  readonly runId: string;
+  /** The driver process whose run this records. Null for a manifest written before owners were
+   *  recorded, or where `/proc` cannot say: such a run can only be judged abandoned. */
+  readonly owner: ProcessOwner | null;
+  createdAt: string;
+  updatedAt: string;
+  entries: TeardownEntry[];
+  /** Expected operation-counter deltas, accumulated during the run. Cleanup
+   *  reconciles the artifact's final tally against this. */
+  counters: Record<string, number>;
+  /** True when the operator asked for the resources to survive the run. */
+  kept: boolean;
+}
+
+const TeardownKindSchema = v.picklist([
+  'worker', 'container-app', 'r2-bucket', 'object-prefix', 'do-state',
+  'local-path', 'process-marker', 'alarm', 'mount',
+]);
+
+const TeardownEntrySchema = v.object({
+  kind: TeardownKindSchema,
+  name: v.string(),
+  detail: v.string(),
+  ids: v.optional(v.array(v.string()), []),
+  done: v.boolean(),
+  attempts: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  lastError: v.nullable(v.string()),
+});
+
+const TeardownManifestSchema = v.object({
+  schema: v.literal(TEARDOWN_MANIFEST_SCHEMA),
+  runId: v.string(),
+  owner: v.optional(v.nullable(ProcessOwnerSchema), null),
+  createdAt: v.string(),
+  updatedAt: v.string(),
+  entries: v.array(TeardownEntrySchema),
+  counters: v.record(v.string(), v.pipe(v.number(), v.safeInteger(), v.minValue(0))),
+  kept: v.boolean(),
+});
+
+/** The one place the manifest directory is spelled: `bench-artifacts` lives
+ *  OUTSIDE git and outside the process, so it survives a crash that kills the
+ *  driver, which is the point. */
+function manifestDirectory(repoRoot: string): string {
+  return join(repoRoot, 'bench-artifacts', 'teardown');
+}
+
+export function manifestPath(repoRoot: string, runId: string): string {
+  return join(manifestDirectory(repoRoot), `${runId}.json`);
+}
+
+/**
+ * Persist the manifest, ATOMICALLY, and only as its own run.
+ *
+ * A plain `writeFileSync` is not atomic, and the one event this file exists to
+ * survive — a signal that kills the driver — can land between the truncate and
+ * the last byte. That leaves a manifest whose JSON does not parse, which is
+ * strictly worse than no manifest at all: the resources are real, the list of
+ * them is on disk, and nothing can read it. Write a sibling temp file and
+ * rename it over the target instead; rename within one directory is atomic, so
+ * a reader sees either the previous manifest or the new one.
+ *
+ * Two benches started in the same second get the same run id and would deploy
+ * the same names. The first write therefore claims the id, and a write over a
+ * manifest whose owner still runs is refused.
+ */
+export function writeManifest(repoRoot: string, manifest: TeardownManifest): void {
+  const path = manifestPath(repoRoot, manifest.runId);
+  mkdirSync(dirname(path), { recursive: true });
+  manifest.updatedAt = new Date().toISOString();
+  const staging = `${path}.${String(process.pid)}.writing`;
+  writeFileSync(staging, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  // The first write claims the run id: `link` refuses a path another run created in the meantime,
+  // where a rename would silently replace that run's record of its resources.
+  const claimed = !existsSync(path) && tolerate(() => {
+    linkSync(staging, path);
+
+    return true;
+  }, 'eexist') === true;
+
+  if (claimed) {
+    rmSync(staging);
+
+    return;
+  }
+
+  const holder = loadManifest(repoRoot, manifest.runId)?.owner ?? null;
+
+  if (holder !== null && !sameOwner(holder, manifest.owner) && ownerAlive(holder)) {
+    rmSync(staging);
+    throw new Error(
+      `run ${manifest.runId} is held by a running bench (pid ${String(holder.pid)}); `
+      + 'a second run under its id would share and then delete its resources',
+    );
+  }
+
+  renameSync(staging, path);
+}
+
+function sameOwner(a: ProcessOwner, b: ProcessOwner | null): boolean {
+  return b !== null && a.bootId === b.bootId && a.pid === b.pid && a.startTicks === b.startTicks;
+}
+
+export function loadManifest(repoRoot: string, runId: string): TeardownManifest | null {
+  const path = manifestPath(repoRoot, runId);
+
+  if (!existsSync(path)) return null;
+
+  return v.parse(TeardownManifestSchema, JSON.parse(readFileSync(path, 'utf8')));
+}
+
+export interface ManifestEntryInput {
+  kind: TeardownKind;
+  name: string;
+  detail?: string;
+}
+
+/** Owned by the calling process unless told otherwise: a manifest names the run that is live now. */
+export function createManifest(
+  runId: string,
+  entries: readonly ManifestEntryInput[],
+  owner: ProcessOwner | null = currentOwner(),
+): TeardownManifest {
+  const now = new Date().toISOString();
+
+  return {
+    schema: TEARDOWN_MANIFEST_SCHEMA,
+    runId,
+    owner,
+    createdAt: now,
+    updatedAt: now,
+    entries: entries.map((entry) => ({
+      kind: entry.kind,
+      name: entry.name,
+      detail: entry.detail ?? '',
+      ids: [],
+      done: false,
+      attempts: 0,
+      lastError: null,
+    })),
+    counters: {},
+    kept: false,
+  };
+}
+
+// ── replay ──────────────────────────────────────────────────────────────────
+
+/** What one deletion step reports. `absent` marks "already gone", which is
+ *  success: teardown must be safe to run twice. */
+export type DeleteOutcome = { ok: true; absent?: boolean } | { ok: false; error: string };
+
+/** One entry's deletion. A step that learns something before it deletes (an entry's `ids`) writes it with `persist`
+ *  first; `manifest` is the whole run's, for a step whose deletion takes a later entry's resource with it. */
+export type TeardownStep = (entry: TeardownEntry, persist: () => void, manifest: TeardownManifest) => Promise<DeleteOutcome>;
+
+/**
+ * Replay every unfinished entry. Statuses persist to disk after EACH entry, so
+ * a signal that lands mid-replay leaves a manifest whose remaining work is
+ * exactly what was left — the next invocation finishes it automatically.
+ */
+export async function replayTeardown(
+  repoRoot: string,
+  manifest: TeardownManifest,
+  exec: TeardownStep,
+): Promise<{ manifest: TeardownManifest; failures: readonly string[] }> {
+  const failures: string[] = [];
+
+  for (const entry of manifest.entries) {
+    if (entry.done) continue;
+    let outcome: DeleteOutcome;
+
+    try {
+      outcome = await exec(entry, () => { writeManifest(repoRoot, manifest); }, manifest);
+    } catch (error) {
+      outcome = { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+
+    entry.attempts += 1;
+
+    if (outcome.ok) {
+      entry.done = true;
+      entry.lastError = null;
+
+      if (outcome.absent === true) entry.detail = `${entry.detail} (already absent)`.trimStart();
+    } else {
+      entry.lastError = outcome.error;
+      failures.push(`${entry.kind}:${entry.name}: ${outcome.error}`);
+    }
+
+    // Durable before the next external await: this write is what makes an
+    // interrupted replay resume instead of redoing deletions.
+    writeManifest(repoRoot, manifest);
+  }
+
+  return { manifest, failures };
+}
+
+/** What a startup scan of the manifest directory found. */
+export interface ManifestScan {
+  /** Manifests still naming resources nobody deleted, oldest run first. */
+  readonly unfinished: readonly TeardownManifest[];
+  /** Unfinished manifests whose driver still runs: their resources are in use, not stranded. */
+  readonly inFlight: readonly TeardownManifest[];
+  /** Manifest files that could not be decoded. Their resources are real and
+   *  their list is unreadable, so they are reported rather than dropped. */
+  readonly unreadable: readonly string[];
+}
+
+/**
+ * Every manifest on disk that still names work nobody finished.
+ *
+ * A driver killed between its deploy and its teardown leaves exactly this: a
+ * complete list of live resources with `done: false` against each. Nothing
+ * reads it unless the next driver looks, so the next driver looks BEFORE it
+ * creates resources of its own — otherwise each interrupted run silently adds
+ * a Worker, a container application and a bucket to the account forever.
+ *
+ * `exclude` is the run doing the scanning. Its own manifest is unfinished by
+ * construction, and replaying it would delete the resources it is about to use.
+ */
+export function scanUnfinishedManifests(repoRoot: string, exclude: string): ManifestScan {
+  const directory = manifestDirectory(repoRoot);
+
+  if (!existsSync(directory)) return { unfinished: [], inFlight: [], unreadable: [] };
+  const unfinished: TeardownManifest[] = [];
+  const inFlight: TeardownManifest[] = [];
+  const unreadable: string[] = [];
+
+  for (const file of readdirSync(directory).sort()) {
+    if (!file.endsWith('.json')) continue;
+
+    if (basename(file, '.json') === exclude) continue;
+    const path = join(directory, file);
+    let manifest: TeardownManifest;
+
+    try {
+      manifest = v.parse(TeardownManifestSchema, JSON.parse(readFileSync(path, 'utf8')));
+    } catch (error) {
+      unreadable.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+
+    if (!manifest.entries.some((entry) => !entry.done)) continue;
+
+    if (manifest.owner !== null && ownerAlive(manifest.owner)) inFlight.push(manifest);
+    else unfinished.push(manifest);
+  }
+
+  return { unfinished, inFlight, unreadable };
+}
+
+/** What the startup scan did about one abandoned run. */
+export interface RecoveredRun {
+  readonly runId: string;
+  /** Entries still undeleted when the scan found it. */
+  readonly unfinished: number;
+  /** False when `--keep` retained the resources on purpose; they are reported
+   *  and left alone, because deleting what an operator asked to inspect is a
+   *  worse failure than leaving it. */
+  readonly replayed: boolean;
+  readonly failures: readonly string[];
+}
+
+/**
+ * Report every abandoned run, and replay the ones nobody asked to keep.
+ *
+ * Runs before the caller creates anything. `replayTeardown` persists each
+ * entry's status as it goes, so a recovery that is itself interrupted leaves
+ * strictly less work than it found and the driver after this one continues.
+ */
+export async function recoverAbandonedRuns(
+  repoRoot: string,
+  exclude: string,
+  exec: TeardownStep,
+  report: (line: string) => void,
+): Promise<readonly RecoveredRun[]> {
+  const scan = scanUnfinishedManifests(repoRoot, exclude);
+
+  for (const problem of scan.unreadable) {
+    report(`abandoned teardown manifest cannot be decoded, so its resources must be swept by hand — ${problem}`);
+  }
+
+  for (const running of scan.inFlight) {
+    report(`run ${running.runId} is still running (pid ${String(running.owner?.pid)}); its resources are its own to delete`);
+  }
+
+  const recovered: RecoveredRun[] = [];
+
+  for (const manifest of scan.unfinished) {
+    const pending = manifest.entries.filter((entry) => !entry.done);
+    report(
+      `run ${manifest.runId} (last touched ${manifest.updatedAt}) left ${pending.length} resource(s) undeleted: `
+      + pending.map((entry) => `${entry.kind}:${entry.name}`).join(', '),
+    );
+
+    if (manifest.kept) {
+      report(`run ${manifest.runId} was retained on purpose (--keep); leaving its resources in place`);
+      recovered.push({ runId: manifest.runId, unfinished: pending.length, replayed: false, failures: [] });
+      continue;
+    }
+
+    const replay = await replayTeardown(repoRoot, manifest, exec);
+
+    for (const failure of replay.failures) report(`run ${manifest.runId}: ${failure}`);
+    report(
+      replay.failures.length === 0
+        ? `run ${manifest.runId}: every abandoned resource is now deleted or already absent`
+        : `run ${manifest.runId}: ${replay.failures.length} resource(s) still undeleted; its manifest keeps them`,
+    );
+    recovered.push({
+      runId: manifest.runId,
+      unfinished: pending.length,
+      replayed: true,
+      failures: replay.failures,
+    });
+  }
+
+  return recovered;
+}
+
+// ── counter reconciliation ──────────────────────────────────────────────────
+
+export interface CounterReconciliation {
+  readonly reconciled: boolean;
+  readonly problems: readonly string[];
+}
+
+/**
+ * Reconcile expected operation counters against actual ones over a closed
+ * vocabulary. An unknown name is a defect in whoever produced the tally, so it
+ * fails reconciliation instead of being ignored into the total.
+ */
+export function reconcileCounters(
+  expected: Readonly<Record<string, number>>,
+  actual: Readonly<Record<string, number>>,
+  vocabulary: readonly string[],
+): CounterReconciliation {
+  const problems: string[] = [];
+  const known = new Set(vocabulary);
+
+  for (const name of Object.keys(actual)) {
+    if (!known.has(name)) problems.push(`unknown operation counter "${name}"`);
+  }
+
+  for (const name of new Set([...Object.keys(expected), ...Object.keys(actual)])) {
+    if (!known.has(name)) continue;
+    const want = expected[name] ?? 0;
+    const got = actual[name] ?? 0;
+
+    if (want !== got) problems.push(`counter "${name}": recorded ${want}, tallied ${got}`);
+  }
+
+  return { reconciled: problems.length === 0, problems };
+}
+
+// ── the C1–C7 checks ────────────────────────────────────────────────────────
+
+/** Everything a check needs from the live world, injected so the gates are
+ *  provable without a deployment. */
+export interface CleanupProbes {
+  workerAbsent(name: string): Promise<boolean>;
+  containerAppAbsent(name: string): Promise<boolean>;
+  /** Bucket state: absent entirely, or present with its object and multipart
+   *  residue counted. */
+  bucketState(name: string): Promise<{ absent: boolean; objects: number; multipartResidue: number }>;
+  boxStateEmpty(box: string): Promise<boolean>;
+  localPathAbsent(path: string): Promise<boolean>;
+  processAbsent(marker: string): Promise<boolean>;
+  alarmAbsent(name: string): Promise<boolean>;
+  mountAbsent(name: string): Promise<boolean>;
+  /** The run's final operation tally, as the artifact records it. */
+  counters(): Promise<Record<string, number>>;
+}
+
+export type CleanupGateId = 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7';
+
+export interface CleanupCheck {
+  readonly gate: CleanupGateId;
+  readonly purpose: string;
+  readonly ok: boolean;
+  readonly detail: string;
+}
+
+export interface CleanupReport {
+  readonly passed: boolean;
+  readonly kept: boolean;
+  readonly multipartResidue: number;
+  readonly checks: readonly CleanupCheck[];
+}
+
+const CLEANUP_GATE_PURPOSE: Readonly<Record<CleanupGateId, string>> = {
+  C1: 'Worker absent.',
+  C2: 'Container resources absent.',
+  C3: 'Bucket and multipart state empty.',
+  C4: 'Box durable state empty.',
+  C5: 'Local credentials and processes absent.',
+  C6: 'Operation counters reconciled.',
+  C7: 'Cleanup replay is idempotent.',
+};
+
+const check = (
+  gate: CleanupGateId, ok: boolean, detail: string,
+): CleanupCheck => ({ gate, purpose: CLEANUP_GATE_PURPOSE[gate], ok, detail });
+
+/**
+ * Run C1–C7 against a post-teardown world. C7 re-runs the replay with a probe
+ * executor that must delete NOTHING: a second pass that still finds work was
+ * not actually finished by the first.
+ */
+export async function checkCleanup(
+  repoRoot: string,
+  manifest: TeardownManifest,
+  probes: CleanupProbes,
+  vocabulary: readonly string[],
+): Promise<CleanupReport> {
+  const checks: CleanupCheck[] = [];
+
+  const workers = manifest.entries.filter((entry) => entry.kind === 'worker');
+  const containers = manifest.entries.filter((entry) => entry.kind === 'container-app');
+  const buckets = manifest.entries.filter((entry) => entry.kind === 'r2-bucket');
+  const prefixes = manifest.entries.filter((entry) => entry.kind === 'object-prefix');
+  const boxes = manifest.entries.filter((entry) => entry.kind === 'do-state');
+  const paths = manifest.entries.filter((entry) => entry.kind === 'local-path');
+  const processes = manifest.entries.filter((entry) => entry.kind === 'process-marker');
+  const alarms = manifest.entries.filter((entry) => entry.kind === 'alarm');
+  const mounts = manifest.entries.filter((entry) => entry.kind === 'mount');
+
+  const workerStates = await Promise.all(workers.map(async (entry) => ({
+    entry, absent: await probes.workerAbsent(entry.name),
+  })));
+
+  checks.push(check(
+    'C1',
+    workerStates.every((state) => state.absent),
+    workerStates.length === 0
+      ? 'no worker was created'
+      : workerStates.map((state) => `${state.entry.name}: ${state.absent ? 'absent' : 'STILL PRESENT'}`).join('; '),
+  ));
+
+  const containerStates = await Promise.all(containers.map(async (entry) => ({
+    entry, absent: await probes.containerAppAbsent(entry.name),
+  })));
+
+  checks.push(check(
+    'C2',
+    containerStates.every((state) => state.absent),
+    containerStates.length === 0
+      ? 'no container applications were created'
+      : containerStates.map((state) => `${state.entry.name}: ${state.absent ? 'absent' : 'STILL PRESENT'}`).join('; '),
+  ));
+
+  let multipartResidue = 0;
+  const bucketDetails: string[] = [];
+  let bucketsOk = prefixes.every((entry) => entry.done);
+
+  for (const entry of buckets) {
+    const [name, prefix] = splitBucketKey(entry.name);
+    const state = await probes.bucketState(name);
+    multipartResidue += state.multipartResidue;
+
+    if (state.absent) {
+      bucketDetails.push(`${name}: deleted`);
+    } else if (state.objects > 0 || state.multipartResidue > 0) {
+      bucketsOk = false;
+      bucketDetails.push(
+        `${name}: ${state.objects} object(s), ${state.multipartResidue} multipart upload(s) REMAIN`,
+      );
+    } else if (prefix !== undefined && !entry.done) {
+      bucketsOk = false;
+      bucketDetails.push(`${name}: prefix ${prefix} was never drained`);
+    } else {
+      bucketDetails.push(`${name}: empty`);
+    }
+  }
+
+  checks.push(check('C3', bucketsOk, bucketDetails.length === 0 ? 'no bucket was used' : bucketDetails.join('; ')));
+
+  const boxStates = await Promise.all(boxes.map(async (entry) => ({
+    entry, empty: await probes.boxStateEmpty(entry.name),
+  })));
+
+  const alarmStates = await Promise.all(alarms.map(async (entry) => ({
+    entry, absent: await probes.alarmAbsent(entry.name),
+  })));
+
+  const mountStates = await Promise.all(mounts.map(async (entry) => ({
+    entry, absent: await probes.mountAbsent(entry.name),
+  })));
+
+  const durableStateOk = boxStates.every((state) => state.empty)
+    && alarmStates.every((state) => state.absent)
+    && mountStates.every((state) => state.absent);
+
+  const durableStateDetails = [
+    ...boxStates.map((state) => `${state.entry.name}: ${state.empty ? 'empty' : 'STATE REMAINS'}`),
+    ...alarmStates.map((state) => `${state.entry.name}: ${state.absent ? 'absent' : 'ALARM REMAINS'}`),
+    ...mountStates.map((state) => `${state.entry.name}: ${state.absent ? 'absent' : 'MOUNT REMAINS'}`),
+  ];
+
+  checks.push(check(
+    'C4',
+    durableStateOk,
+    durableStateDetails.length === 0 ? 'no box state, alarm, or mount was declared' : durableStateDetails.join('; '),
+  ));
+
+  const pathStates = await Promise.all(paths.map(async (entry) => ({
+    entry, absent: await probes.localPathAbsent(entry.name),
+  })));
+
+  const processStates = await Promise.all(processes.map(async (entry) => ({
+    entry, absent: await probes.processAbsent(entry.name),
+  })));
+
+  const localOk = pathStates.every((state) => state.absent)
+    && processStates.every((state) => state.absent);
+
+  const localDetail = [
+    ...pathStates.map((s) => `${s.entry.name}: ${s.absent ? 'absent' : 'LEFT ON DISK'}`),
+    ...processStates.map((s) => `${s.entry.name}: ${s.absent ? 'gone' : 'STILL RUNNING'}`),
+  ].join('; ');
+
+  checks.push(check('C5', localOk, localDetail === '' ? 'no local state was created' : localDetail));
+
+  const recorded = await probes.counters();
+  const reconciliation = reconcileCounters(manifest.counters, recorded, vocabulary);
+  checks.push(check(
+    'C6',
+    reconciliation.reconciled,
+    reconciliation.reconciled
+      ? `all ${Object.keys(recorded).length} counter name(s) known and matching`
+      : reconciliation.problems.join('; '),
+  ));
+
+  const pendingBefore = manifest.entries.filter((entry) => !entry.done).length;
+  const replay = await replayTeardown(repoRoot, manifest, async () => ({ ok: true }));
+  checks.push(check(
+    'C7',
+    pendingBefore === 0 && replay.failures.length === 0,
+    pendingBefore > 0
+      ? `${pendingBefore} entr(y/ies) were still pending when the checks ran; the first replay was incomplete`
+      : 'idempotent replay performed zero deletions',
+  ));
+
+  return {
+    passed: checks.every((row) => row.ok),
+    kept: manifest.kept,
+    multipartResidue,
+    checks,
+  };
+}
+
+/** Bucket manifests carry `name` or `name#prefix`; a bare name means the whole
+ *  bucket was this run's to delete. */
+function splitBucketKey(key: string): [string, string | undefined] {
+  const hash = key.indexOf('#');
+
+  return hash === -1 ? [key, undefined] : [key.slice(0, hash), key.slice(hash + 1)];
+}

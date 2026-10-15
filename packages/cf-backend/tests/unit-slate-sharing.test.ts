@@ -6,7 +6,7 @@ import {
 } from '@kinu.run/core';
 import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
-import { resetRecordedMcp } from './helpers/agents-sdk';
+import { resetRecordedMcp, seedConfiguredMcpServer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 
 type Owner = ReturnType<typeof orchestratorHarness>;
@@ -54,8 +54,9 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     // MCP header, provider key and vault secret: none is in the slate tree, and none may reach the forker.
     const mcpHeader = 'Bearer owner-mcp-header-' + 'a1b2c3d4e5f6';
     await user.userDO.userMcp_list(caller);
-    user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', ?, NULL)`, JSON.stringify({ authorization: mcpHeader }));
+    seedConfiguredMcpServer(user.sql, 'connection-id', {
+      name: 'github', url: 'https://github.example/sse', transport: 'auto', headers: JSON.stringify({ authorization: mcpHeader }),
+    });
     const providerKey = ['sk-ant-', 'owner-provider-key-0123456789'].join('');
     await user.userDO.setCredential(caller, 'anthropic', { kind: 'bearer', token: providerKey });
     const vaultSecret = 'owner-vault-secret-' + '9f8e7d6c';

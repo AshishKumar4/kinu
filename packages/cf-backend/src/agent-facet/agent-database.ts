@@ -4,13 +4,13 @@ import type { ModelMessage, UIMessage } from 'ai';
 import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
-  initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
+  initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, readSubordinateInspection,
   drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
-  localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
-  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
-  type SessionTranscriptReader, type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
+  localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
+  type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
+  type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, TurnReports,
@@ -23,6 +23,7 @@ import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSy
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
+import { durableStamps, readStamp, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
 import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
 
@@ -73,15 +74,43 @@ function holdsConfig(storage: DurableObjectStorage, actorId: SqlValue, config: r
   return stored.length === wanted.length && wanted.every((row) => holds(storage, 'actor_config', row));
 }
 
-interface AgentReadable {
-  readonly actor: ActorHandle;
-  readonly transcript: SessionTranscriptReader;
-}
-
 const IdentitySchema = v.object({
   actor: v.looseObject({ actor_id: v.string(), parent_actor_id: v.nullable(v.string()) }),
   workspace: v.looseObject({ id: v.string(), owner_user_id: v.nullable(v.string()) }),
 });
+
+/** Tagged statements over an agent's own SQLite, its rows for a read. */
+export function agentSql(sql: SqlStorage): SqlExecutor {
+  return <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+}
+
+/** The tables an agent's database is made with: its constructor's, and the tables step's once it repaired them. */
+export function initAgentDatabaseTables(storage: DurableObjectStorage, over: { sql: SqlExecutor; exec: SqlExec }): void {
+  initAgentIsolateSchema({
+    execRaw: (ddl) => { storage.sql.exec(ddl); },
+    sql: over.sql,
+    transactionSync: (write) => storage.transactionSync(write),
+    exec: over.exec,
+  });
+  initPendingSendTables((ddl) => { storage.sql.exec(ddl); });
+  initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
+}
+
+/** An agent's database, asked its stamp first (identity/schema-stamp.ts): one a release's tables step has not reached
+ *  is refused, and every call that would read it answers with why, until the step brings it to this build. */
+export function openAgentDatabase(storage: DurableObjectStorage, workspace: ConstructorParameters<typeof AgentDatabase>[1]): AgentDatabase {
+  return settleSync(Effect.suspend(() => {
+    const stamps = durableStamps(storage.kv);
+    const stamp = readStamp(stamps, storage.sql, 'agent');
+
+    if (stamp === 'behind') return Effect.fail(new StoragePredatesReleaseError('agent', stamps.read()));
+    const database = new AgentDatabase(storage, workspace);
+
+    if (stamp === 'unmade') writeStamp(stamps, 'agent');
+
+    return Effect.succeed(database);
+  }));
+}
 
 export class AgentDatabase {
   private snapshot: AgentSnapshot | undefined;
@@ -180,14 +209,7 @@ export class AgentDatabase {
     holdRunHeads(this.sql);
     // Its config, held: every actor_config write passes `sql` or `exec` (the stores, and adopt's replacement).
     holdConfig(this.sql, this.held);
-    initAgentIsolateSchema({
-      execRaw: (ddl) => { storage.sql.exec(ddl); },
-      sql: this.sql,
-      transactionSync: (write) => storage.transactionSync(write),
-      exec: this.exec,
-    });
-    initPendingSendTables((ddl) => { storage.sql.exec(ddl); });
-    initTerminalEffectTable((ddl) => { storage.sql.exec(ddl); });
+    initAgentDatabaseTables(storage, { sql: this.sql, exec: this.exec });
   }
 
   /** Writes only when the workspace's rows changed, so a read of an unchanged agent writes nothing. Rows read before
@@ -331,7 +353,7 @@ export class AgentDatabase {
         }),
         eventLog: new EventLog(this.exec, bound.handle),
       }),
-      contextEvents: () => null,
+      contextEvents: (bound) => bound.stores.eventRecorder,
       sayToParent: (_child, signal) => this.workspace.sayToParent(signal),
       // Its workspace tools' receipts are the workspace's, where their effects commit (design v2 §4).
       receipts: (execution, callIds) => this.workspace.receipts(execution.turnId, execution.runId, callIds),
@@ -429,22 +451,21 @@ export class AgentDatabase {
     return this.actorHost().bindStores(this.reference()).stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  readable(): AgentReadable {
+  readable(): ReadableActor {
     const record = this.actorHost().describe(this.reference().actorId);
 
     if (record === null) return settleSync(Effect.fail(new KinuError('missing', 'The agent is not in its own database.')));
 
-    if (record.retiringAt === null && record.deletedAt === null) {
-      const bound = this.actorHost().bindStores(this.reference());
+    return readableActor(record, {
+      sql: this.sql,
+      open: () => {
+        const bound = this.actorHost().bindStores(this.reference());
 
-      return { actor: bound.handle, transcript: bound.stores.history.transcript(CHAT_SESSION_ID) };
-    }
-
-    const actor = actorReadHandle(this.sql, record);
-
-    // The workspace owner still holds this actor's retained home. Reading payloads needs no actor reacquisition.
-    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID,
-      async () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home })) };
+        return { actor: bound.handle, transcript: bound.stores.history.transcript(CHAT_SESSION_ID) };
+      },
+      // The workspace owner still holds this actor's retained home.
+      payloads: async () => nimbusSessionFiles(this.workspace.agent(), { home: this.workspace.home }),
+    });
   }
 
   async inspect(request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
@@ -591,7 +612,11 @@ export class AgentDatabase {
   }
 
   contextTree(editor: ContextEditor): ContextTree {
-    return localContextTree(() => ({ claims: this.actorHost().bindStores(this.reference()).stores.claims, events: null }), editor);
+    return localContextTree(() => {
+      const { stores } = this.actorHost().bindStores(this.reference());
+
+      return { claims: stores.claims, events: stores.eventRecorder };
+    }, editor);
   }
 
   figures(): AgentFigures {

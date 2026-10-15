@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
@@ -13,24 +13,16 @@ import {
   ELAPSED_WORK_SOURCE_ROOTS,
   isElapsedWorkDeadlineSource,
 } from "./rules/no-elapsed-work-deadline.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
+import { lintJson, OXLINT, type LintDiagnostic, type LintReport } from "./shared/oxlint-json.ts";
+import { gitEnv } from "../../../packages/test-utils/src/git-env.ts";
 
 const repoRoot = process.cwd();
 const STAGING_PLUGIN = "elapsed-deadline-stage";
 const STAGING_RULE = `${STAGING_PLUGIN}/no-elapsed-work-deadline`;
 const STAGING_CODE = `${STAGING_PLUGIN}(no-elapsed-work-deadline)`;
-const OXLINT_BINARY = "./node_modules/oxlint/bin/oxlint";
 const ACTIVE_RULE = "anti-slop/no-elapsed-work-deadline";
 
-type Diagnostic = {
-  readonly code?: string;
-  readonly filename?: string;
-  readonly message?: string;
-};
-type LintReport = {
-  readonly diagnostics: readonly Diagnostic[];
-  readonly number_of_files: number;
-  readonly number_of_rules: number;
-};
 type HistoricalSource = {
   readonly commit: string;
   readonly path: string;
@@ -43,9 +35,7 @@ type Fixture = {
   readonly code: string;
 };
 
-const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8")) as {
-  readonly rules: Readonly<Record<string, unknown>>;
-};
+const config = readLintConfig(repoRoot);
 assert.equal(
   config.rules[ACTIVE_RULE],
   "error",
@@ -87,7 +77,8 @@ assert.equal(
 const historical = spawnSync(
   "git",
   ["show", `${HISTORICAL_SOURCE.commit}:${HISTORICAL_SOURCE.path}`],
-  { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  // The hook's GIT_DIR must not answer for this checkout, nor anyone's global config shape the blob.
+  { cwd: repoRoot, env: gitEnv(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 );
 if (historical.status === 0) {
   assert.equal(
@@ -239,11 +230,7 @@ function governedSourceSet(): readonly string[] {
 
 /** Oxlint's pre-lint file list is the measured set, not a second local glob. */
 function measuredSourceSet(configPath: string, governed: readonly string[]): readonly string[] {
-  const run = spawnSync(
-    process.execPath,
-    [OXLINT_BINARY, "-c", configPath, "--debug=files", ...governed],
-    { cwd: repoRoot, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-  );
+  const run = spawnSync(OXLINT, ["-c", configPath, "--debug=files", ...governed], { cwd: repoRoot, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   assert.equal(
     run.status,
     0,
@@ -265,27 +252,11 @@ function measuredSourceSet(configPath: string, governed: readonly string[]): rea
 
 /** The isolated binary invocation is the contract under test, so every call checks its file count. */
 function lint(configPath: string, paths: readonly string[], expectedFiles: number): LintReport {
-  const run = spawnSync(
-    process.execPath,
-    [OXLINT_BINARY, "-c", configPath, "-f", "json", ...paths],
-    { cwd: repoRoot, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-  );
-  assert.ok(run.stdout.length > 0, `oxlint produced no JSON for ${paths.join(" ")}:\n${run.stderr}`);
-  const report: LintReport = JSON.parse(run.stdout);
-  assert.equal(
-    report.number_of_files,
-    expectedFiles,
-    `oxlint linted ${String(report.number_of_files)} of ${String(expectedFiles)} requested files; a skipped file cannot be governed`,
-  );
-  assert.ok(
-    report.number_of_rules > 0,
-    `oxlint ran ${String(report.number_of_rules)} rules; the staged rule was not loaded`,
-  );
-  return report;
+  return lintJson(["-c", configPath, ...paths], { cwd: repoRoot, expectedFiles });
 }
 
 /** Diagnostics from the one temporary plugin rule, excluding unrelated Oxlint machinery. */
-function stagedDiagnostics(report: LintReport): readonly Diagnostic[] {
+function stagedDiagnostics(report: LintReport): readonly LintDiagnostic[] {
   return report.diagnostics.filter((diagnostic) => diagnostic.code === STAGING_CODE);
 }
 

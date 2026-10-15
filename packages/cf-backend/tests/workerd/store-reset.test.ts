@@ -1,29 +1,41 @@
 /**
- * A workspace whose store was created before the conversation store's storage reset is refused once, with one
- * message that says what happened and what to do. The history seed and a chat socket answer it instead of running
- * or failing a turn, the platform's wake returns instead of failing, and export still reads the store.
+ * A workspace whose storage a release's tables step has not reached is refused, with one message that says so: the
+ * history seed and a chat socket answer it instead of running or failing a turn, the platform's wake returns instead of
+ * failing, and its export is refused too. The step's own call brings it to this build, and it serves again.
  */
 import { env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 
-const REFUSED = 'This workspace was created before a storage reset, and this version cannot run it: its session_messages '
-  + 'table has no envelope_json, sealed_at, content_json, content_path, content_digest. Export the workspace, or create a new one.';
+const REFUSED = "This workspace's storage was made before this release changed its tables";
 
-it('a store created before the conversation store reset is refused with one message, and still exports', async () => {
+it('a workspace behind its stamp is refused with one message until the tables step reaches it', async () => {
   const probe = env.STORE_RESET_PROBE.get(env.STORE_RESET_PROBE.idFromName('store-reset'));
-  const workspace = 'pre-reset-workspace';
+  const workspace = 'behind-workspace';
 
-  expect(await probe.plantRefusedWorkspace(workspace)).toContain('the pre-reset store is planted');
+  expect(await probe.plantRefusedWorkspace(workspace)).toContain('the older stamp is planted');
   const seeded = await probe.seed(workspace);
 
-  expect(seeded.status).toBe(415);
-  expect(JSON.parse(seeded.body)).toMatchObject({ reason: 'unsupported', success: false });
+  expect(seeded.status).toBe(503);
+  expect(JSON.parse(seeded.body)).toMatchObject({ reason: 'unavailable', success: false });
 
   // The page shows a failed turn's answer from these frames, so the refusal is seen the moment the tab opens.
   const chat = await probe.chat(workspace);
 
-  expect(JSON.parse(chat.connected)).toMatchObject({ reason: 'unsupported', body: REFUSED });
-  expect(JSON.parse(chat.answered)).toMatchObject({ id: 'refused-send', body: REFUSED });
+  expect(JSON.parse(chat.connected)).toMatchObject({ reason: 'unavailable', body: expect.stringContaining(REFUSED) });
+  expect(JSON.parse(chat.answered)).toMatchObject({ id: 'refused-send', body: expect.stringContaining(REFUSED) });
   expect(await probe.wake(workspace)).toBe('returned');
-  expect(await probe.exportedLines(workspace)).toBeGreaterThan(0);
+  expect(await probe.exported(workspace)).toContain(REFUSED);
+
+  expect(await probe.repaired(workspace)).toBe('behind');
+  expect((await probe.seed(workspace)).status).toBe(200);
+  expect(await probe.exported(workspace)).toMatch(/^\d+ line\(s\)$/u);
+});
+
+it('a reshaped table is rebuilt on a Durable Object keeping its rows, its rowids and the rows that refer to it', async () => {
+  const probe = env.STORE_RESET_PROBE.get(env.STORE_RESET_PROBE.idFromName('store-rebuild'));
+  const { answer, notes, children } = await probe.rebuilt();
+
+  expect(answer).toEqual({ held: [{ table: 'notes', rows: 1, stale: true, keepsRows: true }], rebuilt: ['notes', 'notes_children'], dropped: [] });
+  expect(notes).toEqual([{ r: 7, id: 'a', body: 'kept' }]);
+  expect(children).toEqual([{ id: 'c', note: 'a' }]);
 });

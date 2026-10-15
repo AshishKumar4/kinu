@@ -21,7 +21,7 @@
 import { X509Certificate, createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { git } from '@kinu.run/test-utils';
+import { evidenceDir, git } from '@kinu.run/test-utils';
 import type { Subprocess } from 'bun';
 import type { Browser, Page } from 'puppeteer';
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
@@ -30,8 +30,8 @@ import { declaredSettings } from './browser-declarations';
 import { signalGroup } from './process-group';
 import { withTestChrome } from './test-chrome';
 import { devPreviewTlsDir } from '../packages/cf-backend/vite-preview-zone';
+import { REPO_ROOT as REPO } from './repo-root';
 
-const REPO = join(import.meta.dirname, '..');
 
 const CF = join(REPO, 'packages', 'cf-backend');
 
@@ -53,7 +53,7 @@ const devServerOutput = new Map<string, readonly string[]>();
 /** Where a failing run keeps its dev server's output, one file per boot, outside the worktree beside the other runs'
  *  logs. The buffer above dies with the process: on 2026-09-30 reading why a row's agent turn failed under `vite dev`
  *  took a throwaway patch that printed it. */
-const DEV_SERVER_LOGS = join(REPO, '..', 'kinu-logs', 'dev-server');
+const DEV_SERVER_LOGS = evidenceDir('dev-server');
 
 /** What the dev server said about the last failure it served. The LAST block
  *  is this request's: the harness runs one row at a time against its own

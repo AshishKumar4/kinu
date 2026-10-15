@@ -3,7 +3,8 @@
  * again and the relay's own added; anything else a console carried is no such line.
  */
 import { expect, test } from 'bun:test';
-import { createLineLogger, createRecordingLogger, relayedLine, toKinuError } from '../src/obs';
+import { createLineLogger, relayedLine, toKinuError } from '../src/obs';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 test("a line another isolate wrote is written again under its own event, with the relay's fields", () => {
   const written: string[] = [];

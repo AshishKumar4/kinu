@@ -1,8 +1,6 @@
 // Bench task and attempt shapes. The runner lives in scripts/bench.ts. Scoring
 // is never LLM-judged: a task passes when its checks exit 0.
 import { unitHash } from './stats';
-import { normalizeUsage, usageTotal } from '../usage';
-import type { LanguageModelUsage } from 'ai';
 import * as v from 'valibot';
 
 export interface BenchCheck {
@@ -128,45 +126,6 @@ export interface Solver {
 /** All-or-nothing: partial credit would need a chosen weighting, i.e. a rubric. */
 export function attemptPassed(checks: readonly CheckOutcome[]): boolean {
   return checks.length > 0 && checks.every((c) => c.passed);
-}
-
-/** Provider usage is a trust boundary with two dialects (nested V3 `{ total }` and flat).
- *  Unreadable figures stay undefined, never zero; scripts/bench.ts refuses to judge one. */
-const UsageBoundarySchema = v.object({
-  inputTokens: v.optional(v.unknown()),
-  outputTokens: v.optional(v.unknown()),
-});
-
-/** Parsed per field so one garbled figure does not hide the other; `v.finite()` keeps NaN out. */
-const TokenFigureSchema = v.pipe(
-  v.union([
-    v.pipe(v.number(), v.finite()),
-    v.looseObject({ total: v.optional(v.nullable(v.pipe(v.number(), v.finite()))) }),
-  ]),
-  v.transform((figure): number | undefined => (
-    v.is(v.number(), figure) ? figure : figure.total ?? undefined
-  )),
-);
-
-export function usageTokens(usage: { reported: unknown }): number | undefined {
-  const parsed = v.safeParse(UsageBoundarySchema, usage.reported);
-
-  if (!parsed.success) return undefined;
-  const input = v.safeParse(TokenFigureSchema, parsed.output.inputTokens);
-  const output = v.safeParse(TokenFigureSchema, parsed.output.outputTokens);
-
-  // Cache and reasoning details are subsets of these totals, so they are omitted.
-  const report: LanguageModelUsage = {
-    inputTokens: input.success ? input.output : undefined,
-    inputTokenDetails: {
-      noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined,
-    },
-    outputTokens: output.success ? output.output : undefined,
-    outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
-    totalTokens: undefined,
-  };
-
-  return usageTotal(normalizeUsage(report));
 }
 
 /** Per task and repeat from the run seed, so order is not confounded with variant. */

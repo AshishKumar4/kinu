@@ -45,3 +45,41 @@ describe("the client build's files", () => {
     }
   });
 });
+
+describe("the shell wears the account's theme", () => {
+  const shellOf = async (answer: Response): Promise<string | null> => {
+    let theme: string | null = null;
+
+    await new HTMLRewriter().on('html', { element(element) { theme = element.getAttribute('data-theme'); } }).transform(answer).text();
+
+    return theme;
+  };
+
+  const page = (): Request => new Request('https://kinu.example/workspace/jarvis');
+
+  const html = {
+    ASSETS: { fetch: async () => new Response('<!doctype html><html lang="en"><head></head><body></body></html>', { headers: { 'content-type': 'text/html' } }) },
+  };
+
+  test("a signed-in page names the account's theme on the root, so it paints in it before any script runs", async () => {
+    expect(await shellOf(await serveApp(page(), html, { theme: async () => 'warm' }))).toBe('warm');
+  });
+
+  test('a page served with no account names none, and wears the default', async () => {
+    expect(await shellOf(await serveApp(page(), html))).toBeNull();
+  });
+
+  test('a file that is not a page never asks for the theme', async () => {
+    const asked: string[] = [];
+
+    const theme = async (): Promise<'warm'> => {
+      asked.push('theme');
+
+      return 'warm';
+    };
+
+    await serveApp(new Request('https://kinu.example/assets/app-BYNxAknq.js'), env(), { theme });
+
+    expect(asked).toEqual([]);
+  });
+});

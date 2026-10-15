@@ -47,15 +47,14 @@ import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './no
 import type { HostedNodeSeat, NodeCodemode } from './node-agent';
 import type { MissionScope } from '../mission-budget';
 import type { SwarmCandidate } from './swarm';
-import type { PublicationState } from './objective';
-import { isBetter } from './objective';
 
 import type { LanguageModel, ModelMessage } from 'ai';
 import { nanoid } from '../utils/nanoid';
 import { insertSearchNode } from '../mcts/record-node';
-import { outcomeFacts, reenterSwarm, type SwarmReentry } from './swarm-resume';
+import { foldCandidate, outcomeFacts, reenterSwarm, type CandidateFold, type SwarmReentry } from './swarm-resume';
 import type { SwarmProfileSnapshot } from '../profiles';
-import { readArtifact, type TreeNode } from './swarm-tree';
+import { type TreeNode } from './swarm-tree';
+import { originReader } from './merge-back';
 import type { ActorHandle } from '../identity/actor-handle';
 import type {
   ExplorationRecord, MeasuredObjective, ObjectiveIdentity, PublishingCarry,
@@ -691,7 +690,7 @@ export async function createRoot(input: {
   const { actor, sql, reentry, verifier, ctx, resolved, measures, journal, agentNodes } = input;
   const rootId = reentry?.rootId ?? nanoid();
   // Measured now even on re-entry: the stored `observation` predates earlier settles and may hold the task text.
-  const rootArtifact = verifier && ctx ? await readArtifact(ctx, verifier.artifact) : null;
+  const rootArtifact = verifier && ctx ? await originReader(ctx.vfs)(verifier.artifact) : null;
 
   if (!reentry) {
     insertSearchNode(sql, actor, {
@@ -733,10 +732,7 @@ export async function createRoot(input: {
  */
 export interface ResumedSearchSeed {
   readonly candidates: SwarmCandidate[];
-  readonly ensembles: number[];
-  readonly publication: PublicationState;
-  readonly best: SwarmCandidate | null;
-  readonly bestValue: number | null;
+  readonly fold: CandidateFold;
   /**
    * Expansions already made: tree rows plus pending journal-only nodes. The two sets partition, so
    * the union is a plain sum; either alone miscounts.
@@ -754,10 +750,7 @@ export function seedResumedSearch(input: {
   return settleSync(Effect.gen(function* () {
     const { reentry, nodes, rankDirection, spentBy } = input;
     const candidates: SwarmCandidate[] = [];
-    let best: SwarmCandidate | null = null;
-    let bestValue: number | null = null;
-    const ensembles: number[] = [];
-    let publication: PublicationState = { kind: 'open' };
+    const fold: CandidateFold = { publication: { kind: 'open' }, best: null, ensembles: [] };
     // Pending expansions are re-run, not re-bought; they are not in `reentry.nodes`.
     let inheritedExpansions = reentry?.pending.length ?? 0;
     let inheritedTokens: number | null = null;
@@ -787,21 +780,10 @@ export function seedResumedSearch(input: {
       spentBy.set(node.id, record.tokens);
 
       if (record.tokens !== null) inheritedTokens = (inheritedTokens ?? 0) + record.tokens;
-
-      if (ensemble > 0) ensembles.push(ensemble);
-
-      if (breach !== null) publication = { kind: 'sealed', breach };
-
-      if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
-        best = candidate;
-        bestValue = rank;
-      }
+      foldCandidate(fold, candidate, { breach, rank, ensemble }, rankDirection);
     }
 
-    return {
-      candidates, ensembles, publication, best, bestValue,
-      inheritedExpansions, inheritedTokens,
-    };
+    return { candidates, fold, inheritedExpansions, inheritedTokens };
   }));
 }
 

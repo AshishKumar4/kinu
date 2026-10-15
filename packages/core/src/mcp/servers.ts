@@ -46,7 +46,7 @@ export interface McpServerInput {
   presetId?: McpPresetId;
 }
 
-const McpTransportSchema = v.picklist(['auto', 'sse', 'streamable-http']);
+export const McpTransportSchema = v.picklist(MCP_TRANSPORTS);
 
 function isJsonRecord<Value>(value: Value): value is Value & JsonObject {
   return !Array.isArray(value) && v.is(JsonObjectSchema, value);
@@ -180,10 +180,6 @@ function serverName(name: JsonValue): Effect.Effect<string, KinuError> {
   const trimmed = parsed.output.trim();
 
   return trimmed.length > 64 ? Effect.fail(new KinuError('bad_input', '`name` must be <= 64 characters.')) : Effect.succeed(trimmed);
-}
-
-export function validateMcpServerName(name: JsonValue): string {
-  return settleSync(serverName(name));
 }
 
 function jsonColumn<Schema extends v.GenericSchema>(raw: string | null | undefined, schema: Schema): v.InferOutput<Schema> | null {

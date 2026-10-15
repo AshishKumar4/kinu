@@ -61,9 +61,9 @@ import * as v from 'valibot';
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
 import { isManifest, isParseable, isTypescriptConfig, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { moduleSpecifiers, parse } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/undeclared-imports.lock.json`;
 

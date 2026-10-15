@@ -6,21 +6,22 @@ import type { CraftCycleRecord } from '../events/types';
 import type { CraftCall } from './in-episode';
 
 export class TurnCraftLedger {
-  /**
-   * Whether the turn's `eval` calls are observed where they run: evolution on, and not Plan. Set as the turn opens; an
-   * isolate that runs no `eval` of the turn keeps the calls its tools' answers carry, whatever it says.
-   */
-  recording: boolean;
   /** By call id, in the order they settled. */
   private readonly calls = new Map<string, CraftCall>();
 
-  constructor(recording = false) {
-    this.recording = recording;
+  /** `records`: whether the turn evolves (evolution on, and not Plan), as its owner decided it. */
+  constructor(private readonly records: () => boolean = () => false) {}
+
+  /**
+   * Whether the turn's `eval` calls are observed where they run. An isolate that runs no `eval` of the turn keeps the
+   * calls its tools' answers carry, whatever it says.
+   */
+  get recording(): boolean {
+    return this.records();
   }
 
   reset(): void {
     this.calls.clear();
-    this.recording = false;
   }
 
   note(callId: string, call: CraftCall): void {

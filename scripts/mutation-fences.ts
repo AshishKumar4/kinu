@@ -57,12 +57,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { childEnv } from '../packages/test-utils/src/ambient-env';
 import { trackedFiles, workspaceScope } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
 
 /**
  * One concurrency fence, and the proof that it is load-bearing.
@@ -171,14 +170,6 @@ export const FENCES: readonly Fence[] = [
     // never read as finished: the exploration sweep keeps its storage for the
     // life of the workspace, and the cold branch settle owes a report that is
     // never coming.
-    //
-    // NOT FENCED ON `cf/orchestrator#explorationFacetLedgerStatus` in
-    // `packages/cf-backend/src/orchestrator.ts`: that method has NO CALLER
-    // anywhere in the tree, so its mutation cannot turn any test red however the
-    // owner is pointed — measured 2026-09-08, replacing the surviving sweep's
-    // whole classification with `settled = true` (retire every exploration actor
-    // unconditionally) left all 2,936 cf-backend tests reporting exactly as
-    // before.
     //
     // This tuple pair is the one place the four statuses are named,
     // `HEAD_REPORT_STATUSES`'s own docstring records the sweep defect as the

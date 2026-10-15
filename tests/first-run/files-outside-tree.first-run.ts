@@ -29,13 +29,23 @@
 import { afterAll, describe, test } from 'vitest';
 
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · files-outside-tree';
 
-const CASE = 'files-outside-tree' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Opening a hosted file in the Files tab answered EIO — "Code generation from strings '
+    + 'disallowed for this context".',
+  missedBecause: 'the ranged read ran `node -e` through the box\'s exec, and `node -e` compiles '
+    + 'its source with `new Function`, which workerd forbids and every Node-hosted test '
+    + 'allows. The whole bun suite was green over it.',
+  provedRedAt: 'a85ce8793',
+  redDirection: 'the parent of a85ce8793 has no native ranged read on the box file plane, so '
+    + 'the first read of a path outside the workspace tree answers EIO on the deployment.',
+};
 
 /** The executor whose filesystem a hosted workspace lives on — the plane the
  *  Files tab reads, spelled as the pane spells it. */
@@ -64,7 +74,7 @@ const BYTES = [
 /** The refusal this row is named after, in the runtime's own words. */
 const CODEGEN_REFUSAL = 'Code generation from strings';
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'files');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -77,6 +87,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'none',
       genesis: false,
       purpose: 'A workspace whose files a person opens.',
@@ -121,5 +132,3 @@ describe(SUITE, () => {
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

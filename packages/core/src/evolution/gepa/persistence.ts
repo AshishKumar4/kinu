@@ -52,15 +52,12 @@ export function initGepaTables(execRaw: RawSqlExec): void {
     source         TEXT NOT NULL,
     scores_json    TEXT NOT NULL,
     feedback_json  TEXT NOT NULL,
-    aggregate      REAL NOT NULL,
     created_at     INTEGER NOT NULL,
     iteration      INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_iter
            ON gepa_candidates(actor_id, run_id, iteration)`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_aggregate
-           ON gepa_candidates(actor_id, run_id, aggregate DESC)`);
 
 }
 
@@ -100,10 +97,10 @@ export function persistGepaCandidate(
   const feedbackJson = JSON.stringify(Object.fromEntries(args.candidate.feedback));
   void sql`INSERT INTO gepa_candidates
         (actor_id, id, run_id, parent_id, source, scores_json, feedback_json,
-         aggregate, created_at, iteration)
+         created_at, iteration)
         VALUES (${actor.actorId}, ${args.candidate.id}, ${args.runId}, ${args.candidate.parentId},
                 ${args.candidate.source}, ${scoresJson}, ${feedbackJson},
-                ${args.candidate.aggregateScore}, ${args.candidate.createdAt},
+                ${args.candidate.createdAt},
                 ${args.iteration})`;
 }
 
@@ -201,11 +198,11 @@ export function loadGepaCandidates(
   type Row = {
     id: string; parent_id: string | null; source: string;
     scores_json: string; feedback_json: string;
-    aggregate: number; created_at: number;
+    created_at: number;
   };
 
   const rows = sql<Row>`SELECT id, parent_id, source, scores_json, feedback_json,
-                               aggregate, created_at
+                               created_at
                           FROM gepa_candidates
                           WHERE actor_id = ${actor.actorId} AND run_id = ${runId}
                           ORDER BY iteration ASC, created_at ASC`;
@@ -220,7 +217,6 @@ export function loadGepaCandidates(
       source: r.source,
       scores: new Map(Object.entries(scoresObj)),
       feedback: new Map(Object.entries(feedbackObj)),
-      aggregateScore: r.aggregate,
       createdAt: r.created_at,
     };
   });
@@ -273,7 +269,6 @@ export function loadGepaParetoFront(
       source: '',
       scores: new Map(Object.entries(scoresObj)),
       feedback: new Map(),
-      aggregateScore: 0,
       createdAt: 0,
     };
   });

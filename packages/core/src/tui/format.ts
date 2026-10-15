@@ -1,6 +1,7 @@
-import { codenameFor } from '../identity/naming';
+import { agentTitle } from '../subordinates/nested-agent';
 import { revealMisrepresenting } from '../safety/untrusted-text';
 import { ELAPSED_COUNTER } from '../tui-presentation';
+import { estimateTokens } from '../token-estimate';
 
 export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -11,7 +12,7 @@ export interface TurnMeter {
 
 export function meterText(meter: TurnMeter, now: number): string {
   const seconds = Math.max(0, Math.floor((now - meter.startedAt) / 1000));
-  const tokens = Math.ceil(meter.streamedChars / 4);
+  const tokens = estimateTokens(meter.streamedChars);
   const elapsed = `${ELAPSED_COUNTER.prefix}${String(seconds)}${ELAPSED_COUNTER.suffix}`;
 
   return tokens === 0 ? elapsed : `${elapsed} · ~${String(tokens)} tokens`;
@@ -175,7 +176,7 @@ export function literalText(value: string): string {
   return revealMisrepresenting(value.replace(CONTROL_CHARACTER, visible));
 }
 
-/** Blank label means a pre-codename row: show the codename its slug would get (same rule as web `agentTitle`). */
+/** The web's `agentTitle`, over the terminal's `label`. */
 export function agentDisplayLabel(entry: { name: string; label: string }): string {
-  return entry.label.trim() || codenameFor(entry.name);
+  return agentTitle({ name: entry.name, displayName: entry.label });
 }

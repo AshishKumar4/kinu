@@ -83,12 +83,12 @@ import { readFileSync } from 'node:fs';
 import { LADDER, deployGates, packageScripts } from './ladder';
 import { assertMeasured, finding } from './gate-ratchet';
 import { isParseable, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   collapsePath, identifierCalleeName, identifierText, IMPORT_CANDIDATES, importedNames,
   memberCalleeName, moduleSpecifiers, parse, regexPattern, type SyntaxNode, walk,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** The one enumerator, and therefore the one file allowed to discover paths. */
 export const ENUMERATOR = 'scripts/sources.ts';
@@ -196,17 +196,12 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + '`node_modules`, so that set is exactly the one no repository enumerator can produce.',
   ],
   [
-    'scripts/fixtures/storage-matrix/cleanup.ts',
+    'scripts/bench-teardown.ts',
     'enumerates `bench-artifacts/teardown/` to find the teardown manifests of benchmark runs an '
     + 'earlier driver was killed before finishing. That directory is gitignored and every file in '
     + 'it is written at runtime by a run that may no longer exist, so `git ls-files` has never '
     + 'listed one — the set is exactly what no repository enumerator can produce, and it is the '
     + 'set whose members are live Cloudflare Workers and buckets nobody else will ever delete.',
-  ],
-  [
-    'scripts/gallery-harness.ts',
-    'reads the OS temp directory for gallery builds left by processes that are gone. Not a '
-    + 'repository path, and the whole point is to see what git never will.',
   ],
   [
     'scripts/vendor-schema.ts',

@@ -281,7 +281,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
     await this.agentTurns.idle();
 
     for (const actor of this.actorDirectoryStore().list()) {
-      if (actor.parentActorId !== null && hostedActorPlacement(actor).homeName !== null) await (await this.agentCalls(actor.actorId)).idle();
+      if (actor.parentActorId !== null && hostedActorPlacement(actor).homeName !== null) await this.agentCall(actor.actorId, (isolate) => isolate.idle());
     }
 
     await this.settleBackgroundTasks();

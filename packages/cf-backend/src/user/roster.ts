@@ -82,7 +82,7 @@ function rosterEntry(row: RosterRow): RosterEntry {
 
   return {
     name: row.name, displayName: row.displayName, createdAt: row.createdAt, lastVisited: row.lastVisited,
-    overview: stored === null ? null : { ...stored, decisionsWaiting: row.decisions },
+    overview: stored,
     decisions: row.decisions,
     logo: row.logo,
   };

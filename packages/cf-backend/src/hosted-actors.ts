@@ -3,7 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { actorPolicy, assignmentDelivery, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type CodemodeBuilder, type SeatedActor, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
-import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, parseActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
@@ -258,7 +258,7 @@ function admitHostedTask(
 
     // The first work an agent is given is its brief: its stand-in title shows at once, before the turn that opens its
     // chat names it from the same words. A later message ("Continue") never titles it.
-    if (result.admitted && brief && await titleActorFromMessage(actor.handle, input.body)) seams.announce(actor);
+    if (result.admitted && brief && (await titleActorFromMessage(actor.handle, input.body)).changed) seams.announce(actor);
 
     return {
       ...result,
@@ -483,8 +483,16 @@ export async function hostedParentReport(
 
 /** Names a hosted actor after the work it was given, with the title its own isolate suggested (null: the stand-in
  *  only). A failure throws, so the agent's owed row keeps it. */
-export async function hostedAutoTitle(seams: HostedActorSeams, actor: BoundActor, subject: string, title: string | null): Promise<void> {
-  if (await titleActorFromMessage(actor.handle, subject, async () => title)) seams.announce(actor);
+/**
+ * A hosted agent's title from `subject`: with no `title`, the stand-in lands and the mission its model should name
+ * is answered, or null when the title is not the auto-titler's; with one, that name lands.
+ */
+export async function hostedAutoTitle(seams: HostedActorSeams, actor: BoundActor, subject: string, title: string | null): Promise<string | null> {
+  const titled = await titleActorFromMessage(actor.handle, subject, title === null ? undefined : async () => title);
+
+  if (titled.changed) seams.announce(actor);
+
+  return title === null ? titled.mission : null;
 }
 
 /** One actor's child substrate: every verb is a call on the workspace's one host. */
@@ -708,7 +716,7 @@ export async function reclaimSettledExplorationActors(
       continue;
     }
 
-    const head = ledger.readHead(parseExplorationId(record.storageKey, record.name));
+    const head = ledger.readHead(parseActorKey(record.name).id);
 
     const settled = head === null
       ? !live
@@ -724,11 +732,4 @@ export async function reclaimSettledExplorationActors(
   }
 
   return { retired, retained };
-}
-
-/** Only the actor name carries the `exp:` marker, so a generated id never collides with a roster slug. */
-function parseExplorationId(storageKey: string, name: string): string {
-  const marked = name.startsWith('exp:') ? name.slice(4) : name;
-
-  return marked === '' ? storageKey : marked;
 }

@@ -1,5 +1,5 @@
 /**
- * Photograph every state of a design frame at its widths in both themes, into ~/kinu-logs/<frame>/. The states are the
+ * Photograph every state of a design frame at its widths in both themes, into `evidenceDir(<frame>)`. The states are the
  * ones the frame's review bar lists, read from the page, so the shots cannot drift from what the owner can click. A
  * state is as tall as its content, except a wide Changes pane, which scrolls inside its stack and is photographed as
  * seen. A state names the one window it shows in (`data-design-width`), else it shows at desktop and phone width; the
@@ -10,9 +10,11 @@
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseArgs } from 'node:util';
 import type { Page } from 'puppeteer';
 import { withGallery } from './gallery-harness';
 import { withTestChrome } from './test-chrome';
+import { evidenceDir } from '@kinu.run/test-utils';
 
 const FRAMES = ['diff-design'] as const;
 
@@ -37,21 +39,20 @@ interface Shot {
   readonly theme: (typeof THEMES)[number];
 }
 
-const frame = FRAMES.find((name) => name === process.argv[2]);
+const { values: options, positionals } = parseArgs({
+  options: { dev: { type: 'string' }, only: { type: 'string' }, vp: { type: 'string' }, theme: { type: 'string' } },
+  allowPositionals: true,
+});
+
+const frame = FRAMES.find((name) => name === positionals[0]);
 
 if (frame === undefined) throw new Error(`usage: bun scripts/design-shots.ts <${FRAMES.join('|')}> [--dev <origin>] [--only <ids>] [--vp <names>] [--theme <names>]`);
 
-const OUT = join(import.meta.dir, '..', '..', 'kinu-logs', frame);
+const OUT = evidenceDir(frame);
 
-function flag(name: string): string[] | undefined {
-  const at = process.argv.indexOf(`--${name}`);
-
-  return at < 0 ? undefined : process.argv[at + 1]?.split(',');
-}
-
-/** A filter flag keeps what it names; an absent flag keeps everything. */
-function kept(name: string, value: string): boolean {
-  return flag(name)?.includes(value) ?? true;
+/** A filter flag keeps what it names, comma-separated; an absent flag keeps everything. */
+function kept(name: 'only' | 'vp' | 'theme', value: string): boolean {
+  return options[name]?.split(',').includes(value) ?? true;
 }
 
 async function designViews(page: Page, origin: string): Promise<DesignView[]> {
@@ -152,7 +153,7 @@ async function shoot(newPage: () => Promise<Page>, origin: string): Promise<stri
 
 mkdirSync(OUT, { recursive: true });
 
-const dev = flag('dev')?.[0];
+const dev = options.dev;
 
 const written = dev === undefined
   ? await withGallery((gallery) => shoot(gallery.newPage, gallery.origin))

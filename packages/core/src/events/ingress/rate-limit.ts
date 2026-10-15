@@ -26,7 +26,6 @@ export function initWebhookRateLimitTables(sql: SqlExec): void {
       trigger_id     TEXT NOT NULL,
       window_start   INTEGER NOT NULL,
       delivery_count INTEGER NOT NULL DEFAULT 0,
-      updated_at     INTEGER NOT NULL,
       PRIMARY KEY (trigger_id, window_start)
     )
   `);
@@ -84,16 +83,13 @@ export function tryConsumeWebhookRateLimit(
 
   if (count === 0) {
     sql.exec(
-      `INSERT INTO webhook_rate_windows (trigger_id, window_start, delivery_count, updated_at)
-       VALUES (?, ?, ?, ?)`,
-      triggerId, windowStart, nextCount, now,
+      `INSERT INTO webhook_rate_windows (trigger_id, window_start, delivery_count) VALUES (?, ?, ?)`,
+      triggerId, windowStart, nextCount,
     );
   } else {
     sql.exec(
-      `UPDATE webhook_rate_windows
-       SET delivery_count = ?, updated_at = ?
-       WHERE trigger_id = ? AND window_start = ?`,
-      nextCount, now, triggerId, windowStart,
+      `UPDATE webhook_rate_windows SET delivery_count = ? WHERE trigger_id = ? AND window_start = ?`,
+      nextCount, triggerId, windowStart,
     );
   }
 

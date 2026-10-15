@@ -1,7 +1,5 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  ADVISOR_SEVERITIES,
-  CHANGELOG_ENTRY_KINDS,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
   OwedIntentSchema, PlanDecisionOutcomeSchema, PlanReviewResultSchema, PlanReviewSchema,
@@ -15,8 +13,11 @@ import {
   parseJsonValue,
   type JsonObject,
   type JsonValue,
-  REFINEMENT_DISPOSITIONS, REFINEMENT_EDIT_KINDS, REFINEMENT_SCOPES, REFINEMENT_STAGES,
-  REFINEMENT_TRIGGERS,
+  AlternateTakeSetSchema, BranchTurnResultSchema, ChangelogRevertResultSchema, EvolutionChangelogViewSchema,
+  FileCheckpointListingSchema, PendingDeviceConsentSchema, RefinementDecisionResultSchema, ResolvedDeviceConsentSchema,
+  EvolutionConfigViewSchema, ProviderAccountsSchema, ReasoningEffortViewSchema, ReasoningEffortWriteSchema, SetModelResultSchema,
+  StoredModelSpecSchema,
+  RefinementListingSchema, RefinementRequestViewSchema, StagedSkillResultSchema, TakePickOutcomeSchema,
   type RefinementDecisionInput, type RefinementDecisionResult, type RefinementRequestView,
   type StagedSkillResult,
   type ModelTestResult,
@@ -24,8 +25,7 @@ import {
 import { attempt, detach, diagnostics, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
-  FileRestoreResultSchema, ReasoningEffortSchema, type FileCheckpointListing, type WorkspaceSpend,
+  FileRestorePlanSchema, FileRestoreResultSchema, ReasoningEffortSchema, type WorkspaceSpend,
 } from '@kinu.run/core';
 import {
   ActivitySpendSchema,
@@ -47,7 +47,7 @@ import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import { cloudFileLinks, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, WorkspaceBroadcastSchema, type WorkspaceBroadcast, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
-import type { AlternateTakeSet, BranchStatusEvent, SendMetadata, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
+import type { AlternateTakeSet, BranchStatusEvent, SendMetadata, ChangelogRevertResult, RefinementListing, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
   findForkPivot,
@@ -56,7 +56,6 @@ import {
   promptFiles,
   promptText,
   type AgentChangelogView,
-  type AgentRefinementView,
   type AgentClient,
   type AgentClientEvent,
   type AgentClientSendOptions,
@@ -71,7 +70,6 @@ import {
   type DeviceConsentSurface,
   type FileCheckpointSurface,
   type ForkPoint,
-  type PendingDeviceConsent,
   type PlanReviewSurface,
   type OwnerQuestionSurface,
   type WaitingApprovalSurface,
@@ -79,36 +77,10 @@ import {
 import * as v from 'valibot';
 
 
-const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
-  learning: v.boolean(),
-  liveTrials: v.boolean(),
-  advisorEnabled: v.boolean(),
-  advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
-});
-
-const PendingDeviceConsentSchema: v.GenericSchema<PendingDeviceConsent> = v.object({
-  consentId: v.string(),
-  deviceLabel: v.string(),
-  method: v.string(),
-  command: v.string(),
-});
-
-const ResolveDeviceConsentSchema = v.object({ ok: v.boolean() });
-
-const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.object({
-  availability: CheckpointAvailabilitySchema,
-  entries: v.array(FileCheckpointEntrySchema),
-});
-
 /** Core's own `PlanReviewSchema`, so a forged annotation cannot arrive by a route the workspace UI lacks. */
 const CloudPlanReviewSchema = v.nullable(PlanReviewSchema);
 
 const CloudChatPageSchema = positionPageSchema(ChatHistoryEntrySchema);
-
-const BranchTurnResultSchema = v.nullable(v.object({
-  accepted: v.optional(v.boolean()),
-  reason: v.optional(v.string()),
-}));
 
 const AdditionalAgentSchema = v.object({ name: v.string(), displayName: v.string() });
 
@@ -116,104 +88,8 @@ const AdditionalAgentEnvelopeSchema = v.object({
   subordinate: AdditionalAgentSchema,
 });
 
-const ChangelogRevertActionSchema = v.variant('type', [
-  v.object({ type: v.literal('scaffold_rollback'), target: v.string() }),
-  v.object({ type: v.literal('fact_forget'), target: v.string() }),
-  v.object({ type: v.literal('fact_forget_many'), targets: v.array(v.string()) }),
-]);
-
-const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.object({
-  id: v.string(),
-  kind: v.picklist(CHANGELOG_ENTRY_KINDS),
-  at: v.number(),
-  summary: v.string(),
-  evidence: v.string(),
-  revert: v.optional(ChangelogRevertActionSchema),
-  scaffoldVersion: v.optional(v.number()),
-  items: v.optional(v.array(ChangelogEntrySchema)),
-}));
-
-const ChangelogViewSchema = v.nullable(v.object({
-  entries: v.array(ChangelogEntrySchema),
-  unseenCount: v.number(),
-}));
-
-const RefinementRouteSchema = v.object({
-  kind: v.picklist(REFINEMENT_EDIT_KINDS),
-  owner: v.string(),
-  target: v.string(),
-  disposition: v.picklist(REFINEMENT_DISPOSITIONS),
-  reason: v.optional(v.string()),
-});
-
-const RefinementRequestViewSchema: v.GenericSchema<unknown, RefinementRequestView> = v.object({
-  id: v.string(),
-  trigger: v.picklist(REFINEMENT_TRIGGERS),
-  scope: v.picklist(REFINEMENT_SCOPES),
-  stage: v.picklist(REFINEMENT_STAGES),
-  turnIds: v.array(v.string()),
-  routes: v.array(RefinementRouteSchema),
-  detail: v.string(),
-  createdAt: v.number(),
-});
-
-const StagedSkillResultSchema: v.GenericSchema<unknown, StagedSkillResult> = v.variant('ok', [
-  v.object({
-    ok: v.literal(true),
-    view: v.object({
-      requestId: v.string(),
-      routeIndex: v.number(),
-      target: v.string(),
-      digest: v.string(),
-      source: v.string(),
-      intact: v.boolean(),
-    }),
-  }),
-  v.object({ ok: v.literal(false), error: v.string() }),
-]);
-
-const RefinementDecisionResultSchema: v.GenericSchema<unknown, RefinementDecisionResult> = v.variant(
-  'ok',
-  [
-    v.object({ ok: v.literal(true), request: RefinementRequestViewSchema, detail: v.string() }),
-    v.object({ ok: v.literal(false), error: v.string() }),
-  ],
-);
-
-const RefinementViewSchema: v.GenericSchema<unknown, AgentRefinementView> = v.object({
-  requests: v.array(RefinementRequestViewSchema),
-  debt: v.object({
-    turnIds: v.array(v.string()),
-    owed: v.boolean(),
-    key: v.string(),
-    summary: v.string(),
-  }),
-});
-
-const ChangelogRevertResultSchema: v.GenericSchema<ChangelogRevertResult> = v.object({
-  ok: v.boolean(),
-  detail: v.optional(v.string()),
-  error: v.optional(v.string()),
-});
-
-const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
-  id: v.string(),
-  turnId: v.nullable(v.string()),
-  sessionId: v.nullable(v.string()),
-  task: v.string(),
-  winnerNodeId: v.string(),
-  chosenNodeId: v.nullable(v.string()),
-  candidates: v.array(AlternateTakeCandidateSchema),
-  createdAt: v.number(),
-});
-
-const TakePickOutcomeSchema: v.GenericSchema<TakePickOutcome> = v.object({
-  outcome: v.picklist(['accepted', 'corrected']),
-  changedAnswer: v.boolean(),
-  chosen: AlternateTakeCandidateSchema,
-  set: AlternateTakeSetSchema,
-  continuationQueued: v.boolean(),
-});
+/** A write of an effort answers that effort; only a write of none clears it, which this client never asks. */
+const SetEffortAnswerSchema = v.object({ ...ReasoningEffortWriteSchema.entries, effort: ReasoningEffortSchema });
 
 const SearchNodeProjectionSchema = v.object({
   depth: v.number(),
@@ -223,8 +99,6 @@ const SearchNodeProjectionSchema = v.object({
   action: v.optional(v.nullable(v.string())),
 });
 
-const ModelSpecSchema = v.object({ spec: v.nullable(v.string()) });
-
 const ActorSnapshotSchema = v.object({
   displayName: v.string(),
   role: v.string(),
@@ -232,14 +106,6 @@ const ActorSnapshotSchema = v.object({
   model: v.object({ model: v.string() }),
   reasoningEffort: v.nullable(ReasoningEffortSchema),
 });
-
-const SetModelResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
-
-const ReasoningEffortResultSchema = v.object({ effort: v.nullable(ReasoningEffortSchema) });
-
-const SetReasoningEffortResultSchema = v.object({ ok: v.literal(true), effort: ReasoningEffortSchema });
-
-const ProviderAccountsResultSchema = v.object({ accounts: v.record(v.string(), v.string()) });
 
 const SocketFrameSchema = v.objectWithRest({
   type: v.string(),
@@ -347,7 +213,7 @@ export class CloudAgentClient implements AgentClient {
     this.consents = {
       listPending: () => this.callHttp('listPendingConsents', v.array(PendingDeviceConsentSchema)),
       resolve: (consentId, decision) => this.callHttp(
-        'resolveDeviceConsent', ResolveDeviceConsentSchema, [consentId, decision],
+        'resolveDeviceConsent', ResolvedDeviceConsentSchema, [consentId, decision],
       ),
     };
     this.checkpoints = subordinateName ? null : {
@@ -447,9 +313,9 @@ export class CloudAgentClient implements AgentClient {
     task = (async () => {
       try {
         const result = await this.callRpc('branchTurn', [text]);
-        const r = v.parse(BranchTurnResultSchema, result);
+        const admitted = v.parse(BranchTurnResultSchema, result);
 
-        if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
+        if (!admitted.accepted) fail(admitted.reason);
       } catch (cause) {
         fail(renderThrownChain({ cause }));
       } finally {
@@ -688,14 +554,8 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async changelog(): Promise<AgentChangelogView> {
-    const result = v.parse(
-      ChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: 50 }]),
-    );
-
-    const view: AgentChangelogView = {
-      entries: result?.entries ?? [],
-      unseenCount: result?.unseenCount ?? 0,
-    };
+    const result = v.parse(EvolutionChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: 50 }]));
+    const view: AgentChangelogView = { entries: result.entries, unseenCount: result.unseenCount };
 
     // A silently dropped ack leaves the digest unseen forever; report it through the error channel.
     try {
@@ -714,8 +574,8 @@ export class CloudAgentClient implements AgentClient {
     return v.parse(ChangelogRevertResultSchema, await this.callRpc('revertChangelogEntry', [id]));
   }
 
-  async refinements(): Promise<AgentRefinementView> {
-    return v.parse(RefinementViewSchema, await this.callRpc('listRefinements', [20]));
+  async refinements(): Promise<RefinementListing> {
+    return v.parse(RefinementListingSchema, await this.callRpc('listRefinements', [20]));
   }
 
   async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
@@ -825,7 +685,7 @@ export class CloudAgentClient implements AgentClient {
   async getModelSpec(): Promise<string | null> {
     if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).model.model;
 
-    return (await this.callHttp('getStoredModelSpec', ModelSpecSchema)).spec;
+    return (await this.callHttp('getStoredModelSpec', StoredModelSpecSchema)).spec;
   }
 
   async setModel(spec: string): Promise<{ spec: string }> {
@@ -839,15 +699,13 @@ export class CloudAgentClient implements AgentClient {
   async getReasoningEffort(): Promise<ReasoningEffort | null> {
     if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).reasoningEffort;
 
-    return (await this.callHttp('getReasoningEffort', ReasoningEffortResultSchema)).effort;
+    return (await this.callHttp('getReasoningEffort', ReasoningEffortViewSchema)).effort;
   }
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
     const args: JsonValue[] = this.subordinateName === null ? [effort] : [effort, this.subordinateName];
 
-    return {
-      effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, args)).effort,
-    };
+    return { effort: (await this.callHttp('setReasoningEffort', SetEffortAnswerSchema, args)).effort };
   }
 
   async workspaceSpend(): Promise<WorkspaceSpend> {
@@ -855,19 +713,19 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async getProviderAccounts(): Promise<Readonly<Record<string, string>>> {
-    return (await this.callHttp('getProviderAccounts', ProviderAccountsResultSchema)).accounts;
+    return (await this.callHttp('getProviderAccounts', ProviderAccountsSchema)).accounts;
   }
 
   async setProviderAccount(provider: string, account: string | null): Promise<Readonly<Record<string, string>>> {
-    return (await this.callHttp('setProviderAccount', ProviderAccountsResultSchema, [provider, account])).accounts;
+    return (await this.callHttp('setProviderAccount', ProviderAccountsSchema, [provider, account])).accounts;
   }
 
   async getEvolutionConfig(): Promise<EvolutionConfigView> {
-    return await this.callHttp('getEvolutionConfig', EvolutionConfigSchema);
+    return await this.callHttp('getEvolutionConfig', EvolutionConfigViewSchema);
   }
 
   async setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView> {
-    return await this.callHttp('setEvolutionConfig', EvolutionConfigSchema, [decodeJsonValue({ value: view })]);
+    return await this.callHttp('setEvolutionConfig', EvolutionConfigViewSchema, [decodeJsonValue({ value: view })]);
   }
 
   async listModels(): Promise<AgentModelMenu> {

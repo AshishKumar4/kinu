@@ -1,4 +1,4 @@
-import { exists, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, type VFS, type VfsRevision, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { FileChangedSchema, writeConditionally, type FileNow, type ObservedFile } from '../vfs/conditional-write';
 import { sha256Hex } from '../safety/argument-digest';
 import type { CheckpointFiles } from '../types/primitives';
@@ -14,6 +14,7 @@ import {
 } from '../vfs/mounts';
 import { move } from '@nimbus-sh/core/vfs/move.js';
 import { inlineFileType } from './file-types';
+import type { DirectoryPages } from '../vfs/dirent';
 import { isSystemManaged } from '../vfs/workspace-path';
 
 import { Effect } from 'effect';
@@ -23,7 +24,7 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
 
 export interface ExecutorFileLookup {
-  getProvider(name: string): { files?: VFS & Pick<VfsMountRouting, 'places'>; homeDir(segment?: string): Promise<string> } | undefined;
+  getProvider(name: string): { files?: VFS & Pick<VfsMountRouting, 'places'> & Partial<DirectoryPages>; homeDir(segment?: string): Promise<string> } | undefined;
 }
 
 /** `consistency`: `durable` survives everything, `ephemeral` dies with the container,
@@ -369,13 +370,67 @@ function orError<R>(body: Effect.Effect<R, Failed>): Effect.Effect<R | { error: 
   return Effect.catch(body, (failed) => Effect.succeed({ error: renderThrownChain(failed) }));
 }
 
-/** Typed directory listing. Empty `path` means the environment's start; the answer always carries
+/** The longest name a POSIX filesystem holds, in bytes (NAME_MAX: Linux, macOS). */
+const NAME_MAX_BYTES = 255;
+
+/** The longest entry a listing can answer: a name whose every byte JSON escapes to six characters, at its longest numbers. */
+const LONGEST_ENTRY: DirEntry = { name: '\u0001'.repeat(NAME_MAX_BYTES), type: 'file', size: Number.MAX_SAFE_INTEGER, mtimeMs: Number.MAX_SAFE_INTEGER };
+
+/** The most entries one listing answers, so a page's text never passes `files.page_bytes` whatever its names: a folder of
+ *  any size is read and sent a page at a time. */
+export const FILES_PAGE_ENTRIES = Math.floor(PLATFORM_CATALOG['files.page_bytes'].limit.value / (JSON.stringify(LONGEST_ENTRY).length + 1));
+
+/** `next`: where the folder's following page starts; absent after its last. */
+export interface FilesPage {
+  path?: string;
+  entries?: DirEntry[];
+  next?: number;
+  error?: string;
+}
+
+/** Is `path` a machine's, or under one: a stat there is a call to that machine. */
+function onMachine(path: string): boolean {
+  return Object.keys(MOUNT_EXECUTORS).some((point) => path === point || path.startsWith(`${point}/`));
+}
+
+/** A machine's folder whose own plane reads it a window at a time, at the path that plane names it by. */
+function machineWindows(router: ExecutorFileLookup, dir: string): { readonly files: DirectoryPages; readonly at: string } | null {
+  const point = Object.keys(MOUNT_EXECUTORS).find((mount) => dir.startsWith(`${mount}/`));
+  const executor = point === undefined ? undefined : MOUNT_EXECUTORS[point];
+  const files = executor === undefined ? undefined : router.getProvider(executor)?.files;
+
+  if (point === undefined || files?.readdirPage === undefined) return null;
+  const { readdirPage } = files;
+
+  return { files: { readdirPage: (path, window) => readdirPage.call(files, path, window) }, at: dir.slice(point.length) };
+}
+
+/** A null `stat` is one unreadable child, or a mount point, not a failed listing. */
+function dirEntryOf({ name, type, stat }: { readonly name: string; readonly type: string; readonly stat?: VfsStat | null }): DirEntry {
+  return { name, type: (stat?.type ?? type) === 'directory' ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs };
+}
+
+/** The whole folder, sorted: each ancestor of home also lists the next segment down, since on a fresh workspace nothing
+ *  above home has directory entries and home would be unreachable by browsing. */
+async function wholeFolder(vfs: VFS & Pick<VfsMountRouting, 'places'>, dir: string, home: string): Promise<DirEntry[]> {
+  // A machine is asked nothing per child: its listing carries what it read, and a computer asked starts.
+  const listed = await listWithVfsOps(vfs, dir, (child) => !onMachine(child));
+  // The rest of a namespace's `/` is the machine's, which the owner never browses to.
+  const places = dir === '/' ? vfs.places?.() : undefined;
+  const entries = listed.filter(({ name }) => !isSystemManaged(name) && (places?.includes(name) ?? true)).map(dirEntryOf);
+
+  if (home.startsWith('/') && (dir === '/' || home.startsWith(`${dir}/`))) {
+    const next = home.slice(dir === '/' ? 1 : dir.length + 1).split('/')[0];
+
+    if (next && next !== '' && !entries.some((entry) => entry.name === next)) entries.push({ name: next, type: 'dir' });
+  }
+
+  return sortDirEntries(entries);
+}
+
+/** Typed directory listing, a page from `from`. Empty `path` means the environment's start; the answer always carries
  *  the absolute directory listed. */
-export function getExecutorFiles(
-  router: ExecutorFileLookup,
-  executorId: string,
-  path: string,
-): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
+export function getExecutorFiles(router: ExecutorFileLookup, executorId: string, path: string, from = 0): Promise<FilesPage> {
   const provider = router.getProvider(executorId);
   const vfs = provider?.files;
 
@@ -386,30 +441,21 @@ export function getExecutorFiles(
       ? yield* step(() => provider.homeDir())
       : yield* mountLanding(router, normalizePath(path));
 
-    return yield* step(async () => {
-    // A machine's mount point lists as the directory it is: a stat of it asks the machine, and a computer asked starts.
-    const listed = await listWithVfsOps(vfs, dir, (child) => MOUNT_EXECUTORS[child] === undefined);
-    // The rest of a namespace's `/` is the machine's, which the owner never browses to.
-    const places = dir === '/' ? vfs.places?.() : undefined;
+    const windows = machineWindows(router, dir);
 
-    // A null `stat` is one unreadable child, or a mount point, not a failed listing.
-    const entries: DirEntry[] = listed.filter(({ name }) => !isSystemManaged(name) && (places?.includes(name) ?? true)).map(({ name, type, stat }) => ({
-      name, type: (stat?.type ?? type) === 'directory' ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
-    }));
+    return yield* step(async (): Promise<FilesPage> => {
+      // A machine's folder is read from the machine a window at a time: its size never sits whole in this object.
+      if (windows !== null) {
+        const window = await windows.files.readdirPage(windows.at, { offset: from, limit: FILES_PAGE_ENTRIES });
+        const entries = sortDirEntries(window.entries.filter(({ name }) => !isSystemManaged(name)).map(dirEntryOf));
 
-    // Each ancestor of home lists the next segment down: on a fresh workspace nothing above home
-    // has directory entries, so home would be unreachable by browsing.
-    const home = await provider.homeDir();
-
-    if (home.startsWith('/') && (dir === '/' || home.startsWith(`${dir}/`))) {
-      const next = home.slice(dir === '/' ? 1 : dir.length + 1).split('/')[0];
-
-      if (next && next !== '' && !entries.some((entry) => entry.name === next)) {
-        entries.push({ name: next, type: 'dir' });
+        return { path: dir, entries, ...(window.next !== null && { next: window.next }) };
       }
-    }
 
-    return { path: dir, entries: sortDirEntries(entries) };
+      const folder = await wholeFolder(vfs, dir, await provider.homeDir());
+      const end = from + FILES_PAGE_ENTRIES;
+
+      return { path: dir, entries: folder.slice(from, end), ...(end < folder.length && { next: end }) };
     });
   })));
 }

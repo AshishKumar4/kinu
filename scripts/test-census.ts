@@ -21,11 +21,8 @@ import { MIN_NODES, unitsOf, type Unit } from './ast-duplication';
 import { judgeRequirements, TEST_REQUIREMENTS } from './test-requirements';
 import { parseLock, type Plant } from './census-plants';
 import { claims, deployGates, LADDER, packageScripts } from './ladder';
-import {
-  ANTI_SLOP_ROOT, ANTI_SLOP_RULES, isAntiSlopRuleSuite, isBunDiscoverableSuite, isParseable,
-  isManifest, isProductSource, isPythonSuite, isRunnableSuite, isShippedSource, isStylesheet, isTestFile, isTypescriptConfig,
-  isVitestEvalSuite, readMatching, readRepositoryFile, readSources, trackedFiles, workspaceScope,
-} from './sources';
+import { ANTI_SLOP_ROOT, ANTI_SLOP_RULES, isAntiSlopRuleSuite, isBunDiscoverableSuite, isParseable, isManifest, isProductSource, isPythonSuite, isRunnableSuite, isShippedSource, isStylesheet, isTestFile, isTypescriptConfig, isVitestEvalSuite, packageOf, readMatching, readRepositoryFile, readSources, trackedFiles, workspaceScope } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   readAliases, readWorkspace, resolveSpecifier as resolveModule, type Alias, type PackageDir,
 } from './import-graph';
@@ -34,7 +31,6 @@ import {
   literalText, moduleSpecifiers, NAMESPACE, parse, publishedNames, stringArguments, superClassName, type SyntaxNode, walk,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/test-census.lock.json`;
 
@@ -108,16 +104,6 @@ export interface FileRow {
 }
 
 const FILE_SCOPE = '(file scope)';
-
-function packageOf(file: string): string {
-  if (file.startsWith('packages/')) return file.split('/')[1] ?? 'packages';
-
-  if (file.startsWith('scripts/')) return 'scripts';
-
-  if (file.startsWith('tests/')) return 'tests';
-
-  return file.split('/')[0] ?? '(root)';
-}
 
 /* ── Parsing ─────────────────────────────────────────────────────────── */
 

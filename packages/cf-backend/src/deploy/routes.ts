@@ -13,7 +13,7 @@ import {
 } from '@kinu.run/core/deploy';
 import { createPkcePair, err, fetchDeployedAsset, json, safeJson, serveApp, sha256Hex, timingSafeEqual } from '@kinu.run/core';
 import * as v from 'valibot';
-import { DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/session';
+import { DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/cookies';
 import { beneath, type FamilyEnv } from '../api/context';
 import type { DeployRunDO } from './deploy-do';
 

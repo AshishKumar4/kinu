@@ -391,8 +391,8 @@ export class SessionHistory {
       effectiveAt: 'step', turnId, stepIndex: null });
   }
 
-  /** `messages` is the model-facing output; `parts` also carries render-only parts for the public transcript. */
-  /** `after`: the epoch through which a Retry of its answer withdrew the turn's executions (`ActorClaimStore.withdraw`). */
+  /** `messages` is the model-facing output; `parts` also carries render-only parts for the public transcript. `after`:
+   *  the epoch through which a Retry of its answer withdrew the turn's executions (`ActorClaimStore.withdraw`). */
   async outputForTurn(turnId: string, after = 0): Promise<TurnOutput> {
     this.dependencies.actor.assertCurrent();
 

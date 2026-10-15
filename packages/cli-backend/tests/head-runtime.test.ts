@@ -93,13 +93,14 @@ interface RouteProbe {
  *  that ignored the `judge` route is detectable. */
 function headDeps(
   model: LanguageModel,
-  over?: Partial<Omit<CLIHeadRuntimeDeps, 'parentRuntime'>> & { readonly parentRuntime?: LocalParent },
+  over?: Partial<CLIHeadRuntimeDeps> & { readonly parentRuntime?: LocalParent },
   probe?: RouteProbe,
   resolve: (spec: string) => LanguageModel = () => model,
 ): CLIHeadRuntimeDeps {
   const governor = makeGovernor();
   const journal = makeJournal();
-  const parent = over?.parentRuntime ?? makeParent();
+  const { parentRuntime, ...overrides } = over ?? {};
+  const parent = parentRuntime ?? makeParent();
   // One slot shared by caller and host (the fixture's `LocalAgentSession.actorWrites`), filled per run before `acquire`.
   const writes = new Map<string, WriteObserver>();
 
@@ -107,7 +108,6 @@ function headDeps(
   const host = localTestActorHost(parent, parent.db, [], writes);
 
   return {
-    parentRuntime: parent,
     hostHead: headSeatFactory(parent, host, 'fixture-run', { writes, model: resolve }),
     // A seated head's programs account into its own session's turn.
     ledgers: (actor) => present(host.hosted(actor.reference), 'the hosted head').session.orchestrator.acc.ledgers,
@@ -122,7 +122,7 @@ function headDeps(
     },
     reportModelCall: () => {},
     webSearch: stubWeb,
-    governor: () => governor, journal: () => journal, ...over,
+    governor: () => governor, journal: () => journal, ...overrides,
   };
 }
 

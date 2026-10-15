@@ -517,20 +517,56 @@ export const JOB_COMMAND = 'printf "Release to production? (y/N) "; read answer;
 
 export const JOB_STARTED = 'JOB STARTED';
 
+/** How the script says the job did not start, before the cause in its own words. */
+export const JOB_NOT_STARTED = 'The job did not start';
+
+/** A background job's wake (core jobs/runner.ts `wakeText`): its id, and whether it completed. */
+const JOB_WAKE = /^Background \w+ job (bgjob-[\w-]+) (completed|failed|was CANCELLED)/u;
+
+/** The job is started once a program's value carries its id; anything else is said in its own words. */
+function jobOutcome(result: string): ScriptedAnswer {
+  return { text: result.includes('processId') ? JOB_STARTED : `${JOB_NOT_STARTED}: ${result.slice(0, 300)}` };
+}
+
+/**
+ * The turn a backgrounded start's wake opens. The wake names its job and, but for a hire's, carries no result: it asks
+ * for `agent.jobResult`, whose row holds the program's value (staging fcc2e05d6 read the wake alone, and said the job
+ * did not start). A wake that carries its result, a hire's, is read as it stands; a failed one says why.
+ */
+function wokenAnswer(request: ScriptedRequest, jobId: string, completed: boolean): ScriptedAnswer {
+  const latest = request.userTexts.at(-1) ?? '';
+
+  if (!completed || latest.includes('processId')) return jobOutcome(latest);
+  const read = request.turn.at(-1);
+
+  return read === undefined
+    ? { toolCall: { name: 'eval', arguments: { code: `return await agent.jobResult('${jobId}');` } } }
+    : jobOutcome(read.result);
+}
+
 /**
  * The agent-job row (D95): the job its turn starts on the computer, called as the computer's members take their required
  * fields (positionally), then the reply once it has. A refusal is said in its own words, so the row fails at the reply
- * with the cause rather than at a tab that never comes (staging f9c17ac7b).
+ * with the cause rather than at a tab that never comes (staging f9c17ac7b). A fresh workspace's computer can take longer
+ * to wake than a program's call is waited for: the call is then backgrounded, and its wake says how it ended (staging
+ * b11719d71).
  */
 function jobAnswer(request: ScriptedRequest): ScriptedAnswer | undefined {
-  if (!(request.userTexts.at(-1) ?? '').includes(JOB_ASK)) return undefined;
+  const latest = request.userTexts.at(-1) ?? '';
+  const woken = JOB_WAKE.exec(latest);
+
+  if (woken !== null && request.userTexts.some((text) => text.includes(JOB_ASK))) return wokenAnswer(request, woken[1] ?? '', woken[2] === 'completed');
+
+  if (!latest.includes(JOB_ASK)) return undefined;
   const ran = request.turn.at(-1);
 
   if (ran === undefined) {
     return { toolCall: { name: 'eval', arguments: { code: `return await computer.startProcess(${JSON.stringify(JOB_COMMAND)});` } } };
   }
 
-  return { text: ran.result.includes('processId') ? JOB_STARTED : `The job did not start: ${ran.result.slice(0, 300)}` };
+  const backgrounded = /"background":true/u.test(ran.result) ? /bgjob-[\w-]+/u.exec(ran.result)?.[0] : undefined;
+
+  return backgrounded === undefined ? jobOutcome(ran.result) : { text: `The job is starting in the background as ${backgrounded}.` };
 }
 
 /** The write-file row: the file written, then a shell writing beside it where the turn has one. */

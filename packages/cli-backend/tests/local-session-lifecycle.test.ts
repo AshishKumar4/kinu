@@ -1,7 +1,7 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
+import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase, createRecordingLogger } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -14,13 +14,14 @@ import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, MAX_CONCURRENT_DETACHED_JOBS, BackgroundJobStore, JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY, profileCatalogDigest, readActivityLog, type JsonObject, type ProfileCatalogEnvelope, createAgentSelfProvider, InstructionApprovalStore, instructionDigest, createProviderRegistry, createModelsDevCatalogSource,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession, type LocalAgentSessionOpts } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { staticModelPlane } from '../src/profile-authority';
-import { OS_LEASE_PROCESS } from '../src/agent-host/lease-process';
+import { osLeaseProcess } from '../src/agent-host/lease-process';
 import * as v from 'valibot';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, swarmsOn, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, SEARCH_ASK, SEARCH_TASK, textStream, toolCallStream, } from './helpers/local-session';
 
 const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');
@@ -1039,13 +1040,19 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const daemon = Bun.spawn(['sleep', '600']);
     const gone = Bun.spawn(['true']);
     await gone.exited;
+    // The daemon's pid as an earlier process recorded it, before that process ended and the pid was reused.
+    const reused = { ...osLeaseProcess(daemon.pid), generation: 'an-earlier-run' };
 
     try {
-      for (const [id, fiber, pid] of [['bgjob-held', 'f-held', daemon.pid], ['bgjob-gone', 'f-gone', gone.pid]] as const) {
+      for (const [id, fiber, holder] of [
+        ['bgjob-held', 'f-held', osLeaseProcess(daemon.pid)],
+        ['bgjob-gone', 'f-gone', osLeaseProcess(gone.pid)],
+        ['bgjob-reused', 'f-reused', reused],
+      ] as const) {
         db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', '${id}', 'shell', 'build', 'running', 1)`);
         db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', '${fiber}', 'bg:run', '{"phase":"running","jobId":"${id}","kind":"shell"}', 1)`);
         // As that process's own runner records the job it runs.
-        processJobHolder(rt.storage, { ...OS_LEASE_PROCESS, pid }).hold(id);
+        processJobHolder(rt.storage, holder).hold(id);
       }
 
       await session.recoverBackgroundJobs();
@@ -1054,6 +1061,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       expect(jobStatus(db, 'bgjob-held')).toBe('running');
       expect(db.query(`SELECT id FROM fibers`).all()).toEqual([{ id: 'f-held' }]);
       expect(jobStatus(db, 'bgjob-gone')).toBe('failed');
+      expect(jobStatus(db, 'bgjob-reused')).toBe('failed');
     } finally {
       daemon.kill();
     }
@@ -1510,7 +1518,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     expect(row.turn_id).toBe(firstAssistant.id);
 
     expect(db.query<{ c: number }, []>(
-      `SELECT count(*) AS c FROM lessons WHERE status = 'corroborated'`,
+      `SELECT count(*) AS c FROM lessons WHERE corroborated_at IS NOT NULL`,
     ).get()?.c).toBe(1);
   });
 

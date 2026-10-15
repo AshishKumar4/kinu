@@ -1,18 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import * as v from 'valibot';
 import { isLintSource, trackedFiles } from '../../../scripts/sources.ts';
 import { TEST_FILE } from './rules/no-ambient-git-in-tests.ts';
 import { lintJson, describeDiagnostic } from './shared/oxlint-json.ts';
+import { readLintConfig } from './shared/lint-config.ts';
 
 const root = process.cwd();
 const rule = 'no-ambient-bun-in-tests';
 const code = `spawn-env(${rule})`;
-const active = v.parse(v.object({ rules: v.object({ 'anti-slop/no-ambient-bun-in-tests': v.literal('error') }) }), JSON.parse(readFileSync(join(root, '.oxlintrc.json'), 'utf8')));
-assert.equal(active.rules[`anti-slop/${rule}`], 'error');
+assert.equal(readLintConfig(root).rules[`anti-slop/${rule}`], 'error');
 const denominator = trackedFiles().filter(file => isLintSource(file) && TEST_FILE.test(file));
 assert.ok(denominator.includes('packages/cli-backend/tests/runtime-shell.test.ts'));
 const scratch = mkdtempSync(join(tmpdir(), 'kinu-bun-env-gate-'));

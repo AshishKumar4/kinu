@@ -32,7 +32,7 @@ export {
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
-  type StoredRunEvent,
+  type StoredRunEvent, type StoredRunEventRow,
   type ContextMeasures,
   type StepSpendSource,
   holdRunHeads,
@@ -78,4 +78,4 @@ export {
   type SpendTally,
 } from './model-call';
 
-export { buildModelCallEvent, unpricedLedgerSink } from './model-call-event';
+export { buildModelCallEvent } from './model-call-event';

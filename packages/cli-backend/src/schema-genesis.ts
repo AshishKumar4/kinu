@@ -1,31 +1,24 @@
 /**
- * A local workspace database carries the schema genesis that made it. A reset deployment clears Durable Objects
- * only; a local database made under another genesis would open and then fail on its first missing column, so it is
- * refused by name. Kinu never migrates a schema (AGENTS.md "No migrations").
+ * A local workspace database carries its class's stamp (identity/schema-stamp.ts): the digest of the genesis of the
+ * tables a local workspace makes. A database made under another would open and then fail on its first missing column,
+ * so it is refused by name. Kinu never migrates a local schema (AGENTS.md "No migrations").
  */
 
 import type { Database } from 'bun:sqlite';
 import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
-import { getCurrentScaffoldVersion, type ActorHandle, type SqlExecutor, type VersionedScaffoldSource } from '@kinu.run/core';
+import { getCurrentScaffoldVersion, pragmaStamps, requireSchemaStamp, type ActorHandle, type SqlExecutor, type VersionedScaffoldSource } from '@kinu.run/core';
 import { KinuError, settle } from '@kinu.run/core/obs';
-import { requireSchemaGenesis as requireGenesis, SCHEMA_GENESIS_STAMP } from '@kinu.run/core';
+import { makeSqlExec } from './runtime';
 
-/** Marks a database this Kinu made outside `createWorkspace`, which stamps its own. */
-export function stampSchemaGenesis(db: Database): void {
-  db.exec(`PRAGMA user_version = ${String(SCHEMA_GENESIS_STAMP)}`);
-}
-
-/** The seven hex digits a database is stamped with, or null for one no Kinu stamped. */
-export function schemaGenesisOf(db: Database): string | null {
-  const stamp = db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version ?? 0;
-
-  return stamp === 0 ? null : stamp.toString(16).padStart(7, '0');
+/** The stamp a database carries, 0 for none. */
+export function schemaGenesisOf(db: Database): number {
+  return pragmaStamps(makeSqlExec(db)).read();
 }
 
 /** Refuses a database another Kinu's schema made. */
 export function requireSchemaGenesis(db: Database, name: string): void {
-  requireGenesis(`Workspace "${name}"`, schemaGenesisOf(db));
+  requireSchemaStamp(`Workspace "${name}"`, 'local', schemaGenesisOf(db));
 }
 
 interface LocalActorScaffold {

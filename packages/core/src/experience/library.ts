@@ -84,7 +84,6 @@ const DEFAULT_SEARCH_LIMIT = 10;
 
 const LibraryRowSchema = v.object({
   id: v.string(),
-  kind: v.picklist(EXPERIENCE_KINDS),
   source_workspace: v.string(),
   key: v.string(),
   title: v.string(),
@@ -98,11 +97,10 @@ type LibraryRow = v.InferOutput<typeof LibraryRowSchema>;
 function toEntry(row: LibraryRow): ExperienceEntry | null {
   const payload = parseExperiencePayload(row.payload_json);
 
-  if (!payload || payload.kind !== row.kind) return null;
+  if (!payload) return null;
 
   return {
     id: row.id,
-    kind: row.kind,
     key: row.key,
     title: row.title,
     payload,
@@ -141,7 +139,7 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
              evidence     = excluded.evidence,
              search_text  = excluded.search_text,
              published_at = excluded.published_at`,
-          id, candidate.kind, sourceWorkspace, candidate.key, candidate.title,
+          id, candidate.payload.kind, sourceWorkspace, candidate.key, candidate.title,
           JSON.stringify(candidate.payload), candidate.evidence,
           experienceSearchText(candidate), publishedAt,
         );
@@ -149,7 +147,7 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
         const stored = rows(
           `SELECT * FROM experience_library
             WHERE source_workspace = ? AND kind = ? AND key = ? LIMIT 1`,
-          sourceWorkspace, candidate.kind, candidate.key,
+          sourceWorkspace, candidate.payload.kind, candidate.key,
         )[0];
 
         const entry = stored ? toEntry(stored) : null;

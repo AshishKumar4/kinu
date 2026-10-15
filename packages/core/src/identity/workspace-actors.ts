@@ -70,6 +70,15 @@ export interface WorkspaceActor extends ActorProfile {
   readonly deletedAt: number | null;
 }
 
+/** Live until its retirement starts, retiring while its work winds down, retired once its record is deleted. */
+export type ActorStanding = 'live' | 'retiring' | 'retired';
+
+export function actorStanding(actor: Pick<WorkspaceActor, 'retiringAt' | 'deletedAt'>): ActorStanding {
+  if (actor.deletedAt !== null) return 'retired';
+
+  return actor.retiringAt === null ? 'live' : 'retiring';
+}
+
 export interface CreateWorkspaceActor {
   readonly parent: ActorHandle;
   readonly name: string;
@@ -168,7 +177,10 @@ export interface WorkspaceActorDirectoryOptions {
 export class WorkspaceActorDirectory {
   private readonly handles = new WeakSet<ActorHandle>();
 
-  /** Actors this directory retired. It is the only writer of `workspace_actors`, so a handle asks this set, not the row. */
+  /**
+   * Actors this directory wrote a retirement for. It is the only writer of `workspace_actors`, so a handle asks this set,
+   * not the row; only one in it reads its row, which says whether the retirement held or a rollback undid it.
+   */
   private readonly ended = new Set<string>();
 
   /**
@@ -217,13 +229,26 @@ export class WorkspaceActorDirectory {
 
   /** `also` runs after the directory's own checks and can only refuse further, never authorise. */
   private issue(row: WorkspaceActor, also?: () => Effect.Effect<void, KinuError>): ActorHandle {
-    const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => (this.ended.has(row.actorId)
+    const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => (this.retired(row.actorId)
       ? Effect.fail(new KinuError('missing', 'The actor identity is no longer present.'))
       : also?.() ?? Effect.void));
 
     this.handles.add(handle);
 
     return handle;
+  }
+
+  /** Whether `actorId`'s retirement stands: read from its row only once this directory wrote one. */
+  private retired(actorId: string): boolean {
+    if (!this.ended.has(actorId)) return false;
+
+    const [row] = this.sql<{ retired: number }>`
+      SELECT retiring_at IS NOT NULL OR deleted_at IS NOT NULL AS retired FROM workspace_actors WHERE actor_id = ${actorId}`;
+
+    // Undone by the rollback of the transaction that wrote it: the actor is live again.
+    if (row !== undefined && row.retired === 0) this.ended.delete(actorId);
+
+    return row === undefined || row.retired === 1;
   }
 
   describe(handle: ActorHandle): WorkspaceActor {
@@ -391,7 +416,7 @@ export class WorkspaceActorDirectory {
 
       if (row.name !== input.name || !sameProfile(row, actorPreset(input.origin, input.lifetime))) throw new KinuError('denied', 'The cancellation does not match the admitted creation.');
 
-      if (row.retiringAt === null && row.deletedAt === null) this.transitionRetirement(row.actorId, 'retire');
+      if (actorStanding(row) === 'live') this.transitionRetirement(row.actorId, 'retire');
       const updated = this.retained(row.actorId);
 
       if (!updated) throw new KinuError('missing', 'The actor creation record disappeared.');
@@ -479,9 +504,9 @@ export class WorkspaceActorDirectory {
         throw new KinuError('denied', 'The child reference does not match its parent and name.');
       }
 
-      if (input.action === 'validate' && (row.retiringAt !== null || row.deletedAt !== null)) throw new KinuError('missing', 'The child actor is retired.');
+      if (input.action === 'validate' && actorStanding(row) !== 'live') throw new KinuError('missing', 'The child actor is retired.');
 
-      if (input.action === 'retire' && row.retiringAt === null && row.deletedAt === null) {
+      if (input.action === 'retire' && actorStanding(row) === 'live') {
         this.transitionRetirement(row.actorId, 'retire');
       }
 
@@ -611,16 +636,43 @@ export function actorScaffoldPath(record: Pick<WorkspaceActor, 'origin' | 'stora
   return `${actorStateRoot(record.storageKey)}/scaffold/agent.js`;
 }
 
-/** Runs `send` only if the owner may message `actorId`: a view-only agent (a swarm's or evolution's) takes no input. */
+/**
+ * Runs `send` only if the owner may message `actorId`: an agent of this workspace, not retired, whose profile takes
+ * input (a swarm's or evolution's is view-only).
+ */
 export function whenActorTakesInput<Result>(sql: SqlExecutor, actorId: string, send: () => Promise<Result>): Promise<Result> {
-  const origin = sql<{ origin: string }>`SELECT origin FROM workspace_actors WHERE actor_id = ${actorId}`[0]?.origin;
+  const row = sql<Pick<StoredActorRow, 'origin' | 'lifetime' | 'retiringAt' | 'deletedAt'>>`
+    SELECT origin, lifetime, retiring_at AS retiringAt, deleted_at AS deletedAt FROM workspace_actors WHERE actor_id = ${actorId}`[0];
 
-  return settle(origin === 'swarm' || origin === 'evolution'
-    ? Effect.fail(new KinuError('denied', 'This agent is view-only: it takes no messages. You can watch it or stop it.'))
-    : Effect.promise(send));
+  return settle(Effect.suspend(() => {
+    if (row === undefined || actorStanding(row) === 'retired') {
+      return Effect.fail(new KinuError('missing', 'This agent is not in the workspace any more: it takes no messages.'));
+    }
+
+    if (!profileOf(row.origin, row.lifetime).input) {
+      return Effect.fail(new KinuError('denied', 'This agent is view-only: it takes no messages. You can watch it or stop it.'));
+    }
+
+    return Effect.promise(send);
+  }));
 }
 
 /** Local database access is already owner-authorized. This read never registers an actor. */
+/**
+ * A workspace's one birth: its identity row (this database is workspace `id`, named `name`, owned by `ownerUserId`) and
+ * its main actor, in the caller's transaction, over tables the caller has created. A local birth mints its id here.
+ */
+export function bearWorkspaceIdentity(sql: SqlExecutor, birth: {
+  readonly id?: string; readonly name: string; readonly ownerUserId?: string; readonly createdAt: number;
+}): ActorHandle {
+  const id = birth.id ?? crypto.randomUUID();
+  const ownerUserId = birth.ownerUserId ?? '';
+
+  void sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at) VALUES (${id}, ${birth.name}, ${ownerUserId}, ${birth.createdAt})`;
+
+  return new WorkspaceActorDirectory(sql, { workspaceId: id, ownerUserId }).createMain({ name: birth.name });
+}
+
 export function openWorkspaceMainActor(sql: SqlExecutor): ActorHandle {
   if (!tableExists(sql, 'workspace_identity')) throw new KinuError('missing', 'The workspace has no durable identity.');
   const rows = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;

@@ -36,16 +36,34 @@ import { afterAll, describe, test } from 'vitest';
 
 import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  listDevicesOverCliRoute, revokeDeviceOverUserRoute,
+  CONSENT_PARKED, listDevicesOverCliRoute, revokeDeviceOverUserRoute,
   type DeviceAccount, type DeviceListing, type DeviceRow,
 } from './device-session';
 import type { KinuPublicSession, PublicExecutorResult, PublicSessionPlan } from '../../evals/src/session';
 import { attachMachine, detachMachine, readDaemonLogTail, type AttachedMachine } from './daemon';
-import { firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · device-link';
 
-const CASE = 'device-link' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A linked machine\'s socket dropped about forty seconds after connect, every time: '
+    + 'the daemon\'s keepalive pings and the deployed hub never answers, so the daemon closes '
+    + 'the live socket and redials — and a command that lands in the gap is answered with a '
+    + '"needs a computer of yours" card no reconnect retires.',
+  missedBecause: 'every device test asserts the link at the moment it forms — connectDevice '
+    + 'waits for the first connected and stops — so a hub that cannot answer `ping` drops the '
+    + 'socket at +40 s in a window nothing ever measured.',
+  provedRedAt: '2fbe8695f',
+  redDirection: 'RED against the deployed 2fbe8695f on 2026-09-15: a real daemon under this '
+    + 'repo\'s bun, a real `POST /api/cli/devices` registration, and the devices route\'s own '
+    + 'stamps — `lastSeenAt` moves when the second accept lands and `connected` flickers '
+    + 'through the redial gap. Green requires the link to hold the whole 50 s window, a '
+    + 'command to reach the machine through a `once` consent answer, and revoke to end the '
+    + 'socket and the credential.',
+};
 
 /**
  * The machine label this row registers under. The fleet resolves calls by
@@ -69,15 +87,8 @@ const HOLDS_WINDOW_MS = 50_000;
 /** How often the device list is re-read inside the window. */
 const HOLDS_POLL_MS = 500;
 
-/**
- * The consent card's own lifetime — the registry's five-minute window
- * (`DeviceConsentRegistry`), which is also the parked caller's. The case
- * polls inside it rather than beside it, so "the card was never raised" is a
- * finding, not a hang.
- */
-const CONSENT_WINDOW_MS = 300_000;
-
-const CARD_POLL_MS = 500;
+/** How long the case retries a call the workspace's transport still answers as warm-up. */
+const WARMUP_WINDOW_MS = 300_000;
 
 const WARMUP_RETRY_MS = 1_000;
 
@@ -100,7 +111,7 @@ const WARMUP_WORDS = /not available|no device connected|not known here yet|no co
  */
 const DAEMON_REJECTED_EXIT = 4;
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'link');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -199,73 +210,37 @@ interface DeviceCommandRun {
 
 /**
  * One `executeInExecutor('device', command, machine)` driven the way the Env
- * pane drives it — over the workspace's own socket — while the consent card
- * it raises is answered `once` through `resolveDeviceConsent`, the RPC the
- * card's button calls (use-kinu.ts).
- *
- * THE ORDER IS THE FLOW BEING PROVED: the call PARKS on the card
- * (`awaitDeviceConsent`), so it is fired detached; the card is then polled
- * off `listPendingConsents` and resolved, which is what unblocks the call. A
- * call that settles WITHOUT a card is one of two things and the loop treats
- * them as such: warm-up (retried inside the window) or an answer to report
- * verbatim.
+ * pane drives it — over the workspace's own socket — under the park-and-wake
+ * contract: the call parks NOT RUN on the consent card it raises, the card is
+ * answered `once` through `resolveDeviceConsent` (the RPC the card's button
+ * calls, use-kinu.ts), and the call is re-issued, as the agent the answer
+ * wakes re-issues it, spending that answer. A call that answers without
+ * parking is one of two things and the loop treats them as such: warm-up
+ * (retried inside the window) or an answer to report verbatim.
  */
 async function runDeviceCommand(
   session: KinuPublicSession, machine: AttachedMachine, command: string,
 ): Promise<DeviceCommandRun> {
-  const deadline = Date.now() + CONSENT_WINDOW_MS;
-  let cardId: string | null = null;
+  const deadline = Date.now() + WARMUP_WINDOW_MS;
 
   for (;;) {
-    // The settlement flag lives on an object so the poll loop reads what the
-    // socket actually did rather than what control flow can prove about a
-    // `let` assigned inside a `.then` — TypeScript narrows that to never.
-    const landed = { done: false };
-    const call = session.execute('device', command, machine.name);
-    void call.then(() => { landed.done = true; }, () => { landed.done = true; });
-
-    while (!landed.done && Date.now() < deadline) {
-      const card = (await session.pendingConsents())
-        .find((pending) => pending.deviceId === machine.deviceId && pending.consentId !== cardId);
-
-      if (card !== undefined) {
-        const decided = await session.resolveConsent(card.consentId, 'once');
-
-        if (!decided.ok) {
-          throw new Error(`the consent card ${card.consentId} was already settled — `
-            + 'the answer the case is proving never landed');
-        }
-
-        cardId = card.consentId;
-        break;
-      }
-
-      const tick = Promise.withResolvers<void>();
-      setTimeout(tick.resolve, CARD_POLL_MS);
-      await tick.promise;
-    }
-
-    // The call's own verdict is always awaited — a parked call that outlived
-    // the window gets a grace, then the case reports the park rather than
-    // abandoning the frame.
-    const finished = await Promise.race([
-      call.then(() => true, () => true),
-      new Promise<false>((resolve) => { setTimeout(() => resolve(false), 5_000); }),
-    ]);
-
-    if (!finished) {
-      throw new Error(`the device call stayed parked past the consent window${cardId === null
-        ? ' and never raised its card' : ` past its answered card ${cardId}`}`);
-    }
-
     // A socket-level failure throws here with its own words; a refusal or an
     // answer arrives as the result, which the caller reports verbatim.
-    const result = await call;
+    const result = await session.execute('device', command, machine.name);
     const words = result.error ?? result.stdout ?? result.refusal?.error ?? '';
 
-    if (!WARMUP_WORDS.test(words) || Date.now() >= deadline) {
-      return { result, cardId };
+    if (CONSENT_PARKED.test(words)) {
+      const card = (await session.pendingConsents()).find((pending) => pending.deviceId === machine.deviceId);
+
+      if (card === undefined) throw new Error(`the device call parked on consent with no card raised for ${machine.deviceId}: ${words}`);
+      const decided = await session.resolveConsent(card.consentId, 'once');
+
+      if (!decided.ok) throw new Error(`the consent card ${card.consentId} was already settled — the answer the case is proving never landed`);
+
+      return { result: await session.execute('device', command, machine.name), cardId: card.consentId };
     }
+
+    if (!WARMUP_WORDS.test(words) || Date.now() >= deadline) return { result, cardId: null };
 
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, WARMUP_RETRY_MS);
@@ -294,6 +269,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         episode: 'device-link-holds',
         modelCalls: 'none',
         genesis: false,
@@ -367,6 +343,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         episode: 'device-link-command',
         modelCalls: 'none',
         genesis: false,
@@ -418,6 +395,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         episode: 'device-link-revoke',
         modelCalls: 'none',
         genesis: false,

@@ -15,10 +15,9 @@ export interface BackgroundJob {
   error: string | null;
   createdAt: number;
   settledAt: number | null;
-  /** Monotonic lease epoch — bumped by `reclaim` on evict-recovery (§5.3). */
+  /** Monotonic lease epoch, bumped by `reclaim` on each evict-recovery (§5.3): also how many times the job was
+   *  interrupted and re-driven, which bounds its resume loop. */
   epoch: number;
-  /** Bounds evict-recovery resume loops. */
-  resumeAttempts: number;
   /** Replacement job created by an operator retry; null until handled. */
   retriedBy: string | null;
   /** Start of the current attempt's generation; `createdAt` for a first drive, bumped by reclaim. */

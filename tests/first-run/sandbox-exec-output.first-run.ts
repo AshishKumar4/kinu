@@ -22,19 +22,32 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
-import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { isBackgroundHandle, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents, settledJob } from './turn-settlement';
 import { EXEC_OUTPUT_ASK as ASK, EXEC_OUTPUT_COMMANDS as COMMANDS } from './asks';
-import { isBackgroundHandle, type RunEvent } from '../../packages/core/src/index';
+import type { RunEvent } from '../../packages/core/src/index';
 
 const SUITE = 'First-run · sandbox-exec-output';
 
-const CASE = 'sandbox-exec-output' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A background command\'s output vanished: the first-run background-settle case on staging '
+    + '690e3a6040 (2026-09-28) ran `sleep 45 && echo KINU_SETTLED_AFTER_DETACH`, which exited 0, and the '
+    + 'product answered "(no output)".',
+  missedBecause: 'the SDK\'s process lane passes output through FIFOs its own monitor can delete before '
+    + 'the command opens them; the command then writes into a plain file nothing reads. It happens only '
+    + 'under concurrent commands on a container that has been running a while, and no suite ran more than '
+    + 'one untimed sandbox command at once, so every pre-deploy exec test met the lane at rest.',
+  provedRedAt: '690e3a6040',
+  redDirection: 'this case against staging serving 690e3a6040 on 2026-09-28 (the old lane), three runs: '
+    + '595, 596 and 596 of 600 marks returned. The probe behind it (docs/DEVBOX-DECISIONS.md D37): 143 of '
+    + '1175 final lines lost through startProcess at 16 at once, 0 of 1200 through ctx.container.exec.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'execout');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -66,6 +79,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A terse assistant that runs the program it is given and reports its line.',
       // A base snapshot built after a reset, then the program itself, detached: the wait ends when its job settles.
@@ -96,5 +110,3 @@ describe(SUITE, () => {
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

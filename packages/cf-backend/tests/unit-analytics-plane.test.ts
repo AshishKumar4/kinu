@@ -5,7 +5,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  KinuError, RESERVED_LOG_FIELDS, createCompositeLogger, createRecordingLogger, diagnostics, type LogEventName,
+  KinuError,
+  RESERVED_LOG_FIELDS,
+  createCompositeLogger,
+  diagnostics,
+  type LogEventName,
 } from '@kinu.run/core/obs';
 import type { SqlExec } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -33,6 +37,7 @@ import { controlPlaneMetricsQueries } from '@kinu.run/core/analytics';
 import { reportAdminDenial, type AdminDenial } from '../src/control-plane/admin-caller';
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
 import { requireTier, type OwnerCapabilityEnv } from '@kinu.run/core';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 interface Captured {
   indexes?: ((ArrayBuffer | string) | null)[];

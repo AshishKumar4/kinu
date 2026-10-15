@@ -6,12 +6,18 @@ import { inheritedDescriptor, type RpcSurfaceSubject } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 
 export class ActivationGate extends LifecycleCapability {
-  constructor() {
+  /** `refused`: why this object's storage may not be read now (a release's tables step has not reached it), which
+   *  every gated call answers with instead of starting. */
+  constructor(private readonly refused: () => KinuError | undefined = () => undefined) {
     super('kinu-activation-gate');
   }
 
   ready(): Promise<void> {
-    return this.lifecycle.ready();
+    const refusal = this.refused();
+
+    if (refusal === undefined) return this.lifecycle.ready();
+
+    return settle(Effect.fail(refusal));
   }
 }
 

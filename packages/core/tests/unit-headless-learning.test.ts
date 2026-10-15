@@ -12,11 +12,9 @@ import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { listLessons } from '../src/evolution/lessons';
 import { listTurnRatings } from '../src/evolution/ratings';
 import { listRecoveryFindings } from '../src/evolution/recovery';
-import { snapshotCompletedTurn } from '../src/orchestrator/turn-lifecycle';
-import { CONSECUTIVE_FAILURES_BEFORE_STEER, TurnSteering } from '../src/orchestrator/turn-steering';
+import { CONSECUTIVE_FAILURES_BEFORE_STEER } from '../src/orchestrator/turn-steering';
 import type { LLM } from '../src/types/primitives';
 import type { SqlExecutor } from '../src/types/primitives';
-import { actorReferenceOf } from '../src/identity/actor-handle';
 import { ADVISOR_HEADER, type AdvisorSeverity } from '../src/advisor/review';
 
 const REFLECTION_PROMPT = 'should be done differently';
@@ -164,54 +162,6 @@ describe('a headless actor runs the step clock only', () => {
     expect(advisor.tasks).toEqual([]);
   });
 
-  test('a head turn enters no conversational timescale; the same turn answered at the root does', async () => {
-    const { llm, reflections } = reflectingLlm();
-    const { rt, testSql } = createTestRuntime({ llm });
-    // A reply the decision model reads as a correction.
-    rt.decide = async () => ({ answers: {
-      satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
-      wrong: { type: 'choice', choice: 'unrecovered_error' },
-    }, usage: { input: 0, output: 0 } });
-    const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
-    const seat = await seats.seat('head-under-test', 'swarm');
-    const actor = seat.actor.handle;
-    const capture = new HeadCapture();
-
-    const report = await runHeadInference(preparedHeadRun(headInput(), {
-      ...runningOn(seat, probingHead(1)),
-      tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async (): Promise<{ ok: boolean }> => { throw new Error('probe exploded'); } }) },
-      capture, clock: REAL_CLOCK, isAborted: () => false,
-    }));
-
-    expect(report.status).toBe('completed');
-
-    const acc = seat.actor.session.orchestrator.acc;
-    expect(acc.toolCalls.some((call) => call.outcome?.success === false)).toBe(true);
-
-    expect(windowRows(rt.storage.sql, actor.actorId)).toBe(0);
-    expect(listTurnRatings(rt.storage.sql, actor)).toHaveLength(0);
-    expect(listLessons(rt.storage.sql, actor)).toHaveLength(0);
-    expect(reflections()).toBe(0);
-
-    // Control: the same turn at the root, answered by a user, does yield a lesson, so the zeros above are the
-    // loop's decision.
-    const turn = snapshotCompletedTurn({ acc, steering: new TurnSteering() }, {
-      userMessage: 'probe the parser', assistantResponse: report.summary,
-      turnId: 'h1', sessionId: 'default', origin: 'user',
-    });
-
-    const root = await seats.host.acquire(actorReferenceOf(rt.actor), { kind: 'actor' });
-    root.session.orchestrator.recordTurn(turn, 'conversation');
-    root.session.orchestrator.observeUserTurn('u-1', 'the probe kept failing and you never changed its arguments', 'conversation');
-    await root.session.orchestrator.settleTracked();
-    expect(windowRows(rt.storage.sql, actor.actorId)).toBe(0);
-    expect(windowRows(rt.storage.sql, root.handle.actorId)).toBe(1);
-    expect(listTurnRatings(rt.storage.sql, root.handle).map((row) => [row.score, row.source])).toEqual([[1.5, 'model']]);
-    expect(listLessons(rt.storage.sql, root.handle).map((lesson) => [lesson.source, lesson.status]))
-      .toEqual([['turn_reflection', 'corroborated']]);
-    expect(reflections()).toBe(1);
-  });
-
   test('the step clock ticks for a head, under its own actor, and its rows go with it at retirement', async () => {
     const { llm, reflections } = reflectingLlm();
     const { rt, testSql } = createTestRuntime({ llm });
@@ -240,6 +190,8 @@ describe('a headless actor runs the step clock only', () => {
     expect(listLessons(rt.storage.sql, rt.actor)).toHaveLength(0);
     expect(listTurnRatings(rt.storage.sql, actor)).toHaveLength(0);
     expect(reflections()).toBe(0);
+    // A head's turn enters no conversational timescale: no session window row, only the step clock's lesson.
+    expect(windowRows(rt.storage.sql, actor.actorId)).toBe(0);
 
     // `keepHistory: false` purges every actor-scoped table, the lessons ledger included.
     const main = seats.directory.main();

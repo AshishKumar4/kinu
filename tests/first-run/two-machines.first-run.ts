@@ -46,15 +46,25 @@ import { infraBoundary, scratchDir, workerSession, type EvalObservation, type Ev
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import { listDevicesOverCliRoute, type DeviceAccount } from './device-session';
 import { FLEET_ALPHA as ALPHA, FLEET_BETA as BETA, NAMED_MACHINE_ASK, UNNAMED_MACHINE_ASK } from './asks';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · two-machines';
 
-const CASE = 'two-machines' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'With two machines connected, two calls in one turn landed on different machines: the '
+    + 'executor answered as if the account had one.',
+  missedBecause: 'every device test attaches ONE fake daemon, so "the first live socket" and '
+    + '"the machine the user named" are the same machine in the fixture and different machines '
+    + 'in the account.',
+  provedRedAt: '343e157df',
+  redDirection: 'the parent of 343e157df resolves no name: an unnamed call lands on whichever '
+    + 'machine map iteration yields, and a NAMED call is not routed at all.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'fleet');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -77,6 +87,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         modelCalls: 'expected',
         // Genesis independently probes both machines before the unnamed ask.
         // This row measures routing for the two explicit asks, not orientation.
@@ -258,5 +269,3 @@ async function lastAnswer(
 
   return history.filter((row) => row.role === 'assistant').at(-1)?.text ?? streamed;
 }
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

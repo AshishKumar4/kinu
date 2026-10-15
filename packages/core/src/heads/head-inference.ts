@@ -2,10 +2,9 @@
 // strategy/node-agent.ts). Every turn is a claimed actor turn on `ActorSession`.
 // Inherited context: docs/EXPLORATION.md "Inherited context".
 
-import { invalidToolCallRefusal } from '../tools/tool-schema';
 import { operationTool } from '../tools/operation-surfaces';
 import { defineOperation, serve } from '../operations/operation';
-import { type ToolSet, type ModelMessage, type StepResult, type ToolExecutionOptions } from 'ai';
+import { type ToolSet, type ModelMessage, type StepResult } from 'ai';
 import type { ObserveStream } from '../chat';
 import type { HostedActor, SeatedActor } from '../state/actor-host';
 import type { WorkMode } from '../types/turn';
@@ -15,9 +14,7 @@ import {
   type Evidence, type Decision, type ArtifactRef,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
-import { compactToolCall, type ToolCallInput } from '../evolution/tool-call-record';
 import { missionGate, type MissionBudgetRefusal, type MissionGate, type MissionScope, type MissionSeam, type SpendGate } from '../mission-budget';
-import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
 import { addUsage, normalizeUsage, usageReported, type Usage } from '../usage';
 import { nanoid } from '../utils/nanoid';
 import { extractFinalText, synthesizeHeadSummary } from './head-summary';
@@ -26,12 +23,12 @@ import { encodeModelMessageValues } from '../session/message-codec';
 import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
-import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { attempt, diagnostics, hold, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
 import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
 import type { CompactionTriggerReader } from '../orchestrator/turn-context';
+import { improvementLanesOpen } from '../orchestrator/evolution-lanes';
 import type { ActorTurnClaim, ClaimOutcome, PreparingClaim } from '../orchestrator/actor-claims';
 import type { ActorExecutionInput, ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
 import type { ChatEvent } from '../chat';
@@ -74,17 +71,6 @@ export class HeadCapture {
   recordEvidence(e: Evidence): void { this.evidence.push(e); }
   recordDecision(d: Decision): void { this.decisions.push(d); }
   recordArtifact(a: ArtifactRef): void { this.artifacts.push(a); }
-  /** `result` is the projected output. */
-  recordToolCall(call: HeadToolCall): void {
-    this.toolCalls.push(compactToolCall(call));
-  }
-}
-
-export interface HeadToolCall extends ToolCallInput {
-  toolCallId: string;
-  args: JsonObject;
-  result: JsonValue;
-  outcome: ToolOutcome;
 }
 
 import type { Clock } from '../types/clock';
@@ -126,66 +112,6 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
       return 'decision recorded';
     })),
   };
-}
-
-/** Records every call of `tools` into the HeadCapture, a refused one included when this wraps the input check. */
-export function withHeadCaptureRecording(tools: ToolSet, capture: HeadCapture): ToolSet {
-  const out: ToolSet = {};
-
-  for (const [name, entry] of Object.entries(tools)) {
-    out[name] = recordingTool(name, entry, capture);
-  }
-
-  return out;
-}
-
-/** A schema-refused call never reaches {@link recordingTool}. */
-function recordRefusedCalls(step: StepResult<ToolSet>, capture: HeadCapture): void {
-  for (const part of step.content) {
-    if (part.type !== 'tool-call') continue;
-    const refusal = invalidToolCallRefusal(part);
-
-    if (refusal === undefined) continue;
-    const value = projectJsonValue({ value: part.input });
-
-    capture.recordToolCall({
-      name: part.toolName, args: isJsonObject(value) ? value : { input: value }, result: renderThrownChain({ cause: refusal }),
-      outcome: failedToolOutcome({ cause: refusal }), toolCallId: part.toolCallId,
-    });
-  }
-}
-
-function recordingTool<Entry extends ToolSet[string]>(
-  name: string,
-  entry: Entry,
-  capture: HeadCapture,
-): Entry {
-  const execute = entry.execute;
-
-  if (!execute) return entry;
-
-  return Object.assign({}, entry, {
-    execute: async (input: never, options: ToolExecutionOptions<unknown>) => {
-      const value = projectJsonValue({ value: input });
-      const args: JsonObject = isJsonObject(value) ? value : { input: value };
-
-      try {
-        const result = await execute(input, options);
-        capture.recordToolCall({
-          name, args, result: projectJsonValue({ value: result }),
-          outcome: { success: true }, toolCallId: options.toolCallId,
-        });
-
-        return result;
-      } catch (err) {
-        capture.recordToolCall({
-          name, args, result: renderThrownChain({ cause: err }),
-          outcome: failedToolOutcome({ cause: err }), toolCallId: options.toolCallId,
-        });
-        throw err;
-      }
-    },
-  });
 }
 
 const HEAD_PROMPT_TOOL_NAMES = ['record_evidence', 'record_decision', 'split_subheads'] as const;
@@ -459,7 +385,7 @@ async function adviseCompletedTurn({ session, input, deps, lease, outcome }: Com
 
   if (deps.advise !== undefined) return await deps.advise(turn, Object.keys(deps.tools), input.mode);
 
-  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return;
+  if (!improvementLanesOpen('completed', input.mode)) return;
 
   await session.advisor.hire(session.advisor.snapshot(turn, Object.keys(deps.tools)));
 }
@@ -605,7 +531,7 @@ async function inferPrepared(
     if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
   };
 
-  // One dense counter across every turn: `head_steps` is keyed `${id}-s${seq}`, so a per-turn
+  // One dense counter across every turn: `head_steps` is keyed by head and seq, so a per-turn
   // counter would overwrite earlier turns. Steps with no prose, reasoning or tool call are not recorded.
   let recorded = 0;
   let lastText = '';
@@ -639,7 +565,6 @@ async function inferPrepared(
 
   const onStep = async (step: StepResult<ToolSet>, messages: readonly ModelMessage[]): Promise<void> => {
     if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
-    recordRefusedCalls(step, capture);
     // Drawn as the transcript draws the recorded step, so a call keeps its id and a failure reads as one.
     const parts = v.parse(HeadStepPartsSchema, drawnStep(encodeModelMessageValues(messages)));
 
@@ -665,6 +590,9 @@ async function inferPrepared(
   };
 
   let overflowRetry = false;
+
+  // The round's calls as the session's own ledger recorded them, a refused one included; its next turn starts it over.
+  const roundCalls = (): void => { capture.toolCalls.push(...session.orchestrator.acc.toolCalls); };
 
   try {
     // Restored while no round is active, so it replaces the history rather than staging a proposal. A run an execution
@@ -707,6 +635,7 @@ async function inferPrepared(
         };
       },
       project: async ({ lease, assembled, outcome }) => {
+        roundCalls();
         const retry = settleRunContext(current.deps, { outcome, execution: assembled.execution, historyLength: assembled.historyLength, contextWindow: assembled.contextWindow, overflowRetry });
 
         overflowRetry = retry;
@@ -733,6 +662,7 @@ async function inferPrepared(
         return { claim: turnClaimOutcome(turnFailed, outcome.interrupted), stop: failure !== undefined || refusal !== null };
       },
       failed: async ({ lease, failure: cause }) => {
+        roundCalls();
         failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause, otherwise: 'unavailable' });
 
         return lease.signal.aborted || deps.isAborted() ? 'aborted' : 'error';

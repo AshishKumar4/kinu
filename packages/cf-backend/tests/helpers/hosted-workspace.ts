@@ -8,7 +8,7 @@ import {
   type ActorHost, type ActorReference, type AgentRuntime, type SeatedActor, type LoopOrigin,
   type ProfileAuthorityInputs, type SqlExecutor,
 } from '@kinu.run/core';
-import { createAgentTracing, createRecordingTracer } from '@kinu.run/core/obs';
+import { createAgentTracing } from '@kinu.run/core/obs';
 import { makeExecRaw, makeSqlExec } from '../../../core/tests/helpers';
 import { makeEnv } from './actor-harness';
 import { makeCtx } from './platform-context';
@@ -16,6 +16,7 @@ import { createWorkspaceActorHost, HostedActorHomes, type WorkspaceHostSeams } f
 import { createHostedWorkspace } from '../../src/workspace-host';
 import { HELD_NIMBUS_TASKS } from './programmatic-host';
 import { wrapDatabase } from '@kinu.run/core/identity';
+import { createRecordingTracer } from '@kinu.run/test-utils';
 
 const opened: Database[] = [];
 

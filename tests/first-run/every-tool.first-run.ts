@@ -23,9 +23,7 @@ import { formatFailureMix, type EvalObservation, type EvalSubgoal } from '@kinu.
 import {
   BUILTIN_TOOLS, REPORT_TOOL, censusToolFailures, normalizeFactKey, toolFailureKey, type JsonValue, type RunEvent,
 } from '../../packages/core/src/index';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import {
   TOOLS_CODEMODE_MARK as CODEMODE_MARK, TOOLS_FACT as FACT, TOOLS_LIST_ASK as LIST_ASK, TOOLS_PROBE_BYTES as PROBE_BYTES,
@@ -34,13 +32,36 @@ import {
 
 const SUITE = 'First-run · every-tool';
 
-const CASE = 'every-tool' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The owner asked for one fast row proving every native tool answers on the deployed '
+    + 'is read back.',
+  missedBecause: 'every tool has unit coverage over inputs its author wrote, and no row ever '
+    + 'asked the deployed agent to use each one and then read what it left behind, so a tool '
+    + 'that fails only when the MODEL calls it on the deployment was invisible to every gate.',
+  provedRedAt: 'a90ddda79',
+  redDirection: 'RED against the deployed a90ddda79 on 2026-09-12: the retained transcript '
+    + '(bench-artifacts/first-run-flash-1789196459812/every-tool) shows the model\'s request '
+    + 'for the listing turn carrying ONE user message, the genesis signal, and none of the '
+    + 'text the turn was started with, so every check but `no-agents-call` missed. '
+    + 'One check per tool, each off durable state: `sees-every-tool` reds when the '
+    + 'prompt hides a root tool; `file-wrote` when `file` writes nothing or the wrong bytes; '
+    + '`shell-ran` when `shell` errors or drops stdout; `codemode-tool-ran` when codemode cannot '
+    + 'return a string; `memory-saved-and-found` when a save or the search that should find it '
+    + 'errors or comes back empty; `tasks-written` when `tasks` refuses an add; `web-fetched` '
+    + 'when `web` cannot reach the health route; `every-tool-answered` names any call that '
+    + 'closed with an error or a refusal; `no-unexpected-tool-failure` names any failure the '
+    + 'census calls unexpected, a codemode call inside `eval` included; `reported` when the '
+    + 'agent never says DONE.',
+};
 
 /** The tools a ROOT actor is handed: the standing set minus `report`, which only a hired actor has deps for.
  *  Derived, so a tool that joins or leaves the table moves this row with it. */
 const ROOT_TOOLS: readonly string[] = BUILTIN_TOOLS.filter((name) => name !== REPORT_TOOL);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'tools');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -155,6 +176,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A terse assistant that uses the tool it is asked to use and reports the result in one line.',
       async run({ session }) {
@@ -292,4 +314,3 @@ describe(SUITE, () => {
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules
  *  (each of which resolves a live plan at import). */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

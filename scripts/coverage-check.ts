@@ -13,8 +13,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseLcov, type LcovRecord } from './coverage-lcov';
+import { packageOf } from './sources';
+import { REPO_ROOT as ROOT } from './repo-root';
 
-const ROOT = new URL('..', import.meta.url).pathname;
 
 const LCOV = join(ROOT, 'coverage', 'lcov.info');
 
@@ -23,14 +24,6 @@ interface PkgTally {
   functionsHit: number; functionsFound: number;
   branchesHit: number; branchesFound: number;
   files: number;
-}
-
-function packageOf(file: string): string {
-  if (file.startsWith('packages/')) return file.split('/')[1] ?? 'packages';
-
-  if (file.startsWith('scripts/')) return 'scripts';
-
-  return 'tests';
 }
 
 function main(): number {

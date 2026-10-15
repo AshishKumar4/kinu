@@ -8,10 +8,9 @@
 import { describe, expect, test } from 'bun:test';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend, createRecordingLogger } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
-import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
 import { runNodeAgent } from '../src/strategy/node-agent';

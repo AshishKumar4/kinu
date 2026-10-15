@@ -65,18 +65,18 @@
  * proof of runtime capability parity. Spread-based exclusions are reported.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, normalize } from 'node:path';
 import * as v from 'valibot';
 
 import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet';
-import { isParseable, readSources, workspaceScope } from './sources';
+import { aliasFor, readAliases, resolveSpecifier } from './import-graph';
+import { parseJsonc } from './jsonc';
+import { readMatching, readSources, trackedFiles, workspaceScope } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   declarationOf, declaredName, identifierText, isOptionalMember, moduleSpecifiers, parse,
   type SyntaxNode, walk,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/capability-parity.lock.json`;
 
@@ -498,155 +498,13 @@ const SHARED_PACKAGE = new RegExp(
   `^${workspaceScope()}/(core|agent-utils|compaction)(/|$)`,
 );
 
+/** The compiler options that decide what a component's JSX compiles to an import of. */
 const TsconfigSchema = v.object({
   compilerOptions: v.optional(v.object({
-    paths: v.optional(v.record(v.string(), v.array(v.string()))),
     jsx: v.optional(v.string()),
     jsxImportSource: v.optional(v.string()),
   })),
 });
-
-/** JSONC to JSON: `//` and block comments removed, string literals left alone.
- *  Character-wise rather than by regex, because a regex either eats the `//` in
- *  `"https://…"` or needs a lookbehind that misses an escaped quote. */
-export function withoutComments(text: string): string {
-  let out = '';
-  let mode: 'code' | 'string' | 'line' | 'block' = 'code';
-
-  for (let i = 0; i < text.length; i += 1) {
-    const pair = text.slice(i, i + 2);
-
-    if (mode === 'code') {
-      if (pair === '//') { mode = 'line'; i += 1; continue; }
-
-      if (pair === '/*') { mode = 'block'; i += 1; continue; }
-
-      if (text[i] === '"') mode = 'string';
-      out += text[i];
-      continue;
-    }
-
-    if (mode === 'string') {
-      out += text[i];
-
-      if (text[i] === '\\') { out += text[i + 1] ?? ''; i += 1; continue; }
-
-      if (text[i] === '"') mode = 'code';
-      continue;
-    }
-
-    if (mode === 'line') {
-      if (text[i] === '\n') { mode = 'code'; out += '\n'; }
-
-      continue;
-    }
-
-    if (pair === '*/') { mode = 'code'; i += 1; }
-  }
-
-  return out;
-}
-
-/**
- * A package's own path aliases, read from its tsconfig rather than pinned here.
- * An alias this gate did not know about would resolve to nothing, and an
- * unresolvable intra-package import is fatal below — so a stale copy fails
- * loudly instead of quietly reporting fewer files.
- *
- * tsconfig is JSONC, not JSON: `tsc` accepts comments and this repo's own
- * `wrangler.jsonc` shows the habit is present. `JSON.parse` on a documented
- * tsconfig throws `Unrecognized token '/'`, and it happened — a peer added one
- * `//` line explaining an `exclude` and took eight tests down, none of whose
- * names mentioned tsconfig. Comments are stripped first, string-aware so a `//`
- * inside a path is not mistaken for one.
- */
-function compilerOptionsOf(pkg: string): v.InferOutput<typeof TsconfigSchema>['compilerOptions'] {
-  const path = `${root}${pkg}/tsconfig.json`;
-
-  if (!existsSync(path)) return undefined;
-
-  return v.parse(TsconfigSchema, JSON.parse(withoutComments(readFileSync(path, 'utf8')))).compilerOptions;
-}
-
-function aliasesOf(pkg: string): readonly (readonly [string, string])[] {
-  const compilerOptions = compilerOptionsOf(pkg);
-
-  return Object.entries(compilerOptions?.paths ?? {}).flatMap(([pattern, targets]) => {
-    const target = targets[0];
-
-    if (!pattern.endsWith('/*') || target === undefined || !target.endsWith('/*')) return [];
-
-    return [[pattern.slice(0, -1), `${pkg}/${target.replace(/^\.\//, '').slice(0, -1)}`] as const];
-  });
-}
-
-/** What a specifier written inside a package resolves to. `external` covers
- *  everything outside the package, which the caller judges by name instead. */
-type Local =
-  | { readonly kind: 'file'; readonly file: string }
-  /** A stylesheet, image or data file — real, and not something a shared
-   *  package can import, so it pins its importer where it is. */
-  | { readonly kind: 'asset' }
-  /** A relative path that leaves the tree for `node_modules/` — a dependency
-   *  reached through the filesystem because the package exports no subpath for
-   *  it (`nimbus-programmatic.ts` documents the one live instance). A
-   *  DEPENDENCY, never a dependency-free module, and package-relative, so it
-   *  pins its importer exactly as an asset does. */
-  | { readonly kind: 'installed' }
-  | { readonly kind: 'missing' }
-  | { readonly kind: 'external' };
-
-/** The tree path a specifier names before any extension is tried: a relative
- *  path resolved against its importer, an aliased prefix rewritten, or nothing
- *  when the specifier belongs to neither regime. */
-function resolvedBase(
-  from: string,
-  spec: string,
-  aliases: readonly (readonly [string, string])[],
-): string | undefined {
-  if (spec.startsWith('.')) return normalize(join(dirname(from), spec));
-  const alias = aliases.find(([prefix]) => spec.startsWith(prefix));
-
-  if (alias === undefined) return undefined;
-
-  return `${alias[1]}${spec.slice(alias[0].length)}`;
-}
-
-function resolveLocal(
-  from: string,
-  spec: string,
-  known: ReadonlySet<string>,
-  aliases: readonly (readonly [string, string])[],
-): Local {
-  const base = resolvedBase(from, spec, aliases);
-
-  if (base === undefined) return { kind: 'external' };
-
-  if (base.split('/').includes('node_modules')) return { kind: 'installed' };
-
-  // One spelling per regime: no extension under a bundler or Bun, an explicit
-  // `.ts` inside the raw-Node closure. `base` covers the second and the genuine
-  // assets (`.css`, `.json`, `packages/pc-agent/src/index.js`); the rest is the
-  // extensionless form resolving to a module or a barrel.
-  for (const candidate of [
-    base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`,
-  ]) {
-    if (known.has(candidate)) return { kind: 'file', file: candidate };
-  }
-
-  const extension = base.slice(base.lastIndexOf('/') + 1).includes('.');
-
-  if (!extension) return { kind: 'missing' };
-
-  // A path that names a real file outside the governed source set is a
-  // dependency, not a missing module: `packages/pc-agent/src/index.js` is the
-  // CommonJS daemon, which `PRODUCT_SOURCE` (`.tsx?` only) never enumerates.
-  // `isParseable` alone answered "missing" for it, because a `.js` path parses,
-  // and the question here is whether this graph governs the file. It does not,
-  // so the importer cannot move into a shared package — which is what `asset`
-  // records. A specifier naming nothing on disk still throws.
-  return !isParseable(base) || existsSync(join(root, base)) ? { kind: 'asset' } : { kind: 'missing' };
-}
 
 interface Graph {
   /** Bare specifiers that would not compile in a shared package. */
@@ -663,8 +521,10 @@ interface Graph {
  * the source never names. A component therefore depends on React as surely as one that imports it, and a shared
  * package whose own tsconfig compiles no JSX cannot hold it.
  */
-function jsxRuntimeOf(pkg: string): string | null {
-  const options = compilerOptionsOf(pkg);
+function jsxRuntimeOf(tsconfigs: ReadonlyMap<string, string>, pkg: string): string | null {
+  const path = `${pkg}/tsconfig.json`;
+  const text = tsconfigs.get(path);
+  const options = text === undefined ? undefined : parseJsonc(text, TsconfigSchema, path).compilerOptions;
 
   if (options?.jsx !== 'react-jsx' && options?.jsx !== 'react-jsxdev') return null;
 
@@ -681,6 +541,11 @@ function writesJsx(tree: SyntaxNode): boolean {
 
 function buildGraph(sources: ReadonlyMap<string, string>): Graph {
   const known = new Set(sources.keys());
+  // The governed sources and every tracked path, so a stylesheet, a data file or the CommonJS daemon a closure file
+  // names is a real file outside the governed set, which pins its importer, rather than a missing one.
+  const universe = new Set([...known, ...trackedFiles()]);
+  const tsconfigs = readMatching((file) => file.endsWith('tsconfig.json'));
+  const aliases = readAliases(tsconfigs);
   const specifiers = new Map<string, readonly string[]>();
   const runtimes = new Map<string, string | null>();
 
@@ -688,7 +553,7 @@ function buildGraph(sources: ReadonlyMap<string, string>): Graph {
     const tree = parse(file, text).root;
     const pkg = file.split('/').slice(0, 2).join('/');
 
-    if (!runtimes.has(pkg)) runtimes.set(pkg, jsxRuntimeOf(pkg));
+    if (!runtimes.has(pkg)) runtimes.set(pkg, jsxRuntimeOf(tsconfigs, pkg));
     const runtime = runtimes.get(pkg) ?? null;
 
     specifiers.set(file, [...moduleSpecifiers(tree), ...(runtime !== null && writesJsx(tree) ? [runtime] : [])]);
@@ -702,27 +567,25 @@ function buildGraph(sources: ReadonlyMap<string, string>): Graph {
     for (const spec of list) if (!spec.startsWith('.')) importable.add(spec);
   }
 
-  const aliases = new Map<string, readonly (readonly [string, string])[]>();
   const blockers = new Map<string, readonly string[]>();
   const deps = new Map<string, readonly string[]>();
   let edges = 0;
 
   for (const [file, list] of specifiers) {
-    const pkg = file.split('/').slice(0, 2).join('/');
-    let packageAliases = aliases.get(pkg);
-
-    if (packageAliases === undefined) {
-      packageAliases = aliasesOf(pkg);
-      aliases.set(pkg, packageAliases);
-    }
-
     const blocked: string[] = [];
     const local: string[] = [];
 
     for (const spec of list) {
-      const resolved = resolveLocal(file, spec, known, packageAliases);
+      // Neither relative nor aliased: outside the package's own regime, so judged by name.
+      if (!spec.startsWith('.') && aliasFor(spec, file, aliases) === undefined) {
+        if (!SHARED_PACKAGE.test(spec) && !importable.has(spec)) blocked.push(spec);
+        continue;
+      }
 
-      if (resolved.kind === 'missing') {
+      // The workspace is never consulted: a relative or aliased specifier resolves to a path.
+      const resolved = resolveSpecifier({ specifier: spec, from: file, universe, workspace: new Map(), aliases });
+
+      if (resolved.kind === 'unresolved') {
         throw new Error(
           `capability-parity: ${file} imports '${spec}', which resolves to no tracked`
           + ` source file. An unresolvable local import would otherwise be read as a`
@@ -730,15 +593,14 @@ function buildGraph(sources: ReadonlyMap<string, string>): Graph {
         );
       }
 
-      if (resolved.kind === 'file') {
-        local.push(resolved.file);
+      if (resolved.kind === 'file' && known.has(resolved.path)) {
+        local.push(resolved.path);
         edges += 1;
         continue;
       }
 
-      if (resolved.kind === 'asset' || resolved.kind === 'installed') { blocked.push(spec); continue; }
-
-      if (SHARED_PACKAGE.test(spec) || importable.has(spec)) continue;
+      // An asset, a dependency reached by a `node_modules` path, or a file outside the governed set: real, and
+      // nothing a shared package could import, so it pins its importer where it is.
       blocked.push(spec);
     }
 

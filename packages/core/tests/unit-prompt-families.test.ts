@@ -22,10 +22,6 @@ describe('family wording is a delta over the same typed sections', () => {
     expect(resolvePromptModelProfile({ id: 'CLAUDE-SONNET', provider: 'openai' }).family).toBe('claude');
     expect(resolvePromptModelProfile({ id: 'GEMINI-PRO' }).family).toBe('gemini');
     expect(resolvePromptModelProfile().family).toBe('generic');
-
-    for (const model of [MODELS.claude, MODELS.gemini]) {
-      expect([...resolvePromptModelProfile(model).capabilities]).toEqual(['tools', 'streaming']);
-    }
   });
 
 });

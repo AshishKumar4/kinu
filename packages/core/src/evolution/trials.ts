@@ -70,9 +70,10 @@ export function turnArtifactBodies(sql: SqlExecutor, actor: ActorHandle, turn: {
   const segmentId = held?.segment_id ?? (turn.cacheCold || last === undefined ? `seg-${nanoid()}` : last.segment_id);
   const arm = drawArm(trial.trialId, segmentId);
 
+  // The arm is the segment's draw, never stored: a turn's segment decides it again wherever it is read.
   if (held === undefined) {
-    void sql`INSERT INTO trial_turns (actor_id, trial_id, turn_id, segment_id, arm, at)
-      VALUES (${actor.actorId}, ${trial.trialId}, ${turn.answerId}, ${segmentId}, ${arm}, ${now})`;
+    void sql`INSERT INTO trial_turns (actor_id, trial_id, turn_id, segment_id, at)
+      VALUES (${actor.actorId}, ${trial.trialId}, ${turn.answerId}, ${segmentId}, ${now})`;
   }
 
   return {
@@ -101,7 +102,8 @@ function armTurns(sql: SqlExecutor, actor: ActorHandle, trial: LiveTrial, arm: T
   const turns = sql<{ turn_id: string; segment_id: string; errors: number | null; steps: number | null }>`
     SELECT t.turn_id, t.segment_id, s.errors, s.steps FROM trial_turns t
     LEFT JOIN turn_struggles s ON s.actor_id = t.actor_id AND s.turn_id = t.turn_id
-    WHERE t.actor_id = ${actor.actorId} AND t.trial_id = ${trial.trialId} AND t.arm = ${arm}`;
+    WHERE t.actor_id = ${actor.actorId} AND t.trial_id = ${trial.trialId}`
+    .filter((turn) => drawArm(trial.trialId, turn.segment_id) === arm);
 
   const ratings = new Map(listTurnRatings(sql, actor, { turnIds: turns.map((turn) => turn.turn_id) }).map((r) => [r.turnId, r]));
   const bySegment = new Map<string, number[]>();

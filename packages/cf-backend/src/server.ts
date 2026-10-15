@@ -13,8 +13,8 @@ import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
   parseEgressParams, workspaceGrants, type KinuEgressParams,
 } from './egress/outbound';
-import { APP_ROUTES, ORCHESTRATOR_AGENT_SLUG, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
-import { diagnostics, settle, toKinuError, type ErrorCode, type KinuError, settleLogged } from "@kinu.run/core/obs";
+import { APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
+import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -30,23 +30,24 @@ import { deployCallbackRoutes } from "./deploy/routes";
 import { authPageRoutes } from "./auth/routes";
 import { landingRoutes } from "./landing-route";
 import { pcRoutes } from "./pc-routes";
+import { opsRoutes } from "./ops-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
 import {
-  authenticateRequest, AuthError, crossSiteRejection,
+  crossSiteRejection, sessionGate,
   type AuthIdentity,
 } from "./auth/session";
 import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
-import { ownerCaller } from "@kinu.run/core";
-import { appendIdentityHeaders } from "./cli/rpc-gate";
+import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
+import { ownedWorkspace } from "./api/workspace";
 import { err } from "@kinu.run/core";
 import { controlPlaneAccess } from "./control-plane/admin-caller";
 import { CONTROL_PLANE_UI_ROUTE } from "./control-plane/access-gate";
-import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
+import { observeIdentity } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { api } from "./api/app";
 import { beneath, rawParam, rawPath, routeError, type ApiVariables, type FamilyEnv } from "./api/context";
@@ -119,24 +120,6 @@ export { SupervisorRPC } from "@nimbus-sh/worker/session/supervisor-rpc";
 // Without it Nimbus records no span: only its own Worker entry adopts.
 adoptTracing(tracing);
 
-function authError(request: Request, e: AuthError): Response {
-  if (e.status === 401 && wantsHtml(request)) {
-    const url = new URL(request.url);
-    const login = new URL('/login', url.origin);
-    login.searchParams.set('return_to', url.pathname + url.search + url.hash);
-
-    return new Response(null, {
-      status: 302,
-      headers: { location: login.toString(), 'cache-control': 'no-store' },
-    });
-  }
-
-  return new Response(JSON.stringify({ error: e.message }), {
-    status: e.status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
 function authenticateCliAgentTicketRequest(
   request: Request,
   env: Env,
@@ -148,19 +131,13 @@ function authenticateCliAgentTicketRequest(
   if (!agentName || !ticket) return Effect.succeed(null);
 
   if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
-    return Effect.succeed(new Response(JSON.stringify({ error: 'CLI agent tickets are only valid for WebSocket connections.' }), {
-      status: 400,
-      headers: { 'content-type': 'application/json' },
-    }));
+    return Effect.succeed(err(400, 'CLI agent tickets are only valid for WebSocket connections.'));
   }
 
   const userId = parseCliAgentConnectTicketUserId(ticket);
 
   if (!userId) {
-    return Effect.succeed(new Response(JSON.stringify({ error: 'Invalid CLI agent connect ticket.' }), {
-      status: 401,
-      headers: { 'content-type': 'application/json' },
-    }));
+    return Effect.succeed(err(401, 'Invalid CLI agent connect ticket.'));
   }
 
   return Effect.catchCause(Effect.gen(function* () {
@@ -168,16 +145,11 @@ function authenticateCliAgentTicketRequest(
 
     const verified = yield* Effect.promise(async () => userDO.verifyCliAgentConnectTicket(await ownerCaller(env), ticket, {
       userId,
-      agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,
-      capability: 'agent.websocket',
     }));
 
     if (!verified.ok || !verified.user) {
-      return new Response(JSON.stringify({ error: verified.error ?? 'Invalid CLI agent connect ticket.' }), {
-        status: 401,
-        headers: { 'content-type': 'application/json' },
-      });
+      return err(401, verified.error ?? 'Invalid CLI agent connect ticket.');
     }
 
     url.searchParams.delete('ticket');
@@ -250,14 +222,6 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function wantsHtml(request: Request): boolean {
-  if (new URL(request.url).pathname.startsWith('/agents/')) return false;
-
-  const accept = request.headers.get('accept') ?? '';
-
-  return request.method === 'GET' && (accept.includes('text/html') || accept.includes('*/*'));
-}
-
 /** Dev hosts (localhost, LAN) match neither and stay on plain HTTP. */
 function isPublishedHost(url: URL, env: Env): boolean {
   if (isPreviewHostRequest(url, env)) return true;
@@ -328,12 +292,6 @@ previewHost.all('*', async (c) => await servePreviewRequest(c.req.raw, c.env));
 
 previewHost.onError(routeError);
 
-/** Every other code is a workspace failure: 500. */
-const HOSTED_ACTOR_ROUTE_STATUS: Partial<Readonly<Record<ErrorCode, number>>> = {
-  missing: 404,
-  denied: 403,
-};
-
 /** `request`: a CLI ticket stripped. */
 interface WorkerVariables extends ApiVariables {
   request: Request;
@@ -352,6 +310,24 @@ function mount<Bindings extends object, Variables extends object>(
 
 const appShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env);
 
+/**
+ * Behind sign-in: the page names the account's theme, so it paints in it on any device it opens on. The theme is only
+ * a look: a read that fails is logged and the page is served in the default, never refused.
+ */
+const accountShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env, {
+  theme: async () => {
+    let theme: ThemeName = DEFAULT_THEME;
+
+    await settleLogged('app.theme_read_failed', { doing: "reading the account's theme for its page", otherwise: 'unavailable' }, async () => {
+      const account = c.env.UserDO.get(c.env.UserDO.idFromName(c.get('identity').userId));
+
+      theme = accountTheme(await account.getConfig(await ownerCaller(c.env), THEME_CONFIG_KEY));
+    });
+
+    return theme;
+  },
+});
+
 worker.use('*', async (c, next) => (isPreviewHostRequest(new URL(c.req.url), c.env)
   ? await previewHost.fetch(c.req.raw, c.env, c.executionCtx)
   : await next()));
@@ -359,6 +335,9 @@ worker.use('*', async (c, next) => (isPreviewHostRequest(new URL(c.req.url), c.e
 worker.all('/api/*', beneath<WorkerEnv>('/api', async (c) => api.fetch(c.req.raw, c.env, c.executionCtx)));
 
 mount(pcRoutes);
+
+// Before any session: its own pass (ops-routes.ts).
+mount(opsRoutes);
 
 // Access before every bypass.
 worker.use(CONTROL_PLANE_UI_ROUTE, controlPlaneAccess);
@@ -401,29 +380,14 @@ for (const prefix of ['/auth', '/assets', '/shared/blueprint']) worker.all(`${pr
 
 worker.use('*', (c, next) => settle(Effect.gen(function* () {
   const request = c.req.raw;
-  let identity: AuthIdentity;
-  let routed = request;
   const cliAgentTicket = yield* authenticateCliAgentTicketRequest(request, c.env);
 
   if (cliAgentTicket instanceof Response) return cliAgentTicket;
+  // A CLI ticket is its own credential; the cross-site rule still holds over it.
+  const identity = cliAgentTicket === null ? yield* sessionGate(request, c.env) : (crossSiteRejection(request) ?? cliAgentTicket.identity);
 
-  if (cliAgentTicket) {
-    identity = cliAgentTicket.identity;
-    routed = cliAgentTicket.request;
-  } else {
-    const authenticated = yield* Effect.catchCause(Effect.promise(() => authenticateRequest(request, c.env)), (failed) => {
-      const e = Cause.squash(failed);
-
-      return e instanceof AuthError ? Effect.succeed(authError(request, e)) : Effect.failCause(failed);
-    });
-
-    if (authenticated instanceof Response) return authenticated;
-    identity = authenticated;
-  }
-
-  const crossSite = crossSiteRejection(request);
-
-  if (crossSite) return crossSite;
+  if (identity instanceof Response) return identity;
+  const routed = cliAgentTicket?.request ?? request;
 
   // After CSRF so cross-site requests never feed the index; workspaces are
   // indexed only after the ownership check below.
@@ -446,30 +410,21 @@ worker.all('/agents/*', async (c, next) => {
 
   // routeAgentRequest maps every DO binding by slug; the rejection above keeps
   // UserDO and KinuDevbox unreachable.
-  const identity = c.get('identity');
-  const claim = await claimOwnedWorkspace(c.env, identity.userId, agentName);
+  const owned = await ownedWorkspace(c, c.get('identity'), agentName, c.get('request'));
 
-  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
-
-  observeWorkspaceUse(c.env, identity, agentName, { retain: c.executionCtx });
-
-  const routed = c.get('request');
-  const headers = appendIdentityHeaders(routed.headers, identity);
-
+  if (Result.isFailure(owned)) return owned.failure;
+  const { agent, request } = owned.success;
   const hosted = hostedActorRoute(c.req.path);
 
-  if (hosted) {
-    const root = c.env.OrchestratorAgent.get(c.env.OrchestratorAgent.idFromName(agentName));
-    const target = await root.resolveHostedActorRoute(hosted.name);
+  if (hosted === null) return (await routeAgentRequest(request, c.env)) ?? next();
+  const target = await agent.resolveHostedActorRoute(hosted.name);
 
-    if ('reason' in target) {
-      return Response.json(target, { status: HOSTED_ACTOR_ROUTE_STATUS[target.reason] ?? 500 });
-    }
+  if ('reason' in target) return Response.json(target, { status: ERROR_STATUS[target.reason] });
+  const headers = new Headers(request.headers);
 
-    headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);
-  }
+  headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);
 
-  return (await routeAgentRequest(new Request(routed, { headers }), c.env)) ?? next();
+  return (await routeAgentRequest(new Request(request, { headers }), c.env)) ?? next();
 });
 
 // A workspace's page wakes its object while the document, the app and its socket are still on the way: the claim
@@ -484,13 +439,13 @@ const workspacePage = async (c: Context<WorkerEnv>): Promise<Response> => {
       async () => { await claimOwnedWorkspace(c.env, c.get('identity').userId, workspace); }));
   }
 
-  return await appShell(c);
+  return await accountShell(c);
 };
 
 worker.get(APP_ROUTES.workspace, workspacePage);
 
 worker.get(`${APP_ROUTES.workspace}/*`, workspacePage);
 
-worker.notFound(appShell);
+worker.notFound(accountShell);
 
 worker.onError(routeError);

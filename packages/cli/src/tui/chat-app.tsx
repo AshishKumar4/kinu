@@ -11,7 +11,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } fro
 
 import {
   nextReasoningEffort, offeredReasoningEfforts, type AlternateTakeCandidate, type AlternateTakeSet,
-  type ChangelogEntry, type ReasoningEffort, type TierId,
+  type ChangelogEntry, type PendingDeviceConsent, type ReasoningEffort, type TierId,
 } from '@kinu.run/core';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
 import {
@@ -25,7 +25,6 @@ import {
   type AgentTranscriptMessage,
   type DeviceConsentDecision,
   type ForkPoint,
-  type PendingDeviceConsent,
 } from '../agent-client';
 import {
   commandsForClient,
@@ -203,6 +202,16 @@ function leave(onExit: ChatAppOpts['onExit']): void | Promise<void> {
   return onExit ? onExit() : globalExit?.();
 }
 
+/** The model a status names; none before the first status arrives. */
+function modelOf(status: AgentClientStatus | null): string {
+  return status?.model ?? '';
+}
+
+/** A status update setting its model; none before the first status arrives. */
+function withModel(spec: string): (current: AgentClientStatus | null) => AgentClientStatus | null {
+  return (current) => current === null ? current : { ...current, model: spec };
+}
+
 export function ChatApp(props: ChatAppOpts) {
   return (
     <TuiProductProvider runtime={props.tui}>
@@ -243,8 +252,9 @@ function ChatScene({
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
   const [commandPhase, setCommandPhase] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  // The workspace's configuration as one snapshot (model, effort, role): each operation updates it once.
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
-  const [modelSpec, setModelSpec] = useState<string>('');
+  const modelSpec = modelOf(status);
   const [nextTier, setNextTier] = useState<TierId | null>(null);
   const [liveContext, setLiveContext] = useState<ContextNumber | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
@@ -599,7 +609,6 @@ function ChatScene({
       if (result.client !== client) {
         setReady(false);
         setStatus(null);
-        setModelSpec('');
         clientGenerationRef.current += 1;
         setModelCatalog([]);
         setBranchTasks({});
@@ -702,7 +711,6 @@ function ChatScene({
       forgetSessionTurn();
       setTurnPhase(null);
       setStatus(null);
-      setModelSpec('');
       setModelCatalog([]);
       setBranchTasks({});
       // A pending next-turn tier does not survive a switch.
@@ -855,7 +863,7 @@ function ChatScene({
 
     try {
       const result = await client.setModel(spec);
-      setModelSpec(result.spec);
+      setStatus(withModel(result.spec));
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
       addError({ cause: err });
@@ -953,7 +961,7 @@ function ChatScene({
 
         return;
       case 'model-set':
-        setModelSpec(outcome.spec);
+        setStatus(withModel(outcome.spec));
         addMessage({ role: 'system', content: `Model: ${outcome.spec}` });
 
         return;
@@ -969,7 +977,6 @@ function ChatScene({
         return;
       case 'status':
         setStatus(outcome.status);
-        setModelSpec(outcome.status.model ?? '');
         const note: Omit<DisplayMessage, 'id'> = { role: 'system', content: '', status: outcome.status };
         addMessage(note);
 
@@ -1535,7 +1542,6 @@ function ChatScene({
 
             if (abort.signal.aborted) return;
             setStatus(next);
-            setModelSpec((current) => current || (next.model ?? ''));
           } catch (cause) {
             if (!abort.signal.aborted) {
               addMessage({

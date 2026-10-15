@@ -31,7 +31,6 @@ function multiAccountCredential(): OAuthCredential {
       tokenType: 'bearer',
       accounts: [PERSONAL, EMPLOYER],
       accountId: PERSONAL.id,
-      accountName: PERSONAL.name,
     },
   };
 }
@@ -85,7 +84,7 @@ describe('Cloudflare account selection', () => {
       const owner = await testOwner();
       await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, {
         kind: 'oauth', accessToken: 'cf-access',
-        metadata: { accountId: PERSONAL.id, accountName: PERSONAL.name },
+        metadata: { accountId: PERSONAL.id },
       });
       expect(await harness.userDO.listCloudflareAccounts(owner)).toEqual({
         connected: true, selectedId: PERSONAL.id, accounts: [],

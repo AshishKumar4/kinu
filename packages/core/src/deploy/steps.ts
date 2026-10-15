@@ -5,7 +5,7 @@
 // deployment takes a 0% version (wrangler 4.129.0 sends one).
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { KinuError } from '../obs/index';
+import { KinuError } from '../obs/index';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
   FACT_ACCESS_APP, FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
@@ -20,7 +20,7 @@ import { HealthAnswerSchema } from './update';
 import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { bytesToBase64 } from '../utils/base64';
-import type { ReleaseBinding, ReleaseManifest } from './manifest';
+import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
 
 export interface DeployStep {
   readonly id: string;
@@ -215,15 +215,23 @@ function vectorizeStep(manifest: ReleaseManifest): DeployStep {
         const existing = yield* Effect.promise(async () => cloudflareResult(
           context.transport,
           { method: 'GET', path: base },
-          v.array(v.object({ name: v.string() })),
+          v.array(v.object({ name: v.string(), config: v.object({ dimensions: v.number(), metric: v.string() }) })),
         ));
 
-        const held = new Set(existing.map((index) => index.name));
+        const held = new Map(existing.map((index) => [index.name, index.config]));
 
         for (const index of manifest.vectorIndexes) {
           const name = resourceName(context.inputs, index.name);
+          const config = held.get(name);
 
-          if (held.has(name)) {
+          // An index of another shape binds, and refuses every vector this release writes: not ready, and not ours to drop.
+          if (config !== undefined && (config.dimensions !== index.dimensions || config.metric !== index.metric)) {
+            return yield* new KinuError('bad_input', `${name} already exists at ${String(config.dimensions)} dimensions, `
+              + `${config.metric}, and this release writes ${String(index.dimensions)}-dimension ${index.metric} vectors, `
+              + `which it would refuse. Delete ${name} in the Cloudflare dashboard (Vectorize), or deploy under another name.`);
+          }
+
+          if (config !== undefined) {
             context.note(`${name} already exists.`);
             continue;
           }
@@ -285,6 +293,9 @@ function gatewayStep(): DeployStep {
   };
 }
 
+/** The Access policy that names who may sign in: the owner and the addresses they listed. */
+const OWNERS_POLICY = 'Owners';
+
 function accessStep(): DeployStep {
   return {
     id: 'access',
@@ -319,13 +330,22 @@ function accessStep(): DeployStep {
         context.facts.set(FACT_ACCESS_APP, appId);
         context.facts.set(FACT_OWNER_EMAIL, context.inputs.ownerEmail);
 
+        // Found and updated, never added again: a second sitting keeps one Owners policy, at today's addresses.
+        const policies = yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'GET', path: `${base}/${appId}/policies` },
+          v.array(v.object({ id: v.string(), name: v.optional(v.string()) })),
+        ));
+
+        const owners = policies.find((policy) => policy.name === OWNERS_POLICY);
+
         yield* Effect.promise(async () => cloudflareResult(
           context.transport,
           {
-            method: 'POST',
-            path: `${base}/${appId}/policies`,
+            method: owners === undefined ? 'POST' : 'PUT',
+            path: owners === undefined ? `${base}/${appId}/policies` : `${base}/${appId}/policies/${owners.id}`,
             body: {
-              name: 'Owners',
+              name: OWNERS_POLICY,
               decision: 'allow',
               include: [...emails].map((email) => ({ email: { email } })),
             },
@@ -740,7 +760,7 @@ async function walkArtifact(context: DeployContext, manifest: ReleaseManifest, s
       modules.push({
         name: moduleName,
         filename: moduleName,
-        contentType: moduleName.endsWith('.wasm') ? 'application/wasm' : 'application/javascript+module',
+        contentType: releaseModuleKind(moduleName) === 'wasm' ? 'application/wasm' : 'application/javascript+module',
         body,
       });
       continue;

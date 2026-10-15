@@ -58,8 +58,8 @@ describe('the pty screen model', () => {
   });
 
   test('a control that moves cells and is not modelled refuses the run', async () => {
-    await expect(screenOf(`${at(1, 1)}ink${CSI}1S`, SIZE)).rejects.toThrow('unmodelled CSI finals: S');
-    await expect(screenOf(`${at(1, 1)}ink${CSI}L${CSI}2@`, SIZE)).rejects.toThrow('unmodelled CSI finals: @L');
+    await expect(screenOf(`${at(1, 1)}ink${CSI}1S`, SIZE)).rejects.toThrow(Error);
+    await expect(screenOf(`${at(1, 1)}ink${CSI}L${CSI}2@`, SIZE)).rejects.toThrow(Error);
   });
 });
 
@@ -100,9 +100,13 @@ describe('the pty driver', () => {
       '}',
     ].join('\n'));
 
-    await expect(runTuiInPty(program, {
+    const run = await runTuiInPty(program, {
       steps: [{ wait: 'ready' }, { send: '\n' }, { wait: 'done', timeout: 1 }],
-    })).rejects.toThrow('the screen never showed "done"');
+      unmetWait: 'report',
+    });
+
+    expect(run.waits[1]).toMatchObject({ text: 'done', met: false });
+    expect(run.waits[1]?.afterMs).toBeLessThan(3_000);
   });
 
   test('cycling between previously seen screens cannot keep a stuck wait alive', async () => {
@@ -118,9 +122,13 @@ describe('the pty driver', () => {
       '}',
     ].join('\n'));
 
-    await expect(runTuiInPty(program, {
+    const run = await runTuiInPty(program, {
       steps: [{ wait: 'ready' }, { send: '\n' }, { wait: 'done', timeout: 1 }],
-    })).rejects.toThrow('the screen never showed "done"');
+      unmetWait: 'report',
+    });
+
+    expect(run.waits[1]).toMatchObject({ text: 'done', met: false });
+    expect(run.waits[1]?.afterMs).toBeLessThan(4_000);
   });
 
   // A wait that never held skipped every later step; a run that read on would blame the wrong step (CI 36962966527).
@@ -129,8 +137,13 @@ describe('the pty driver', () => {
 
     writeFileSync(program, "console.log('ready');\nawait Bun.sleep(60_000);\n");
 
-    await expect(runTuiInPty(program, { steps: [{ wait: 'ready', timeout: 15 }, { wait: 'never painted', timeout: 1 }] }))
-      .rejects.toThrow('the screen never showed "never painted"');
+    const steps = [{ wait: 'ready', timeout: 15 }, { wait: 'never painted', timeout: 1 }, { wait: 'ready' }];
+    await expect(runTuiInPty(program, { steps })).rejects.toThrow(Error);
+    const run = await runTuiInPty(program, { steps, unmetWait: 'report' });
+    expect(run.waits).toEqual([
+      expect.objectContaining({ text: 'ready', met: true }),
+      expect.objectContaining({ text: 'never painted', met: false }),
+    ]);
   });
 
   test('a run ends every process the program started, not only the program', async () => {

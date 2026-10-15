@@ -5,12 +5,13 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { killAndAwaitExit, oneMachine, present, recordedIn, runOk, scratchDir } from '@kinu.run/test-utils';
+import { createMemoryVfs, killAndAwaitExit, oneMachine, present, recordedIn, runOk, scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  bunResolutionShell, deviceFiles, DEVICE_FRAMES, JsonValueSchema,
-  parseJsonObject, type DeviceStatus, type DeviceTransport, type JsonObject, DEVICE_METHOD,
+  bunResolutionShell, createDeviceTunnelExecutor, DefaultExecutionRouter, deviceFiles, DEVICE_FRAMES, FILES_PAGE_ENTRIES,
+  getExecutorFiles, JsonValueSchema, parseJsonObject, standardMounts, withMountTable,
+  type DeviceStatus, type DeviceTransport, type JsonObject, DEVICE_METHOD,
 } from '@kinu.run/core';
 import {
   DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, ROTATED_TOKEN, startUpdateHub,
@@ -467,6 +468,60 @@ function tunnelOver(socket: HubSocket, sandbox: FrameSandbox): DeviceTransport {
 // The daemon is one dependency-free file and cannot import core's frame names or its file client;
 // driven by a hub that speaks them, it must answer in them.
 describe('the daemon answers the hub in core\'s frames', () => {
+  // 2026-10-14, the owner's machine: its /tmp of 56,762 entries, read whole and an entry statted each through the hub,
+  // reset the workspace for memory every time Files opened /pc.
+  test('Files reads a 56,762-entry folder of the machine a page at a time, and stats none of it', async () => {
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    startDaemon(home, await releaseSigningEnv());
+    await served.sockets.until((hellos) => hellos[0] !== undefined);
+    const socket = present(served.sockets.items[0], 'the HELLO');
+    const proved = v.parse(ProvedHelloSchema, socket.hello);
+
+    if (proved.sandbox.capability !== 'sandboxed') return;
+    const owners = 56_762;
+    const big = scratchDir('daemon-big-folder');
+
+    for (let entry = 0; entry < owners; entry++) writeFileSync(join(big, `entry-${String(entry)}`), '');
+    const tunnel = tunnelOver(socket, { tier: 'sandboxed', agentHome: join(proved.agentRoot, 'ws-big', 'home'), roots: [big] });
+    const asked: string[] = [];
+
+    const recorded: DeviceTransport = {
+      ...tunnel,
+      rpc: async (method, params, opts) => {
+        asked.push(method);
+
+        return tunnel.rpc(method, params, opts);
+      },
+    };
+
+    const router = new DefaultExecutionRouter();
+    router.register(createDeviceTunnelExecutor(recorded, { consentedRoot: async () => big, deviceHome: async () => null, scope: async () => 'sandboxed' }));
+    const workspace = withMountTable(createMemoryVfs().vfs, standardMounts((name) => router.getProvider(name)));
+
+    const lookup = {
+      getProvider: (name: string) => (name === 'workspace' ? { files: workspace, homeDir: async () => '/home/main' } : router.getProvider(name)),
+    };
+
+    const machine = present((await getExecutorFiles(lookup, 'workspace', '/pc')).entries?.[0], 'the machine at /pc').name;
+    const first = await getExecutorFiles(lookup, 'workspace', `/pc/${machine}`);
+    const pages = [first];
+
+    for (let from = first.next; from !== undefined;) {
+      const page = await getExecutorFiles(lookup, 'workspace', present(first.path, 'the landed folder'), from);
+
+      pages.push(page);
+      from = page.next;
+    }
+
+    expect(pages.map((page) => page.error).filter((error) => error !== undefined)).toEqual([]);
+    expect(pages.every((page) => (page.entries?.length ?? 0) <= FILES_PAGE_ENTRIES)).toBe(true);
+    expect(new Set(pages.flatMap((page) => page.entries?.map((entry) => entry.name) ?? [])).size).toBe(owners);
+    // Each page one window asked of the machine, and no entry asked after: what the daemon was sent says so.
+    expect(asked.filter((method) => method === DEVICE_METHOD.statPath)).toEqual([]);
+    expect(asked.filter((method) => method === DEVICE_METHOD.listFiles).length).toBe(pages.length);
+  });
+
   test('a rotated token is on disk when the daemon acknowledges it', async () => {
     const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
@@ -510,6 +565,33 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(ran.stdout).toContain(`the full stdout is at ${shown}]`);
     expect(await readText(files, shown)).toBe(`${'x'.repeat(600_000)}END`);
     await tunnel.rpc(DEVICE_METHOD.execAck, [requestId]);
+  });
+
+  // 2026-10-14, the owner's machine: a sandboxed terminal's bwrap was told to report on a descriptor only a command's
+  // supervisor holds, so it exited before the shell started, and the Env tab showed a cursor and nothing else.
+  test('a sandboxed terminal opens a shell that answers what is typed into it', async () => {
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    startDaemon(home, await releaseSigningEnv());
+    await served.sockets.until((hellos) => hellos[0] !== undefined);
+    const socket = present(served.sockets.items[0], 'the HELLO');
+    const proved = v.parse(ProvedHelloSchema, socket.hello);
+
+    if (proved.sandbox.capability !== 'sandboxed') return;
+    const session = 'rpc-terminal00-1';
+    const sandbox = { tier: 'sandboxed' as const, agentHome: join(proved.agentRoot, 'ws-terminal', 'home'), roots: [scratchDir('daemon-terminal')] };
+    socket.send({ id: session, method: DEVICE_METHOD.ptyOpen, params: [80, 24], sandbox });
+    expect(v.parse(ReplySchema, await socket.waitForReply(session)).error).toBeUndefined();
+    socket.send({ type: DEVICE_FRAMES.ptyInput, session, data: Buffer.from('echo $((6 * 7))\r').toString('base64') });
+
+    const ofSession = (type: string) => socket.frames.items.filter((frame) => frame.type === type && frame.session === session);
+    const shown = () => ofSession(DEVICE_FRAMES.ptyOutput).map((frame) => Buffer.from(String(frame.data), 'base64').toString()).join('');
+    // The shell answers, or its terminal ends: a sandbox that never started the shell ends it at once.
+    await socket.frames.until(() => /\b42\b/.test(shown()) || ofSession(DEVICE_FRAMES.ptyExit).length > 0);
+
+    expect({ answered: /\b42\b/.test(shown()), ended: ofSession(DEVICE_FRAMES.ptyExit) }).toEqual({ answered: true, ended: [] });
+    socket.send({ id: 'rpc-terminal00-2', method: DEVICE_METHOD.cancel, params: [session] });
+    await socket.waitForReply('rpc-terminal00-2');
   });
 });
 
@@ -626,7 +708,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     const proc = Bun.spawn({
       cmd: [process.execPath, '-e', `
         import { daemonStatus } from './packages/cli/src/device-connect.ts';
-        console.log(JSON.stringify(daemonStatus()));
+        console.log(JSON.stringify(await daemonStatus()));
       `],
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },
@@ -651,7 +733,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     const proc = Bun.spawn({
       cmd: [process.execPath, '-e', `
         import { daemonStatus } from './packages/cli/src/device-connect.ts';
-        console.log(JSON.stringify(daemonStatus()));
+        console.log(JSON.stringify(await daemonStatus()));
       `],
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },

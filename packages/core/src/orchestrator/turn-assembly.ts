@@ -13,7 +13,7 @@ import type { MediaModality } from '../prompting/attachment-sanitizer';
 import type { PromptBackend, PromptIdentity } from '../prompting/surface';
 import { withOperationProfile, type OperationProfile } from '../profiles/operation';
 import { effectiveRoleCatalog } from '../profiles/catalog';
-import { ownProfileChoices, resolveAgentTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
+import { ownProfileChoices, resolveTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
 import type { FrozenAuthority } from './turn-facts';
 import type { TierId } from '../types/profile';
 import { reasoningEffortOptions } from '../providers/effort';
@@ -39,7 +39,7 @@ import type { CompactionTriggerReader } from './turn-context';
 import { activatedSkillsBlock, filterToolSetBySkills, resolveTurnSkills, splitTurnSkills, type TurnSkillSurface, type TurnSkillsConfig } from './turn-surface';
 
 export interface TurnModelSources {
-  readonly catalog: Pick<ModelCatalogSession, 'window' | 'windowFor' | 'warm' | 'acceptedMedia'>;
+  readonly catalog: Pick<ModelCatalogSession, 'window' | 'windowFor' | 'warm' | 'acceptedMedia' | 'callsTools'>;
   normalize(spec: string): string;
   resolve(spec: string): LanguageModel;
   readonly routed?: {
@@ -147,12 +147,12 @@ async function draftTurn(sources: Pick<TurnAssemblySources, 'profileInputs' | 'c
   const profileInputs = await sources.profileInputs();
   const ancestors = sources.ancestors?.() ?? [];
   const choices = sources.choices ?? ownProfileChoices(sources.config, profileInputs, ancestors.length === 0 ? undefined : ancestors, request.explicitTier === undefined ? {} : { explicitTier: request.explicitTier });
-  const drafted = resolveAgentTurnProfile({ ...profileInputs, ...choices, workMode: request.workMode, availableTools: [], activeSkills: [] });
+  const drafted = resolveTurnProfile({ ...profileInputs, ...choices, workMode: request.workMode, availableTools: [], activeSkills: [] });
   const served = sources.models.normalize(request.model ?? drafted.tier.model);
 
   return {
     profileInputs, ancestors, choices, drafted, served,
-    roleSkills: effectiveRoleCatalog(profileInputs.envelope.catalog)[choices.activeRoleId]?.skills ?? [],
+    roleSkills: effectiveRoleCatalog(profileInputs.envelope.catalog)[choices.roleId]?.skills ?? [],
     limits: sources.models.catalog.window(served),
   };
 }
@@ -165,7 +165,7 @@ function frozenDraft(sources: Pick<TurnAssemblySources, 'models' | 'choices'>, f
 
   return {
     profileInputs: inputs, ancestors: [], drafted: profile, served,
-    choices: { activeRoleId: profile.role.id, ...sources.choices },
+    choices: { roleId: profile.role.id, ...sources.choices },
     roleSkills: effectiveRoleCatalog(inputs.envelope.catalog)[profile.role.id]?.skills ?? [],
     limits: sources.models.catalog.window(served),
   };
@@ -180,7 +180,7 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 }): ResolvedTurnProfile {
   const { drafted } = turn;
 
-  return resolveAgentTurnProfile({
+  return resolveTurnProfile({
     ...turn.profileInputs,
     ...turn.choices,
     workMode: turn.workMode,
@@ -253,7 +253,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     model: models.resolve(spec),
     modelSpec: spec,
     // Without `modelOutputLimit` the whole window reads as the answer's allowance.
-    modelContext: { id: spec, contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit },
+    modelContext: { id: spec, contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, callsTools: models.catalog.callsTools(spec) },
     system: systemPromptText(system),
     systemShared: system.shared.length,
     attachments: { accepts: models.catalog.acceptedMedia(spec), vfs: sources.rt.storage.vfs, budget: sources.attachmentBudget },
@@ -352,7 +352,7 @@ export interface TurnSourcesBundle {
   readonly memoryTail: string | null;
   readonly artifacts: ReturnType<TurnAssemblySources['artifacts']>;
   readonly conversationKey: string;
-  readonly models: Readonly<Record<string, { readonly window: ModelWindow; readonly media: readonly MediaModality[] }>>;
+  readonly models: Readonly<Record<string, { readonly window: ModelWindow; readonly media: readonly MediaModality[]; readonly callsTools: boolean | undefined }>>;
 }
 
 export async function materializeTurnSources(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<TurnSourcesBundle> {
@@ -363,7 +363,9 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
 
   const [skills, soul, identity, agentsMd, memoryTail, windows] = await Promise.all([
     sources.skills(request.userText, roleSkills, limits), sources.soul(), sources.identity(), sources.agentsMd(limits), sources.memoryTail(),
-    Promise.all(specs.map(async (spec) => [spec, { window: await models.catalog.windowFor(spec), media: [...models.catalog.acceptedMedia(spec)] }] as const)),
+    Promise.all(specs.map(async (spec) => [spec, {
+      window: await models.catalog.windowFor(spec), media: [...models.catalog.acceptedMedia(spec)], callsTools: models.catalog.callsTools(spec),
+    }] as const)),
   ]);
 
   return {
@@ -418,6 +420,13 @@ export function turnSourcesFromBundle(bundle: TurnSourcesBundle, local: LocalTur
       const model = read(spec);
 
       if (model !== undefined) return new Set(model.media);
+
+      return settleSync(Effect.fail(unread(spec)));
+    },
+    callsTools(spec) {
+      const model = read(spec);
+
+      if (model !== undefined) return model.callsTools;
 
       return settleSync(Effect.fail(unread(spec)));
     },

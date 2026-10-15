@@ -9,10 +9,7 @@ import {
   CONTINUE, CONTINUED, FEEDBACK_HEARD, HIRED, HOME_ASK, HOME_REPORTED, INTERRUPTED_BRIEF, PIN_ASK, PIN_PAGE, PLAN_COMMENT,
   PLAN_COMMENT_ASK, REACH_REPLY, REACH_SLATE, REACH_SLATE_ASK, REACH_STREAM, THREAD_REPLY,
 } from './flows-script';
-import {
-  CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle,
-  settled, settledAfter, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget,
-} from './product-flows';
+import { CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle, settled, settledAfter, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget } from './browser-page';
 import { signedInPage } from '../evals/src/browser';
 import { webHeaders } from '../evals/src/workspace-roster';
 
@@ -253,7 +250,7 @@ const SharedSchema = v.object({ id: v.string(), url: v.nullable(v.string()) });
 
 /** The reach slate shared with anyone who has the link, from its tile in My stuff: the share and its link. */
 async function sharedPublicly(target: FlowTarget, workspace: string): Promise<v.InferOutput<typeof SharedSchema>> {
-  const page = await signedInPage(target.browser, target.identity);
+  const page = await signedInPage(target.browser, target);
   const tile = `[data-drive-slate="${REACH_SLATE.id}"][data-drive-workspace="${workspace}"]`;
 
   await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });

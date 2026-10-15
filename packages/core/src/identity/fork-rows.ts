@@ -24,7 +24,6 @@ export const ForkSessionMessageRowSchema = v.object({
   sealed_at: v.number(),
   content_json: v.nullable(v.string()),
   content_path: v.nullable(v.string()),
-  content_digest: v.nullable(v.string()),
 });
 
 /** One entry of the carried chat, oldest first. Session and context columns do not cross;
@@ -37,7 +36,6 @@ export const ForkConversationEntryRowSchema = v.object({
   run_id: v.nullable(v.string()),
   metadata_json: v.nullable(v.string()),
   metadata_path: v.nullable(v.string()),
-  metadata_digest: v.nullable(v.string()),
   recorded_at: v.number(),
 });
 
@@ -76,8 +74,8 @@ export const ForkLessonRowSchema = v.object({
   turn_ids: v.string(),
   text: v.string(),
   source: v.string(),
-  status: v.picklist(['provisional', 'corroborated']),
   created_at: v.number(),
+  /** Null while provisional. */
   corroborated_at: v.nullable(v.number()),
 });
 

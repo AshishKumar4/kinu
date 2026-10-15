@@ -8,7 +8,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import { MAX_TX_BLOB_BYTES } from '@nimbus-sh/core/constants.js';
 import { Database } from 'bun:sqlite';
 import { createTestRuntime, makeSql, makeExecRaw } from './helpers';
-import { createRecordingLogger, type LogFields, type RecordingLogger } from '../src/obs/index';
+import { type LogFields } from '../src/obs/index';
 import { initSearchTables } from '../src/mcts/schemas';
 import { insertSearchNode } from '../src/mcts/record-node';
 import { backpropagate } from '../src/mcts/backpropagation';
@@ -16,7 +16,6 @@ import { selectFrontierNode, type FrontierPolicy } from '../src/mcts/frontier';
 import { diversityAngle } from '../src/mcts/diversity';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { RunEventRecorder } from '../src/events/recorder';
-import { unpricedLedgerSink } from '../src/events/model-call-event';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
 import { explorationForkTree } from '../src/read-models/fork-tree-rows';
@@ -31,7 +30,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { LLM, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import { createTestActors, present, unobservedSpend } from '@kinu.run/test-utils';
+import { createTestActors, present, unobservedSpend, unpricedLedger, type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { refuseHostNode } from './helpers-actor-host';
 
@@ -211,7 +210,7 @@ function tree(): Tree {
       const id = `n${String(minted)}`;
       insertSearchNode(sql, actor, {
         nodeId: id, parentNodeId: parentId, rootId,
-        task: 't', action: '', observation: `answer ${id}`, depth: depthOf(parentId) + 1,
+        action: '', observation: `answer ${id}`, depth: depthOf(parentId) + 1,
       });
 
       if (reward !== null) backpropagate(sql, actor, id, reward);
@@ -515,7 +514,7 @@ describe('a thought node\'s call is swarm spend', () => {
     const prompts: string[] = [];
 
     const result = await runSwarm(
-      { reportModelCall: unpricedLedgerSink(events), rt, hostNode: NO_NODE, model: () => answering(null, [OPTIMAL], prompts), mode: 'build' },
+      { reportModelCall: unpricedLedger(events), rt, hostNode: NO_NODE, model: () => answering(null, [OPTIMAL], prompts), mode: 'build' },
       resolved({ depth: 1, branches: 3 }),
     );
 

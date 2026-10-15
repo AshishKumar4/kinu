@@ -4,9 +4,10 @@
  * contain it.
  */
 import { describe, expect, test } from 'bun:test';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestSql, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
 import {
-  KinuError, createRecordingLogger, setDiagnosticsSink, type RecordedLog,
+  KinuError,
+  setDiagnosticsSink,
 } from '@kinu.run/core/obs';
 import type { AgentSignal, JsonValue, SendOutcome } from '@kinu.run/core';
 import {

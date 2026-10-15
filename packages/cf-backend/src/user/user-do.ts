@@ -10,7 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -18,8 +18,12 @@ import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'ag
 // via user-do (after the stub lands), not mcp.ts directly.
 export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 
-import { diagnostics, KinuError, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import {
+  durableStamps, ERROR_STATUS, readStamp, requireOps, resetTables, StoragePredatesReleaseError, TablesRequestSchema, writeStamp,
+  type OpsCaller, type TablesAnswer, type TablesRequest,
+} from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
 import { tenantDrive } from '../drive/tenant';
@@ -37,13 +41,14 @@ import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-se
 import { UserAccountMemory } from './account-memory';
 import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, SqlValue } from '@kinu.run/core';
 import {
-  UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
+  UserSessions, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
 
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
+import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
 import {
@@ -70,19 +75,31 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
-    const gate = new ActivationGate();
+    // Asked once, never caught: storage a release's tables step has not reached is read by that step alone, and every
+    // other call is refused with why (identity/schema-stamp.ts).
+    const stamps = durableStamps(this.ctx.storage.kv);
+    const stamp = readStamp(stamps, this.ctx.storage.sql, 'account');
+
+    if (stamp === 'behind') this.storageRefusal = new StoragePredatesReleaseError('account', stamps.read());
+    const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
+
     // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.
-    this.initTables();
+    if (stamp !== 'behind') this.initTables();
+
+    if (stamp === 'unmade') writeStamp(stamps, 'account');
   }
+
+  /** Why this account's storage may not be read: a release's tables step has not reached it yet. */
+  private storageRefusal: StoragePredatesReleaseError | undefined;
 
   /** Every gated RPC waits for this (`startBeforeRpc`); the MCP dials it starts are not awaited. */
   override onStart(): void {
-    this.mcpServers.start();
+    if (this.storageRefusal === undefined) this.mcpServers.start();
   }
 
   private readonly host: UserObjectHost = {
@@ -107,6 +124,7 @@ export class UserDO extends Agent<Env> {
     sql: this.ctx.storage.sql,
     owner: () => ({ userId: this.name, email: this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '' }),
     recipient: (userId) => this.env.UserDO.get(this.env.UserDO.idFromName(userId)),
+    accountOf: (email) => accountIdFor(this.env, email),
     caller: () => ownerCaller(this.env),
   });
 
@@ -116,13 +134,16 @@ export class UserDO extends Agent<Env> {
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
 
-  private readonly devices = new UserDevices({ ...this.host, chatgptSignIns: () => this.chatgpt.chatgptSignIns() });
+  private readonly devices = new UserDevices({
+    ...this.host, chatgptSignIns: () => this.chatgpt.chatgptSignIns(), accountName: () => this.name,
+    workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name),
+  });
 
   private readonly chatgpt = new UserChatGptSignIn({ ...this.host, devices: this.devices, vault: this.credentials });
 
   private readonly terminals = new UserTerminals({ ...this.host, devices: this.devices });
 
-  private readonly userDrive = new UserDrive({ ...this.host, driveFor: (tenant) => this.driveFor(tenant) });
+  private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
 
   ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
     return this.profile.ensureProfile(caller, email, displayName);
@@ -265,10 +286,6 @@ export class UserDO extends Agent<Env> {
 
   hasWorkspace(caller: UserCaller, name: string): Promise<boolean> {
     return this.workspaces.hasWorkspace(caller, name);
-  }
-
-  hasPeerGrant(caller: UserCaller, senderAgentName: string, senderUserId: string): Promise<boolean> {
-    return this.workspaces.hasPeerGrant(caller, senderAgentName, senderUserId);
   }
 
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]> {
@@ -491,20 +508,13 @@ export class UserDO extends Agent<Env> {
 
   issueCliAgentConnectTicket(caller: UserCaller, input: {
     userId: string;
-    agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
     agentName: string;
     cliTokenHash: string;
-    capabilities?: Array<typeof CLI_AGENT_WEBSOCKET_CAPABILITY>;
   }): ReturnType<UserSessions['issueCliAgentConnectTicket']> {
     return this.sessions.issueCliAgentConnectTicket(caller, input);
   }
 
-  verifyCliAgentConnectTicket(caller: UserCaller, ticket: string, expected: {
-      userId: string;
-      agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
-      agentName: string;
-      capability: typeof CLI_AGENT_WEBSOCKET_CAPABILITY;
-    }): Promise<CliAgentConnectTicketVerification> {
+  verifyCliAgentConnectTicket(caller: UserCaller, ticket: string, expected: { userId: string; agentName: string }): Promise<CliAgentConnectTicketVerification> {
     return this.sessions.verifyCliAgentConnectTicket(caller, ticket, expected);
   }
 
@@ -604,8 +614,12 @@ export class UserDO extends Agent<Env> {
     return this.terminals.openDeviceTerminal(caller, agentName, window, deviceId);
   }
 
-  issueDeviceJoin(caller: UserCaller): ReturnType<UserDevices['issueDeviceJoin']> {
-    return this.devices.issueDeviceJoin(caller);
+  issueDeviceJoin(caller: UserCaller, workspace: string | null): ReturnType<UserDevices['issueDeviceJoin']> {
+    return this.devices.issueDeviceJoin(caller, workspace);
+  }
+
+  joinDevice(caller: UserCaller, ticket: string, label?: string, replaces?: string): ReturnType<UserDevices['joinDevice']> {
+    return this.devices.joinDevice(caller, ticket, label, replaces);
   }
 
   registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): ReturnType<UserDevices['registerDevice']> {
@@ -674,6 +688,10 @@ export class UserDO extends Agent<Env> {
 
   listDeviceConsents(caller: UserCaller): ReturnType<UserDevices['listDeviceConsents']> {
     return this.devices.listDeviceConsents(caller);
+  }
+
+  grantDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserDevices['grantDeviceConsent']> {
+    return this.devices.grantDeviceConsent(caller, agentName, deviceId);
   }
 
   revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserDevices['revokeDeviceConsent']> {
@@ -757,6 +775,23 @@ export class UserDO extends Agent<Env> {
     return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
+  /** A release's tables reset (`scripts/reset.ts tables`): what this account holds of the changed tables, and with
+   *  `drop`, those still in the old shape dropped and made again. Only `/ops/tables` holds the capability. */
+  async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
+    await requireOps(this.env, caller);
+    const { tables, drop } = v.parse(TablesRequestSchema, request);
+    const { sql } = this.ctx.storage;
+
+    const answer = resetTables(sql, { tables, drop }, {
+      schema: 'account', stamps: durableStamps(this.ctx.storage.kv), transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { this.initTables(); },
+    });
+
+    // Brought to this build and stamped: open to every call from here.
+    if (drop) this.storageRefusal = undefined;
+
+    return { name: null, ...answer };
+  }
+
   /** Once per activation, from the constructor. Claims live in isolate memory, so any claim in storage
    * at activation start was abandoned; the activation boundary is the expiry. */
   private initTables(): void {
@@ -830,7 +865,10 @@ export class UserDO extends Agent<Env> {
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
 
+  /** Storage a release's tables step has not reached answers every socket and request with why, as every RPC does. */
   override async fetch(request: Request): Promise<Response> {
+    if (this.storageRefusal !== undefined) return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
+
     return await this._sockets.fetch(request);
   }
 
@@ -962,8 +1000,8 @@ export class UserDO extends Agent<Env> {
     if (!deviceIdFromSocket(ws) && !isRosterSocket(ws)) return this.lifecycle.webSocketError(...call);
   }
 
-  // The Mossaic tenant id is the owner's user id, derived from the profile row's email as the
-  // edge does, so no caller names a tenant. Every owner workspace mounts it at `/shared`.
+  // The Mossaic tenant id is this account's own id, the name it is addressed by, so no caller names a tenant. Every
+  // owner workspace mounts the same one at `/shared`: its recorded owner is that name too.
 
   /** Seam: the hosted deployment builds the SDK client from bindings; the bun:sqlite harness fakes it. */
   protected driveFor(tenant: string): MossaicVfs | null {
@@ -1021,8 +1059,9 @@ export class UserDO extends Agent<Env> {
 
     await this.destroy();
     // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
-    // again, empty, and answers as the new account.
+    // again, empty, and answers as the new account. They are this build's, so they carry its stamp.
     this.initTables();
+    writeStamp(durableStamps(this.ctx.storage.kv), 'account');
 
     return { ok: true, workspaces: workspaces.length };
   }

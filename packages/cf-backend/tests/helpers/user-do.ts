@@ -11,10 +11,10 @@ import type { WorkspaceRegistration } from '../../src/user/workspaces';
 import {
   DeviceConsentRegistry,
   DeviceConsentStore,
-  initDeviceConsentRequestsTable,
+  initWorkspaceActorTable,
   JsonValueSchema,
-  type DeviceConsentDecision,
   type DeviceConsentRequest,
+  type DeviceConsentVerdict,
   type JsonValue,
   type SqlExec,
   type MossaicVfs,
@@ -22,9 +22,12 @@ import {
   type SqlValue,
 } from '@kinu.run/core';
 import { makeExecRaw, makeSql } from '../../../core/tests/helpers';
+import { initDeviceConsentAsksTable } from '../../../core/src/safety/device-consent';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { PictureBucket } from '../../src/slates/pictures';
 import type { ShareCardRecipient } from '../../src/user/share-cards';
+import { kvOf } from './platform-context';
 
 mockAgentsSdk();
 
@@ -118,12 +121,21 @@ export interface TestUserDO {
   deviceFrames: DeviceFrame[];
   /** Non-call frames pushed to a device (the UPDATE a HELLO earns). */
   devicePushes: DevicePush[];
-  /** Default: refuse. `hold` leaves the card waiting so an identical second ask can join it. */
+  /** The owner's answer to each card as it is raised. Default: refuse. `hold` leaves the card waiting, so an
+   *  identical second ask joins it. */
   consentDecision: 'once' | 'always' | 'deny' | 'hold';
-  answerConsent(answer: 'once' | 'always' | 'deny'): void;
+  answerConsent(answer: 'once' | 'always' | 'deny'): Promise<void>;
   pendingConsents(workspace: string): Array<{ consentId: string }>;
   /** The owner's click, as `resolveDeviceConsent` runs it over RPC. */
-  resolveConsent(workspace: string, consentId: string, answer: 'once' | 'always' | 'deny'): { ok: boolean };
+  resolveConsent(workspace: string, consentId: string, answer: 'once' | 'always' | 'deny'): Promise<{ ok: boolean }>;
+  /** The agents an owner's answer woke, with what it told them. */
+  consentWakes: Array<{ workspace: string; actorId: string; text: string }>;
+  /** The binding an owner's `always` leaves, for tests whose subject is not consent: the workspace was granted the
+   *  device before the test began. */
+  grantDevice(agentName: string, deviceId: string): void;
+  /** A device call as an agent makes it: when it parks on a card, the owner's answer wakes the agent, which re-issues
+   *  it once. A call that parks with nobody answering stays NOT RUN. */
+  deviceCall(...call: Parameters<UserDOInstance['deviceRpc']>): ReturnType<UserDOInstance['deviceRpc']>;
   /** A device socket open, as its connect leaves it: with the served build that connect read. */
   attachDevice(deviceId: string | null): void;
   /** Deliver a HELLO through the real socket handler, unvalidated so unknown fields can be tested.
@@ -275,7 +287,7 @@ interface TestUserEnvironment {
       destroyAgent(ownerUserId: string): Promise<void>;
       installWorkspaceCapability(token: string): Promise<{ readonly ok: true }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
-      awaitDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentDecision>;
+      askDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentVerdict>;
       announceDeviceUnavailable(devices: Array<{ id: string; label: string; lastSeenAt: number | null }>): Promise<{ ok: boolean }>;
       announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }>;
       closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
@@ -424,6 +436,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   });
 
   let consentDecision: TestUserDO['consentDecision'] = 'deny';
+  // The owner's answers given at the card, until the call they answer re-issues.
+  const answering: Array<Promise<boolean>> = [];
+  const consentWakes: TestUserDO['consentWakes'] = [];
 
   /** One registry per agent name, as at runtime: the real `DeviceConsentRegistry` decides whether an
    *  identical re-ask joins the existing card. `hold` leaves a card waiting. */
@@ -440,7 +455,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     if (existing) return existing;
 
     const storage = new Database(':memory:');
-    initDeviceConsentRequestsTable(makeExecRaw(storage));
+    // The workspace's own actors, which an ask's live-agent read joins: the harness's asks name none of them.
+    initWorkspaceActorTable(makeExecRaw(storage));
+    initDeviceConsentAsksTable(makeExecRaw(storage));
     const store = new DeviceConsentStore(makeSql(storage));
     consentStores.set(name, store);
 
@@ -455,6 +472,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     const registry: DeviceConsentRegistry = new DeviceConsentRegistry({
       store: storeFor(name),
       newId: () => `cons-${++mintedConsents}`,
+      wake: (actorId, signal) => Effect.sync(() => { consentWakes.push({ workspace: name, actorId, text: signal.text }); }),
       announce: (notice) => {
         if (notice.kind !== 'raised') return;
         const consent = notice.consent;
@@ -469,7 +487,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         if (consent.workspaceName) prompt.workspaceName = consent.workspaceName;
         consentPrompts.push(prompt);
 
-        if (consentDecision !== 'hold') registry.resolve(consent.consentId, consentDecision);
+        if (consentDecision !== 'hold') answering.push(registry.resolve(consent.consentId, consentDecision));
       },
     });
 
@@ -492,7 +510,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     return device === null ? [] : [`device:${device}`];
   };
 
-  const kv = new Map<string, JsonValue>();
+  const kv = kvOf(db);
 
   const ctx = {
     // Sealed values are bound to the DO id; fixed so a DB written in one test opens in another.
@@ -570,8 +588,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
           return token ? sha256Hex(token) : null;
         },
-        awaitDeviceConsent(request: DeviceConsentRequest) {
-          return registryFor(name).request(request);
+        async askDeviceConsent(request: DeviceConsentRequest) {
+          return registryFor(name).ask(request);
         },
         async announceDeviceUnavailable(devices: TestUserDO['unavailableNotices'][number]['devices']) {
           unavailableNotices.push({ workspace: name, devices });
@@ -640,13 +658,37 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
     revokedSessionPushes, overviewNudges,
     pendingConsents: (workspace) => registryFor(workspace).list(),
-    resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),
+    resolveConsent: async (workspace, consentId, answer) => ({ ok: await registryFor(workspace).resolve(consentId, answer) }),
+    consentWakes,
+    grantDevice: (agentName, deviceId) => {
+      db.query(`INSERT INTO device_consent (agent_name, device_id, policy, updated_at) VALUES (?, ?, 'allow', ?)`).run(agentName, deviceId, Date.now());
+    },
+    deviceCall: async (...call) => {
+      try {
+        return await userDO.deviceRpc(...call);
+      } catch (parked) {
+        if (!(parked instanceof Error) || !parked.message.startsWith('NOT RUN')) throw parked;
+        // The answer, then the agent it woke re-issuing the call: the wake is the only way an agent learns of it, so an
+        // agent's call is re-issued only once a wake reached that agent. The owner's own call (no agent) is re-issued
+        // as the owner re-clicks it.
+        const answered = answering.splice(0);
+        const wakesBefore = consentWakes.length;
+
+        if (answered.length === 0) throw parked;
+        await Promise.all(answered);
+        const asker = call[3]?.actorId;
+
+        if (asker !== undefined && !consentWakes.slice(wakesBefore).some((wake) => wake.actorId === asker)) throw parked;
+
+        return await userDO.deviceRpc(...call);
+      }
+    },
     consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames, devicePushes,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },
-    answerConsent: (answer) => {
+    answerConsent: async (answer) => {
       for (const registry of registries.values()) {
-        for (const waiting of registry.list()) registry.resolve(waiting.consentId, answer);
+        for (const waiting of registry.list()) await registry.resolve(waiting.consentId, answer);
       }
     },
     sendDeviceHello: (hello, deviceId) => {

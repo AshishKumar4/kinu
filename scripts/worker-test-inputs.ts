@@ -1,8 +1,7 @@
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as v from 'valibot';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
 
 /** Vitest cannot infer SELF's Worker inputs through its virtual module. The changed-test ladder
  * supplies its existing input closure; the native trigger reruns the pool when those inputs move. */

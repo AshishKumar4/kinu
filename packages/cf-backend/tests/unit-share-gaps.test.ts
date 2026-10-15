@@ -13,7 +13,7 @@ import {
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
-import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
+import { resetRecordedMcp, seedConfiguredMcpServer, seedMcpTools } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
@@ -23,7 +23,7 @@ import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
 import { present } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
-import { deriveUserId } from '../src/auth/store';
+import { accountIdFor } from '../src/auth/store';
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
@@ -33,7 +33,9 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
 
 const OWNER_ID = '0123456789abcdef0123456789abcdef';
 
-const VIEWER_ID = 'fedcba9876543210fedcba9876543210';
+/** The account pat@example.test is on the harness's deployment, which declares no sign-in provider: a share naming
+ *  pat reaches the account pat signs in to. */
+const VIEWER_ID = await accountIdFor({}, 'pat@example.test');
 
 const APP_ORIGIN = 'https://app.test';
 
@@ -93,8 +95,7 @@ async function userWorld(
 
   await user.userDO.ensureProfile(caller, account.email);
   await user.userDO.userMcp_list(caller);
-  user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-    VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL)`);
+  seedConfiguredMcpServer(user.sql, 'connection-id', { name: 'github', url: 'https://github.example/sse', transport: 'auto' });
 
   return { user, agent };
 }
@@ -119,8 +120,7 @@ async function twoUserWorld(): Promise<World> {
     ['viewer-home', viewerSide.agent.agent],
   ]);
 
-  // pat@example.test is the viewer: a card sent to the account that email names lands in the viewer's.
-  for (const [id, side] of [[OWNER_ID, ownerSide], [VIEWER_ID, viewerSide], [await deriveUserId('pat@example.test'), viewerSide]] as const) users.set(id, side.user);
+  for (const [id, side] of [[OWNER_ID, ownerSide], [VIEWER_ID, viewerSide]] as const) users.set(id, side.user);
   const acquired: string[] = [];
 
   const partialEnv: Partial<Env> = {};

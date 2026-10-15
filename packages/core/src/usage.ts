@@ -5,6 +5,7 @@
 
 import type { LanguageModelUsage } from 'ai';
 import * as v from 'valibot';
+import type { JsonObject } from './utils/json';
 
 /**
  * Prompt `input` is cache-inclusive: `cacheRead` and `cacheWrite` are subsets of it, the latter charged at a different
@@ -87,6 +88,31 @@ function reportedByProvider(r: RawProviderUsage): Usage {
       ?? undefined,
     neurons: r.neurons ?? undefined,
   };
+}
+
+/**
+ * An Anthropic `usage` block read alone, with no SDK sum beside it (a cache warm's answer): `input` cache-inclusive, as
+ * the SDK sums it, and every other field as reported, the one-hour cache write included; omitted fields stay absent.
+ */
+export function normalizeAnthropicUsage(raw: JsonObject): Usage {
+  const parsed = v.safeParse(RawProviderUsageSchema, raw);
+
+  if (!parsed.success) return {};
+  const { input: fresh, ...reported } = reportedByProvider(parsed.output);
+  const { cacheRead, cacheWrite } = reported;
+  const out: { -readonly [K in keyof Usage]: number } = {};
+
+  if (fresh !== undefined || cacheRead !== undefined || cacheWrite !== undefined) {
+    out.input = (fresh ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  }
+
+  for (const field of ['output', 'cacheRead', 'cacheWrite', 'cacheWrite1h'] as const) {
+    const value = reported[field];
+
+    if (value !== undefined) out[field] = value;
+  }
+
+  return out;
 }
 
 /** `raw` decides whether each field was reported; the SDK value is preferred for what it is. Without `raw`, the SDK

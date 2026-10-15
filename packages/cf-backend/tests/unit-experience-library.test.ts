@@ -12,7 +12,6 @@ const BETA = 'workspace-b';
 
 function lesson(text: string): PublishableCandidate {
   return {
-    kind: 'lesson',
     key: `lsn-${text.length}`,
     title: text,
     payload: { kind: 'lesson', text },
@@ -47,7 +46,7 @@ describe('the experience library is owner-scoped and provenance is proven', () =
 
     expect(await alpha.search({})).toEqual([]);
     const hits = await beta.search({ query: 'error' });
-    expect(hits.map((h) => [h.sourceWorkspace, h.kind, h.title]))
+    expect(hits.map((h) => [h.sourceWorkspace, h.payload.kind, h.title]))
       .toEqual([[ALPHA, 'lesson', 'Read the error before rerunning.']]);
     harness.close();
   });
@@ -79,7 +78,7 @@ describe('the experience library is owner-scoped and provenance is proven', () =
     const { harness, alpha, beta } = await twoWorkspaces();
     const published = await alpha.publish(lesson('Read the error before rerunning.'));
 
-    expect(await beta.get(published.id)).toMatchObject({ id: published.id, sourceWorkspace: ALPHA, kind: 'lesson' });
+    expect(await beta.get(published.id)).toMatchObject({ id: published.id, sourceWorkspace: ALPHA, payload: { kind: 'lesson' } });
     expect(await beta.get('exp-nope')).toBeNull();
     harness.close();
   });

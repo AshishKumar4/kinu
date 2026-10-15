@@ -65,8 +65,8 @@ export interface TurnLedgers {
   readonly craft: TurnCraftLedger;
 }
 
-/** Empty ledgers: a turn's own, which observes its crafted tools where `recordsCraft`, or a call's outside any turn. */
-export function turnLedgers(recordsCraft = false): TurnLedgers {
+/** Empty ledgers: a turn's own, which observes its crafted tools while `recordsCraft`, or a call's outside any turn. */
+export function turnLedgers(recordsCraft: () => boolean = () => false): TurnLedgers {
   return {
     files: new TurnFileLedger(), context: new TurnContextBudget(), escalations: new TurnEscalationLedger(), craft: new TurnCraftLedger(recordsCraft),
   };
@@ -94,23 +94,27 @@ export class TurnAccumulator {
   lastFinishReason: string | undefined = undefined;
   /** The turn stopped on its question to the owner: its pending call is the end it meant, not a defect. */
   askedOwner = false;
-  /** The turn's last request, for providers/cache-warming.ts. Held by reference, never copied. */
-  /** `fallback`: the spec that served it, where a fallback did. */
+  /** The turn's last request, for providers/cache-warming.ts. Held by reference, never copied. `fallback`: the spec that
+   *  served it, where a fallback did. */
   lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage; readonly fallback: string | undefined } | undefined = undefined;
   hadError = false;
   firstChunkSeen = false;
   startedAt = 0;
   /** Crafted tools run inside `eval`, never as `toolCalls` names: its craft ledger holds each call's, as the isolate
    *  that ran it observed it. */
-  readonly ledgers: TurnLedgers = turnLedgers();
+  readonly ledgers: TurnLedgers;
   /** The tool lessons a step listed, id to the revision shown. */
   private readonly lessons = new Map<string, number>();
   private gate: SpendGate | undefined;
 
+  /** `evolving`: whether the turn under way evolves, read by its crafted-tool record. */
   constructor(
     private readonly sinks: TurnSinks = {},
     private readonly budget?: MissionGovernor,
-  ) {}
+    evolving: () => boolean = () => false,
+  ) {
+    this.ledgers = turnLedgers(evolving);
+  }
 
   private get charged(): SpendGate | undefined {
     return this.gate ?? this.budget;

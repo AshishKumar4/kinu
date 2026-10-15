@@ -4,6 +4,7 @@ import { AwaitedList, awaitExit, killAndAwaitExit, recordedIn, runToExit } from 
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
@@ -70,7 +71,8 @@ afterEach(async () => {
 
 interface StubCloud {
   origin: string;
-  hits: { daemonScript: number; ticket: number };
+  hits: { daemonScript: number; ticket: number; signIn: number };
+  joins: AwaitedList<{ ticket?: string; label?: string; replaces?: string }>;
   registrationRequests: AwaitedList<Request>;
   listRequests: AwaitedList<Request>;
 }
@@ -83,6 +85,8 @@ interface StubCloudOptions {
   onRegister?: (body: { label?: string; replaces?: string }) => void;
   /** Ticket-exchange statuses in order, last repeating; 401 makes the daemon exit, 404 retries. */
   ticketStatuses?: readonly number[];
+  /** The account `/api/cli/me` names for the session it is asked with. */
+  signedInAs?: { id: string; email: string };
 }
 
 const POISON_MARKER = 'poisoned-daemon-ran';
@@ -99,7 +103,8 @@ const POISON_DAEMON = [
 ].join('\n');
 
 function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
-  const hits = { daemonScript: 0, ticket: 0 };
+  const hits = { daemonScript: 0, ticket: 0, signIn: 0 };
+  const joins = new AwaitedList<{ ticket?: string; label?: string; replaces?: string }>();
   const registrationRequests = new AwaitedList<Request>();
   const listRequests = new AwaitedList<Request>();
 
@@ -140,6 +145,20 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
         return Response.json({ error: 'refused by the stub' }, { status });
       }
 
+      if (url.pathname === '/pc/join' && req.method === 'POST') {
+        const body = v.parse(v.object({ ticket: v.optional(v.string()), label: v.optional(v.string()), replaces: v.optional(v.string()) }), await req.json());
+        joins.push(body);
+
+        return Response.json({
+          deviceId: 'dev_joined', token: 'device-token', label: 'joined-by-ticket', userId: JOIN_ACCOUNT,
+          origin: opts.deviceOrigin ?? `http://localhost:${server.port}`,
+        }, { status: 201 });
+      }
+
+      if (url.pathname === '/api/cli/me' && opts.signedInAs !== undefined) return Response.json({ user: opts.signedInAs });
+
+      if (url.pathname.startsWith('/api/cli/auth/')) hits.signIn += 1;
+
       if (url.pathname === '/pc/daemon.js') {
         hits.daemonScript += 1;
 
@@ -152,7 +171,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
   stubs.push(server);
 
-  return { origin: 'http://localhost:' + server.port, hits, registrationRequests, listRequests };
+  return { origin: 'http://localhost:' + server.port, hits, joins, registrationRequests, listRequests };
 }
 
 function makeHome(config: JsonObject): string {
@@ -249,7 +268,7 @@ function daemonRuntimeProbe(origin: string): string {
     import { waitForDaemonPid } from './packages/cli/tests/helpers/device-process.ts';
     const result = await connectDevice({ origin: ${JSON.stringify(origin)}, token: 'ptc_test' }, { session: true });
     await waitForDaemonPid(process.env.KINU_HOME);
-    const pid = daemonStatus().daemonPid;
+    const pid = (await daemonStatus()).daemonPid;
     const listed = Bun.spawn([${JSON.stringify(ps)}, '-p', String(pid), '-o', 'command='], { stdout: 'pipe' });
     const command = (await new Response(listed.stdout).text()).trim();
     if (await listed.exited !== 0) throw new Error('ps found no process ' + String(pid));
@@ -341,7 +360,7 @@ describe('device-connect daemon lifecycle', () => {
       import { waitForDaemonPid } from './packages/cli/tests/helpers/device-process.ts';
       const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
       await waitForDaemonPid(process.env.KINU_HOME);
-      const status = daemonStatus();
+      const status = await daemonStatus();
       console.log(JSON.stringify({ result, status }));
       process.exit(0);
     `);
@@ -357,9 +376,9 @@ describe('device-connect daemon lifecycle', () => {
 
     expect(stub.registrationRequests.items.length).toBe(1);
     expect(stub.hits.daemonScript).toBe(0);
-    // runScript sets cwd to the repo root; the daemon reports it to the hub as the consented tree.
+    // runScript runs in the repo root, which is not what the daemon reports as the consented tree: this user's home is.
     const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
-    expect(deviceConfig).toEqual({ user: 'user_1', device: 'dev_1', token: 'device-token', origin: stub.origin, root: repoRoot });
+    expect(deviceConfig).toEqual({ user: 'user_1', device: 'dev_1', token: 'device-token', origin: stub.origin, root: homedir() });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(statSync(join(home, 'device.json')).mode & 0o777).toBe(0o600);
     expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
@@ -430,9 +449,11 @@ describe('device-connect daemon lifecycle', () => {
       const stub = startStubCloud({ devices: () => devices });
       const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-      const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
-      sleepers.push(sleeper);
-      writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
+      // A daemon of this machine's own file, holding its pidfile: the installed daemon as the pidfile protocol reads it.
+      writeFileSync(join(home, 'pc-agent.js'), 'process.stdin.resume();\n', { mode: 0o700 });
+      const daemon = Bun.spawn({ cmd: [process.execPath, join(home, 'pc-agent.js')], stdin: 'pipe', env: { ...process.env, KINU_HOME: home } });
+      sleepers.push(daemon);
+      writeFileSync(join(home, 'pc-agent.pid'), `${daemon.pid}\n`, { mode: 0o600 });
       writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', device: 'dev_this', token: 'pdt_this', origin: stub.origin, root: repoRoot }));
 
       const out = await runScript(home, `
@@ -448,8 +469,8 @@ describe('device-connect daemon lifecycle', () => {
       expect(result).toEqual({ kind: 'already-running', connected });
       expect(stub.registrationRequests.items.length).toBe(0);
       expect(stub.hits.daemonScript).toBe(0);
-      expect(sleeper.killed).toBe(false);
-      expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(sleeper.pid));
+      expect(daemon.killed).toBe(false);
+      expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(daemon.pid));
     });
   }
 });
@@ -631,7 +652,7 @@ describe('device-connect install hardening', () => {
     expect(registrations).toEqual([{ label: 'reconnected' }]);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
     expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8')))
-      .toMatchObject({ user: 'user_1', device: 'dev_1', origin: hub.origin, root: repoRoot });
+      .toMatchObject({ user: 'user_1', device: 'dev_1', origin: hub.origin, root: homedir() });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     const socket = hub.sockets.items[0];
 
@@ -664,7 +685,7 @@ describe('device-connect install hardening', () => {
     expect(await connected.proc.exited).toBe(0);
     await connected.drained;
     expect(registrations).toEqual([{ label: 'reconnected' }]);
-    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ device: 'dev_1', root: repoRoot });
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ device: 'dev_1', root: homedir() });
   });
 
   test('publishes neither install file when the daemon cannot be replaced', async () => {
@@ -851,6 +872,26 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(JSON.parse(out.trim()).result).toEqual({ kind: 'cancelled', deviceId: 'dev_1', replacedLocalConfig: false });
+  });
+
+  // The CLI read any live pid its pidfile named as the daemon, where the daemon checks it runs the daemon's file: a
+  // recycled pid kept session mode from starting one. One protocol now, the daemon's.
+  test('session mode starts the daemon when its pidfile names a live program that is not it', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
+    sleepers.push(sleeper);
+    writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
+
+    const out = await runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      console.log(JSON.stringify(result));
+      process.exit(0);
+    `);
+
+    expect(v.parse(v.looseObject({ kind: v.string() }), JSON.parse(out.trim())).kind).toBe('connected');
+    expect(sleeper.killed).toBe(false);
   });
 
   test('never signals an unrelated live process named by a stale pidfile', async () => {
@@ -1117,7 +1158,7 @@ function spawnPtyCommand(command: string, cwd = newProjectDir()) {
   };
 }
 
-function spawnConnectInPty(home: string, label?: string, cwd?: string) {
+function spawnConnectInPty(home: string, label?: string, cwd?: string, flags: readonly string[] = []) {
   const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
@@ -1128,10 +1169,123 @@ function spawnConnectInPty(home: string, label?: string, cwd?: string) {
     quote(cliBin),
     'connect',
     ...(label === undefined ? [] : ['--label', quote(label)]),
+    ...flags.map(quote),
   ].join(' ');
 
   return spawnPtyCommand(command, cwd);
 }
+
+/** The account the stub's join tickets name. */
+const JOIN_ACCOUNT = '0123456789abcdef0123456789abcdef';
+
+const JOIN_TICKET = `pjt_${JOIN_ACCOUNT}_${'j'.repeat(43)}`;
+
+describe("a browser's connect command, run on a machine", () => {
+  /** A hub whose accepted daemon is handed a new token, and a cloud that joins by ticket and names `signedInAs`. */
+  function joinWorld(signedInAs?: { id: string; email: string }) {
+    const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
+    updateHubs.push(hub);
+    const stub = startStubCloud({ deviceOrigin: hub.origin, signedInAs, devices: () => [connectedDevice(true)] });
+
+    return { hub, stub };
+  }
+
+  test('with no session joins by its ticket, asks nobody to sign in, and roots the device at home, not where it ran', async () => {
+    const { stub } = joinWorld();
+    const home = makeHome({ origin: stub.origin });
+    daemonHomes.push(home);
+    const ranIn = newProjectDir();
+
+    const connect = spawnConnectInPty(home, 'build box', ranIn, ['--device', 'dev_joined', '--join', JOIN_TICKET]);
+    await connect.waitFor('Link and start the daemon?');
+    await connect.send('y');
+    await connect.waitFor('✓ Connected as joined-by-ticket');
+    expect(await connect.proc.exited).toBe(0);
+    await connect.drained;
+
+    expect(stub.joins.items).toEqual([{ ticket: JOIN_TICKET, label: 'build box' }]);
+    expect(stub.hits.signIn).toBe(0);
+    expect(stub.registrationRequests.items).toHaveLength(0);
+    expect(connect.output()).not.toContain('sign-in');
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ user: JOIN_ACCOUNT, device: 'dev_joined', root: homedir() });
+  });
+
+  test('a root the command names is the one linked', async () => {
+    const { stub } = joinWorld();
+    const home = makeHome({ origin: stub.origin });
+    daemonHomes.push(home);
+    const named = newProjectDir();
+
+    const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--join', JOIN_TICKET, '--root', named]);
+    await connect.waitFor('Link and start the daemon?');
+    await connect.send('y');
+    expect(await connect.proc.exited).toBe(0);
+    await connect.drained;
+
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ root: named });
+  });
+
+  test('signed in as the account it names, it links through that session and leaves the ticket unspent', async () => {
+    const { stub } = joinWorld({ id: JOIN_ACCOUNT, email: 'owner@example.com' });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    daemonHomes.push(home);
+
+    const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--device', 'dev_1', '--join', JOIN_TICKET]);
+    await connect.waitFor('Link and start the daemon?');
+    await connect.send('y');
+    await connect.waitFor('✓ Connected as');
+    expect(await connect.proc.exited).toBe(0);
+    await connect.drained;
+
+    expect(stub.joins.items).toEqual([]);
+    expect(stub.registrationRequests.items).toHaveLength(1);
+  });
+
+  test('signed in as another account, it refuses and changes nothing', async () => {
+    const { stub } = joinWorld({ id: 'f'.repeat(32), email: 'someone-else@example.com' });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--join', JOIN_TICKET]);
+    expect(await connect.proc.exited).toBe(1);
+    await connect.drained;
+
+    expect(connect.output()).toContain('signed in as someone-else@example.com');
+    expect(connect.output()).toContain('kinu logout');
+    expect(stub.joins.items).toEqual([]);
+    expect(stub.registrationRequests.items).toHaveLength(0);
+    expect(existsSync(join(home, 'device.json'))).toBe(false);
+  });
+
+  test('a machine linked to another account is not relinked by a ticket', async () => {
+    const { stub } = joinWorld();
+    const home = makeHome({ origin: stub.origin });
+    const linked = { user: 'f'.repeat(32), device: 'dev_theirs', token: 'pdt_theirs', origin: stub.origin, root: homedir() };
+    writeFileSync(join(home, 'device.json'), JSON.stringify(linked), { mode: 0o600 });
+
+    const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--join', JOIN_TICKET]);
+    await connect.waitFor('Link and start the daemon?');
+    await connect.send('y');
+    expect(await connect.proc.exited).toBe(1);
+    await connect.drained;
+
+    expect(connect.output()).toContain('linked to another Kinu account');
+    expect(stub.joins.items).toEqual([]);
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toEqual(linked);
+  });
+
+  test('a ticket that is not one is refused in words, before anything is installed', async () => {
+    const { stub } = joinWorld();
+    const home = makeHome({ origin: stub.origin });
+
+    const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--join', 'pjt_not-a-ticket']);
+    expect(await connect.proc.exited).toBe(1);
+    await connect.drained;
+
+    expect(connect.output()).toContain('carries no valid ticket');
+    expect(stub.joins.items).toEqual([]);
+    expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
+  });
+});
 
 describe('kinu connect waits on the daemon and says less', () => {
   test('the hub row reading connected ends the wait with the row label', async () => {

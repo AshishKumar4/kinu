@@ -1,16 +1,33 @@
 import { afterAll, describe, test } from 'vitest';
 import type { RunEvent } from '../../packages/core/src/index';
 import type { EvalObservation } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { WAKE_ASK, WAKE_STEPS as STEPS } from './asks';
 
 const SUITE = 'First-run · background-wake';
 
-const CASE = 'background-wake' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A multi-step turn whose activation ended mid-turn — an isolate killed, an alarm-boundary '
+    + 'reset — sat un-driven: the run row stayed open with nothing scheduled to notice it. The '
+    + 'turn-open wake added at 4fe96cf72 was released by the first tick that fired inside the turn, '
+    + 'so an ordinary turn held a wake for about one second (REVIEW-chat-loop C2).',
+  missedBecause: 'the wake-chain suite listed schedules right after a turn opened and never fired a '
+    + 'tick with the turn parked; the workerd background-wake case holds the turn in-process and '
+    + 'ends no activation; and the deployed product had no way to end one, so no row could ask it.',
+  provedRedAt: 'fddd4f9d6',
+  redDirection: 'RED by reading on build fddd4f9d6: `_kinuTerminalRetryTick` cancelled its armed row '
+    + 'whenever `nextOwedAt()` was null, and an open run row is untimed, so every mid-turn tick left '
+    + 'the registry empty (packages/cf-backend/src/actor-agent.ts:1929-1932 at that build). '
+    + 'Unit red: unit-alarm-wake-chain "a tick that fires inside a parked turn keeps a wake row" '
+    + 'found 0 rows before 14909875d. This row is the live proof; it needs the eval-only abort '
+    + '(ARCHITECTURE-DECISIONS C3) to end an activation on the deployed build, so its first live '
+    + 'run is on the build that carries both.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'bgwake');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -48,6 +65,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       // No genesis turn: the row's prompt must open its OWN run — the wake
       // it measures is that run's, and a send that spliced into a genesis
       // turn already under way streams under that turn's request id, which
@@ -141,4 +159,3 @@ describe(SUITE, () => {
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules
  *  (each of which resolves a live plan at import). */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { asFetchFunction } from '@kinu.run/core';
 import {
-  createRecordingLogger, setDiagnosticsSink, type RecordedLog,
+  setDiagnosticsSink,
 } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../src/auth/session';
 import { clientErrorRoutes, type ClientErrorEnv } from '../src/client-error/route';
@@ -29,6 +29,7 @@ import { pageDeployedBuildSha, reportChatStreamFailure, reportRenderFailure } fr
 import { readUIMessageStream, type UIMessageChunk } from 'ai';
 import { APP_ROUTES, routeTemplateOf } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
+import { type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
 
 const ORIGIN = 'https://kinu.example.com';
 

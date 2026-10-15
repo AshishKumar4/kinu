@@ -2,7 +2,7 @@
 
 export * from './types';
 
-export { computeParetoFront, sampleParentByWeight, bestAggregate, parentSelectionWeights } from './pareto';
+export { aggregateScore, computeParetoFront, sampleParentByWeight, bestAggregate, parentSelectionWeights } from './pareto';
 
 export { rolloutMinibatch, renderReflectionPrompt, proposeMutation } from './mutate';
 

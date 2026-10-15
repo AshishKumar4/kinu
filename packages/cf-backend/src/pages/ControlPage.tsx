@@ -371,9 +371,9 @@ function FeedbackView(): ReactNode {
                   when(f.createdAt), f.email,
                   <span className="font-mono text-xs">{f.route}</span>,
                   f.workspace ?? <span className="p-text-3">—</span>,
-                  f.objectKey === null
+                  f.bytes === null
                     ? <span className="p-text-3 p-t-status">note only</span>
-                    : <span className="p-meta tabular-nums">{f.bytes === null ? '—' : formatBytes(f.bytes)}</span>,
+                    : <span className="p-meta tabular-nums">{formatBytes(f.bytes)}</span>,
                   <span className="p-text-2 text-xs whitespace-pre-wrap">{f.note}</span>,
                 ],
               }))}

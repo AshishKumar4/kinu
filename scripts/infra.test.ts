@@ -67,7 +67,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     // vacuous — the exact shape this repository's ladder exists to refuse.
     expect(infrastructure.resources.length).toBeGreaterThan(20);
     expect(worker.workerName).toBe('kinu');
-    expect(infrastructure.accountId).not.toBe('');
+    expect(deployedConfig('production').account_id).toMatch(/^[0-9a-f]{32}$/);
 
     const ids = infrastructure.resources.map((resource) => resource.id);
     // Named, not counted: a count cannot say WHICH resource the manifest lost.
@@ -439,7 +439,7 @@ describe('what a hostname says about its own route', () => {
   const url = 'https://probe.kinu.run/api/health';
 
   test('a health stamp is this Worker; a 5xx is wired and unwell', () => {
-    expect(routeAnswer(url, 200, { build: { sha: 'abc' } }).state).toBe('present');
+    expect(routeAnswer(url, 200, { build: { version: '0.2.0+abc', sha: 'abc', builtAt: '2026-10-14T00:00:00.000Z' } }).state).toBe('present');
     expect(routeAnswer(url, 503, {}).state).toBe('unknown');
   });
 

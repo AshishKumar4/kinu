@@ -11,10 +11,12 @@
 // around the map is the one thing that never gets to be the answer, because it pins a file layout
 // the publisher never promised and evades `gate:patch-parity`, which measures declared patches.
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
+import * as v from "valibot";
+import { readLintConfig, type LintConfig } from "./shared/lint-config.ts";
 
 const repoRoot = process.cwd();
 
@@ -55,32 +57,38 @@ export type Host = ProgrammaticHost;
   },
 ];
 
-const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
+const config = readLintConfig(repoRoot);
 
 // Declaration half. The pattern is the whole policy: a group narrower than `**/node_modules/**`
 // (one package, one depth) would re-admit the next reach, so the exact group is asserted.
 const declared = config.rules[RULE];
 
+/** The groups a `no-restricted-imports` setting bans, or undefined for a bare severity. */
+const bannedGroups = (setting: LintConfig["rules"][string] | undefined): readonly (readonly string[])[] | undefined =>
+  Array.isArray(setting)
+    ? v.parse(v.object({ patterns: v.array(v.looseObject({ group: v.array(v.string()) })) }), setting[1]).patterns.map((pattern) => pattern.group)
+    : undefined;
+
 assert.ok(Array.isArray(declared) && declared[0] === "error", `${RULE} must be enabled at error`);
 assert.deepEqual(
-  declared[1]?.patterns?.map((pattern: { group: readonly string[] }) => pattern.group),
+  bannedGroups(declared),
   [["**/node_modules/**"]],
   `${RULE} must ban every path through node_modules, at any depth, for any package`,
 );
 // An override replaces the rule's options for the files it matches, so each override that sets the rule
 // restates the group; one that dropped it would re-admit the reach in exactly those files.
-for (const override of config.overrides ?? []) {
-  const options = override.rules?.[RULE];
+for (const override of config.overrides) {
+  const options = override.rules[RULE];
 
   if (options === undefined) continue;
   assert.deepEqual(
-    options[1]?.patterns?.map((pattern: { group: readonly string[] }) => pattern.group),
+    bannedGroups(options),
     [["**/node_modules/**"]],
     `the override for ${JSON.stringify(override.files)} sets ${RULE} without the node_modules ban`,
   );
 }
-assert.equal(config.options?.denyWarnings, true);
-assert.equal(config.options?.reportUnusedDisableDirectives, "error");
+assert.equal(config.options.denyWarnings, true);
+assert.equal(config.options.reportUnusedDisableDirectives, "error");
 
 const fixtures = mkdtempSync(join(tmpdir(), "no-deep-import-gate-"));
 

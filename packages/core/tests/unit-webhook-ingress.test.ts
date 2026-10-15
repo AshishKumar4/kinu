@@ -525,7 +525,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     const live = await registerDurableWebhook(triggers, secrets, { label: 'live', auth_mode: 'bearer' }, NOW);
     const dying = await registerDurableWebhook(triggers, secrets, { label: 'old', auth_mode: 'bearer' }, NOW);
     triggers.revoke(dying.trigger_id, NOW);
-    secrets.put('webhook_secret_ghost', 'trg-never-existed', 'orphan-by-absence', NOW);
+    secrets.put('webhook_secret_ghost', 'trg-never-existed', 'orphan-by-absence');
 
     // A fresh activation rebuilds the store; the sweep runs with it.
     createWebhookSecretStore(sql);

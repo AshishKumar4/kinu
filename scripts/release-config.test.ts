@@ -57,12 +57,12 @@ import { parseJsonc } from './jsonc';
 import { CONTAINER_IMAGES } from './container-images';
 import { allCommands, invocation, parseShell, type ShellScript } from './shell-words';
 import { isWorkerConfig, readRepositoryFile, trackedFiles } from './sources';
+import { REPO_ROOT } from './repo-root';
 import { type ContextPath, contextPaths } from './workflow-expressions';
 // The config module itself, not its text: the failure being guarded is a hook
 // that exists and decides the wrong thing, which no source-text assertion sees.
 import viteConfigFor from '../packages/cf-backend/vite.config';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
 

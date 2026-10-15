@@ -9,7 +9,7 @@ google-chrome --version
 bwrap --unshare-all --die-with-parent --ro-bind / / true
 ffmpeg -version | head -n 1
 # The Lean toolchains the proofs pin (lean/ and packages/devbox/proof) and both builds, for `bun run verify:lean`,
-# which a deploy runs on armada (ARMADA_DEPLOY_ROWS in scripts/ladder.ts). elan comes from a named release whose sha256
+# which a deploy runs on armada (`onArmada` in scripts/ladder.ts). elan comes from a named release whose sha256
 # is checked before it runs, as .github/actions/setup-lean does. Built once per environment; a task's checkout keeps
 # `.lake`, so a run rebuilds only what its commit changed.
 elan_work="$(mktemp -d)"

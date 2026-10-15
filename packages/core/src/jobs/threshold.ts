@@ -32,17 +32,6 @@ export interface BackgroundHandle {
   readonly message: string;
 }
 
-const BackgroundHandleSchema: v.GenericSchema<BackgroundHandle> = v.object({
-  background: v.literal(true),
-  jobId: v.string(),
-  kind: v.string(),
-  message: v.string(),
-});
-
-export function isBackgroundHandle<T>(value: T): value is T & BackgroundHandle {
-  return v.safeParse(BackgroundHandleSchema, value).success;
-}
-
 /** Same discriminator over the serialized result, the only form the tool-result extension seam carries. */
 export function isBackgroundOutcomeText(result: string): boolean {
   const text = result.trimStart();

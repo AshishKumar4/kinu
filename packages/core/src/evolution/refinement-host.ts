@@ -4,9 +4,11 @@ import {
   advanceRefinementLane, refinementDebtRequest, requestRefinement,
   type RefinementLaneStep, type RequestRefinementInput,
 } from './refinement-lane';
+import * as v from 'valibot';
 import {
-  createRefinementStore, evolutionDebt, holdRefinementLane, nextEvolutionAnswerAt, refinementRequestView, releaseRefinementLane,
-  type RefinementDeps, type RefinementRequestView, type RefinementScope,
+  createRefinementStore, evolutionDebt, EvolutionDebtSchema, holdRefinementLane, nextEvolutionAnswerAt, refinementRequestView,
+  RefinementRequestViewSchema, releaseRefinementLane, type EvolutionDebt, type RefinementDeps, type RefinementRequestView,
+  type RefinementScope,
 } from './refinement';
 import { Effect } from 'effect';
 import { attempt, settle, type KinuError } from '../obs/index';
@@ -21,8 +23,19 @@ export function requestOwnerRefinement(
   return requestRefinement(deps, opts.turnIds === undefined ? request : { ...request, turnIds: opts.turnIds });
 }
 
-/** Newest requests plus the debt that would open the next one. */
-export function listRefinements(deps: RefinementDeps, limit = 20) {
+/** Newest requests plus the debt that would open the next one: one shape, so a debt count never renders against a
+ *  stale list. */
+export interface RefinementListing {
+  readonly requests: readonly RefinementRequestView[];
+  readonly debt: EvolutionDebt;
+}
+
+export const RefinementListingSchema: v.GenericSchema<RefinementListing> = v.object({
+  requests: v.array(RefinementRequestViewSchema),
+  debt: EvolutionDebtSchema,
+});
+
+export function listRefinements(deps: RefinementDeps, limit = 20): RefinementListing {
   return {
     requests: createRefinementStore(deps.control.sql, deps.control.rt.actor).list(limit).map(refinementRequestView),
     debt: evolutionDebt(deps.control.sql, deps.control.rt.actor),

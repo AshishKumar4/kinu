@@ -7,7 +7,6 @@
 import * as v from 'valibot';
 import { LifecycleCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
 import { ShareCardSchema, type ShareCard, type SqlExec, type UserCaller, type WorkspaceOverviewShare } from '@kinu.run/core';
-import { deriveUserId } from '../auth/store';
 import { retriedLater } from '../advice-jobs';
 
 const SHARE_CARD_JOB = 'share-card';
@@ -51,6 +50,8 @@ export interface ShareCardDeps {
   /** This account: its id, and the email its recipients see. */
   readonly owner: () => { readonly userId: string; readonly email: string };
   readonly recipient: (userId: string) => ShareCardRecipient;
+  /** The account a recipient's address is on this deployment. */
+  readonly accountOf: (email: string) => Promise<string>;
   /** The deployment's owner authority, as one account writes another's cards. */
   readonly caller: () => Promise<UserCaller>;
 }
@@ -79,7 +80,7 @@ export class ShareCardJobs extends LifecycleCapability {
       const card = shareCardOf(share, owner.email);
 
       for (const email of share.users) {
-        const recipient = await deriveUserId(email.toLowerCase());
+        const recipient = await this.#deps.accountOf(email);
 
         if (recipient !== owner.userId) wanted.set(JSON.stringify([share.share, recipient]), { share: share.share, recipient, card, text: JSON.stringify(card) });
       }

@@ -10,7 +10,7 @@
  */
 
 import { KinuError } from '../../../src/obs/error';
-import { createRecordingLogger } from '../../../src/obs/log';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const log = createRecordingLogger();
 

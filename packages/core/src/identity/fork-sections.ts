@@ -183,13 +183,13 @@ function lessonRows({ sql, plan }: ForkSectionSource): Iterable<ForkLessonRow> {
 
   return actorRows(sql, (actorId, after) => {
     const found = sql<ForkLessonRow & { rowid: number }>`
-      SELECT rowid, id, turn_ids, text, source, status, created_at, corroborated_at FROM lessons
+      SELECT rowid, id, turn_ids, text, source, created_at, corroborated_at FROM lessons
       WHERE actor_id = ${actorId} AND created_at <= ${cut} AND rowid > ${after} ORDER BY rowid LIMIT 1
     `[0];
 
     if (found === undefined) return undefined;
     const later = found.corroborated_at !== null && found.corroborated_at > cut;
-    const row = v.parse(ForkLessonRowSchema, { ...found, ...(later && { status: 'provisional', corroborated_at: null }) });
+    const row = v.parse(ForkLessonRowSchema, { ...found, ...(later && { corroborated_at: null }) });
 
     return { rowid: found.rowid, row };
   });
@@ -244,17 +244,17 @@ export const FORK_CONVERSATION_DECLARATIONS: ForkConversationDeclarations = {
     count: ({ plan }) => plan.messageIds.length,
     // Content is the one unbounded conversation field: inline `content_json` is a whole message's parts.
     bytes: (row) => utf8Bytes(row.message_id) + utf8Bytes(row.role) + utf8Bytes(row.native_content_kind) + utf8Bytes(row.origin)
-      + utf8Bytes(row.envelope_json) + utf8Bytes(row.content_json) + utf8Bytes(row.content_path) + utf8Bytes(row.content_digest),
+      + utf8Bytes(row.envelope_json) + utf8Bytes(row.content_json) + utf8Bytes(row.content_path),
     // Request, output slot and ingress id are the source run's and do not cross.
     stage: ({ sql, actorId, artifactPath }, rows) => {
       for (const row of rows) {
         void sql`
           INSERT INTO session_messages
           (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id,
-           envelope_json, sealed_at, content_json, content_path, content_digest)
+           envelope_json, sealed_at, content_json, content_path)
           VALUES (${actorId}, ${row.message_id}, ${row.role}, ${row.native_content_kind}, ${row.origin}, ${null}, ${null}, ${null},
                   ${row.envelope_json}, ${row.sealed_at}, ${row.content_json},
-                  ${row.content_path === null ? null : artifactPath(row.content_path)}, ${row.content_digest})
+                  ${row.content_path === null ? null : artifactPath(row.content_path)})
         `;
       }
     },
@@ -266,17 +266,17 @@ export const FORK_CONVERSATION_DECLARATIONS: ForkConversationDeclarations = {
     },
     count: ({ plan }) => plan.entryIds.length,
     bytes: (row) => utf8Bytes(row.id) + utf8Bytes(row.role) + utf8Bytes(row.turn_id) + utf8Bytes(row.run_id)
-      + utf8Bytes(row.metadata_json) + utf8Bytes(row.metadata_path) + utf8Bytes(row.metadata_digest),
+      + utf8Bytes(row.metadata_json) + utf8Bytes(row.metadata_path),
     // The public chat, oldest first; its context columns stay null until publication points the cut at the fork's.
     stage: ({ sql, actorId, artifactPath }, rows) => {
       for (const row of rows) {
         void sql`
           INSERT INTO conversation_entries
           (actor_id, session_id, id, position, role, turn_id, run_id,
-           metadata_json, metadata_path, metadata_digest, recorded_at, context_id, context_revision)
+           metadata_json, metadata_path, recorded_at, context_id, context_revision)
           VALUES (${actorId}, ${CHAT_SESSION_ID}, ${row.id}, ${row.position}, ${row.role}, ${row.turn_id}, ${row.run_id},
                   ${row.metadata_json}, ${row.metadata_path === null ? null : artifactPath(row.metadata_path)},
-                  ${row.metadata_digest}, ${row.recorded_at}, ${null}, ${null})
+                  ${row.recorded_at}, ${null}, ${null})
         `;
       }
     },
@@ -378,8 +378,8 @@ export const FORK_SECTIONS: ForkSections = {
     stage: ({ sql, actorId }, rows) => {
       for (const row of rows) {
         void sql`
-          INSERT INTO lessons (actor_id, id, turn_ids, text, source, status, created_at, corroborated_at)
-          VALUES (${actorId}, ${row.id}, ${row.turn_ids}, ${row.text}, ${row.source}, ${row.status}, ${row.created_at}, ${row.corroborated_at})
+          INSERT INTO lessons (actor_id, id, turn_ids, text, source, created_at, corroborated_at)
+          VALUES (${actorId}, ${row.id}, ${row.turn_ids}, ${row.text}, ${row.source}, ${row.created_at}, ${row.corroborated_at})
         `;
       }
     },

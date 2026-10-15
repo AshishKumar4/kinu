@@ -7,14 +7,23 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { LiveShareCreatedSchema, liveSharePagePath } from '@kinu.run/core';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · users-share';
 
-const CASE = 'users-share' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A share for named people answered its link with a bare "Not found" to the very people it named, and its create answer listed no one; only the Drive card\'s signed entry got them in.',
+  missedBecause: 'The host 404s any users-share visitor without a viewer cookie, and the dialog copies that bare link; the unit proofs minted the ticket through /api/shared/live/open directly, as no recipient holding the link can.',
+  provedRedAt: 'c9fee59a0',
+  redDirection: 'RED on the deployed c9fee59a0 (2026-10-08 staging walk): the recipient following the share link got 404 "Not found", and the create answer\'s share.users was []. '
+    + 'Green requires the link to send a visitor with no cookie to the app\'s page for the share, the answer to name the recipient, and the named account to enter as itself through that page\'s ticket.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'named');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -36,7 +45,7 @@ describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
       purpose: 'Disposable users share entered by a second account through its link; no model task.',
       async run({ session, plan }) {
         const goals: EvalSubgoal[] = [];
@@ -109,5 +118,3 @@ END`));
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

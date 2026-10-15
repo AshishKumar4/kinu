@@ -15,7 +15,7 @@ import {
   decodeJsonValue, explainSandboxError, toolsNamespace,
   renderCodemodeDescription, programDeclarations, describeProgramSource, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel,
+  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, createToolArguments,
 } from '@kinu.run/core';
 import { tool, type ToolSet } from 'ai';
 import { programBody } from './executor';
@@ -78,7 +78,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
         const logs: string[] = [];
 
         const capture: Console['log'] = (...values) => {
-          logs.push(values.map((value) => formatLogArg({ value })).join(' '));
+          logs.push(values.map((value) => shownConsoleValue({ value })).join(' '));
         };
 
         const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
@@ -113,9 +113,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
             // `workspace.createTool` takes the function itself, sent as its source, as in the CF sandbox.
             const create = nsp['createTool'];
 
-            if (p.name === 'workspace' && create !== undefined) {
-              nsp['createTool'] = (...toolArgs) => create(...toolArgs.map((arg) => (typeof arg === 'function' ? String(arg) : arg)));
-            }
+            if (p.name === 'workspace' && create !== undefined) nsp['createTool'] = (...toolArgs) => create(...createToolArguments(toolArgs));
 
             providerBindings[p.name] = nsp;
           }
@@ -158,14 +156,3 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
   };
 }
 
-/** Strings verbatim, everything else JSON, so the model never reads "[object Object]". */
-function formatLogArg(input: { value: unknown }): string {
-  const text = v.safeParse(v.string(), input.value);
-
-  if (text.success) return text.output;
-
-  try { return JSON.stringify(input.value) ?? String(input.value); }
-  catch (error) {
-    return `unserializable tool input: ${renderThrownChain({ cause: error })}`;
-  }
-}

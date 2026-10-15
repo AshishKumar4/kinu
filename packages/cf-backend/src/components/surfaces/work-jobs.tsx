@@ -32,7 +32,7 @@ function statusMeta(status: BackgroundJob["status"]) {
 /** The durable resume count, in the owner's words (the operator's drilldown keeps its own terse count). Null when there
  *  is nothing to say. */
 function interruptionNote(job: BackgroundJob, now: number): string | null {
-  const attempts = job.resumeAttempts ?? 0;
+  const attempts = job.epoch;
 
   if (attempts === 0) return null;
   const times = attempts === 1 ? "once" : `${attempts} times`;

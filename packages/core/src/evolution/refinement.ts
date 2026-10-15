@@ -24,16 +24,16 @@ import { listTurnRatings } from './ratings';
 import { workspaceSkillPath } from '../skills/discover';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
-export const REFINEMENT_TRIGGERS = ['explicit', 'evolution_debt'] as const;
+const REFINEMENT_TRIGGERS = ['explicit', 'evolution_debt'] as const;
 
 export type RefinementTrigger = (typeof REFINEMENT_TRIGGERS)[number];
 
 /** `account` scope has no writable authority here, so it is refused by name rather than narrowed. */
-export const REFINEMENT_SCOPES = ['workspace', 'account'] as const;
+const REFINEMENT_SCOPES = ['workspace', 'account'] as const;
 
 export type RefinementScope = (typeof REFINEMENT_SCOPES)[number];
 
-export const REFINEMENT_STAGES = [
+const REFINEMENT_STAGES = [
   'requested', 'planning', 'gated', 'evaluating', 'applied', 'rolled_back', 'refused',
 ] as const;
 
@@ -133,7 +133,7 @@ export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
  * Pending states differ: a fact is live now, a section awaits a trial, a skill awaits the owner.
  * `refused` is a deterministic gate; `rejected` is the owner declining.
  */
-export const REFINEMENT_DISPOSITIONS = [
+const REFINEMENT_DISPOSITIONS = [
   'applied', 'pending_trials', 'pending_owner_approval', 'refused', 'rejected',
 ] as const;
 
@@ -192,6 +192,18 @@ export interface RefinementRequestView {
   readonly detail: string;
   readonly createdAt: number;
 }
+
+/** A request as a client reads it over the wire. */
+export const RefinementRequestViewSchema: v.GenericSchema<RefinementRequestView> = v.object({
+  id: v.string(),
+  trigger: v.picklist(REFINEMENT_TRIGGERS),
+  scope: v.picklist(REFINEMENT_SCOPES),
+  stage: v.picklist(REFINEMENT_STAGES),
+  turnIds: v.array(v.string()),
+  routes: v.array(RefinementRouteSchema),
+  detail: v.string(),
+  createdAt: v.number(),
+});
 
 /**
  * Staged under `.kinu/`, read by nothing that builds a prompt, so a proposal influences nothing before
@@ -610,6 +622,13 @@ export interface EvolutionDebt {
   readonly key: string;
   readonly summary: string;
 }
+
+export const EvolutionDebtSchema: v.GenericSchema<EvolutionDebt> = v.object({
+  turnIds: v.array(v.string()),
+  owed: v.boolean(),
+  key: v.string(),
+  summary: v.string(),
+});
 
 /**
  * Derived, never stored. Exclusion happens before the limit, and the cut takes the oldest rows;

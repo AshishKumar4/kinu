@@ -31,10 +31,10 @@ export interface PreparedRequestBundle {
   readonly rendered: readonly { readonly message: ModelMessage; readonly prepared: PreparedMessage }[];
 }
 
-interface RequestRow { request_id: string; turn_id: string; run_id: string; epoch: number; revision: number; step_index: number | null; context_id: string; context_revision: number; metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null }
+interface RequestRow { request_id: string; turn_id: string; run_id: string; epoch: number; revision: number; step_index: number | null; context_id: string; context_revision: number; metadata_json: string | null; metadata_path: string | null }
 
 function requestOf(row: RequestRow): Effect.Effect<PreparedRequest, KinuError> {
-  return Effect.map(storedPayload(row.metadata_json, row.metadata_path, row.metadata_digest), (metadata) => ({
+  return Effect.map(storedPayload(row.metadata_json, row.metadata_path), (metadata) => ({
     id: row.request_id, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, revision: row.revision, step: row.step_index,
     source: { contextId: row.context_id, revision: row.context_revision }, metadata,
   }));
@@ -88,14 +88,14 @@ export class SessionRequests {
   forTurn(turnId: string): readonly PreparedRequest[] {
     this.actor.assertCurrent();
 
-    return settleSync(Effect.forEach(this.sql<RequestRow>`SELECT request_id,turn_id,run_id,epoch,revision,step_index,context_id,context_revision,metadata_json,metadata_path,metadata_digest
+    return settleSync(Effect.forEach(this.sql<RequestRow>`SELECT request_id,turn_id,run_id,epoch,revision,step_index,context_id,context_revision,metadata_json,metadata_path
       FROM actor_requests WHERE actor_id=${this.actor.actorId} AND turn_id=${turnId} ORDER BY epoch,revision`, requestOf));
   }
 
   /** Inside the claim owner's transaction, after it rechecked its epoch. */
   record(request: PreparedRequest): void {
-    void this.sql`INSERT INTO actor_requests(actor_id,request_id,turn_id,run_id,epoch,step_index,revision,context_id,context_revision,metadata_json,metadata_path,metadata_digest,recorded_at)
-      VALUES(${this.actor.actorId},${request.id},${request.turnId},${request.runId},${request.epoch},${request.step},${request.revision},${request.source.contextId},${request.source.revision},${request.metadata.json},${request.metadata.path},${request.metadata.digest},${Date.now()})`;
+    void this.sql`INSERT INTO actor_requests(actor_id,request_id,turn_id,run_id,epoch,step_index,revision,context_id,context_revision,metadata_json,metadata_path,recorded_at)
+      VALUES(${this.actor.actorId},${request.id},${request.turnId},${request.runId},${request.epoch},${request.step},${request.revision},${request.source.contextId},${request.source.revision},${request.metadata.json},${request.metadata.path},${Date.now()})`;
   }
 
   /** Inline metadata only. */
@@ -111,7 +111,7 @@ export class SessionRequests {
   read(id: string): PreparedRequest | null {
     this.actor.assertCurrent();
 
-    const row = this.sql<RequestRow>`SELECT request_id,turn_id,run_id,epoch,revision,step_index,context_id,context_revision,metadata_json,metadata_path,metadata_digest
+    const row = this.sql<RequestRow>`SELECT request_id,turn_id,run_id,epoch,revision,step_index,context_id,context_revision,metadata_json,metadata_path
       FROM actor_requests WHERE actor_id=${this.actor.actorId} AND request_id=${id}`[0];
 
     if (row === undefined) return null;

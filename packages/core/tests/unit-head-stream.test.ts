@@ -4,15 +4,12 @@
  */
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { createTestRuntime, scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { runHeadInference, preparedHeadRun, HeadCapture, type HeadInferenceDeps } from '../src/heads/head-inference';
 import type { HeadStreamKind } from '../src/heads/head-stream';
-import { makeSql, makeExecRaw, createTestActor, stepText } from './helpers';
-import { LiveHeadJournal } from '../src/heads/live-journal';
-import { initHeadsTables } from '../src/heads/schema';
+import { stepText } from './helpers';
 import type { HeadInput, HeadStep } from '../src/heads/types';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { fixtureCompaction, hostedSeatsOver } from './helpers-actor-host';
@@ -200,31 +197,6 @@ describe('a running head publishes what it is producing', () => {
     expect(steps.map(stepText)).toEqual([chunks.join('')]);
     expect(frames.map((frame) => frame.delta).join('')).toBe(chunks.join(''));
     expect(report.summary).toBe(chunks.join(''));
-  });
-
-  test('the durable channel is untouched: the journal still announces its own write', async () => {
-    // `head_activity` stays a separate channel: it retires a painted frame.
-    const database = new Database(':memory:');
-    const sql = makeSql(database);
-    const execRaw = makeExecRaw(database);
-    initHeadsTables(execRaw);
-    const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'head-stream-test');
-    const announced: string[] = [];
-    const journal = new LiveHeadJournal(sql, actor, (headId) => { announced.push(headId); });
-    const frames: Frame[] = [];
-
-    const input = headInput();
-    journal.insertSpawn(input);
-    announced.length = 0;
-    await runHeadInference(preparedHeadRun(input, await deps(chunkedHead(['a ', 'settled ', 'answer']), {
-      reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
-      reportStep: (seq, step) => { journal.appendStep(input.id, seq, step); },
-    })));
-
-    expect(frames).toHaveLength(3);
-    expect(announced).toEqual([input.id]);
-    expect(journal.readSteps(input.id).map(stepText)).toEqual(['a settled answer']);
-    database.close();
   });
 
   test('no sink wired changes nothing about the run', async () => {

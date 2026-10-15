@@ -9,12 +9,14 @@ import {
   DynamicContextLedger,
   ExtensionHost,
   runChat,
+  INTERRUPTED_TURN,
   composePrepareStep,
   type KinuExtension,
   type ChatEvent,
   type Usage,
 } from '../src/index';
-import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
+import { setDiagnosticsSink, KinuError } from '../src/obs/index';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 /** One text answer, streamed the way the SDK delivers it. */
 function textStream(text: string): ReadableStream<LanguageModelV3StreamPart> {
@@ -318,32 +320,37 @@ describe('composePrepareStep (the shared step pipeline)', () => {
     { role: 'assistant', content: 'b' },
   ];
 
+  const Marked = v.object({
+    providerOptions: v.object({ anthropic: v.object({ cacheControl: v.object({ type: v.literal('ephemeral') }) }) }),
+  });
+
   test('extension rewrites first, cache tail markers land LAST on the final array', async () => {
+    const { model, prompt } = promptCapturingModel();
+
     const host = new ExtensionHost().register({
       name: 'steer',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 'steered' }],
     });
 
-    const out = await composePrepareStep({ extensions: host, cache: { strategy: { kind: 'anthropic' } } }, { stepNumber: 0, messages: base, steps: [] });
-    expect(out?.messages.map((m) => m.content)).toEqual(['a', 'b', 'steered']);
+    for await (const _ of runChat({
+      modelSpec: 'anthropic/test', model, system: 'sys', history: base, tools: {}, cache: { providerId: 'anthropic' }, extensions: host,
+    })) { /* drain */ }
 
+    expect(userTexts(prompt())).toEqual(['a', 'steered']);
     // The marker rides the injected tail message, so markers were applied after the rewrite.
-    const tail = v.parse(v.object({
-      providerOptions: v.object({
-        anthropic: v.object({ cacheControl: v.object({ type: v.literal('ephemeral') }) }),
-      }),
-    }), out?.messages.at(-1));
-
-    expect(tail.providerOptions.anthropic.cacheControl).toEqual({ type: 'ephemeral' });
+    expect(v.parse(Marked, model.doStreamCalls[0]?.prompt.at(-1)).providerOptions.anthropic.cacheControl).toEqual({ type: 'ephemeral' });
   });
 
-  test('per-step system override rides the plan (Think TurnConfig is string-only)', async () => {
-    const out = await composePrepareStep({
-      cache: { strategy: { kind: 'anthropic' }, system: { role: 'system', content: 'cached-sys' } },
-    }, { stepNumber: 0, messages: base, steps: [] });
+  test('the system prompt reaches the model as a cache breakpoint of its own', async () => {
+    const { model } = promptCapturingModel();
 
-    expect(out?.system).toEqual({ role: 'system', content: 'cached-sys' });
-    expect(out?.messages).toHaveLength(2);
+    for await (const _ of runChat({
+      modelSpec: 'anthropic/test', model, system: 'sys', history: base, tools: {}, cache: { providerId: 'anthropic' },
+    })) { /* drain */ }
+
+    const system = model.doStreamCalls[0]?.prompt[0];
+    expect(system).toMatchObject({ role: 'system', content: 'sys' });
+    expect(v.parse(Marked, system).providerOptions.anthropic.cacheControl).toEqual({ type: 'ephemeral' });
   });
 
   test('no plan → steered messages only; nothing at all → undefined', async () => {
@@ -406,10 +413,17 @@ describe('ExtensionHost', () => {
         .register({ name: 'witness', onToolResult: () => { order.push('witness-result'); } })
         .register({ name: 'witness', onTurnEnd: () => { order.push('witness-end'); } });
 
-      await host.emitTurnStart({ system: 's', history: [] });
-      await host.emitToolCall({ toolName: 'ping', args: {} });
-      await host.emitToolResult({ toolName: 'ping', args: {}, result: 'pong', success: true });
-      await host.emitTurnEnd({ text: 'done', responseMessages: [] });
+      const { model } = toolThenTextModel();
+      const events: ChatEvent[] = [];
+
+      for await (const event of runChat({
+        modelSpec: 'test/model', model, system: 'sys', history: [{ role: 'user', content: 'go' }],
+        tools: { ping: tool({ inputSchema: z.object({}), execute: async () => 'pong' }) }, extensions: host,
+      })) events.push(event);
+
+      // The turn itself was untouched: the tool answered and the model finished.
+      expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ toolName: 'ping', result: 'pong', success: true });
+      expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'all done' });
       // The loop continued past the thrower: every later extension still ran.
       expect(order).toEqual(['witness-start', 'witness-call', 'witness-result', 'witness-end']);
       const failures = log.emitted.filter((row) => row.event === 'extension.hook_failed');
@@ -520,57 +534,68 @@ describe('ExtensionHost', () => {
     expect(await failing.runTransformContext({ model: 'test/model', ...ctx, messages: [...ctx.messages] })).toBeUndefined();
   });
 
-  test('a hook that never settles stops holding the turn once the turn is cancelled', async () => {
-    // Without the host's abort race both awaits hang until the suite deadline; a second clock here would lose
-    // under load.
-    const never = (): Promise<never> => new Promise(() => undefined);
+  // Each releases the turn in its own path's words: a stuck step hook stops the stream as an interrupted turn, which the
+  // session records as unfinished; a stuck context transform refuses the turn as cancelled.
+  test.each([
+    { hook: 'prepareStep', ends: { message: INTERRUPTED_TURN } },
+    { hook: 'transformContext', ends: { code: 'cancelled' } },
+  ] as const)('a $hook hook that never settles releases the turn once it is cancelled', async ({ hook, ends }) => {
+    // Without the host's abort race the turn hangs until the suite deadline; a second clock here would lose under load.
+    const { model } = promptCapturingModel();
+    const entered = Promise.withResolvers<void>();
 
-    const host = new ExtensionHost()
-      .register({ name: 'stuck-prepare', prepareStep: never })
-      .register({ name: 'stuck-transform', transformContext: never });
+    const never = (): Promise<never> => {
+      entered.resolve();
 
+      return new Promise(() => undefined);
+    };
+
+    const host = new ExtensionHost().register({ name: 'stuck', ...(hook === 'prepareStep' ? { prepareStep: never } : { transformContext: never }) });
     const controller = new AbortController();
-    const prepare = Promise.resolve(host.runPrepareStep({ stepNumber: 0, messages: [], abortSignal: controller.signal }));
 
-    const transform = host.runTransformContext({
-      model: 'test/model',
-      sessionKey: 's', messages: [], system: 'sys', contextWindow: 1000, trigger: 'auto', abortSignal: controller.signal,
-    });
-
-    // Each outcome is caught before the abort, so neither rejection is ever unhandled.
-    const refused = (pending: Promise<ModelMessage[] | undefined>): Promise<KinuError> => (async () => {
+    // Caught before the abort, so the rejection is never unhandled.
+    const outcome = (async () => {
       try {
-        await pending;
+        for await (const _ of runChat({
+          modelSpec: 'test/model', model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {}, extensions: host, signal: controller.signal,
+        })) { /* drain */ }
       } catch (cause) {
-        if (cause instanceof KinuError) return cause;
-        throw new Error('the cancelled hook rejected with something other than a KinuError', { cause });
+        return cause;
       }
 
-      throw new Error('the cancelled hook settled');
+      return null;
     })();
 
-    const outcomes = [prepare, transform].map(refused);
+    await entered.promise;
     controller.abort(new Error('user stopped the turn'));
 
-    for (const outcome of outcomes) {
-      expect((await outcome).code).toBe('cancelled');
-    }
+    expect(await outcome).toMatchObject(ends);
+    expect(model.doStreamCalls).toEqual([]);
   });
 
   test('a hook that does I/O receives the signal the turn was given', async () => {
+    const { model } = promptCapturingModel();
     const controller = new AbortController();
-    let seen: AbortSignal | undefined;
+    const seen: AbortSignal[] = [];
+
+    const observe = (signal: AbortSignal | undefined): undefined => {
+      if (signal === undefined) throw new Error('the I/O hook received no abort signal');
+      seen.push(signal);
+
+      return undefined;
+    };
 
     const host = new ExtensionHost().register({
-      name: 'io', prepareStep: ({ abortSignal }) => {
-        seen = abortSignal;
-
-        return undefined;
-      },
+      name: 'io', prepareStep: ({ abortSignal }) => observe(abortSignal), transformContext: async ({ abortSignal }) => observe(abortSignal),
     });
 
-    await host.runPrepareStep({ stepNumber: 0, messages: [], abortSignal: controller.signal });
-    expect(seen).toBe(controller.signal);
+    for await (const _ of runChat({
+      modelSpec: 'test/model', model, system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {}, extensions: host, signal: controller.signal,
+    })) { /* drain */ }
+
+    const reason = new Error('stop I/O');
+    controller.abort(reason);
+    expect(seen.map((signal) => ({ aborted: signal.aborted, reason: signal.reason }))).toEqual([{ aborted: true, reason }, { aborted: true, reason }]);
   });
 
   test('runPrepareStep chains outputs and reports no-change as undefined', async () => {

@@ -42,18 +42,32 @@ import { ROOT } from '../../evals/src/helper-address';
 import { helperAnswer, hirerHeard } from './hires';
 import { openPublicSocket } from './public-socket';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · delegation';
 
-const CASE = 'delegation' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A lead was asked for a helper that says one word and reports back. The owner saw the '
+    + 'conversation keep gaining "system, to be shown to the agent" cards as delegation ran — '
+    + 'growth with no bound anyone could name.',
+  missedBecause: 'every-tool deliberately EXCLUDES hire and asserts the agents tool was never '
+    + 'called; the unit proofs drive that tool against fixtures the test author wrote. Nothing '
+    + 'asked the deployed agent to hire and then read back the settle, the relay, and the retire.',
+  provedRedAt: 'fddd4f9d6',
+  redDirection: 'RED by reading on build fddd4f9d6, measured 2026-09-17: the workspace\'s '
+    + 'opening turn never closed inside the 20-minute case budget, no `hire` call ever '
+    + 'settled, no model call was accounted, and the ledger reads hung on the unresponsive '
+    + 'object until the row\'s own test bound ended it. The card ceiling never reached '
+    + 'counting — the product was dead before a second turn could be sent.',
+};
 
 /** The exact bound the card subgoal holds: delegation may drain at most this many cards. */
 const SYSTEM_CARD_CEILING = 2;
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'deleg');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -105,6 +119,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       genesis: false,
       modelCalls: 'expected',
       purpose: 'A lead that has one helper answer one word, shows a second on the roster, and retires it.',
@@ -181,4 +196,3 @@ describe(SUITE, () => {
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules
  *  (each of which resolves a live plan at import). */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

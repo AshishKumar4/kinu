@@ -2,7 +2,12 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
 import {
-  MERGE_POLICY_BINDING, mergePolicyProfile, present, scriptedTurnModel, toolExecute,
+  MERGE_POLICY_BINDING,
+  mergePolicyProfile,
+  present,
+  scriptedTurnModel,
+  toolExecute,
+  createRecordingLogger,
 } from '@kinu.run/test-utils';
 import {
   MergeOutputSchema, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG, mcpToolKey, type JsonValue,
@@ -17,7 +22,6 @@ import {
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import type { ScriptedAnswer } from './helpers/turn-harness';
-import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createHeadRuntime } from '../src/head-runtime';
 import type { HostedActorSeams } from '../src/hosted-actors';
 import type { ModelMessage, ToolSet } from 'ai';

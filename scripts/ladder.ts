@@ -32,6 +32,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { cpus } from 'node:os';
+import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { EVAL_TASK_TIMEOUT_SECONDS } from '../evals/src/config';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -48,16 +49,15 @@ import { auditClosure } from './ladder-audit';
 import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Closure, Inputs, Repo } from './ladder-closure';
-import {
-  isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
-  trackedFiles,
-} from './sources';
+import { isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { discoverArgv } from './python-suites';
 import { CLI_TEST_ROOT } from './test-cli';
 import { modulesReaching } from './import-closure';
 import type { ModuleEdges } from './module-edges';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, evalWebIdentityEnv, LIVE_MODEL_ENV, SCRIPTED_MODEL_KEY_ENV } from '../packages/test-utils/src/index';
+import { gitIn } from '../packages/test-utils/src/git-env';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
 import { resourceCostFile, withResourceCosts } from './gate-cost';
@@ -79,7 +79,6 @@ function antiSlopRuleCount(): number {
   ).filter((rule) => rule.startsWith('anti-slop/')).length;
 }
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** Where the tracked hooks live, RELATIVE so git resolves it against each
  *  worktree's own root — see `--install-hooks`. */
@@ -207,6 +206,13 @@ export interface Gate {
    *  armada, in its phase's one job at the deploy's exact SHA ({@link armadaPhaseRows}), so nothing heavy runs here
    *  unless a row says why it must. */
   readonly here?: string;
+  /**
+   * Why the CI tier does not run this deploy row, whose files it then does not cover. The rows that carry one are the
+   * whole CI-vs-deploy delta, so "a green CI badge means everything a deploy checks except these" is a sentence
+   * someone can check. On 2026-08-17 the undeclared delta was five packages, 41 of 42 CLI files, the root suites and
+   * both Layergate runs.
+   */
+  readonly ciExempt?: string;
   /** Where its evidence lands under the deploy's report, for a row armada runs: the row writes it under
    *  BENCH_ARTIFACTS in its container, its verdict carries it back, and the deploy unpacks it there. */
   readonly evidence?: string;
@@ -246,6 +252,30 @@ const CLIENT_BUILD: Inputs = { ...AMBIENT_BY_NAME, corpus: true };
 function workersPool(base: string): Inputs {
   return { ...AMBIENT_BY_NAME, env: [...AMBIENT_BY_NAME.env ?? [], ...base === 'packages/cf-backend' ? ['KINU_CLOUDFLARE_API_TOKEN'] : []], reads: [`${base}/`] };
 }
+
+/** Why no live-app row can run on a pull request: each boots the product's own dev server. */
+const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and a scripted model for minutes, which '
+  + 'answers for the tree being deployed rather than a push: it runs in the deploy\'s source-phase job on armada, '
+  + 'in a container of its own. The boot is offline (KINU_DEV_OFFLINE) and mints its own keys, '
+  + 'so it needs no credential (measured 2026-10-08 with none passed: every row booted).';
+
+/** What a live-app row reads: a booted dev server, Chrome, and this box's credentials, which no tree hash stands for. */
+const LIVE_APP_INPUTS: Inputs = { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' };
+
+/** How every live-app row that drives the workspace page at 1440x900 opens its `catches`. */
+const LIVE_APP_CATCHES = 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. ';
+
+/** What those rows cannot see: one workspace, viewport and model, on a LOCAL dev server. */
+const LIVE_APP_BLIND = 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
+  + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
+  + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
+  + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
+  + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
+  + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
+  + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
+  + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
+  + 'the right one. The deployed build\'s browser rows are the product flows\' '
+  + '(`scripts/product-flows.ts`), which run against the deployment alone.';
 
 /** Gates that run before the deploy tier. The deploy tier is parsed from
  *  deploy.sh — see the header. Cheapest first inside each tier, so the first
@@ -984,7 +1014,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/pre-commit-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1117,7 +1147,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -1598,7 +1628,7 @@ export const LADDER: readonly Gate[] = [
     // deployment plumbing. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/ephemeral-deployment.test.ts scripts/devbox-container-tier.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/bench-teardown.test.ts scripts/ephemeral-deployment.test.ts scripts/devbox-container-tier.test.ts',
     label: 'Benchmark harness guarantees',
     tier: 'ci',
     // 7.00s: 221 tests over 15 files, median of 7.00 / 7.71 / 6.86 on the
@@ -2113,13 +2143,13 @@ export const LADDER: readonly Gate[] = [
       + 'typechecked project that imports `effect`, and the gate is red unless it also reports '
       + 'the one planted in scripts/fixtures/effect-diagnostics, so a bump or a lost `plugins` '
       + 'entry cannot turn the check off in silence.',
-    blind: 'warning- and suggestion-severity diagnostics; a project outside `bun run typecheck`; '
+    blind: 'warning- and suggestion-severity diagnostics; a project `bun run check` does not compile; '
       + 'a project that imports no `effect`. All are printed on the gate\'s green path.',
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts',
-    label: 'Hammer and fence gate self-tests',
+    run: 'bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts scripts/mutation-sweep.test.ts',
+    label: 'Hammer, fence gate and sweep catalogue self-tests',
     tier: 'push',
     seconds: 0.4,
     catches: 'the two adversarial gates\' own decision boundaries — the half that decides '
@@ -2131,7 +2161,10 @@ export const LADDER: readonly Gate[] = [
       + 'stale fixture, a mutant that PASSES fails naming the fence, a pristine baseline that '
       + 'fails is reported as a broken owner rather than as a proved fence, and a run that '
       + 'never settled is neither. Both gates are seeded with the shapes their own red proofs '
-      + 'used, so a refactor that quietly stopped either from failing is caught here.',
+      + 'used, so a refactor that quietly stopped either from failing is caught here. For the '
+      + 'sweep, which runs on request: a catalogue snippet that no longer sits exactly once in '
+      + 'its file, or a symbol that names nothing in the product sources, fails here rather than '
+      + 'in the next sweep.',
     blind: 'whether the fences and the suite are the RIGHT ones to hammer. That is a '
       + 'judgement in the declarations, which is why each fence carries a `why` and the '
       + 'hammer prints its blind spots on the green path.',
@@ -2140,6 +2173,9 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:mutation-fences',
     label: 'Concurrency fences stay load-bearing',
+    ciExempt: 'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs eight '
+      + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada, whose '
+      + 'checkout carries the whole history.',
     tier: 'deploy',
     // Four fences, each proved twice (pristine green, mutant red) inside one
     // sparse `git worktree add --detach` copy: 2.5s measured 2026-08-31 on the
@@ -2270,18 +2306,19 @@ export const LADDER: readonly Gate[] = [
       + 'mid-turn, a page opened mid-turn, plans, layout and the own-server rows. One viewport and a local scripted model; '
       + 'a LOCAL dev server whose workerd and Durable Objects are not production\'s, so the edge, the deployed assets and '
       + 'the real identity belong to `gate:first-run` after the publish.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
     label: 'Live app in a browser: a running turn',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.0 s at load 2.9, its five scenarios 11-34 s each beside the dev server's boot.
     // 2026-10-01, interleaved twice at load 9-29: 204 s median without the #30 rows, 289 s with them as two rows of
     // their own, 220 s with the watched turn run in the answered row's workspace (as now), all 14 green.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 220,
-    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+    catches: LIVE_APP_CATCHES
       + 'Its rows: a running turn draws exactly one live state through the paced turn\'s four silences, and '
       + 'Stop never stands over a pane drawing nothing; a page opened mid-turn offers Stop while it runs and stops '
       + 'showing it once it ends, its header never disagreeing with its composer; a page whose socket drops mid-turn '
@@ -2289,21 +2326,13 @@ export const LADDER: readonly Gate[] = [
       + 'after a reload, the model\'s next request carrying it, and so does a turn another tab sent, on the page that '
       + 'watched it, and the workspace\'s own first turn, which no page sent; and a marker sent in each pane stays out of the '
       + 'other, the transcript leak a shared store shows as green.',
-    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
-      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
-      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
-      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
-      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
-      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
-      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts',
     label: 'Live app in a browser: a wait on the provider',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-10-13 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 059486671: 218.8 s wall,
     // when the minute-limited turn waited 60-120 s; it waits one stated minute now, so the measure is an upper bound.
@@ -2316,60 +2345,45 @@ export const LADDER: readonly Gate[] = [
     blind: 'one workspace per scenario, one viewport, one scripted model sending Workers AI\'s recorded refusal body; '
       + 'a real provider\'s limits, a header-stated wait, and a refusal that outlasts every retry are the unit rows\' '
       + '(`packages/core/tests/unit-model-retry.test.ts`). A LOCAL dev server, not production.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
     label: 'Live app in a browser: a page that loses the turn',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.1 s at load 3.7, its four scenarios 20-33 s each beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 133,
-    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+    catches: LIVE_APP_CATCHES
       + 'Its rows: a page that only watched a turn another tab sent replays it as it stood after its socket drops; '
       + 'a page asleep while its turn ends wakes to the finished answer with nothing left running, a page that only '
       + 'watched included; and a page joining a reasoning turn part-way, on a dropped socket or a slow link, reads '
       + 'it whole.',
-    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
-      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
-      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
-      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
-      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
-      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
-      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
     label: 'Live app in a browser: a long chat and its plans',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 167.9 s at load 2.7, its four scenarios 10-104 s each, chat-scroll the long one beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 168,
-    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+    catches: LIVE_APP_CATCHES
       + 'Its rows: a long chat opens at its newest message and pages older history only when the reader scrolls '
       + 'for it, one page per scroll; the plan review flow runs from submission to the turn that implements it; at '
       + 'most one plan-bearing tab or filter stands in the inspector, so plans have one owner; the inspector '
       + 'never moves its selection on its own; and an answer\'s <slate-ui> blocks are drawn in place, read a file '
       + 'and reach the agent as their author, are drawn again after a reload, and a block a browser forges is not.',
-    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
-      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
-      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
-      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
-      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
-      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
-      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-own-server.test.ts',
     label: 'Live app in a browser: a slate that serves its own page, in its answer',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Unmeasured: the plans file's walkthrough (about 60 s) and the dev server's boot, the plans row's figures.
     seconds: 120,
@@ -2381,36 +2395,33 @@ export const LADDER: readonly Gate[] = [
     blind: 'one slate, one viewport, one model: a scripted SSE server, so a real model\'s turn is unmeasured. A '
       + 'LOCAL dev server: `vite dev`\'s workerd is not the production isolate, and the deployed build is the '
       + 'product flows\' subject. No pixel is compared: the row reads heights and computed colours.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
     label: 'Live app in a browser: the inspector column\'s layout',
+    ciExempt: LIVE_APP_AT_CI,
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 120.3 s at load 3.1, its three scenarios 14-38 s each beside the dev server's boot.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 120,
-    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+    catches: LIVE_APP_CATCHES
       + 'Its rows: the tab strip\'s rule continuous to the column\'s right edge with the active underline on it '
       + 'and the chat rule on the same line, in dark and in light; and a column the reader collapsed reopening '
       + 'through the product\'s own control, found by role and accessible name, and the rail collapsing. The '
       + 'right panel\'s state across a switch to a new agent\'s tab runs in the product flows on the deployment: '
       + 'that tab\'s pane needs its agent facet, which `vite dev` never loads.',
-    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
-      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
-      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
-      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
-      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
-      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
-      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
-      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
-    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+    blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
   },
   {
     run: 'bun run gate:infra',
     label: 'Declared infrastructure exists and is bound',
+    ciExempt: 'needs a Cloudflare session. CI has none, and giving it one would put an account credential '
+      + 'with write scope on every pull request. Without a session the gate reports BLOCKED and '
+      + 'non-zero rather than skipping, so it cannot be run there and read as a pass — which is '
+      + 'why it lives at the deploy tier, immediately after `wrangler whoami` has proved there is '
+      + 'a session to use.',
     here: 'until it moves: it reads the account through this machine\'s wrangler session, which no armada run carries yet.',
     phase: 'upload',
     alone: 'holds every upload, with the secret scan beside it: an account that cannot be proved never '
@@ -2461,6 +2472,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:first-run',
     label: 'First-run tier',
+    ciExempt: 'has nothing to run against at CI. Its subject is the deployment that just went up, so it '
+      + 'runs AFTER the upload and the smoke gate, on a build that exists — at CI there is no such '
+      + 'build, and pointing it at the previous one would report the last deploy\'s product under '
+      + "this pull request's name. It also creates workspaces, links real machines and spends "
+      + 'model calls on a shared account, none of which belongs on a pull request.',
     evidence: 'first-run',
     phase: 'post-publish',
     deadline: {
@@ -2517,6 +2533,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:devbox-e2e',
     label: 'Devbox contracts on real golden containers',
+    ciExempt: 'needs staging eval authority and a Cloudflare session to create and remove throwaway real containers, R2 and snapshots; no pull request holds those credentials.',
     evidence: 'devbox',
     // Its Worker, bucket and containers through the deploy's REST token, never a wrangler login; its desktop client in
     // the container's own Chrome. The staging identity whatever the deployment: production is never its authority.
@@ -2536,6 +2553,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
+    ciExempt: 'has nothing to run against at CI: its subject is the deployment that just went up, as the '
+      + 'eval identity, whose secret no pull request holds.',
     phase: 'post-publish',
     alone: 'runs after the upload and the smoke gate, in the wave of the tiers whose subject is the '
       + 'build that just shipped and the local source gates (L18), its Chrome in the browser lane '
@@ -2568,6 +2587,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bash scripts/eval-pass-tier.sh',
     label: 'One trial of every eval task, on the deployment',
+    ciExempt: 'has nothing to run against at CI: its subject is the deployment that just went up, as eval-service, '
+      + 'whose secret no pull request holds.',
     evidence: 'evals',
     phase: 'soak',
     deadline: { seconds: EVAL_TASK_TIMEOUT_SECONDS, why: 'the local command waits for native armada jobs; '
@@ -2980,21 +3001,6 @@ export function productFlowsTierCommand(source = readFileSync(resolve(root, PROD
   return line === undefined ? '' : line.slice('exec '.length);
 }
 
-/**
- * Deploy gates whose FILES the CI tier does not cover, each with the reason.
- * This map is the whole CI-vs-deploy delta, so "a green CI badge means
- * everything a deploy checks except these" is a sentence someone can check.
- *
- * Each entry is a reason. On 2026-08-17 the undeclared delta was five
- * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
- */
-/** Why no live-app row can run on a pull request: each boots the product's own dev server. */
-const LIVE_APP_AT_CI = 'boots the product\'s own dev server, workerd, Chrome and a scripted model for minutes, which '
-  + 'answers for the tree being deployed rather than a push: it runs in the deploy\'s source-phase job on armada, '
-  + 'in a container of its own. The boot is offline (KINU_DEV_OFFLINE) and mints its own keys, '
-  + 'so it needs no credential (measured 2026-10-08 with none passed: every row booted).';
-
-
 /** Whether armada runs `gate` at deploy: every deploy row that does not say why it runs here ({@link Gate.here}). On
  *  this box they lost to its load: on 2026-10-07 the staging deploy of 8505a3ce6 killed live-app-plans and
  *  live-app-sleep at the 480 s silence bound, at load 28 on 24 threads with 25 of 30 GB swap in use. */
@@ -3007,39 +3013,6 @@ export function armadaPhaseRows(phases: readonly DeployPhase[]): Gate[] {
   return LADDER.filter((gate) => phases.some((phase) => phase === (gate.phase ?? 'source')) && onArmada(gate));
 }
 
-export const CI_EXEMPT = {
-  'bun run gate:infra':
-    'needs a Cloudflare session. CI has none, and giving it one would put an account credential '
-    + 'with write scope on every pull request. Without a session the gate reports BLOCKED and '
-    + 'non-zero rather than skipping, so it cannot be run there and read as a pass — which is '
-    + 'why it lives at the deploy tier, immediately after `wrangler whoami` has proved there is '
-    + 'a session to use.',
-  'bun run gate:mutation-fences':
-    'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs eight '
-    + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada, whose '
-    + 'checkout carries the whole history.',
-  'bun run gate:first-run':
-    'has nothing to run against at CI. Its subject is the deployment that just went up, so it '
-    + 'runs AFTER the upload and the smoke gate, on a build that exists — at CI there is no such '
-    + 'build, and pointing it at the previous one would report the last deploy\'s product under '
-    + "this pull request's name. It also creates workspaces, links real machines and spends "
-    + 'model calls on a shared account, none of which belongs on a pull request.',
-  'bun run gate:devbox-e2e':
-    'needs staging eval authority and a Cloudflare session to create and remove throwaway real containers, R2 and snapshots; no pull request holds those credentials.',
-  'bash scripts/product-flows-tier.sh':
-    'has nothing to run against at CI: its subject is the deployment that just went up, as the '
-    + 'eval identity, whose secret no pull request holds.',
-  'bash scripts/eval-pass-tier.sh':
-    'has nothing to run against at CI: its subject is the deployment that just went up, as eval-service, '
-    + 'whose secret no pull request holds.',
-  'bun test --timeout=0 tests/browser/live-app-turns.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 tests/browser/live-app-own-server.test.ts': LIVE_APP_AT_CI,
-} satisfies Record<string, string>;
-
 /** Every gate at or below `tier`. */
 export function gatesFor(tier: Tier): Gate[] {
   const upto = TIERS.indexOf(tier);
@@ -3050,7 +3023,7 @@ export function gatesFor(tier: Tier): Gate[] {
 /** The gates `--tier=<tier>` runs: every gate at or below it, and below the deploy tier none of the written CI
  *  exemptions, which CI cannot host. */
 export function tierRun(tier: Tier): Gate[] {
-  return gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+  return gatesFor(tier).filter((gate) => tier === 'deploy' || gate.ciExempt === undefined);
 }
 
 /** Six independent contended runs: each runner keeps the same suite and its own burners. */
@@ -3639,7 +3612,7 @@ function printMatrix(): void {
   for (const gate of all) {
     const at = TIERS.indexOf(gate.tier);
     const cells = TIERS.map((_, index) => (index >= at ? 'yes    ' : '-      ')).join('');
-    const note = gate.run in CI_EXEMPT ? '  ci-exempt' : '';
+    const note = gate.ciExempt === undefined ? '' : '  ci-exempt';
     const files = claims(gate.run, tracked).length;
     console.log(
       `${gate.run.padEnd(width)}  ${cells}${gate.seconds.toFixed(1)}s`.padEnd(width + 39)
@@ -3710,7 +3683,7 @@ const SCRATCH_TMPDIR = '/mnt/local/kinu/tmp';
 
 
 function fullRevision(): string {
-  return Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();
+  return gitIn(root, 'rev-parse', 'HEAD');
 }
 
 function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean, timingPath?: string): string[] {
@@ -3946,34 +3919,45 @@ function ciVerdict(asked: string, sha: string, report: string): number {
   return reportCIVerdicts(file, 'armada verdict ' + sha.slice(0, 12), report) ? 0 : 1;
 }
 
-/** A `--name=value` argument's value. */
-function argumentValue(name: string): string | undefined {
-  return process.argv.find((argument) => argument.startsWith('--' + name + '='))?.slice(name.length + 3);
+/** This program's options. `--run` is not one: everything after it is the command it wraps, split off unread. */
+const LADDER_OPTIONS = {
+  'ci-plan': { type: 'boolean' }, 'ci-verdict': { type: 'string' }, 'ci-costs': { type: 'string' }, 'ci-row': { type: 'string' },
+  'deploy-phase': { type: 'string' }, 'deploy-origin': { type: 'string' }, 'deploy-secrets': { type: 'string' },
+  tier: { type: 'string' }, gate: { type: 'string' }, changed: { type: 'string' }, verdicts: { type: 'string' },
+  artifacts: { type: 'string' }, skip: { type: 'string' }, 'no-cache': { type: 'boolean' }, serial: { type: 'boolean' },
+  matrix: { type: 'boolean' }, costs: { type: 'boolean' }, 'install-hooks': { type: 'boolean' }, 'audit-closure': { type: 'boolean' },
+} as const;
+
+/** The command line, read once: this program's options, and `--run`'s command when it wraps one. */
+function ladderArgs(argv: readonly string[]) {
+  const runAt = argv.indexOf('--run');
+  const { values } = parseArgs({ args: runAt === -1 ? [...argv] : argv.slice(0, runAt), options: LADDER_OPTIONS });
+
+  return { ...values, run: runAt === -1 ? undefined : argv.slice(runAt + 1) };
 }
+
+type LadderArgs = ReturnType<typeof ladderArgs>;
 
 /** What CI units are cut and weighed from: `ci-cost.json`, with the container runner's own measurements over it
  *  (`--ci-costs`, armada's timings). The plan and every task of one run are given the same file, so all cut the same
  *  units. */
-function ciPlanCosts(): HostedCosts {
-  const measured = argumentValue('ci-costs');
+function ciPlanCosts(measured: string | undefined): HostedCosts {
   const hosted = readHostedCosts();
   const labels = new Map(ciUnits(hosted).map((unit) => [unit.gate.run, unit.gate.label]));
 
   return measured === undefined ? hosted : withRunnerCosts(hosted, parseRunnerTimings(readFileSync(measured, 'utf8')), labels);
 }
 
-async function ciCommand(): Promise<number | undefined> {
-  const option = argumentValue;
+async function ciCommand(cli: LadderArgs): Promise<number | undefined> {
+  if (cli['ci-plan'] === true) {
+    const phases = phasesNamed(cli['deploy-phase']);
 
-  if (process.argv.includes('--ci-plan')) {
-    const phases = phasesNamed(option('deploy-phase'));
-
-    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts()) : armadaPlan(phases, option('deploy-origin'), option('deploy-secrets') ?? '')));
+    console.log(JSON.stringify(phases === undefined ? ciPlan(ciPlanCosts(cli['ci-costs'])) : armadaPlan(phases, cli['deploy-origin'], cli['deploy-secrets'] ?? '')));
 
     return 0;
   }
 
-  const asked = option('ci-verdict');
+  const asked = cli['ci-verdict'];
 
   if (asked === undefined) return undefined;
   const report = process.env['KINU_DEPLOY_REPORT'] ?? '';
@@ -3998,7 +3982,8 @@ if (import.meta.main) {
   // Read, and deleted from the environment, before this process spawns anything: no row sees the bucket's credentials.
   const remoteStore = fromEnvironment(process.env);
 
-  const ciStatus = await ciCommand();
+  const cli = ladderArgs(process.argv.slice(2));
+  const ciStatus = await ciCommand(cli);
 
   if (ciStatus !== undefined) process.exit(ciStatus);
 
@@ -4026,10 +4011,8 @@ if (import.meta.main) {
   // the shared default. The hand run and the ladder row are one figure. It is
   // the first branch, so a wrapped command's closure is the wrapper's graph
   // loaded and nothing another mode reads (`RUNNER_SCRIPT`, ladder-closure.ts).
-  const runAt = process.argv.indexOf('--run');
-
-  if (runAt !== -1) {
-    const argv = process.argv.slice(runAt + 1);
+  if (cli.run !== undefined) {
+    const argv = cli.run;
 
     if (argv.length === 0) {
       console.error('usage: bun scripts/ladder.ts --run <command…>');
@@ -4040,14 +4023,14 @@ if (import.meta.main) {
     process.exit(outcome.exitCode);
   }
 
-  if (process.argv.includes('--matrix')) {
+  if (cli.matrix === true) {
     printMatrix();
     process.exit(0);
   }
 
   // The measured table as a reader sees it, heaviest first, with the two
   // figures the wave admits against.
-  if (process.argv.includes('--costs')) {
+  if (cli.costs === true) {
     const plan = deployPlan();
     const costs = readCosts();
     const width = Math.max(...plan.map((row) => row.label.length));
@@ -4090,7 +4073,7 @@ if (import.meta.main) {
   // remembered to run an installer. Proven: a probe hook placed in a
   // worktree's own .githooks ran and blocked a commit there, with the value set
   // only once, here.
-  if (process.argv.includes('--install-hooks')) {
+  if (cli['install-hooks'] === true) {
     const set = Bun.spawnSync(['git', 'config', 'core.hooksPath', HOOKS_DIR], { cwd: root });
 
     if (set.exitCode !== 0) {
@@ -4111,16 +4094,15 @@ if (import.meta.main) {
   // a finding. This is the measurement behind a `reads` declaration, and the
   // red direction of the cache's soundness: a closure that errs narrow is a
   // stale green, and this is the one place that can see it.
-  if (process.argv.includes('--audit-closure')) {
-    const flag = process.argv.find((argument) => argument.startsWith('--tier='));
-    const tier = TIERS.find((candidate) => candidate === flag?.slice('--tier='.length)) ?? 'push';
-    const named = process.argv.indexOf('--gate');
+  if (cli['audit-closure'] === true) {
+    const tier = TIERS.find((candidate) => candidate === cli.tier) ?? 'push';
+    const named = cli.gate;
     const repo = repoAt(root, (run, files) => claims(run, files));
     const tracked = trackedTestFiles();
 
-    const gates = named === -1
+    const gates = named === undefined
       ? tierRun(tier)
-      : LADDER.filter((gate) => gate.run === process.argv[named + 1]);
+      : LADDER.filter((gate) => gate.run === named);
 
     if (gates.length === 0) {
       console.error('ladder --audit-closure --gate: expected an exact command from the declared gate table');
@@ -4158,32 +4140,30 @@ if (import.meta.main) {
     }
 
     console.log(
-      `\naudit-closure ${named === -1 ? `--tier=${tier}` : '--gate'}: ${String(audited)} gate(s) audited, `
+      `\naudit-closure ${named === undefined ? `--tier=${tier}` : '--gate'}: ${String(audited)} gate(s) audited, `
       + `${String(holes)} with undeclared reads, ${String(unproven)} red under the trace`,
     );
     process.exit(holes === 0 && unproven === 0 ? 0 : 1);
   }
 
-  const gateAt = process.argv.indexOf('--gate');
-  const selectedGate = gateAt === -1 ? undefined : LADDER.find((gate) => gate.run === process.argv[gateAt + 1]);
+  const selectedGate = cli.gate === undefined ? undefined : LADDER.find((gate) => gate.run === cli.gate);
 
-  if (gateAt !== -1 && selectedGate === undefined) {
+  if (cli.gate !== undefined && selectedGate === undefined) {
     console.error('ladder --gate: expected an exact command from the declared gate table');
     process.exit(2);
   }
 
   // A changed run proves the native selection only; CI still runs every complete row.
-  const changedFrom = process.argv.find((argument) => argument.startsWith('--changed='))?.slice('--changed='.length);
+  const changedFrom = cli.changed;
   // `--deploy-phase=<phase>[,<phase>…]`: phases of the deploy, their plan rows through ONE wave, the way deploy.sh
   // runs them. Every row runs to its end whatever goes red, so one run reports every red (L18).
-  const phaseAsked = process.argv.find((argument) => argument.startsWith('--deploy-phase='))?.slice('--deploy-phase='.length);
+  const phaseAsked = cli['deploy-phase'];
   const phasesAsked = phaseAsked?.split(',') ?? [];
   const deployPhases = DEPLOY_PHASES.filter((candidate) => phasesAsked.includes(candidate));
   const deployPhase = phaseAsked === undefined || deployPhases.length !== phasesAsked.length ? undefined : deployPhases;
-  const flag = process.argv.find((argument) => argument.startsWith('--tier='));
 
   const asked = (selectedGate === undefined || changedFrom !== undefined) && phaseAsked === undefined
-    ? flag?.slice('--tier='.length) ?? (changedFrom === undefined ? undefined : 'commit')
+    ? cli.tier ?? (changedFrom === undefined ? undefined : 'commit')
     : 'deploy';
 
   const tier = TIERS.find((candidate) => candidate === asked);
@@ -4203,15 +4183,15 @@ if (import.meta.main) {
   const armadaRows = deployPhase === undefined || selectedGate !== undefined ? [] : phaseGates.filter(onArmada);
   const declared = selectedGate === undefined ? phaseGates.filter((gate) => !armadaRows.includes(gate)) : [selectedGate];
 
-  const verdictPath = process.argv.find((argument) => argument.startsWith('--verdicts='))?.slice('--verdicts='.length);
+  const verdictPath = cli.verdicts;
 
   if (verdictPath !== undefined && Bun.spawnSync(['git', 'status', '--porcelain'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim() !== '') {
     throw new Error('CI row verdicts require a clean full SHA; commit the tree first');
   }
 
-  const costs = ciPlanCosts();
+  const costs = ciPlanCosts(cli['ci-costs']);
   // `--ci-row`: one CI unit, as the container runner runs them, each in its own task.
-  const ciRow = process.argv.find((argument) => argument.startsWith('--ci-row='))?.slice('--ci-row='.length);
+  const ciRow = cli['ci-row'];
 
   // A deploy phase's armada job runs its rows the same way (`armadaPlan`).
   const rowGate = ciRow === undefined ? undefined
@@ -4221,7 +4201,7 @@ if (import.meta.main) {
 
   const evidenceDir = rowGate !== undefined && onArmada(rowGate) ? adoptDeployEntry(rowGate) : undefined;
   // The task's own artifacts directory (`.armada.json`'s `{artifacts}`), which armada keeps and hands the run back.
-  const artifactsDir = process.argv.find((argument) => argument.startsWith('--artifacts='))?.slice('--artifacts='.length);
+  const artifactsDir = cli.artifacts;
   const evidence = evidenceDir === undefined || artifactsDir === undefined ? undefined : { dir: evidenceDir, artifacts: artifactsDir };
 
   const chosen = rowGate === undefined ? declared : [rowGate];
@@ -4264,7 +4244,7 @@ if (import.meta.main) {
 
   // `--skip=<why>` with `--deploy-phase`: the deploy cannot run these rows (after a failed upload, nothing that reads
   // the deployment can test this build), so each is named, not run, and why, in its report.
-  const skipWhy = process.argv.find((argument) => argument.startsWith('--skip='))?.slice('--skip='.length);
+  const skipWhy = cli.skip;
 
   if (skipWhy !== undefined && deployPhase !== undefined) {
     for (const gate of [...gates, ...armadaRows]) {
@@ -4320,7 +4300,7 @@ if (import.meta.main) {
   // quiet one. A derived gate runs under exactly the environment its key
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
-  const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: process.argv.includes('--no-cache') });
+  const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: cli['no-cache'] === true });
   const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
   const store = storeAt(defaultStoreDirectory());
@@ -4385,7 +4365,7 @@ if (import.meta.main) {
   // costs, the box's caps and the one-at-a-time browser lane), each gate's output printed whole when it ends; in a
   // tier, a gate that declares a phase runs alone first, as the deploy's preflight does. One gate, or `--serial`, runs
   // in order with its output live, which is how `--gate` reads it.
-  const concurrent = pending.length > 1 && !process.argv.includes('--serial');
+  const concurrent = pending.length > 1 && cli.serial !== true;
   let stdio: 'inherit' | 'pipe' | 'tee' = 'inherit';
   // A CI row reports its output and each file's seconds in its verdict file.
   const verdictRows = rowGate !== undefined;

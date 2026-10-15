@@ -12,8 +12,12 @@ import {
 } from '../src/index';
 import { statedRetryAfterMs } from '../src/providers/fallback-cooldown';
 import {
-  KinuError, createLineLogger, createRecordingLogger, renderThrownChain, setDiagnosticsSink,
+  KinuError,
+  createLineLogger,
+  renderThrownChain,
+  setDiagnosticsSink,
 } from '../src/obs/index';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 interface CircularProviderError {
   code: undefined;
@@ -139,6 +143,9 @@ describe('describeProviderError', () => {
       status: 400,
     });
     expect(providerFailureFacts({ cause: '  plain stream text  ' })).toEqual({ message: 'plain stream text' });
+    // core-rest review P1-31: Cloudflare's envelope read as an unrecognised error, though retry classified it.
+    expect(providerFailureFacts({ cause: { success: false, errors: [{ code: 3040, message: 'Capacity temporarily exceeded' }] } }))
+      .toEqual({ message: 'Capacity temporarily exceeded', providerCode: '3040' });
     expect(providerFailureFacts({ cause: undefined }).providerCode).toBeUndefined();
   });
 
@@ -311,5 +318,19 @@ describe('a Cloudflare AI refusal reaches the user in Cloudflare\'s words', () =
     });
 
     expect(statedRetryAfterMs({ cause: thrown }, 0)).toBe(600_000);
+  });
+
+  // core-rest review P2-22: the walk stopped at four causes, so a wait stated by a deeper wrapper was never honoured.
+  test('a wait stated five causes down is honoured, and a chain that loops ends', () => {
+    const deep = new Error('one', { cause: new Error('two', { cause: new Error('three', { cause: new Error('four', {
+      cause: new Error('five', { cause: Object.assign(new Error('the gateway'), { retryAfterMs: 7_000 }) }),
+    }) }) }) });
+
+    const looping = new Error('looping');
+
+    looping.cause = new Error('back', { cause: looping });
+
+    expect(statedRetryAfterMs({ cause: deep }, 0)).toBe(7_000);
+    expect(statedRetryAfterMs({ cause: looping }, 0)).toBeNull();
   });
 });

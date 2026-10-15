@@ -11,7 +11,9 @@ import { statelessResponses } from './util';
 import { heardFetch } from './middleware/attempt';
 import { asFetchFunction } from './fetch-shim';
 
-export type WireProtocol = 'responses' | 'messages' | 'chat-completions';
+/** `openai-chat`: OpenAI's own Chat Completions, through OpenAI's client, which knows its token field and its reasoning
+ *  models; `chat-completions` is any compatible endpoint's. */
+export type WireProtocol = 'responses' | 'messages' | 'chat-completions' | 'openai-chat';
 
 const OPENAI_AUTHOR = 'openai/';
 
@@ -75,6 +77,10 @@ export function createWireModel(input: WireModelInput): LanguageModelV4 {
 
   if (input.protocol === 'messages') {
     return lazyModel(name, modelId, async () => (await import('@ai-sdk/anthropic')).createAnthropic({ name, baseURL, ...anthropicAuth(headers ?? {}), ...fetched })(modelId));
+  }
+
+  if (input.protocol === 'openai-chat') {
+    return lazyModel(`${name}.chat`, modelId, async () => (await import('@ai-sdk/openai')).createOpenAI({ name, baseURL, apiKey: 'placeholder', headers, ...fetched }).chat(modelId));
   }
 
   return input.protocol === 'responses'

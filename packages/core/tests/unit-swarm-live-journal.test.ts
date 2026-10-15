@@ -3,11 +3,10 @@
  * journal held at that instant, so the test asserts the row's durable sequence, not a callback count.
  */
 import { describe, expect, test } from 'bun:test';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend, createRecordingLogger } from '@kinu.run/test-utils';
 import type { LanguageModelV4Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
 import { swarmSeats } from './helpers-actor-host';
-import { createRecordingLogger } from '../src/obs/index';
 import { runSwarm, type SwarmRunDeps } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import { HeadJournal } from '../src/heads/journal';

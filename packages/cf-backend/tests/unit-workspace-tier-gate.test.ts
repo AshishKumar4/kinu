@@ -136,7 +136,6 @@ const GATED_CALLS: GatedCall[] = [
     run: (u, c) => u.putWorkspaceOverview(c, WORKSPACE, { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] }),
   },
 
-  { capability: 'peers.grants', name: 'hasPeerGrant', run: (u, c) => u.hasPeerGrant(c, 'scout', 'b'.repeat(32)) },
 
   { capability: 'experience.read', name: 'searchExperience', run: (u, c) => u.searchExperience(c, { query: 'deploy' }) },
   { capability: 'experience.read', name: 'getExperienceEntry', run: (u, c) => u.getExperienceEntry(c, 'exp-nope') },
@@ -144,7 +143,7 @@ const GATED_CALLS: GatedCall[] = [
     capability: 'experience.write',
     name: 'publishExperience',
     run: (u, c) => u.publishExperience(c, {
-      kind: 'fact', key: 'deploy.target', title: 'deploy.target',
+      key: 'deploy.target', title: 'deploy.target',
       payload: { kind: 'fact', key: 'deploy.target', value: 'x.workers.dev', confidence: 1 },
       evidence: 'held at confidence 1.00',
     }),
@@ -169,14 +168,14 @@ const GATED_CALLS: GatedCall[] = [
     capability: 'auth_tokens',
     name: 'issueCliAgentConnectTicket',
     run: (u, c) => u.issueCliAgentConnectTicket(c, {
-      userId: USER_ID, agentClass: 'orchestrator-agent', agentName: WORKSPACE, cliTokenHash: TOKEN_HASH,
+      userId: USER_ID, agentName: WORKSPACE, cliTokenHash: TOKEN_HASH,
     }),
   },
   {
     capability: 'auth_tokens',
     name: 'verifyCliAgentConnectTicket',
     run: (u, c) => u.verifyCliAgentConnectTicket(c, `pat_${USER_ID}_${'x'.repeat(32)}`, {
-      userId: USER_ID, agentClass: 'orchestrator-agent', agentName: WORKSPACE, capability: 'agent.websocket',
+      userId: USER_ID, agentName: WORKSPACE,
     }),
   },
   {
@@ -677,7 +676,7 @@ describe('facets attenuate with their workspace', () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     const facetCaller: UserCaller = { workspaceToken: harness.token };
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc(facetCaller, 'statPath', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.deviceCall(facetCaller, 'statPath', ['/tmp/a'], { agentName: WORKSPACE });
     expect(await harness.userDO.setDeviceTier(await testOwner(), 'dev-1', 'raw')).toEqual({ ok: true });
 
     // A facet naming anything still gets workspace-a's answer: its identity is the token, not the argument.
@@ -695,12 +694,12 @@ describe('facets attenuate with their workspace', () => {
   test('a workspace cannot ride a sibling\'s remembered device grant', async () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     harness.consentDecision = 'always';
-    await harness.userDO.deviceRpc({ workspaceToken: harness.token }, 'statPath', ['/tmp/a'], { agentName: WORKSPACE });
+    await harness.deviceCall({ workspaceToken: harness.token }, 'statPath', ['/tmp/a'], { agentName: WORKSPACE });
     harness.consentDecision = 'deny';
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
 
     // Consent resolves against the proven caller, so a borrowed claim is asked, not waved through.
-    await expect(harness.userDO.deviceRpc(sibling, 'exec', ['ls'], { agentName: WORKSPACE }))
+    await expect(harness.deviceCall(sibling, 'exec', ['ls'], { agentName: WORKSPACE }))
       .rejects.toThrow('device use was not approved');
     expect(harness.consentPrompts.filter((p) => p.workspace === OTHER_WORKSPACE)).toEqual([{
       workspace: OTHER_WORKSPACE,

@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import type { LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import { PendingSendStore, type JsonObject, type WorkMode } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { fakeModel, gatedFactCallStream, setup, steerStatuses, textStream, transcript, turnStarts } from './helpers/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
+import { fakeModel, gatedToolCallStream, setup, steerStatuses, textStream, transcript, turnStarts } from './helpers/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
 /** Its first answer waits for the test, in one step: what arrives meanwhile is still owed when the turn ends. */
@@ -89,7 +90,7 @@ describe('a send asked where it stands, from its durable facts', () => {
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
-      doStream: async () => ({ stream: calls++ === 0 ? gatedFactCallStream('call-1', gate.promise, usage) : textStream('read it', usage) }),
+      doStream: async () => ({ stream: calls++ === 0 ? gatedToolCallStream('call-1', gate.promise, usage) : textStream('read it', usage) }),
     });
 
     const { session, events } = setup('unused', model);

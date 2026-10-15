@@ -15,12 +15,14 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider, CHAT_SESSION_ID, JsonObjectSchema, WORKSPACE_RUN_ID, usageTotal, profileCatalogDigest, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY, type AgentsToolDeps, type JsonObject, type JsonValue, type ProfileCatalogEnvelope, defaultLoopOrigin, MergeOutputSchema,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
-import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
+import { cloudProxyBaseURL } from '@kinu.run/core';
+import { createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { nodeSeatFactory } from './actor-fixture';
 import * as v from 'valibot';
-import { resolverRest, namedSpec, textStream, gatedFactCallStream, abortableTextStream, headStreamFrames, DUMMY_LLM, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, failAssistantEntryWrite, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, searchingModel, SEARCH_ASK, codingSearchModel, setupWithResolver, jobResult, turnStarts, steerStatuses, writeFocusedSkill, messageText, runThenAnswerModel, gateTurn, } from './helpers/local-session';
+import { resolverRest, namedSpec, textStream, gatedToolCallStream, abortableTextStream, headStreamFrames, DUMMY_LLM, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, failAssistantEntryWrite, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, searchingModel, SEARCH_ASK, codingSearchModel, setupWithResolver, jobResult, turnStarts, steerStatuses, writeFocusedSkill, messageText, runThenAnswerModel, gateTurn, } from './helpers/local-session';
 
 describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', () => {
   /** Call #1 streams a gated `fact` call so a test can steer before the step boundary; call #2 answers. Captures every prompt. */
@@ -40,7 +42,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
         if (calls === 1) {
           return {
-            stream: gatedFactCallStream('call-1', gate, usage),
+            stream: gatedToolCallStream('call-1', gate, usage),
             response: { headers: {} },
           };
         }
@@ -150,7 +152,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
         if (prompts.length > 2) return fakeModel('done').doStream(options);
 
-        return { stream: gatedFactCallStream(`call-${String(prompts.length)}`, prompts.length === 1 ? gate.promise : Promise.resolve(), usage), response: { headers: {} } };
+        return { stream: gatedToolCallStream(`call-${String(prompts.length)}`, prompts.length === 1 ? gate.promise : Promise.resolve(), usage), response: { headers: {} } };
       },
     });
 
@@ -286,10 +288,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
             stream: new ReadableStream({
               async start(controller) {
                 controller.enqueue({ type: 'stream-start', warnings: [] });
-                controller.enqueue({
-                  type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
-                  input: JSON.stringify({ op: 'recall', key: 'probe' }),
-                });
+                controller.enqueue({ type: 'tool-call', toolCallId: 'call-1', toolName: 'file', input: JSON.stringify({ path: 'probe.txt' }) });
                 await toolStep.promise;
                 controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
                 controller.close();
@@ -376,7 +375,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
         if (calls === 1) {
           return {
-            stream: gatedFactCallStream('call_ed15d29f352a4735e6b01b5', gate, usage),
+            stream: gatedToolCallStream('call_ed15d29f352a4735e6b01b5', gate, usage),
             response: { headers: {} },
           };
         }
@@ -431,7 +430,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
         if (calls === 1) {
           return {
-            stream: gatedFactCallStream('call-1', gate, usage),
+            stream: gatedToolCallStream('call-1', gate, usage),
             response: { headers: {} },
           };
         }
@@ -543,10 +542,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
                   controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
                 }, { once: true });
                 controller.enqueue({ type: 'stream-start', warnings: [] });
-                controller.enqueue({
-                  type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
-                  input: JSON.stringify({ op: 'recall', key: 'probe' }),
-                });
+                controller.enqueue({ type: 'tool-call', toolCallId: 'call-1', toolName: 'file', input: JSON.stringify({ path: 'probe.txt' }) });
                 await stepGate.promise;
                 controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
                 controller.close();

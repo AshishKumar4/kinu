@@ -32,10 +32,10 @@ import {
   auditCitations, auditCoverage, citations, isGovernedCitationFile, type Citations,
 } from './lean-citations';
 import { isTextSource, isVendoredSource, trackedFiles } from './sources';
+import { REPO_ROOT as repoRoot } from './repo-root';
 import { LADDER } from './ladder';
 import { stringValues, tsDeclarations } from '../lean/ts-refs.mjs';
 
-const repoRoot = resolve(import.meta.dir, '..');
 
 /** Real modules, so a fixture exercises resolution rather than mocking it. */
 const ARBITRATION = 'lean/Kinu/Exploration/Arbitration.lean';

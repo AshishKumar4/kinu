@@ -392,7 +392,7 @@ const SetModelSchema = v.object({ spec: v.string() });
 
 /** The executor's display fields and its producer-owned command refusal.
  * Success omits refusal; historical responses may lack classification. */
-const ExecutorCommandSchema = v.object({
+export const ExecutorCommandSchema = v.object({
   stdout: v.optional(v.string()),
   stderr: v.optional(v.string()),
   exitCode: v.optional(v.number()),
@@ -449,7 +449,6 @@ const PublicBackgroundJobSchema = v.object({
   /** When the job began, in milliseconds since the epoch. */
   createdAt: v.optional(v.number()),
   settledAt: v.optional(v.nullable(v.number())),
-  resumeAttempts: v.optional(v.number()),
 });
 
 const BackgroundJobsSchema = v.array(PublicBackgroundJobSchema);

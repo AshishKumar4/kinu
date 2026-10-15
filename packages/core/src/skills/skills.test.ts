@@ -7,7 +7,7 @@ import { exists, readText, type VFS, type VfsDirent, writeText } from '@nimbus-s
  */
 
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, createRecordingLogger } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../context-window';
 import { estimateTokens } from '../token-estimate';
 import {
@@ -26,7 +26,7 @@ import { buildSystemPromptSync } from '../prompt';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { InstructionTrustResolver } from '../safety/instruction-trust';
-import { createRecordingLogger, setDiagnosticsSink } from '../obs/index';
+import { setDiagnosticsSink } from '../obs/index';
 
 /** The `readFile` list proves whether a body was fetched. */
 interface VfsCalls { readFile: string[]; stat: string[]; readdir: string[] }

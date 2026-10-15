@@ -4,7 +4,6 @@
  */
 import * as v from 'valibot';
 import { parseJsonValue } from '../utils/json';
-import type { ARMS } from './artifact-schema';
 
 const DAY_MS = 86_400_000;
 
@@ -17,7 +16,7 @@ const LOOKS = 3;
 /** z for a one-sided α of 0.05/3. */
 const Z = 2.128;
 
-export type TrialArm = (typeof ARMS)[number];
+export type TrialArm = 'candidate' | 'incumbent';
 
 export interface LiveTrial {
   readonly trialId: string;

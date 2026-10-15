@@ -26,12 +26,12 @@ import { FAILURE_SURFACES, failureSurface } from '../tools/oxlint/anti-slop/rule
 
 import { assertMeasured, finding, refuseLock, shrinkOnly, type LockRefusal, type LockedNumber } from './gate-ratchet';
 import { readSources } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   declaredName, functionOwner, identifierCalleeName, isFunctionLike, literalString, memberCalleeName, parse, superClassName, walk,
   type SyntaxNode,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/error-model.lock.json`;
 
@@ -62,7 +62,7 @@ export const DECLARED = byFile([
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
     mechanisms: MECHANISMS, reason: `${surface.type}'s one runner rethrows its typed failure or a defect`,
   }] as const),
-  ...['packages/core/src/obs/tracer.ts', 'packages/core/src/obs/agent-tracing.ts', 'packages/cf-backend/src/obs/cf-tracer.ts'].map(file => [file, {
+  ...['packages/test-utils/src/recording.ts', 'packages/core/src/obs/agent-tracing.ts', 'packages/cf-backend/src/obs/cf-tracer.ts'].map(file => [file, {
     mechanisms: ['promise-rejection'],
     reason: 'a span hands its caller\'s promise back unchanged, so a pipelined RPC stub keeps pipelining; '
       + '`then(close, close)` observes it settle without deriving an unhandled rejection',
@@ -115,7 +115,7 @@ export const DECLARED = byFile([
     reason: 'session events reach the frontend listener in order, synchronously when it answers synchronously; a promise '
       + 'chain keeps that order (settle\'s hops would reorder events), and a listener\'s failure is reported, never the loop\'s end',
   }],
-  ...['packages/agent-utils/src/core/utils.ts', 'packages/agent-utils/src/memory/store.ts', 'packages/agent-utils/src/vfs/addressing.ts'].map(file => [file, {
+  ...['packages/agent-utils/src/core/utils.ts', 'packages/agent-utils/src/memory/store.ts'].map(file => [file, {
     mechanisms: ['throw', 'catch'],
     reason: 'agent-utils sits below core and holds no runner: a leaf utility throws and catches as plain async code, '
       + 'and core brings each failure in with `attempt`',
@@ -125,6 +125,17 @@ export const DECLARED = byFile([
     reason: 'the checkpoint engine the device daemon runs as a generated copy holds no runner, so the daemon\'s '
       + 'dependency-free JavaScript runs it unchanged: it throws and catches as plain async code, and each host brings '
       + 'a failure in at its own edge',
+  }],
+  ['packages/cli-backend/src/machine-pidfile.ts', {
+    mechanisms: ['throw', 'catch'],
+    reason: 'the machine pidfile protocol the device daemon claims through as well: its CommonJS build carries this leaf, '
+      + 'which holds no runner, so it throws and catches as plain code, and each caller brings a failure in at its own edge',
+  }],
+  ['packages/core/src/workspace-birth.ts', {
+    mechanisms: ['promise-rejection'],
+    within: ['bornWithoutModel'],
+    reason: 'the `LLM` contract a birth runtime holds: a workspace being born calls no model, and the contract fails a call '
+      + 'by its promise, as every other implementation does',
   }],
   ['packages/compaction/src/codec.ts', {
     mechanisms: ['throw', 'catch'],
@@ -158,11 +169,6 @@ export const DECLARED = byFile([
     within: ['createWorkersTracer'],
     reason: 'a span wraps its caller\'s synchronous call: a throw is recorded on the span and rethrown unchanged, so the '
       + 'caller sees its own failure',
-  }],
-  ['packages/core/src/layergate/layers.ts', {
-    mechanisms: ['throw', 'catch'],
-    reason: 'the Layergate\'s literal fixtures stand in for collaborators: each throws or rejects as that collaborator does, '
-      + 'so a layer\'s answer to it is observed byte for byte',
   }],
   ['packages/cf-backend/src/gallery-drive.tsx', {
     mechanisms: ['throw', 'catch'],
@@ -217,7 +223,7 @@ export const DECLARED = byFile([
     ['packages/cf-backend/src/cli/auth-store.ts', ['RateLimitError', 'CliAuthCodeError']],
     ['packages/core/src/mission-budget.ts', ['MissionBudgetExhausted']],
     ['packages/core/src/providers/util.ts', ['StaleModelList']],
-    ['packages/core/src/state/store-reset.ts', ['StoragePredatesResetError']],
+    ['packages/core/src/identity/schema-stamp.ts', ['StoragePredatesReleaseError']],
     ['packages/core/src/tools/db-codemode.ts', ['AppBatchError']],
     ['packages/core/src/types/file-edits.ts', ['FileRefusalError']],
 
@@ -282,6 +288,8 @@ export const DECLARED = byFile([
       'the terminal routes\' HTTP JSON bodies'],
     ['packages/cf-backend/src/user/routes.ts', ['body'],
       'the user routes\' HTTP JSON bodies, read by the browser'],
+    ['packages/cf-backend/src/user/account-api.ts', ['body'],
+      'the account routes\' HTTP JSON bodies, read by the browser and the CLI\'s fetch alike'],
     ['packages/cf-backend/src/user/devices.ts', ['renameDevice', 'verifyDeviceToken', 'issueDeviceConnectTicket', 'verifyDeviceConnectTicket', 'setDeviceTier', 'revokeDeviceConsent', 'acknowledgeUnstoppedDevice', 'sweepAndRevokeDevice'],
       'UserDO device and ticket verdicts read across the isolate'],
     ['packages/cf-backend/src/user/drive.ts', ['DriveAnswer', 'driveOp', 'drive_writeChunk'],
@@ -388,8 +396,6 @@ export const DECLARED = byFile([
       'the tool ledger\'s stored success flag for one call'],
     ['packages/core/src/heads/head-inference.ts', ['execute'],
       'a head tool call\'s stored outcome record'],
-    ['packages/core/src/layergate/layers.ts', ['probes', 'observe', 'small'],
-      'layer-gate fixtures: tool answers and stored records the probes observe and hash'],
     ['packages/core/src/bench/split.ts', ['validateWithRetries'],
       'a seeded task\'s validation report: whether its oracle passed, and on which attempt'],
     ['packages/core/src/vfs/context-plane.ts', ['write'],

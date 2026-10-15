@@ -3,18 +3,16 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
-import { createTestActorsOver, handClock, hostDeliveries, oneMachine, present, toolExecute } from '@kinu.run/test-utils';
+import { createTestActorsOver, handClock, hostDeliveries, oneMachine, present, toolExecute, isBackgroundHandle } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { createHubDeviceTransport, type DeviceHubClient } from '../src/execution/hub-device-transport';
 import type { DeviceExecOutput } from '../src/execution/device-tunnel';
 import type { ExecutorProvider } from '../src/execution/types';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
-import { isBackgroundHandle } from '../src/jobs/threshold';
 import { wrapToolsForBackground, type BackgroundableTool } from '../src/jobs/background-wrap';
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner, type BackgroundJobRunnerDeps } from '../src/jobs/runner';
-import { recordServingJobs, type PortHolders } from '../src/jobs/serving';
 import { followJobOutput, JOB_OUTPUT_EVENT, JobOutputFeeds, type JobOutputFrame, type JobOutputTail } from '../src/jobs/live-output';
 import { REAL_CLOCK } from '../src/types/clock';
 import { listBackgroundJobs } from '../src/read-models/background-jobs';
@@ -348,9 +346,6 @@ describe("a detached workspace command and the agent's next one", () => {
   });
 });
 
-/** The port the agent exposed. */
-const SERVED = 8001;
-
 describe('a sandbox command a job takes', () => {
   // eval-site-preview-1-2ypddc, staging f75f06932, 2026-10-01: `node server.js` in the sandbox outran the window and
   // its job read as running forever, though all it did was serve the port the agent then exposed. The command carries
@@ -394,73 +389,6 @@ describe('a sandbox command a job takes', () => {
 
     serving.resolve({ stdout: 'stopped\n', stderr: '', exitCode: 0 });
     await Promise.all(bodies);
-  });
-
-  // The listing reads a record the job's own moments write (029e6cc1b): its detach and its settle. The real 30 s
-  // window is crossed on a hand clock, not waited out.
-  test('is recorded serving the exposed port it holds when it detaches, and no longer once it settles', async () => {
-    const clock = handClock(Date.now());
-    const serving = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
-    let stamp: string | null = null;
-    let listening = true;
-
-    // The sandbox's exposed port, held by the command that carried `stamp` while it listens.
-    const sandbox: PortHolders = {
-      exposedPorts: async () => [SERVED],
-      holders: async (ports) => (listening && ports.includes(SERVED) ? [{ port: SERVED, stamp }] : []),
-      answersFor: async () => null,
-    };
-
-    const settledRecords: Array<Promise<void>> = [];
-
-    const { runner, store, bodies } = wholeChainRunner((jobs) => ({
-      clock,
-      policy: () => BACKGROUND_POLICY.interactive,
-      // As the cf actor wires them: the detach waits on its record, the settle starts one.
-      onDetached: () => recordServingJobs(jobs, sandbox),
-      onSettled: () => { settledRecords.push(recordServingJobs(jobs, sandbox)); },
-    }));
-
-    const handle: SandboxHandle = {
-      // The server runs past its call's window: the window's time passes while it runs.
-      exec: (_command, opts) => {
-        stamp = opts?.env?.[JOB_STAMP_ENV] ?? null;
-        clock.advance(BACKGROUND_POLICY.interactive.detachAfterMs);
-
-        return serving.promise;
-      },
-      readFile: async () => ({}),
-      writeFile: async () => {},
-      listFiles: async () => ({ files: [] }),
-      deleteFile: async () => {},
-      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
-      unexposePort: async () => {},
-      getExposedPorts: async () => [],
-      ...sandboxHandleLifecycle,
-    };
-
-    const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(handle, { previewHostSuffix: 'preview.example.com' }));
-    const { rt } = createTestRuntime();
-
-    const wrapped = wrapToolsForBackground(
-      buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) }),
-      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
-    );
-
-    const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
-    const detached = await run({ command: 'node server.js', runtime: 'computer', why: 'serve the site' });
-
-    if (!isBackgroundHandle(detached)) throw new Error(`the server call did not detach: ${JSON.stringify(detached)}`);
-    expect(listBackgroundJobs(store).map(({ id, status }) => ({ id, status }))).toEqual([{ id: detached.jobId, status: 'serving' }]);
-
-    // The server stops: its job settles, and nothing holds the port.
-    listening = false;
-    serving.resolve({ stdout: 'stopped\n', stderr: '', exitCode: 0 });
-    await Promise.all(bodies);
-    await Promise.all(settledRecords);
-
-    expect(store.get(detached.jobId)).toMatchObject({ status: 'completed', serves: null });
   });
 });
 

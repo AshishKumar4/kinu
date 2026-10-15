@@ -8,11 +8,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-  createRecordingLogger,
   KinuError,
   toKinuError,
 } from '../src/obs/index';
-import { runToExit } from '@kinu.run/test-utils';
+import { runToExit, createRecordingLogger } from '@kinu.run/test-utils';
 
 const here = dirname(fileURLToPath(import.meta.url));
 

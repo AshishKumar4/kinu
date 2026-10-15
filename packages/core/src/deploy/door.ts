@@ -9,6 +9,7 @@ import {
   type DeployOptions, type DeploySnapshot,
 } from './frames';
 import type { DeployInputs } from './inputs';
+import type { DeployToken } from './pkce';
 import { DEPLOY_API } from './paths';
 import { DEPLOY_SOCKET_PROTOCOL, type DeployRunTicket } from './session';
 
@@ -35,17 +36,11 @@ interface DeployProviderKey {
   readonly value: string;
 }
 
-export interface DeployTokenPair {
-  readonly accessToken: string;
-  readonly refreshToken: string;
-  readonly expiresInSeconds: number;
-}
-
 export interface DeployDoor {
   snapshot(): Promise<DeploySnapshot>;
   accounts(): Promise<readonly DeployChoice[]>;
   zones(): Promise<readonly DeployChoice[]>;
-  holdToken(token: DeployTokenPair): Promise<void>;
+  holdToken(token: DeployToken): Promise<void>;
   holdProviderKey(name: string, value: string): Promise<string>;
   start(inputs: DeployInputs): Promise<DeploySnapshot>;
   retry(stepId: string): Promise<DeploySnapshot>;
@@ -77,7 +72,7 @@ export function deployDoor(run: DeployRunAddress, fetchImpl: typeof fetch = fetc
   function post<Schema extends v.GenericSchema>(
     schema: Schema,
     tail: string,
-    body?: DeployTokenPair | DeployProviderKey | DeployInputs,
+    body?: DeployToken | DeployProviderKey | DeployInputs,
   ): Effect.Effect<v.InferOutput<Schema>> {
     return read(schema, at(tail), {
       method: 'POST',
@@ -90,7 +85,7 @@ export function deployDoor(run: DeployRunAddress, fetchImpl: typeof fetch = fetc
     snapshot: () => settle(get(DeploySnapshotSchema, '')),
     accounts: () => settle(get(ChoicesSchema, '/accounts')),
     zones: () => settle(get(ChoicesSchema, '/zones')),
-    holdToken: (token: DeployTokenPair): Promise<void> => settle(Effect.asVoid(post(AuthorizedSchema, '/token', token))),
+    holdToken: (token: DeployToken): Promise<void> => settle(Effect.asVoid(post(AuthorizedSchema, '/token', token))),
     holdProviderKey: (name: string, value: string): Promise<string> =>
       settle(Effect.map(post(HeldSchema, '/keys', { name, value }), (answer) => answer.held)),
     start: (inputs: DeployInputs) => settle(post(DeploySnapshotSchema, '/start', inputs)),

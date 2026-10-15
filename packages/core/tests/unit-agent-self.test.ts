@@ -214,7 +214,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("jobResult on a SETTLED job passes the row through unchanged — the result is there to read", async () => {
     const settled: BackgroundJob = {
       id: "bgjob-1", kind: "shell", label: null, workMode: "build", status: "completed",
-      result: '"the output"', error: null, createdAt: 1, settledAt: 2, epoch: 0, resumeAttempts: 0,
+      result: '"the output"', error: null, createdAt: 1, settledAt: 2, epoch: 0,
       retriedBy: null,
       attemptStartedAt: 1, resumeAfter: null, serves: null,
     };
@@ -233,7 +233,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     // A bare {status:'running'} invites a poll loop; the shaped read states the wake contract instead.
     const running: BackgroundJob = {
       id: "bgjob-2", kind: "agents", label: null, workMode: "build", status: "running",
-      result: null, error: null, createdAt: 1, settledAt: null, epoch: 0, resumeAttempts: 0,
+      result: null, error: null, createdAt: 1, settledAt: null, epoch: 0,
       retriedBy: null,
       attemptStartedAt: 1, resumeAfter: null, serves: null,
     };

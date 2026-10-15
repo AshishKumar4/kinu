@@ -61,10 +61,10 @@ import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
 import { isProductSource, readMatching } from './sources';
+import { REPO_ROOT as REPO } from './repo-root';
 import { parse, walk } from './syntax';
 import { workerCompatibility } from '../packages/cf-backend/vite-agent-bundle';
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 /** Every wrangler config a deploy can use. */
 const WRANGLER_CONFIGS = ['packages/cf-backend/wrangler.jsonc'] as const;

@@ -7,17 +7,18 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { AwaitedList, present, scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
+import { AwaitedList, present, scratchDir, scratchPath, workspaceDatabase, createRecordingLogger } from '@kinu.run/test-utils';
 import {
   appendMemoryNote, CHAT_SESSION_ID, DYNAMIC_CONTEXT_OPEN_TAG, initWorkspaceSchema, workspaceSkillPath, WORKSPACE_SKILLS_DIR,
   type LLMProviderConfig,
 } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { createTestWorkspace } from '../../core/tests/helpers';
 import { streamFork } from '../../core/tests/helpers/fork-stream';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
 const DUMMY_LLM: LLMProviderConfig = {

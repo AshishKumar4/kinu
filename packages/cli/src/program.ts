@@ -2,6 +2,7 @@
 
 import { Effect } from 'effect';
 import { Command, Option } from 'commander';
+import { ACCESS_TOKEN_SCOPES } from '@kinu.run/core';
 import { settleSync } from '@kinu.run/core/obs';
 import { MODEL_OPTION_FLAG } from './options';
 import { createCommand } from './commands/create';
@@ -9,7 +10,7 @@ import { acpCommand } from './commands/acp';
 import { chatCommand } from './commands/chat';
 import { execCommand, runCommand } from './commands/run';
 import { authCommand, authSessionsCommand, logoutCommand, whoamiCommand } from './commands/auth';
-import { desktopCommand } from './commands/desktop';
+import { desktopCommand, type ConnectCommandOptions } from './commands/desktop';
 import { daemonCommand } from './commands/daemon';
 import { deployCommand } from './commands/deploy';
 import { setupCommand } from './commands/setup';
@@ -34,7 +35,7 @@ import {
 } from './commands/inspect';
 import { debugCommand } from './commands/debug';
 import { exportCommand, importCommand } from './commands/export-import';
-import { ACCESS_TOKEN_SCOPES, tokensCommand } from './commands/tokens';
+import { tokensCommand } from './commands/tokens';
 import { workspaceDeleteCommand } from './commands/workspace';
 import { setCommandExample, VERSION } from './display';
 
@@ -377,7 +378,9 @@ export function buildProgram(): Command {
     .description('Connect this PC so your agents can run commands on it')
     .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
     .option('--device <id>', 'The device a browser issued for this machine, from its connect command')
-    .action((opts: { label?: string; device?: string }) => desktopCommand('connect', opts));
+    .option('--join <ticket>', 'The ticket a browser\'s connect command carries: joins this machine with no sign-in here')
+    .option('--root <dir>', 'The folder your agents\' file calls are scoped to (default: your home directory)')
+    .action((opts: ConnectCommandOptions) => desktopCommand('connect', opts));
 
   program
     .command('desktop [action]')

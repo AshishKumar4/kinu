@@ -4,6 +4,7 @@ import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, whenActorTakesInput } from '../src/identity/workspace-actors';
 import { explorationActorKey } from '../src/identity/actor-key';
 import { actorHomeName } from '../src/vfs/agent-home';
+import type { SqlExecutor } from '../src/types/primitives';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
 
@@ -74,6 +75,24 @@ describe('one workspace actor directory', () => {
     // A swarm worker is keyed by its id, whatever it is named.
     const head = directory.describe(directory.create({ parent: main, name: explorationActorKey('n1'), origin: 'swarm', lifetime: 'task', creationId: 'n1' }));
     expect(head.storageKey).toBe(head.actorId);
+  });
+
+  // core-rest review P2-17: the retired set was written inside the caller's transaction and a rollback left it standing.
+  test('a retirement its transaction rolled back leaves the actor\'s handle usable', () => {
+    const { db, directory } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+    const hired = directory.apply(main, [], { action: 'register', name: 'reader', origin: 'agent', lifetime: 'durable', creationId: 'c-reader' });
+    const reader = directory.open(hired.reference.actorId);
+
+    expect(() => db.transaction(() => {
+      directory.apply(main, [], { action: 'retire', name: 'reader', reference: hired.reference });
+      expect(() => reader.assertCurrent()).toThrow(expect.objectContaining({ code: 'missing' }));
+      throw new Error('the caller failed after the retirement');
+    })()).toThrow('the caller failed after the retirement');
+
+    expect(reader.assertCurrent()).toBeUndefined();
+    directory.apply(main, [], { action: 'retire', name: 'reader', reference: hired.reference });
+    expect(() => reader.assertCurrent()).toThrow(expect.objectContaining({ code: 'missing' }));
   });
 
   test('foreign and forged handles cannot act as a parent', () => {
@@ -208,22 +227,38 @@ describe('one workspace actor directory', () => {
       VALUES (${actorId}, ${main.actorId}, 'x', ${actorId}, ${row.origin}, ${row.lifetime}, ${Date.now()}, 'c-bad')`).toThrow('CHECK constraint failed');
   });
 
+  /** A message to `actorId` through the input gate, recording each send it lets run. */
+  const sendRecorded = (sql: SqlExecutor, sent: string[]) => (actorId: string) => whenActorTakesInput(sql, actorId, () => {
+    sent.push(actorId);
+
+    return Promise.resolve('turn');
+  });
+
   test('a view-only agent refuses a message and never runs the send; a hire takes it', async () => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const background = directory.create({ parent: main, name: 'ask-refiner-a1', creationId: 'c-bg', origin: 'evolution', lifetime: 'task' });
     const hire = directory.create({ parent: main, name: 'reader', creationId: 'c-hire', origin: 'user', lifetime: 'durable' });
     const sent: string[] = [];
-
-    const send = (actorId: string) => whenActorTakesInput(sql, actorId, () => {
-      sent.push(actorId);
-
-      return Promise.resolve('turn');
-    });
+    const send = sendRecorded(sql, sent);
 
     await expect(send(background.actorId)).rejects.toMatchObject({ code: 'denied' });
     await expect(send(hire.actorId)).resolves.toBe('turn');
     expect(sent).toEqual([hire.actorId]);
+  });
+
+  // core-rest review P2-6: the gate read the origin alone, so an id with no agent, or a retired one, took the send.
+  test('an id that names no agent, or a retired one, refuses a message and never runs the send', async () => {
+    const { directory, sql } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+    const gone = directory.create({ parent: main, name: 'gone', creationId: 'c-gone', origin: 'user', lifetime: 'durable' });
+    void sql`UPDATE workspace_actors SET retiring_at = 1, deleted_at = 2 WHERE actor_id = ${gone.actorId}`;
+    const sent: string[] = [];
+    const send = sendRecorded(sql, sent);
+
+    await expect(send(gone.actorId)).rejects.toMatchObject({ code: 'missing' });
+    await expect(send('no-such-agent')).rejects.toMatchObject({ code: 'missing' });
+    expect(sent).toEqual([]);
   });
 
   test('each origin is stored as its preset: main feeds evolution, swarm and background agents are view-only task agents', () => {

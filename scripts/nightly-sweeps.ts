@@ -3,22 +3,24 @@
  * The nightly sweeps, on armada at one commit. Each needs no credential and no model, so each is an `armada map` over
  * its parts, every part a medium container of the commit's own environment (.armada.json):
  *
- *   flakes  every suite the CI tier runs, three seeded runs under --randomize (`bun run sweep:flakes`, scripts/flake-gate.ts)
- *   bench   every bench task's defect must break this repository's checks and its reverse restore them (`bench.ts validate`)
+ *   flakes    every suite the CI tier runs, three seeded runs under --randomize (`bun run sweep:flakes`, scripts/flake-gate.ts)
+ *   bench     every bench task's defect must break this repository's checks and its reverse restore them (`bench.ts validate`)
+ *   mutation  the mutation pilot's sample over core (`scripts/mutation-pilot.ts`), in a worktree made inside the container,
+ *             because the pilot mutates in place and refuses a main checkout; a survivor is a finding, not a red part
  *
  * They were GitHub workflows (flake-sweep.yml, bench.yml). Each part's report comes back as its armada output and is
  * kept under {@link REPORTS}. A red part makes the run exit 1; nothing retries or quarantines.
  *
- *   bun scripts/nightly-sweeps.ts run <rev> [flakes|bench]...   the named sweeps (default: both) at <rev>
- *   bun scripts/nightly-sweeps.ts install <branch>              a user timer that runs both at origin's <branch> each night
+ *   bun scripts/nightly-sweeps.ts run <rev> [flakes|bench|mutation]...   the named sweeps (default: all) at <rev>
+ *   bun scripts/nightly-sweeps.ts install <branch>                       a user timer that runs all at origin's <branch> each night
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { connect } from 'armada';
 import { drainArmadaProgress } from './armada-progress';
+import { REPO_ROOT as ROOT } from './repo-root';
 
-const ROOT = join(import.meta.dir, '..');
 
 /** The dedicated checkout the timer runs from, and no one edits. */
 export const WORKTREE = '/mnt/local/kinu/wt/nightly-sweeps';
@@ -27,7 +29,7 @@ export const WORKTREE = '/mnt/local/kinu/wt/nightly-sweeps';
 export const REPORTS = join(process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state'), 'kinu', 'nightly-sweeps');
 
 export interface Sweep {
-  readonly name: 'flakes' | 'bench';
+  readonly name: 'flakes' | 'bench' | 'mutation';
   readonly parts: number;
   /** One part's command; `{item}` is its 1-based number, `{out}` the report it leaves. */
   readonly command: readonly string[];
@@ -37,7 +39,8 @@ export interface Sweep {
 /**
  * Parts sized to the medium container. flakes: the swept rows' walls add up to 29 minutes a pass, 86 for the three
  * (2026-09-26, the 24-thread box), so sixteen parts finish in minutes. bench: one task took 130 s (2026-09-23) and
- * twenty shards hold about eight tasks each.
+ * twenty shards hold about eight tasks each. mutation: the pilot's 24 mutants, six a part, each part paying one core
+ * baseline and, per survivor, one more.
  */
 export const SWEEPS: readonly Sweep[] = [
   {
@@ -51,6 +54,16 @@ export const SWEEPS: readonly Sweep[] = [
     parts: 20,
     command: ['sh', '-c', 'bun scripts/bench.ts validate --run-root "$(mktemp -d /tmp/kinu-bench-XXXXXX)" --shard {item}/20; '
       + 'status=$?; tar -czf {out} bench-artifacts 2>/dev/null; exit $status'],
+    timeoutSeconds: 3600,
+  },
+  {
+    name: 'mutation',
+    parts: 4,
+    // `setup-worktree.sh` prepares the tree it runs in, so the part enters the worktree first; the whole chain writes
+    // the report, so a part that fails before the pilot starts says why.
+    command: ['sh', '-c', 'tree="$(mktemp -d /tmp/kinu-mutation-XXXXXX)/tree"; (git worktree add --quiet --detach "$tree" HEAD '
+      + '&& cd "$tree" && bash scripts/setup-worktree.sh >/dev/null && bun scripts/mutation-pilot.ts --shard {item}/4) '
+      + '> mutation-pilot.txt 2>&1; status=$?; tar -czf {out} mutation-pilot.txt 2>/dev/null; exit $status'],
     timeoutSeconds: 3600,
   },
 ];
@@ -159,7 +172,7 @@ function install(branch: string): void {
     if (run.exitCode !== 0) throw new Error(`systemctl --user ${argv.join(' ')} failed: ${run.stderr.toString().trim()}`);
   }
 
-  console.log(`nightly-sweeps: kinu-nightly-sweeps@${instance}.timer runs both sweeps at origin/${branch} each night from ${WORKTREE}`);
+  console.log(`nightly-sweeps: kinu-nightly-sweeps@${instance}.timer runs every sweep at origin/${branch} each night from ${WORKTREE}`);
 }
 
 if (import.meta.main) {
@@ -167,7 +180,7 @@ if (import.meta.main) {
   const unknown = named.filter((name) => !SWEEPS.some((sweep) => sweep.name === name));
 
   if (target === undefined || (command !== 'run' && command !== 'install') || unknown.length > 0) {
-    console.error('usage: bun scripts/nightly-sweeps.ts run <rev> [flakes|bench]... | install <branch>');
+    console.error('usage: bun scripts/nightly-sweeps.ts run <rev> [flakes|bench|mutation]... | install <branch>');
     process.exit(2);
   }
 

@@ -4,6 +4,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
+  aggregateScore,
   findComplementaryPair, renderMergePrompt, proposeMerge, runGepa,
   type GepaCandidate, type EvalInstance, type MetricOutcome,
 } from './index';
@@ -21,13 +22,9 @@ function seededRng(seed: number): () => number {
 function mkCandidate(
   source: string, scores: Record<string, number>, createdAt = 0,
 ): GepaCandidate {
-  const m = new Map(Object.entries(scores));
-  const total = Array.from(m.values()).reduce((a, b) => a + b, 0);
-
   return {
     id: source, parentId: null, source,
-    scores: m, feedback: new Map(),
-    aggregateScore: m.size > 0 ? total / m.size : 0,
+    scores: new Map(Object.entries(scores)), feedback: new Map(),
     createdAt,
   };
 }
@@ -192,7 +189,7 @@ describe('runGepa with Merge end-to-end', () => {
 
     // Merged candidate should have won.
     expect(result.winner.source).toBe('merged');
-    expect(result.winner.aggregateScore).toBeCloseTo(0.95, 3);
+    expect(aggregateScore(result.winner)).toBeCloseTo(0.95, 3);
   });
 
   // `useMerge: false` is covered in gepa.test.ts ('useMerge off means the operator never runs').

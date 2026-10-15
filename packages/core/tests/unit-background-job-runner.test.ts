@@ -16,11 +16,11 @@ import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
-import { createTestRuntime, createTestActors, hostDeliveries, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, hostDeliveries, toolExecute, workspaceDatabase, createRecordingLogger } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
 import { createSqlFiber } from '../src/execution/fiber';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { processJobHolder } from '../src/jobs/process-holder';
 import { scratchPath } from '@kinu.run/test-utils';
@@ -659,7 +659,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
     const job = store.get('jr');
     expect(job?.epoch).toBe(1);
-    expect(job?.resumeAttempts).toBe(1);
+    expect(job?.epoch).toBe(1);
     expect(job?.status).toBe('completed');
     expect(job?.result).toBe('{"text":"resumed answer"}');
     expect(seenInput).toEqual({ strategy: 'mcts', task: 't' });
@@ -701,7 +701,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
     const job = first.store.get('jc');
     expect(job?.status).toBe('running');
-    expect(job?.resumeAttempts).toBe(12);
+    expect(job?.epoch).toBe(12);
     expect(job?.error).toBeNull();
     expect(first.store.runningIds()).toEqual(['jc']);
     expect(last.enqueued).toHaveLength(0);
@@ -733,7 +733,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     const fresh = setup({ resume, db: first.db });
     await fresh.runner.recover({ jobId: 'jp', phase: 'running' });
 
-    expect(first.store.get('jp')?.resumeAttempts).toBe(9);
+    expect(first.store.get('jp')?.epoch).toBe(9);
     expect(first.store.get('jp')?.resumeAfter).toBe(armed);
   });
 
@@ -753,7 +753,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     // A swarm node has no `scheduleResume`/`resume`: the job must be left alone, no throw.
     const nowake = setup({ resume, db: first.db });
     await nowake.runner.recover({ jobId: 'jw', phase: 'running' });
-    expect(first.store.get('jw')?.resumeAttempts).toBe(1);
+    expect(first.store.get('jw')?.epoch).toBe(1);
   });
 
   test('a re-driven job is in flight for its whole drive, though its row already reads deferred', async () => {
@@ -780,7 +780,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     await runner.recover({ jobId: 'jd', phase: 'running' });
     await runner.recoverOrphans();
 
-    expect(store.get('jd')?.resumeAttempts).toBe(1);
+    expect(store.get('jd')?.epoch).toBe(1);
     expect(store.get('jd')?.epoch).toBe(1);
   });
 });
@@ -822,13 +822,13 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       expect(inFlight.map((j) => j.id)).toEqual(['jz']);
     }
 
-    expect(first.store.get('jz')?.resumeAttempts).toBe(6);
+    expect(first.store.get('jz')?.epoch).toBe(6);
 
     // A restart during the wait re-drives nothing but still counts the job in flight.
     first.store.deferResume('jz', Date.now() + 60_000);
     const waiting = await setup({ resume, db: first.db }).runner.recoverOrphans();
     expect(waiting.map((j) => j.id)).toEqual(['jz']);
-    expect(first.store.get('jz')?.resumeAttempts).toBe(6);
+    expect(first.store.get('jz')?.epoch).toBe(6);
     expect(first.store.get('jz')?.status).toBe('running');
     expect(first.store.runningIds()).toEqual(['jz']);
   });
@@ -855,7 +855,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     store.create({ id: 'jg', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     expect((await runner.recoverOrphans()).map((job) => job.id).sort()).toEqual(['jg', 'jl']);
-    expect({ live: store.get('jl')?.resumeAttempts, gone: store.get('jg')?.resumeAttempts }).toEqual({ live: 0, gone: 1 });
+    expect({ live: store.get('jl')?.epoch, gone: store.get('jg')?.epoch }).toEqual({ live: 0, gone: 1 });
     expect(Object.fromEntries(held)).toEqual({ jl: 'daemon', jg: 'this' });
     expect(held.get(runner.create('think', {}, 'build', new AbortController()))).toBe('this');
   });
@@ -915,7 +915,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 
     const holderOn = (db: Database, pid: number): JobHolder => processJobHolder(
       { sql: makeSql(db), execRaw: makeExecRaw(db), transactionSync: (write) => db.transaction(write).immediate() },
-      { pid, isAlive: (candidate) => alive.has(candidate) },
+      { pid, generation: '', isAlive: (holder) => alive.has(holder.pid) },
     );
 
     const racer = (db: Database, pid: number, name: string, holder = holderOn(db, pid)) => {
@@ -969,7 +969,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       await Promise.all([a.settled(), b.settled()]);
 
       expect(resumed).toEqual(['b']);
-      expect(a.store.get('jd')).toMatchObject({ status: 'completed', resumeAttempts: 1 });
+      expect(a.store.get('jd')).toMatchObject({ status: 'completed', epoch: 1 });
     } finally {
       close();
     }
@@ -995,7 +995,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       await b.settled();
 
       expect(resumed).toEqual([]);
-      expect(b.store.get(id)).toMatchObject({ status: 'running', epoch: 0, resumeAttempts: 0 });
+      expect(b.store.get(id)).toMatchObject({ status: 'running', epoch: 0 });
     } finally {
       close();
     }
@@ -1010,7 +1010,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     runner.detach(id, 'shell', new Promise<string>((resolve) => { finish = () => resolve('real result'); }));
 
     await runner.recoverOrphans();
-    expect(store.get(id)?.resumeAttempts).toBe(0);
+    expect(store.get(id)?.epoch).toBe(0);
 
     finish();
     await settled();
@@ -1053,15 +1053,15 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     first.store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     await setup({ resume, db: first.db }).runner.recoverDueResumes();
-    expect(first.store.get('jd')?.resumeAttempts).toBe(0);
+    expect(first.store.get('jd')?.epoch).toBe(0);
 
     first.store.deferResume('jd', Date.now() + 60_000);
     await setup({ resume, db: first.db }).runner.recoverDueResumes();
-    expect(first.store.get('jd')?.resumeAttempts).toBe(0);
+    expect(first.store.get('jd')?.epoch).toBe(0);
 
     first.store.deferResume('jd', Date.now() - 1);
     await setup({ resume, db: first.db }).runner.recoverDueResumes();
-    expect(first.store.get('jd')?.resumeAttempts).toBe(1);
+    expect(first.store.get('jd')?.epoch).toBe(1);
   });
 
   // An unreadable stored input must fail its own job without holding a slot or failing the gate.
@@ -1344,7 +1344,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
 
     store.reclaim('j1', store.epochOf('j1') ?? -1, 5_000);
     expect(store.get('j1')).toMatchObject({
-      attemptStartedAt: 5_000, resumeAttempts: 1, epoch: 1,
+      attemptStartedAt: 5_000, epoch: 1,
     });
   });
 
@@ -1471,7 +1471,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     await runner.recoverOrphans();
     await settled();
 
-    expect(store.get('bgjob-gen')?.resumeAttempts).toBe(3);
+    expect(store.get('bgjob-gen')?.epoch).toBe(3);
     expect(enqueued[0]?.text ?? '').toContain('generation 4');
   });
 

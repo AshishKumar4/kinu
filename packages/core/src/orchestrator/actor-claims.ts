@@ -13,7 +13,7 @@ import { AgentSequence, initAgentSequenceTable } from '../subordinates/report-se
 import { sqlCheckList } from '../identity/schema';
 import type { ActorTurnProgram } from './actor-program';
 import type { SessionHistory } from '../session/history';
-import type { ClaimFences } from '../session/messages';
+import { admissionRequestId, type ClaimFences } from '../session/messages';
 import type { ContextSelection } from '../session/context';
 import type { PromptCacheRoute } from '../prompting/cache-breakpoints';
 
@@ -109,6 +109,7 @@ export function cutsThrough(cut: TurnCut) {
   return { work: cut.workCuts + (cut.phase === 'work' ? 1 : 0), provider: cut.providerCuts + (cut.phase === 'provider' ? 1 : 0) };
 }
 
+/** A claim row as one reads it: its program only once bound. */
 export interface ClaimRow { turn_id: string; run_id: string; epoch: number; work_mode: WorkMode; phase: 'preparing' | 'admitted'; program_kind: ActorProgramIdentity['kind'] | null; program_version: number | null; program_digest: string | null; program_build: string | null; outcome: ClaimOutcome | null; claimed_at: number; withdrawn_through: number; answered: number }
 
 /** A claim minted as its execution opens: its epoch, which is its capability, and the execution it supersedes. */
@@ -179,7 +180,7 @@ export class ActorClaimStore {
     const { epoch } = input;
 
     const admission = await this.history.requests.prepare({
-      id: `${input.turnId}:${epoch}:admission`, turnId: input.turnId, runId: input.runId, epoch, revision: 0, step: null,
+      id: admissionRequestId(input.turnId, epoch), turnId: input.turnId, runId: input.runId, epoch, revision: 0, step: null,
       source: input.context,
       metadata: { program: { ...input.program }, workMode: input.workMode, ...(input.installedBuild !== undefined && { installedBuild: input.installedBuild }) },
     });
@@ -421,7 +422,6 @@ interface ClaimGuard {
   readonly selected: ContextSelection | null;
 }
 
-/** A claim row as one reads it: its program only once bound. */
 /** The actor's claims still open, newest first; read without a handle too, as a cold root reads them before it hosts
  *  anybody. */
 export function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): readonly StoredActorClaim[] {

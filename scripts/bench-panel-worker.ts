@@ -111,7 +111,7 @@ async function main(): Promise<void> {
 
   if (fresh) {
     await createWorkspace(db, {
-      name: input.workspaceName, purpose: input.purpose, llm: analyst, home: workspaceHome(db),
+      name: input.workspaceName, purpose: input.purpose, home: workspaceHome(db),
     });
     // `initSearchTables` and `initScaffoldTables` seed the search and scaffold
     // tables for the panel arms' starting point.
@@ -171,7 +171,6 @@ async function main(): Promise<void> {
       return { ...seat, sources: { ...seat.sources, models: { ...seat.sources.models, normalize: (spec) => spec, resolve: member } } };
     },
     ledgers: (actor) => seating.runLedgers(actor),
-    parentRuntime: rt,
     // The analyst synthesises the panel, through the same routed policy both
     // backends use rather than a second merge path this instrument maintains.
     profile: async () => analystProfile(),

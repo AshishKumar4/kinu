@@ -1,5 +1,5 @@
 // Backend conformance over the production `kinu create` + open chain; compareSurface fails on any
-// disagreement with core/src/conformance/manifest.ts.
+// disagreement with test-utils/src/conformance/manifest.ts.
 import { describe, test, expect, afterAll } from 'bun:test';
 
 import { homedir, tmpdir } from 'node:os';
@@ -7,21 +7,20 @@ import { join, resolve } from 'node:path';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
-  compareSurface, observedOpEnum, wiredProducers,
-  renderConformanceFindings, NO_COUNT_ENDPOINT, BUILTIN_PROFILE_CATALOG, profileCatalogDigest,
-  type ObservedSurface, type ProfileCatalog,
+  NO_COUNT_ENDPOINT, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, type ProfileCatalog,
 } from '@kinu.run/core';
 import {
   LocalAgentHost, openWorkspaceCLI,
   type CLIRuntime, type LocalModelResolver,
 } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
-import { resolveLLMConfig, agentDbPath, AGENT_HOME, listLocalRefsAllProjects, updateConfigFile } from '../src/config';
+import { resolveModelDefaults, agentDbPath, AGENT_HOME, listLocalRefsAllProjects, updateConfigFile } from '../src/config';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { present } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
+import { compareSurface, observedOpEnum, wiredProducers, renderConformanceFindings, type ObservedSurface } from '@kinu.run/test-utils/conformance';
 
-// Dummy provider config so resolveLLMConfig succeeds offline. Passed as arguments, not `process.env`:
+// Dummy provider config so resolveModelDefaults names a model offline. Passed as arguments, not `process.env`:
 // bun runs every file of an invocation in one process, so env set here leaks into later files.
 const OFFLINE_PROVIDER = {
   baseUrl: 'http://localhost:0/v1',
@@ -115,7 +114,8 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   let captured: CapturedTool[] = [];
   const model = capturingModel((tools) => { captured = tools; });
   const resolver = staticResolver(model);
-  const openConfig = { llm: resolveLLMConfig(OFFLINE_PROVIDER), cwd: scratchDir('cli-conformance-folder') };
+  const defaults = resolveModelDefaults(OFFLINE_PROVIDER);
+  const openConfig = { llm: defaults.endpoint, defaultSpec: defaults.spec, cwd: scratchDir('cli-conformance-folder') };
 
   const host = new LocalAgentHost({
     // The host binds planes from placement, never from an agent.db.

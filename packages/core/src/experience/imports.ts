@@ -30,7 +30,6 @@ export type ImportStatus = 'provisional' | 'corroborated';
 export interface ImportedExperienceRow {
   id: string;
   libraryId: string;
-  kind: ExperienceKind;
   key: string;
   title: string;
   payload: ExperiencePayload;
@@ -53,29 +52,29 @@ export function initImportedExperienceTable(execRaw: RawSqlExec): void {
     payload_json     TEXT NOT NULL,
     evidence         TEXT NOT NULL,
     source_workspace TEXT NOT NULL,
-    status           TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
     turn_ids         TEXT NOT NULL,
     imported_at      INTEGER NOT NULL,
+    -- Null while provisional.
     corroborated_at  INTEGER,
     PRIMARY KEY (actor_id, id)
   )`);
   // Unique per actor: two actors of one workspace may each adopt the same entry.
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_experience_library
     ON imported_experience(actor_id, library_id)`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_imported_experience_status
-    ON imported_experience(actor_id, status, imported_at DESC)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_imported_experience_recent
+    ON imported_experience(actor_id, imported_at DESC)`);
 }
 
 interface RawImportRow {
   id: string; library_id: string; kind: ExperienceKind; key: string; title: string;
   payload_json: string; evidence: string; source_workspace: string;
-  status: ImportStatus; turn_ids: string; imported_at: number; corroborated_at: number | null;
+  turn_ids: string; imported_at: number; corroborated_at: number | null;
 }
 
 function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
   const payload = parseExperiencePayload(r.payload_json);
 
-  if (!payload || payload.kind !== r.kind) return null;
+  if (!payload) return null;
   const rawTurnIds: unknown = tolerate(() => JSON.parse(r.turn_ids), 'malformed-input');
   const parsedTurnIds = v.safeParse(v.array(v.string()), rawTurnIds);
 
@@ -96,9 +95,10 @@ function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
   const turnIds = parsedTurnIds.output;
 
   return {
-    id: r.id, libraryId: r.library_id, kind: r.kind, key: r.key, title: r.title,
+    id: r.id, libraryId: r.library_id, key: r.key, title: r.title,
     payload, evidence: r.evidence, sourceWorkspace: r.source_workspace,
-    status: r.status, turnIds, importedAt: r.imported_at, corroboratedAt: r.corroborated_at,
+    status: r.corroborated_at === null ? 'provisional' : 'corroborated', turnIds, importedAt: r.imported_at,
+    corroboratedAt: r.corroborated_at,
   };
 }
 
@@ -110,12 +110,12 @@ export function listImportedExperience(
   actor.assertCurrent();
   const limit = options.limit ?? 100;
 
-  const rows = options.status
-    ? sql<RawImportRow>`SELECT * FROM imported_experience
-        WHERE actor_id = ${actor.actorId} AND status = ${options.status}
-        ORDER BY imported_at DESC LIMIT ${limit}`
-    : sql<RawImportRow>`SELECT * FROM imported_experience WHERE actor_id = ${actor.actorId}
-        ORDER BY imported_at DESC LIMIT ${limit}`;
+  // A status reads as the timestamp's nullness: provisional while it is null.
+  const status = options.status ?? null;
+
+  const rows = sql<RawImportRow>`SELECT * FROM imported_experience
+    WHERE actor_id = ${actor.actorId} AND (${status} IS NULL OR (corroborated_at IS NULL) = (${status} = 'provisional'))
+    ORDER BY imported_at DESC LIMIT ${limit}`;
 
   return rows.map(toImportRow).filter((r): r is ImportedExperienceRow => r !== null);
 }
@@ -130,13 +130,6 @@ export function stageImport(
   entry: ExperienceEntry,
   now = nowMs(),
 ): ImportOutcome {
-  // The library decoded the payload; only the pairing with `kind` is left to refuse.
-  if (entry.payload.kind !== entry.kind) {
-    return {
-      ok: false,
-      reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience: refusing a row lists would skip`,
-    };
-  }
 
   const verdict = checkMisevolutionForSurface(misevolutionSourceOf(entry.payload), 'import');
 
@@ -144,7 +137,7 @@ export function stageImport(
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'import',
       violation: verdict,
-      detail: `${entry.kind} "${entry.key}" from workspace "${entry.sourceWorkspace}" rejected`,
+      detail: `${entry.payload.kind} "${entry.key}" from workspace "${entry.sourceWorkspace}" rejected`,
     });
 
     return {
@@ -155,14 +148,14 @@ export function stageImport(
 
   rt.actor.assertCurrent();
 
-  const existing = rt.storage.sql<{ status: ImportStatus }>`
-    SELECT status FROM imported_experience
+  const existing = rt.storage.sql<{ corroborated_at: number | null }>`
+    SELECT corroborated_at FROM imported_experience
     WHERE actor_id = ${rt.actor.actorId} AND library_id = ${entry.id} LIMIT 1`[0];
 
   if (existing) {
     return {
       ok: false,
-      reason: existing.status === 'corroborated'
+      reason: existing.corroborated_at !== null
         ? `already imported and corroborated here: it is part of this workspace already`
         : `already imported this turn and waiting on the outcome that would corroborate it`,
     };
@@ -171,15 +164,15 @@ export function stageImport(
   const id = `imp-${nanoid()}`;
   void rt.storage.sql`INSERT INTO imported_experience
       (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
-       status, turn_ids, imported_at, corroborated_at)
-    VALUES (${rt.actor.actorId}, ${id}, ${entry.id}, ${entry.kind}, ${entry.key}, ${entry.title},
+       turn_ids, imported_at, corroborated_at)
+    VALUES (${rt.actor.actorId}, ${id}, ${entry.id}, ${entry.payload.kind}, ${entry.key}, ${entry.title},
             ${JSON.stringify(entry.payload)}, ${entry.evidence}, ${entry.sourceWorkspace},
-            'provisional', '[]', ${now}, NULL)`;
+            '[]', ${now}, NULL)`;
 
   return {
     ok: true,
     row: {
-      id, libraryId: entry.id, kind: entry.kind, key: entry.key, title: entry.title,
+      id, libraryId: entry.id, key: entry.key, title: entry.title,
       payload: entry.payload, evidence: entry.evidence, sourceWorkspace: entry.sourceWorkspace,
       status: 'provisional', turnIds: [], importedAt: now, corroboratedAt: null,
     },
@@ -191,7 +184,7 @@ export function bindPendingImports(sql: SqlExecutor, actor: ActorHandle, turnId:
   actor.assertCurrent();
   // `stageImport` writes `'[]'`, so an unbound row is exactly that literal.
   void sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])}
-    WHERE actor_id = ${actor.actorId} AND status = 'provisional' AND turn_ids = '[]'`;
+    WHERE actor_id = ${actor.actorId} AND corroborated_at IS NULL AND turn_ids = '[]'`;
 }
 
 export interface ImportSettlement {
@@ -199,7 +192,7 @@ export interface ImportSettlement {
   discarded: ImportedExperienceRow[];
 }
 
-/** Written with the status change, so a failed promotion stays retryable. */
+/** Written with the corroboration, so a failed promotion stays retryable. */
 const IMPORT_SETTLED_SCOPE = 'import_settled';
 
 export async function settleImportsForTurn(
@@ -219,7 +212,7 @@ export async function settleImportsForTurn(
 
     if (verdict === 'accepted' && await promoteImport(rt, row, turnId)) {
       void rt.storage.sql`UPDATE imported_experience
-          SET status = 'corroborated', corroborated_at = ${now}
+          SET corroborated_at = ${now}
           WHERE actor_id = ${rt.actor.actorId} AND id = ${row.id}`;
       recordEffectDone(rt.storage.sql, rt.actor, { scope: IMPORT_SETTLED_SCOPE, key: row.id });
       settlement.corroborated.push({ ...row, status: 'corroborated', corroboratedAt: now });

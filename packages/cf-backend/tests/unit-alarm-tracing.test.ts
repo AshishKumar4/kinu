@@ -13,10 +13,17 @@ import { analyticsDigest } from '@kinu.run/core/analytics';
 import { makeSql } from '../../core/tests/helpers';
 
 import {
-  createAgentTracing, createRecordingTracer, KinuError, renderCauseChain,
-  SPAN_ATTR_INVOCATION, SPAN_ATTR_ISOLATE_GEN, SPAN_ATTR_SELF_PATH,
-  type AgentTracing, type RecordingTracer, type TraceException, type TracedInvocation,
+  createAgentTracing,
+  KinuError,
+  renderCauseChain,
+  SPAN_ATTR_INVOCATION,
+  SPAN_ATTR_ISOLATE_GEN,
+  SPAN_ATTR_SELF_PATH,
+  type AgentTracing,
+  type TraceException,
+  type TracedInvocation,
 } from '@kinu.run/core/obs';
+import { type RecordingTracer, createRecordingTracer } from '@kinu.run/test-utils';
 
 /** In `_kinuTimerTick` order, so a phase dropped from the method fails rather than shrinking the tree. */
 const PHASES = [

@@ -10,7 +10,8 @@ import { KinuError } from '@kinu.run/core/obs';
 import type { LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
 import type { LLMProviderConfig, SessionTranscriptReader } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
 

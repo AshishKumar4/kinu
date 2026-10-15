@@ -8,7 +8,7 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
-import { Effect } from 'effect';
+import type { AgentFacetCalls } from '../../src/agent-facet/agent-facet';
 import {
   HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
   type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
@@ -16,10 +16,8 @@ import {
 import {
   createCompositeLogger,
   createConsoleLogger,
-  createRecordingLogger,
   setDiagnosticsSink,
   type Logger,
-  type RecordedLog,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
@@ -30,7 +28,6 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { meterInPlace, type MeteredTurn, type SqlMeter, type TurnCrossings } from './sql-meter';
 import { Crossings } from './crossings';
 import { AgentWorkspaceHost, AgentWorkspaceRPC } from '../../src/agent-facets';
-import { agentCallsThrough } from '../../src/dynamic-worker-slots';
 import { UserDO } from '../../src/user/user-do';
 import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
 import type { AgentFacet as ProbeAgentFacet, SeededEntry } from './two-turn-probe-agent';
@@ -96,6 +93,7 @@ import { changeNotesCard, ownerCaller, turnTags, type ChangeNote, type NotedChan
 import type { ChatWire, ChatWireTransport } from '../../src/chat-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import type { ToolSet } from 'ai';
+import { type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils/recording';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
 // classes, as slate-actor-probe.ts:43-48 does.
@@ -157,8 +155,21 @@ const NO_STANDING = { messageCount: 0, measures: { provider: null, gate: null },
  */
 const crossings = new Crossings('host.executeTool');
 
-/** The facet's calls as the workspace makes them. */
-const FACET_CALLS = Object.keys(agentCallsThrough(() => Effect.die('names only')));
+/** The facet's calls as the workspace makes them: every one of AgentFacetCalls, which the compiler holds this list to. */
+const FACET_CALLS = Object.keys({
+  opsTables: true,
+  activePlanReview: true, planReviews: true, savePlanReviewAnnotations: true, dismissPlanReview: true,
+  ownerQuestions: true, dismissOwnerQuestions: true, admit: true, landing: true, sendState: true, awaitSend: true,
+  interruptChat: true, wake: true, modelSettingsChanged: true, revertTo: true, clearConversation: true, owed: true,
+  owedWork: true, answerTexts: true, answer: true, newestFirst: true, armCompaction: true, forkHas: true,
+  forkPlan: true, forkCount: true, forkRows: true, forkClear: true, forkStage: true, forkPublish: true,
+  drainAnswers: true, lastUserMetadata: true, turnPair: true, standing: true, steps: true, runSteps: true,
+  listRuns: true, runSummaries: true, runEvents: true, runEventText: true, idle: true, deliverAdvice: true,
+  step: true, frozen: true, history: true, historyPage: true, messageCount: true, inspect: true,
+  inheritedContext: true, workingContext: true, turnRequests: true, turnRequest: true, spend: true, context: true,
+  searchConversations: true, scrollConversation: true, browseConversations: true, admitted: true, interrupt: true,
+  recover: true, archivePage: true,
+} satisfies Record<keyof AgentFacetCalls, true>);
 
 // The relay and the host whole, but what each keeps to itself; the account by the surface it serves.
 crossings.countAll(AgentWorkspaceRPC, 'relay', ['host', 'owned']);
@@ -327,7 +338,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const reason = (result: SlateAnswer<unknown>) => (result.ok ? 'ok' : result.reason);
     // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it.
     const call = async (id: string) => reason(await this.slateCallAs(ROOT_SLATE_CALLER, id, 'workspace', { path: ['exists'], args: ['/home'], invocation: null }));
-    const { items } = await this.agentStores(agent).historyPage({});
+    const { items } = await this.agentCall(agent, (isolate, snapshot) => isolate.historyPage(snapshot, {}));
     const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
     const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
     const ids = { answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` };
@@ -500,7 +511,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   async plantCrossings(): Promise<void> {
     const actorId = this.actorHandle().actorId;
 
-    await (await this.agentCalls(actorId)).newestFirst(this.agentSnapshot(actorId), 1);
+    await this.agentCall(actorId, (isolate, snapshot) => isolate.newestFirst(snapshot, 1));
     const { stub, caller } = await this.userHub();
 
     await stub.getCredentialsRevision(caller);
@@ -587,7 +598,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           id: textColumn(row.id), kind: textColumn(row.kind), status: textColumn(row.status),
           result: row.result === null ? null : textColumn(row.result), settledAt: row.settled_at === null ? null : Number(row.settled_at),
         })),
-      runs: (await this.mainRows("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid"))
+      runs: (await this.mainRows("SELECT run_id, type, json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid"))
         .reduce<Array<{ runId: string; userMessage: string; reason: string | null }>>((runs, row) => {
           const payload = v.parse(v.looseObject({ userMessage: v.optional(v.string()), reason: v.optional(v.string()) }), JSON.parse(textColumn(row.payload)));
 
@@ -656,7 +667,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** The public `busy` getter `routeBusyChat` consults. */
   /** A run the loop continues after a reset closes exactly once, by the loop. */
   async runEnds(): Promise<Array<{ runId: string; reason: string }>> {
-    return (await this.mainRows(`SELECT run_id, payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`))
+    return (await this.mainRows(`SELECT run_id, json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`))
       .map((row) => ({
         runId: textColumn(row.run_id),
         reason: v.parse(v.object({ reason: v.string() }), JSON.parse(textColumn(row.payload))).reason,
@@ -685,7 +696,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           seq: Number(row.seq), input: textColumn(row.input_json), lane: textColumn(row.lane), status: textColumn(row.status),
           attempts: Number(row.attempts),
         })),
-      runEvents: (await this.mainRows("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid"))
+      runEvents: (await this.mainRows("SELECT run_id, type, json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid"))
         .map((row) => ({ runId: textColumn(row.run_id), type: textColumn(row.type), payload: textColumn(row.payload) })),
       canonicalParts: (await this.mainRows(`SELECT message_id, json_extract(part.value, '$.partNo') AS part_no,
         json_extract(part.value, '$.value') AS value FROM session_messages, json_each(content_json) part
@@ -778,7 +789,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const closed = new Set((await this.mainRows("SELECT run_id FROM run_events WHERE type = 'run_end'"))
       .map((row) => textColumn(row.run_id)));
 
-    return (await this.mainRows("SELECT run_id, payload FROM run_events WHERE type = 'run_start' ORDER BY rowid"))
+    return (await this.mainRows("SELECT run_id, json_set(payload, '$.runId', run_id, '$.eventIndex', event_index, '$.type', type, '$.timestamp', ts) AS payload FROM run_events WHERE type = 'run_start' ORDER BY rowid"))
       .map((row) => ({
         cause: v.parse(
           v.fallback(v.looseObject({ caused_by: v.fallback(v.string(), '') }), { caused_by: '' }),

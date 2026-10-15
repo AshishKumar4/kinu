@@ -176,6 +176,53 @@ describe('workspaces whose first tile has not landed', () => {
     harness.close();
   });
 
+  test("tiles a reset dropped come back through the nudge: each workspace's activity and decisions again, none unreported", async () => {
+    const tiles = new Map<string, WorkspaceOverview>([
+      ['ledger', { ...QUIET, activity: 'working' }],
+      ['notes', { ...QUIET, decisionsWaiting: 2 }],
+      ['budget', { ...QUIET, activity: 'unfinished' }],
+    ]);
+
+    const callers = new Map<string, UserCaller>();
+
+    const harness: TestUserDO = createTestUserDO({
+      durableObjectId: USER_ID,
+      // What a workspace does when asked: pushes the tile it folds from its own stores, which a reset never touched.
+      overviewNudge: async (name) => {
+        const caller = callers.get(name);
+
+        if (caller === undefined) throw new Error(`no capability for ${name}`);
+        await harness.userDO.putWorkspaceOverview(caller, name, tiles.get(name) ?? QUIET);
+      },
+    });
+
+    const owner = await testOwner();
+
+    for (const name of tiles.keys()) callers.set(name, await workspace(harness, name));
+
+    for (const [name, tile] of tiles) await harness.userDO.putWorkspaceOverview(callers.get(name) ?? owner, name, tile);
+    // The reset: the table reshaped, its rows gone; the workspaces and their nudge markers are not.
+    harness.db.exec('DELETE FROM workspace_overviews');
+    expect((await harness.userDO.listWorkspaces(owner)).counts.unreported).toBe(3);
+    await until(() => harness.overviewNudges.length === 3, 'every workspace asked');
+
+    const back = await (async () => {
+      for (let lap = 0; lap < 50; lap++) {
+        const page = await harness.userDO.listWorkspaces(owner);
+
+        if (page.counts.unreported === 0) return page;
+        await nextTurn();
+      }
+
+      throw new Error('a workspace stayed unreported');
+    })();
+
+    expect(back.counts).toMatchObject({ unreported: 0, working: 1, needs: 1, decisions: 2 });
+    expect(Object.fromEntries(back.entries.map((entry) => [entry.name, [entry.overview?.activity, entry.overview?.decisionsWaiting]])))
+      .toEqual({ ledger: ['working', 0], notes: ['idle', 2], budget: ['unfinished', 0] });
+    harness.close();
+  });
+
   test('a failed ask is asked again once its backoff has passed, never before', async () => {
     let refuse = true;
     let answered = false;

@@ -181,7 +181,6 @@ interface DeviceUserProbeRpc extends Rpc.DurableObjectBranded {
   stopAgent(workspace: string, actorId: string): Promise<Array<{ requestId?: string; outcome: string; detail?: string }>>;
   acknowledge(workspace: string, requestId: string): Promise<void>;
   withdrawConsent(workspace: string, deviceId: string): Promise<{ ok: boolean }>;
-  answerConsent(workspace: string, decision: 'once' | 'always' | 'deny'): Promise<void>;
   revoke(deviceId: string): Promise<{ ok: boolean; unstoppedCommands?: number }>;
   requests(): Promise<Array<{ requestId: string; actorId: string | null; outcome: string | null; claim: string | null }>>;
   unstoppedSince(deviceId: string): Promise<number | null>;
@@ -293,7 +292,9 @@ interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
   seed(workspace: string): Promise<SeedAnswer>;
   chat(workspace: string): Promise<ChatAnswers>;
   wake(workspace: string): Promise<string>;
-  exportedLines(workspace: string): Promise<number>;
+  exported(workspace: string): Promise<string>;
+  repaired(workspace: string): Promise<string>;
+  rebuilt(): Promise<{ readonly answer: { readonly held: unknown[]; readonly rebuilt: readonly string[]; readonly dropped: readonly string[] }; readonly notes: unknown[]; readonly children: unknown[] }>;
 }
 
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
@@ -333,6 +334,8 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
     | { ok: true; frames: string[]; output: string }
     | { ok: false; error: string }
   >;
+  /** Types `line` on a fresh terminal socket; answers once `token` is printed and a prompt follows it. */
+  typeToPrompt(workspace: string, line: string, token: string): Promise<string>;
   reattachTerminal(workspace: string): Promise<{ frames: string[]; output: string }>;
   shellCalls(workspace: string, owner: string, calls: Array<{ command: string; cwd?: string; name?: string }>): Promise<string[]>;
   refusedTerminalFrame(workspace: string, frame: string): Promise<{ code: number; reason: string }>;

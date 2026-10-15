@@ -40,9 +40,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseSync } from 'oxc-parser';
 import { isParseable, isTextSource, isVendoredSource, readMatching } from './sources';
+import { REPO_ROOT as repoRoot } from './repo-root';
 import { literalString, parse, walk } from './syntax';
 
-const repoRoot = new URL('..', import.meta.url).pathname;
 
 const leanRoot = join(repoRoot, 'lean');
 

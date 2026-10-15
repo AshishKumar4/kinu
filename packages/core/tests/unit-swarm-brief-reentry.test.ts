@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend, createRecordingLogger } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { swarmSeats } from './helpers-actor-host';
-import { createRecordingLogger } from '../src/obs';
 import { HeadJournal } from '../src/heads/journal';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
 import { initSearchTables } from '../src/mcts/schemas';

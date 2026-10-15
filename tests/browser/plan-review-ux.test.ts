@@ -3,7 +3,7 @@ import type { Page, Viewport } from 'puppeteer';
 import * as v from 'valibot';
 
 import { unruledClasses, withGallery, type Gallery } from '../../scripts/gallery-harness';
-import { openInspectorPage } from '../../scripts/product-flows';
+import { openInspectorPage } from '../../scripts/browser-page';
 
 type Mode = 'dark' | 'light';
 

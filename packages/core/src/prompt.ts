@@ -66,7 +66,6 @@ export type {
 } from './prompting/surface';
 
 export type {
-  PromptModelCapability,
   PromptModelContext,
   PromptModelFamily,
   PromptModelProfile,
@@ -185,7 +184,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, se
 
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
-  const executors = surface.configuredExecutors;
+  const executors = surface.executors;
 
   if (executors.length === 0) return '';
 

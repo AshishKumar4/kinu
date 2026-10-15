@@ -260,8 +260,8 @@ describe('a decided trial', () => {
       if (made[arm] >= 10) continue;
       made[arm] += 1;
       const turnId = `turn-${String(i)}`;
-      void rt.storage.sql`INSERT INTO trial_turns (actor_id, trial_id, turn_id, segment_id, arm, at)
-        VALUES (${rt.actor.actorId}, ${trialId}, ${turnId}, ${segment}, ${arm}, ${NOW + i})`;
+      void rt.storage.sql`INSERT INTO trial_turns (actor_id, trial_id, turn_id, segment_id, at)
+        VALUES (${rt.actor.actorId}, ${trialId}, ${turnId}, ${segment}, ${NOW + i})`;
       recordTurnRating(rt.storage.sql, rt.actor, {
         turnId, score: arm === 'candidate' ? 4.6 + (i % 3) * 0.1 : 3 + (i % 3) * 0.1, corrected: 0, wrong: 'nothing',
         source: 'model', request: 'r', answer: 'a', now: NOW + i,

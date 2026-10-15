@@ -90,7 +90,7 @@ import {
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory, ownerAsks,
-  parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
+  FILES_PAGE_ENTRIES, parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
@@ -116,6 +116,38 @@ import * as v from "valibot";
 import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
+
+/** `&env=computer`: the workspace shell with its computer up, so Environment shows its terminal and its desktop. */
+const SHELL_COMPUTER = frame === "workspaceshell" && new URLSearchParams(location.search).get("env") === "computer";
+
+/** The owner's PC in the Environment frames: the account's device row that `ENVIRONMENT_EXECUTORS`' device names. */
+const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
+
+/** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
+const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
+
+/** The shell's machines under `&env=computer` or `&pc=`, as `listMounts` and the snapshot's executors answer them. */
+const SHELL_MACHINES = {
+  mounts: [
+    { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
+    { name: "computer", prefix: "computer.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
+    ...(SHELL_PC === null ? [] : [{ name: "device", prefix: "device.*", live: SHELL_PC !== "offline", policy: { readOnly: false, consistency: "live-shared" }, reason: null }]),
+  ],
+  executors: [
+    ...(SHELL_PC === null ? [] : [{
+      name: "device", kind: "device", available: SHELL_PC !== "offline", configured: true, active: SHELL_PC !== "offline", status: "active", label: GALLERY_PC.label,
+      capabilities: ["shell", "npm", "git", "fs_owned", "process_spawn"],
+    }]),
+    {
+      name: "computer", kind: "computer", available: true, configured: true, active: true, status: "active",
+      capabilities: ["shell", "npm", "git", "fs_owned", "net_inbound", "process_long"],
+    },
+    {
+      name: "workspace", kind: "workspace", available: true, configured: true, active: true, status: "active",
+      capabilities: ["javascript", "typescript", "python", "shell", "npm", "fs_shared"],
+    },
+  ],
+};
 
 // Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
@@ -768,7 +800,13 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
+/** Built-in sign-in off, as on an account with an OAuth app: the invite card stays away. */
+function builtinAuthFixture(path: string): Response | null {
+  return path === "/api/user/builtin-auth" ? fixtureJson({ enabled: false, owner: false }) : null;
+}
+
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  builtinAuthFixture,
   accountMemoryFixture,
   accountProfileFixture,
   settingsSectionsFixture,
@@ -1106,7 +1144,40 @@ function galleryUploadFixture(path: string, method: string): Response | null {
   return new Response('{"ok":true,"revision":8}', { headers: { "content-type": "application/json" } });
 }
 
+/** The PC this workspace holds: `&pc=ungranted` starts without, and the Env tab's one click grants it. */
+let galleryPcGranted = (SHELL_PC ?? "granted") !== "ungranted";
+
+/**
+ * The owner's account in the Environment frames: one PC, connected unless `&offline=device` or `&pc=offline`, held by
+ * the frame's workspace unless `&pc=ungranted`. Null outside those frames and under the connect rig's own roster.
+ */
+function accountMachinesFixture(asked: string, method: string): Response | null {
+  // The path as asked, query and all: a grant names its workspace in `?agentName=`.
+  const path = asked.split("?")[0] ?? asked;
+
+  if ((frame !== "environment" && SHELL_PC === null) || connectFixtureActive || !path.startsWith("/api/user/devices")) return null;
+  const query = new URLSearchParams(location.search);
+  const connected = query.get("offline") !== "device" && SHELL_PC !== "offline";
+
+  if (path === "/api/user/devices" && method === "GET") return fixtureJson([galleryConnectDevice(GALLERY_PC.id, GALLERY_PC.label, connected)]);
+
+  if (path === "/api/user/devices/consents" && method === "GET") {
+    return fixtureJson(galleryPcGranted ? [{ agentName: WORKSPACE_PAGE_NAME, deviceId: GALLERY_PC.id, policy: "allow", lastMethod: null, lastSummary: null }] : []);
+  }
+
+  if (path === `/api/user/devices/${GALLERY_PC.id}/consent` && method === "POST") {
+    galleryPcGranted = true;
+
+    return fixtureJson({ agentName: WORKSPACE_PAGE_NAME, deviceId: GALLERY_PC.id, policy: "allow", lastMethod: null, lastSummary: null });
+  }
+
+  return null;
+}
+
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
+  const machines = accountMachinesFixture(path, method);
+
+  if (machines !== null) return Promise.resolve(machines);
   const upload = galleryUploadFixture(path, method);
 
   if (upload !== null) return Promise.resolve(upload);
@@ -1373,7 +1444,7 @@ window.WebSocket = new Proxy(window.WebSocket, {
 
     if (path === ROSTER_SOCKET_ROUTE) return new GalleryRosterSocket();
 
-    if (frame === "environment" && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
+    if ((frame === "environment" || SHELL_COMPUTER || SHELL_PC !== null) && TERMINAL_PATH.test(path)) return new GalleryShellSocket(url);
 
     return protocols === undefined ? new target(url) : new target(url, protocols);
   },
@@ -1508,7 +1579,8 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     memoryContent: "",
     // The full-screen explorer reads its tree off the snapshot.
     mcts: MCTS_ROWS,
-    timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
+    timeline: [], executors: SHELL_COMPUTER || SHELL_PC !== null ? SHELL_MACHINES.executors : [], executorOutputs: [],
+    lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
     // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
     chat: {
       name: "checkout-coupon-bug-9935d3", actorId: "agent_01j9x7q2m4checkoutfixes", displayName: "Storefront", role: "default",
@@ -3193,6 +3265,8 @@ const workspacePageRpc: SocketCall = async <T,>(method: string, args?: unknown[]
   const page = WORKSPACE_PAGE_RPC.get(method);
 
   if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
+
+  if ((SHELL_COMPUTER || SHELL_PC !== null) && method === "listMounts") return rpcResult(v.parse(JsonValueSchema, SHELL_MACHINES.mounts)).json<T>();
 
   return agentPageFallback<T>(method, args);
 };
@@ -5382,20 +5456,24 @@ const WORKSPACE_WORK = {
   ],
 };
 
-const BACKGROUND_JOBS = [
+/** A first drive: never interrupted, never retried, serving nothing. */
+const FIRST_DRIVE = { epoch: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
+
+const BACKGROUND_JOBS: BackgroundJob[] = [
   {
     id: "bgjob-7c1e4a92", kind: "fork", label: "explore three coupon-lookup fixes",
-    workMode: "build" as const, status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
+    workMode: "build", status: "running", result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null,
+    ...FIRST_DRIVE,
   },
   {
     id: "bgjob-2f8b1d04", kind: "eval", label: "bun test packages/core",
-    workMode: "build" as const, status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
-    createdAt: NOW - 42e5, settledAt: NOW - 33e5,
+    workMode: "build", status: "completed", result: "2,633 pass · 0 fail · 187 files", error: null,
+    createdAt: NOW - 42e5, attemptStartedAt: NOW - 42e5, settledAt: NOW - 33e5, ...FIRST_DRIVE,
   },
   {
     id: "bgjob-9d3c6e11", kind: "shell", label: "wrangler deploy --dry-run",
-    workMode: "build" as const, status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
-    createdAt: NOW - 61e5, settledAt: NOW - 58e5,
+    workMode: "build", status: "failed", result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
+    createdAt: NOW - 61e5, attemptStartedAt: NOW - 61e5, settledAt: NOW - 58e5, ...FIRST_DRIVE,
   },
 ];
 
@@ -5646,7 +5724,7 @@ function buildTail(lines: number, lost: readonly number[]): JobOutputTail {
 function buildingJob(output: JobOutputTail): BackgroundJob {
   return {
     id: BUILD_JOB_ID, kind: "shell", label: "workspace: bun run build", workMode: "build", status: "running",
-    result: null, error: null, createdAt: NOW - 95e3, settledAt: null, output,
+    result: null, error: null, createdAt: NOW - 95e3, attemptStartedAt: NOW - 95e3, settledAt: null, ...FIRST_DRIVE, output,
   };
 }
 
@@ -5850,6 +5928,7 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
     ["/slates/checkout-dashboard", [{ name: "index.html", type: "file", size: 6_120, mtimeMs: NOW - 2 * 864e5 }]],
     ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
     ["/home/main", [
+      { name: "logs", type: "dir", mtimeMs: NOW - 60e3 },
       { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
       { name: "skills", type: "dir", mtimeMs: NOW - 20 * 864e5 },
       { name: "AGENTS.md", type: "file", size: 2_148, mtimeMs: NOW - 3 * 864e5 },
@@ -5858,6 +5937,10 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       { name: "binary-weights.bin", type: "file", size: 4_089_446, mtimeMs: NOW - 6 * 864e5 },
     ]],
     ["/home/main/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
+    // More than two pages: the folder lists its first, and Load more the rest.
+    ["/home/main/logs", Array.from({ length: 1_234 }, (_, at) => ({
+      name: `run-${String(at).padStart(4, "0")}.log`, type: "file" as const, size: 2_048 + at, mtimeMs: NOW - at * 60e3,
+    }))],
     ["/home/main/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
     ["/computer", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
     ["/computer/workspace", [
@@ -5878,6 +5961,13 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   }
 
   return tree;
+}
+
+/** A page of `entries` from `from`, as `getExecutorFiles` answers one: `next` while more follow. */
+function filesPage(dir: string, entries: readonly DirEntry[], from = 0) {
+  const end = from + FILES_PAGE_ENTRIES;
+
+  return { path: dir, entries: entries.slice(from, end), ...(end < entries.length && { next: end }) };
 }
 
 /** As `deviceMountSegment` keys a fleet of one. */
@@ -5944,7 +6034,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
     if (method === "listMounts") return rpcResult(v.parse(JsonValueSchema, mounts)).json<T>();
 
     if (method === "getExecutorFiles") {
-      const [execName, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      const [execName, path, from] = v.parse(v.tuple([v.string(), v.string(), v.optional(v.number())]), args ?? []);
 
       noteListing(path);
 
@@ -5954,7 +6044,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
       const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
-      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, { path: dir, entries })).json<T>();
+      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, filesPage(dir, entries, from))).json<T>();
 
       // In the words of `deviceFiles`' path guard.
       const error = dir.startsWith(PC_MOUNT)

@@ -11,7 +11,8 @@ export interface SearchNode {
   parent_id: string | null;
   /** The root's id, itself included. */
   root_id: string;
-  task: string;
+  /** The search's task, on its root; null on a child, which reads its root's through `search_node_scores`. */
+  task: string | null;
   action: string;
   observation: string;
   visits: number;

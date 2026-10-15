@@ -31,7 +31,7 @@ export function DevicesCard() {
   const grants = lastValue(grantRoster.resource) ?? [];
 
   const [flow] = useState(() => new DeviceConnectFlow({
-    register: registerDevice,
+    register: async (label) => registerDevice({ label }),
     onConnected: reloadDevices,
   }));
 

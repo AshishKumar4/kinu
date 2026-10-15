@@ -4,6 +4,7 @@ import { describe, expect, setSystemTime, test } from "bun:test";
 import { type PcIngressEnv, type PcUserNamespace } from "@kinu.run/core";
 import { pcRoutes } from "../src/pc-routes";
 import type { UserCaller } from "@kinu.run/core";
+import { KinuError } from "@kinu.run/core/obs";
 import { makeKv } from "./helpers/kv";
 import * as v from "valibot";
 
@@ -14,6 +15,10 @@ const GOOD_TOKEN = `pdt_${"x".repeat(32)}`;
 const WRONG_TOKEN = `pdt_${"w".repeat(32)}`; // well-shaped, so admitted knocks reach the DO and fail there
 
 const GOOD_TICKET = `pct_${"y".repeat(32)}`;
+
+const GOOD_JOIN = `pjt_${GOOD_USER}_${"j".repeat(43)}`;
+
+const JOIN_URL = "https://kinu.test/pc/join";
 
 const TICKET_URL = "https://kinu.test/pc/connect-ticket";
 
@@ -30,6 +35,7 @@ interface FakeUserId {
 interface RecordedUserDO {
   idNames: string[];
   tokens: string[];
+  joins: string[];
   refusals: Array<{ version: string; runtime: string; reason: string }>;
   fetched: Request[];
   ns: PcUserNamespace<FakeUserId>;
@@ -38,6 +44,7 @@ interface RecordedUserDO {
 function makeUserDO(): RecordedUserDO {
   const idNames: string[] = [];
   const tokens: string[] = [];
+  const joins: string[] = [];
   const refusals: Array<{ version: string; runtime: string; reason: string }> = [];
   const fetched: Request[] = [];
 
@@ -71,11 +78,18 @@ function makeUserDO(): RecordedUserDO {
 
           return new Response("socket accepted");
         },
+        async joinDevice(_caller: UserCaller, ticket: string, label?: string) {
+          joins.push(ticket);
+
+          if (ticket !== GOOD_JOIN || joins.length > 1) throw new KinuError('bad_input', 'This connect command has expired or was already used.');
+
+          return { deviceId: 'dev-issued', token: GOOD_TOKEN, label: label ?? 'Your PC' };
+        },
       };
     },
   };
 
-  return { idNames, tokens, refusals, fetched, ns };
+  return { idNames, tokens, joins, refusals, fetched, ns };
 }
 
 function makeEnv(userDO: RecordedUserDO): PcIngressEnv<FakeUserId> {
@@ -318,6 +332,56 @@ describe('/pc/update-refused', () => {
     const userDO = makeUserDO();
     const response = await pcRoutes.fetch(new Request('https://kinu.test/pc/update-refused'), makeEnv(userDO));
     expect(response.status).toBe(405);
+    expect(userDO.idNames).toEqual([]);
+  });
+});
+
+describe('/pc/join', () => {
+  const join = (body: { readonly ticket: string; readonly label?: string }) => new Request(JOIN_URL, { method: 'POST', body: JSON.stringify(body) });
+
+  test("a connect command's ticket registers its device once, at the account the ticket names", async () => {
+    const userDO = makeUserDO();
+    const env = makeEnv(userDO);
+    const joined = await pcRoutes.fetch(join({ ticket: GOOD_JOIN, label: 'Build box' }), env);
+
+    expect(joined.status).toBe(201);
+    expect(v.parse(v.record(v.string(), v.string()), await joined.json()))
+      .toEqual({ deviceId: 'dev-issued', token: GOOD_TOKEN, label: 'Build box', userId: GOOD_USER, origin: 'https://kinu.test' });
+    expect(userDO.idNames).toEqual([GOOD_USER]);
+
+    // Pasted twice, the account says why in words the person who pasted it can act on.
+    const again = await pcRoutes.fetch(join({ ticket: GOOD_JOIN }), env);
+
+    expect(again.status).toBe(400);
+    expect(v.parse(v.object({ error: v.string() }), await again.json()).error).toContain('already used');
+  });
+
+  test('a ticket that is not one is refused before any namespace lookup, naming the way in that needs none', async () => {
+    for (const ticket of ['', `pjt_${GOOD_USER}_short`, `pjt_NOTHEX_${"j".repeat(43)}`, GOOD_TICKET]) {
+      const userDO = makeUserDO();
+      const response = await pcRoutes.fetch(join({ ticket }), makeEnv(userDO));
+
+      expect(response.status).toBe(400);
+      expect(v.parse(v.object({ error: v.string() }), await response.json()).error).toContain('kinu connect');
+      expect(userDO.idNames).toEqual([]);
+    }
+  });
+
+  test('the per-source budget bounds join attempts in their own bucket', async () => {
+    const userDO = makeUserDO();
+    const env = makeEnv(userDO);
+
+    for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) await pcRoutes.fetch(join({ ticket: `pjt_${GOOD_USER}_${String(knock).padStart(43, 'k')}` }), env);
+    expect((await pcRoutes.fetch(join({ ticket: GOOD_JOIN }), env)).status).toBe(429);
+    expect(userDO.joins).not.toContain(GOOD_JOIN);
+    // Its own bucket: the daemon's ticket rail still answers.
+    expect((await pcRoutes.fetch(ticketPost(JSON.stringify({ user: GOOD_USER, token: GOOD_TOKEN })), env)).status).toBe(200);
+  });
+
+  test('only POST joins', async () => {
+    const userDO = makeUserDO();
+
+    expect((await pcRoutes.fetch(new Request(JOIN_URL), makeEnv(userDO))).status).toBe(405);
     expect(userDO.idNames).toEqual([]);
   });
 });

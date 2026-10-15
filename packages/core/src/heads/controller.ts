@@ -23,6 +23,7 @@ import {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
   forkMission,
+  unreportedHead,
 } from './types';
 import type { HeadSplitRequest, HeadSplitResult } from './head-tools';
 import { headProducedFindings } from './head-summary';
@@ -211,7 +212,7 @@ export class HeadController {
         if (spawnRecorded !== undefined) yield* Effect.promise(() => spawnRecorded);
 
         return yield* Effect.catchCause(Effect.promise((): Promise<SpawnedHead | HeadReport> => this.runtime.spawnHead(input)), (spawnFailed) => Effect.gen({ self: this }, function* () {
-          const failed = unreportedHead(id, 'Head failed to spawn before producing a report.', 0, spawnFailed);
+          const failed = failedHead(id, 'Head failed to spawn before producing a report.', 0, spawnFailed);
 
           yield* Effect.promise(async () => this.journal.recordReport(failed));
 
@@ -246,7 +247,7 @@ export class HeadController {
 
           return report;
         }), (runFailed) => Effect.gen({ self: this }, function* () {
-          const failed = unreportedHead(h.id, 'Head failed before producing a report.', this.clock.now() - startedAt, runFailed);
+          const failed = failedHead(h.id, 'Head failed before producing a report.', this.clock.now() - startedAt, runFailed);
 
           yield* Effect.promise(async () => this.journal.recordReport(failed));
 
@@ -566,12 +567,9 @@ function headTrajectory(r: HeadReport): string {
   return parts.join('\n').trim();
 }
 
-/** A head that never reported: usage `{}` (unknown), reason in `errorMessage`. */
-function unreportedHead(id: string, summary: string, wallClockMs: number, failed: Cause.Cause<unknown>): HeadReport {
-  return {
-    id, status: 'errored', summary, evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
-    toolCalls: [], stepCount: 0, usage: {}, wallClockMs, errorMessage: renderThrownChain({ cause: Cause.squash(failed) }),
-  };
+/** A head that never reported, failed by `failed`. */
+function failedHead(id: string, summary: string, wallClockMs: number, failed: Cause.Cause<unknown>): HeadReport {
+  return unreportedHead({ id, status: 'errored', summary, wallClockMs, errorMessage: renderThrownChain({ cause: Cause.squash(failed) }) });
 }
 
 /** No score in the text: null (dropped, never 0). A failing judge propagates rather than looking unscoreable. */

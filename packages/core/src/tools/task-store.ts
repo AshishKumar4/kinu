@@ -65,8 +65,8 @@ function toTask(r: Row): AgentTask {
 export function initTaskListTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_tasks (
     actor_id   TEXT NOT NULL,
-    id         TEXT NOT NULL,
     seq        INTEGER NOT NULL,
+    id         TEXT GENERATED ALWAYS AS ('t' || seq) VIRTUAL,
     parent_id  TEXT,
     title      TEXT NOT NULL,
     status     TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlCheckList(TASK_STATUSES)})),
@@ -75,10 +75,10 @@ export function initTaskListTable(execRaw: RawSqlExec): void {
     plan_id    TEXT,
     revision   INTEGER,
     session_id TEXT,
-    PRIMARY KEY (actor_id, id)
+    PRIMARY KEY (actor_id, seq)
   )`);
-  // Per-actor: a table-wide UNIQUE(seq) would collide actors' `t{seq}` numbering.
-  execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tasks_seq ON agent_tasks(actor_id, seq)`);
+  // A task is named by its id, which its seq generates; this finds it by that name.
+  execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tasks_id ON agent_tasks(actor_id, id)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(actor_id, status)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent ON agent_tasks(actor_id, parent_id)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_plan ON agent_tasks(actor_id, session_id, plan_id, revision)`);
@@ -160,10 +160,10 @@ export class TaskListStore {
         continue;
       }
 
-      const id = `t${seq}`;
-      void this.sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, updated_at, plan_id, revision, session_id)
-        VALUES (${this.actorId}, ${id}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${linkedPlan?.id ?? null}, ${linkedPlan?.revision ?? null}, ${linkedPlan?.sessionId ?? null})`;
-      added.push({ id, parentId, title, status: 'open', updatedAt: now, note: null });
+      // The id is the table's to generate from the seq; the insert hands it back.
+      for (const { id } of this.sql<{ id: string }>`INSERT INTO agent_tasks (actor_id, seq, parent_id, title, status, updated_at, plan_id, revision, session_id)
+        VALUES (${this.actorId}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${linkedPlan?.id ?? null}, ${linkedPlan?.revision ?? null}, ${linkedPlan?.sessionId ?? null})
+        RETURNING id`) added.push({ id, parentId, title, status: 'open', updatedAt: now, note: null });
       seq++;
     }
 

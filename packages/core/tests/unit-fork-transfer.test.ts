@@ -237,8 +237,8 @@ describe('fork transfer receiver', () => {
         SELECT id, position, role FROM conversation_entries ORDER BY rowid`,
       entryParts: ws.sql<{ entry_id: string; message_id: string; part_no: number }>`
         SELECT entry_id, message_id, part_no FROM conversation_entry_parts ORDER BY entry_id, position`,
-      messages: ws.sql<{ message_id: string; role: string; origin: string; sealed_at: number; envelope_json: string; content_json: string | null; content_digest: string | null }>`
-        SELECT message_id, role, origin, sealed_at, envelope_json, content_json, content_digest FROM session_messages ORDER BY rowid`,
+      messages: ws.sql<{ message_id: string; role: string; origin: string; sealed_at: number; envelope_json: string; content_json: string | null }>`
+        SELECT message_id, role, origin, sealed_at, envelope_json, content_json FROM session_messages ORDER BY rowid`,
       members: ws.sql<{ entry_id: string; position: number; message_id: string }>`
         SELECT entry_id, position, message_id FROM context_memberships WHERE to_revision IS NULL ORDER BY position`,
       tools: ws.sql<{ name: string }>`SELECT name FROM crafted_tools ORDER BY name`,

@@ -1,15 +1,15 @@
 // Shared device-consent watcher; each case awaits the poll it needs, so nothing sleeps for a number.
 import { describe, expect, test } from 'bun:test';
 
+import type { PendingDeviceConsent } from '@kinu.run/core';
 import type {
   DeviceConsentDecision,
   DeviceConsentSurface,
-  PendingDeviceConsent,
 } from '../src/agent-client';
 import { watchDeviceConsents, watchHeadlessConsents, watchTerminalConsents, type ConsentNoteKind } from '../src/consent-watch';
 
 function consent(id: string): PendingDeviceConsent {
-  return { consentId: id, deviceLabel: 'device', method: 'exec', command: 'ls' };
+  return { consentId: id, deviceId: 'device', deviceLabel: 'device', method: 'exec', command: 'ls', createdAt: 1 };
 }
 
 /** A pending list the test controls, with awaits for the Nth poll and resolution. */
@@ -176,8 +176,8 @@ describe('watchDeviceConsents', () => {
     expect(notes).toEqual([]);
   });
 
-  test('stop() mid-question cancels the prompt and best-effort denies, silently', async () => {
-    const { surface, resolved, settled } = makeSurface([consent('c1')]);
+  test('stop() mid-question cancels the prompt and leaves the ask waiting, silently', async () => {
+    const { surface, resolved } = makeSurface([consent('c1')]);
     const { notes, note } = collectNotes();
     const asked = Promise.withResolvers<void>();
 
@@ -195,10 +195,9 @@ describe('watchDeviceConsents', () => {
 
     await asked.promise;
     watcher.stop();
-    await settled(1);
     await watcher.done;
 
-    expect(resolved).toEqual([{ consentId: 'c1', decision: 'deny' }]);
+    expect(resolved).toEqual([]);
     expect(notes).toEqual([]);
   });
 

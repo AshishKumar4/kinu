@@ -72,13 +72,14 @@
  * same AST test, applied where the message points.
  */
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { gitEnv, gitIn } from '../packages/test-utils/src/git-env';
 import { assertMeasured, finding, type Finding } from './gate-ratchet';
 import { isParseable, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { identifierText, parse, walk } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** This file, so the convention's start point is derived from the commit that
  *  added it rather than recorded as a SHA nobody can verify later. */
@@ -674,21 +675,6 @@ function configuredCleanup(): string {
   return read.status === 0 ? read.stdout.trim() : 'default';
 }
 
-/** The ambient git environment, removed. A `commit-msg` hook exports `GIT_DIR`,
- *  `GIT_INDEX_FILE` and friends, and every one of them outranks both `cwd` and
- *  `-C` — so a gate that trusted either would answer about whatever the hook
- *  pointed at rather than about the repository it was asked about. */
-const scrubbedEnv = (): NodeJS.ProcessEnv => Object.fromEntries(
-  Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
-);
-
-/** `git` against THIS checkout, with that environment. */
-function git(...args: readonly string[]): string {
-  return execFileSync('git', ['-C', root, ...args], {
-    encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
-  });
-}
-
 /**
  * Paths in one TREE whose bytes contain `name` at all: the tree-side spelling of
  * `codeIdentifierTest`'s `text.includes(name)` pre-filter, run by git over the
@@ -703,7 +689,7 @@ function treePathsContaining(repo: string, tree: string, name: string): readonly
   const grep = spawnSync(
     'git',
     ['-C', repo, 'grep', '--files-with-matches', '-z', '--fixed-strings', '-e', name, tree, '--'],
-    { encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26 },
+    { encoding: 'utf8', env: gitEnv(), maxBuffer: 1 << 26 },
   );
 
   if (grep.status === 1) return [];
@@ -738,9 +724,7 @@ function treeDeclares(repo: string, tree: string, name: string): boolean {
   for (const path of treePathsContaining(repo, tree, name)) {
     if (!isParseable(path)) continue;
 
-    const text = execFileSync('git', ['-C', repo, 'cat-file', 'blob', `${tree}:${path}`], {
-      encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
-    });
+    const text = gitIn(repo, 'cat-file', 'blob', `${tree}:${path}`);
 
     // A blob frozen months ago cannot be re-parsed by whoever reads this, so the
     // live wording ("someone is mid-edit, re-run") would send them after a file
@@ -793,9 +777,7 @@ export function committedIdentifierTest(repo: string, commit: string): (name: st
   let spanned: readonly string[] | undefined;
 
   const trees = (): readonly string[] => {
-    spanned ??= [commit, ...execFileSync('git', ['-C', repo, 'log', '-1', '--format=%P', commit], {
-      encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
-    }).trim().split(/\s+/u).filter((sha) => sha.length > 0)];
+    spanned ??= [commit, ...gitIn(repo, 'log', '-1', '--format=%P', commit).split(/\s+/u).filter((sha) => sha.length > 0)];
 
     return spanned;
   };
@@ -835,9 +817,7 @@ export function committedIdentifierTest(repo: string, commit: string): (name: st
  * Truncation is the thing being refused, not emptiness.
  */
 export function truncatedHistoryRefusal(repo: string): Finding | undefined {
-  const shallow = execFileSync('git', ['-C', repo, 'rev-parse', '--is-shallow-repository'], {
-    encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
-  }).trim();
+  const shallow = gitIn(repo, 'rev-parse', '--is-shallow-repository');
 
   if (shallow !== 'true') return undefined;
 
@@ -860,7 +840,7 @@ export function truncatedHistoryRefusal(repo: string): Finding | undefined {
  *  branch that does not contain it — both of which mean "nothing to govern here"
  *  rather than "clean". */
 export function conventionBoundary(): string | undefined {
-  const log = git('log', 'HEAD', '--diff-filter=A', '--format=%H', '--follow', '--', GATE_PROGRAM);
+  const log = gitIn(root, 'log', 'HEAD', '--diff-filter=A', '--format=%H', '--follow', '--', GATE_PROGRAM);
 
   return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
 }
@@ -869,7 +849,7 @@ export function conventionBoundary(): string | undefined {
  *  whose diff to this file added the rule's name. Undefined before it is
  *  committed and on a branch without it, both meaning "no commit is sized here". */
 export function sizeRuleBoundary(): string | undefined {
-  const log = git('log', 'HEAD', '--format=%H', "-S'message-size'", '--', GATE_PROGRAM);
+  const log = gitIn(root, 'log', 'HEAD', '--format=%H', "-S'message-size'", '--', GATE_PROGRAM);
 
   return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
 }
@@ -883,8 +863,8 @@ export function sizeRuleBoundary(): string | undefined {
  * cherry-pick, which is why it is the date compared rather than the committer's.
  */
 export function commitsFrom(boundary: string): ReadonlySet<string> {
-  const since = Number(git('log', '-1', '--format=%at', boundary).trim());
-  const log = git('log', '--format=%H%x1f%at', `${boundary}^..HEAD`);
+  const since = Number(gitIn(root, 'log', '-1', '--format=%at', boundary));
+  const log = gitIn(root, 'log', '--format=%H%x1f%at', `${boundary}^..HEAD`);
 
   return new Set(log.trim().split('\n')
     .filter((line) => line.length > 0)
@@ -901,7 +881,7 @@ export interface GovernedCommit {
 /** Every commit made after the convention landed. Merges included: their
  *  subjects are exempt by shape, their hand-written bodies are not. */
 export function governedCommits(boundary: string): GovernedCommit[] {
-  const log = git('log', '--format=%H%x1f%B%x1e', `${boundary}..HEAD`);
+  const log = gitIn(root, 'log', '--format=%H%x1f%B%x1e', `${boundary}..HEAD`);
 
   return log.split('\u001e')
     .map((entry) => entry.replace(/^\n+/, ''))

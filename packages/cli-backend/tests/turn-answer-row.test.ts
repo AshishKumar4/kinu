@@ -5,7 +5,8 @@ import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase } from '
 import { CHAT_SESSION_ID, initWorkspaceSchema, readSessionTranscript, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -32,10 +33,7 @@ function narratedModel(narration: string, answer: string): TestLanguageModelV2 {
               controller.enqueue({ type: 'text-start', id: '0' });
               controller.enqueue({ type: 'text-delta', id: '0', delta: narration });
               controller.enqueue({ type: 'text-end', id: '0' });
-              controller.enqueue({
-                type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
-                input: JSON.stringify({ op: 'recall', key: 'probe' }),
-              });
+              controller.enqueue({ type: 'tool-call', toolCallId: 'call-1', toolName: 'file', input: JSON.stringify({ path: 'probe.txt' }) });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE });
             } else {
               controller.enqueue({ type: 'text-start', id: '0' });

@@ -63,7 +63,6 @@ export class UserTerminals {
       return new Response(renderThrownChain({ cause: authoredRefusal({ doing: 'attaching a terminal pane', cause }) }), { status: 409 });
     }
 
-    server.send(JSON.stringify({ type: 'ready' }));
     diagnostics.event('device.terminal_attached', { device: attached.device, workspace: attached.workspace });
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
 
@@ -109,14 +108,14 @@ export class UserTerminals {
       // Resolved before minting: several live devices and none named is an error.
       const target = yield* this.host.devices.resolveDeviceForCall(deviceId, undefined);
 
+      // Known before the machine is asked, so what its shell draws first waits for the pane.
+      this._terminals.register(session, target, agentName);
       yield* attemptInItsWords('io', () => this.host.devices.deviceRpc(
         caller,
         DEVICE_METHOD.ptyOpen,
         [bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows)],
         { agentName, deviceId: target, requestId: session, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
-      ));
-
-      this._terminals.register(session, target, agentName);
+      )).pipe(Effect.tapError(() => Effect.sync(() => this._terminals.forget(session))));
 
       // Unattached sessions are swept on the next open: this object's one alarm belongs to other work.
       for (const stale of this._terminals.expired()) yield* this.closeDeviceTerminal(stale.session, stale.device);

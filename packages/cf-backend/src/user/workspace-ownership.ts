@@ -4,7 +4,7 @@
  */
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
-import { ERROR_STATUS, ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
+import { ERROR_STATUS, ownerCaller, PLATFORM_CATALOG, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { classifyDoCall, isRetryableDoCall } from '@nimbus-sh/platform/oom-classify.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
@@ -50,9 +50,12 @@ const refused = <Agent>(status: number, error: string): OwnedWorkspaceResult<Age
  * claimOwner. Evicted when `ensureWorkspaceCapability`'s re-check contradicts it. */
 const membershipProven = new Set<string>();
 
-/** Memory bound on the proof set; overflow drops all proofs. Unrelated to
- * MAX_RATE_LIMIT_PER_MIN despite the same number. */
-const MEMBERSHIP_PROOF_LIMIT = 10_000;
+/** One proof's heap: a 32-hex user id and a 64-character name keyed in the set, measured in Bun on 2026-10-14. */
+const PROOF_BYTES = 182;
+
+/** The proofs hold at most a hundredth of the isolate's memory (`worker.isolate.memory`), about 7,300; overflow drops
+ * all of them, which costs only registry reads. */
+const MEMBERSHIP_PROOF_LIMIT = Math.floor(PLATFORM_CATALOG['worker.isolate.memory'].limit.value / 100 / PROOF_BYTES);
 
 function forgetWorkspaceMembership(userId: string, workspaceName: string): void {
   membershipProven.delete(`${userId}\u0000${workspaceName}`);

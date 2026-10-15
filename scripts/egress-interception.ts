@@ -16,14 +16,14 @@ import { assertMeasured } from "./gate-ratchet";
 import {
   classMembers, declaredName, importBindings, literalText, memberCalleeName, parse, publishedNames, superClassName, walk, type SyntaxNode,
 } from './syntax';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const WORKER_ENTRY = 'packages/cf-backend/src/server.ts';
 
 export function readInterceptionSources(): Map<string, string> {
   return readMatching(file => isProductSource(file) || (file.startsWith("packages/devbox/")
-    && isParseable(file) && !isTestFile(file) && !file.includes("/tests/")));
+    && isParseable(file) && !isTestFile(file)));
 }
 
 /**

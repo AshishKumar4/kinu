@@ -6,9 +6,30 @@
 # (.githooks/pre-push, L25), with every other ci row, so nothing reaches integration unproved.
 #
 # NEVER --no-verify. It lints the working tree's copy of each staged file.
+#
+# A merge lints the files its resolution wrote: those whose staged content differs from every parent. Each other file
+# is byte for byte a parent's, which its own commit linted. A clean merge of the integration tip staged about 250
+# files, and one oxlint run over all of them went past local-check.sh's 4 GB scope (2026-10-15).
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 source scripts/repo-runtime.sh
-mapfile -d '' touched < <(git diff --cached --name-only -z --diff-filter=ACMR -- '*.ts' '*.tsx' '*.mts' '*.cts' '*.js' '*.jsx' '*.mjs' '*.cjs')
+LINTED=('*.ts' '*.tsx' '*.mts' '*.cts' '*.js' '*.jsx' '*.mjs' '*.cjs')
+mapfile -d '' touched < <(git diff --cached --name-only -z --diff-filter=ACMR -- "${LINTED[@]}")
+
+if git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+  mapfile -t heads < "$(git rev-parse --git-path MERGE_HEAD)"
+
+  for head in "${heads[@]}"; do
+    declare -A differs=()
+
+    while IFS= read -r -d '' file; do differs["$file"]=1; done < <(git diff --cached --name-only -z "$head" -- "${LINTED[@]}")
+    resolved=()
+
+    for file in "${touched[@]}"; do [ -z "${differs[$file]:-}" ] || resolved+=("$file"); done
+    touched=("${resolved[@]}")
+    unset differs
+  done
+fi
+
 [ "${#touched[@]}" -gt 0 ] || exit 0
 exec "$PWD/node_modules/.bin/oxlint" --no-error-on-unmatched-pattern -- "${touched[@]}"

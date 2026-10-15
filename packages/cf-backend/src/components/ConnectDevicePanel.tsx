@@ -159,12 +159,13 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
   );
 }
 
-export function ConnectDeviceDialog({ onClose }: { onClose: () => void }) {
+/** `workspace`: opened from that workspace's Env tab, so the machine connects already granted to it. */
+export function ConnectDeviceDialog({ workspace, onClose }: { workspace: string | undefined; onClose: () => void }) {
   const { resource, reload } = useDeviceRoster();
   const devices = lastValue(resource);
 
   const [flow] = useState(() => new DeviceConnectFlow({
-    register: registerDevice,
+    register: async (label) => registerDevice({ label, workspace }),
     onConnected: onClose,
   }));
 

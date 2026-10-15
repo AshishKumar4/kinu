@@ -8,10 +8,18 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import { callSharedSlate, consentToShare, type EvalObservation, type SlateViewerAnswer } from '@kinu.run/test-utils';
 import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
-import { FIRST_RUN_DEFECTS, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
 
-const CASE = 'public-share';
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The owner asked for a live share a stranger can open without an account and call one read-only member of, with every mutating member refused unless approved by name.',
+  missedBecause: 'No deployed route served a share origin: the share label parser, the grant cut and the viewer path existed in no build, so every unit and workerd proof ran against code production never had.',
+  provedRedAt: '0415e0f93',
+  redDirection: 'RED against the deployed 0415e0f93 on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, `probe()` to answer over a Cap\'n Web batch, and `mutate()` to be refused with the share\'s own "does not grant" reason.',
+};
 
 const SUITE = 'First-run · public-share (CLI operator, no model, signed-out visitor)';
 
@@ -39,7 +47,7 @@ describe(SUITE, () => {
   test.skipIf(PLAN === null)('MEASURED: public-share', async () => {
     if (PLAN === null) throw new Error('Explicit operator plan required');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false, purpose: 'Disposable public live-share probe; no model task.',
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false, purpose: 'Disposable public live-share probe; no model task.',
       async run({ session }) {
         const setup = v.parse(Exec, await session.rpcAt(session.workspace, 'executeInExecutor', ['workspace', `mkdir -p /slates/${SLATE}
 cat > /slates/${SLATE}/package.json <<'END'
@@ -94,5 +102,3 @@ END`]));
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

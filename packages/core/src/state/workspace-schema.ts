@@ -1,5 +1,5 @@
 // The one table list every composition root creates, in one idempotent transaction. Root-only tables are
-// declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
+// declared in `test-utils/src/conformance/manifest.ts`, which checks `sqlite_master` against this.
 
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
 import { initAgentReportsTable } from '../subordinates/report-sequence';
@@ -23,7 +23,6 @@ import { initCurriculumTable } from '../curriculum/proposer';
 import { initEventsHubTables } from '../events/hub/schema';
 import { initRunEventTables } from '../events/recorder';
 import { initActorClaimTables } from '../orchestrator/actor-claims';
-import { resetGuardedExec } from './store-reset';
 import { initGepaTables } from '../evolution/gepa/persistence';
 import { initLessonTables } from '../evolution/lessons';
 import { initTurnRatingTables } from '../evolution/ratings';
@@ -34,7 +33,7 @@ import { initHeadsTables } from '../heads/schema';
 import { initBackgroundJobsTable } from '../jobs/store';
 import { initToolEffectClaimTable } from '../tools/effect-claim';
 import { initDeferredApprovalsTable } from '../safety/deferred-approval';
-import { initDeviceConsentRequestsTable } from '../safety/device-consent';
+import { initDeviceConsentAsksTable } from '../safety/device-consent';
 import { initWorkspaceProposalsTable } from '../safety/workspace-proposals';
 import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
@@ -175,7 +174,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initEventsHubTables(exec);
   initHeadsTables(execRaw);
   initRunEventTables(execRaw);
-  initActorClaimTables(resetGuardedExec(execRaw, exec));
+  initActorClaimTables(execRaw);
   // What a hired turn told its hirer, read by the recovery of its claim.
   initTurnReportTable(execRaw);
   initFactsTable(execRaw);
@@ -185,7 +184,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initToolEffectClaimTable(execRaw);
   initEffectTombstoneTable(execRaw);
   initDeferredApprovalsTable(execRaw);
-  initDeviceConsentRequestsTable(execRaw);
+  initDeviceConsentAsksTable(execRaw);
   initWorkspaceProposalsTable(execRaw);
   initPlanReviewTable(execRaw);
   initOwnerQuestionsTable(execRaw);

@@ -10,13 +10,14 @@ import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalCallWidth, EvalTask } from '../evals/src/task';
 import { ARMS, deployedBuild } from '../evals/src/target';
 import { evalTargetVerdict, evalWebIdentityEnv } from '../packages/test-utils/src/eval-identity';
-import { gitEnv } from '../packages/test-utils/src/git-env';
+import { deploymentOf } from './infra-manifest';
+import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
 import { LOCAL_CHECK, processEvals } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
+import { REPO_ROOT as ROOT } from './repo-root';
 
-const ROOT = join(import.meta.dirname, '..');
 
 /** Keep each cell's whole matrix for trialSlot: selection does not renumber its account. */
 export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, origins: readonly { leg: 'candidate' | 'baseline'; origin: string }[], pass: boolean): TrialItem[] {
@@ -170,22 +171,17 @@ async function main(): Promise<number> {
     pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
   } });
 
-  const definitions = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: ROOT, env: gitEnv(), stdout: 'pipe', stderr: 'pipe' });
+  const sha = gitIn(ROOT, 'rev-parse', 'HEAD');
 
-  if (definitions.exitCode !== 0) throw new Error(`reading the definitions commit: ${definitions.stderr.toString()}`);
-  const sha = definitions.stdout.toString().trim();
-
-  const dirty = Bun.spawnSync(['git', 'status', '--porcelain'], { cwd: ROOT, env: gitEnv(), stdout: 'pipe' });
-
-  if (dirty.stdout.toString().trim() !== '') throw new Error('armada measures a committed checkout: commit the tree first');
-  const candidateOrigin = values.pass ? process.env['KINU_EVAL_ORIGIN'] : 'https://staging.kinu.run';
+  if (gitIn(ROOT, 'status', '--porcelain') !== '') throw new Error('armada measures a committed checkout: commit the tree first');
+  const candidateOrigin = values.pass ? process.env['KINU_EVAL_ORIGIN'] : deploymentOf('staging').origin;
   const target = evalTargetVerdict(candidateOrigin);
 
   if (target.kind === 'refused' || target.why !== 'deployment') throw new Error('evals-map names a real Kinu deployment through KINU_EVAL_ORIGIN');
 
   const origins: { leg: 'candidate' | 'baseline'; origin: string }[] = [{ leg: 'candidate', origin: target.origin }];
 
-  if (!values.pass) origins.push({ leg: 'baseline', origin: 'https://kinu.run' });
+  if (!values.pass) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
 
   const builds = await Promise.all(origins.map(async ({ origin }) => (await deployedBuild({ origin })).sha));
 

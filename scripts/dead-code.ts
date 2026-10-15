@@ -98,17 +98,15 @@ import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 
 import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet';
+import { readAliases } from './import-graph';
 import { parseJsonc } from './jsonc';
+import { isDocument, isLockfile, isManifest, isParseable, isProductSource, isStylesheet, isVendoredSource, isTestScaffold, isTextSource, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
-  isDocument, isLockfile, isManifest, isParseable, isProductSource, isStylesheet, isVendoredSource,
-  isTestScaffold, isTextSource, trackedFiles,
-} from './sources';
-import {
-  declarationOf, declaredBindings, declaredName, exportedLocalNames, identifierCalleeName,
-  importedNames, isReExport, moduleSpecifiers, parse, stringArguments, walk, type SyntaxNode,
+  declarationOf, declaredBindings, declaredName, exportedLocalNames,
+  importedNames, isReExport, moduleSpecifiers, parse, requiredSpecifiers, walk, type SyntaxNode,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/dead-code.lock.json`;
 
@@ -327,12 +325,6 @@ export const servedBy = (manifest: string, reach: readonly string[] = []): ((fil
   return (file) => file.startsWith(directory) || reach.some((reached) => file.startsWith(reached));
 };
 
-const TsconfigPaths = v.looseObject({
-  compilerOptions: v.optional(v.looseObject({
-    paths: v.optional(v.record(v.string(), v.array(v.string())), {}),
-  }), {}),
-});
-
 /**
  * The directories a package compiles from beyond its own: every target of a
  * `paths` alias in its `tsconfig.json` that resolves outside the package. The
@@ -345,26 +337,9 @@ export function compileReach(manifest: string, files: readonly string[], read: (
   const tsconfig = `${directory}tsconfig.json`;
 
   if (!files.includes(tsconfig)) return [];
-  const parsed = parseJsonc(read(tsconfig), TsconfigPaths, tsconfig);
-  const roots = new Set<string>();
+  const targets = readAliases(new Map([[tsconfig, read(tsconfig)]])).map((alias) => `${alias.target}/`);
 
-  for (const targets of Object.values(parsed.compilerOptions.paths)) {
-    for (const target of targets) {
-      const segments = [...directory.split('/').filter((part) => part !== ''), ...target.split('/')];
-      const resolved: string[] = [];
-
-      for (const segment of segments) {
-        if (segment === '..') resolved.pop();
-        else if (segment !== '.' && segment !== '*' && segment !== '') resolved.push(segment);
-      }
-
-      const aliased = `${resolved.join('/')}/`;
-
-      if (!aliased.startsWith(directory)) roots.add(aliased);
-    }
-  }
-
-  return [...roots].sort();
+  return [...new Set(targets.filter((target) => !target.startsWith(directory)))].sort();
 }
 
 /** `@types/node` and `@ai-sdk/openai` carry characters a regex reads. */
@@ -464,10 +439,7 @@ function namedModules(file: string, text: string): readonly string[] {
 
   if (known?.text === text) return known.modules;
   const tree = parse(file, text).root;
-  const out = [...moduleSpecifiers(tree)];
-  walk(tree, (node) => {
-    if (node.raw.type === 'CallExpression' && identifierCalleeName(node) === 'require') out.push(...stringArguments(node));
-  });
+  const out = [...moduleSpecifiers(tree), ...requiredSpecifiers(tree)];
   modulesOf.set(file, { text, modules: out });
 
   return out;

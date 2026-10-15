@@ -49,7 +49,17 @@ interface AgentRowInput {
   usd?: number;
 }
 
-function agentRow(input: AgentRowInput): AgentRow {
+/** A row as the diagnostics path reads it from log fields: its classifications are text, and it alone carries a
+ *  `reason` and an `activation`. */
+export interface AgentRowFields extends Omit<AgentRowInput, 'outcome' | 'agentKind'> {
+  outcome?: string;
+  agentKind?: string;
+  reason?: string;
+  activation?: number;
+}
+
+/** Every `AGENT_METRICS_SCHEMA` slot, absent ones at `''`/0: the one row builder for typed writers and diagnostics. */
+export function agentRow(input: AgentRowFields): AgentRow {
   const usage = input.usage ?? {};
 
   return {
@@ -66,7 +76,7 @@ function agentRow(input: AgentRowInput): AgentRow {
     tool: input.tool ?? '',
     source: input.source ?? '',
     // Only the diagnostics path fills `reason`; typed rows carry the verdict in `outcome` + `code`.
-    reason: '',
+    reason: input.reason ?? '',
     count: 1,
     durationMs: input.durationMs ?? 0,
     ttftMs: input.ttftMs ?? 0,
@@ -81,7 +91,7 @@ function agentRow(input: AgentRowInput): AgentRow {
     neurons: usage.neurons ?? 0,
     usd: input.usd ?? 0,
     priced: input.usd === undefined ? 0 : 1,
-    activation: 0,
+    activation: input.activation ?? 0,
   };
 }
 

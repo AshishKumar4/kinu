@@ -295,7 +295,8 @@ requirements:
       - Kinu.Safety.DeviceToken.two_copies_cannot_alternate
       - Kinu.Safety.DeviceToken.one_holder_is_never_revoked
     tsRefs:
-      - packages/cf-backend/src/user/devices.ts#DEVICE_CONNECT_TICKET_TTL_MS
+      - packages/cf-backend/src/user/single-use-tickets.ts#TICKET_TTL_MS
+      - packages/cf-backend/src/user/single-use-tickets.ts#SingleUseTickets.spend
       - packages/cf-backend/src/user/user-do.ts#UserDO.issueDeviceConnectTicket
       - packages/cf-backend/src/user/user-do.ts#UserDO.verifyDeviceConnectTicket
       - packages/cf-backend/src/user/user-do.ts#UserDO.verifyDeviceToken

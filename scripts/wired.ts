@@ -95,21 +95,18 @@
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
 import { exportedDeclarations, inScope } from './dead-code';
 import { declaredRpcs, invokedNames } from './reachability';
-import {
-  isManifest, isParseable, isTestFile, isTestScaffold, isTypescriptConfig, readMatching, readRepositoryFile, readTests,
-  trackedFiles,
-} from './sources';
+import { isManifest, isParseable, isTestFile, isTestScaffold, isTypescriptConfig, readMatching, readRepositoryFile, readTests, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { readAliases, readWorkspace, resolveSpecifier } from './import-graph';
 import {
   classMembers, collapsePath, declarationOf, declaredName, identifierText,
   importBindings, importedNames, isFunctionLike, isOptionalMember, isReExport,
   literalText,
-  importUses, methodKind, moduleSpecifiers,
+  importUses, methodKind, moduleSpecifiers, requiredSpecifiers,
   NAMESPACE, parse, type Parsed, reExportBindings, referencedNames, returnTypeOf, superClassName,
   type SyntaxNode, walk,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/wired.lock.json`;
 
@@ -300,8 +297,8 @@ export function buildGraph(reachers: ReadonlyMap<string, string>): Graph {
       }
     }
 
-    // Dynamic imports reach a file even when no imported binding is consumed.
-    for (const specifier of moduleSpecifiers(tree)) {
+    // Dynamic imports and CommonJS requires reach a file even when no imported binding is consumed.
+    for (const specifier of [...moduleSpecifiers(tree), ...requiredSpecifiers(tree)]) {
       const { file: target } = resolve(file, specifier);
 
       if (target !== undefined) edges.add(target);

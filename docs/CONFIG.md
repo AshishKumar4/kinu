@@ -56,7 +56,7 @@ Signed in, `kinu provider connect` sends my key to my Kinu account by default. T
 
 `providers` is therefore the local-override store. Cloud workspaces never read it.
 
-The model spec decides which credential answers a turn. `resolveLLMConfig` gives the account every spec the account hosts. `@cf/…` and the provider ids the proxy carries go to the proxy even when a local key is present. Every other spec falls to the local store, matched on the provider the spec names (`openai/…`, `anthropic/…`, `openrouter/…`, `codex/…`, `opencode/…`). A bare model id with no provider goes to a stored Codex or OpenAI credential, in that order. `providers.openaiCompat.default` catches anything still unmatched except a `@cf/…` spec, which a local endpoint would accept and answer with some other model. With no account session the local store is the only source.
+The model spec decides which credential answers a turn. `resolveModelDefaults` gives the account every spec the account hosts. `@cf/…` and the provider ids the proxy carries go to the proxy even when a local key is present. Every other spec falls to the local store, matched on the provider the spec names (`openai/…`, `anthropic/…`, `openrouter/…`, `codex/…`, `opencode/…`). A bare model id with no provider goes to a stored Codex or OpenAI credential, in that order. `providers.openaiCompat.default` catches anything still unmatched except a `@cf/…` spec, which a local endpoint would accept and answer with some other model. With no account session the local store is the only source.
 
 | Field | What it is |
 | --- | --- |
@@ -105,7 +105,7 @@ Six apply to every command. `kinu --help` lists exactly these.
 | `KINU_BASE_URL` | LLM API base URL. |
 | `KINU_AUTH` | LLM auth header value. |
 
-`resolveLLMConfig` reads three more as fallbacks. Each applies only when its `KINU_` counterpart is unset. The three are `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_AUTH`, and `AI_GATEWAY_MODEL`.
+`resolveModelDefaults` reads three more as fallbacks. Each applies only when its `KINU_` counterpart is unset. The three are `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_AUTH`, and `AI_GATEWAY_MODEL`.
 
 `resolveProviderCredentials` reads the local provider keys from the environment before it reads `config.json`. A shell override wins inside the shell that sets it.
 

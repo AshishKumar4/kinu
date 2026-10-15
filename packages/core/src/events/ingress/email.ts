@@ -192,7 +192,7 @@ export async function acceptInboundEmail(
     if (admitted) {
       deps.replies.bindEvent(reply_channel_id, id);
     } else {
-      deps.replies.abort(reply_channel_id, msg.now, 'duplicate email delivery');
+      deps.replies.abort(reply_channel_id);
     }
   }
 

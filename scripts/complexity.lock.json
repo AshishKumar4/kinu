@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-14",
-  "files": 3286,
-  "functions": 86120,
+  "measuredAt": "2026-10-15",
+  "files": 3330,
+  "functions": 87115,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -54,16 +54,8 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
-      "complexity": 36
-    },
-    {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
       "complexity": 36
-    },
-    {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 35
     },
     {
       "key": "scripts/bench-external.ts#readHarborTrial",
@@ -74,11 +66,11 @@
       "complexity": 35
     },
     {
-      "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
       "complexity": 34
     },
     {
-      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
+      "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
       "complexity": 34
     },
     {
@@ -138,10 +130,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
-      "complexity": 30
-    },
-    {
       "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 30
     },
@@ -178,10 +166,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/core/src/tui/input-state.ts#reduceInput",
-      "complexity": 29
-    },
-    {
       "key": "packages/core/src/web/hero-canvas.ts#createCanvasRenderer>render",
       "complexity": 29
     },
@@ -206,14 +190,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/cli/src/config.ts#resolveLLMConfig",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 28
-    },
-    {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
       "complexity": 28
     },
@@ -234,15 +210,7 @@
       "complexity": 27
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
-      "complexity": 27
-    },
-    {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
-      "complexity": 27
-    },
-    {
-      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
       "complexity": 27
     },
     {
@@ -267,10 +235,6 @@
     },
     {
       "key": "packages/core/src/orchestrator/session-stream.ts#SessionStream.writePart",
-      "complexity": 27
-    },
-    {
-      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
       "complexity": 27
     },
     {
@@ -338,6 +302,10 @@
       "complexity": 26
     },
     {
+      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
+      "complexity": 26
+    },
+    {
       "key": "packages/cf-backend/src/gallery-preview-tabs.tsx#PreviewTabsGallery>useCallback>gen",
       "complexity": 26
     },
@@ -346,15 +314,15 @@
       "complexity": 26
     },
     {
+      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
+      "complexity": 26
+    },
+    {
       "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
       "complexity": 26
     },
     {
       "key": "packages/cli/src/slash-commands.ts#instructionsCommand",
-      "complexity": 26
-    },
-    {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#30",
       "complexity": 26
     },
     {
@@ -370,11 +338,15 @@
       "complexity": 26
     },
     {
-      "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage>gen",
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 26
     },
     {
       "key": "packages/core/src/orchestrator/terminal-effects.ts#TerminalEffectLedger.attempt",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
       "complexity": 26
     },
     {
@@ -398,7 +370,7 @@
       "complexity": 26
     },
     {
-      "key": "packages/core/tests/unit-deploy-flow.test.ts#FakeCloudflare.answer",
+      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 26
     },
     {

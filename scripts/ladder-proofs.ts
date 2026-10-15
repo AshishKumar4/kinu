@@ -21,12 +21,10 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { S3Client } from 'bun';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
+import { requireCloudflareAccountId } from './infra-cloudflare';
 import { EntrySchema, type Store } from './ladder-cache';
 
 export const PROOFS_BUCKET = 'kinu-ci-proofs';
-
-/** The account the bucket lives in; scripts/deploy.sh and the devbox tools name the same one. */
-const ACCOUNT = 'f44999d1ddda7012e9a87729eba250f1';
 
 /** The names of the two secrets, removed from the environment once read. Never a gate's own names. */
 export const PROOF_SECRET_NAMES = ['KINU_PROOFS_ACCESS_KEY_ID', 'KINU_PROOFS_SECRET_ACCESS_KEY'] as const;
@@ -106,7 +104,7 @@ export function remoteProofs(bucket: ProofBucket, secret: string): RemoteProofs 
 
 /** The bucket over R2's S3 API. */
 export function r2Bucket(accessKeyId: string, secretAccessKey: string): ProofBucket {
-  const client = new S3Client({ accessKeyId, secretAccessKey, bucket: PROOFS_BUCKET, endpoint: `https://${ACCOUNT}.r2.cloudflarestorage.com` });
+  const client = new S3Client({ accessKeyId, secretAccessKey, bucket: PROOFS_BUCKET, endpoint: `https://${requireCloudflareAccountId()}.r2.cloudflarestorage.com` });
 
   return {
     async read(key) {

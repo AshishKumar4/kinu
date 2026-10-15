@@ -1,20 +1,19 @@
 import { parseCliTokenUserId } from '../cli/auth-store';
 import {
-  getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, ORCHESTRATOR_AGENT_SLUG, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
+  getActiveAccessTokenScopes, listAccessTokens as listAccessTokenRows, mintAccessToken as mintAccessTokenRow, revokeAccessToken as revokeAccessTokenRow, verifyAccessToken as verifyAccessTokenRow, type AccessTokenMint, type AccessTokenRecord, type AccessTokenScope, nanoid, ownerCaller, type UserCaller, validateWorkspaceName, randomToken, sha256Hex, type UserProfile,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import { closeEndedRosterSockets, rosterSockets } from './roster';
 import { singletonValue, type SessionStands, type UserObjectHost } from './user-host';
+import { SingleUseTickets } from './single-use-tickets';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
-const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 
-export const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
 
 /** A CLI device-code approval redeemed twice; the poll route answers it as already-delivered.
  * Crosses the DO RPC boundary as its message. */
@@ -40,7 +39,6 @@ export interface CliAgentConnectTicketVerification {
   user?: { id: string; email: string; displayName: string | null };
   tokenHash?: string;
   expiresAt?: number;
-  capabilities?: string[];
   /** Present only for tickets minted by a scoped `pta_…` token; the websocket pins to these scopes. */
   scopes?: AccessTokenScope[];
   /** Rides the connection's tags so a later revocation can name every older socket,
@@ -78,12 +76,6 @@ function cleanCliTokenLabel(label?: string): string {
   return trimmed ? trimmed.slice(0, 80) : 'Kinu CLI';
 }
 
-function parseCapabilityList(value: string): string[] {
-  const parsed = v.safeParse(v.array(v.string()), tolerate(() => JSON.parse(value), 'malformed-input'));
-
-  return parsed.success ? parsed.output : [];
-}
-
 export interface UserSessionsHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
   readonly sql: BuiltinSql;
   accountName(): string;
@@ -93,7 +85,13 @@ export interface UserSessionsHost extends Pick<UserObjectHost, 'ctx' | 'env' | '
 
 /** The account's sign-ins, sessions, tokens and connect tickets. */
 export class UserSessions {
-  constructor(private readonly host: UserSessionsHost) {}
+  /** Single-use socket tickets a CLI bearer trades for one agent socket: the CLI's websocket to one workspace, the only
+   *  thing a ticket opens, so a row holds whose, which workspace, and the bearer that asked. */
+  private readonly connectTickets: SingleUseTickets<{ user_id: string; agent_name: string; cli_token_hash: string }>;
+
+  constructor(private readonly host: UserSessionsHost) {
+    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'cli_agent_connect_tickets', ['user_id', 'agent_name', 'cli_token_hash']);
+  }
 
   /** Called before the cookie is issued. An existing hash throws; the caller compensates. */
   async registerBrowserSession(
@@ -519,16 +517,12 @@ export class UserSessions {
 
   async issueCliAgentConnectTicket(caller: UserCaller, input: {
     userId: string;
-    agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
     agentName: string;
     cliTokenHash: string;
-    capabilities?: Array<typeof CLI_AGENT_WEBSOCKET_CAPABILITY>;
   }): Promise<{ ok: boolean; ticket?: string; expiresAt?: number; error?: string }> {
     await this.host.requireTier(caller, 'auth_tokens');
 
     if (!/^[a-f0-9]{32}$/.test(input.userId)) return { ok: false, error: 'invalid user id' };
-
-    if (input.agentClass !== ORCHESTRATOR_AGENT_SLUG) return { ok: false, error: 'invalid agent class' };
 
     if (!/^[a-f0-9]{64}$/.test(input.cliTokenHash)) return { ok: false, error: 'invalid token hash' };
     validateWorkspaceName(input.agentName);
@@ -536,27 +530,16 @@ export class UserSessions {
     if (!this.host.workspaceRegistered(input.agentName)) return { ok: false, error: 'agent not found' };
 
     const now = Date.now();
-    this.host.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
 
     if (!this.cliBearerScopes(input.cliTokenHash, now)) return { ok: false, error: 'invalid CLI token' };
 
-    const capabilities = input.capabilities?.length ? input.capabilities : [CLI_AGENT_WEBSOCKET_CAPABILITY];
-
-    if (!capabilities.includes(CLI_AGENT_WEBSOCKET_CAPABILITY)) return { ok: false, error: 'missing websocket capability' };
     const ticket = `pat_${input.userId}_${randomToken(32)}`;
-    const expiresAt = now + CLI_AGENT_CONNECT_TICKET_TTL_MS;
-    this.host.sqlx(
-      `INSERT INTO cli_agent_connect_tickets
-         (ticket_hash, user_id, agent_class, agent_name, cli_token_hash, capabilities, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      await sha256Hex(ticket),
-      input.userId,
-      input.agentClass,
-      input.agentName,
-      input.cliTokenHash,
-      JSON.stringify(capabilities),
-      expiresAt,
-    );
+
+    const expiresAt = this.connectTickets.mint(ticket, {
+      user_id: input.userId,
+      agent_name: input.agentName,
+      cli_token_hash: input.cliTokenHash,
+    }, now);
 
     return { ok: true, ticket, expiresAt };
   }
@@ -564,12 +547,7 @@ export class UserSessions {
   async verifyCliAgentConnectTicket(
     caller: UserCaller,
     ticket: string,
-    expected: {
-      userId: string;
-      agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
-      agentName: string;
-      capability: typeof CLI_AGENT_WEBSOCKET_CAPABILITY;
-    },
+    expected: { userId: string; agentName: string },
   ): Promise<CliAgentConnectTicketVerification> {
     await this.host.requireTier(caller, 'auth_tokens');
     const hintedUserId = parseCliAgentConnectTicketUserId(ticket);
@@ -580,36 +558,14 @@ export class UserSessions {
     validateWorkspaceName(expected.agentName);
 
     const now = Date.now();
-    this.host.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
-    const ticketHash = await sha256Hex(ticket);
+    // Spent on presentation, a match or not: a ticket shown to the wrong agent is burnt, never left live.
+    const row = this.connectTickets.spend(ticket, now);
 
-    const row = this.host.sqlx<{
-      user_id: string;
-      agent_class: string;
-      agent_name: string;
-      cli_token_hash: string;
-      capabilities: string;
-      expires_at: number;
-      used_at: number | null;
-    }>(
-      `SELECT user_id, agent_class, agent_name, cli_token_hash, capabilities, expires_at, used_at
-         FROM cli_agent_connect_tickets
-        WHERE ticket_hash = ? LIMIT 1`,
-      ticketHash,
-    )[0];
-
-    if (!row || row.used_at !== null || row.expires_at <= now) return { ok: false, error: 'invalid ticket' };
+    if (!row) return { ok: false, error: 'invalid ticket' };
 
     if (row.user_id !== expected.userId) return { ok: false, error: 'wrong user' };
 
-    if (row.agent_class !== expected.agentClass) return { ok: false, error: 'wrong agent class' };
-
     if (row.agent_name !== expected.agentName) return { ok: false, error: 'wrong agent' };
-    const capabilities = parseCapabilityList(row.capabilities);
-
-    if (!capabilities.includes(expected.capability)) return { ok: false, error: 'missing capability' };
-
-    this.host.sqlx(`UPDATE cli_agent_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
 
     if (!this.host.workspaceRegistered(expected.agentName)) return { ok: false, error: 'agent not found' };
     const bearerScopes = this.cliBearerScopes(row.cli_token_hash, now);
@@ -624,7 +580,6 @@ export class UserSessions {
       user: { id: expected.userId, email: profile.email, displayName: profile.displayName },
       tokenHash: row.cli_token_hash,
       expiresAt: row.expires_at,
-      capabilities,
       authGeneration: this.authGeneration(),
     };
 

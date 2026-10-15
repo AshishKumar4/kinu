@@ -24,7 +24,8 @@ const RAIL_BUTTON_CLS = `${RAIL_ICON_CLS} p-text-3 ${NAV_HOVER}`;
 /** Lane width and entering column share 180ms; reduced motion gets the end state at once. */
 const LANE_ENTER_CLS = "motion-safe:animate-[fade-in_180ms_ease-out]";
 
-export function SidebarRail() {
+/** `folded` while a view fills the workspace area: the rail folds for it, and is as the reader keeps it after. */
+export function SidebarRail({ folded }: { folded: boolean }) {
   const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_KEY) !== "0");
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -36,6 +37,10 @@ export function SidebarRail() {
   };
 
   const { entries } = useAgentsNav();
+
+  useEffect(() => {
+    setRailOpen(!folded && localStorage.getItem(RAIL_KEY) !== "0");
+  }, [folded]);
 
   useEffect(() => {
     if (entries === 0) return;
@@ -83,7 +88,7 @@ export function SidebarRail() {
               );
             })}
           </nav>
-          <Link to="/user/settings" aria-label="Account settings" title="Account settings" className="mt-auto flex size-[26px] items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">
+          <Link to="/user/settings" aria-label="Account settings" title="Account settings" className="mt-auto flex size-[26px] items-center justify-center rounded-full p-accent-subtle text-[12px] font-semibold p-accent-mark">
             {profile?.email?.[0]?.toUpperCase() ?? "?"}
           </Link>
         </div>

@@ -105,7 +105,7 @@ import { ActorSession, type ActorTurnLease,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
-  changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
+  changeRoleAsOwner, agentsProfileContext,
   resolveModelRoute, completeOnRoute,
   resolveRoutingProfile, currentOperationProfile, captureOperationProfile, ancestorPins,
   type PinnedProfile,
@@ -145,7 +145,7 @@ import { createLocalActorHost } from './actor-host';
 import { createLocalOrchestration, type LocalOrchestration } from './orchestration';
 import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
-import { OS_LEASE_PROCESS } from './agent-host/lease-process';
+import { osLeaseProcess } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers, readMemoryTail } from '@kinu.run/core';
@@ -222,7 +222,6 @@ export interface LocalParentRelay {
   }) => Promise<string>;
 }
 
-export type { SessionEvent } from '@kinu.run/core';
 
 /** Shows the ask's queue row; resolving null leaves the row waiting there. `signal` aborts once another surface
  *  decided it. */
@@ -468,7 +467,7 @@ export class LocalAgentSession {
     this.headJournal = new LiveHeadJournal(this.rt.storage.sql, this.rt.actor, this.headActivity);
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
-    this.sessionId = canonicalConversationId(this.config);
+    this.sessionId = CHAT_SESSION_ID;
 
     // Refine the runtime's profile authority rather than install a second resolver, so lanes and turns agree.
     const refinement: ProfileAuthorityRefinement = {
@@ -577,7 +576,7 @@ export class LocalAgentSession {
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channelFor(this.rt.actor.actorId));
     this.jobsDrivenHere = drivenJobs(opts.hosted);
-    this.jobHolder = processJobHolder(this.rt.storage, OS_LEASE_PROCESS);
+    this.jobHolder = processJobHolder(this.rt.storage, osLeaseProcess(process.pid));
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -611,7 +610,7 @@ export class LocalAgentSession {
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
     // The next turn awaits this before admitting input.
-    this.chat.measureSessionStart({ restored: this.chat.restoreHistory(), measure: !this.oneShot });
+    this.chat.measureSessionStart({ restored: this.chat.restoreWorkingHistory(), measure: !this.oneShot });
     this.ensureModelState();
     this.rearmLocalAlarm();
   }
@@ -1692,7 +1691,7 @@ export class LocalAgentSession {
       toolset: (mode) => this.turnToolSet(mode),
       // What lies outside the workspace is its own agent's alone.
       externalTools: async (window) => {
-        if (!this.actorReach.external) return {};
+        if (this.actorReach.kind !== 'workspace') return {};
         await this.admitMcp(window);
 
         return this.extraTools;
@@ -2466,7 +2465,7 @@ export class LocalAgentSession {
     const report = this.reportGateOpen() ? this.reportDeps : null;
     const reported = report === null ? {} : { report: () => report };
 
-    if (this.actorReach.surface === 'program') return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, reported);
+    if (this.actorReach.kind === 'workspace') return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, reported);
     const acc = this.actorSession.orchestrator.acc;
 
     // A program here runs in this process, which holds no Browser Run socket client, so no browser sessions.
@@ -2517,7 +2516,6 @@ export class LocalAgentSession {
       // No `spec` stamp: the merge runs on the routed judge tier; the provider's `modelId` is the record.
       reportModelCall: (report) => this.modelCallSink(report),
       operations: this.modelOperations,
-      parentRuntime: this.rt,
       webSearch: this.getWebSearchProvider(),
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
@@ -2757,7 +2755,7 @@ export class LocalAgentSession {
       escalations: this.actorSession.orchestrator.acc.ledgers.escalations,
       craft: this.actorSession.orchestrator.acc.ledgers.craft,
       vectorStore: null,
-      ...(this.actorReach.external && { external: () => this.turnExternalTools }),
+      ...(this.actorReach.kind === 'workspace' && { external: () => this.turnExternalTools }),
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
         const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
@@ -2770,7 +2768,7 @@ export class LocalAgentSession {
         return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
-      ...(this.actorReach.lanes && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
+      ...(this.actorReach.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
       jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },

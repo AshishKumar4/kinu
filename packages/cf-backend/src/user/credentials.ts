@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, grantedEgressBindings, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary,
+  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, grantedEgressBindings, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -43,7 +43,7 @@ const CLAUDE_SIGN_IN_KEY = 'claude.sign-in';
 const ClaudeSignInSchema = v.object({ url: v.string(), state: v.string(), verifier: v.string(), revision: v.number() });
 
 function unrenewable(key: string, cred: Credential): string | null {
-  return subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !cred.refreshToken ? `${key} requires an OAuth refresh token.` : null;
+  return subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !renewableLogin(cred) ? `${key} requires an OAuth refresh token.` : null;
 }
 
 export interface CodexStatus {
@@ -314,11 +314,7 @@ export class UserCredentials {
   }
 
   bumpCredentialsRevision(): void {
-    this.host.sqlx(
-      `INSERT INTO user_credentials_revision (id, revision, updated_at) VALUES (1, 1, ?)
-       ON CONFLICT(id) DO UPDATE SET revision = revision + 1, updated_at = excluded.updated_at`,
-      Date.now(),
-    );
+    this.host.sqlx(`INSERT INTO user_credentials_revision (id, revision) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET revision = revision + 1`);
   }
 
   /**

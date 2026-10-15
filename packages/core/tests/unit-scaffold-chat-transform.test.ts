@@ -230,6 +230,27 @@ describe('scaffoldChatTransform', () => {
     });
   });
 
+  // core-rest review P1-4: the seam's schema had lost `model-fallback` and `context-admitted`, stripped a step's extra
+  // fields, and dropped whatever failed to parse without a trace.
+  test('relayed fallback, admission and step fields arrive whole; a malformed chunk is reported, not dropped', async () => {
+    const relaying = `async function run() {
+      await host.emit({ type: 'ui_chunk', chunk: { type: 'model-fallback', from: 'a/one', to: 'b/two', reason: 'overloaded' } });
+      await host.emit({ type: 'ui_chunk', chunk: { type: 'context-admitted', tokens: 1200, contextWindow: 200000 } });
+      await host.emit({ type: 'ui_chunk', chunk: { type: 'step-finish', stepIndex: 0, responseMessages: [], egress: 'device', modelId: 'two' } });
+      await host.emit({ type: 'ui_chunk', chunk: { type: 'no-such-event' } });
+    }`;
+
+    const { chat } = defaultTurn(DEFAULT_EVENTS);
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, relaying) }));
+
+    expect(events.filter((e) => e.type === 'model-fallback' || e.type === 'context-admitted' || e.type === 'step-finish')).toMatchObject([
+      { type: 'model-fallback', from: 'a/one', to: 'b/two', reason: 'overloaded' },
+      { type: 'context-admitted', tokens: 1200, contextWindow: 200000 },
+      { type: 'step-finish', stepIndex: 0, egress: 'device', modelId: 'two' },
+    ]);
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ type: 'error', message: expect.stringContaining('not a chat event') });
+  });
+
   test('a failing tool dispatch is reported as an unsuccessful tool-result', async () => {
     const { chat } = defaultTurn(DEFAULT_EVENTS);
     const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, TOOL_SCAFFOLD, async () => { throw new Error('boom'); }) }));

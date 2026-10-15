@@ -10,11 +10,11 @@ import {
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  desktopClientUrl, executorLabel, ownerAsks, planSurface,
+  ownerAsks, planSurface,
 } from "@kinu.run/core";
 import type { OwedOwnerIntent, PlanReview, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
-import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import type { SubordinateView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
@@ -40,7 +40,6 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
-import { DesktopScreen } from "@/components/surfaces/DesktopScreen";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
 import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
@@ -408,7 +407,7 @@ function planOwnerName(subName: string | undefined, agentId: string | undefined)
 function AgentChatColumn({ workspace, subName, subordinates, rpc, ids, input }: {
   workspace: string;
   subName: string;
-  subordinates: readonly SubordinateRosterEntry[];
+  subordinates: readonly SubordinateView[];
   rpc: WorkspaceRpc;
   ids: AgentLinkIds;
   input: boolean;
@@ -575,14 +574,6 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
   }
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
-
-  if (view === "desktop") {
-    return (
-      <div className="flex min-h-0 flex-1 bg-black">
-        <DesktopScreen src={desktopClientUrl(location, workspace)} title={`${executorLabel("computer")}'s desktop`} />
-      </div>
-    );
-  }
 
   return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
     plan={state.activePlan} arrival={state.workspacePlanArrival}

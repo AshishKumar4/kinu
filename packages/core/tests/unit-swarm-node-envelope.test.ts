@@ -3,10 +3,9 @@
  * `unit-turn-envelope.test.ts`). No measured node finished, so only the cost of a step is derivable.
  */
 import { expect, test, spyOn } from 'bun:test';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel, unobservedSpend, createRecordingLogger } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
-import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runNodeAgent } from '../src/strategy/node-agent';
 

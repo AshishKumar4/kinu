@@ -5,7 +5,8 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { initWorkspaceSchema } from '@kinu.run/core';
-import { makeWorkspaceSchemaSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
+import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { stampSchemaGenesis } from '@kinu.run/core';
 import { createTestActorsOver, workspaceDatabase } from '@kinu.run/test-utils';
 import { agentDir } from '../src/config';
 import { listLocalTimeline, searchLocalMemory } from '../src/local-inspection';
@@ -25,7 +26,7 @@ function seed(rows: number, notes = false): void {
   const db = workspaceDatabase(DB_PATH);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const { actorId } = createTestActorsOver(db, { name: AGENT }).main;
-  stampSchemaGenesis(db);
+  stampSchemaGenesis((ddl) => db.exec(ddl));
 
   for (let i = 0; i < rows; i++) {
     db.run('INSERT INTO evolution_events (actor_id, id, type, message, created_at) VALUES (?, ?, ?, ?, ?)',

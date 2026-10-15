@@ -36,24 +36,26 @@ import {
   type SqlExecutor,
   type TeamToolDeps,
   type TemporaryRunRequest,
+  DriverLeaseHold,
+  type DriverKind,
+  type DriverLeaseHolder,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import type { Subprocess } from 'bun';
 import {
   LocalAgentHost,
-  DriverLeaseHold,
-  type DriverKind,
-  type DriverLeaseHolder,
   type LocalAgentHostOptions,
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
-import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+import type { SessionEvent } from '@kinu.run/core';
+import { LocalAgentSession } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
+import { osLeaseProcess } from '../src/agent-host/lease-process';
 import { ANSWERING_HIRE_ANSWER, answeringHireModel, hireDeathModel } from './hire-death-model';
 import { swarmsOn, toolCallStream, toolSequenceModel } from './helpers/local-session';
 import { staticModelPlane } from '../src/profile-authority';
@@ -476,7 +478,6 @@ async function seedAgent(state: string, name: string): Promise<string> {
     await createWorkspace(db, {
       name,
       purpose: `Test agent ${name}`,
-      llm: DUMMY_LLM,
       home: workspaceHome(db),
     });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
@@ -738,7 +739,8 @@ describe('LocalAgentHost', () => {
     const config = main.config;
     expect(sessions).toEqual([{ session_id: 'default' }]);
     expect(rows?.n).toBe(4);
-    expect(config.get('conversation.id')).toBe('default');
+    // schema audit: the session is the chat-session constant, never a stored key.
+    expect(config.get('conversation.id')).toBeNull();
     db.close();
     await host.close();
   });
@@ -854,7 +856,7 @@ describe('LocalAgentHost', () => {
     if (hire === null) throw new Error('the hire was not created');
     const input = JSON.stringify({ op: 'swarm', preset: 'ideate', task: HELD_SEARCH, branches: 1, depth: 1 });
 
-    seeded.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, resume_attempts)
+    seeded.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at, epoch)
       VALUES (?, 'bgjob-held', 'agents', 'build', 'running', ?, 1, 6)`).run(hire.actor_id, input);
     seeded.query(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, 'f-held', 'bg:agents', ?, 1)`)
       .run(hire.actor_id, JSON.stringify({ phase: 'running', jobId: 'bgjob-held', kind: 'agents' }));
@@ -1886,8 +1888,7 @@ describe('LocalAgentHost', () => {
     const events: SessionEvent[] = [];
     reopened.subscribe((agent, event) => { if (agent === address) events.push(event); });
     await (await reopened.acquire(address)).send('Hire another researcher.', { id: crypto.randomUUID() });
-    expect(events.filter((event) => event.type === 'tool-result' && event.toolName === 'agents'))
-      .toMatchObject([{ success: false, reason: 'denied' }]);
+    expect(events.filter((event) => event.type === 'tool-result' && event.toolName === 'agents' && event.success)).toEqual([]);
     expect(await capped.list()).toEqual([]);
     await reopened.close();
   });
@@ -2529,7 +2530,7 @@ function evolutionRows(dbPath: string, actorId: string) {
         'SELECT score, source FROM turn_ratings WHERE actor_id = ? ORDER BY created_at',
       ).all(actorId),
       lessons: db.query<{ source: string; status: string }, [string]>(
-        'SELECT source, status FROM lessons WHERE actor_id = ? ORDER BY created_at',
+        "SELECT source, CASE WHEN corroborated_at IS NULL THEN 'provisional' ELSE 'corroborated' END AS status FROM lessons WHERE actor_id = ? ORDER BY created_at",
       ).all(actorId),
     };
   } finally { db.close(); }
@@ -2601,7 +2602,7 @@ describe('LocalAgentHost — the driver lease', () => {
       const hold = new DriverLeaseHold({
         sql: makeSql(db),
         execRaw: makeExecRaw(db),
-        proc: { pid: rival.pid, isAlive: () => true },
+        proc: osLeaseProcess(rival.pid),
       }, kind);
 
       const refusal = hold.acquire();

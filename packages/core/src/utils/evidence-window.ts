@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { renderThrownChain, settleSync } from '../obs/index';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
+import { headEnd, tailStart } from './text';
 
 export { EVIDENCE_BUDGETS } from '../types/evidence';
 
@@ -14,11 +15,12 @@ const HEAD_FRACTION = 0.5;
 /** Keeps both ends and names what was dropped; text within budget passes through byte-identical. */
 export function evidenceWindow(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
-  const headLen = Math.floor(maxChars * HEAD_FRACTION);
-  const tailLen = maxChars - headLen;
-  const omitted = text.length - headLen - tailLen;
+  // Neither cut splits a surrogate pair: each moves at most one unit inward, and the count names what was cut.
+  const head = text.slice(0, headEnd(text, Math.floor(maxChars * HEAD_FRACTION)));
+  const tail = text.slice(tailStart(text, maxChars - Math.floor(maxChars * HEAD_FRACTION)));
+  const omitted = text.length - head.length - tail.length;
 
-  return `${text.slice(0, headLen)}\n[... ${omitted} chars omitted from the middle ...]\n${text.slice(-tailLen)}`;
+  return `${head}\n[... ${omitted} chars omitted from the middle ...]\n${tail}`;
 }
 
 /** Renders a tool result for trajectory/trace/fallback; objects serialize as JSON, never "[object Object]". */

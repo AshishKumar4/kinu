@@ -6,7 +6,7 @@ import type { ModelMessage } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   startActorTurn, prepareActorProgram,
-  runHeadInference, preparedHeadRun, HeadCapture, withHeadCaptureRecording,
+  runHeadInference, preparedHeadRun, HeadCapture,
   initActorStateSchema,
 } from '@kinu.run/core';
 import { defaultLoopOrigin } from '@kinu.run/core';
@@ -120,20 +120,25 @@ test('hosted polled cancellation refuses a promoted direct effect without a sign
   expect(model.doStreamCalls).toHaveLength(0);
 });
 
-test('a native refusal keeps the same failed outcome at capture and scaffold boundaries', async () => {
+// core-rest review P1-35: a head recorded its calls through its own wrapper, beside the session's ledger.
+test('a native refusal keeps the same failed outcome in the turn and in the head\'s report', async () => {
   const { rt } = await runtime('async function run() { await host.callTool("fail", {}); await host.emit({ type: "text_delta", text: "finished" }); }');
-  const capture = new HeadCapture();
 
-  const tools = withHeadCaptureRecording({ fail: tool({ inputSchema, execute: async (): Promise<string> => {
+  const tools = { fail: tool({ inputSchema, execute: async (): Promise<string> => {
     throw new KinuError('denied', 'fixture permission refused');
-  } }) }, capture);
+  } }) };
 
   const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools } });
 
   const events = await collect(prepared.events);
   expect(events.find(event => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'denied' });
-  expect(capture.toolCalls).toMatchObject([{ outcome: { success: false, reason: 'denied' } }]);
+
+  const report = await runHeadInference(preparedHeadRun(headInput(), {
+    ...headLoopSeams(rt, { model: () => unusedModel() }), clock: REAL_CLOCK, tools, capture: new HeadCapture(), isAborted: () => false,
+  }));
+
+  expect(report.toolCalls).toMatchObject([{ name: 'fail', outcome: { success: false, reason: 'denied' } }]);
 });
 
 function probeThenFinish(reasoning: string, toolCallId: string) {
@@ -162,7 +167,7 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
   const model = probeThenFinish('thinking marker', 'probe-call');
 
   const capture = new HeadCapture();
-  const tools = withHeadCaptureRecording({ probe: tool({ inputSchema, execute: async () => 'private result nonce1842' }) }, capture);
+  const tools = { probe: tool({ inputSchema, execute: async () => 'private result nonce1842' }) };
   const messages: ModelMessage[] = [];
   const deltas: Array<{ kind: string; text: string }> = [];
 
@@ -175,7 +180,7 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
   expect(report.status).toBe('completed');
   expect(report.stepCount).toBe(2);
   expect(report.usage).toMatchObject({ input: 2, output: 2 });
-  expect(capture.toolCalls).toHaveLength(1);
+  expect(report.toolCalls).toMatchObject([{ name: 'probe', outcome: { success: true } }]);
   expect(deltas).toContainEqual({ kind: 'reasoning', text: 'thinking marker' });
   expect(messages.flatMap(message => message.role === 'tool' ? message.content : []))
     .toContainEqual(expect.objectContaining({ type: 'tool-result', toolCallId: 'probe-call', output: { type: 'text', value: 'private result nonce1842' } }));

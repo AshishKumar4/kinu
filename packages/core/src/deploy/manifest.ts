@@ -58,6 +58,11 @@ export interface ReleaseFile {
   readonly assetHash: string | null;
 }
 
+/** What a release module is to the runtime that loads it: `.wasm` a WebAssembly module, anything else an ES module. */
+export function releaseModuleKind(name: string): 'wasm' | 'esModule' {
+  return name.endsWith('.wasm') ? 'wasm' : 'esModule';
+}
+
 export interface ReleaseWorker {
   readonly name: string;
   readonly mainModule: string;
@@ -67,7 +72,6 @@ export interface ReleaseWorker {
   readonly modules: readonly string[];
   readonly modulesPath: string;
   readonly assets: string;
-  readonly assetsBinding: string;
   readonly crons: readonly string[];
 }
 
@@ -123,7 +127,6 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
     modules: v.pipe(v.array(ReleaseFilePathSchema), v.minLength(1)),
     modulesPath: ReleaseFilePathSchema,
     assets: ReleaseFilePathSchema,
-    assetsBinding: v.pipe(v.string(), v.minLength(1)),
     crons: v.array(v.string()),
   }),
   bindings: v.array(v.object({

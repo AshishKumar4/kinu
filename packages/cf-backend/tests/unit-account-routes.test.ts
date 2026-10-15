@@ -2,13 +2,14 @@
 // SDK's abort sentinel reads as success while any other failure reaches the caller.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { accountRoutes, type AccountRoutesEnv } from '../src/user/account-routes';
 import { serveFamily } from './helpers/api';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '@kinu.run/core';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 

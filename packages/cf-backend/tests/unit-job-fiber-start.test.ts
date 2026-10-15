@@ -1,10 +1,11 @@
 // The fiber host refusing a background job's lane row before its body runs: the job settles failed
 // through jobs.fiber_start_failed, and no rejection is left unhandled.
 import { BackgroundJobRunner } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { describe, test, expect } from 'bun:test';
 
 import { orchestratorHarness } from './helpers/actor-harness';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 type HarnessAgent = ReturnType<typeof orchestratorHarness>['agent'];
 

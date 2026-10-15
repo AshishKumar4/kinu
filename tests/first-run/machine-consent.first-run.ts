@@ -28,15 +28,26 @@ import { webHeaders } from '../../evals/src/workspace-roster';
 import { ORCHESTRATOR_AGENT_SLUG, type JsonValue, type RunEvent } from '../../packages/core/src/index';
 import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, type AttachedMachine } from './daemon';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { openPublicSocket } from './public-socket';
 import { CONSENT_ASK as ASK } from './asks';
 
 const SUITE = 'First-run · machine-consent';
 
-const CASE = 'machine-consent' as const;
+const CASE = firstRunCaseId(import.meta.url);
+
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'MA-041 asked for both consent branches of a cloud workspace\'s first use of the owner\'s '
+    + 'machine, and no deployed row let the agent reach for a machine that was not connected, '
+    + 'or let its own call raise the consent card.',
+  missedBecause: 'device-link drives the Environment pane\'s RPC against a machine already attached, and '
+    + 'approve-clears and two-machines grant consent before their first command, so a card that '
+    + 'never showed, or a connect prompt that never came, passed them all.',
+  provedRedAt: null,
+  redDirection: 'Planted on a loopback `vite dev` build of this tree: a device call that skips the '
+    + 'owner\'s consent leaves `consent-requested` missed.',
+};
 
 /** The machine this case connects halfway through. */
 const MACHINE = 'kinu-first-run-consent';
@@ -47,7 +58,7 @@ const CONSENT_REQUESTED = 'device_consent';
 /** What the refusal names when no machine is connected: where the owner connects one. */
 const CONNECT_PROMPT = 'kinu connect';
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+const PLAN = firstRunCasePlan(SUITE, 'consent');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -150,6 +161,7 @@ describe(SUITE, () => {
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
+        defect: DEFECT,
         modelCalls: 'expected',
         genesis: false,
         purpose: 'An assistant that uses the owner\'s own machine when asked to.',
@@ -263,4 +275,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

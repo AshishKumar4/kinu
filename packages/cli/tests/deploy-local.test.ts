@@ -78,7 +78,6 @@ function manifestOf(): string {
       modules: ['index.js'],
       modulesPath: 'worker',
       assets: 'client',
-      assetsBinding: 'ASSETS',
       crons: [],
     },
     bindings: [
@@ -229,12 +228,12 @@ describe('kinu deploy local', () => {
     expect(readFileSync(join(layout, 'workerd.capnp'), 'utf8'))
       .toContain(`(name = "http", address = "127.0.0.1:${String(port)}", http = (), service = "main"),`);
 
-    const answer = await fetch(config.address);
+    const answer = await fetch(`http://127.0.0.1:${String(port)}`);
 
     expect(answer.status).toBe(200);
     expect(await answer.text()).toBe('local probe');
 
-    const roundTrip = await fetch(new URL('/kv', config.address));
+    const roundTrip = await fetch(`http://127.0.0.1:${String(port)}/kv`);
 
     expect(roundTrip.status).toBe(200);
     expect(await roundTrip.text()).toBe('kv round trip');

@@ -123,9 +123,12 @@ const CHECKOUT_CHANGELOG = {
   ],
 };
 
+/** A first drive: never interrupted, never retried, serving nothing. */
+const FIRST_DRIVE = { epoch: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
+
 const CHECKOUT_JOBS: BackgroundJob[] = [
-  { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, settledAt: null },
-  { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
+  { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null, ...FIRST_DRIVE },
+  { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, attemptStartedAt: NOW - 61e5, settledAt: NOW - 58e5, ...FIRST_DRIVE },
 ];
 
 const CHECKOUT_PENDING: PendingAction[] = [
@@ -166,7 +169,10 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
       jobs = method === 'retryBackgroundJob'
         ? [
           ...jobs.map((job) => (job.id === id ? { ...job, retriedBy: retryId } : job)),
-          { id: retryId, kind: 'shell', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null, createdAt: Date.now(), settledAt: null },
+          {
+            id: retryId, kind: 'shell', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null,
+            createdAt: Date.now(), attemptStartedAt: Date.now(), settledAt: null, ...FIRST_DRIVE,
+          },
         ]
         : jobs.filter((job) => job.id !== id);
       pending = pending.filter((action) => action.id !== id);

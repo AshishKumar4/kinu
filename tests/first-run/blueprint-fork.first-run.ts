@@ -10,14 +10,22 @@ import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   BlueprintForkSchema, JsonValueSchema, PublishedBlueprintSchema, SharedLibrarySchema, SlateCapabilityGraphSchema,
 } from '@kinu.run/core';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · blueprint-fork';
 
-const CASE = 'blueprint-fork' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A blueprint published from a slate named what it reaches and carried nothing of its owner\'s; a second workspace imported it, its MCP call refused until that workspace connected its own server of the same name, which made the call answer.',
+  missedBecause: 'Unit proofs cover publish and admit in isolation; nothing drove the app-host publish, public read, fork, and forker-side serve for the same bytes on the deployed product.',
+  provedRedAt: null,
+  redDirection: 'Green requires publish to answer inspection plus link, the owner\'s Drive library to list the slate and the blueprint, the public blueprint read and the fork to name the two namespaces the slate reached, the fork\'s MCP call refused before its own server is connected, hello() to answer, and the call to answer through the importer\'s own MCP server.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'fork');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -44,7 +52,7 @@ describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
       purpose: 'Disposable blueprint publish and fork probe; no model task.',
       async run({ session, plan }) {
         const goals: EvalSubgoal[] = [];
@@ -189,5 +197,3 @@ END`));
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

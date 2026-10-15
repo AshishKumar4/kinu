@@ -46,8 +46,8 @@
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
 # Usage:
-#   bun run deploy [--promote | --rollback] [--reset] [--evals]
-#   bash scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--evals]
+#   bun run deploy [--promote | --rollback] [--reset | --reset-tables] [--evals]
+#   bash scripts/deploy.sh [--promote] [--reset | --reset-tables] [--bootstrap] [--gates-only] [--evals]
 #   bash scripts/deploy.sh --rollback
 #
 # `--evals` runs the real-model evals a deploy can start: on staging, the
@@ -87,6 +87,12 @@
 # record names what was deleted. On production it asks for a typed confirmation
 # before anything runs. A reset whose build never uploaded is finished by the next deploy with `--reset`,
 # whose pre-upload infrastructure phase defers exactly the rows that reset's record deleted.
+#
+# `--reset-tables` keeps every object and drops only the tables this release changed against the build the
+# deployment served before, on every object that holds them, between the upload and the smoke test
+# (`scripts/reset.ts tables`, scripts/tables-reset.ts). Chosen per release, never automatic. It prints the plan
+# with each table's class and rows per object; on production it asks for a typed confirmation naming the tables.
+# Its record goes where a reset's does, and a rerun drops nothing a finished one made.
 #
 # Idempotent: safe to re-run.
 set -uo pipefail
@@ -140,6 +146,7 @@ KINU_GATES_ONLY=0
 KINU_PROMOTE=0
 KINU_ROLLBACK=0
 KINU_RESET=0
+KINU_RESET_TABLES=0
 KINU_EVALS=0
 for option in "$@"; do
   case "$option" in
@@ -148,10 +155,11 @@ for option in "$@"; do
     --bootstrap) KINU_BOOTSTRAP=1 ;;
     --gates-only) KINU_GATES_ONLY=1 ;;
     --reset) KINU_RESET=1 ;;
+    --reset-tables) KINU_RESET_TABLES=1 ;;
     --evals) KINU_EVALS=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--evals] | --rollback"
+      echo "Usage: scripts/deploy.sh [--promote] [--reset | --reset-tables] [--bootstrap] [--gates-only] [--evals] | --rollback"
       exit 2
       ;;
   esac
@@ -234,6 +242,36 @@ if [ "$KINU_RESET" = "1" ]; then
   fi
 fi
 
+# A tables reset runs through the candidate's own /ops/tables, so it can only plan once the build is up; the build the
+# deployment serves now is what it diffs the genesis lock against, read before the upload replaces it.
+KINU_TABLES_RECORD=""
+KINU_TABLES_FROM=""
+if [ "$KINU_RESET_TABLES" = "1" ]; then
+  if [ "$KINU_RESET" = "1" ] || [ "$KINU_GATES_ONLY" = "1" ]; then
+    echo -e "${RED}--reset-tables drops tables after the upload: --reset deletes every object anyway, and --gates-only stops before the build.${NC}"
+    exit 2
+  fi
+  if [ "$KINU_ENV" = "production" ] && [ ! -t 0 ]; then
+    echo -e "${RED}A production tables reset is confirmed at a terminal, and this run has none. Nothing was deployed or dropped.${NC}"
+    exit 1
+  fi
+  KINU_TABLES_RECORD="$(mktemp -t kinu-tables.XXXXXX.json)"
+  KINU_TABLES_FROM="$(bun "$KINU_ROOT/scripts/reset.ts" served "$KINU_ENV")" || exit 1
+  echo -e "${BOLD}RESET TABLES: after the upload, the tables changed since $KINU_TABLES_FROM are dropped on every object of $KINU_ENV that holds them; the plan prints then.${NC}"
+elif [ "$KINU_RESET" != "1" ] && [ "$KINU_ROLLBACK" != "1" ] && [ "$KINU_GATES_ONLY" != "1" ]; then
+  # A build that moves a class's stamp refuses every database of that class until the tables step reaches it, so it
+  # never ships without the step.
+  KINU_STAMPS_MOVED="$(bun "$KINU_ROOT/scripts/reset.ts" stamps "$KINU_ENV")"
+  case $? in
+    0) ;;
+    3)
+      echo -e "${RED}This build moves the stamp of: $KINU_STAMPS_MOVED. Every such database is refused until the tables step reaches it: deploy with --reset-tables.${NC}"
+      exit 1
+      ;;
+    *) exit 1 ;;
+  esac
+fi
+
 # The pre-deploy phase, read by scripts/infra-verify.ts, travels in the
 # environment so the `bun run gate:infra` line below stays one string for
 # scripts/ladder.ts to parse.
@@ -282,10 +320,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Read one dotted JSON field from stdin. Prints nothing when the body is not
-# JSON — which is exactly what a smoke test needs, because "not JSON" is how a
-# missing asset presents itself (the SPA shell under a JSON
-# content-type).
 # The validator's reading in a wrangler upload's <log>: its startup in ms, `refused`, or `none`.
 startup_reading() {
   if grep -qF 'Script startup exceeded CPU time limit' "$1"; then echo refused; return; fi
@@ -294,6 +328,10 @@ startup_reading() {
   echo "${said:-none}"
 }
 
+# Read one dotted JSON field from stdin. Prints nothing when the body is not
+# JSON — which is exactly what a smoke test needs, because "not JSON" is how a
+# missing asset presents itself (the SPA shell under a JSON
+# content-type).
 json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
@@ -788,6 +826,17 @@ fi
 
 cd "$KINU_ROOT" || { publish_red "cannot cd to $KINU_ROOT"; return 1; }
 
+# ── Step 3b: The tables reset ─────────────────────────────────
+# Through the version just deployed, before the smoke test reads it: until it runs, an object holding an old table
+# fails what reads the new shape. A stop here is finished by running the same command again.
+if [ "$KINU_RESET_TABLES" = "1" ]; then
+  echo ""
+  echo -e "${BOLD}Step 3b: Resetting the tables this release changed on $KINU_WORKER${NC}"
+  KINU_RECORD_ARGS=("$KINU_TABLES_RECORD")
+  bun "$KINU_ROOT/scripts/reset.ts" tables "$KINU_ENV" "$KINU_TABLES_RECORD" --from "$KINU_TABLES_FROM" \
+    || { publish_red "the tables reset failed; its lines say what it dropped before it stopped, and 'bun scripts/reset.ts tables $KINU_ENV $KINU_TABLES_RECORD --from $KINU_TABLES_FROM' finishes it"; return 1; }
+fi
+
 # ── Step 4: Post-deploy smoke test ───────────────────────────────
 # Every check reads the response of the version this deploy made (`ours`): a
 # version it replaced may still answer at an edge for seconds after the upload.
@@ -974,7 +1023,7 @@ else
   echo -e "${BOLD}Step 4b: Publishing the tiers' scripted model${NC}"
   KINU_SCRIPTED_SECRETS="$(umask 077 && mktemp -t kinu-scripted-secrets.XXXXXX.json)"
   bun -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({ SCRIPTED_MODEL_KEY: process.env.KINU_SCRIPTED_MODEL_KEY }))' "$KINU_SCRIPTED_SECRETS"
-  bunx wrangler deploy -c scripts/scripted-model-worker.jsonc --secrets-file "$KINU_SCRIPTED_SECRETS"
+  npx wrangler deploy -c scripts/scripted-model-worker.jsonc --secrets-file "$KINU_SCRIPTED_SECRETS"
   KINU_SCRIPTED_PUBLISHED=$?
   rm -f "$KINU_SCRIPTED_SECRETS"
   if [ "$KINU_SCRIPTED_PUBLISHED" != "0" ]; then
@@ -1025,8 +1074,6 @@ fi
 # (packages/test-utils/src/eval-identity.ts): each deployment has its own.
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
-# Production, the baseline leg's origin: the evals measure the candidate on staging against it.
-EVAL_BASELINE_ORIGIN="https://kinu.run"
 
 # THE STATISTICS, on armada (L19). scripts/evals-map.ts runs each trial as one `armada map` task at
 # this commit, both legs at once: every eval task five trials each on staging, which must be serving
@@ -1035,19 +1082,23 @@ EVAL_BASELINE_ORIGIN="https://kinu.run"
 # statistical map starts so two jobs cannot multiply the one Muse budget. Its completed verdict is
 # stored beside the verified record; either may finish first, and promotion waits for both.
 KINU_EVALS_OUT=""
-KINU_EVALS_WHY=""
 start_evals() {
   local out="$KINU_DEPLOY_REPORT/evals-map"
   mkdir -p "$out"
-  setsid nohup bash -c '
-    bun scripts/ladder.ts --deploy-phase=soak
-    bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?
-    bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak
-    exec bun scripts/evals-map.ts "$1" --out="$2" --record --post="$1"
-  ' _ "$KINU_SHA" "$out" >"$out/driver.log" 2>&1 </dev/null &
+  setsid nohup bash -c 'run_soak; exec bun scripts/evals-map.ts "$1" --out="$2" --record --post="$1"' \
+    _ "$KINU_SHA" "$out" >"$out/driver.log" 2>&1 </dev/null &
   KINU_EVALS_OUT="$out"
   report dispatched "the evals of $KINU_SHA on armada, every task five trials each on staging against production" "$out/driver.log"
 }
+
+# The soak's run, its verdict into the report, and the report rendered again: the soak alone, or before the evals.
+# Exported, so the detached shells that run it have it.
+run_soak() {
+  bun scripts/ladder.ts --deploy-phase=soak
+  bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?
+  bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak
+}
+export -f run_soak
 
 # THE EVAL ACCOUNTS' PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment
 # one drives: this one and, for a staging build, production, the baseline the evals compare it with. The evals and the
@@ -1065,8 +1116,7 @@ provision_eval_keys() {
 # deployment serves and never awaited, so a real model's minutes are outside this deploy's 20-minute wall and its red
 # outside this deploy's verdict: the soak writes into this report's soak section and renders it again when it ends.
 start_soak() {
-  setsid nohup bash -c 'bun scripts/ladder.ts --deploy-phase=soak; bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?; bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak' \
-    >"$KINU_DEPLOY_REPORT/soak.log" 2>&1 </dev/null &
+  setsid nohup bash -c run_soak >"$KINU_DEPLOY_REPORT/soak.log" 2>&1 </dev/null &
   report dispatched "the eval soak, one trial of every task on $KINU_EVAL_ORIGIN; its reds re-render this report" "$KINU_DEPLOY_REPORT/soak.log"
 }
 
@@ -1092,9 +1142,11 @@ else
   # Started first, so its hours run while the wave runs here. Without its run
   # this build has no verdict to be promoted on, so a failed start is a red.
   if [ "$KINU_EVALS" = "1" ] && [ "$KINU_SERVING" = "1" ]; then
+    # Production, the baseline leg's origin, as wrangler.jsonc declares it: the evals measure the candidate on staging
+    # against it.
+    EVAL_BASELINE_ORIGIN="$(bun "$KINU_ROOT/scripts/eval-target.ts" production | head -1)"
     if provision_eval_keys "$KINU_EVAL_ORIGIN" "$EVAL_BASELINE_ORIGIN"; then
-      start_evals \
-        || step_red evals "the evals" "evals-map.ts was not started for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
+      start_evals
     fi
   fi
   if [ -z "$KINU_TIERS_WHY" ]; then
@@ -1150,18 +1202,20 @@ fi
 # is a red of this deploy whatever its tests said, in the report under
 # `telemetry` (L18); so is telemetry it cannot read, and telemetry whose reads
 # still disagree after an hour. Its window ends when the wave's last row that
-# drove the deployment did (the ladder's `traffic` mark), not at its verdict: every
-# row of the window's events has landed ten minutes after its end
+# drove the deployment did (the ladder's `traffic` mark), not at its verdict:
+# 99.96% of a window's rows have landed three minutes after its end
 # (`SETTLE_HOLD_MS`), so the first read then that agrees with the one before it
-# settles it, and the rows that drove nothing, the devbox contracts on their
-# own Worker and the source rows, run out inside that wait. With no such row,
-# the window ends now.
+# settles it. The rest are read by later deploys: this one keeps its window in
+# the releases bucket and reads again every window earlier deploys kept, so a
+# row that landed late is a red of this report, named for its version
+# (scripts/telemetry-windows.ts). With no row that drove the deployment, the
+# window ends now.
 if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
   echo ""
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
   KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
   bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
-    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} || KINU_REDS=1
+    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" || KINU_REDS=1
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────

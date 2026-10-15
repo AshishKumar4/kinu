@@ -49,22 +49,19 @@ export function turnReach(input: {
 
 /** What an agent reaches by what it is, whatever the turn (design v2 §9): computed once from its policy. */
 export interface ActorReach {
-  /** Its programs' surface: the workspace's own (its memory, files, tasks, agents and self, its account), or a hire's,
-   *  confined to its web, files and state. */
-  readonly surface: 'program' | 'confined';
-  /** What lies outside the workspace: its owner's MCP servers and its extensions, declared to its eval, and its owner's
-   *  other workspaces, as peers. */
-  readonly external: boolean;
-  /** The workspace's lanes: its owner's turns are evolution's verdicts and its fresh ones draw trial arms and run the
-   *  evolved tool text, it spends and scopes the workspace's missions and switches the workspace's role, and its jobs
-   *  are the workspace's. */
-  readonly lanes: boolean;
+  /**
+   * `workspace`: the workspace's own agent. Its programs reach the workspace's own surface (its memory, files, tasks,
+   * agents and self, its account) and what lies outside the workspace (its owner's MCP servers and extensions, declared
+   * to its eval, and its owner's other workspaces, as peers), and it runs on the workspace's lanes (its owner's turns are
+   * evolution's verdicts, its fresh ones draw trial arms and run the evolved tool text, it spends and scopes the
+   * workspace's missions and switches its role, and its jobs are the workspace's).
+   * `confined`: a hire's, a head's or a swarm node's: its web, files and state, and none of the above.
+   */
+  readonly kind: 'workspace' | 'confined';
 }
 
 export function actorReach(policy: Pick<ActorPolicy, 'workspaceAgent'>): ActorReach {
-  return policy.workspaceAgent
-    ? { surface: 'program', external: true, lanes: true }
-    : { surface: 'confined', external: false, lanes: false };
+  return { kind: policy.workspaceAgent ? 'workspace' : 'confined' };
 }
 
 /** What one turn of an agent reaches: what it reaches by what it is, and what the lane it was admitted in adds. Every

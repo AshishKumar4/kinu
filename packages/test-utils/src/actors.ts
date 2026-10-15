@@ -3,7 +3,7 @@
 import type { Database } from 'bun:sqlite';
 import {
   WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, initAgentConfigTable, initCodemodeStateTable,
-  WorkspaceActorDirectory, type ActorHandle, type RawSqlExec, type SqlExecutor,
+  WorkspaceActorDirectory, bearWorkspaceIdentity, type ActorHandle, type RawSqlExec, type SqlExecutor,
 } from '@kinu.run/core';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
@@ -33,10 +33,8 @@ export function createTestActors(
     SELECT id, owner_user_id FROM workspace_identity LIMIT 1
   `[0];
 
-  const workspaceId = existing?.id ?? crypto.randomUUID();
   const name = opts.name ?? 'test';
-
-  if (!existing) void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, ${name})`;
+  const workspaceId = existing?.id ?? bearWorkspaceIdentity(sql, { name, createdAt: Date.now() }).workspaceId;
 
   // The directory refuses an authority that disagrees with the database's stated owner, so read it.
   const directory = new WorkspaceActorDirectory(sql, {

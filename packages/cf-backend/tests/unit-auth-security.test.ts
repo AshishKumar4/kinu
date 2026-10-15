@@ -20,9 +20,8 @@ import {
   bootstrappedProfile, cliAccount, staticRouteCliEnv, unreachableAssets, unreachableNamespace, userAccount,
   workerContext,
 } from './helpers/bindings';
-import {
-  authenticateRequest, CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, type AuthIdentity,
-} from '../src/auth/session';
+import { authenticateRequest, type AuthIdentity } from '../src/auth/session';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { pollCliAuth, startCliAuth } from '../src/cli/auth-store';
 import type { CliRoutesEnv } from '../src/cli/routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
@@ -214,7 +213,7 @@ describe('auth and desktop security invariants', () => {
     // Past the profile every signed-in request ensures, neither route asks the account anything.
     const account = userAccount({
       ensureProfile: async (_caller: UserCaller, email: string) => bootstrappedProfile(email),
-      issueDeviceJoin: async () => ({ deviceId: 'dev-issued' }),
+      issueDeviceJoin: async () => ({ deviceId: 'dev-issued', ticket: `pjt_${OWNER_IDENTITY.userId}_${'t'.repeat(43)}` }),
     });
 
     const env: UserRoutesEnv<string> = {
@@ -242,6 +241,8 @@ describe('auth and desktop security invariants', () => {
     expect(device.installCommand).toContain('Ashish');
     // The machine registers as the device the dashboard issued, so the dashboard knows which arrival is its.
     expect(device.installCommand).toContain("--device 'dev-issued'");
+    // It carries the ticket that registers it, single-use and minutes long, never a session.
+    expect(device.installCommand).toContain(`--join 'pjt_${OWNER_IDENTITY.userId}_`);
     expect([cli.installCommand, device.installCommand].filter((command) => command.includes('KINU_TOKEN'))).toEqual([]);
     expect([cli.setupCommand, cli.authCommand].filter((command) => command.includes('KINU_TOKEN'))).toEqual([]);
   });
@@ -395,7 +396,6 @@ describe('auth and desktop security invariants', () => {
       // Switching rewrites only the selection.
       const switched = withCloudflareAccount(credential, 'bbb222bbb222bbb222bbb222bbb222bb');
       expect(accountIdFromCloudflareCredential(switched)).toBe('bbb222bbb222bbb222bbb222bbb222bb');
-      expect(switched.metadata?.accountName).toBe('Employer');
       expect(switched.accessToken).toBe(credential.accessToken);
       // Against the literal list the stub returned, not a second call of the function under test.
       expect(cloudflareAccountsFromCredential(switched)).toEqual([

@@ -78,8 +78,6 @@ interface OpenTurn {
   readonly reference: ActorReference;
   readonly request: HostedTurnRequest;
   prepared: PreparedHostedTurn | null;
-  /** Over the turn's own tools, as its isolate resolves it. */
-  profile: ResolvedTurnProfile | null;
   /** The account's facts, read once when the turn is read, so every step's block is the same bytes. */
   accountFacts?: readonly Fact[];
   /** MEMORY.md's tail, read with its sources for the same reason. */
@@ -142,7 +140,7 @@ export class AgentTurns {
     const request: HostedTurnRequest = { sequenceId: input.id, body: input.task, mode: input.mode, parentDriven: false, driving: undefined, awaitsReply: false, run: { input, inference } };
     const ended = Promise.withResolvers<AgentTurnEnd>();
 
-    this.open.set(reference.actorId, input.id, { reference, request, prepared: null, profile: null, ended });
+    this.open.set(reference.actorId, input.id, { reference, request, prepared: null, ended });
     ledger.open(opened, Date.now());
     inference.signal?.addEventListener('abort', cut, { once: true });
 
@@ -416,11 +414,12 @@ export class AgentTurns {
   }
 
   private dynamic(turn: OpenTurn, prepared: PreparedHostedTurn): DynamicContext {
-    const { offered, sources, resolved } = prepared.surface;
+    const { offered, sources, resolved, surface } = prepared.surface;
 
     const reads = { memoryTail: turn.memoryTail, activeSkills: null, ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }) };
 
-    return sources.dynamic(reads)(turn.profile ?? resolved.profile, offered);
+    // The surface holds the profile its isolate bound, once bound, else the one it resolved.
+    return sources.dynamic(reads)(surface.operation?.profile ?? resolved.profile, offered);
   }
 
   /** `held`: the opening the fence already holds for a turn read again after a restart (`reread`), opened by nothing. */
@@ -453,7 +452,6 @@ export class AgentTurns {
       request: hosted,
       ...(fenced !== undefined && { fenced }),
       prepared: null,
-      profile: null,
     };
 
     // Running from here: the agent is preparing it. A preparation that fails, or that a later opening overtook, leaves
@@ -589,7 +587,6 @@ export class AgentTurns {
     const turn = this.turn(actorId, bound.turnId);
     const prepared = this.prepared(turn);
 
-    turn.profile = profile;
     prepared.surface.bind(profile);
 
     return this.dynamic(turn, prepared);

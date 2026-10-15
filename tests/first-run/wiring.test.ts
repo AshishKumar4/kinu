@@ -5,8 +5,9 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { assessAdmissibility, outcomeRow, projectRunEventProvenance, runOk, runToExit, scratchDir, spawnTest, subgoalOutcome, TASK_OUTCOME, type EvalObservation } from '@kinu.run/test-utils';
-import { FLEET_MODULE, fleetCases, TUI_HARNESS } from '../../vitest.first-run.config';
-import { FIRST_RUN_CASES } from './first-run';
+import { EXECUTOR_READERS, FLEET_MODULE, fleetCases, TUI_HARNESS } from '../../vitest.first-run.config';
+import { isFirstRunSuite, trackedFiles } from '../../scripts/sources';
+import { CAPABILITY_ROWS, ENTRY_ROWS, PAGE_ROWS, STRIP_ROWS } from './surfaces';
 import { resolvePublicSessionPlan } from '../../evals/src/session';
 
 const RUNTIME = resolve(import.meta.dirname, '../../node_modules/.bin/bun');
@@ -28,7 +29,7 @@ function tierFixture(name: string, project: string, cases: readonly string[] = [
   copyFileSync(join(import.meta.dirname, '../../scripts/repo-runtime.sh'), join(scripts, 'repo-runtime.sh'));
   writeFileSync(join(bin, 'bun'), `#!/bin/bash
 case "$1" in
-  -e) printf '%s\\n' KINU_EVAL_WEB_IDENTITY ;;
+  scripts/eval-target.ts) printf '%s\\n' 'https://kinu.run' KINU_EVAL_WEB_IDENTITY ;;
   scripts/bench-retention.ts) mkdir -p "$REPORT_FIXTURE"; printf '%s\\n' "$REPORT_FIXTURE" ;;
   scripts/eval-session-mint.ts) ;;
   scripts/eval-credentials.ts) printf '%s\\n' 'https://kinu.run' 'fixture-token' ;;
@@ -133,6 +134,19 @@ describe('a case gets a fresh workspace, and gives it back', () => {
 
 });
 
+/** The tier's cases: its tracked case files, each named `<id>.first-run.ts`. */
+const caseIds = (): string[] => trackedFiles().filter(isFirstRunSuite).map((file) => file.slice(file.lastIndexOf('/') + 1, -'.first-run.ts'.length));
+
+describe('every case a list names is a case file', () => {
+  test('each surface row and each executor reader names a tracked case', () => {
+    const cases = new Set(caseIds());
+    const rows = [PAGE_ROWS, STRIP_ROWS, ENTRY_ROWS, CAPABILITY_ROWS].flatMap((map) => Object.values(map).flatMap((row) => Array.isArray(row) ? row : []));
+
+    expect(cases.size).toBeGreaterThan(40);
+    expect([...rows, ...Object.keys(EXECUTOR_READERS)].filter((id) => !cases.has(id))).toEqual([]);
+  });
+});
+
 describe('a partial first-run tier is not evidence', () => {
   test('omitting a declared case is inadmissible; the complete set carries the primary metric', () => {
     const scored = (id: string): EvalObservation => ({
@@ -142,7 +156,7 @@ describe('a partial first-run tier is not evidence', () => {
       provenance: projectRunEventProvenance([]),
     });
 
-    const declared = [...FIRST_RUN_CASES];
+    const declared = caseIds();
 
     const partial = assessAdmissibility(declared, declared.slice(0, -1).map(scored));
     expect(partial.admissible).toBe(false);

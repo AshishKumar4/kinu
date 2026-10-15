@@ -21,26 +21,17 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
 import { recordDeadEnds } from '../evals/src/browser';
 import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
-import {
-  CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES,
-  countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
-  until, waitOn, type ControlAttempt, type RpcCounter,
-} from './product-flows';
+import { CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
-import {
-  KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER,
-  ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK,
-  SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK,
-  laterReconnectTurn, toldBackTurn, unsentFirstTurn,
-  DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
-  startScriptedModel, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn,
-} from './scripted-model';
+import { registerScriptedModel, startScriptedModel } from './scripted-model';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
+import { evidenceDir } from '@kinu.run/test-utils';
 
 /** Screenshots land beside the other lanes' evidence, outside the worktree. */
-const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'wave2-0917', 'browser');
+const SHOTS = evidenceDir('live-app-rows');
 
 mkdirSync(SHOTS, { recursive: true });
 

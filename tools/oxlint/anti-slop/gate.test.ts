@@ -5,8 +5,9 @@ import { basename, dirname } from "node:path";
 import antiSlopPlugin from "./index.ts";
 import { isParseable, isRunnableSuite, readRepositoryFile, trackedFiles } from "../../../scripts/sources.ts";
 import { declaredName, importBindings, literalString, parse, walk, type SyntaxNode } from "../../../scripts/syntax.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
 
-const config = JSON.parse(readFileSync(".oxlintrc.json", "utf8"));
+const config = readLintConfig();
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const pluginPackage = JSON.parse(
   readFileSync("tools/oxlint/anti-slop/package.json", "utf8"),

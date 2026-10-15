@@ -75,7 +75,7 @@ describe('a run under a deadline', () => {
     expect(JSON.parse(printed)).toEqual({
       verdicts: [null, 'answered', 'answered too'],
       ended: ['hangs'],
-      broke: { hangs: "the row went silent near its runner's bound while waiting for hangs's stack cleared" },
+      broke: { hangs: "the run went silent near its runner's bound while waiting for hangs's stack cleared" },
     });
   });
 

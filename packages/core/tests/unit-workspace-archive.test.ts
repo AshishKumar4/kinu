@@ -7,7 +7,6 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import {
-  archiveSqlFromDatabase,
   initActorClaimTables,
   initAllTables,
   initWorkspaceActorTable,
@@ -30,8 +29,10 @@ import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import { workspaceArchiveStore, workspaceArchiveTarget } from '../src/vfs/workspace-planes';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
-import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
+import { seedTranscriptEntry } from '@kinu.run/test-utils';
 import { claimFences } from '../src/orchestrator/actor-claims';
+import { sqlStorageOver } from '../src/identity/inline-primitives';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 /** One in-memory database with every handle this suite drives it through. */
 interface Workspace {
@@ -49,7 +50,7 @@ function fresh(): Workspace {
   let bundle: WorkspaceBundle | null = null;
 
   return {
-    db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: archiveSqlFromDatabase(db),
+    db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: sqlStorageOver(db),
     get bundle() { return (bundle ??= createWorkspaceBundle(db)); },
     get vfs() { return this.bundle.vfs; },
   };
@@ -286,57 +287,36 @@ const OWNER_TEXT = '# the owner wrote this\n';
     expect(await readText(target.vfs, 'SOUL.md')).toBe('# an agent edited this\n');
   });
 
-  test('external workspace files page in the same stream and restore byte-exactly', async () => {
+  // core-rest review P1-33: a local archive wrote file records, files and directories only, and a local import refused
+  // a symlink; both backends now write store pages, so a folder's links, modes and times survive either way.
+  test('a local folder travels as its own page tree, its links, modes and times kept', async () => {
     const source = sourceWorkspace();
-    source.execRaw('CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)');
-    void source.sql`INSERT INTO notes (text) VALUES (${'database state'})`;
-
-    const bodies = new Map([
-      ['SOUL.md', new TextEncoder().encode('# soul\n')],
-      ['memory/project.md', new TextEncoder().encode('remember\n')],
-      ['project/data.bin', new Uint8Array([0, 255, 7, 8])],
-    ]);
-
-    const files = {
-      async listEntries() {
-        return [
-          { path: 'SOUL.md', type: 'file' as const },
-          { path: 'memory', type: 'directory' as const },
-          { path: 'memory/project.md', type: 'file' as const },
-          { path: 'project', type: 'directory' as const },
-          { path: 'project/data.bin', type: 'file' as const },
-        ];
-      },
-      async readFile(path: string) { return present(bodies.get(path), `the archived body of ${path}`).slice(); },
-    };
+    const kernel = (await source.bundle.session()).vfs.as(CRED_KERNEL);
+    kernel.mkdir('/local/project', { recursive: true, mode: 0o755 });
+    kernel.writeFile('/local/project/run.sh', 'echo ran\n', { mode: 0o750 });
+    kernel.symlink('run.sh', '/local/project/latest');
+    kernel.utimes('/local/project/run.sh', 1_000_000, 2_000_000);
 
     const paged: string[] = [];
     let cursor: ArchiveCursor | null = null;
 
     do {
       const page = await readWorkspaceArchivePage(source.archive, {
-        workspace: 'external', source: 'cloud', now: 11, files, cursor, maxBytes: 1,
+        workspace: 'scout', source: 'local', now: 11, store: workspaceArchiveStore(source.bundle), cursor, maxBytes: 1,
       });
 
       paged.push(...page.lines);
       cursor = page.next;
     } while (cursor);
 
-    expect(paged.filter((line) => line.includes('"t":"header"'))).toHaveLength(1);
-
     const target = fresh();
-    const restoredBodies = new Map<string, Uint8Array>();
+    await restoreWorkspaceArchive(target.archive, paged, { store: () => workspaceArchiveTarget(target.bundle) });
+    const restored = (await target.bundle.session()).vfs.as(CRED_KERNEL);
+    const script = restored.lstat('/local/project/run.sh');
 
-    const restored = await restoreWorkspaceArchive(target.archive, paged, {
-      files: () => ({
-        async mkdir() {},
-        async writeFile(path, data) { restoredBodies.set(path, data.slice()); },
-      }),
-    });
-
-    expect(restored.files).toBe(3);
-    expect(restoredBodies).toEqual(bodies);
-    expect(target.sql<{ text: string }>`SELECT text FROM notes`).toEqual([{ text: 'database state' }]);
+    expect({ link: restored.readlink('/local/project/latest'), text: restored.readFileString('/local/project/run.sh') })
+      .toEqual({ link: 'run.sh', text: 'echo ran\n' });
+    expect({ mode: script.mode & 0o7777, mtime: script.mtime }).toEqual({ mode: 0o750, mtime: 2_000_000 });
   });
 
   test('a page stops at the first row that fills it, however big the rows are', async () => {
