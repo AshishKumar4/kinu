@@ -68,29 +68,26 @@ export function ForkDialog({ room, title, mode, onClose, workspaces, create }: {
 
   useEffect(() => {
     let mounted = true;
+    const failed = showing((chain) => { if (mounted) setErr(chain); });
 
-    if (workspaces === undefined) {
-      detach(Effect.catchCause(Effect.map(Effect.promise(() => listWorkspaces()), (list) => {
-        if (!mounted) return;
+    const listed = workspaces !== undefined ? Effect.void : Effect.catchCause(Effect.flatMap(Effect.promise(() => listWorkspaces()), (list) => {
+      const only = list.entries.length === 1 ? list.entries[0] : undefined;
 
-        // One workspace to edit in: no choice to make.
-        if (mode === "edit" && list.entries.length === 1 && list.entries[0] !== undefined) {
-          const only = list.entries[0].name;
+      if (!mounted) return Effect.void;
 
-          detach(Effect.promise(async () => navigate(editPath(only, room))));
+      // One workspace to edit in: no choice to make.
+      if (mode === "edit" && only !== undefined) return Effect.promise(async () => navigate(editPath(only.name, room)));
 
-          return;
-        }
-
+      return Effect.sync(() => {
         setRoster(list.entries);
         setTarget(list.entries[0]?.name ?? NEW_WORKSPACE);
-      }), showing((chain) => { if (mounted) setErr(chain); })));
-    }
+      });
+    }), failed);
 
-    if (mode === "fork") {
-      detach(Effect.catchCause(Effect.map(Effect.promise(() => readForkPreview(room.workspace, room.slate)), (read) => { if (mounted) setPreview(read); }),
-        showing((chain) => { if (mounted) setErr(chain); })));
-    }
+    const previewed = mode !== "fork" ? Effect.void
+      : Effect.catchCause(Effect.map(Effect.promise(() => readForkPreview(room.workspace, room.slate)), (read) => { if (mounted) setPreview(read); }), failed);
+
+    detach(Effect.all([listed, previewed], { concurrency: "unbounded", discard: true }));
 
     return () => { mounted = false; };
   }, [workspaces, mode, room, navigate]);

@@ -330,7 +330,7 @@ class FakeRoomSocket extends EventTarget implements RoomSocket {
     if (!frame.success) return;
 
     this.view = applied(this.view, frame.output.call);
-    this.push({ id: frame.output.id, ok: true });
+    this.push({ id: frame.output.id, refusal: null });
     this.push({ view: this.view });
   }
 

@@ -97,8 +97,10 @@ export function useRoom({ workspace, slate, linkKey, live = openRoomSocket }: {
         if (call === undefined) return;
         calls.delete(frame.output.id);
 
-        if (frame.output.ok) call.resolve();
-        else call.reject(new KinuError(CODES[frame.output.refusal.reason], frame.output.refusal.message));
+        const { refusal } = frame.output;
+
+        if (refusal === null) call.resolve();
+        else call.reject(new KinuError(CODES[refusal.reason], refusal.message));
       });
       opened.addEventListener("close", () => {
         if (socket.current !== opened) return;

@@ -62,29 +62,13 @@ export interface RoomFrames {
 export function hostRoomFrames(host: RoomHost): RoomFrames {
   const ports = new Set<MessagePort>();
 
-  const serve = (port: MessagePort, request: Request) => {
-    const send = (reply: Reply) => port.postMessage(reply);
-
+  /** One request's work: a call answers the frame once the room has; the rest hand the page what the frame asked. */
+  const serve = (port: MessagePort, request: Request): Effect.Effect<void> => {
     switch (request.op) {
-      case "call": {
-        detach(Effect.map(Effect.promise(() => host.call(request.call)), (refused) => send({ id: request.id, refused })));
-        break;
-      }
-
-      case "decide": {
-        host.decide(request.decision);
-        break;
-      }
-
-      case "sign-in": {
-        host.signIn();
-        break;
-      }
-
-      case "connect": {
-        host.connect(request.service);
-        break;
-      }
+      case "call": return Effect.map(Effect.promise(() => host.call(request.call)), (refused) => port.postMessage({ id: request.id, refused } satisfies Reply));
+      case "decide": return Effect.sync(() => host.decide(request.decision));
+      case "sign-in": return Effect.sync(() => host.signIn());
+      case "connect": return Effect.sync(() => host.connect(request.service));
     }
   };
 
@@ -98,7 +82,8 @@ export function hostRoomFrames(host: RoomHost): RoomFrames {
     port.addEventListener("message", (message: MessageEvent) => {
       const request = v.safeParse(RequestSchema, message.data);
 
-      if (request.success) serve(port, request.output);
+      if (!request.success) return;
+      detach(serve(port, request.output));
     });
     port.start();
     port.postMessage({ view: host.view() } satisfies Reply);

@@ -5,12 +5,12 @@ import { Button } from "@cloudflare/kumo";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
-import { joinDir, type DriveEntry, type MarkedSkill } from "@kinu.run/core";
+import { joinDir, type DriveEntry, type DriveRoomCard, type DriveSlate, type MarkedSkill } from "@kinu.run/core";
 import { showing, settle } from "@kinu.run/core/obs";
 import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
 } from "@/lib/drive-api";
-import { leaveSlate, type DriveCard, type OwnedSlate } from "@/lib/shared-api";
+import { leaveSlate } from "@/lib/shared-api";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -219,9 +219,9 @@ export type DriveDialogState =
   | { kind: "rename"; entry: DriveEntry }
   | { kind: "delete"; entry: DriveEntry }
   | { kind: "add-skill" }
-  | { kind: "share"; slate: OwnedSlate }
-  | { kind: "leave"; card: DriveCard }
-  | { kind: "fork"; card: DriveCard };
+  | { kind: "share"; slate: DriveSlate }
+  | { kind: "leave"; card: DriveRoomCard }
+  | { kind: "fork"; card: DriveRoomCard };
 
 export function DriveDialog({ dialog, folder, onClose, onListingChanged, onSharesChanged, onSkillAdded }: {
   dialog: DriveDialogState;

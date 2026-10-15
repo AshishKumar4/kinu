@@ -7,13 +7,12 @@ import * as v from "valibot";
 import Sidebar from "@/components/Sidebar";
 import {
   addSkill, APP_ROUTES, deleteDriveEntry, listDrive, makeDriveFolder, markAsSkill, mossaicVfs, packDriveFolder, receiveDriveUpload,
-  renameDriveEntry, SKILL_FOLDER_FILE, type DriveUploadTarget,
+  renameDriveEntry, SKILL_FOLDER_FILE, type DriveLibrary, type DriveUploadTarget,
   type MossaicVfs,
 } from "@kinu.run/core";
 import { Effect } from "effect";
 import { detach, KinuError, renderThrownChain, showing, type ErrorCode } from "@kinu.run/core/obs";
 import { fakeMossaic } from "@kinu.run/test-utils/mossaic";
-import type { DriveLibrary } from "@/lib/shared-api";
 
 const DrivePage = lazy(() => import("@/pages/DrivePage"));
 

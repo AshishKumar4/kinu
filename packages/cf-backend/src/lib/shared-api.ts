@@ -3,36 +3,10 @@
  * cookie. A slate's own sharing goes through its room (use-room, room-client).
  */
 import { Effect } from 'effect';
-import { DriveRoomCardSchema, GalleryListingSchema, RoomAudienceSchema } from '@kinu.run/core';
+import { DriveLibrarySchema, type DriveLibrary } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { refusal, request, respond } from './http';
-
-/** One of the owner's slates, and who can open it. */
-const OwnedSlateSchema = v.object({
-  id: v.string(),
-  title: v.string(),
-  workspace: v.string(),
-  audience: RoomAudienceSchema,
-  picture: v.optional(v.string()),
-});
-
-export type OwnedSlate = v.InferOutput<typeof OwnedSlateSchema>;
-
-export type DriveCard = DriveLibrary['shared'][number];
-
-/**
- * What the Drive shows of sharing: the owner's slates; slates shared with them; slates they used through a link; and
- * Gallery slates they starred. `unseen` marks a slate shared with them since they last opened Shared.
- */
-const DriveLibrarySchema = v.object({
-  slates: v.array(OwnedSlateSchema),
-  shared: v.array(v.object({ ...DriveRoomCardSchema.entries, unseen: v.optional(v.literal(true)) })),
-  used: v.array(DriveRoomCardSchema),
-  starred: v.array(GalleryListingSchema),
-});
-
-export type DriveLibrary = v.InferOutput<typeof DriveLibrarySchema>;
 
 export function getDriveLibrary(): Promise<DriveLibrary> {
   return settle(request(DriveLibrarySchema, '/api/shared'));

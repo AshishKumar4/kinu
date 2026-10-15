@@ -6,7 +6,7 @@
  *
  * It reads the room's sheet and calls the room; the next view shows each call's effect.
  */
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
 import { Button } from "@cloudflare/kumo";
@@ -315,14 +315,14 @@ export function ShareSheet({ workspace, title, owner, sheet, call, onClose }: {
   const [busy, setBusy] = useState(0);
   const shared = sheet.audience !== "only-you";
 
-  const send = (sent: RoomCall) => {
+  const send = useCallback((sent: RoomCall) => {
     setFailure(null);
     setBusy((count) => count + 1);
     detach(call(sent).pipe(
       Effect.catch((refused) => Effect.sync(() => setFailure(renderThrownChain({ cause: refused })))),
       Effect.ensuring(Effect.sync(() => setBusy((count) => count - 1))),
     ));
-  };
+  }, [call]);
 
   return (
     <Modal title={`Share ${title}`} icon={<ShareNetworkIcon size={18} className="p-accent" />} onClose={onClose} busy={busy > 0} maxWidthClass="max-w-[460px]"

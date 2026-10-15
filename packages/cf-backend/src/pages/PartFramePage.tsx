@@ -3,7 +3,7 @@
  * reads and calls the room only through the live page at the top of its window (lib/room-bridge.ts); opened any other
  * way it shows nothing of the room.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@cloudflare/kumo";
@@ -33,16 +33,17 @@ export function PartFrame({ part }: { part: string }) {
     detach(Effect.map(Effect.promise(() => bridge.call({ op: "open", part })), (refused) => { if (refused !== null) setFailure(refused); }));
   }, [bridge, part]);
 
+  const send = useCallback((sent: RoomCall) => {
+    if (bridge === null) return;
+    setFailure(null);
+    detach(Effect.map(Effect.promise(() => bridge.call(sent)), (refused) => { if (refused !== null) setFailure(refused); }));
+  }, [bridge]);
+
   if (outside) return <PartOutsideItsSlate />;
 
   const shown = view?.parts[part];
 
   if (bridge === null || view === null || shown === undefined) return <div className="flex justify-center py-6"><Loader size="sm" /></div>;
-
-  const send = (sent: RoomCall) => {
-    setFailure(null);
-    detach(Effect.map(Effect.promise(() => bridge.call(sent)), (refused) => { if (refused !== null) setFailure(refused); }));
-  };
 
   const act = {
     ask: () => send({ op: "ask", part }),

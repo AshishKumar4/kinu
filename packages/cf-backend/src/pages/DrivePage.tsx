@@ -15,14 +15,15 @@ import * as v from "valibot";
 import {
   APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, compareCodeUnits, entryRevision, formatBytes, joinDir, parseSkillFile, roomPagePath, shortAge,
   skillViewPath, workspaceDisplayTitle,
-  type DriveEntry, type DriveListing, type FileText, type GalleryListing, type RoomAudience, type SkillFileRefusal,
+  type DriveEntry, type DriveLibrary, type DriveListing, type DriveRoomCard, type DriveSlate, type FileText, type GalleryListing, type RoomAudience,
+  type SkillFileRefusal,
 } from "@kinu.run/core";
 import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
-import { getDriveLibrary, markSharedSeen, type DriveCard, type DriveLibrary, type OwnedSlate } from "@/lib/shared-api";
+import { getDriveLibrary, markSharedSeen } from "@/lib/shared-api";
 import { useAsyncResource, lastValue, type AsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
@@ -41,7 +42,7 @@ function folderHref(path: string): string {
   return path === "/" ? APP_ROUTES.drive : `${APP_ROUTES.drive}${path}`;
 }
 
-function slateHref(slate: OwnedSlate): string {
+function slateHref(slate: DriveSlate): string {
   return `/workspace/${encodeURIComponent(slate.workspace)}?slate=${encodeURIComponent(slate.id)}`;
 }
 
@@ -590,18 +591,18 @@ function matching<Row>(rows: readonly Row[], needle: string, words: (row: Row) =
   return rows.filter((row) => needle === "" || words(row).some((text) => text.toLowerCase().includes(needle)));
 }
 
-const newestFirst = (rows: readonly DriveCard[]) => [...rows].sort((a, b) => b.at - a.at);
+const newestFirst = (rows: readonly DriveRoomCard[]) => [...rows].sort((a, b) => b.at - a.at);
 
 function SharedBody({ library, query, card, starred }: {
   library: DriveLibrary | null;
   query: string;
-  card: (row: DriveCard) => ReactNode;
+  card: (row: DriveRoomCard) => ReactNode;
   starred: (listing: GalleryListing) => ReactNode;
 }) {
   if (library === null) return <div className="flex justify-center py-16"><Loader size="base" /></div>;
 
   const needle = query.trim().toLowerCase();
-  const cardWords = (row: DriveCard) => [row.title, row.owner.name ?? row.owner.email];
+  const cardWords = (row: DriveRoomCard) => [row.title, row.owner.name ?? row.owner.email];
   const shared = newestFirst(matching(library.shared, needle, cardWords));
   const used = newestFirst(matching(library.used, needle, cardWords));
   const stars = matching(library.starred, needle, (listing) => [listing.title, listing.line, listing.owner.name]);
@@ -620,7 +621,7 @@ function SharedBody({ library, query, card, starred }: {
 }
 
 /** Every slate across the owner's workspaces, each labelled with its workspace. */
-function SlatesBody({ slates, tile }: { slates: readonly OwnedSlate[] | null; tile: (slate: OwnedSlate) => ReactNode }) {
+function SlatesBody({ slates, tile }: { slates: readonly DriveSlate[] | null; tile: (slate: DriveSlate) => ReactNode }) {
   if (slates === null) return <div className="flex justify-center py-16"><Loader size="base" /></div>;
 
   return <section aria-label="Slates" data-drive-section="Slates"><ul className={GRID}>{slates.map(tile)}</ul></section>;
@@ -872,7 +873,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   ];
 
   // A slate shared with this person, or used through its link: opened live, where everyone uses it together.
-  const cardTile = (row: DriveCard): ReactNode => {
+  const cardTile = (row: DriveRoomCard): ReactNode => {
     const href = roomPagePath(row.workspace, row.slate);
     const meta = [row.owner.name ?? row.owner.email, row.relation === "shared" && row.role === "edit" ? "Edit" : null, shortAge(row.at)].filter(Boolean).join(" · ");
 
@@ -902,7 +903,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     );
   };
 
-  const slateTile = (slate: OwnedSlate): ReactNode => (
+  const slateTile = (slate: DriveSlate): ReactNode => (
     <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title}
       picture={<SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top"
         fallback={<Cover title={slate.title} />} />}
