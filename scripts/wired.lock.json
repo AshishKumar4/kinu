@@ -168,7 +168,6 @@
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.logger (unsupplied-field)",
   "packages/core/src/strategy/swarm.ts#BRANCH_REFUSAL_POLICIES (unreached-export)",
   "packages/core/src/strategy/swarm.ts#UNMEASURED_JUDGE_SAMPLES (unreached-export)",
-  "packages/core/src/tools/clamp.ts#TOOL_OUTPUT_DIR (unreached-export)",
   "packages/core/src/tools/crafted-executor.ts#toCraftedToolSource (unreached-export)",
   "packages/core/src/tools/shell-file-steer.ts#fileToolSteer (unreached-export)",
   "packages/core/src/tools/shell-file-steer.ts#handRolledFileWrite (unreached-export)",

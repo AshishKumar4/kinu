@@ -728,7 +728,6 @@ export {
   withClampedToolResult,
   withClampedToolResults,
   DEFAULT_TOOL_RESULT_MAX_CHARS,
-  TOOL_OUTPUT_DIR,
   type ClampToolResultOptions,
 } from './tools/clamp';
 
@@ -1529,7 +1528,7 @@ export {
   type ScoreInterval,
 } from './utils/stats';
 
-export { isoDate, today, nowMs } from './utils/date';
+export { isoDate, nowMs } from './utils/date';
 
 // Branching heads
 export type {
@@ -1907,8 +1906,7 @@ export {
 } from './read-models/files';
 
 export type {
-  DirEntry, ExecutorFileLookup, ExecutorTextFile, ExecutorWriteResult,
-  MountInfo,
+  DirEntry, EnvironmentInfo, ExecutorFileLookup, ExecutorTextFile, ExecutorWriteResult,
 } from './read-models/files';
 
 export { inlineFileType } from './read-models/file-types';
@@ -2005,7 +2003,7 @@ export type {
 
 export {
   cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
-  jobResult, listBackgroundJobs, retryBackgroundJob,
+  listBackgroundJobs, retryBackgroundJob,
 } from './read-models/background-jobs';
 
 export type {

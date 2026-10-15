@@ -117,7 +117,7 @@ import { ActorSession, type ActorTurnLease,
   type ResolvedTurnProfile,
   decodeJsonValue, projectJsonValue,
   agentSelfHost,
-  cancelBackgroundJob, jobResult, listBackgroundJobs,
+  cancelBackgroundJob, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, type ApprovalGrant,
   setAlwaysActiveSkills, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
@@ -901,7 +901,7 @@ export class LocalAgentSession {
   }
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobs, jobId);
+    return this.jobs.get(jobId);
   }
 
   /** `actor`: a `/`-joined path of names below this one, as the cloud names a hosted child; absent, this actor's own. */

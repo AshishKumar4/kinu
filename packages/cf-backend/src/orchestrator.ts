@@ -197,7 +197,7 @@ import {
   ExecutorFileUpload, ExecutorFileDownload,
   type DirEntry, type ExecutorTextFile, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
-  jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
+  listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
@@ -3816,7 +3816,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobAuthorities.owning(jobId)?.store ?? this.jobs, jobId);
+    return (this.jobAuthorities.owning(jobId)?.store ?? this.jobs).get(jobId);
   }
 
   @callable()

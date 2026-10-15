@@ -35,7 +35,7 @@ import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
 import type { SqlExecutor } from '../src/types/primitives';
 import {
-  cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob, jobResult,
+  cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
 } from '../src/read-models/background-jobs';
 import {
@@ -782,7 +782,7 @@ describe('background-job control plane', () => {
     const bareSql = makeSql(db);
     const jobs = new BackgroundJobStore(bareSql, createTestActors(bareSql, makeExecRaw(db)).main);
     expect(() => listBackgroundJobs(jobs)).toThrow(/no such table: background_jobs/);
-    expect(() => jobResult(jobs, 'j1')).toThrow(/no such table: background_jobs/);
+    expect(() => jobs.get('j1')).toThrow(/no such table: background_jobs/);
     expect(dismissBackgroundJob(jobs, 'j1')).toEqual({
       ok: false,
       error: expect.stringContaining('no such table: background_jobs'),

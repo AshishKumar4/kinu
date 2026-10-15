@@ -4,7 +4,7 @@
  * composition's axes are not persisted in a readable form.
  * Specified by docs/EXPLORATION.md: "The six axes", "Presets", "Settle is derived", "Refusals".
  */
-import { settleOf, SWARM_PRESET_POINTS, type SwarmPresetRow } from '../strategy/swarm';
+import { settleOf, SWARM_PRESET_POINTS, type SwarmPresetPoint } from '../strategy/swarm';
 import {
   NAMED_SWARM_PRESETS,
   type NamedSwarmPreset, type SwarmConfig, type SwarmSettle,
@@ -40,7 +40,7 @@ export function swarmResolutionOf(label: string | null | undefined): SwarmResolu
   const preset = NAMED_SWARM_PRESETS.find((candidate) => candidate === named);
 
   if (preset === undefined) return { kind: "custom", label: named };
-  const row: SwarmPresetRow = SWARM_PRESET_POINTS[preset];
+  const row: SwarmPresetPoint = SWARM_PRESET_POINTS[preset];
 
   return {
     kind: "preset",

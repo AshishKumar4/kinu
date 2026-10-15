@@ -107,7 +107,7 @@ import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
   FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
-  ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
+  ForkRunSummary, HeadRunView, EnvironmentInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { ModelTestResult, UserDevice } from "@/lib/user-api";
@@ -5982,7 +5982,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
   const heldPreviewContent = useRef("");
   const previewReads = useRef(0);
 
-  const mounts: MountInfo[] = [
+  const mounts: EnvironmentInfo[] = [
     { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
     offlineDevice
       ? { name: "device", prefix: "device.*", live: false, policy: { readOnly: false, consistency: "live-shared" }, reason: "no device connected" }
