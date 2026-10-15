@@ -23,7 +23,7 @@ import {
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
-import type { ActorReference, HostedNodeHome, TierRefusals } from '@kinu.run/core';
+import type { ActorReference, HostedNodeHome, InvocationSurface, TierRefusals } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -79,6 +79,8 @@ export interface CFRuntimeAccess {
   workspaceServing(): Promise<WorkspaceServing>;
   getCliCwdForDevice?(): string | null;
   getCheckpointMetaForDevice?(): { turnId: string; sessionId: string } | null;
+  /** The surface of the live turn, which its calls' background policy reads (`ActorAgent.turnSurface`). */
+  readonly turnSurface?: () => InvocationSurface;
 }
 
 /** A method, so the SDK's scalar-only `sql` satisfies it while `SqlExecutor` also admits ArrayBuffer. */
@@ -469,6 +471,7 @@ export function createCFRuntime(
     actorId: actor.actor.actorId,
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
+    ...(access.turnSurface !== undefined && { surface: access.turnSurface }),
     onStatusChanged: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions']),
   };
 
