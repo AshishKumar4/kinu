@@ -908,6 +908,14 @@ export class RoomCaretaker {
     }));
   }
 
+  /** Whether a step still waits for a decision that can count: undecided, its run current, its grant at the generation named. */
+  stillWaiting(pendingId: string): boolean {
+    const pending = this.pending.get(pendingId);
+    const run = pending === undefined ? undefined : this.runs.get(pending.run);
+
+    return pending !== undefined && pending.decided === null && run !== undefined && this.runOk(run) && this.grant(pending.grant)?.gen === pending.gen;
+  }
+
   /**
    * After the wait: the step goes ahead only if it was approved, the run is still current and the grant still at the
    * generation the approval named; an outflow passes the sink check again with the holder's show in place.

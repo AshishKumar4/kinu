@@ -547,7 +547,9 @@ export class SlateRoom extends DurableObject<Env> {
 
   /** A call's answer frame: done, or refused in the room's words. It never fails. */
   private answer(ws: WebSocket, state: SocketState, id: number, call: RoomCall): Effect.Effect<RoomServerFrame> {
-    return Effect.catch(Effect.as(this.call(ws, state, call), { id, refusal: null } satisfies RoomServerFrame), (error) => {
+    const called = Effect.ensuring(this.call(ws, state, call), Effect.sync(() => { this.releaseEnded(); }));
+
+    return Effect.catch(Effect.as(called, { id, refusal: null } satisfies RoomServerFrame), (error) => {
       const reason = error.code === 'denied' || error.code === 'missing' || error.code === 'bad_input' ? error.code : 'unavailable';
 
       return Effect.succeed({ id, refusal: { reason, message: error.message } } satisfies RoomServerFrame);
@@ -621,7 +623,12 @@ export class SlateRoom extends DurableObject<Env> {
           return yield* this.syncGallery();
         }
 
-        case 'showTo': case 'showToMembers': case 'decline': return yield* care(() => { this.answerAsk(actor, call.ask, call.op); });
+        // A step waiting for its holder is declined by them, which ends the run; any other `decline` answers an ask.
+        case 'decline': return yield* care(() => {
+          if (this.caretaker.waiting(actor ?? '').some((each) => each.id === call.ask)) this.decideWaiting(actor, call.ask, false);
+          else this.answerAsk(actor, call.ask, 'decline');
+        });
+        case 'showTo': case 'showToMembers': return yield* care(() => { this.answerAsk(actor, call.ask, call.op); });
         case 'approve': case 'send': return yield* care(() => { this.decideWaiting(actor, call.ask, true); });
         case 'check': return yield* this.check(session, call.part);
         case 'list': {
@@ -924,6 +931,16 @@ export class SlateRoom extends DurableObject<Env> {
     if (op === 'showTo') this.caretaker.show(actor, tag, fn, [asker]);
     else if (op === 'showToMembers') this.caretaker.show(actor, tag, fn, this.everyoneAdded());
     else this.caretaker.dismissAsk(actor ?? '', asker, tag, fn);
+  }
+
+  /**
+   * Every step still waiting whose run a call just ended (a grant taken back, a person removed, the link stopped): woken,
+   * so its run meets the refusal at once instead of waiting for a decision that can no longer count.
+   */
+  private releaseEnded(): void {
+    for (const [id, wake] of this.waiters) {
+      if (!this.caretaker.stillWaiting(id)) wake();
+    }
   }
 
   private decideWaiting(actor: string | null, id: string, approve: boolean): void {

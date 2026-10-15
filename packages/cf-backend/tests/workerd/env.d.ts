@@ -317,6 +317,14 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   deleteWorkspace(workspace: string, owner: string): Promise<void>;
   isolatedRuns(input: { workspace: string; owner: string }): Promise<string[]>;
   sealed(value: JsonValue | null): Promise<{ csp: string | null; type: string | null; body: string }>;
+  attackHolder(): Promise<{ alice: string; bobFirst: string; afterSamShows: string; afterAliceShows: string }>;
+  attackRequester(): Promise<{ alice: string; bob: string; aliceCallsForBob: number }>;
+  attackToolFlow(): Promise<{ samOwn: string; alice: string; samMailsForAlice: number }>;
+  attackSink(): Promise<{ asked: string; mailedBeforeDeciding: number; mailedAfter: number; alice: string }>;
+  attackApprovals(): Promise<{ bobApproves: string; week2BeforeApproval: number; week2AfterOne: number; secondAsked: boolean; week3: number; bob3: string }>;
+  attackRevision(): Promise<{ edited: string; bob: string; sam: string; deploysAfterEdit: number }>;
+  attackPost(): Promise<{ alice: string; bobBoard: string }>;
+  attackFork(): Promise<{ forked: string; dana: string; samDeploysForDana: number }>;
   draftRoom(workspace: string, id: string): Promise<boolean>;
   roomExists(workspace: string, id: string): Promise<boolean>;
   rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }>;
