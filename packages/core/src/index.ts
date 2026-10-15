@@ -1364,7 +1364,7 @@ export * from './strategy/index';
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export * from './bench/index';
 
-export * from './curriculum/index';
+export * from './curriculum/proposer';
 
 // Providers. Secrets stay inside UserDO and never enter the provider layer.
 export * from './providers/index';
