@@ -248,7 +248,7 @@ test("a delivered run's kept end whose spilled file cannot be read is told as a 
     store.reserveTurn({ id: 'kept-end', text: 'Name another.', metadata: kept });
     store.recordRunEnd('kept-end', { json: JSON.stringify({ refused: { code: 'cancelled', message: 'stopped' } }), path: null, digest: null });
 
-    const owed = await fixture.chat.runEndsOwed();
+    const owed = await fixture.chat.runEnds.owed();
 
     expect(owed.map(({ id, outcome }) => [id, 'refused' in outcome ? outcome.refused.code : 'ended'])).toEqual([['lost-end', 'missing'], ['kept-end', 'cancelled']]);
   } finally {
