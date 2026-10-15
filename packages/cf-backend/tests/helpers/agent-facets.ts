@@ -8,7 +8,7 @@ import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/
 import type { AgentWorkspacePort } from '../../src/agent-facet/workspace-rpc';
 import { attemptInItsWords, settle, type KinuError } from '@kinu.run/core/obs';
 import type { Effect } from 'effect';
-import { AgentDatabase } from '../../src/agent-facet/agent-database';
+import { openAgentDatabase } from '../../src/agent-facet/agent-database';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import { type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
 import { joinedOnlyByItself } from './agents-sdk';
@@ -449,7 +449,7 @@ export function agentDatabase(workspace: Database, storageKey: string): Database
 
   agents.set(storageKey, db);
   databases.set(workspace, agents);
-  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable });
+  openAgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable });
 
   return db;
 }
@@ -846,6 +846,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 /** `isolate`'s calls, each made through `through` as an RPC into it would be. */
 export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: () => Promise<A>) => Effect.Effect<A, KinuError>): AgentFacetCalls {
   return {
+    opsTables: (request) => settle(through(() => isolate.opsTables(request))),
     activePlanReview: (...args) => settle(through(() => isolate.activePlanReview(...args))),
     planReviews: (...args) => settle(through(() => isolate.planReviews(...args))),
     savePlanReviewAnnotations: (...args) => settle(through(() => isolate.savePlanReviewAnnotations(...args))),

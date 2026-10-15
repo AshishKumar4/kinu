@@ -23,7 +23,6 @@ import { initCurriculumTable } from '../curriculum/proposer';
 import { initEventsHubTables } from '../events/hub/schema';
 import { initRunEventTables } from '../events/recorder';
 import { initActorClaimTables } from '../orchestrator/actor-claims';
-import { resetGuardedExec } from './store-reset';
 import { initGepaTables } from '../evolution/gepa/persistence';
 import { initLessonTables } from '../evolution/lessons';
 import { initTurnRatingTables } from '../evolution/ratings';
@@ -175,7 +174,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initEventsHubTables(exec);
   initHeadsTables(execRaw);
   initRunEventTables(execRaw);
-  initActorClaimTables(resetGuardedExec(execRaw, exec));
+  initActorClaimTables(execRaw);
   // What a hired turn told its hirer, read by the recovery of its claim.
   initTurnReportTable(execRaw);
   initFactsTable(execRaw);

@@ -411,7 +411,7 @@ describe('kinu export / import', () => {
     expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
     const [header, ...records] = readFileSync(archive, 'utf8').split('\n');
     const unstamped = { ...parseJsonObject(header ?? '') };
-    Reflect.deleteProperty(unstamped, 'schema_genesis');
+    Reflect.deleteProperty(unstamped, 'schema_stamp');
     writeFileSync(archive, [JSON.stringify(unstamped), ...records].join('\n'));
 
     const agedHere = workspaceDatabase(current);

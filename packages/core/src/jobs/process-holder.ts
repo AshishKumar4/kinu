@@ -10,6 +10,11 @@ const JOB_HOLDERS_DDL = `CREATE TABLE IF NOT EXISTS background_job_holders (
   generation TEXT    NOT NULL
 )`;
 
+/** Made with the local workspace's database, so its stamp covers it (identity/schema-stamp.ts). */
+export function initJobHoldersTable(execRaw: (ddl: string) => void): void {
+  execRaw(JOB_HOLDERS_DDL);
+}
+
 /** Liveness by process generation, as the driver lease's: a pid reused by a later process holds no job. */
 export function processJobHolder({ sql, execRaw, transactionSync }: Pick<Storage, 'sql' | 'execRaw' | 'transactionSync'>, proc: LeaseProcess): JobHolder {
   execRaw(JOB_HOLDERS_DDL);

@@ -18,8 +18,12 @@ import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'ag
 // via user-do (after the stub lands), not mcp.ts directly.
 export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 
-import { diagnostics, KinuError, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import {
+  durableStamps, ERROR_STATUS, readStamp, requireOps, resetTables, StoragePredatesReleaseError, TablesRequestSchema, writeStamp,
+  type OpsCaller, type TablesAnswer, type TablesRequest,
+} from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
 import { tenantDrive } from '../drive/tenant';
@@ -71,19 +75,31 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
-    const gate = new ActivationGate();
+    // Asked once, never caught: storage a release's tables step has not reached is read by that step alone, and every
+    // other call is refused with why (identity/schema-stamp.ts).
+    const stamps = durableStamps(this.ctx.storage.kv);
+    const stamp = readStamp(stamps, this.ctx.storage.sql, 'account');
+
+    if (stamp === 'behind') this.storageRefusal = new StoragePredatesReleaseError('account', stamps.read());
+    const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
+
     // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.
-    this.initTables();
+    if (stamp !== 'behind') this.initTables();
+
+    if (stamp === 'unmade') writeStamp(stamps, 'account');
   }
+
+  /** Why this account's storage may not be read: a release's tables step has not reached it yet. */
+  private storageRefusal: StoragePredatesReleaseError | undefined;
 
   /** Every gated RPC waits for this (`startBeforeRpc`); the MCP dials it starts are not awaited. */
   override onStart(): void {
-    this.mcpServers.start();
+    if (this.storageRefusal === undefined) this.mcpServers.start();
   }
 
   private readonly host: UserObjectHost = {
@@ -759,6 +775,23 @@ export class UserDO extends Agent<Env> {
     return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
+  /** A release's tables reset (`scripts/reset.ts tables`): what this account holds of the changed tables, and with
+   *  `drop`, those still in the old shape dropped and made again. Only `/ops/tables` holds the capability. */
+  async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
+    await requireOps(this.env, caller);
+    const { tables, drop } = v.parse(TablesRequestSchema, request);
+    const { sql } = this.ctx.storage;
+
+    const answer = resetTables(sql, { tables, drop }, {
+      schema: 'account', stamps: durableStamps(this.ctx.storage.kv), transactionSync: (write) => this.ctx.storage.transactionSync(write), init: () => { this.initTables(); },
+    });
+
+    // Brought to this build and stamped: open to every call from here.
+    if (drop) this.storageRefusal = undefined;
+
+    return { name: null, ...answer };
+  }
+
   /** Once per activation, from the constructor. Claims live in isolate memory, so any claim in storage
    * at activation start was abandoned; the activation boundary is the expiry. */
   private initTables(): void {
@@ -832,7 +865,10 @@ export class UserDO extends Agent<Env> {
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
 
+  /** Storage a release's tables step has not reached answers every socket and request with why, as every RPC does. */
   override async fetch(request: Request): Promise<Response> {
+    if (this.storageRefusal !== undefined) return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
+
     return await this._sockets.fetch(request);
   }
 
@@ -1023,8 +1059,9 @@ export class UserDO extends Agent<Env> {
 
     await this.destroy();
     // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
-    // again, empty, and answers as the new account.
+    // again, empty, and answers as the new account. They are this build's, so they carry its stamp.
     this.initTables();
+    writeStamp(durableStamps(this.ctx.storage.kv), 'account');
 
     return { ok: true, workspaces: workspaces.length };
   }

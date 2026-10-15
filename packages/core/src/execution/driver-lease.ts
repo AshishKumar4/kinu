@@ -66,7 +66,8 @@ interface LeaseRow {
   kind: string;
 }
 
-function initDriverLeaseTable(execRaw: RawSqlExec): void {
+/** Made with the local workspace's database too, so its stamp covers it (identity/schema-stamp.ts). */
+export function initDriverLeaseTable(execRaw: RawSqlExec): void {
   execRaw(DRIVER_LEASE_DDL);
 }
 

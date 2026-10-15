@@ -97,13 +97,17 @@ function commandStub(name: string): string {
 command_line="${name} $*"
 command_line="\${command_line//$KINU_DEPLOY_ROOT\\//}"
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
-if [[ "$*" == *--ci-verdict=* ]] && [ "$KINU_CI_ABSENT" = "1" ]; then
+if [[ "$*" == *--ci-verdict=* ]] && [ "$KINU_CI" = "absent" ]; then
   echo 'CI refused: armada has no verdict for testsha'
   exit 1
 fi
-if [[ "$*" == *--ci-verdict=* ]] && [ "$KINU_CI_RED" = "1" ]; then
+if [[ "$*" == *--ci-verdict=* ]] && [ "$KINU_CI" = "red" ]; then
   echo 'CI RED bun run test:core'
   exit 1
+fi
+if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "stamps" ] && [ "$KINU_STAMPS_MOVED" = "1" ]; then
+  echo 'account'
+  exit 3
 fi
 # The deploy's report directory, as scripts/deploy-report.ts opens and names it, its logs directory made.
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
@@ -181,8 +185,10 @@ interface DeployRun {
   readonly scriptedKey?: string;
   /** Another deploy of the environment holds its lock for the whole run. */
   readonly lockHeld?: boolean;
-  readonly ciAbsent?: boolean;
-  readonly ciRed?: boolean;
+  /** The armada verdict on the clean sha: green (the default), none, or red. */
+  readonly ci?: 'green' | 'absent' | 'red';
+  /** The build moves a class's stamp (`reset.ts stamps` exits 3). */
+  readonly stampsMoved?: boolean;
   /** The reset the environment is still in: its placeholder serves and its build never uploaded. */
   readonly pendingReset?: string;
   /** A KINU_RESET_RECORD already on the environment, which must never soften a deploy nobody asked to reset. */
@@ -322,8 +328,8 @@ async function runDeploy({
   ambientEnvironment = "",
   scriptedKey = "fixture-scripted-key",
   lockHeld = false,
-  ciAbsent = false,
-  ciRed = false,
+  ci = 'green',
+  stampsMoved = false,
   pendingReset = "none",
   ambientRecord = "",
   account,
@@ -426,8 +432,8 @@ exit 87
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       KINU_SCRIPTED_MODEL_KEY: scriptedKey,
       SKIP_E2E: "1",
-      KINU_CI_ABSENT: ciAbsent ? '1' : '0',
-      KINU_CI_RED: ciRed ? '1' : '0',
+      KINU_CI: ci,
+      KINU_STAMPS_MOVED: stampsMoved ? '1' : '0',
       XDG_RUNTIME_DIR: fixture,
     }),
   });
@@ -439,7 +445,9 @@ exit 87
   // directory, and a mark without the seconds it was reached at.
   const REPORT = "bun scripts/deploy-report.ts ";
 
-  const events = logged.filter((event) => !event.startsWith(REPORT) && !event.startsWith('bun scripts/ladder.ts --ci-'));
+  const STAMPS = 'bun scripts/reset.ts stamps';
+
+  const events = logged.filter((event) => !event.startsWith(REPORT) && !event.startsWith('bun scripts/ladder.ts --ci-') && !event.startsWith(STAMPS));
 
   const report = logged.filter((event) => event.startsWith(REPORT))
     .map((event) => event.slice(REPORT.length).replace(/^(\w+) report( |$)/u, "$1$2").replace(/^mark (\S+) \d+$/u, "mark $1"));
@@ -453,6 +461,7 @@ exit 87
     events,
     report,
     ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
+    stamps: logged.filter((event) => event.startsWith(STAMPS)),
     stdout: run.stdout.toString(),
     stderr: run.stderr.toString(),
     infraPhase,
@@ -466,14 +475,25 @@ exit 87
 describe("deploy gate", () => {
   // CI's verdict is armada's, stored for this exact revision when its push was proved (L25), and a deploy takes it
   // before it runs anything else: a missing or red one builds, uploads and records nothing.
-  test.each([
-    ['no armada verdict', { ciAbsent: true }, 'armada has no verdict'],
-    ['a red armada verdict', { ciRed: true }, 'CI RED bun run test:core'],
+  test.each<[string, DeployRun, string]>([
+    ['no armada verdict', { ci: 'absent' }, 'armada has no verdict'],
+    ['a red armada verdict', { ci: 'red' }, 'CI RED bun run test:core'],
   ])('%s for the clean SHA refuses before any upload gate, build or record', async (_, options, said) => {
     const run = await runDeploy(options);
 
     expect({ status: run.status, events: run.events, ci: run.ci, said: run.stdout.includes(said), refused: run.stdout.includes('armada has no green verdict for testsha') })
       .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
+  });
+
+  // A build that moves a class's stamp refuses every database of that class until the tables step reaches it, so it
+  // never deploys without the step (scripts/reset.ts stamps).
+  test('a build that moves a stamp is refused without --reset-tables, before anything runs', async () => {
+    const moved = await runDeploy({ stampsMoved: true });
+    const plain = await runDeploy({});
+
+    expect({ status: moved.status, events: moved.events, stamps: moved.stamps, said: moved.stdout.includes('deploy with --reset-tables') })
+      .toEqual({ status: 1, events: [], stamps: ['bun scripts/reset.ts stamps staging'], said: true });
+    expect(plain.stamps).toEqual(['bun scripts/reset.ts stamps staging']);
   });
 
   test('a green armada verdict is read once, before the upload gates', async () => {

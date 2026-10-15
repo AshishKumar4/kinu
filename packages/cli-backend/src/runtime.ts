@@ -25,7 +25,7 @@ import {
   DefaultExecutionRouter,
   adaptMemory,
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, createBashShell, holdsGrant, createInheritedApprovalPolicy,
-  initFiberTable, initWorkspaceActorTable, bearWorkspaceIdentity, stampSchemaGenesis, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
+  initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, bearWorkspaceIdentity, stampSchemaGenesis, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver,
@@ -225,6 +225,9 @@ function buildCLIRuntime(
     agentName = config.actorBinding.name;
   } else {
     execRaw(WORKSPACE_IDENTITY_DDL);
+    // The root's local tables, made with it so its stamp covers them; the lease and the job holders fill them on use.
+    initDriverLeaseTable(execRaw);
+    initJobHoldersTable(execRaw);
     const existing = sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0];
 
     if (existing) {

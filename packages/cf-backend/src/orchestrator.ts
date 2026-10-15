@@ -40,6 +40,7 @@ import {
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
+import { durableStamps, requireOps, resetTables, TablesRequestSchema, type OpsCaller, type TablesAnswer, type TablesRequest } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
@@ -479,7 +480,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     this.installClientMessageGate();
-    const gate = new ActivationGate();
+    const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     startBeforeRpc(this, ORCHESTRATOR_STARTED_RPC, () => (this.nimbusSibling ? Promise.resolve() : gate.ready()));
   }
@@ -4227,7 +4228,39 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Device connection is user-level: UserDO owns the tunnel socket and tokens; nothing
   // per-agent verifies, attaches, issues or lists a device token.
 
-  /** DDL only; no persisted schema version. */
+  /**
+   * A release's tables reset (`scripts/reset.ts tables`): what this workspace and each agent whose database it keeps
+   * (a retired one's too) hold of the changed tables, and with `drop`, each brought to this build: what is stale
+   * dropped, made again by its own init, and stamped. The agents go first, while the directory that names them is as
+   * the build before left it. Only `/ops/tables` holds the capability. A Nimbus sibling holds no workspace table.
+   */
+  async opsTables(caller: OpsCaller, request: TablesRequest): Promise<TablesAnswer> {
+    await requireOps(this.env, caller);
+    const { tables, drop } = v.parse(TablesRequestSchema, request);
+
+    const agents = this.nimbusSibling ? [] : await Promise.all(this.keptAgents().map(async ({ name, placement }) => ({
+      name, ...await (await agentFacet(this.ctx, this.env, placement)).opsTables({ tables, drop }),
+    })));
+
+    const answer = resetTables(this.ctx.storage.sql, { tables, drop }, {
+      schema: 'workspace', stamps: durableStamps(this.ctx.storage.kv), transactionSync: (write) => this.ctx.storage.transactionSync(write),
+      init: () => {
+        this.initBaseTables();
+
+        if (!this.nimbusSibling) this.initTables();
+      },
+    });
+
+    // Brought to this build and stamped: open to every call from here, as one constructed now would be.
+    if (drop && this.storageRefusal !== undefined) {
+      this.storageRefusal = undefined;
+
+      if (!this.nimbusSibling && this.workspaceBorn()) this.registerCompactionExtension();
+    }
+
+    return { name: this.addressedName, ...answer, agents };
+  }
+
   private initTables(): void {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
@@ -5293,6 +5326,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Retired ones hold their stores until destroyed; main's isolate, once it ran a turn, and not opened for none. A store
    *  this version refuses never ran one: its conversation is the workspace's own, old, table. */
+  /** The agents whose databases this workspace keeps, by name, and where each lives, read over storage the tables step
+   *  has not brought up yet: its refusal stands aside for this one synchronous read alone, so no other call is served
+   *  past it. */
+  private keptAgents(): Array<{ readonly name: string; readonly placement: AgentFacetPlacement }> {
+    const refusal = this.storageRefusal;
+
+    this.storageRefusal = undefined;
+
+    const agents = this.agentsWithStores().map((actorId) => ({
+      name: this.actorDirectoryStore().retained(actorId)?.name ?? actorId, placement: this.agentPlacement(actorId),
+    }));
+
+    this.storageRefusal = refusal;
+
+    return agents;
+  }
+
   private agentsWithStores(): string[] {
     const mainHolds = (): boolean => this.storageRefusal === undefined && this.config.getHoldsTurns();
 
