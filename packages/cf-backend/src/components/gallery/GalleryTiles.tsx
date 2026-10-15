@@ -12,7 +12,7 @@ export const gallerySlateHref = (workspace: string, slate: string) => `/gallery/
 export function ListingPicture({ listing }: { listing: GalleryListing }) {
   return (
     <SlatePicture workspace={listing.workspace} slate={{ id: listing.slate, title: listing.title, picture: listing.picture }} at={galleryPicturePath}
-      className="absolute inset-0 size-full object-cover object-top" fallback={<Cover title={listing.title} />} />
+      className="absolute inset-0 size-full object-cover object-left-top" fallback={<Cover title={listing.title} />} />
   );
 }
 

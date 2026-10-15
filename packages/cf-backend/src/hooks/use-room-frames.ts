@@ -20,6 +20,15 @@ export function signInAndReturn(back = returnHere()): void {
   window.location.assign(login.toString());
 }
 
+/** This page again with its fork picker open (`?fork=1`): where someone who pressed Fork signed out lands once signed in. */
+export function hereForking(): string {
+  const here = new URL(window.location.href);
+
+  here.searchParams.set("fork", "1");
+
+  return here.pathname + here.search;
+}
+
 /** Where a person connects a service of their own, and comes back from. */
 function connectAndReturn(): void {
   window.location.assign(`/user/settings/mcp?return_to=${encodeURIComponent(returnHere())}`);

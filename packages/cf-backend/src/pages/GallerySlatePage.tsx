@@ -3,12 +3,13 @@
  * yours and of its author's, the files a fork gets, and Report.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FlagIcon, GitForkIcon, LockSimpleIcon, PlayIcon, StarIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import type { GalleryListing, GallerySlate, RoomService } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
+import { useGallerySignedIn } from "@/components/gallery/GalleryShell";
 import { ListingPicture, ListingTile, ServiceIcon } from "@/components/gallery/GalleryTiles";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
@@ -16,6 +17,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
+import { hereForking, signInAndReturn } from "@/hooks/use-room-frames";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { readGallery, readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
 import { linkKeyOf } from "@/lib/room-client";
@@ -54,7 +56,7 @@ function Reach({ slate }: { slate: GallerySlate }) {
         ))}
       </div>
       <div data-gallery-reads-author={slate.readsAuthor}>
-        <GroupHead>{`Of ${author}'s`}</GroupHead>
+        <GroupHead>{`${author} lends`}</GroupHead>
         {slate.readsAuthor
           ? <ReachRow icon={<UsersThreeIcon size={14} />} name="What they lend" detail={`Some parts run with ${author}'s own access; you see what they return`} />
           : <ReachRow icon={<LockSimpleIcon size={14} />} name="Nothing" detail="It reads none of its author's data" />}
@@ -92,16 +94,28 @@ function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; o
   );
 }
 
+/** Fork, signed in: the roster it lands in is the shell's, so the sidebar lists a new workspace at once. */
+function ForkListing({ listing, onClose }: { listing: GalleryListing; onClose: () => void }) {
+  const { create } = useWorkspaceRoster();
+
+  return (
+    <ForkDialog room={{ workspace: listing.workspace, slate: listing.slate, key: linkKeyOf(listing.url) }} title={listing.title} mode="fork"
+      onClose={onClose} create={create} />
+  );
+}
+
 export default function GallerySlatePage() {
   const { workspace = "", slate = "" } = useParams();
-  const { create } = useWorkspaceRoster();
+  const [search] = useSearchParams();
+  const signedIn = useGallerySignedIn();
   const [read, setRead] = useState<GallerySlate | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
   const [like, setLike] = useState<readonly GalleryListing[]>([]);
   const [star, setStar] = useState<{ on: boolean; count: number } | null>(null);
   const [starFailure, setStarFailure] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<"fork" | "report" | null>(null);
+  // Back from signing in to fork: the picker is open.
+  const [dialog, setDialog] = useState<"fork" | "report" | null>(signedIn && search.has("fork") ? "fork" : null);
   const [reported, setReported] = useState(false);
 
   // The slate's page, then more of its category: never itself.
@@ -148,7 +162,7 @@ export default function GallerySlatePage() {
       <div className="mx-auto w-full max-w-[1120px] px-4 pb-16 pt-6 sm:px-8 sm:pt-8">
         <p className="p-meta p-text-3"><Link to="/gallery" className="p-text-2 hover:underline">Gallery</Link> / {listing.title}</p>
         <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          <div className="relative aspect-[2/1] overflow-hidden rounded-[14px] border p-border"><ListingPicture listing={listing} /></div>
+          <div data-gallery-hero className="relative aspect-[2/1] overflow-hidden rounded-[14px] border p-border"><ListingPicture listing={listing} /></div>
           <div className="min-w-0 space-y-4">
             <div>
               <h1 className="p-display text-2xl">{listing.title}</h1>
@@ -157,8 +171,10 @@ export default function GallerySlatePage() {
             <p className="p-row-text p-text-2">{listing.line}</p>
             <div className="flex flex-wrap items-center gap-2">
               <a href={listing.url} data-gallery-open className="p-btn inline-flex h-9 items-center gap-1.5 rounded-md px-5 text-sm font-medium"><PlayIcon size={14} weight="fill" />Open</a>
-              <Button size="base" variant="secondary" data-gallery-fork onClick={() => setDialog("fork")}><GitForkIcon size={15} />Fork</Button>
-              <Button size="base" variant="ghost" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={toggleStar}>
+              <Button size="base" variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereForking()))}>
+                <GitForkIcon size={15} />Fork
+              </Button>
+              <Button size="base" variant="ghost" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={signedIn ? toggleStar : () => signInAndReturn()}>
                 <StarIcon size={15} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : ""} />{star.on ? "Starred" : "Star"} · {star.count.toLocaleString("en-US")}
               </Button>
             </div>
@@ -170,7 +186,7 @@ export default function GallerySlatePage() {
               <span>Updated {UPDATED.format(read.updatedAt)}</span>
               {reported
                 ? <span data-gallery-reported className="ml-auto inline-flex items-center gap-1"><FlagIcon size={12} />Reported</span>
-                : <button type="button" data-gallery-report onClick={() => setDialog("report")} className="ml-auto inline-flex items-center gap-1 hover:underline"><FlagIcon size={12} />Report</button>}
+                : <button type="button" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())} className="ml-auto inline-flex items-center gap-1 hover:underline"><FlagIcon size={12} />Report</button>}
             </p>
           </div>
         </div>
@@ -189,10 +205,7 @@ export default function GallerySlatePage() {
           )}
         </div>
       </div>
-      {dialog === "fork" && (
-        <ForkDialog room={{ workspace: listing.workspace, slate: listing.slate, key: linkKeyOf(listing.url) }} title={listing.title} mode="fork"
-          onClose={() => setDialog(null)} create={create} />
-      )}
+      {dialog === "fork" && <ForkListing listing={listing} onClose={() => setDialog(null)} />}
       {dialog === "report" && <ReportDialog listing={listing} onClose={() => setDialog(null)} onSent={() => { setReported(true); setDialog(null); }} />}
     </div>
   );

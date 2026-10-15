@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet, matchPath, useLocation, useParams } from "react-router-dom";
 import { Suspense, type ReactNode } from "react";
 import Layout from "./components/layout";
+import GalleryShell from "./components/gallery/GalleryShell";
 import HomePage from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -118,8 +119,6 @@ export default function App() {
             <Route path={APP_ROUTES.driveFolder} element={<Page label="drive-folder"><DrivePage tab="mine" /></Page>} />
             <Route path={APP_ROUTES.slates} element={<Page label="slates"><DrivePage tab="slates" /></Page>} />
             <Route path={APP_ROUTES.shared} element={<Page label="shared"><DrivePage tab="shared" /></Page>} />
-            <Route path={APP_ROUTES.gallery} element={<Page label="gallery"><GalleryPage /></Page>} />
-            <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />
             <Route path={APP_ROUTES.workspaces} element={<Page label="workspaces"><WorkspacesPage /></Page>} />
             <Route path={APP_ROUTES.plugins} element={<Page label="plugins"><PluginsPage /></Page>} />
             <Route path={APP_ROUTES.devices} element={<Page label="devices"><DevicesPage /></Page>} />
@@ -131,6 +130,11 @@ export default function App() {
             <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
             <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
           </Route>
+        </Route>
+        {/* Public discovery: the app's shell signed in, a bar with Sign in signed out (GalleryShell). */}
+        <Route element={<GalleryShell />}>
+          <Route path={APP_ROUTES.gallery} element={<Page label="gallery"><GalleryPage /></Page>} />
+          <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />
         </Route>
         {/* Outside the shell and onboarding: whoever the slate is shared with, or holds its link, uses it here, signed in or not. */}
         <Route path={APP_ROUTES.liveSlate} element={<Page label="live-slate"><LiveSlatePage /></Page>} />

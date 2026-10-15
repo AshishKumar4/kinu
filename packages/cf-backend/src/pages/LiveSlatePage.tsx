@@ -17,7 +17,7 @@ import { ShareSheet } from "@/components/sharing/ShareSheet";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { useRoom, type RoomLive } from "@/hooks/use-room";
-import { signInAndReturn, useRoomFrames } from "@/hooks/use-room-frames";
+import { hereForking, signInAndReturn, useRoomFrames } from "@/hooks/use-room-frames";
 import type { RoomDecision } from "@/lib/room-bridge";
 import { readRoomEntry, type RoomClosed, type RoomSlate } from "@/lib/room-client";
 import { registerWorkspace } from "@/lib/user-api";
@@ -44,15 +44,6 @@ export const CLOSED: Record<Exclude<RoomClosed, "sign-in">, { said: string; deta
   missing: { said: "There's no slate here", detail: "Its link may have changed." },
   stopped: { said: "This link was stopped" },
 };
-
-/** This page again with its fork picker open (`?fork=1`): where a visitor who pressed Fork lands once signed in. */
-function forkHere(): string {
-  const here = new URL(window.location.href);
-
-  here.searchParams.set("fork", "1");
-
-  return here.pathname + here.search;
-}
 
 /** What a live page opens with: a gallery frame's sheet, picker or decision. */
 export interface LiveOpened {
@@ -91,7 +82,7 @@ export function LiveSlate({ room, entry, live, opened = {}, workspaces }: {
     <div className="flex h-screen w-screen flex-col p-bg p-text">
       <LiveBar session={session} presence={view.presence} onShare={view.sheet === null ? null : () => setSharing(true)}
         onEdit={() => (owner ? window.location.assign(`/workspace/${encodeURIComponent(room.workspace)}?slate=${encodeURIComponent(room.slate)}`) : setPicking("edit"))}
-        onFork={() => (session.me === null ? signInAndReturn(forkHere()) : setPicking("fork"))} />
+        onFork={() => (session.me === null ? signInAndReturn(hereForking()) : setPicking("fork"))} />
       <main className="relative min-h-0 flex-1">
         <iframe src={session.frame} title={session.title} data-live-frame className="block size-full border-0" />
         {view.ended !== null && <Ended ended={view.ended} slate={session.title} onAsk={() => { if (view.ended !== null) emailTo(view.ended.by); }} />}

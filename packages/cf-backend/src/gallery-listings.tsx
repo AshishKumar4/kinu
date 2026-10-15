@@ -1,14 +1,15 @@
 /**
- * Gallery frames (`gallery-list`, `gallery-slate&slate=<slate>`) on a fixed set of listings: `/api/gallery` answers as
- * the Gallery's contract says (room-api.ts), sorted, filtered and searched here, six to a page; a star and a report are
- * taken; a listed slate's fork admits only its link's key.
+ * Gallery frames (`gallery-list`, `gallery-slate&slate=<slate>`; `&signed=out` for a visitor, `&fork=1` back from
+ * signing in to fork) on a fixed set of listings: `/api/gallery` answers as the Gallery's contract says (room-api.ts),
+ * sorted, filtered and searched here, six to a page; a star and a report are taken; a listed slate's fork admits only its
+ * link's key. Each listing but Team lunch poll has a picture; a test or a shot answers its reads.
  */
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
 import { APP_ROUTES, type ForkPreview, type GalleryListing, type GallerySlate } from "@kinu.run/core";
-import Sidebar from "@/components/Sidebar";
+import GalleryShell from "@/components/gallery/GalleryShell";
 
 const GalleryPage = lazy(() => import("@/pages/GalleryPage"));
 
@@ -22,6 +23,11 @@ const listing = (
   workspace: string, slate: string, key: string, rest: Omit<GalleryListing, "workspace" | "slate" | "url" | "starred" | "featured"> & { featured?: boolean },
 ): GalleryListing => ({ workspace, slate, url: `/s/${workspace}/${slate}?k=${key}`, starred: false, ...rest, featured: rest.featured ?? false });
 
+/** A picture's digest: any 64 hex characters name one version. */
+const PICTURES = {
+  "pr-board": "fb78dc00234ee9eeda9437ad7af4cd8c89a6836d2111827b4df00569ecd26b74", trip: "34a389d790fc2bdd8458e5f1cde6933c97d11eeda65cf328b64460f0d68f04b5", habits: "d68cffa59de9dff4b72aaaa70edfd8f4a957c580c654b7da4b0fcea7ad307a95", digest: "0bf474896363505e5ea5e5d6ace8ebfb13a760a409b1fb467d428fc716f9f284", standup: "c0fbdc38b1762851a9221b774a130fd2ae0bf78c61bd69eb334f8cd2caa08319", recipe: "e1d8e552330911f9f779f85b6f2c00a15e790dcc3fbb3b28f5da1d660a30c5b8",
+} as const;
+
 const GITHUB = { title: "GitHub", kind: "github" } as const;
 
 const MODEL = { title: "Model", kind: "ai" } as const;
@@ -30,27 +36,27 @@ const MODEL = { title: "Model", kind: "ai" } as const;
 const LISTINGS: readonly GalleryListing[] = [
   listing("ravi", "pr-board", "p8x2", {
     title: "PR review board", line: "Every pull request waiting on you, across your repositories, sorted by how long it has waited.",
-    category: "developer", owner: { name: "Ravi Menon" }, stars: 412, listedAt: NOW - 20 * DAY, needs: [GITHUB], featured: true,
+    category: "developer", owner: { name: "Ravi Menon" }, stars: 412, listedAt: NOW - 20 * DAY, needs: [GITHUB], featured: true, picture: PICTURES["pr-board"],
   }),
   listing("ana", "trip", "t5c1", {
     title: "Trip budget splitter", line: "Log what each person paid; it says who owes whom, in as few payments as possible.",
-    category: "money", owner: { name: "Ana Souza" }, stars: 287, listedAt: NOW - 3 * DAY, needs: [], featured: true,
+    category: "money", owner: { name: "Ana Souza" }, stars: 287, listedAt: NOW - 3 * DAY, needs: [], featured: true, picture: PICTURES.trip,
   }),
   listing("alice", "habits", "h2b6", {
     title: "Habit tracker", line: "A week of habits on one screen. Tap a day to mark it.", category: "home", owner: { name: "Alice Chen" }, stars: 233,
-    listedAt: NOW - 12 * DAY, needs: [],
+    listedAt: NOW - 12 * DAY, needs: [], picture: PICTURES.habits,
   }),
   listing("jules", "digest", "d9e4", {
     title: "Morning reading", line: "Five things worth reading today on the topics you choose, summarised by your model.", category: "work",
-    owner: { name: "Jules Martin" }, stars: 198, listedAt: NOW - DAY, needs: [MODEL],
+    owner: { name: "Jules Martin" }, stars: 198, listedAt: NOW - DAY, needs: [MODEL], picture: PICTURES.digest,
   }),
   listing("priya", "standup", "s3f7", {
     title: "Standup notes", line: "Turns yesterday's commits and calendar into a three-line standup.", category: "work", owner: { name: "Priya Shah" },
-    stars: 164, listedAt: NOW - 6 * DAY, needs: [MODEL, GITHUB],
+    stars: 164, listedAt: NOW - 6 * DAY, needs: [MODEL, GITHUB], picture: PICTURES.standup,
   }),
   listing("tom", "recipe", "r1a8", {
     title: "Recipe scaler", line: "Paste a recipe and scale it to any number of people, in grams.", category: "home", owner: { name: "Tom Okafor" },
-    stars: 121, listedAt: NOW - 9 * DAY, needs: [],
+    stars: 121, listedAt: NOW - 9 * DAY, needs: [], picture: PICTURES.recipe,
   }),
   listing("mei", "poll", "l6q0", {
     title: "Team lunch poll", line: "One question, a few options, results live for everyone voting.", category: "fun", owner: { name: "Mei Lin" },
@@ -109,10 +115,19 @@ export function installGalleryFixture(frame: string): void {
   // What the page asked the Gallery, in order, on the root for a test to read: its fetches never reach the network.
   const asked: { path: string; search: string; body: string | null }[] = [];
 
+  const visitor = new URLSearchParams(location.search).get("signed") === "out";
+
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     const [, api, area, workspace, slate, rest] = url.pathname.split("/");
+
+    if (url.pathname === "/api/auth/me") {
+      return visitor
+        ? Response.json({ error: "Sign in." }, { status: 401 })
+        : Response.json({ user: { id: "owner", email: "owner@example.com", provider: "google", signedInWith: "Google", displayName: "Owner" } });
+    }
+
     const found = listings.find((each) => each.workspace === workspace && each.slate === slate);
 
     if (api !== "api" || (area !== "gallery" && area !== "rooms")) return next(input, init);
@@ -154,21 +169,20 @@ export function installGalleryFixture(frame: string): void {
 export function galleryEntry(frame: string, search: URLSearchParams): string {
   const asked = LISTINGS.find((each) => each.slate === search.get("slate")) ?? LISTINGS[0];
 
-  return frame === "gallery-slate" && asked !== undefined ? `/gallery/${asked.workspace}/${asked.slate}` : APP_ROUTES.gallery;
+  if (frame !== "gallery-slate" || asked === undefined) return APP_ROUTES.gallery;
+
+  return `/gallery/${asked.workspace}/${asked.slate}${search.has("fork") ? "?fork=1" : ""}`;
 }
+
+const loading = (shown: ReactNode) => <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{shown}</Suspense>;
 
 export function GalleryAppFrame() {
   return (
-    <div className="flex h-screen w-screen overflow-hidden p-bg p-text">
-      <aside className="hidden w-60 shrink-0 border-r p-border p-sidebar md:block"><Sidebar /></aside>
-      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>
-          <Routes>
-            <Route path={APP_ROUTES.gallery} element={<GalleryPage />} />
-            <Route path={APP_ROUTES.gallerySlate} element={<GallerySlatePage />} />
-          </Routes>
-        </Suspense>
-      </main>
-    </div>
+    <Routes>
+      <Route element={<GalleryShell />}>
+        <Route path={APP_ROUTES.gallery} element={loading(<GalleryPage />)} />
+        <Route path={APP_ROUTES.gallerySlate} element={loading(<GallerySlatePage />)} />
+      </Route>
+    </Routes>
   );
 }
