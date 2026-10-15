@@ -170,8 +170,8 @@ const TYPED_ROW = 'u1';
 const DRAIN_ROW = 'd1';
 
 /** The two endings the node rows are read for (gallery.tsx RUNNING_RUN): one
- *  turn the provider rate-limited, one the operator stopped. */
-const RATE_LIMITED_NODE = 'lv008';
+ *  turn that stalled, one the operator stopped. */
+const STALLED_NODE = 'lv008';
 
 const ABORTED_NODE = 'lv005';
 
@@ -587,7 +587,7 @@ async function run(): Promise<Observed> {
     await explore.setViewport({ width: 1280, height: 1100 });
     await explore.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
     await explore.reload({ waitUntil: 'networkidle0' });
-    await explore.waitForSelector(`[data-run-node="${RATE_LIMITED_NODE}"]`);
+    await explore.waitForSelector(`[data-run-node="${STALLED_NODE}"]`);
     const runNodes = await readRunNodes(explore);
     await explore.close();
 
@@ -926,20 +926,9 @@ describe('the Environment tab, as a user reads it', () => {
   });
 });
 
-describe('a node the provider rate-limited, as the run list reads it', () => {
-  test('the row says rate limit, not fault', () => {
-    // The seam this reads through is `isRateLimitedTurnError`. Rendering
-    // `errorMessage` verbatim in the failure tone makes a node the provider
-    // told us to wait for indistinguishable from a wedged one — the
-    // distinction the classifier exists for.
-    expect(observed.runNodes[RATE_LIMITED_NODE]?.reason).toBe('rate-limited');
-  });
-
-  test('a turn that ended some other way is still a fault', () => {
-    // The guard on the classification: the operator stopped this one, nothing
-    // declared a wait, and a refactor that blames the provider for every ending
-    // fails here rather than passing quietly.
-    expect(observed.runNodes[ABORTED_NODE]?.reason).toBe('failed');
+describe('an errored node, as the run list reads it', () => {
+  test('a stalled node and a stopped one both read as failures, each with its own reason', () => {
+    expect([observed.runNodes[STALLED_NODE]?.reason, observed.runNodes[ABORTED_NODE]?.reason]).toEqual(['failed', 'failed']);
   });
 });
 

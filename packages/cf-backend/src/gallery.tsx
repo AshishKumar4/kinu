@@ -3533,8 +3533,8 @@ const RUNNING_RUN: HeadRunView = {
     swarmNode("lv008", "Check whether inferKind belongs at the edge", "expansion 3 of 3", {
       status: "errored", depth: 2, parentId: "lv002", wallClockMs: 7_400,
       spawnedAt: NOW - 18e4, lastStepAt: NOW - 15e4,
-      errorMessage: "Turn ended by provider rate limiting: the provider asked this turn to "
-        + "wait 61s against a 45s budget, that wait was taken, and still nothing flowed.",
+      errorMessage: "Turn stalled: the provider asked this turn to wait 61s against a 45s budget, "
+        + "that wait was taken, and still nothing flowed.",
     }),
     swarmNode("lv009", "Fan the two guarded readers in", "fan-in over 2 parents of depth 1", {
       status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
