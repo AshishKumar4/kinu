@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom';
 
 import { APP_ROUTES, routeTemplateOf, type ReportedRoute } from '@kinu.run/core';
 import type { ArtFrame, KeepOut } from '@kinu.run/core/web/art';
-import { Connectome, type ConnectomeActivity, type ConnectomeMode } from '@kinu.run/core/web/connectome';
+import { type Field, type MeshActivity, type MeshMode, NeuralMesh } from '@kinu.run/core/web/neural-mesh';
 import { groundTextElements } from '@kinu.run/core/web/ground-text';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useRosterActivity } from '@/hooks/use-workspace-roster';
@@ -31,7 +31,7 @@ interface AppBackgroundHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
   time(): number;
-  mode(): ConnectomeMode;
+  mode(): MeshMode;
   pointer(): number;
 }
 
@@ -53,13 +53,13 @@ declare global {
 }
 
 /** `known` outlives the tissue so a decision that arrived on another route still flashes on return. */
-function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }): ReactElement {
+function Tissue({ known }: { readonly known: { current: MeshActivity } }): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
   const wide = useMediaQuery(RAIL_QUERY);
   const hoverable = useMediaQuery('(hover: hover)');
   const calm = useMediaQuery('(prefers-reduced-motion: reduce)');
   const { working, decisions } = useRosterActivity();
-  const living = useRef<LivingCanvas<ArtFrame, Connectome> | null>(null);
+  const living = useRef<LivingCanvas<ArtFrame, NeuralMesh> | null>(null);
 
   useEffect(() => {
     known.current = { working, decisions };
@@ -71,7 +71,7 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
     const shell = host?.parentElement ?? null;
 
     if (host === null || shell === null) return;
-    let picture: Connectome | null = null;
+    let picture: NeuralMesh | null = null;
     let copy: Element[] = [];
     let stale = true;
     let scheduled = 0;
@@ -95,8 +95,16 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       return boxes;
     };
 
-    const tissue = (aspect: number): Connectome => {
-      picture = new Connectome({ seed: BACKGROUND_SEED, aspect, width: host.getBoundingClientRect().width, activity: known.current });
+    // The rail is opaque: the mesh frames the page beside it, and grows again when the rail folds.
+    const field = (): Field => {
+      const box = host.getBoundingClientRect();
+      const page = shell.querySelector('main')?.getBoundingClientRect();
+
+      return page === undefined || box.width <= 0 ? { left: 0, right: 1 } : { left: (page.left - box.left) / box.width, right: (page.right - box.left) / box.width };
+    };
+
+    const tissue = (aspect: number): NeuralMesh => {
+      picture = new NeuralMesh({ seed: BACKGROUND_SEED, aspect, width: host.getBoundingClientRect().width, field: field(), activity: known.current });
 
       return picture;
     };
@@ -107,7 +115,10 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       holdStill: () => !wide,
       startFrozen: () => window.__kinuGalleryStepping === true && window.__kinuGalleryFrozen === true,
       resolution: RESOLUTION,
-      fit: (art) => art.setKeepOut(keepOut()),
+      fit: (art) => {
+        art.setField(field());
+        art.setKeepOut(keepOut());
+      },
       shown: (_frame, canvas) => {
         const mode = picture?.mode() ?? 'idle';
 
@@ -131,9 +142,15 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       onScroll();
     };
 
+    // The rail folds over a width transition: the page beside it has its final width only once that ends.
+    const onTransition = (event: TransitionEvent): void => {
+      if (event.propertyName === 'width') onScroll();
+    };
+
     const changes = new MutationObserver(onMutation);
     changes.observe(shell, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
     shell.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    shell.addEventListener('transitionend', onTransition);
 
     // The host is pointer-transparent, so the window listens instead.
     const toView = (clientX: number, clientY: number): readonly [number, number] => {
@@ -188,6 +205,7 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
     return () => {
       changes.disconnect();
       shell.removeEventListener('scroll', onScroll, { capture: true });
+      shell.removeEventListener('transitionend', onTransition);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerdown', onPress);
       window.removeEventListener('pointerleave', onLeave);
@@ -214,7 +232,7 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
 
 export function AppBackground(): ReactElement | null {
   const { pathname } = useLocation();
-  const known = useRef<ConnectomeActivity>({ working: false, decisions: 0 });
+  const known = useRef<MeshActivity>({ working: false, decisions: 0 });
 
   return SHOWN_ROUTES[routeTemplateOf(pathname)] === true ? <Tissue known={known} /> : null;
 }

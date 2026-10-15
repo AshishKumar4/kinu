@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-15",
-  "files": 3330,
-  "functions": 87115,
+  "files": 3331,
+  "functions": 87186,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -163,10 +163,6 @@
     },
     {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
-      "complexity": 29
-    },
-    {
-      "key": "packages/core/src/web/hero-canvas.ts#createCanvasRenderer>render",
       "complexity": 29
     },
     {
