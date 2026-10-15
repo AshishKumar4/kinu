@@ -39,8 +39,16 @@ open Kinu.Sharing.Confinement
 /-- A label with no element of tag `t`. -/
 def TFree (t : Tag) (L : List Elem) : Prop := ∀ e ∈ L, e.tag ≠ t
 
-/-- No declassification on record lets `t` reach `q`. -/
-def Shut (t : Tag) (q : Pid) (c : Core) : Prop := ∀ d ∈ c.decls, d.tag = t → d.aud.covers q = false
+/-- `q` reads `t` by no reader check and no declassification on record lets `t` reach `q`. -/
+def Shut (t : Tag) (q : Pid) (c : Core) : Prop :=
+  c.readers.contains (q, t) = false ∧ ∀ d ∈ c.decls, d.tag = t → d.aud.covers q = false
+
+/-- An event that opens source `t` to `q`: its holder declassifying it to an audience covering `q`, or a reader check
+    finding that `q` reads it directly. The origin theorems hold for every history without one. -/
+def Opens (t : Tag) (q : Pid) : Ev → Prop
+  | .declassify a _ t' _ aud => t' = t ∧ a = t.holder ∧ aud.covers q = true
+  | .readerCheck q' t' ok => q' = q ∧ t' = t ∧ ok = true
+  | _ => False
 
 /-- Two states `q` cannot tell apart, and whose `t`-free values agree. -/
 structure LowEq (t : Tag) (q : Pid) (s1 s2 : St) : Prop where
@@ -49,22 +57,45 @@ structure LowEq (t : Tag) (q : Pid) (s1 s2 : St) : Prop where
   val : ∀ i cl, s1.core.cell i = some cl → TFree t cl.label → s1.val i = s2.val i
   seen : seen q s1 = seen q s2
 
-/-- What may reach `q` carries no element of a tag `q` cannot read and nobody let `q` see. -/
-private theorem flows_free (E : Env) (c : Core) (s : SlateId) (L : List Elem) (q : Pid) (t : Tag)
-    (hq : E.reads q t = false) (hs : Shut t q c) (h : flows Policy.full E c s L q = true) : TFree t L := by
+/-- **What reaches `q` carries no source closed to `q`.** In any state where `q` reads `t` by no reader check and no
+    declassification of `t` covers `q`, every label that may reach `q` is free of `t`. A reader who lost access, and
+    a declassification withdrawn, take effect at the next release. -/
+theorem what_reaches_q_carries_no_closed_source (c : Core) (s : SlateId) (L : List Elem) (q : Pid) (t : Tag)
+    (hq : q ≠ t.holder) (hs : Shut t q c) (h : flows Policy.full c s L q = true) : TFree t L := by
   intro e he heq
   have hm := (List.all_eq_true.mp h) e he
   simp only [mayRead, Bool.or_eq_true, List.any_eq_true] at hm
   rcases hm with hr | ⟨d, hd, hcov⟩
-  · rw [heq, hq] at hr; cases hr
-  · simp only [Decl.covers, Bool.and_eq_true] at hcov
+  · simp only [Core.canRead, heq, Bool.or_eq_true, beq_iff_eq, hs.1] at hr
+    rcases hr with hr | hr
+    · exact hq hr
+    · cases hr
+  · simp only [Decl.covers, Decl.shows, Bool.and_eq_true] at hcov
     obtain ⟨⟨⟨⟨⟨_, _⟩, htag⟩, _⟩, _⟩, haud⟩ := hcov
     have htag' : d.tag = t := by rw [← heq]; simpa using htag
-    rw [hs d hd htag'] at haud; cases haud
+    rw [hs.2 d hd htag'] at haud; cases haud
+
+/-- What a tool step sends reaches only audiences its label may reach. -/
+private theorem audFlows_free (c : Core) (s : SlateId) (L : List Elem) (q : Pid) (t : Tag) (aud : Aud)
+    (hq : q ≠ t.holder) (hs : Shut t q c) (h : audFlows Policy.full c s L aud = true) (hc : aud.covers q = true) :
+    TFree t L := by
+  cases aud with
+  | only ps =>
+    simp only [audFlows, List.all_eq_true] at h
+    simp only [Aud.covers, List.elem_iff] at hc
+    exact what_reaches_q_carries_no_closed_source c s L q t hq hs (h q hc)
+  | anyone =>
+    intro e he heq
+    simp only [audFlows, List.all_eq_true, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨d, hd, hshows, haud⟩ := h e he
+    simp only [Decl.shows, Bool.and_eq_true, beq_iff_eq] at hshows
+    have htag : d.tag = t := by rw [← heq]; exact hshows.1.1.2
+    have := hs.2 d hd htag
+    rw [haud] at this; cases this
 
 private theorem seen_snoc (q : Pid) (l : List Obs) (o : Obs) :
-    ((l ++ [o]).filter (·.to == q)).map (·.what) =
-      (l.filter (·.to == q)).map (·.what) ++ (if o.to == q then [o.what] else []) := by
+    ((l ++ [o]).filter (·.to.covers q)).map (·.what) =
+      (l.filter (·.to.covers q)).map (·.what) ++ (if o.to.covers q then [o.what] else []) := by
   rw [List.filter_append, List.map_append]
   congr 1
   simp only [List.filter_cons, List.filter_nil]
@@ -89,10 +120,7 @@ private theorem run_back (P : Policy) (c : Core) (e : Ev) (r : Nat) (run' : Run)
     · exact Or.inl ⟨run', h, rfl, rfl⟩
   | finish j =>
     simp only [apply, Core.run] at h
-    rw [List.find?_map] at h
-    have : ((fun x : Run => x.id == r) ∘ fun x => if x.id == j then { x with live := false } else x) =
-        (fun x : Run => x.id == r) := by funext x; simp only [Function.comp]; split <;> rfl
-    rw [this] at h
+    rw [lookup_through_a_map Run.id _ (fun x => by split <;> rfl)] at h
     cases hc : c.runs.find? (fun x => x.id == r) with
     | none => rw [hc] at h; cases h
     | some x =>
@@ -100,7 +128,7 @@ private theorem run_back (P : Policy) (c : Core) (e : Ev) (r : Nat) (run' : Run)
       exact Or.inl ⟨x, hc, by split <;> rfl, by split <;> rfl⟩
   | post j => simp only [apply] at h; split at h <;> exact Or.inl ⟨run', h, rfl, rfl⟩
   | share | collaborate | remove | mint | setCap | declassify | undeclassify | toolStep | approve | observe
-  | write | release | render | editCode | fork | publish => exact Or.inl ⟨run', h, rfl, rfl⟩
+  | write | release | render | editCode | fork | publish | readerCheck => exact Or.inl ⟨run', h, rfl, rfl⟩
 
 private theorem cell_back (P : Policy) (c : Core) (e : Ev) (i : Nat) (cl : Cell)
     (h : (apply P c e).cell i = some cl) :
@@ -142,43 +170,62 @@ private theorem cell_back (P : Policy) (c : Core) (e : Ev) (i : Nat) (cl : Cell)
         · cases h
     · exact Or.inl h
   | share | collaborate | remove | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write
-  | release | render | finish | editCode | fork | publish => exact Or.inl h
+  | release | render | finish | editCode | fork | publish | readerCheck => exact Or.inl h
 
 /-- No event but a declassification touches what `Shut` reads, and an admitted declassification of `t` comes from
     `t`'s holder. -/
 private theorem shut_kept (E : Env) (t : Tag) (q : Pid) (c : Core) (e : Ev) (hs : Shut t q c)
-    (hp : permits Policy.full E c e = true)
-    (he : ∀ a s sc aud, e = .declassify a s t sc aud → a = t.holder → aud.covers q = false) :
-    Shut t q (apply Policy.full c e) := by
+    (hp : permits Policy.full E c e = true) (he : ¬ Opens t q e) : Shut t q (apply Policy.full c e) := by
+  refine ⟨?_, ?_⟩
+  · cases e with
+    | readerCheck q' t' ok =>
+      simp only [apply]
+      cases h : (c.readers.filter (fun x => x != (q', t')) ++ (if ok then [(q', t')] else [])).contains (q, t)
+      · rfl
+      · have hmem := List.mem_append.mp (List.elem_iff.mp h)
+        rcases hmem with hmem | hmem
+        · have hin : c.readers.contains (q, t) = true := List.elem_iff.mpr (List.mem_filter.mp hmem).1
+          rw [hs.1] at hin; cases hin
+        · cases ok
+          · cases hmem
+          · simp only [ite_true, List.mem_singleton, Prod.mk.injEq] at hmem
+            obtain ⟨rfl, rfl⟩ := hmem
+            exact absurd ⟨rfl, rfl, rfl⟩ he
+    | admit req s f arg caps inputs => simp only [apply]; split <;> exact hs.1
+    | post r => simp only [apply]; split <;> exact hs.1
+    | share | collaborate | remove | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write
+    | release | render | finish | editCode | fork | publish => exact hs.1
   intro d hd htag
   cases e with
   | declassify a s t' scope aud =>
     simp only [apply, List.mem_append, List.mem_singleton] at hd
     rcases hd with hd | rfl
-    · exact hs d hd htag
+    · exact hs.2 d hd htag
     · simp only at htag; subst htag
       cases hsl : c.slate s with
       | none => simp [permits, hsl] at hp
       | some sl =>
         simp only [permits, hsl, Option.any_some, Policy.full, Bool.not_true, Bool.false_and, Bool.or_false,
           Bool.and_eq_true, beq_iff_eq] at hp
-        exact he a s scope aud rfl hp.2
+        cases hcov : aud.covers q
+        · rfl
+        · exact absurd ⟨rfl, hp.2, hcov⟩ he
   | undeclassify a i =>
     simp only [apply, List.mem_map] at hd
     obtain ⟨x, hx, rfl⟩ := hd
     by_cases hc : (x.id == i) = true
-    · rw [if_pos hc] at htag ⊢; exact hs x hx htag
-    · rw [if_neg hc] at htag ⊢; exact hs x hx htag
+    · rw [if_pos hc] at htag ⊢; exact hs.2 x hx htag
+    · rw [if_neg hc] at htag ⊢; exact hs.2 x hx htag
   | editCode a s f rev =>
     simp only [apply, List.mem_map] at hd
     obtain ⟨x, hx, rfl⟩ := hd
     by_cases hc : (x.minter == a && x.slate == s) = true
-    · rw [if_pos hc] at htag ⊢; exact hs x hx htag
-    · rw [if_neg hc] at htag ⊢; exact hs x hx htag
-  | admit req s f arg caps inputs => simp only [apply] at hd; split at hd <;> exact hs d hd htag
-  | post r => simp only [apply] at hd; split at hd <;> exact hs d hd htag
+    · rw [if_pos hc] at htag ⊢; exact hs.2 x hx htag
+    · rw [if_neg hc] at htag ⊢; exact hs.2 x hx htag
+  | admit req s f arg caps inputs => simp only [apply] at hd; split at hd <;> exact hs.2 d hd htag
+  | post r => simp only [apply] at hd; split at hd <;> exact hs.2 d hd htag
   | share | collaborate | remove | mint | setCap | toolStep | approve | observe | write | release | render | finish
-  | fork | publish => exact hs d hd htag
+  | fork | publish | readerCheck => exact hs.2 d hd htag
 
 /-- `t`-free runs keep agreeing when the core changed without touching contents. -/
 private theorem reads_back (P : Policy) (t : Tag) (c : Core) (e : Ev) (hna : ∀ req s f arg caps inputs,
@@ -212,7 +259,7 @@ private theorem reads_same (P : Policy) (E : Env) (w : World) (s : St) (e : Ev)
   | release r q a => simp only [contents]; split <;> rfl
   | render i q a => simp only [contents]; split <;> rfl
   | share | collaborate | remove | mint | setCap | declassify | undeclassify | approve | finish | editCode | fork
-  | publish => rfl
+  | publish | readerCheck => rfl
 
 private theorem val_same (P : Policy) (E : Env) (w : World) (s : St) (e : Ev)
     (h1 : ∀ req s f arg caps inputs, e ≠ .admit req s f arg caps inputs) (h2 : ∀ r, e ≠ .write r)
@@ -225,7 +272,7 @@ private theorem val_same (P : Policy) (E : Env) (w : World) (s : St) (e : Ev)
   | release r q a => simp only [contents]; split <;> rfl
   | render i q a => simp only [contents]; split <;> rfl
   | share | collaborate | remove | mint | setCap | declassify | undeclassify | approve | observe | finish
-  | editCode | fork | publish => rfl
+  | editCode | fork | publish | readerCheck => rfl
 
 private theorem log_same (P : Policy) (E : Env) (w : World) (s : St) (e : Ev) (h1 : ∀ r i, e ≠ .toolStep r i)
     (h2 : ∀ r q a, e ≠ .release r q a) (h3 : ∀ i q a, e ≠ .render i q a) : (contents P E w s e).2.2 = s.log := by
@@ -236,7 +283,7 @@ private theorem log_same (P : Policy) (E : Env) (w : World) (s : St) (e : Ev) (h
   | write r => simp only [contents]; split <;> rfl
   | post r => simp only [contents]; split <;> rfl
   | share | collaborate | remove | mint | setCap | declassify | undeclassify | admit | approve | observe | finish
-  | editCode | fork | publish => rfl
+  | editCode | fork | publish | readerCheck => rfl
 
 /-- Every run's output cell exists and carries the run's label. -/
 def OutCells (c : Core) : Prop := ∀ r run, c.run r = some run → ∃ cl, c.cell run.out = some cl ∧ cl.label = run.label
@@ -249,7 +296,7 @@ private theorem find_none_of_fresh {α : Type} (key : α → Nat) (l : List α) 
   simp only [beq_iff_eq] at heq; omega
 
 /-- **Output cells are kept**: under `Policy.full` every step keeps each run's output cell, labelled as its run. -/
-theorem output_cells_are_kept (E : Env) (c : Core) (e : Ev) (hf : Fresh c) (ho : OutCells c) :
+theorem output_cells_are_kept (c : Core) (e : Ev) (hf : Fresh c) (ho : OutCells c) :
     OutCells (apply Policy.full c e) := by
   intro r run' hr
   rcases run_back Policy.full c e r run' hr with ⟨run, hrun, hlab, hout⟩ | ⟨hrn, req, s, f, arg, caps, inputs, rfl⟩
@@ -268,15 +315,15 @@ theorem output_cells_are_kept (E : Env) (c : Core) (e : Ev) (hf : Fresh c) (ho :
       simp only [apply, hsl, Core.run, List.find?_append, hrnone, Option.none_or, List.find?_cons, List.find?_nil,
         Core.newRun, beq_self_eq_true, ite_true, Option.some.injEq] at hr
       subst hr
-      refine ⟨⟨c.next + 1, sl.id, List.map (capElem f (sl.codeOf f)) (List.filterMap c.cap caps) ++
-        c.inputLabels inputs⟩, ?_, rfl⟩
+      refine ⟨⟨c.next + 1, sl.id, dedup (List.map (capElem f (sl.codeOf f)) (List.filterMap c.cap caps) ++
+        c.inputLabels inputs)⟩, ?_, rfl⟩
       simp [apply, hsl, Core.cell, List.find?_append, hcnone, Core.newRun, Policy.full]
 
 /-- **One step keeps two worlds indistinguishable to `q`.** -/
 theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
-    (hw : ∀ t' x, t' ≠ t → w1 t' x = w2 t' x) (hq : E.reads q t = false) (s1 s2 : St) (e : Ev)
+    (hw : ∀ t' x, t' ≠ t → w1 t' x = w2 t' x) (hq : q ≠ t.holder) (s1 s2 : St) (e : Ev)
     (hl : LowEq t q s1 s2) (hs : Shut t q s1.core) (hf : Fresh s1.core) (ho : OutCells s1.core)
-    (he : ∀ a s sc aud, e = .declassify a s t sc aud → a = t.holder → aud.covers q = false) :
+    (he : ¬ Opens t q e) :
     LowEq t q (step Policy.full E w1 s1 e) (step Policy.full E w2 s2 e) ∧
       Shut t q (step Policy.full E w1 s1 e).core := by
   obtain ⟨hcore, hreads, hval, hseen⟩ := hl
@@ -343,7 +390,7 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
         exact hreads r run' hr hfree
     | write _ | post _ | release _ _ _ | render _ _ _ | share _ _ _ | collaborate _ _ _ _ | remove _ _ _
     | mint _ _ _ _ _ _ _ | setCap _ _ _ | declassify _ _ _ _ _ | undeclassify _ _ | approve _ _ _ _ | finish _
-    | editCode _ _ _ _ | fork _ _ | publish _ _ =>
+    | editCode _ _ _ _ | fork _ _ | publish _ _ | readerCheck _ _ _ =>
       rw [reads_same _ _ _ _ _ (fun _ _ _ _ _ _ h => by cases h) (fun _ _ h => by cases h) (fun _ _ h => by cases h),
         reads_same _ _ _ _ _ (fun _ _ _ _ _ _ h => by cases h) (fun _ _ h => by cases h) (fun _ _ h => by cases h)]
       exact reads_back _ t _ _ (fun _ _ _ _ _ _ h => by cases h) _ _ hreads
@@ -395,7 +442,7 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
         rw [hreads j run hrun hempty]
     | toolStep _ _ | release _ _ _ | render _ _ _ | share _ _ _ | collaborate _ _ _ _ | remove _ _ _
     | mint _ _ _ _ _ _ _ | setCap _ _ _ | declassify _ _ _ _ _ | undeclassify _ _ | approve _ _ _ _ | observe _ _
-    | finish _ | editCode _ _ _ _ | fork _ _ | publish _ _ =>
+    | finish _ | editCode _ _ _ _ | fork _ _ | publish _ _ | readerCheck _ _ _ =>
       rw [val_same _ _ _ _ _ (fun _ _ _ _ _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h),
         val_same _ _ _ _ _ (fun _ _ _ _ _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)]
       exact val_back _ t _ _ (fun _ _ _ _ _ _ h => by cases h) (fun _ h => by cases h) _ _ hval
@@ -413,14 +460,13 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
       unfold seen at hseen
       rw [hseen]
       congr 1
-      by_cases hhq : k.holder = q
+      by_cases hcov : k.observers.covers q = true
       · simp only [permits, hrun, hk, Option.any_some, Bool.and_eq_true] at hp
-        have hflow : flows Policy.full E s1.core run.slate run.label k.holder = true := by
+        have hflow : audFlows Policy.full s1.core run.slate run.label k.observers = true := by
           simpa [Policy.full] using hp.2
-        rw [hhq] at hflow
-        have hfree := flows_free E s1.core run.slate run.label q t hq hs hflow
-        rw [hreads j run hrun hfree]
-      · simp [hhq]
+        have hfree := audFlows_free s1.core run.slate run.label q t _ hq hs hflow hcov
+        simp only [hreads j run hrun hfree]
+      · simp [hcov]
     | release j q' acc =>
       cases hrun : s1.core.run j with
       | none => simp [permits, hrun] at hp
@@ -433,9 +479,12 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
       by_cases hqq : q' = q
       · subst hqq
         simp only [permits, hrun, Option.any_some, Bool.and_eq_true] at hp
-        have hfree := flows_free E s1.core run.slate run.label q' t hq hs hp.2
+        have hfree := what_reaches_q_carries_no_closed_source s1.core run.slate run.label q' t hq hs hp.2
         simp only [hreads j run hrun hfree]
-      · simp [hqq]
+      · have hc : (Aud.only [q']).covers q = false := by
+          simp only [Aud.covers, List.contains_cons, List.contains_nil, Bool.or_false, beq_eq_false_iff_ne]
+          exact fun h => hqq h.symm
+        simp only [hc]; rfl
     | render i q' acc =>
       cases hcl : s1.core.cell i with
       | none => simp [permits, hcl] at hp
@@ -447,14 +496,17 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
       congr 1
       by_cases hqq : q' = q
       · subst hqq
-        by_cases hflow : flows Policy.full E s1.core cl.slate cl.label q' = true
-        · have hfree := flows_free E s1.core cl.slate cl.label q' t hq hs hflow
+        by_cases hflow : flows Policy.full s1.core cl.slate cl.label q' = true
+        · have hfree := what_reaches_q_carries_no_closed_source s1.core cl.slate cl.label q' t hq hs hflow
           simp only [hflow, if_true, hval i cl hcl hfree]
         · simp [hflow]
-      · simp [hqq]
+      · have hc : (Aud.only [q']).covers q = false := by
+          simp only [Aud.covers, List.contains_cons, List.contains_nil, Bool.or_false, beq_eq_false_iff_ne]
+          exact fun h => hqq h.symm
+        simp only [hc]; rfl
     | write _ | post _ | share _ _ _ | collaborate _ _ _ _ | remove _ _ _ | mint _ _ _ _ _ _ _ | setCap _ _ _
     | declassify _ _ _ _ _ | undeclassify _ _ | admit _ _ _ _ _ _ | approve _ _ _ _ | observe _ _ | finish _
-    | editCode _ _ _ _ | fork _ _ | publish _ _ =>
+    | editCode _ _ _ _ | fork _ _ | publish _ _ | readerCheck _ _ _ =>
       unfold seen at hseen ⊢
       rw [log_same _ _ _ _ _ (fun _ _ h => by cases h) (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h),
         log_same _ _ _ _ _ (fun _ _ h => by cases h) (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h)]
@@ -462,8 +514,8 @@ theorem one_step_keeps_q_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
 
 /-- Indistinguishability to `q` survives any events none of which is `t`'s holder declassifying `t` to `q`. -/
 theorem q_stays_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
-    (hw : ∀ t' x, t' ≠ t → w1 t' x = w2 t' x) (hq : E.reads q t = false) (evs : List Ev)
-    (hd : ∀ e ∈ evs, ∀ a s sc aud, e = .declassify a s t sc aud → a = t.holder → aud.covers q = false) :
+    (hw : ∀ t' x, t' ≠ t → w1 t' x = w2 t' x) (hq : q ≠ t.holder) (evs : List Ev)
+    (hd : ∀ e ∈ evs, ¬ Opens t q e) :
     ∀ s1 s2, LowEq t q s1 s2 → Shut t q s1.core → Fresh s1.core → OutCells s1.core →
       LowEq t q (exec Policy.full E w1 s1 evs) (exec Policy.full E w2 s2 evs) := by
   induction evs with
@@ -479,7 +531,7 @@ theorem q_stays_blind (E : Env) (w1 w2 : World) (t : Tag) (q : Pid)
       · exact hf
     have ho' : OutCells (step Policy.full E w1 s1 e).core := by
       rw [step_core]; split
-      · exact output_cells_are_kept E _ _ hf ho
+      · exact output_cells_are_kept _ _ hf ho
       · exact ho
     exact ih (fun e he => hd e (List.mem_cons_of_mem _ he)) _ _ hl' hs' hf' ho'
 
@@ -488,15 +540,15 @@ private theorem lowEq_refl (t : Tag) (q : Pid) (s : St) : LowEq t q s s :=
 
 private theorem init_inv (o : Pid) (t : Tag) (q : Pid) :
     Shut t q (init o).core ∧ Fresh (init o).core ∧ OutCells (init o).core :=
-  ⟨by simp [Shut, init], fresh_init o, by intro r run h; simp [init, Core.run] at h⟩
+  ⟨⟨by simp [init], by simp [init]⟩, fresh_init o, by intro r run h; simp [init, Core.run] at h⟩
 
 /-- **Release needs every contributing tag's holder.** Whatever happens on any shared slate, a principal `q` who
     cannot read source `t` directly is shown the same values and placeholders, in the same order, whatever `t` holds,
     unless `t`'s holder declassified `t` to an audience covering `q`. Declassifications by anyone else, the slate's
     owner and lenders included, change nothing. -/
 theorem release_needs_every_contributing_tag_holder (E : Env) (w1 w2 : World) (o : Pid) (t : Tag) (q : Pid)
-    (hw : ∀ t' x, t' ≠ t → w1 t' x = w2 t' x) (hq : E.reads q t = false) (evs : List Ev)
-    (hd : ∀ e ∈ evs, ∀ a s sc aud, e = .declassify a s t sc aud → a = t.holder → aud.covers q = false) :
+    (hw : ∀ t' x, t' ≠ t → w1 t' x = w2 t' x) (hq : q ≠ t.holder) (evs : List Ev)
+    (hd : ∀ e ∈ evs, ¬ Opens t q e) :
     seen q (exec Policy.full E w1 (init o) evs) = seen q (exec Policy.full E w2 (init o) evs) := by
   obtain ⟨hs, hf, ho⟩ := init_inv o t q
   exact (q_stays_blind E w1 w2 t q hw hq evs hd _ _ (lowEq_refl t q _) hs hf ho).seen
@@ -516,12 +568,12 @@ private theorem hidden_core (E : Env) (w : World) (t : Tag) (s : St) (e : Ev) (h
   · cases e with
     | toolStep | observe | write | release => rfl
     | share | collaborate | remove | mint | setCap | declassify | undeclassify | admit | approve | post | render
-    | finish | editCode | fork | publish => exact absurd hh id
+    | finish | editCode | fork | publish | readerCheck => exact absurd hh id
   · rfl
 
 /-- **A hidden run's step shows `q` nothing.** Any one action of a run whose label carries `t` leaves everything `q`
     can be shown, now or later, as it was: the structure, every `t`-free value, and `q`'s view. -/
-theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : Pid) (hq : E.reads q t = false)
+theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : Pid) (hq : q ≠ t.holder)
     (s : St) (e : Ev) (hs : Shut t q s.core) (ho : OutCells s.core) (hh : HiddenAct t s.core e) :
     LowEq t q (step Policy.full E w s e) s := by
   have hcore := hidden_core E w t s e hh
@@ -552,7 +604,7 @@ theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : 
       simp only [step, if_pos hp]
       rw [reads_same _ _ _ _ _ (fun _ _ _ _ _ _ h => by cases h) (fun _ _ h => by cases h) (fun _ _ h => by cases h)]
     | share | collaborate | remove | mint | setCap | declassify | undeclassify | admit | approve | post | render
-    | finish | editCode | fork | publish => exact absurd hh id
+    | finish | editCode | fork | publish | readerCheck => exact absurd hh id
   · cases e with
     | write j =>
       obtain ⟨run, hrun, hnf⟩ := hh
@@ -567,7 +619,7 @@ theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : 
       simp only [step, if_pos hp]
       rw [val_same _ _ _ _ _ (fun _ _ _ _ _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)]
     | share | collaborate | remove | mint | setCap | declassify | undeclassify | admit | approve | post | render
-    | finish | editCode | fork | publish => exact absurd hh id
+    | finish | editCode | fork | publish | readerCheck => exact absurd hh id
   · cases e with
     | toolStep j i =>
       obtain ⟨run, hrun, hnf⟩ := hh
@@ -576,14 +628,14 @@ theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : 
       | some k =>
       simp only [step, if_pos hp, seen, contents, hrun, hk]
       rw [seen_snoc]
-      have hhq : k.holder ≠ q := by
-        intro hhq
-        simp only [permits, hrun, hk, Option.any_some, Bool.and_eq_true] at hp
-        have hflow : flows Policy.full E s.core run.slate run.label k.holder = true := by
-          simpa [Policy.full] using hp.2
-        rw [hhq] at hflow
-        exact hnf (flows_free E s.core run.slate run.label q t hq hs hflow)
-      simp [hhq]
+      have hcov : k.observers.covers q = false := by
+        cases hc : k.observers.covers q
+        · rfl
+        · simp only [permits, hrun, hk, Option.any_some, Bool.and_eq_true] at hp
+          have hflow : audFlows Policy.full s.core run.slate run.label k.observers = true := by
+            simpa [Policy.full] using hp.2
+          exact absurd (audFlows_free s.core run.slate run.label q t _ hq hs hflow hc) hnf
+      simp only [hcov, Bool.false_eq_true, ite_false, List.append_nil]
     | release j q' a =>
       obtain ⟨run, hrun, hnf⟩ := hh
       simp only [step, if_pos hp, seen, contents, hrun]
@@ -592,13 +644,16 @@ theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : 
         intro hqq
         simp only [permits, hrun, Option.any_some, Bool.and_eq_true] at hp
         rw [hqq] at hp
-        exact hnf (flows_free E s.core run.slate run.label q t hq hs hp.2)
-      simp [hqq]
+        exact hnf (what_reaches_q_carries_no_closed_source s.core run.slate run.label q t hq hs hp.2)
+      have hc : (Aud.only [q']).covers q = false := by
+        simp only [Aud.covers, List.contains_cons, List.contains_nil, Bool.or_false, beq_eq_false_iff_ne]
+        exact fun h => hqq h.symm
+      simp only [hc, Bool.false_eq_true, ite_false, List.append_nil]
     | observe j i | write j =>
       simp only [step, if_pos hp, seen]
       rw [log_same _ _ _ _ _ (fun _ _ h => by cases h) (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h)]
     | share | collaborate | remove | mint | setCap | declassify | undeclassify | admit | approve | post | render
-    | finish | editCode | fork | publish => exact absurd hh id
+    | finish | editCode | fork | publish | readerCheck => exact absurd hh id
 
 /-- **A run's own choices show `q` nothing.** Insert, anywhere in any history, one action of a run whose label carries
     `t` (the actions its code chooses after reading `t`): what `q` is shown is the same as without it. Applied once
@@ -606,18 +661,18 @@ theorem a_hidden_runs_step_shows_q_nothing (E : Env) (w : World) (t : Tag) (q : 
     `release_needs_every_contributing_tag_holder`, neither what `t` holds nor what the run chose to do with it reaches
     `q`. -/
 theorem a_hidden_runs_choices_show_q_nothing (E : Env) (w : World) (o : Pid) (t : Tag) (q : Pid)
-    (hq : E.reads q t = false) (pre post : List Ev) (e : Ev)
-    (hd : ∀ x ∈ pre ++ post, ∀ a s sc aud, x = .declassify a s t sc aud → a = t.holder → aud.covers q = false)
+    (hq : q ≠ t.holder) (pre post : List Ev) (e : Ev)
+    (hd : ∀ x ∈ pre ++ post, ¬ Opens t q x)
     (hh : HiddenAct t (exec Policy.full E w (init o) pre).core e) :
     seen q (exec Policy.full E w (init o) (pre ++ e :: post)) = seen q (exec Policy.full E w (init o) (pre ++ post)) := by
-  have hpre : ∀ x ∈ pre, ∀ a s sc aud, x = .declassify a s t sc aud → a = t.holder → aud.covers q = false :=
+  have hpre : ∀ x ∈ pre, ¬ Opens t q x :=
     fun x hx => hd x (List.mem_append_left _ hx)
-  have hpost : ∀ x ∈ post, ∀ a s sc aud, x = .declassify a s t sc aud → a = t.holder → aud.covers q = false :=
+  have hpost : ∀ x ∈ post, ¬ Opens t q x :=
     fun x hx => hd x (List.mem_append_right _ hx)
   -- The state before the hidden step keeps every invariant.
   obtain ⟨hs0, hf0, ho0⟩ := init_inv o t q
-  have inv : ∀ (evs : List Ev) (s : St), (∀ x ∈ evs, ∀ a s sc aud, x = .declassify a s t sc aud → a = t.holder →
-      aud.covers q = false) → Shut t q s.core → Fresh s.core → OutCells s.core →
+  have inv : ∀ (evs : List Ev) (s : St), (∀ x ∈ evs, ¬ Opens t q x) → Shut t q s.core → Fresh s.core →
+      OutCells s.core →
       Shut t q (exec Policy.full E w s evs).core ∧ Fresh (exec Policy.full E w s evs).core ∧
         OutCells (exec Policy.full E w s evs).core := by
     intro evs
@@ -632,7 +687,7 @@ theorem a_hidden_runs_choices_show_q_nothing (E : Env) (w : World) (o : Pid) (t 
       · exact hs
       · exact every_id_is_below_the_counter _ _ _ hf
       · exact hf
-      · exact output_cells_are_kept E _ _ hf ho
+      · exact output_cells_are_kept _ _ hf ho
       · exact ho
   obtain ⟨hs, hf, ho⟩ := inv pre _ hpre hs0 hf0 ho0
   have split1 : exec Policy.full E w (init o) (pre ++ e :: post) =
@@ -688,7 +743,7 @@ theorem only_a_tags_holder_declassifies_it (E : Env) (o : Pid) (evs : List Ev) :
       | admit req s f arg caps inputs => simp only [apply] at hd; split at hd <;> exact h d hd
       | post r => simp only [apply] at hd; split at hd <;> exact h d hd
       | share | collaborate | remove | mint | setCap | toolStep | approve | observe | write | release | render
-      | finish | fork | publish => exact h d hd
+      | finish | fork | publish | readerCheck => exact h d hd
     · exact h
 
 end Kinu.Sharing.Origin

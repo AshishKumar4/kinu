@@ -9,8 +9,9 @@
 
   - **Grants** (`Cap`): durable, never stubs. A *lend* is a narrow binding its holder grants to one function of the
     slate; a *personal grant* is a person's own connection, usable only in that person's own requests. Each is bound
-    to the revision of its function's code it was granted for, with a closed argument domain and a declared effect,
-    and has a generation that moves whenever it is switched; a run carries the generation it was admitted under.
+    to the revision of its function's code it was granted for, with a closed argument domain, a declared effect and a
+    sink (who besides the holder observes what a call through it sends), and has a generation that moves whenever it
+    is switched; a run carries the generation it was admitted under. An approval admits one effect of one call.
   - **Shared state** (`Cell`): labelled values. A label lists where a value came from: each element is a source
     (`Tag`: whose authority read it, and what) and the function revision that read it first-hand.
   - **Runs** (`Run`): one admitted call of one function, requested by a session or by the slate itself. A run's label
@@ -19,11 +20,13 @@
     on what a run read; only a run with an empty label may post new state.
   - **Declassifications** (`Decl`): a tag's holder lets values of that tag reach an audience, for the whole slate or
     only for what named function revisions computed.
+  - **Readers** (`Core.readers`): who a source's own reader check, run with the reader's own grant, last found able to
+    read it directly. Access gained or lost is an event (`readerCheck`).
 
   **The release rule** (`flows`): a value reaches a principal only if, for every element of its label, the principal
   reads that source directly or a live declassification minted by the tag's holder covers them. Owning the slate,
   running a lend or authoring a function is no such authority. A release that fails it does not happen; rendering a
-  cell that fails it shows a placeholder.
+  cell that fails it shows a placeholder; a tool call whose observers fail it does not happen.
 
   **Premises** (outside this model):
   - references are unforgeable: a run reaches a grant only by holding its id, and only the host mints a run's env;
@@ -33,11 +36,15 @@
   - sealed rendering: labelled content reaches a person's screen in a frame the slate's own client code cannot read,
     so a request carries only what its person chose to send;
   - one serialized caretaker: every guard is evaluated atomically with the step it guards;
-  - `Env.oracle` answers "could this person read this source directly" soundly; the default answers no.
+  - who chooses the schedule: events are requested by people's sessions, by holders and owners, and by runs with an
+    empty label; a confined run cannot request an admission, mint, declassify, approve or edit code, so its own
+    choices are only its tool steps, observations, writes and releases (`Origin.HiddenAct`);
+  - a reader check is sound: it says yes only if the person may see what the source held, then or since, and a
+    grant's declared sink includes everyone its effect can reach.
 
   **Not claimed**: timing, termination and refusal channels; what a person does with what they saw (relaying);
-  remote effects already committed when a grant is revoked; immunity of a model step to injected text; secrets a
-  person types into code. Every guard in `permits` is parameterised by `Policy` only so `Attacks.lean` can remove one
+  remote work dispatched before a grant is revoked (dispatch is the boundary the caretaker controls); immunity of a
+  model step to injected text; secrets a person types into code. Every guard in `permits` is parameterised by `Policy` only so `Attacks.lean` can remove one
   guard at a time and exhibit the attack it exists for; every theorem elsewhere is about `Policy.full`.
 -/
 
@@ -83,6 +90,12 @@ structure Slate where
   linkGen : Nat
   listed : Bool
   parent : Option SlateId
+  removed : List Pid
+  deriving DecidableEq, Repr
+
+inductive Aud where
+  | anyone
+  | only (ps : List Pid)
   deriving DecidableEq, Repr
 
 /-- A durable grant: a lend (`personal = false`) or a person's own connection (`personal = true`). -/
@@ -96,13 +109,11 @@ structure Cap where
   rev : Rev
   dom : List Nat
   effect : Bool
+  /-- Who besides the holder can observe what a call through this grant sends: nobody for a query to the holder's
+      own account, everyone for an effect that publishes or mails to recipients the code picks. -/
+  sink : Aud
   gen : Nat
   live : Bool
-  deriving DecidableEq, Repr
-
-inductive Aud where
-  | anyone
-  | only (ps : List Pid)
   deriving DecidableEq, Repr
 
 /-- A tag holder's consent that values of `tag` reach `aud` on one slate: anything derived (`scope = none`), or only
@@ -145,12 +156,14 @@ structure Cell where
   label : List Elem
   deriving DecidableEq, Repr
 
-/-- A holder's approval of one effect: one grant, one run, the grant's generation, the exact argument. -/
+/-- A holder's approval of one effect: one grant, one run, the grant's generation, the exact argument, and which of
+    the run's steps it is (`seq`, the number of steps the run had taken), so it admits that one call and no other. -/
 structure Approval where
   cap : Nat
   run : Nat
   gen : Nat
   arg : Nat
+  seq : Nat
   deriving DecidableEq, Repr
 
 /-- Everything a guard may look at. No guard reads a value's content. -/
@@ -161,12 +174,14 @@ structure Core where
   runs : List Run
   cells : List Cell
   approvals : List Approval
+  /-- Who a source's own reader check, run with the reader's own grant, last said can read it directly. -/
+  readers : List (Pid × Tag)
   next : Nat
   deriving DecidableEq, Repr
 
-/-- What one principal was shown: a value, or a placeholder (`none`). -/
+/-- What an audience was shown: a value, or a placeholder (`none`). -/
 structure Obs where
-  to : Pid
+  to : Aud
   what : Option Nat
   deriving DecidableEq, Repr
 
@@ -177,10 +192,9 @@ structure St where
   log : List Obs
 
 /-- The world outside the model's control. `code` and `argOf` are the slate's functions: any code at all, hostile
-    included. `oracle` answers whether a person could read a source directly. -/
+    included. -/
 structure Env where
   signedIn : Pid → Bool
-  oracle : Pid → Tag → Bool
   code : Fn → Rev → Nat → List Nat → Nat
   argOf : Fn → Rev → Nat → List Nat → Nat
 
@@ -197,20 +211,23 @@ structure Policy where
   bindRevision : Bool
   forkBare : Bool
   postPublicOnly : Bool
+  sinkAudience : Bool
+  approvalOnce : Bool
 
-def Policy.full : Policy := ⟨true, true, true, true, true, true, true, true⟩
+def Policy.full : Policy := ⟨true, true, true, true, true, true, true, true, true, true⟩
 
 inductive Ev where
   | share (actor : Pid) (s : SlateId) (on : Bool)
   | collaborate (actor : Pid) (s : SlateId) (q : Pid) (role : Role)
   | remove (actor : Pid) (s : SlateId) (q : Pid)
   | mint (actor : Pid) (s : SlateId) (personal : Bool) (src : Src) (fn : Fn) (dom : List Nat) (effect : Bool)
+      (sink : Aud)
   | setCap (actor : Pid) (cap : Nat) (on : Bool)
   | declassify (actor : Pid) (s : SlateId) (tag : Tag) (scope : Option (Fn × List Rev)) (aud : Aud)
   | undeclassify (actor : Pid) (d : Nat)
   | admit (req : Option (Pid × Acc)) (s : SlateId) (fn : Fn) (arg : Nat) (caps : List Nat) (inputs : List Nat)
   | toolStep (run : Nat) (cap : Nat)
-  | approve (actor : Pid) (cap : Nat) (run : Nat) (arg : Nat)
+  | approve (actor : Pid) (cap : Nat) (run : Nat) (arg : Nat) (seq : Nat)
   | observe (run : Nat) (cell : Nat)
   | write (run : Nat)
   | post (run : Nat)
@@ -220,6 +237,7 @@ inductive Ev where
   | editCode (actor : Pid) (s : SlateId) (fn : Fn) (rev : Rev)
   | fork (actor : Pid) (s : SlateId)
   | publish (actor : Pid) (s : SlateId)
+  | readerCheck (q : Pid) (t : Tag) (ok : Bool)
   deriving DecidableEq, Repr
 
 /-! ## Lookups -/
@@ -232,25 +250,41 @@ def Core.decl (c : Core) (i : Nat) : Option Decl := c.decls.find? (·.id == i)
 
 /-! ## Who may do what -/
 
-def Env.reads (E : Env) (q : Pid) (t : Tag) : Bool := q == t.holder || E.oracle q t
+/-- Who reads a source directly: its holder, and whoever its own reader check last confirmed. -/
+def Core.canRead (c : Core) (q : Pid) (t : Tag) : Bool := q == t.holder || c.readers.contains (q, t)
 
 def Aud.covers : Aud → Pid → Bool
   | .anyone, _ => true
   | .only ps, q => ps.contains q
 
-def Decl.covers (P : Policy) (s : SlateId) (q : Pid) (e : Elem) (d : Decl) : Bool :=
+/-- A live declassification of element `e` on slate `s`, by `e`'s holder, whose scope includes `e`. -/
+def Decl.shows (P : Policy) (s : SlateId) (e : Elem) (d : Decl) : Bool :=
   d.live && d.slate == s && d.tag == e.tag && (!P.holderAuthority || d.minter == e.tag.holder) &&
-    (match d.scope with
-     | none => true
-     | some (f, rs) => f == e.fn && rs.contains e.rev) &&
-    d.aud.covers q
+    match d.scope with
+    | none => true
+    | some (f, rs) => f == e.fn && rs.contains e.rev
 
-def mayRead (P : Policy) (E : Env) (c : Core) (s : SlateId) (q : Pid) (e : Elem) : Bool :=
-  E.reads q e.tag || c.decls.any (Decl.covers P s q e)
+def Decl.covers (P : Policy) (s : SlateId) (q : Pid) (e : Elem) (d : Decl) : Bool :=
+  d.shows P s e && d.aud.covers q
+
+def mayRead (P : Policy) (c : Core) (s : SlateId) (q : Pid) (e : Elem) : Bool :=
+  c.canRead q e.tag || c.decls.any (Decl.covers P s q e)
 
 /-- The release rule: every element of the label may reach `q`. -/
-def flows (P : Policy) (E : Env) (c : Core) (s : SlateId) (L : List Elem) (q : Pid) : Bool :=
-  L.all (mayRead P E c s q)
+def flows (P : Policy) (c : Core) (s : SlateId) (L : List Elem) (q : Pid) : Bool :=
+  L.all (mayRead P c s q)
+
+/-- The release rule for an audience: every member may see the label; for everyone, each element's holder showed it
+    to everyone. -/
+def audFlows (P : Policy) (c : Core) (s : SlateId) (L : List Elem) : Aud → Bool
+  | .only ps => ps.all (flows P c s L)
+  | .anyone => L.all fun e => c.decls.any fun d => d.shows P s e && d.aud == .anyone
+
+/-- Who observes what a call through grant `k` sends: its holder and its sink. -/
+def Cap.observers (k : Cap) : Aud :=
+  match k.sink with
+  | .anyone => .anyone
+  | .only ps => .only (k.holder :: ps)
 
 /-- The revision of one function's code (its image): every edit of a module it runs moves it. -/
 def Slate.codeOf (sl : Slate) (f : Fn) : Rev := ((sl.code.find? (·.1 == f)).map (·.2)).getD 0
@@ -265,7 +299,7 @@ def Slate.canEdit (sl : Slate) (q : Pid) : Bool :=
 def Slate.current (sl : Slate) (q : Pid) : Acc → Bool
   | .owner => q == sl.owner
   | .member g => sl.members.any (fun m => m.who == q && m.gen == g)
-  | .link g => sl.link && sl.linkGen == g
+  | .link g => sl.link && sl.linkGen == g && !sl.removed.contains q
 
 def Core.sessionOk (c : Core) (s : SlateId) (q : Pid) (a : Acc) : Bool :=
   (c.slate s).any (·.current q a)
@@ -290,13 +324,16 @@ def capAdmits (P : Policy) (E : Env) (sl : Slate) (req : Option (Pid × Acc)) (f
     (if k.personal then !P.personalToHolder || req.map (·.1) == some k.holder
      else req.all (fun r => E.signedIn r.1))
 
+/-- A label lists each element once, however often it arrived. -/
+def dedup (l : List Elem) : List Elem := l.foldl (fun acc x => if acc.contains x then acc else acc ++ [x]) []
+
 def Core.inputLabels (c : Core) (inputs : List Nat) : List Elem :=
   inputs.flatMap fun i => ((c.cell i).map (·.label)).getD []
 
 def Core.newRun (c : Core) (req : Option (Pid × Acc)) (sl : Slate) (f arg : Nat) (caps inputs : List Nat) : Run :=
   { id := c.next, out := c.next + 1, slate := sl.id, requester := req, fn := f, rev := sl.codeOf f, arg := arg,
     caps := caps.filterMap fun i => (c.cap i).map fun k => (i, k.gen),
-    label := (caps.filterMap c.cap).map (capElem f (sl.codeOf f)) ++ c.inputLabels inputs,
+    label := dedup ((caps.filterMap c.cap).map (capElem f (sl.codeOf f)) ++ c.inputLabels inputs),
     live := true }
 
 /-! ## Guards: every check the caretaker makes, on `Core` alone -/
@@ -305,7 +342,7 @@ def permits (P : Policy) (E : Env) (c : Core) : Ev → Bool
   | .share a s _ => (c.slate s).any fun sl => a == sl.owner
   | .collaborate a s q _ => (c.slate s).any fun sl => a == sl.owner && q != sl.owner && E.signedIn q
   | .remove a s q => (c.slate s).any fun sl => a == sl.owner || a == q
-  | .mint a s personal _ _ _ _ => (c.slate s).any fun sl =>
+  | .mint a s personal _ _ _ _ _ => (c.slate s).any fun sl =>
       E.signedIn a && (if personal then sl.hasAccess a else sl.canEdit a)
   | .setCap a i on => (c.cap i).any fun k => (c.slate k.slate).any fun sl =>
       a == k.holder || (!on && !k.personal && a == sl.owner)
@@ -319,20 +356,21 @@ def permits (P : Policy) (E : Env) (c : Core) : Ev → Bool
   | .toolStep r i => (c.run r).any fun run => (c.cap i).any fun k =>
       c.runOk P run && run.caps.any (·.1 == i) && run.label.contains (capElem run.fn run.rev k) &&
       (!P.personalToHolder || !k.personal || run.requester.map (·.1) == some k.holder) &&
-      (!P.toolFlow || flows P E c run.slate run.label k.holder)
-  | .approve a i r _ => (c.cap i).any (fun k => a == k.holder) && (c.run r).isSome
+      (!P.toolFlow || audFlows P c run.slate run.label (if P.sinkAudience then k.observers else .only [k.holder]))
+  | .approve a i r _ _ => (c.cap i).any (fun k => a == k.holder) && (c.run r).isSome
   | .observe r i => (c.run r).any fun run => (c.cell i).any fun cl =>
       c.runOk P run && cl.slate == run.slate && cl.label.all (run.label.contains ·)
   | .write r => (c.run r).any fun run => c.runOk P run && run.requester.all (fun q => E.signedIn q.1)
   | .post r => (c.run r).any fun run =>
       c.runOk P run && (!P.postPublicOnly || run.label.isEmpty) && run.requester.all (fun q => E.signedIn q.1)
   | .release r q a => (c.run r).any fun run =>
-      c.runOk P run && c.sessionOk run.slate q a && flows P E c run.slate run.label q
+      c.runOk P run && c.sessionOk run.slate q a && flows P c run.slate run.label q
   | .render i q a => (c.cell i).any fun cl => c.sessionOk cl.slate q a
   | .finish r => (c.run r).isSome
   | .editCode a s _ _ => (c.slate s).any (·.canEdit a)
   | .fork a s => (c.slate s).any fun sl => E.signedIn a && sl.hasAccess a
   | .publish a s => (c.slate s).any fun sl => a == sl.owner && sl.link
+  | .readerCheck .. => true
 
 /-! ## The structural update -/
 
@@ -345,13 +383,16 @@ def apply (P : Policy) (c : Core) : Ev → Core
                next := c.next + 1 }
   | .collaborate _ s q role =>
       { c with slates := mapSlate s (fun sl =>
-                 { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩] }) c.slates,
+                 { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩],
+                           removed := sl.removed.filter (· != q) }) c.slates,
                next := c.next + 1 }
   | .remove _ s q =>
-      { c with slates := mapSlate s (fun sl => { sl with members := sl.members.filter (·.who != q) }) c.slates }
-  | .mint a s personal src f dom effect =>
+      { c with slates := mapSlate s (fun sl => { sl with members := sl.members.filter (·.who != q),
+                                                         linkGen := c.next, removed := sl.removed ++ [q] }) c.slates,
+               next := c.next + 1 }
+  | .mint a s personal src f dom effect sink =>
       { c with caps := c.caps ++ [⟨c.next, s, a, personal, src, f, ((c.slate s).map (·.codeOf f)).getD 0, dom, effect,
-                                   c.next, true⟩],
+                                   sink, c.next, true⟩],
                next := c.next + 1 }
   | .setCap _ i on =>
       { c with caps := c.caps.map fun k => if k.id == i then { k with live := on, gen := c.next } else k,
@@ -368,8 +409,8 @@ def apply (P : Policy) (c : Core) : Ev → Core
                    cells := c.cells ++ [⟨run.out, sl.id, if P.labelState then run.label else []⟩], next := c.next + 2 }
       | none => c
   | .toolStep _ _ => c
-  | .approve _ i r arg =>
-      { c with approvals := c.approvals ++ [⟨i, r, ((c.cap i).map (·.gen)).getD 0, arg⟩] }
+  | .approve _ i r arg n =>
+      { c with approvals := c.approvals ++ [⟨i, r, ((c.cap i).map (·.gen)).getD 0, arg, n⟩] }
   | .observe _ _ => c
   | .write _ => c
   | .post r =>
@@ -389,19 +430,23 @@ def apply (P : Policy) (c : Core) : Ev → Core
                  else d }
   | .fork a s =>
       { c with slates := c.slates ++ [⟨c.next, a, ((c.slate s).map (·.code)).getD [], [], false, c.next, false,
-                                       some s⟩],
+                                       some s, []⟩],
                next := c.next + 1 }
   | .publish _ s => { c with slates := mapSlate s (fun sl => { sl with listed := true }) c.slates }
+  | .readerCheck q t ok =>
+      { c with readers := c.readers.filter (· != (q, t)) ++ (if ok then [(q, t)] else []) }
 
 /-! ## Contents: what values are, never consulted by a guard -/
 
 def upd {α : Type} (f : Nat → α) (k : Nat) (v : α) : Nat → α := fun x => if x = k then v else f x
 
 /-- Whether a tool step's effect goes ahead: no effect, the holder's own request, or the holder approved exactly this
-    run, generation and argument. -/
-def effectOk (c : Core) (run : Run) (i : Nat) (k : Cap) (a : Nat) : Bool :=
+    run, generation, argument and step (`n`, the steps the run had taken). Without an approval the holder is shown the
+    request (the tool step's observation) and the run gets nothing back. -/
+def effectOk (P : Policy) (c : Core) (run : Run) (i : Nat) (k : Cap) (a n : Nat) : Bool :=
   !k.effect || run.requester.map (·.1) == some k.holder ||
-    c.approvals.any fun ap => ap.cap == i && ap.run == run.id && ap.gen == k.gen && ap.arg == a
+    c.approvals.any fun ap =>
+      ap.cap == i && ap.run == run.id && ap.gen == k.gen && ap.arg == a && (!P.approvalOnce || ap.seq == n)
 
 def contents (P : Policy) (E : Env) (w : World) (s : St) : Ev → (Nat → List Nat) × (Nat → Nat) × List Obs
   | .admit .. => (upd s.reads s.core.next [], upd s.val (s.core.next + 1) 0, s.log)
@@ -409,8 +454,9 @@ def contents (P : Policy) (E : Env) (w : World) (s : St) : Ev → (Nat → List 
       match s.core.run r, s.core.cap i with
       | some run, some k =>
           let a := E.argOf run.fn run.rev run.arg (s.reads r)
-          (upd s.reads r (s.reads r ++ [if effectOk s.core run i k a then w ⟨k.holder, k.src⟩ a else 0]), s.val,
-           s.log ++ [⟨k.holder, some a⟩])
+          (upd s.reads r (s.reads r ++ [if effectOk P s.core run i k a (s.reads r).length then w ⟨k.holder, k.src⟩ a
+                                        else 0]), s.val,
+           s.log ++ [⟨k.observers, some a⟩])
       | _, _ => (s.reads, s.val, s.log)
   | .observe r i => (upd s.reads r (s.reads r ++ [s.val i]), s.val, s.log)
   | .write r =>
@@ -423,11 +469,12 @@ def contents (P : Policy) (E : Env) (w : World) (s : St) : Ev → (Nat → List 
       | none => (s.reads, s.val, s.log)
   | .release r q _ =>
       match s.core.run r with
-      | some run => (s.reads, s.val, s.log ++ [⟨q, some (E.code run.fn run.rev run.arg (s.reads r))⟩])
+      | some run => (s.reads, s.val, s.log ++ [⟨.only [q], some (E.code run.fn run.rev run.arg (s.reads r))⟩])
       | none => (s.reads, s.val, s.log)
   | .render i q _ =>
       match s.core.cell i with
-      | some cl => (s.reads, s.val, s.log ++ [⟨q, if flows P E s.core cl.slate cl.label q then some (s.val i) else none⟩])
+      | some cl =>
+          (s.reads, s.val, s.log ++ [⟨.only [q], if flows P s.core cl.slate cl.label q then some (s.val i) else none⟩])
       | none => (s.reads, s.val, s.log)
   | _ => (s.reads, s.val, s.log)
 
@@ -442,12 +489,12 @@ def exec (P : Policy) (E : Env) (w : World) (s : St) (evs : List Ev) : St := evs
 
 /-- One slate, `0`, owned by `o`, every function at revision `0`, shared with nobody. -/
 def init (o : Pid) : St :=
-  { core := { slates := [⟨0, o, [], [], false, 0, false, none⟩], caps := [], decls := [], runs := [], cells := [],
-              approvals := [], next := 1 },
+  { core := { slates := [⟨0, o, [], [], false, 0, false, none, []⟩], caps := [], decls := [], runs := [], cells := [],
+              approvals := [], readers := [], next := 1 },
     reads := fun _ => [], val := fun _ => 0, log := [] }
 
 /-- What `q` was shown, in order. -/
-def seen (q : Pid) (s : St) : List (Option Nat) := (s.log.filter (·.to == q)).map (·.what)
+def seen (q : Pid) (s : St) : List (Option Nat) := (s.log.filter (·.to.covers q)).map (·.what)
 
 theorem step_core (P : Policy) (E : Env) (w : World) (s : St) (e : Ev) :
     (step P E w s e).core = if permits P E s.core e then apply P s.core e else s.core := by

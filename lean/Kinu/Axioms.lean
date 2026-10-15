@@ -169,6 +169,9 @@ import Kinu
 
 /-! ## Kinu/Sharing/Facts.lean -/
 
+#print axioms Kinu.Sharing.Facts.lookup_through_a_map
+#print axioms Kinu.Sharing.Facts.capSame_refl
+#print axioms Kinu.Sharing.Facts.capSame_trans
 #print axioms Kinu.Sharing.Facts.a_grant_keeps_its_identity
 #print axioms Kinu.Sharing.Facts.a_run_keeps_its_identity
 #print axioms Kinu.Sharing.Facts.a_cell_keeps_its_label
@@ -189,6 +192,7 @@ import Kinu
 #print axioms Kinu.Sharing.Confinement.every_admission_is_current_and_in_domain
 #print axioms Kinu.Sharing.Confinement.every_reachable_state_is_fresh_and_anchored
 #print axioms Kinu.Sharing.Confinement.a_fork_starts_with_its_code_alone
+#print axioms Kinu.Sharing.Confinement.a_fork_never_reaches_its_parents_grants
 #print axioms Kinu.Sharing.Confinement.a_listing_never_mints
 
 /-! ## Kinu/Sharing/Revocation.lean -/
@@ -196,12 +200,14 @@ import Kinu
 #print axioms Kinu.Sharing.Revocation.a_dead_run_is_refused_everything
 #print axioms Kinu.Sharing.Revocation.a_grants_generation_never_returns
 #print axioms Kinu.Sharing.Revocation.a_revoked_grant_never_acts_again
+#print axioms Kinu.Sharing.Revocation.an_approval_names_one_step
 #print axioms Kinu.Sharing.Revocation.a_removed_persons_sessions_stay_ended
 #print axioms Kinu.Sharing.Revocation.a_stopped_links_sessions_stay_ended
 #print axioms Kinu.Sharing.Revocation.a_withdrawn_declassification_stays_withdrawn
 
 /-! ## Kinu/Sharing/Origin.lean -/
 
+#print axioms Kinu.Sharing.Origin.what_reaches_q_carries_no_closed_source
 #print axioms Kinu.Sharing.Origin.output_cells_are_kept
 #print axioms Kinu.Sharing.Origin.one_step_keeps_q_blind
 #print axioms Kinu.Sharing.Origin.q_stays_blind
@@ -228,6 +234,10 @@ import Kinu
 #print axioms Kinu.Sharing.Attacks.bare_forks_hold_no_lend
 #print axioms Kinu.Sharing.Attacks.a_labelled_run_posts_a_secret_without_the_post_guard
 #print axioms Kinu.Sharing.Attacks.the_post_guard_hides_a_labelled_runs_choice
+#print axioms Kinu.Sharing.Attacks.a_persons_own_mail_publishes_their_secret_without_the_sink_check
+#print axioms Kinu.Sharing.Attacks.the_sink_check_keeps_a_secret_out_of_a_wide_effect
+#print axioms Kinu.Sharing.Attacks.one_approval_repeats_an_effect_without_binding_it_to_a_step
+#print axioms Kinu.Sharing.Attacks.an_approval_admits_one_effect
 
 /-! ## Kinu/Sharing/Friction.lean -/
 
@@ -235,6 +245,7 @@ import Kinu
 #print axioms Kinu.Sharing.Friction.a_grant_serves_only_its_function
 #print axioms Kinu.Sharing.Friction.a_placeholder_asks_exactly_the_holders_of_what_it_hides
 #print axioms Kinu.Sharing.Friction.the_holders_consent_shows_a_placeholder
+#print axioms Kinu.Sharing.Friction.a_parts_consent_shows_only_that_part
 #print axioms Kinu.Sharing.Friction.connecting_admits_a_personal_part
 #print axioms Kinu.Sharing.Friction.adding_someone_lets_them_in
 #print axioms Kinu.Sharing.Friction.an_effect_waits_only_for_another_persons_call
@@ -244,6 +255,7 @@ import Kinu
 #print axioms Kinu.Sharing.Friction.a_private_part_is_a_placeholder_and_no_prompt
 #print axioms Kinu.Sharing.Friction.the_owner_showing_it_is_one_decision
 #print axioms Kinu.Sharing.Friction.a_reader_of_the_source_sees_it_unasked
+#print axioms Kinu.Sharing.Friction.a_join_needs_no_cross_consent
 
 /-! ## Kinu/Storage/FTS5Search.lean -/
 

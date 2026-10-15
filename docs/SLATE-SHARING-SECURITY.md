@@ -22,10 +22,10 @@ page (`packages/cf-backend/src/share-design/ShareDesign.tsx` on the UI lane's br
 - **Revocation takes effect at one point.** Grants, memberships, the link and every "show" decision have generations
   in one serialized caretaker. After a revoke nothing admitted under the old generation acts, writes or releases,
   live sessions included.
-- **Proved, not asserted.** 61 Lean theorems: confinement, collaborator isolation, admission, revocation, forks and
-  listings, data origin as noninterference (any history, any slate code, a run's own choices included), the attack
-  each of eight guards exists for, and what the design asks of people. The proofs cover the model. What the build
-  must do to refine it is §8.
+- **Proved, not asserted.** 73 Lean theorems: confinement, collaborator isolation, admission, revocation, forks and
+  listings, data origin as noninterference (for any history and any slate code, and unchanged by anything a run that
+  read the source chooses to do), the attack each of ten guards exists for, and what the design asks of people. The
+  proofs cover the model, under premises stated in §3. What the build must do to refine it is §8.
 
 ## 2. Decisions
 
@@ -44,10 +44,14 @@ Three mechanisms, compared on the same question: may this value reach this perso
 
 The choice is **(b)**, with **static labels**: a run's label is fixed at admission from the grants it holds and the
 state it is given, never from what it read. That is why no guard ever reads a value, and why the proof is a
-noninterference theorem rather than a check on one path. Cloudflare OS's best idea is kept as an option inside (b):
-for a connection kind that can answer it with the viewer's own grant (a GitHub repository's collaborators, a Google
-file's sharing), the reader check may say "yes", and the viewer sees the part without anyone being asked
-(`Friction.lean:a_reader_of_the_source_sees_it_unasked`). The default answers "no", which costs a placeholder, never a leak.
+noninterference theorem rather than a check on one path. Cloudflare OS's best idea is kept inside (b) as a **reader
+check**: for a connection kind that can answer it with the viewer's own grant (a GitHub repository's collaborators, a
+Google file's sharing), the check may record that the viewer reads the source directly, and they see the part without
+anyone being asked (`Friction.lean:a_reader_of_the_source_sees_it_unasked`). Access gained or lost is an event, and every
+release is checked against the readers recorded at that moment
+(`Origin.lean:what_reaches_q_carries_no_closed_source`). With no check for a kind, the answer is "no": a placeholder,
+never a leak. A check must be coarse enough to be sound for what a value already holds: membership of a repository
+covers its history; a check of one file's current sharing does not cover a copy of a version deleted since.
 
 Rejected: (a) because it needs answers Kinu's servers cannot give, denies whole slates, and misses stored state; (c)
 because a complete provenance log is labels with more storage, and an incomplete one is unsound.
@@ -57,9 +61,9 @@ because a complete provenance log is labels with more storage, and an incomplete
 Cloudflare OS runs a binding through its creator's account for everyone (`overseer.ts` 10692-10705). Kinu does not:
 a collaborator's connection is never exercised on another's behalf by default. Each person's parts use that person's
 own grant (`Confinement.lean:a_personal_grant_acts_only_in_its_holders_requests`), and a connection serves everyone only when its
-holder lends it to one function, with a contract. The consequence for lends: anyone may be a lender, not only the
-owner, and data a lend reads carries the lender's tag, so only the lender can show it to others. The v7 interface
-offers lending to the owner only; the model and proofs already cover any holder.
+holder lends it to one function, with a contract. The consequence for lends: a lender need not be the owner (the
+model lets the owner and Edit collaborators lend their own connections), and data a lend reads carries the lender's
+tag, so only the lender can show it to others. The v7 interface offers lending to the owner only.
 
 ### 2.3 Where the live slate runs, and where labelled state rests
 
@@ -80,6 +84,15 @@ output is a cell allocated at admission with the run's label. The server stores 
 empty label may post new shared state, so how much state exists never depends on what a run read
 (`Origin.lean:a_hidden_runs_choices_show_q_nothing`; without the guard, `Attacks.lean:a_labelled_run_posts_a_secret_without_the_post_guard`).
 
+Every grant declares its **sink**: who besides its holder can observe what a call through it sends. A query to the
+holder's own account has none; an effect that mails or publishes to recipients the code picks reaches everyone. A tool
+call happens only if every observer may see the run's label, so a part holding Alice's repository and her own mail
+grant cannot mail her secret to Bob from her own request (`Attacks.lean:the_sink_check_keeps_a_secret_out_of_a_wide_effect`;
+without it, `Attacks.lean:a_persons_own_mail_publishes_their_secret_without_the_sink_check`). For the same reason a run
+that holds two people's grants cannot call either with the other's data in reach. A part over several people's
+sources is therefore one run per holder and a join with no tools, which needs no one's consent but the holders'
+"show" decisions for its readers (`Friction.lean:a_join_needs_no_cross_consent`).
+
 Labelled content reaches a screen in a **sealed frame**: a frame on another origin with no scripts and no network,
 which the slate's own client code cannot read. Otherwise the slate's browser code could read Alice's data off Bob's
 screen, or off Alice's own, and post it back as shared state. A part showing labelled data is therefore static,
@@ -95,9 +108,14 @@ re-run when its inputs change. Private input works the other way: input meant fo
 | Personal parts (own connections) | yes | yes | yes | yes | "Sign in and connect GitHub to see your pull requests" |
 | Call a lent function themselves | yes | yes | yes | yes | no (lent parts need sign-in, owner's decision); its shown output renders |
 | Change the code (with their own AI) | yes | yes | no | no | no |
-| Lend, show own sources | own | own | own | own | no |
+| Lend own connections to a function | yes | yes (v7 interface: owner only) | no | no | no |
+| Connect own sources, show them | yes | yes | yes | yes | no |
 | Add people, the link, the Gallery | yes | no | no | no | no |
 | Fork | yes | yes | yes | yes | sign in first |
+
+Removing someone ends every session they hold on the slate, through membership and through the link: removal re-keys
+the link (other link visitors reopen without noticing), and a removed person cannot reopen it by the link until added
+back (`Revocation.lean:a_removed_persons_sessions_stay_ended`). Stopping the link leaves members' own sessions alone.
 
 Attribution: every change and every call is attributed to the signed-in account whose session made it
 (`Confinement.lean:every_admission_is_current_and_in_domain` records the requester's access). Signed-out visitors change nothing, so
@@ -131,13 +149,16 @@ its generation, the listing, the fork parent), grants (holder, kind, source, fun
 generation, switch), declassifications (minter, tag, scope, audience), runs (requester and access, function,
 revision, argument, grants held with their generations, label, output cell), cells (label) and approvals. Events:
 `share`, `collaborate`, `remove`, `mint`, `setCap`, `declassify`, `undeclassify`, `admit`, `toolStep`, `approve`,
-`observe`, `write`, `post`, `release`, `render`, `finish`, `editCode`, `fork`, `publish`. Each event has one guard
+`observe`, `write`, `post`, `release`, `render`, `finish`, `editCode`, `fork`, `publish`, `readerCheck`. Each event
+has one guard
 (`permits`), evaluated on the structure alone; values (`reads`, `val`) and what each person was shown (`log`) evolve
 beside it. The slate's code (`Env.code`, `Env.argOf`) is arbitrary, hostile included.
 
 Premises, outside the model: references are unforgeable; the codec is sound; runs share nothing but the modelled
 channels, one run per isolate; labelled content renders in sealed frames; one caretaker evaluates each guard atomically
-with its step; the reader check is sound and defaults to "no".
+with its step; a confined run cannot request an admission, mint, declassify, approve or edit code, so its own choices
+are only its tool steps, observations, writes and releases; reader checks are sound for what a value already holds;
+a grant's declared sink includes everyone its effect reaches.
 
 ## 4. Guarantees
 
@@ -151,38 +172,50 @@ Each is a theorem about `Policy.full` (every guard on), cited by name.
 | `Confinement.lean:a_personal_grant_acts_only_in_its_holders_requests` | A tool step through a person's own connection happens only in that person's request: never another collaborator's, a link visitor's or the slate's own work |
 | `Confinement.lean:every_admission_is_current_and_in_domain` | An admitted call holds each grant live at its current generation, bound to the revision that runs, with the argument in the declared domain |
 | `Revocation.lean:a_revoked_grant_never_acts_again` | After a grant is switched off, no run holding it from before acts, observes, writes or releases, even after it is switched on again |
-| `Revocation.lean:a_removed_persons_sessions_stay_ended`; `Revocation.lean:a_stopped_links_sessions_stay_ended` | After removal or stopping the link, no session from before is current again: nothing is rendered or released to it and no run requested under it acts |
+| `Revocation.lean:a_removed_persons_sessions_stay_ended` | After someone is removed, no session they held before, through membership or the link, is current again: nothing is rendered or released to it and no run requested under it acts |
+| `Revocation.lean:a_stopped_links_sessions_stay_ended` | After the link is stopped, no link session from before is current again, even if the link is switched back on |
+| `Revocation.lean:an_approval_names_one_step` | An effect someone else's call asks for runs only on its holder's approval of that generation, argument and step |
 | `Revocation.lean:a_withdrawn_declassification_stays_withdrawn` | A withdrawn "show" decision is never live again, so stored state derived through it renders as a placeholder from then on |
 | `Confinement.lean:a_fork_starts_with_its_code_alone`; `Confinement.lean:a_listing_never_mints` | A fork holds no member, link, listing, grant, declassification, run or state; publishing changes only the listing |
-| `Origin.lean:release_needs_every_contributing_tag_holder` | A person who cannot read source `t` is shown the same values and placeholders, in order, whatever `t` holds, unless `t`'s holder showed it to them; nobody else's decision counts |
-| `Origin.lean:a_hidden_runs_choices_show_q_nothing` | Inserting any action of a run that read `t` (what its code chooses to do) changes nothing that person is shown |
+| `Confinement.lean:a_fork_never_reaches_its_parents_grants` | In every reachable state a fork's runs hold only the fork's own grants |
+| `Origin.lean:release_needs_every_contributing_tag_holder` | For any history in which nothing opens source `t` to a person (`t`'s holder showing it to them, or a reader check finding they read it), they are shown the same values and placeholders, in order, whatever `t` holds; nobody else's decision counts |
+| `Origin.lean:a_hidden_runs_choices_show_q_nothing` | Inserting anywhere an action of a run that read `t` (what its code chooses to do) changes nothing that person is shown |
+| `Origin.lean:what_reaches_q_carries_no_closed_source` | In any state where `t` is closed to a person, nothing carrying `t` may reach them: a lost reader or a withdrawn "show" takes effect at the next release |
 | `Origin.lean:only_a_tags_holder_declassifies_it` | Every "show" decision in any reachable state was made by the holder of the source it shows |
 
 "Shown" means every way a value reaches a person in the model: a response or push to their session (`release`),
 shared state rendered to them (`render`), and arguments a tool step sends to a grant's holder (`toolStep`). Persisted
 state is inside the theorem, not beside it.
 
-**The attack behind each guard** (`Attacks.lean`): each removes one guard and exhibits, by kernel evaluation, a trace
-where the attack succeeds, then shows the full policy stopping the same trace.
+The history theorem fixes the sequence of events and varies only what a source holds. Who chooses events is a premise
+(§3): people and runs with an empty label. What a run that read `t` chooses is covered by the insertion theorem, and
+what a person who read `t` chooses to do is relaying (§5).
+
+**The attack behind each guard** (`Attacks.lean`): each of the ten guards a `Policy` switch removes, removed alone,
+with a trace evaluated by the kernel where the attack succeeds, then the full policy stopping the same trace. The
+other checks in `permits` are ordinary access checks (sessions, roles, liveness, domains, which state a run may
+observe); the confinement and revocation theorems cover them.
 
 | Guard removed | What happens |
 |---|---|
 | The per-tag holder check | Sam switches on "people can see it" for everything; Bob is shown Alice's private repository, and what Bob sees varies with what it holds. This is v6's rule "what a lent function returns is the owner's disclosure", refuted once the slate holds other people's data |
 | Labels on stored state | Alice's data passes through a shared cell without its label and reaches Bob |
-| The requester check on personal grants | Alice showed her public pull requests; Bob drives her connection with another query and reads her private ones |
+| The requester check on personal grants | Alice let everyone see what her part shows, driven by her own inputs; Bob drives her connection with an input of his own and reads an answer she never asked for |
 | Generations | Sam switches a lend off while Bob's call waits, then on again; the old call resumes and reaches Bob |
 | The tool-flow check | A function holding Alice's repository and Sam's Linear sends Alice's secret to Sam's Linear as an argument |
-| Revision binding | Ben edits a function Sam lent with an effect; Sam's next use runs Ben's code with Sam's grant, unasked |
+| Revision binding | Ben edits a function Sam lent with an effect; Sam's next use runs the effect with the argument Ben's code computed, unasked |
 | Bare forks | Dana's fork keeps Sam's lend and still calls Sam's server after Sam stops sharing |
 | Only unlabelled runs post | A run that read Alice's repository posts shared state, and her secret reaches Bob |
+| The sink audience | Alice's part mails her own secret to Bob through her own mail grant, from her own request |
+| One approval, one effect | Sam approves one effect of Bob's call; the call repeats it |
 
 ## 5. Not claimed
 
 - **Timing, termination and refusal channels.** How long a run takes, whether it ends, and when a placeholder
   appears can carry bits.
 - **Relaying.** A person can pass on what they saw, screenshots included, or act on it.
-- **Committed effects and delivered bytes.** Revocation cannot recall a remote effect already made or a value
-  already shown.
+- **Dispatched work and delivered bytes.** Dispatch is the boundary the caretaker controls: a remote call dispatched
+  before a revocation may complete after it, and a value already shown stays shown.
 - **Injection immunity.** A model step inside a confined run gets a fresh context and no tools by default; injected
   text can still shape that run's output, which carries the run's label.
 - **The integrity of public parts.** An editor can change what unlabelled parts show or do; the Edit role is trusted
@@ -201,13 +234,18 @@ Proved in `Friction.lean`:
 - **Nothing unused.** A grant serves only the function it was granted for (`Friction.lean:a_grant_serves_only_its_function`); a
   slate asks for a connection where a part that needs it is first used, never up front.
 - **No dead ends.** A placeholder asks exactly the holders of the sources the viewer cannot read
-  (`Friction.lean:a_placeholder_asks_exactly_the_holders_of_what_it_hides`), and their yes shows it
-  (`Friction.lean:the_holders_consent_shows_a_placeholder`); connecting admits a personal part (`Friction.lean:connecting_admits_a_personal_part`);
-  being added lets a person in (`Friction.lean:adding_someone_lets_them_in`). Every refusal names whom to ask.
+  (`Friction.lean:a_placeholder_asks_exactly_the_holders_of_what_it_hides`); their yes to that part shows it
+  (`Friction.lean:the_holders_consent_shows_a_placeholder`) and no other part (`Friction.lean:a_parts_consent_shows_only_that_part`);
+  connecting admits a personal part (`Friction.lean:connecting_admits_a_personal_part`); being added lets a person in
+  (`Friction.lean:adding_someone_lets_them_in`). Every refusal names whom to ask. These cover admission and visibility; a
+  tool call that would send one person's data to another's account asks the first person, and the design avoids that
+  case by splitting runs per holder (§2.4).
 - **The owner decides only on widening or outflow.** An effect waits for its holder only on someone else's call
   (`Friction.lean:an_effect_waits_only_for_another_persons_call`); a placeholder asks the owner only about the owner's own sources.
   Sharing, adding people and lending are the owner's own acts, made in the share sheet. One kind of decision repeats
-  by design: an effect someone else's call asks for waits for its holder each time, bound to that call's arguments.
+  by design: an effect someone else's call asks for waits for its holder each time, bound to that step's argument
+  and the grant's generation. The holder is shown the request only after the tool-flow check passes, since the
+  request shows the argument.
 
 What each person sees, as the v7 wireframes must draw it:
 
@@ -225,6 +263,7 @@ What each person sees, as the v7 wireframes must draw it:
 | A removed person | "Sam removed you from Team board. What you saw stays with you." | "Ask Sam for access" |
 | Anyone, link stopped | "Sam stopped sharing this slate." | "Ask Sam" |
 | Sam, an effect asked by Ben | "Ben wants Start deploy job on acme-ci for week 41." | "Approve", "Decline" |
+| Alice, a part of hers that would send her data wider than her own account | "This part sends data from acme/secret to bob@acme.dev by mail." | "Send", "Not now" |
 
 ## 7. Four scenarios against Cloudflare OS
 
@@ -237,7 +276,7 @@ run in the model (`Friction.lean`, the scenario theorems). Cloudflare OS's are r
 |---|---|---|
 | (i) A task board edited by three people | Sam: the sheet, three emails, Edit, Send (about 5 clicks, 0 prompts). Each person: 0 prompts. Everyone sees every card | Sam: Share, three emails, role picks, Invite (about 5 clicks). Each person: 0 prompts with no vendor connection, else one verification dialog each |
 | (ii) A public dashboard lending one read-only function | Sam: link, one switch "people see what it returns", Copy (about 4 clicks). A signed-out visitor: 0 prompts to view; 1 (sign in) to pick another week | Every visitor signs in (1 prompt). The dashboard reads the owner's metrics, so each visitor's observer check fails: denied after 2 prompts. A public dashboard over private data is not possible |
-| (iii) A Gallery app forked by a stranger (one GitHub part, one lent part) | Dana: Fork, pick a workspace (2 clicks); 1 prompt (Connect GitHub) when she first uses that part; the lent part says "This part ran with Sam's lend · Build it with your agent" | Dana signs in; one configuration dialog per unresolved binding before the copy exists: 2 dialogs, 5 clicks |
+| (iii) A Gallery app forked by a stranger (one GitHub part, one lent metrics part) | Dana: Fork, pick a workspace (2 clicks). Each part asks for Dana's own connection when she first uses it: Connect GitHub, Connect her metrics in place of Sam's lend (2 prompts if she uses both, 0 for a part she never uses). Sam's lend never travels | Dana signs in; one configuration dialog per unresolved binding before the copy exists: 2 dialogs, 5 clicks |
 | (iv) A slate reading Sam's private repo, shared with Bob who cannot read it | Bob: 0 prompts; the whole slate with the repo part as a placeholder; 1 optional click "Ask Sam"; Sam: 1 decision if asked. If Bob can read the repo and connected GitHub: shown, nobody asked | Bob: a verification dialog, then a repair dialog (2 prompts), then denied the whole workspace; Sam cannot make an exception |
 | (iv') Alice's personal part puts her repo data in shared state | Alice: 0 prompts; "Show to everyone here" optional. Bob: placeholder, "Ask Alice". Sam cannot show it | Persisted producer data in UI state is a documented unverified gap: it can reach Bob |
 
@@ -253,7 +292,10 @@ Where Kinu is worse, and what is done about it:
    instead: one decision for Sam, and no permission graph to revoke through.
 4. **Private parts are static.** Sealed frames run no scripts, so a part showing labelled data re-runs on input rather
    than reacting in the page.
-5. **Editors' edits re-ask.** An edit to a function holding someone else's grant asks that holder once. Cloudflare OS
+5. **Parts over several people's sources need care.** A run cannot send one person's data to another's account, so
+   such a part is built as one run per holder and a join (§2.4). Done by the slate's code, not by the people using it;
+   a part that does mix them asks the first holder before the call.
+6. **Editors' edits re-ask.** An edit to a function holding someone else's grant asks that holder once. Cloudflare OS
    trusts build collaborators with every binding; Kinu does not. A "trust Ben's edits" delegation was considered and
    rejected: it hands an editor's agent the holder's authority, the exploitation this design exists to stop.
 
@@ -269,10 +311,16 @@ Build step 3b (`/mnt/local/kinu/tmp/sharing/plan-3b.md`, on hold) is redone agai
   `{ room, grant, generation, run }` as `SlateBinding` (`packages/cf-backend/src/slates/bindings.ts`) seals its props
   today. A grant is exercised in its holder's account object, which fills credentials there; no credential byte
   enters a slate isolate.
-- **Labels.** A source per grant (holder, server identity and root); a run's label fixed at admission; a cell
-  allocated per run at admission; `post` only for empty labels; every release, render and tool argument checked by
-  `flows`. Handles for the shared server; sealed frames for labelled content; private input straight to a confined
-  run.
+- **Labels.** A source per grant (holder, server identity and root); a run's label fixed at admission, each element
+  once; a cell allocated per run at admission; `post` only for empty labels; every release and render checked by
+  `flows`, every tool argument by `audFlows` against the grant's holder and declared sink. Handles for the shared
+  server; sealed frames for labelled content; private input straight to a confined run. Confined runs get no way to
+  request admissions, mint, declassify, approve or edit code.
+- **Reader checks** per connection kind (GitHub repository membership first), run with the reader's own grant,
+  recorded as events so a lost reader takes effect at the next release.
+- **Approvals** bound to one step of one run, its argument and the grant's generation; the request is shown to the
+  holder only after the tool-flow check passes.
+- **Removal** ends every session of the person, re-keys the link, and keeps them off the link until added back.
 - **Contracts and the codec** as v6 specified (`SlateCallRequestSchema` in `packages/core/src/slates/surface.ts` grows
   into the bounded codec), with each grant bound to its function's image digest.
 - **Deleted.** S2 and S5 with their code: `shareCaller` and the share caller key (`packages/core/src/slates/caller.ts`),

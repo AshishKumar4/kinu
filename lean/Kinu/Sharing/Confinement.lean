@@ -54,11 +54,9 @@ def Confined (E : Env) (c : Core) : Prop :=
 
 private theorem holds_of_same {E : Env} {r r' : Run} {k k' : Cap} (hr : RunSame r r') (hk : CapSame k k')
     (h : Holds E r k) : Holds E r' k' := by
-  obtain ⟨_, _, hs, hq, hf, _, ha, _, _⟩ := hr
-  obtain ⟨_, ks, kh, kp, _, kf, kd, _⟩ := hk
   obtain ⟨h1, h2, h3, h4⟩ := h
-  refine ⟨by rw [ks, hs, h1], by rw [kf, hf, h2], by rw [kd, ha]; exact h3, ?_⟩
-  rw [kp, kh, hq]; exact h4
+  refine ⟨by rw [hk.slate, hr.slate, h1], by rw [hk.fn, hr.fn, h2], by rw [hk.dom, hr.arg]; exact h3, ?_⟩
+  rw [hk.personal, hk.holder, hr.requester]; exact h4
 
 private theorem slate_of_find {c : Core} {s : SlateId} {sl : Slate} (h : c.slate s = some sl) : sl.id = s := by
   have := List.find?_some h
@@ -100,7 +98,7 @@ theorem confinement_is_kept (E : Env) (c : Core) (e : Ev) (h : Confined E c)
     (hg : permits Policy.full E c e = true) : Confined E (apply Policy.full c e) := by
   intro r' hr' p hp
   rcases a_run_keeps_its_identity Policy.full c e r' hr' with ⟨r, hr, hsame⟩ | ⟨req, s, f, arg, caps, inputs, sl, rfl, hsl, rfl⟩
-  · have hp' : p ∈ r.caps := by rw [← hsame.2.2.2.2.2.2.2.1]; exact hp
+  · have hp' : p ∈ r.caps := by rw [← hsame.caps]; exact hp
     obtain ⟨k, hk, hholds⟩ := h r hr p hp'
     obtain ⟨k', hk', hks⟩ := a_grant_keeps_its_identity Policy.full c e p.1 k hk
     exact ⟨k', hk', holds_of_same hsame hks hholds⟩
@@ -128,35 +126,30 @@ theorem every_run_holds_only_grants_of_its_own_slate_and_function (E : Env) (o :
     that step's `mint`, whose actor is the grant's holder. -/
 theorem a_grant_is_minted_by_its_holder (P : Policy) (c : Core) (e : Ev) (i : Nat) (k : Cap)
     (hnone : c.cap i = none) (hk : (apply P c e).cap i = some k) :
-    ∃ s personal src f dom effect, e = .mint k.holder s personal src f dom effect := by
+    ∃ s personal src f dom effect sink, e = .mint k.holder s personal src f dom effect sink := by
   cases e with
-  | mint a s personal src f dom effect =>
+  | mint a s personal src f dom effect sink =>
     simp only [apply, Core.cap, List.find?_append] at hk
     unfold Core.cap at hnone
     rw [hnone] at hk
     simp only [Option.none_or, List.find?_cons, List.find?_nil] at hk
     split at hk
-    · cases hk; exact ⟨s, personal, src, f, dom, effect, rfl⟩
+    · cases hk; exact ⟨s, personal, src, f, dom, effect, sink, rfl⟩
     · cases hk
   | setCap a j on =>
     simp only [apply, Core.cap] at hk
-    rw [List.find?_map] at hk
-    have : ((fun x : Cap => x.id == i) ∘ fun k => if k.id == j then { k with live := on, gen := c.next } else k) =
-        (fun x : Cap => x.id == i) := by funext x; simp only [Function.comp]; split <;> rfl
-    rw [this] at hk; unfold Core.cap at hnone; rw [hnone] at hk; cases hk
+    rw [lookup_through_a_map Cap.id _ (fun x => by split <;> rfl)] at hk
+    unfold Core.cap at hnone; rw [hnone] at hk; cases hk
   | editCode a s f rev =>
     simp only [apply, Core.cap] at hk
-    rw [List.find?_map] at hk
-    have : ((fun x : Cap => x.id == i) ∘ fun k =>
-        if k.holder == a && k.slate == s && k.fn == f then { k with rev := rev } else k) =
-        (fun x : Cap => x.id == i) := by funext x; simp only [Function.comp]; split <;> rfl
-    rw [this] at hk; unfold Core.cap at hnone; rw [hnone] at hk; cases hk
+    rw [lookup_through_a_map Cap.id _ (fun x => by split <;> rfl)] at hk
+    unfold Core.cap at hnone; rw [hnone] at hk; cases hk
   | admit req s f arg caps inputs =>
     simp only [apply] at hk; split at hk <;> (unfold Core.cap at hk hnone; rw [hnone] at hk; cases hk)
   | post r =>
     simp only [apply] at hk; split at hk <;> (unfold Core.cap at hk hnone; rw [hnone] at hk; cases hk)
   | share | collaborate | remove | declassify | undeclassify | toolStep | approve | observe | write | release | render
-  | finish | fork | publish =>
+  | finish | fork | publish | readerCheck =>
     unfold Core.cap at hk hnone; simp only [apply] at hk; rw [hnone] at hk; cases hk
 
 /-- **The owner's authority reaches another person's run only as a lend.** In every reachable state, a run that the
@@ -228,8 +221,8 @@ private theorem slate_persists (P : Policy) (c : Core) (e : Ev) (x : Nat) (h : �
   | fork a s => exact ⟨sl, List.mem_append_left _ hsl, hid⟩
   | admit req s f arg caps inputs => simp only [apply]; split <;> exact ⟨sl, hsl, hid⟩
   | post r => simp only [apply]; split <;> exact ⟨sl, hsl, hid⟩
-  | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write | release | render | finish =>
-    exact ⟨sl, hsl, hid⟩
+  | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write | release | render | finish
+  | readerCheck => exact ⟨sl, hsl, hid⟩
 
 private theorem slate_of_some {c : Core} {s : SlateId} {sl : Slate} (h : c.slate s = some sl) :
     ∃ x ∈ c.slates, x.id = s :=
@@ -249,7 +242,7 @@ private theorem anchoring_is_kept (P : Policy) (E : Env) (c : Core) (e : Ev) (h 
   refine ⟨?_, ?_, ?_, ?_⟩
   · intro k hk'
     cases e with
-    | mint a s personal src f dom effect =>
+    | mint a s personal src f dom effect sink =>
       simp only [apply, List.mem_append, List.mem_singleton] at hk'
       rcases hk' with hk' | rfl
       · exact keep _ (hk k hk')
@@ -265,7 +258,7 @@ private theorem anchoring_is_kept (P : Policy) (E : Env) (c : Core) (e : Ev) (h 
     | admit req s f arg caps inputs => simp only [apply] at hk'; split at hk' <;> exact keep _ (hk k hk')
     | post r => simp only [apply] at hk'; split at hk' <;> exact keep _ (hk k hk')
     | share | collaborate | remove | declassify | undeclassify | toolStep | approve | observe | write | release
-    | render | finish | fork | publish => exact keep _ (hk k hk')
+    | render | finish | fork | publish | readerCheck => exact keep _ (hk k hk')
   · intro d hd'
     cases e with
     | declassify a s t scope aud =>
@@ -284,10 +277,10 @@ private theorem anchoring_is_kept (P : Policy) (E : Env) (c : Core) (e : Ev) (h 
     | admit req s f arg caps inputs => simp only [apply] at hd'; split at hd' <;> exact keep _ (hd d hd')
     | post r => simp only [apply] at hd'; split at hd' <;> exact keep _ (hd d hd')
     | share | collaborate | remove | mint | setCap | toolStep | approve | observe | write | release | render
-    | finish | fork | publish => exact keep _ (hd d hd')
+    | finish | fork | publish | readerCheck => exact keep _ (hd d hd')
   · intro r' hr'
     rcases a_run_keeps_its_identity P c e r' hr' with ⟨r, hr0, hsame⟩ | ⟨req, s, f, arg, caps, inputs, sl, rfl, hsl, rfl⟩
-    · rw [hsame.2.2.1]; exact keep _ (hr r hr0)
+    · rw [hsame.slate]; exact keep _ (hr r hr0)
     · obtain ⟨x, hx, hid⟩ := slate_of_some hsl
       exact keep _ ⟨x, hx, by rw [hid]; simp only [Core.newRun]; exact (by simpa using (List.find?_some hsl) : sl.id = s).symm⟩
   · intro cl hcl
@@ -318,7 +311,7 @@ theorem every_reachable_state_is_fresh_and_anchored (P : Policy) (E : Env) (o : 
 theorem a_fork_starts_with_its_code_alone (c : Core) (a : Pid) (s : SlateId) (hf : Fresh c)
     (ha : Anchored c) :
     let c' := apply Policy.full c (.fork a s)
-    (⟨c.next, a, ((c.slate s).map (·.code)).getD [], [], false, c.next, false, some s⟩ : Slate) ∈ c'.slates ∧
+    (⟨c.next, a, ((c.slate s).map (·.code)).getD [], [], false, c.next, false, some s, []⟩ : Slate) ∈ c'.slates ∧
       (∀ k ∈ c'.caps, k.slate ≠ c.next) ∧ (∀ d ∈ c'.decls, d.slate ≠ c.next) ∧
       (∀ r ∈ c'.runs, r.slate ≠ c.next) ∧ (∀ cl ∈ c'.cells, cl.slate ≠ c.next) := by
   obtain ⟨hs, _, _, _, _⟩ := hf
@@ -327,6 +320,16 @@ theorem a_fork_starts_with_its_code_alone (c : Core) (a : Pid) (s : SlateId) (hf
     rintro x ⟨sl, hsl, rfl⟩; have := (hs sl hsl).1; omega
   refine ⟨by simp [apply], fun k h => away _ (hk k h), fun d h => away _ (hd d h), fun r h => away _ (hr r h),
     fun cl h => away _ (hc cl h)⟩
+
+/-- **A fork never reaches its parent's grants.** In every reachable state each grant a run holds belongs to the run's
+    own slate, so a fork's runs never hold a grant of the slate it was forked from: not at the fork, and not after the
+    parent's owner stops sharing. -/
+theorem a_fork_never_reaches_its_parents_grants (E : Env) (o : Pid) (evs : List Ev) (r : Run)
+    (hr : r ∈ (coreRun Policy.full E (init o).core evs).runs) (p : Nat × Nat) (hp : p ∈ r.caps) (k : Cap)
+    (hk : (coreRun Policy.full E (init o).core evs).cap p.1 = some k) : k.slate = r.slate := by
+  obtain ⟨k', hk', hholds⟩ := every_run_holds_only_grants_of_its_own_slate_and_function E o evs r hr p hp
+  rw [hk] at hk'; cases hk'
+  exact hholds.1
 
 /-- **A listing never mints.** Publishing a slate to the Gallery changes its `listed` flag and nothing else: no grant,
     declassification, run, state, approval or member. -/

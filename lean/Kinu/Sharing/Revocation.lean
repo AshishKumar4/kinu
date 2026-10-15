@@ -46,9 +46,7 @@ private theorem gen_moves_to_counter (P : Policy) (c : Core) (e : Ev) (i : Nat) 
   have keep : ∀ (f : Cap → Cap), (∀ x, (f x).id = x.id) → (∀ x, (f x).gen = x.gen ∨ (f x).gen = c.next) →
       (c.caps.map f).find? (fun x => x.id == i) = some k' → k'.gen = k.gen ∨ k'.gen = c.next := by
     intro f hid hgen hf
-    rw [List.find?_map] at hf
-    have : ((fun x : Cap => x.id == i) ∘ f) = (fun x : Cap => x.id == i) := by funext x; simp [Function.comp, hid]
-    rw [this] at hf; unfold Core.cap at h; rw [h] at hf
+    rw [lookup_through_a_map Cap.id f hid] at hf; unfold Core.cap at h; rw [h] at hf
     simp only [Option.map_some', Option.some.injEq] at hf
     subst hf; exact hgen k
   cases e with
@@ -64,7 +62,7 @@ private theorem gen_moves_to_counter (P : Policy) (c : Core) (e : Ev) (i : Nat) 
   | post r =>
     simp only [apply] at h'; split at h' <;> (simp only [Core.cap] at h h'; rw [h] at h'; cases h'; exact Or.inl rfl)
   | share | collaborate | remove | declassify | undeclassify | toolStep | approve | observe | write | release | render
-  | finish | fork | publish =>
+  | finish | fork | publish | readerCheck =>
     simp only [apply, Core.cap] at h h'; rw [h] at h'; cases h'; exact Or.inl rfl
 
 /-- **A grant's generation never returns.** Once a step leaves grant `i` at generation at least `g` with the counter
@@ -109,10 +107,7 @@ theorem a_revoked_grant_never_acts_again (E : Env) (c : Core) (a i : Nat)
   have h1 : ∃ k, (apply Policy.full c (.setCap a i false)).cap i = some k ∧ c.next ≤ k.gen := by
     refine ⟨{ k0 with live := false, gen := c.next }, ?_, Nat.le_refl _⟩
     simp only [apply, Core.cap]
-    rw [List.find?_map]
-    have : ((fun x : Cap => x.id == i) ∘ fun k => if k.id == i then { k with live := false, gen := c.next } else k) =
-        (fun x : Cap => x.id == i) := by funext x; simp only [Function.comp]; split <;> rfl
-    rw [this]; unfold Core.cap at hk0; rw [hk0]
+    rw [lookup_through_a_map Cap.id _ (fun x => by split <;> rfl)]; unfold Core.cap at hk0; rw [hk0]
     have hid : k0.id = i := by simpa using List.find?_some hk0
     simp [hid]
   obtain ⟨k, hk, hge⟩ := a_grants_generation_never_returns Policy.full E i c.next evs _
@@ -125,6 +120,19 @@ theorem a_revoked_grant_never_acts_again (E : Env) (c : Core) (a i : Nat)
   rw [hk]
   simp [Policy.full, hne]
 
+/-- **An approval names one step.** An effect another person's call asks for goes ahead only on an approval its
+    holder made for this grant's current generation, this exact argument and this step of the run; a later step, a
+    later generation or another argument needs another approval. -/
+theorem an_approval_names_one_step (c : Core) (run : Run) (i : Nat) (k : Cap) (a n : Nat)
+    (h : effectOk Policy.full c run i k a n = true) (heff : k.effect = true)
+    (hother : run.requester.map (·.1) ≠ some k.holder) :
+    ∃ ap ∈ c.approvals, ap.cap = i ∧ ap.run = run.id ∧ ap.gen = k.gen ∧ ap.arg = a ∧ ap.seq = n := by
+  simp only [effectOk, heff, Bool.not_true, Bool.false_or, Bool.or_eq_true, beq_iff_eq, List.any_eq_true,
+    Bool.and_eq_true, Policy.full] at h
+  rcases h with h | ⟨ap, hap, h⟩
+  · exact absurd h hother
+  · exact ⟨ap, hap, h.1.1.1.1, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩
+
 /-! ## Sessions -/
 
 /-- How one slate looks after a step: the same slate with its members and link generation changed only as the step
@@ -133,57 +141,44 @@ private theorem slate_after (P : Policy) (c : Core) (e : Ev) (s : SlateId) (sl' 
     (h : (apply P c e).slate s = some sl') :
     (∃ sl, c.slate s = some sl ∧
       ((sl'.members = sl.members ∧ (sl'.linkGen = sl.linkGen ∨ sl'.linkGen = c.next)) ∨
-       (∃ q, sl'.members = sl.members.filter (·.who != q) ∧ sl'.linkGen = sl.linkGen) ∨
+       (∃ q, sl'.members = sl.members.filter (·.who != q) ∧ sl'.linkGen = c.next) ∨
        (∃ q role, sl'.members = sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩] ∧ sl'.linkGen = sl.linkGen))) ∨
     (sl'.members = [] ∧ sl'.linkGen = c.next) := by
   unfold Core.slate at h ⊢
+  -- A step that maps slate `s0` through `f`: the slate before, then `f` or nothing.
+  have viaMap : ∀ (s0 : SlateId) (f : Slate → Slate), (∀ x, (f x).id = x.id) →
+      (mapSlate s0 f c.slates).find? (fun x => x.id == s) = some sl' →
+      ∃ sl, c.slates.find? (fun x => x.id == s) = some sl ∧ sl' = if sl.id == s0 then f sl else sl := by
+    intro s0 f hf h
+    rw [slate_lookup_through_a_map s s0 f hf] at h
+    cases hc : c.slates.find? (fun x => x.id == s) with
+    | none => rw [hc] at h; cases h
+    | some sl => rw [hc] at h; simp only [Option.map_some', Option.some.injEq] at h; exact ⟨sl, rfl, h.symm⟩
   cases e with
   | share a s0 on =>
-    simp only [apply] at h; rw [slate_lookup_through_a_map s s0 (fun sl => { sl with link := on, linkGen := c.next }) (fun _ => rfl)] at h
-    cases hc : c.slates.find? (fun x => x.id == s) with
-    | none => rw [hc] at h; cases h
-    | some sl =>
-      rw [hc] at h; simp only [Option.map_some', Option.some.injEq] at h; subst h
-      refine Or.inl ⟨sl, rfl, Or.inl ?_⟩
-      split <;> simp
+    obtain ⟨sl, hsl, rfl⟩ := viaMap s0 (fun sl => { sl with link := on, linkGen := c.next }) (fun _ => rfl) h
+    refine Or.inl ⟨sl, hsl, Or.inl ?_⟩
+    split <;> simp
   | collaborate a s0 q role =>
-    simp only [apply] at h; rw [slate_lookup_through_a_map s s0 (fun sl => { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩] }) (fun _ => rfl)] at h
-    cases hc : c.slates.find? (fun x => x.id == s) with
-    | none => rw [hc] at h; cases h
-    | some sl =>
-      rw [hc] at h; simp only [Option.map_some', Option.some.injEq] at h; subst h
-      refine Or.inl ⟨sl, rfl, ?_⟩
-      split
-      · exact Or.inr (Or.inr ⟨q, role, rfl, rfl⟩)
-      · exact Or.inl ⟨rfl, Or.inl rfl⟩
+    obtain ⟨sl, hsl, rfl⟩ := viaMap s0 (fun sl => { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩], removed := sl.removed.filter (· != q) }) (fun _ => rfl) h
+    refine Or.inl ⟨sl, hsl, ?_⟩
+    split
+    · exact Or.inr (Or.inr ⟨q, role, rfl, rfl⟩)
+    · exact Or.inl ⟨rfl, Or.inl rfl⟩
   | remove a s0 q =>
-    simp only [apply] at h; rw [slate_lookup_through_a_map s s0 (fun sl => { sl with members := sl.members.filter (·.who != q) }) (fun _ => rfl)] at h
-    cases hc : c.slates.find? (fun x => x.id == s) with
-    | none => rw [hc] at h; cases h
-    | some sl =>
-      rw [hc] at h; simp only [Option.map_some', Option.some.injEq] at h; subst h
-      refine Or.inl ⟨sl, rfl, ?_⟩
-      split
-      · exact Or.inr (Or.inl ⟨q, rfl, rfl⟩)
-      · exact Or.inl ⟨rfl, Or.inl rfl⟩
+    obtain ⟨sl, hsl, rfl⟩ := viaMap s0 (fun sl => { sl with members := sl.members.filter (·.who != q), linkGen := c.next, removed := sl.removed ++ [q] }) (fun _ => rfl) h
+    refine Or.inl ⟨sl, hsl, ?_⟩
+    split
+    · exact Or.inr (Or.inl ⟨q, rfl, rfl⟩)
+    · exact Or.inl ⟨rfl, Or.inl rfl⟩
   | editCode a s0 f rev =>
-    simp only [apply] at h
-    rw [slate_lookup_through_a_map s s0 (fun sl => { sl with code := sl.code.filter (·.1 != f) ++ [(f, rev)] })
-      (fun _ => rfl)] at h
-    cases hc : c.slates.find? (fun x => x.id == s) with
-    | none => rw [hc] at h; cases h
-    | some sl =>
-      rw [hc] at h; simp only [Option.map_some', Option.some.injEq] at h; subst h
-      refine Or.inl ⟨sl, rfl, Or.inl ?_⟩
-      split <;> simp
+    obtain ⟨sl, hsl, rfl⟩ := viaMap s0 (fun sl => { sl with code := sl.code.filter (·.1 != f) ++ [(f, rev)] }) (fun _ => rfl) h
+    refine Or.inl ⟨sl, hsl, Or.inl ?_⟩
+    split <;> simp
   | publish a s0 =>
-    simp only [apply] at h; rw [slate_lookup_through_a_map s s0 (fun sl => { sl with listed := true }) (fun _ => rfl)] at h
-    cases hc : c.slates.find? (fun x => x.id == s) with
-    | none => rw [hc] at h; cases h
-    | some sl =>
-      rw [hc] at h; simp only [Option.map_some', Option.some.injEq] at h; subst h
-      refine Or.inl ⟨sl, rfl, Or.inl ?_⟩
-      split <;> simp
+    obtain ⟨sl, hsl, rfl⟩ := viaMap s0 (fun sl => { sl with listed := true }) (fun _ => rfl) h
+    refine Or.inl ⟨sl, hsl, Or.inl ?_⟩
+    split <;> simp
   | fork a s0 =>
     simp only [apply] at h; rw [List.find?_append] at h
     cases hc : c.slates.find? (fun x => x.id == s) with
@@ -199,69 +194,99 @@ private theorem slate_after (P : Policy) (c : Core) (e : Ev) (s : SlateId) (sl' 
     simp only [apply] at h; split at h <;> exact Or.inl ⟨sl', h, Or.inl ⟨rfl, Or.inl rfl⟩⟩
   | post r =>
     simp only [apply] at h; split at h <;> exact Or.inl ⟨sl', h, Or.inl ⟨rfl, Or.inl rfl⟩⟩
-  | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write | release | render | finish =>
+  | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write | release | render | finish
+  | readerCheck =>
     simp only [apply] at h; exact Or.inl ⟨sl', h, Or.inl ⟨rfl, Or.inl rfl⟩⟩
 
-/-- Every membership `q` holds on slate `s` was granted at or after `g`. -/
-def MembersFrom (s : SlateId) (q : Pid) (g : Nat) (c : Core) : Prop :=
-  g ≤ c.next ∧ ∀ sl, c.slate s = some sl → ∀ m ∈ sl.members, m.who = q → g ≤ m.gen
+/-- Every membership `q` holds on slate `s` was granted at or after `g`, and every link session before `g` is dead. -/
+def SessionsFrom (s : SlateId) (q : Pid) (g : Nat) (c : Core) : Prop :=
+  g ≤ c.next ∧ ∀ sl, c.slate s = some sl → g ≤ sl.linkGen ∧ ∀ m ∈ sl.members, m.who = q → g ≤ m.gen
 
-private theorem membersFrom_kept (P : Policy) (E : Env) (s : SlateId) (q : Pid) (g : Nat) (c : Core) (e : Ev)
-    (h : MembersFrom s q g c) : MembersFrom s q g (if permits P E c e then apply P c e else c) := by
+/-- Every link session of slate `s` opened before `g` is dead. -/
+def LinkFrom (s : SlateId) (g : Nat) (c : Core) : Prop :=
+  g ≤ c.next ∧ ∀ sl, c.slate s = some sl → g ≤ sl.linkGen
+
+private theorem linkFrom_kept (P : Policy) (E : Env) (s : SlateId) (g : Nat) (c : Core) (e : Ev)
+    (h : LinkFrom s g c) : LinkFrom s g (if permits P E c e then apply P c e else c) := by
   split
-  · obtain ⟨hn, hm⟩ := h
-    refine ⟨Nat.le_trans hn (the_counter_never_falls P c e), fun sl' hsl' m hm' hwho => ?_⟩
-    rcases slate_after P c e s sl' hsl' with ⟨sl, hsl, hcase⟩ | ⟨hnil, _⟩
-    · rcases hcase with ⟨hmem, _⟩ | ⟨q', hmem, _⟩ | ⟨q', role, hmem, _⟩
-      · rw [hmem] at hm'; exact hm sl hsl m hm' hwho
-      · rw [hmem] at hm'; exact hm sl hsl m (List.mem_filter.mp hm').1 hwho
-      · rw [hmem] at hm'
-        rcases List.mem_append.mp hm' with hm' | hm'
-        · exact hm sl hsl m (List.mem_filter.mp hm').1 hwho
-        · rw [List.mem_singleton] at hm'; subst hm'; simp only; omega
-    · rw [hnil] at hm'; cases hm'
+  · obtain ⟨hn, hl⟩ := h
+    refine ⟨Nat.le_trans hn (the_counter_never_falls P c e), fun sl' hsl' => ?_⟩
+    rcases slate_after P c e s sl' hsl' with ⟨sl, hsl, hcase⟩ | ⟨_, hlg⟩
+    · have := hl sl hsl
+      rcases hcase with ⟨_, hlg | hlg⟩ | ⟨_, _, hlg⟩ | ⟨_, _, _, hlg⟩ <;> omega
+    · omega
   · exact h
 
+private theorem sessionsFrom_kept (P : Policy) (E : Env) (s : SlateId) (q : Pid) (g : Nat) (c : Core) (e : Ev)
+    (h : SessionsFrom s q g c) : SessionsFrom s q g (if permits P E c e then apply P c e else c) := by
+  have hl := linkFrom_kept P E s g c e ⟨h.1, fun sl hsl => (h.2 sl hsl).1⟩
+  by_cases hp : permits P E c e = true
+  · rw [if_pos hp] at hl ⊢
+    obtain ⟨hn, hm⟩ := h
+    refine ⟨hl.1, fun sl' hsl' => ⟨hl.2 sl' hsl', fun m hm' hwho => ?_⟩⟩
+    rcases slate_after P c e s sl' hsl' with ⟨sl, hsl, hcase⟩ | ⟨hnil, _⟩
+    · have hms := (hm sl hsl).2
+      rcases hcase with ⟨hmem, _⟩ | ⟨q', hmem, _⟩ | ⟨q', role, hmem, _⟩
+      · rw [hmem] at hm'; exact hms m hm' hwho
+      · rw [hmem] at hm'; exact hms m (List.mem_filter.mp hm').1 hwho
+      · rw [hmem] at hm'
+        rcases List.mem_append.mp hm' with hm' | hm'
+        · exact hms m (List.mem_filter.mp hm').1 hwho
+        · rw [List.mem_singleton] at hm'; subst hm'; simp only; omega
+    · rw [hnil] at hm'; cases hm'
+  · rw [if_neg hp]; exact h
+
+private theorem stays (Q : Core → Prop) (P : Policy) (E : Env)
+    (keep : ∀ c e, Q c → Q (if permits P E c e then apply P c e else c)) :
+    ∀ (evs : List Ev) c, Q c → Q (coreRun P E c evs) := by
+  intro evs
+  induction evs with
+  | nil => intro c h; exact h
+  | cons e evs ih => intro c h; exact ih _ (keep c e h)
+
 /-- **A removed person's sessions stay ended.** Removing `q` from slate `s` at state `c` is the linearization point:
-    in every later state, no membership session `q` held before it is current, so no render or release reaches it
-    and no run requested under it acts. Adding `q` back grants a membership at a newer generation. -/
-theorem a_removed_persons_sessions_stay_ended (E : Env) (c : Core) (a s q : Nat) (evs : List Ev) (g : Nat) (hgen : g < c.next) :
-    (coreRun Policy.full E (apply Policy.full c (.remove a s q)) evs).sessionOk s q (.member g) = false := by
-  have h1 : MembersFrom s q c.next (apply Policy.full c (.remove a s q)) := by
-    refine ⟨by simp [apply], fun sl' hsl' m hm hwho => ?_⟩
+    in every later state no session `q` held before it is current, through membership or through the link, so no
+    render or release reaches it and no run requested under it acts. Removal re-keys the link, so other link visitors
+    reopen. Adding `q` back opens a membership at a newer generation. -/
+theorem a_removed_persons_sessions_stay_ended (E : Env) (c : Core) (a s q : Nat) (evs : List Ev) (g : Nat)
+    (hgen : g < c.next) :
+    let c2 := coreRun Policy.full E (apply Policy.full c (.remove a s q)) evs
+    c2.sessionOk s q (.member g) = false ∧ c2.sessionOk s q (.link g) = false := by
+  have h1 : SessionsFrom s q c.next (apply Policy.full c (.remove a s q)) := by
+    refine ⟨by simp [apply], fun sl' hsl' => ?_⟩
     unfold Core.slate at hsl'; simp only [apply] at hsl'
-    rw [slate_lookup_through_a_map s s (fun sl => { sl with members := sl.members.filter (·.who != q) }) (fun _ => rfl)] at hsl'
+    rw [slate_lookup_through_a_map s s
+      (fun sl => { sl with members := sl.members.filter (·.who != q), linkGen := c.next, removed := sl.removed ++ [q] })
+      (fun _ => rfl)] at hsl'
     cases hc : c.slates.find? (fun x => x.id == s) with
     | none => rw [hc] at hsl'; cases hsl'
     | some sl =>
       rw [hc] at hsl'; simp only [Option.map_some', Option.some.injEq] at hsl'
       have hid : sl.id = s := by simpa using List.find?_some hc
-      subst hsl'; simp only [hid, beq_self_eq_true, ite_true, List.mem_filter, bne_iff_ne, ne_eq] at hm
+      subst hsl'
+      refine ⟨by simp [hid], fun m hm hwho => ?_⟩
+      simp only [hid, beq_self_eq_true, ite_true, List.mem_filter, bne_iff_ne, ne_eq] at hm
       exact absurd hwho hm.2
-  have hall : ∀ evs c', MembersFrom s q c.next c' → MembersFrom s q c.next (coreRun Policy.full E c' evs) := by
-    intro evs
-    induction evs with
-    | nil => intro c' h; exact h
-    | cons e evs ih => intro c' h; exact ih _ (membersFrom_kept Policy.full E s q c.next c' e h)
-  obtain ⟨_, hm⟩ := hall evs _ h1
+  obtain ⟨_, hm⟩ := stays _ Policy.full E (sessionsFrom_kept Policy.full E s q c.next) evs _ h1
+  intro c2
   unfold Core.sessionOk
-  cases hsl : (coreRun Policy.full E (apply Policy.full c (.remove a s q)) evs).slate s with
-  | none => rfl
+  cases hsl : c2.slate s with
+  | none => exact ⟨rfl, rfl⟩
   | some sl =>
-  simp only [Option.any_some]
-  simp only [Slate.current, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
-  intro m hm' hwho hgm
-  have := hm sl hsl m hm' hwho
-  omega
-
-/-- Every link session of slate `s` opened before `g` is dead: the slate's link generation is at least `g`. -/
-def LinkFrom (s : SlateId) (g : Nat) (c : Core) : Prop :=
-  g ≤ c.next ∧ ∀ sl, c.slate s = some sl → g ≤ sl.linkGen
+  obtain ⟨hlg, hms⟩ := hm sl hsl
+  refine ⟨?_, ?_⟩
+  · simp only [Option.any_some, Slate.current, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+    intro m hm' hwho hgm
+    have := hms m hm' hwho
+    omega
+  · have hne : sl.linkGen ≠ g := by omega
+    simp [Slate.current, hne]
 
 /-- **A stopped link's sessions stay ended.** Switching slate `s`'s link off at state `c` is the linearization point:
     in every later state, no session opened through the link before it, signed in or not, is current again, even
     after the link is switched back on. -/
-theorem a_stopped_links_sessions_stay_ended (E : Env) (c : Core) (a s : Nat) (evs : List Ev) (q g : Nat) (hgen : g < c.next) :
+theorem a_stopped_links_sessions_stay_ended (E : Env) (c : Core) (a s : Nat) (evs : List Ev) (q g : Nat)
+    (hgen : g < c.next) :
     (coreRun Policy.full E (apply Policy.full c (.share a s false)) evs).sessionOk s q (.link g) = false := by
   have h1 : LinkFrom s c.next (apply Policy.full c (.share a s false)) := by
     refine ⟨by simp [apply], fun sl' hsl' => ?_⟩
@@ -273,31 +298,13 @@ theorem a_stopped_links_sessions_stay_ended (E : Env) (c : Core) (a s : Nat) (ev
       rw [hc] at hsl'; simp only [Option.map_some', Option.some.injEq] at hsl'
       have hid : sl.id = s := by simpa using List.find?_some hc
       subst hsl'; simp [hid]
-  have hall : ∀ evs c', LinkFrom s c.next c' → LinkFrom s c.next (coreRun Policy.full E c' evs) := by
-    intro evs
-    induction evs with
-    | nil => intro c' h; exact h
-    | cons e evs ih =>
-      intro c' h
-      apply ih
-      simp only
-      split
-      · obtain ⟨hn, hl⟩ := h
-        refine ⟨Nat.le_trans hn (the_counter_never_falls _ c' e), fun sl' hsl' => ?_⟩
-        rcases slate_after Policy.full c' e s sl' hsl' with ⟨sl, hsl, hcase⟩ | ⟨_, hlg⟩
-        · have := hl sl hsl
-          rcases hcase with ⟨_, hlg | hlg⟩ | ⟨_, _, hlg⟩ | ⟨_, _, _, hlg⟩ <;> omega
-        · omega
-      · exact h
-  obtain ⟨_, hl⟩ := hall evs _ h1
+  obtain ⟨_, hl⟩ := stays _ Policy.full E (linkFrom_kept Policy.full E s c.next) evs _ h1
   unfold Core.sessionOk
   cases hsl : (coreRun Policy.full E (apply Policy.full c (.share a s false)) evs).slate s with
   | none => rfl
   | some sl =>
-  simp only [Option.any_some]
-  have := hl sl hsl
-  simp only [Slate.current, Bool.and_eq_false_iff, beq_eq_false_iff_ne, ne_eq]
-  right; omega
+  have hne : sl.linkGen ≠ g := by have := hl sl hsl; omega
+  simp [Slate.current, hne]
 
 /-! ## Declassifications -/
 
@@ -349,7 +356,7 @@ theorem a_withdrawn_declassification_stays_withdrawn (P : Policy) (E : Env) (c :
           | post r =>
             simp only [apply] at hx; split at hx <;> exact h x hx hid
           | share | collaborate | remove | mint | setCap | toolStep | approve | observe | write | release | render | finish
-          | fork | publish => exact h x hx hid
+          | fork | publish | readerCheck => exact h x hx hid
         · exact h
   intro x hx
   apply inv evs (apply P c (.undeclassify a d)) hd

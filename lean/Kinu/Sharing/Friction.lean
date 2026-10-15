@@ -11,10 +11,13 @@
     granted for, so nobody is asked for what the slate never calls.
   - **No dead ends.** Every refusal names whom to ask, and their yes is enough:
     a placeholder asks exactly the holders of the sources the viewer cannot read
-    (`a_placeholder_asks_exactly_the_holders_of_what_it_hides`), and their consent shows it
-    (`the_holders_consent_shows_a_placeholder`); a personal part asks its user to connect, and connecting admits the
-    call (`connecting_admits_a_personal_part`); a person who is not on the slate asks its owner, and being added lets
-    them in (`adding_someone_lets_them_in`).
+    (`a_placeholder_asks_exactly_the_holders_of_what_it_hides`), and their consent to that part shows it
+    (`the_holders_consent_shows_a_placeholder`) and nothing else (`a_parts_consent_shows_only_that_part`); a personal
+    part asks its user to connect, and connecting admits the call (`connecting_admits_a_personal_part`); a person who
+    is not on the slate asks its owner, and being added lets them in (`adding_someone_lets_them_in`). These cover
+    admission and visibility. A run holding two holders' grants cannot send either's data to the other without their
+    consent; the design splits such a part into one run per holder and a join with no tools
+    (`a_join_needs_no_cross_consent`).
   - **The owner decides only when reach widens or their source would flow out.** An effect waits for a grant's holder
     only when someone else's call asks for it (`an_effect_waits_only_for_another_persons_call`); a placeholder asks the
     owner only about the owner's own sources (the placeholder theorem above). Sharing, adding people and lending are
@@ -37,16 +40,13 @@ open Kinu.Sharing.Confinement
 private theorem cap_kept_run (P : Policy) (E : Env) (c : Core) (evs : List Ev) (i : Nat) (k : Cap)
     (h : c.cap i = some k) : ∃ k', (coreRun P E c evs).cap i = some k' ∧ CapSame k k' := by
   induction evs generalizing c k with
-  | nil => exact ⟨k, h, ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩⟩
+  | nil => exact ⟨k, h, capSame_refl k⟩
   | cons e evs ih =>
     simp only [coreRun, List.foldl_cons]
     split
     · obtain ⟨k1, hk1, hs1⟩ := a_grant_keeps_its_identity P c e i k h
       obtain ⟨k2, hk2, hs2⟩ := ih _ k1 hk1
-      obtain ⟨a1, a2, a3, a4, a5, a6, a7, a8⟩ := hs1
-      obtain ⟨b1, b2, b3, b4, b5, b6, b7, b8⟩ := hs2
-      exact ⟨k2, hk2, b1.trans a1, b2.trans a2, b3.trans a3, b4.trans a4, b5.trans a5, b6.trans a6, b7.trans a7,
-        b8.trans a8⟩
+      exact ⟨k2, hk2, capSame_trans hs1 hs2⟩
     · exact ih c k h
 
 private theorem cell_kept_run (P : Policy) (E : Env) (c : Core) (evs : List Ev) (i : Nat) (cl : Cell)
@@ -85,13 +85,13 @@ theorem a_granted_call_stays_admissible (E : Env) (c : Core) (req : Option (Pid 
     obtain ⟨k, hk, hlive, hrev⟩ := hcaps i hi
     obtain ⟨k', hk', hsame⟩ := cap_kept_run Policy.full E c evs i k0 hk0
     rw [hk] at hk'; cases hk'
-    obtain ⟨_, hs, hh, hpers, _, hf, hd, _⟩ := hsame
     rw [hk]
     simp only [Option.any_some, capAdmits, Policy.full, Bool.not_true, Bool.false_and, Bool.or_false, Bool.false_or,
       Bool.true_or, Bool.and_eq_true, beq_iff_eq] at h0 ⊢
     obtain ⟨⟨⟨⟨⟨_, hs0⟩, hf0⟩, _⟩, hd0⟩, hw0⟩ := h0
-    refine ⟨⟨⟨⟨⟨hlive, by rw [hs, hs0, hid, hid0]⟩, by rw [hf]; exact hf0⟩, hrev⟩, by rw [hd]; exact hd0⟩, ?_⟩
-    rw [hpers, hh]; exact hw0
+    refine ⟨⟨⟨⟨⟨hlive, by rw [hsame.slate, hs0, hid, hid0]⟩, by rw [hsame.fn]; exact hf0⟩, hrev⟩,
+      by rw [hsame.dom]; exact hd0⟩, ?_⟩
+    rw [hsame.personal, hsame.holder]; exact hw0
   · have h0 := hin i hi
     cases hc0 : c.cell i with
     | none => rw [hc0] at h0; cases h0
@@ -117,16 +117,16 @@ theorem a_grant_serves_only_its_function (E : Env) (c : Core) (req : Option (Pid
 /-! ## No dead ends -/
 
 /-- Whom a placeholder asks: the holder of each element `q` may not read. -/
-def toAsk (P : Policy) (E : Env) (c : Core) (s : SlateId) (L : List Elem) (q : Pid) : List Pid :=
-  (L.filter fun e => !mayRead P E c s q e).map (·.tag.holder)
+def toAsk (P : Policy) (c : Core) (s : SlateId) (L : List Elem) (q : Pid) : List Pid :=
+  (L.filter fun e => !mayRead P c s q e).map (·.tag.holder)
 
 /-- **A placeholder asks exactly the holders of what it hides.** A value reaches `q` exactly when there is nobody to
     ask, and everyone asked holds a source in the value that `q` may not read. The slate's owner is asked only about
     the owner's own sources. -/
-theorem a_placeholder_asks_exactly_the_holders_of_what_it_hides (P : Policy) (E : Env) (c : Core) (s : SlateId)
+theorem a_placeholder_asks_exactly_the_holders_of_what_it_hides (P : Policy) (c : Core) (s : SlateId)
     (L : List Elem) (q : Pid) :
-    (flows P E c s L q = true ↔ toAsk P E c s L q = []) ∧
-      ∀ p ∈ toAsk P E c s L q, ∃ e ∈ L, e.tag.holder = p ∧ mayRead P E c s q e = false := by
+    (flows P c s L q = true ↔ toAsk P c s L q = []) ∧
+      ∀ p ∈ toAsk P c s L q, ∃ e ∈ L, e.tag.holder = p ∧ mayRead P c s q e = false := by
   refine ⟨?_, ?_⟩
   · unfold flows toAsk
     rw [List.map_eq_nil_iff, List.filter_eq_nil_iff, List.all_eq_true]
@@ -138,61 +138,62 @@ theorem a_placeholder_asks_exactly_the_holders_of_what_it_hides (P : Policy) (E 
     obtain ⟨e, ⟨he, hm⟩, rfl⟩ := hp
     exact ⟨e, he, rfl, hm⟩
 
+/-- Each holder's answer to "show this part to `q`": consent for exactly the function and revision that computed
+    each hidden element. -/
+def consents (s : SlateId) (q : Pid) (L : List Elem) : List Ev :=
+  L.map fun e => .declassify e.tag.holder s e.tag (some (e.fn, [e.rev])) (.only [q])
+
 private theorem decls_grow (E : Env) (c : Core) (s : SlateId) (q : Pid) (L : List Elem) (d : Decl)
-    (hd : d ∈ c.decls) :
-    d ∈ (coreRun Policy.full E c (L.map fun e => .declassify e.tag.holder s e.tag none (.only [q]))).decls := by
+    (hd : d ∈ c.decls) : d ∈ (coreRun Policy.full E c (consents s q L)).decls := by
   induction L generalizing c with
   | nil => exact hd
   | cons e L ih =>
-    simp only [List.map_cons, coreRun, List.foldl_cons]
+    simp only [consents, List.map_cons, coreRun, List.foldl_cons] at ih ⊢
     apply ih
     split
     · simp only [apply, List.mem_append]; exact Or.inl hd
     · exact hd
 
-private theorem slate_kept_decl (E : Env) (c : Core) (s : SlateId) (q : Pid) (L : List Elem) (sl : Slate)
-    (h : c.slate s = some sl) :
-    (coreRun Policy.full E c (L.map fun e => .declassify e.tag.holder s e.tag none (.only [q]))).slate s = some sl := by
-  induction L generalizing c with
-  | nil => exact h
-  | cons e L ih =>
-    simp only [List.map_cons, coreRun, List.foldl_cons]
-    apply ih
-    split
-    · exact h
-    · exact h
-
-/-- **The holders' consent shows a placeholder.** If each holder of a source in a value lets `q` see it (one
-    declassification each, `Aud.only [q]`), the value reaches `q`. Nobody else's consent is needed. -/
+/-- **The holders' consent shows a placeholder.** If each holder of a source in a value lets `q` see that part (one
+    declassification each, for the function and revision that computed it, to `q` alone), the value reaches `q`.
+    Nobody else's consent is needed. -/
 theorem the_holders_consent_shows_a_placeholder (E : Env) (c : Core) (s : SlateId) (sl : Slate) (q : Pid)
     (L : List Elem) (hsl : c.slate s = some sl) (hsig : ∀ e ∈ L, E.signedIn e.tag.holder = true) :
-    flows Policy.full E (coreRun Policy.full E c (L.map fun e => .declassify e.tag.holder s e.tag none (.only [q])))
-      s L q = true := by
+    flows Policy.full (coreRun Policy.full E c (consents s q L)) s L q = true := by
   induction L generalizing c with
   | nil => rfl
   | cons e L ih =>
     have hsig' : ∀ x ∈ L, E.signedIn x.tag.holder = true := fun x hx => hsig x (List.mem_cons_of_mem _ hx)
-    have hp : permits Policy.full E c (.declassify e.tag.holder s e.tag none (.only [q])) = true := by
+    have hp : permits Policy.full E c (.declassify e.tag.holder s e.tag (some (e.fn, [e.rev])) (.only [q])) = true := by
       simp [permits, hsl, hsig e (List.mem_cons_self _ _)]
-    simp only [List.map_cons, coreRun, List.foldl_cons, if_pos hp]
-    let c1 := apply Policy.full c (.declassify e.tag.holder s e.tag none (.only [q]))
+    simp only [consents, List.map_cons, coreRun, List.foldl_cons, if_pos hp]
+    let c1 := apply Policy.full c (.declassify e.tag.holder s e.tag (some (e.fn, [e.rev])) (.only [q]))
     have hsl1 : c1.slate s = some sl := hsl
     have hrest := ih c1 hsl1 hsig'
     simp only [flows, List.all_cons, Bool.and_eq_true] at hrest ⊢
     refine ⟨?_, hrest⟩
-    have hmem : (⟨c.next, s, e.tag.holder, e.tag, none, .only [q], true⟩ : Decl) ∈
-        (coreRun Policy.full E c1 (L.map fun e => .declassify e.tag.holder s e.tag none (.only [q]))).decls :=
+    have hmem : (⟨c.next, s, e.tag.holder, e.tag, some (e.fn, [e.rev]), .only [q], true⟩ : Decl) ∈
+        (coreRun Policy.full E c1 (consents s q L)).decls :=
       decls_grow E c1 s q L _ (by simp [c1, apply])
     simp only [mayRead, Bool.or_eq_true, List.any_eq_true]
-    exact Or.inr ⟨_, hmem, by simp [Decl.covers, Policy.full, Aud.covers]⟩
+    exact Or.inr ⟨_, hmem, by simp [Decl.covers, Decl.shows, Policy.full, Aud.covers]⟩
+
+/-- **A part's consent shows only that part.** A declassification made by `consents` shows an element only if it has
+    the tag, the function and the revision the consent was asked for: a second part reading the same source through
+    another function stays hidden. -/
+theorem a_parts_consent_shows_only_that_part (i s : Nat) (q : Pid) (e e' : Elem)
+    (h : (⟨i, s, e.tag.holder, e.tag, some (e.fn, [e.rev]), .only [q], true⟩ : Decl).shows Policy.full s e' = true) :
+    e'.tag = e.tag ∧ e'.fn = e.fn ∧ e'.rev = e.rev := by
+  simp only [Decl.shows, Bool.and_eq_true, beq_iff_eq, List.contains_cons, List.contains_nil, Bool.or_false] at h
+  exact ⟨h.1.1.2.symm, h.2.1.symm, h.2.2⟩
 
 /-- **Connecting admits a personal part.** A signed-in person with a current session who connects their own source for
     a function is admitted to call it with any argument the grant's domain holds. -/
 theorem connecting_admits_a_personal_part (E : Env) (c : Core) (q : Pid) (a : Acc) (s : SlateId) (sl : Slate)
     (src f arg : Nat) (dom : List Nat) (hf : Fresh c) (hsl : c.slate s = some sl) (hsig : E.signedIn q = true)
     (hcur : sl.current q a = true) (hdom : arg ∈ dom) :
-    permits Policy.full E c (.mint q s true src f dom false) = true ∧
-      permits Policy.full E (apply Policy.full c (.mint q s true src f dom false))
+    permits Policy.full E c (.mint q s true src f dom false (.only [])) = true ∧
+      permits Policy.full E (apply Policy.full c (.mint q s true src f dom false (.only [])))
         (.admit (some (q, a)) s f arg [c.next] []) = true := by
   have hid : sl.id = s := by simpa using List.find?_some hsl
   have hacc : sl.hasAccess q = true := by
@@ -205,18 +206,18 @@ theorem connecting_admits_a_personal_part (E : Env) (c : Core) (q : Pid) (a : Ac
       exact Or.inl (Or.inr ⟨m, hm, by simp [hw]⟩)
     | link g =>
       simp only [Slate.current, Bool.and_eq_true, beq_iff_eq] at hcur
-      simp [Slate.hasAccess, hcur.1]
+      simp [Slate.hasAccess, hcur.1.1]
   refine ⟨by simp [permits, hsl, hsig, hacc], ?_⟩
   have hnone : c.caps.find? (fun x => x.id == c.next) = none := by
     rw [List.find?_eq_none]
     intro k hk heq
     have := (hf.2.1 k hk).1
     simp only [beq_iff_eq] at heq; omega
-  have hcap : (apply Policy.full c (.mint q s true src f dom false)).cap c.next =
-      some ⟨c.next, s, q, true, src, f, sl.codeOf f, dom, false, c.next, true⟩ := by
+  have hcap : (apply Policy.full c (.mint q s true src f dom false (.only []))).cap c.next =
+      some ⟨c.next, s, q, true, src, f, sl.codeOf f, dom, false, .only [], c.next, true⟩ := by
     simp [apply, Core.cap, List.find?_append, hnone, hsl]
-  have hsl' : (apply Policy.full c (.mint q s true src f dom false)).slate s = some sl := hsl
-  generalize apply Policy.full c (.mint q s true src f dom false) = c' at hcap hsl' ⊢
+  have hsl' : (apply Policy.full c (.mint q s true src f dom false (.only []))).slate s = some sl := hsl
+  generalize apply Policy.full c (.mint q s true src f dom false (.only [])) = c' at hcap hsl' ⊢
   simp only [permits, hsl', hcap, Option.any_some]
   simp [capAdmits, hcap, hcur, hid, hdom, Policy.full]
 
@@ -227,11 +228,12 @@ theorem adding_someone_lets_them_in (c : Core) (o : Pid) (s : SlateId) (q : Pid)
     (apply Policy.full c (.collaborate o s q role)).sessionOk s q (.member c.next) = true := by
   have hid : sl.id = s := by simpa using List.find?_some hsl
   have h1 : (apply Policy.full c (.collaborate o s q role)).slate s =
-      some { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩] } := by
+      some { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩], removed := sl.removed.filter (· != q) } := by
     unfold Core.slate at hsl ⊢
     simp only [apply]
     rw [slate_lookup_through_a_map s s
-      (fun sl => { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩] }) (fun _ => rfl), hsl]
+      (fun sl => { sl with members := sl.members.filter (·.who != q) ++ [⟨q, role, c.next⟩], removed := sl.removed.filter (· != q) })
+      (fun _ => rfl), hsl]
     simp [hid]
   simp [Core.sessionOk, h1, Slate.current]
 
@@ -239,32 +241,32 @@ theorem adding_someone_lets_them_in (c : Core) (o : Pid) (s : SlateId) (q : Pid)
 
 /-- **An effect waits only for another person's call.** A tool step's effect is held for its holder only when the
     grant declares an effect and the call is not the holder's own. -/
-theorem an_effect_waits_only_for_another_persons_call (c : Core) (run : Run) (i : Nat) (k : Cap) (a : Nat)
-    (h : effectOk c run i k a = false) : k.effect = true ∧ run.requester.map (·.1) ≠ some k.holder := by
+theorem an_effect_waits_only_for_another_persons_call (P : Policy) (c : Core) (run : Run) (i : Nat) (k : Cap)
+    (a n : Nat) (h : effectOk P c run i k a n = false) :
+    k.effect = true ∧ run.requester.map (·.1) ≠ some k.holder := by
   simp only [effectOk, Bool.or_eq_false_iff, Bool.not_eq_false', beq_eq_false_iff_ne] at h
   exact ⟨h.1.1, h.1.2⟩
 
-/-! ## The four scenarios, run
+/-! ## The scenarios, run
 
   People: Sam (1) owns slate 0; Alice (2), Bob (3), Ben (4) are people Sam adds; Dana (5) a stranger with the link;
-  9 a browser nobody signed in on. Sources: Sam's metrics (8), Sam's private repository (6), Dana's own GitHub (3).
-  A slate function returns its input plus what it read. `acts p` counts the decisions `p` made in a trace: sharing,
-  adding, lending, connecting, showing, approving, forking, publishing. Signing in is not an event of the model. -/
+  9 a browser nobody signed in on. Sources: Sam's metrics (8), Sam's private repository (6), Alice's repository (7),
+  Dana's own GitHub (3). A slate function returns its input plus what it read. `acts p` counts the decisions `p` made
+  in a trace: sharing, adding, lending, connecting, showing, approving, forking, publishing. Signing in is not an event
+  of the model. -/
 
-def senv (oracle : Pid → Tag → Bool) : Env where
+def senv : Env where
   signedIn p := p != 9
-  oracle := oracle
   code _ _ a rs := a + rs.foldl (· + ·) 0
   argOf _ r a rs := r * 1000 + a + rs.foldl (· + ·) 0
 
 def sworld : World := fun t x =>
-  if t = ⟨1, 8⟩ then 70 + x else if t = ⟨1, 6⟩ then 900 else if t = ⟨5, 3⟩ then 40 else 0
-
-def nobody : Pid → Tag → Bool := fun _ _ => false
+  if t = ⟨1, 8⟩ then 70 + x else if t = ⟨1, 6⟩ then 900 else if t = ⟨5, 3⟩ then 40 else if t = ⟨2, 7⟩ then 300
+  else 0
 
 def decider : Ev → Option Pid
-  | .share a _ _ | .collaborate a _ _ _ | .remove a _ _ | .mint a _ _ _ _ _ _ | .setCap a _ _
-  | .declassify a _ _ _ _ | .undeclassify a _ | .approve a _ _ _ | .fork a _ | .publish a _ => some a
+  | .share a _ _ | .collaborate a _ _ _ | .remove a _ _ | .mint a _ _ _ _ _ _ _ | .setCap a _ _
+  | .declassify a _ _ _ _ | .undeclassify a _ | .approve a _ _ _ _ | .fork a _ | .publish a _ => some a
   | _ => none
 
 def acts (p : Pid) (evs : List Ev) : Nat := (evs.filter (fun e => decider e == some p)).length
@@ -278,7 +280,7 @@ def teamBoard : List Ev :=
    .render 5 3 (.member 2), .render 7 3 (.member 2), .render 9 3 (.member 2)]
 
 theorem a_team_board_asks_only_its_owner :
-    seen 3 (exec Policy.full (senv nobody) sworld (init 1) teamBoard) = [some 11, some 12, some 13] ∧
+    seen 3 (exec Policy.full senv sworld (init 1) teamBoard) = [some 11, some 12, some 13] ∧
       acts 1 teamBoard = 3 ∧ acts 2 teamBoard = 0 ∧ acts 3 teamBoard = 0 ∧ acts 4 teamBoard = 0 := by
   decide
 
@@ -286,56 +288,86 @@ theorem a_team_board_asks_only_its_owner :
     what it computes; the slate's own refresh draws the chart. A signed-out browser sees the chart; its own call of
     the lend is refused until it signs in; Dana, signed in, picks another week. -/
 def dashboard : List Ev :=
-  [.share 1 0 true, .mint 1 0 false 8 2 [0, 1] false, .declassify 1 0 ⟨1, 8⟩ (some (2, [0])) .anyone, .publish 1 0,
+  [.share 1 0 true, .mint 1 0 false 8 2 [0, 1] false (.only []), .declassify 1 0 ⟨1, 8⟩ (some (2, [0])) .anyone,
+   .publish 1 0,
    .admit none 0 2 0 [2] [], .toolStep 4 2, .write 4,
    .render 5 9 (.link 1),
    .admit (some (9, .link 1)) 0 2 1 [2] [], .release 6 9 (.link 1),
    .admit (some (5, .link 1)) 0 2 1 [2] [], .toolStep 6 2, .release 6 5 (.link 1)]
 
 theorem a_public_dashboard_asks_visitors_nothing :
-    seen 9 (exec Policy.full (senv nobody) sworld (init 1) dashboard) = [some 70] ∧
-      seen 5 (exec Policy.full (senv nobody) sworld (init 1) dashboard) = [some 72] ∧
+    seen 9 (exec Policy.full senv sworld (init 1) dashboard) = [some 70] ∧
+      seen 5 (exec Policy.full senv sworld (init 1) dashboard) = [some 72] ∧
       acts 1 dashboard = 4 ∧ acts 9 dashboard = 0 ∧ acts 5 dashboard = 0 := by
   decide
 
-/-- (iii) A Gallery slate forked by a stranger: Sam lists a slate that lends a function and has a personal GitHub part.
-    Dana forks it (slate 3), connects her own GitHub in her fork and uses the part; Sam's lend is not hers. Dana sees
-    her own GitHub's query go out (0) and the answer (40); Sam's servers hear nothing from her fork. -/
+/-- (iii) A Gallery slate forked by a stranger: Sam lists a slate with a lent metrics part and a personal GitHub part.
+    Dana forks it (slate 3); Sam's lend is not hers. She connects her own GitHub, and her own metrics in place of
+    Sam's lend, each when she first uses its part, and both parts work in her copy. Sam's servers hear nothing from
+    her fork. -/
 def galleryFork : List Ev :=
-  [.share 1 0 true, .mint 1 0 false 8 2 [0] false, .publish 1 0,
+  [.share 1 0 true, .mint 1 0 false 8 2 [0] false (.only []), .publish 1 0,
    .fork 5 0,
    .admit (some (5, .owner)) 3 2 0 [2] [],
-   .mint 5 3 true 3 7 [0] false,
-   .admit (some (5, .owner)) 3 7 0 [4] [], .toolStep 5 4, .release 5 5 .owner]
+   .mint 5 3 true 3 7 [0] false (.only []),
+   .admit (some (5, .owner)) 3 7 0 [4] [], .toolStep 5 4, .release 5 5 .owner,
+   .mint 5 3 false 3 2 [0] false (.only []),
+   .admit (some (5, .owner)) 3 2 0 [7] [], .toolStep 8 7, .release 8 5 .owner]
 
 theorem a_fork_asks_its_forker_only_for_their_own :
-    seen 5 (exec Policy.full (senv nobody) sworld (init 1) galleryFork) = [some 0, some 40] ∧
-      seen 1 (exec Policy.full (senv nobody) sworld (init 1) galleryFork) = [] ∧
-      acts 5 galleryFork = 2 := by
+    seen 5 (exec Policy.full senv sworld (init 1) galleryFork) = [some 0, some 40, some 0, some 40] ∧
+      seen 1 (exec Policy.full senv sworld (init 1) galleryFork) = [] ∧
+      acts 5 galleryFork = 3 := by
   decide
 
 /-- (iv) A slate that reads Sam's private repository, shared with Bob, who cannot read it: Bob sees the slate with a
     placeholder where the repository's part is, and is asked nothing. -/
 def privateRepo : List Ev :=
-  [.collaborate 1 0 3 .use, .mint 1 0 false 6 6 [0] false,
+  [.collaborate 1 0 3 .use, .mint 1 0 false 6 6 [0] false (.only []),
    .admit none 0 6 0 [2] [], .toolStep 3 2, .write 3,
    .render 4 3 (.member 1)]
 
 theorem a_private_part_is_a_placeholder_and_no_prompt :
-    seen 3 (exec Policy.full (senv nobody) sworld (init 1) privateRepo) = [none] ∧ acts 3 privateRepo = 0 := by
+    seen 3 (exec Policy.full senv sworld (init 1) privateRepo) = [none] ∧ acts 3 privateRepo = 0 := by
   decide
 
-/-- (iv, Sam shows it) Sam answers Bob's ask once; the same part now renders for Bob. -/
+/-- (iv, Sam shows it) Sam answers Bob's ask once, for that part; the part now renders for Bob. -/
 theorem the_owner_showing_it_is_one_decision :
-    seen 3 (exec Policy.full (senv nobody) sworld (init 1)
-      (privateRepo ++ [.declassify 1 0 ⟨1, 6⟩ none (.only [3]), .render 4 3 (.member 1)])) = [none, some 900] ∧
-      acts 1 (privateRepo ++ [.declassify 1 0 ⟨1, 6⟩ none (.only [3])]) = 3 := by
+    seen 3 (exec Policy.full senv sworld (init 1)
+      (privateRepo ++ consents 0 3 [⟨⟨1, 6⟩, 6, 0⟩] ++ [.render 4 3 (.member 1)])) = [none, some 900] ∧
+      acts 1 (privateRepo ++ consents 0 3 [⟨⟨1, 6⟩, 6, 0⟩]) = 3 := by
   decide
 
-/-- (iv, Bob can read it) When the repository's own check says Bob can read it directly, Bob sees it and nobody is
-    asked. -/
+/-- (iv, Bob can read it) When the repository's own check, run with Bob's grant, says Bob can read it directly, Bob
+    sees it and nobody is asked. -/
 theorem a_reader_of_the_source_sees_it_unasked :
-    seen 3 (exec Policy.full (senv (fun p t => p == 3 && t == ⟨1, 6⟩)) sworld (init 1) privateRepo) = [some 900] := by
+    seen 3 (exec Policy.full senv sworld (init 1)
+      (privateRepo ++ [.readerCheck 3 ⟨1, 6⟩ true, .render 4 3 (.member 1)])) = [none, some 900] ∧
+      acts 1 (privateRepo ++ [.readerCheck 3 ⟨1, 6⟩ true]) = 2 := by
+  decide
+
+/-- (v) A part over two people's sources. One run holding Alice's repository and Sam's metrics may not call Sam's
+    metrics: Sam's server would see an argument computed in a run that holds Alice's data. Split into one run per
+    holder and a join with no tools, it needs nobody's consent beyond Sam showing his metrics, and Alice sees the
+    joined value. -/
+def oneRunTwoHolders : List Ev :=
+  [.collaborate 1 0 2 .edit, .mint 1 0 false 8 2 [0] false (.only []),
+   .declassify 1 0 ⟨1, 8⟩ (some (2, [0])) .anyone,
+   .mint 2 0 true 7 2 [0] false (.only []),
+   .admit (some (2, .member 1)) 0 2 0 [2, 4] [], .toolStep 5 2, .toolStep 5 4, .release 5 2 (.member 1)]
+
+def splitRuns : List Ev :=
+  [.collaborate 1 0 2 .edit, .mint 1 0 false 8 2 [0] false (.only []),
+   .declassify 1 0 ⟨1, 8⟩ (some (2, [0])) .anyone,
+   .mint 2 0 true 7 9 [0] false (.only []),
+   .admit (some (2, .member 1)) 0 2 0 [2] [], .toolStep 5 2, .write 5,
+   .admit (some (2, .member 1)) 0 9 0 [4] [], .toolStep 7 4, .write 7,
+   .admit (some (2, .member 1)) 0 11 0 [] [6, 8], .observe 9 6, .observe 9 8, .release 9 2 (.member 1)]
+
+theorem a_join_needs_no_cross_consent :
+    seen 2 (exec Policy.full senv sworld (init 1) oneRunTwoHolders) = [some 0, some 300] ∧
+      seen 2 (exec Policy.full senv sworld (init 1) splitRuns) = [some 0, some 370] ∧
+      acts 2 splitRuns = 1 := by
   decide
 
 end Kinu.Sharing.Friction

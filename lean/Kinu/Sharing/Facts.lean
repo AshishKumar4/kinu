@@ -15,7 +15,9 @@ open Kinu.Sharing.Model
 
 /-! ## Lookups through the two list shapes `apply` uses -/
 
-private theorem find_map_keep {α : Type} (key : α → Nat) (f : α → α) (hf : ∀ x, key (f x) = key x)
+/-- **A keyed map keeps lookups**: looking up by key after mapping a function that keeps keys is looking up before,
+    then mapping. Every map `apply` makes over grants, runs, slates and declarations keeps ids. -/
+theorem lookup_through_a_map {α : Type} (key : α → Nat) (f : α → α) (hf : ∀ x, key (f x) = key x)
     (l : List α) (i : Nat) :
     (l.map f).find? (fun x => key x == i) = (l.find? (fun x => key x == i)).map f := by
   rw [List.find?_map]
@@ -39,11 +41,22 @@ private theorem find_append_own {α : Type} (key : α → Nat) (l : List α) (x 
 /-! ## Grants -/
 
 /-- The fields a grant never changes. -/
-def CapSame (k k' : Cap) : Prop :=
-  k'.id = k.id ∧ k'.slate = k.slate ∧ k'.holder = k.holder ∧ k'.personal = k.personal ∧ k'.src = k.src ∧
-    k'.fn = k.fn ∧ k'.dom = k.dom ∧ k'.effect = k.effect
+structure CapSame (k k' : Cap) : Prop where
+  id : k'.id = k.id
+  slate : k'.slate = k.slate
+  holder : k'.holder = k.holder
+  personal : k'.personal = k.personal
+  src : k'.src = k.src
+  fn : k'.fn = k.fn
+  dom : k'.dom = k.dom
+  effect : k'.effect = k.effect
+  sink : k'.sink = k.sink
 
-private theorem capSame_refl (k : Cap) : CapSame k k := ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+theorem capSame_refl (k : Cap) : CapSame k k := ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+
+theorem capSame_trans {k k' k'' : Cap} (a : CapSame k k') (b : CapSame k' k'') : CapSame k k'' :=
+  ⟨b.id.trans a.id, b.slate.trans a.slate, b.holder.trans a.holder, b.personal.trans a.personal, b.src.trans a.src,
+    b.fn.trans a.fn, b.dom.trans a.dom, b.effect.trans a.effect, b.sink.trans a.sink⟩
 
 /-- **A grant keeps its identity.** Whatever happens, a grant the state holds is still held under its id with the
     same holder, slate, source, function, domain and effect. -/
@@ -55,15 +68,15 @@ theorem a_grant_keeps_its_identity (P : Policy) (c : Core) (e : Ev) (i : Nat) (k
   | setCap a j on =>
     refine ⟨if k.id == j then { k with live := on, gen := c.next } else k, ?_, ?_⟩
     · show List.find? (fun (x : Cap) => x.id == i) (List.map _ c.caps) = _
-      rw [find_map_keep Cap.id _ (by intro x; split <;> rfl)]
+      rw [lookup_through_a_map Cap.id _ (by intro x; split <;> rfl)]
       unfold Core.cap at h; rw [h]; rfl
-    · split <;> exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · split <;> exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | editCode a s f rev =>
     refine ⟨if k.holder == a && k.slate == s && k.fn == f then { k with rev := rev } else k, ?_, ?_⟩
     · show List.find? (fun (x : Cap) => x.id == i) (List.map _ c.caps) = _
-      rw [find_map_keep Cap.id _ (by intro x; split <;> rfl)]
+      rw [lookup_through_a_map Cap.id _ (by intro x; split <;> rfl)]
       unfold Core.cap at h; rw [h]; rfl
-    · split <;> exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · split <;> exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | admit req s f arg caps inputs =>
     refine ⟨k, ?_, capSame_refl k⟩
     simp only [apply]; split <;> exact h
@@ -71,14 +84,21 @@ theorem a_grant_keeps_its_identity (P : Policy) (c : Core) (e : Ev) (i : Nat) (k
     refine ⟨k, ?_, capSame_refl k⟩
     simp only [apply]; split <;> exact h
   | share | collaborate | remove | declassify | undeclassify | toolStep | approve | observe | write | release | render
-  | finish | fork | publish => exact ⟨k, h, capSame_refl k⟩
+  | finish | fork | publish | readerCheck => exact ⟨k, h, capSame_refl k⟩
 
 /-! ## Runs -/
 
 /-- The fields a run never changes. -/
-def RunSame (r r' : Run) : Prop :=
-  r'.id = r.id ∧ r'.out = r.out ∧ r'.slate = r.slate ∧ r'.requester = r.requester ∧ r'.fn = r.fn ∧ r'.rev = r.rev ∧
-    r'.arg = r.arg ∧ r'.caps = r.caps ∧ r'.label = r.label
+structure RunSame (r r' : Run) : Prop where
+  id : r'.id = r.id
+  out : r'.out = r.out
+  slate : r'.slate = r.slate
+  requester : r'.requester = r.requester
+  fn : r'.fn = r.fn
+  rev : r'.rev = r.rev
+  arg : r'.arg = r.arg
+  caps : r'.caps = r.caps
+  label : r'.label = r.label
 
 private theorem runSame_refl (r : Run) : RunSame r r := ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
@@ -106,7 +126,7 @@ theorem a_run_keeps_its_identity (P : Policy) (c : Core) (e : Ev) (r' : Run) (h 
     refine Or.inl ⟨r, hr, ?_⟩
     split <;> exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
   | share | collaborate | remove | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write
-  | release | render | editCode | fork | publish => exact Or.inl ⟨r', h, runSame_refl r'⟩
+  | release | render | editCode | fork | publish | readerCheck => exact Or.inl ⟨r', h, runSame_refl r'⟩
 
 /-! ## Cells -/
 
@@ -135,17 +155,13 @@ theorem a_cell_keeps_its_label (P : Policy) (c : Core) (e : Ev) (cl : Cell) (h :
       · exact Or.inr (Or.inl ⟨req, s, f, arg, caps, inputs, sl, rfl, hsl, List.mem_singleton.mp h⟩)
     · exact Or.inl h
   | share | collaborate | remove | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write
-  | release | render | finish | editCode | fork | publish => exact Or.inl h
+  | release | render | finish | editCode | fork | publish | readerCheck => exact Or.inl h
 
 /-- **A slate map keeps lookups**: looking a slate up after `mapSlate` is looking it up before, then mapping it. -/
 theorem slate_lookup_through_a_map (s s' : SlateId) (f : Slate → Slate) (hf : ∀ x, (f x).id = x.id) (l : List Slate) :
     (mapSlate s' f l).find? (fun x => x.id == s) =
       (l.find? (fun x => x.id == s)).map (fun sl => if sl.id == s' then f sl else sl) := by
-  simp only [mapSlate]
-  rw [List.find?_map]
-  have : ((fun x : Slate => x.id == s) ∘ fun sl => if sl.id == s' then f sl else sl) = (fun x : Slate => x.id == s) := by
-    funext x; simp only [Function.comp]; split <;> simp [hf]
-  rw [this]
+  exact lookup_through_a_map Slate.id _ (fun x => by split <;> simp [hf]) l s
 
 /-- **A cell stays where it is**: a cell the state holds under an id is held under it after any step. -/
 theorem a_cell_stays_where_it_is (P : Policy) (c : Core) (e : Ev) (i : Nat) (cl : Cell) (h : c.cell i = some cl) :
@@ -160,7 +176,7 @@ theorem a_cell_stays_where_it_is (P : Policy) (c : Core) (e : Ev) (i : Nat) (cl 
     · simp only [Core.cell, List.find?_append]; unfold Core.cell at h; rw [h]; rfl
     · exact h
   | share | collaborate | remove | mint | setCap | declassify | undeclassify | toolStep | approve | observe | write
-  | release | render | finish | editCode | fork | publish => exact h
+  | release | render | finish | editCode | fork | publish | readerCheck => exact h
 
 /-! ## The counter -/
 
@@ -242,14 +258,14 @@ theorem every_id_is_below_the_counter (P : Policy) (c : Core) (e : Ev) (h : Fres
     · exact ⟨b1, b2, b3⟩
   | remove a s q =>
     simp only [apply]
-    refine ⟨?_, hk, hd, hr, hc⟩
+    refine ⟨?_, hk1, hd1, hr1, hc1⟩
     intro sl' hsl'
     obtain ⟨sl, hsl, rfl⟩ := mem_mapSlate hsl'
-    obtain ⟨b1, b2, b3⟩ := hs sl hsl
+    obtain ⟨b1, b2, b3⟩ := hs1 sl hsl
     split
-    · exact ⟨b1, b2, fun g hg => b3 g (List.mem_filter.mp hg).1⟩
+    · exact ⟨b1, by simp, fun g hg => b3 g (List.mem_filter.mp hg).1⟩
     · exact ⟨b1, b2, b3⟩
-  | mint a s personal src f dom effect =>
+  | mint a s personal src f dom effect sink =>
     simp only [apply]
     refine ⟨hs1, ?_, hd1, hr1, hc1⟩
     intro k' hk'
@@ -357,6 +373,7 @@ theorem every_id_is_below_the_counter (P : Policy) (c : Core) (e : Ev) (h : Fres
     rcases hsl with hsl | rfl
     · exact hs1 sl hsl
     · simp
+  | readerCheck q t ok => exact ⟨hs, hk, hd, hr, hc⟩
   | publish a s =>
     simp only [apply]
     refine ⟨?_, hk, hd, hr, hc⟩
