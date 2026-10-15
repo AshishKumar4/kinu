@@ -699,6 +699,27 @@ export const PLATFORM_CATALOG = {
       + 'so a reader still passes it.',
   },
 
+  'files.page_bytes': {
+    subject: 'Listing text one Files page may carry out of the workspace object',
+    limit: { value: 256 * KiB, unit: 'bytes' },
+    origin: 'self-imposed',
+    bounds: 'response',
+    evidence: 'proven-by-source',
+    provenance: 'packages/core/src/read-models/files.ts:373-381',
+    date: '2026-10-15',
+    trigger: 'a folder whose entries, at the longest a name can be, would take one listing past 256 KiB',
+    onBreach: 'the page ends at FILES_PAGE_ENTRIES and the reader asks again from `next`; a machine is asked one window of that size',
+    observable: [],
+    firstPartySignal: true,
+    notes:
+      'Stands for do.isolate.transient_alloc_reset and worker.memory_kill_is_burst_sensitive, as run_events.page_bytes '
+      + 'does, and is the same text bound so the two pages can be in flight together. Observed in production on '
+      + '2026-10-14: workspace pine-brook-a26400b1 opened its PC in Files, whose /tmp held 56,762 entries; the folder '
+      + 'was read whole and each entry statted through the hub, and the object was reset for memory 11 times in an hour '
+      + 'inside websocket messages. The entry count is derived, not chosen: this bound over the longest entry a listing '
+      + 'can answer (a 255-byte name whose every byte JSON escapes to six characters).',
+  },
+
   'rpc.clone_refused': {
     subject: 'Values that cannot cross a worker boundary at all, at any size',
     limit: null,

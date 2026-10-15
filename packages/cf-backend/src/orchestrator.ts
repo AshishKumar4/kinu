@@ -195,7 +195,7 @@ import {
   getExecutorFiles, readExecutorFile, listEnvironments,
   renameExecutorPathOp, deleteExecutorPathOp,
   ExecutorFileUpload, ExecutorFileDownload,
-  type DirEntry, type ExecutorTextFile, type ExecutorWriteResult,
+  type ExecutorTextFile, type FilesPage, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
@@ -6662,10 +6662,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Directory listing read off each executor's own raw handle, in that environment's paths. */
-  @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
+  /** A page of the folder from `from`; its answer names where the next starts. */
+  @callable() async getExecutorFiles(executorId: string, path: string, from?: number): Promise<FilesPage> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
 
-    return getExecutorFiles(this.rt.executionRouter, executorId, path);
+    return getExecutorFiles(this.rt.executionRouter, executorId, path, from);
   }
 
   @callable() async readExecutorFile(executorId: string, path: string): Promise<ExecutorTextFile> {

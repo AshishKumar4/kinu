@@ -1960,13 +1960,13 @@ export {
   getExecutorFiles, readExecutorFile, sortDirEntries, writeExecutorFileOp,
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, joinDir, parentDir,
-  FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
+  FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, FILES_PAGE_ENTRIES,
   ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
 } from './read-models/files';
 
 export type {
   DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorTextFile, ExecutorWriteResult,
-  EnvironmentInfo, MountInfo,
+  EnvironmentInfo, FilesPage, MountInfo,
 } from './read-models/files';
 
 export { inlineFileType } from './read-models/file-types';

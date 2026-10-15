@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { executorLabel, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
+import { executorLabel, FILES_PAGE_ENTRIES, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { evidenceDir, present } from '@kinu.run/test-utils';
 
 
@@ -2168,6 +2168,38 @@ describe('a revoked device whose command may still run', () => {
  * the string the server fixture handed over, because a client that rebuilt it
  * from `location.origin` would render something that looks right.
  */
+// A folder of any size is sent a page at a time: the owner's 56,762-entry /tmp, sent whole, reset the workspace.
+describe('a large folder in Files', () => {
+  test('lists its first page, and Load more the rest', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
+
+      for (const folder of ['home', 'main', 'logs']) {
+        await page.waitForSelector(`[data-files-entry][title="${folder}"]`);
+        await page.click(`[data-files-entry][title="${folder}"]`);
+      }
+
+      await page.waitForSelector('[data-files-entry][title="run-0000.log"]');
+      const rows = () => page.$$eval('[data-files-entry]', (shown) => shown.length);
+
+      expect(await rows()).toBe(FILES_PAGE_ENTRIES);
+
+      while (await page.$('[data-files-more]') !== null) {
+        const before = await rows();
+
+        await page.click('[data-files-more]');
+        await page.waitForFunction((had: number) => document.querySelectorAll('[data-files-entry]').length > had, {}, before);
+      }
+
+      // The fixture's whole folder, once each.
+      expect(await rows()).toBe(1_234);
+      await page.close();
+    });
+  });
+});
+
 describe('linking a machine happens on the surface that asked for it', () => {
   test('the Environment card opens the panel in place, and the arriving machine closes it', async () => {
     await withGallery(async ({ newPage, origin }) => {
