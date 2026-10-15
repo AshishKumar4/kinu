@@ -808,7 +808,8 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     // The older unticked, the newer approved alone.
     await page.click(`[data-attention-card] [data-parked-command="${stacked[1].slice('action:'.length)}"] input`);
     await answerStackCard(page, stacked[0], 'Approve 1');
-    await until(page, "the flow's other card remains", `${remaining}.length === 1`);
+    // The batch card stands for both under one key until the answer lands, so the other is only alone once it ends.
+    await until(page, "the flow's other card remains", `${PARKED_ROWS}.length < 2 && ${remaining}.length === 1`);
     const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
 
     await answerStackCard(page, stacked[1], 'Deny');
