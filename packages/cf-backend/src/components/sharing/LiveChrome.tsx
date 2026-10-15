@@ -1,7 +1,7 @@
 /**
  * The live page around a shared slate: a thin bar with its name, whose it is, who is here, Edit for those who may change
- * it and Fork for anyone signed in, the one way to a copy of their own (the owner, 2026-10-15); and what the page shows
- * when a person's session ends under them.
+ * it and Fork for everyone, the one way to a copy of their own (the owner, 2026-10-15), which signs a visitor in first;
+ * and what the page shows when a person's session ends under them.
  */
 import { Button } from "@cloudflare/kumo";
 import { GitForkIcon, PencilSimpleIcon, ShareNetworkIcon } from "@phosphor-icons/react";
@@ -33,7 +33,7 @@ export function LiveBar({ session, presence, onShare, onEdit, onFork }: {
       <Presence here={here} viewing={presence.signedOut} />
       {session.mayEdit && <Button size="sm" variant="secondary" aria-label="Edit" data-live-edit onClick={onEdit}><PencilSimpleIcon size={13} /><span className="hidden sm:inline">Edit</span></Button>}
       {onShare !== null && <Button size="sm" variant="secondary" aria-label="Share" data-live-share onClick={onShare}><ShareNetworkIcon size={13} /><span className="hidden sm:inline">Share</span></Button>}
-      {session.mayFork && <Button size="sm" variant="secondary" aria-label="Fork" data-live-fork onClick={onFork}><GitForkIcon size={13} /><span className="hidden sm:inline">Fork</span></Button>}
+      {(session.mayFork || session.me === null) && <Button size="sm" variant="secondary" aria-label="Fork" data-live-fork onClick={onFork}><GitForkIcon size={13} /><span className="hidden sm:inline">Fork</span></Button>}
     </header>
   );
 }

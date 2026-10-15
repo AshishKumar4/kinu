@@ -356,6 +356,9 @@ const FORK_PREVIEW: ForkPreview = {
   parts: [{ fn: "listIssues", lent: false, needs: { title: "Linear", kind: "mcp" } }, { fn: "weeklyDeploys", lent: true, needs: null }],
 };
 
+/** The link's key a link visitor's frame came by: the fork route admits them by it, as the room does. */
+const LINK_KEY = "k4m9";
+
 /** Answers the room's HTTP routes in the gallery: its entry, and its fork's preview. */
 export function installRoomFixture(frame: string): void {
   if (!frame.startsWith("room")) return;
@@ -363,9 +366,16 @@ export function installRoomFixture(frame: string): void {
   const next = window.fetch.bind(window);
 
   window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
-    const path = new URL(new Request(input, init).url).pathname;
+    const url = new URL(new Request(input, init).url);
+    const path = url.pathname;
 
-    if (path.startsWith("/api/rooms/") && path.endsWith("/fork")) return Promise.resolve(Response.json(FORK_PREVIEW));
+    if (path.startsWith("/api/rooms/") && path.endsWith("/fork")) {
+      const byLink = stateOf(new URLSearchParams(location.search).get("state")).access === "link";
+
+      return Promise.resolve(byLink && url.searchParams.get("k") !== LINK_KEY
+        ? Response.json({ error: "This slate isn't shared with you" }, { status: 403 })
+        : Response.json(FORK_PREVIEW));
+    }
 
     if (path.startsWith("/api/rooms/") && path.endsWith("/entry")) {
       const entry: RoomEntry = { title: SCENES[stateOf(new URLSearchParams(location.search).get("state")).scene].title, owner: SAM, access: "edit" };
@@ -393,7 +403,7 @@ export function RoomFrame() {
   }
 
   return (
-    <LiveSlate room={{ workspace: "acme", slate: state.scene }} entry={{ title: scene.title, owner: SAM, access: state.access }} linkKey={null}
+    <LiveSlate room={{ workspace: "acme", slate: state.scene, key: state.access === "link" ? LINK_KEY : null }} entry={{ title: scene.title, owner: SAM, access: state.access }}
       live={fakeLive(state)} opened={state.opened} workspaces={ROSTER} />
   );
 }
@@ -408,10 +418,10 @@ export function RoomSlateFrame() {
       <h1 className="text-[17px] font-bold">{scene.heading}</h1>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         {scene.parts.map((part) => (
-          <section key={part.key} className="overflow-hidden rounded-lg border border-[#e5e7eb]">
+          <section key={part.key} className="flex flex-col overflow-hidden rounded-lg border border-[#e5e7eb]">
             <h2 className="border-b border-[#eef1f5] px-3 py-2 text-xs font-bold text-[#4a5568]">{part.label}</h2>
             <iframe src={`/gallery.html?frame=room-part&part=${part.key}&scheme=light`} title={part.label} data-slate-part={part.key}
-              className="block w-full border-0" style={{ height: part.height }} />
+              className="block w-full flex-1 border-0" style={{ minHeight: part.height }} />
           </section>
         ))}
       </div>

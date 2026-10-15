@@ -69,6 +69,9 @@ function ShownBy({ from }: { from: readonly RoomSource[] }) {
   return <p data-part-shown-by className="flex items-center gap-1.5 px-1 pt-1.5 p-meta p-text-3"><LockSimpleIcon size={12} className="shrink-0" />Shown by {holdersOf(from).join(", ")} · from {sourcesOf(from)}</p>;
 }
 
+/** A part held back from this person: it fills the part, so the slate's page shows no gap under it. */
+const HELD = "flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 rounded-lg p-recessed px-4 py-6 text-center";
+
 /** Someone's private source, which this person can't read: whose, from where, and asking them. */
 function Placeholder({ part, signedIn, act }: { part: Extract<PartView, { state: "placeholder" }>; signedIn: boolean; act: PartActions }) {
   const holders = holdersOf(part.sources);
@@ -76,9 +79,10 @@ function Placeholder({ part, signedIn, act }: { part: Extract<PartView, { state:
   const checkable = part.sources.find((source) => source.checkable);
 
   return (
-    <div data-part-private className="flex flex-col items-start gap-2 rounded-lg p-recessed px-3 py-2.5">
-      <p className="flex items-center gap-1.5 p-meta p-text-2"><LockSimpleIcon size={13} className="shrink-0" />Private to {holders.join(", ")} · from {sourcesOf(part.sources)}</p>
-      <div className="flex flex-wrap gap-1.5">
+    <div data-part-private className={HELD}>
+      <LockSimpleIcon size={22} className="shrink-0 p-text-3" />
+      <p className="p-meta p-text-2">Private to {holders.join(", ")} · from {sourcesOf(part.sources)}</p>
+      <div className="flex flex-wrap justify-center gap-1.5">
         {signedIn
           ? <PartButton onClick={act.ask} disabled={part.asked} data-part-ask>{part.asked ? `Asked ${holder}` : `Ask ${holder}`}</PartButton>
           : <PartButton onClick={act.signIn} data-part-sign-in>Sign in to ask {holder}</PartButton>}
@@ -146,7 +150,8 @@ export function PartFrameView({ part, signedIn, act }: { part: PartView; signedI
 
     case "waiting": {
       return (
-        <div data-part-waiting className="flex flex-col items-start gap-2 rounded-lg p-recessed px-3 py-2.5">
+        <div data-part-waiting className={HELD}>
+          <LockSimpleIcon size={22} className="shrink-0 p-text-3" />
           <p className="p-meta p-text-2">Waiting for {firstName(part.holder)} to lend this again</p>
           {signedIn
             ? <PartButton onClick={act.ask} data-part-ask>Ask {firstName(part.holder)}</PartButton>

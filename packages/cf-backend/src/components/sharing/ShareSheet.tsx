@@ -21,7 +21,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { Switch } from "@/components/ui/Switch";
 import { useCopy } from "@/hooks/use-copy";
-import { ago, nameOf, possessives, reachOf } from "./words";
+import { ago, CATEGORY_WORDS, nameOf, possessives, reachOf } from "./words";
 
 const AUDIENCES: readonly { id: RoomAudience; icon: ReactNode; label: string; hint: string | null }[] = [
   { id: "only-you", icon: <LockSimpleIcon size={15} />, label: "Only you", hint: null },
@@ -34,7 +34,6 @@ const ROLES: Record<RoomRole, { readonly label: string; readonly hint: string }>
   use: { label: "Use", hint: "Can use it" },
 };
 
-const CATEGORY_WORDS: Record<GalleryCategory, string> = { work: "Work", money: "Money", home: "Home", developer: "Developer", fun: "Fun" };
 
 /** One menu open at a time, by key. */
 function useMenu() {

@@ -4,7 +4,9 @@
  * thing the same way. Hosted only, so locked in `capability-parity.lock.json`: rooms live in the cf worker, and the
  * local CLI has no slate to share.
  */
-import type { RoomPerson, RoomReach, RoomSource, RoomTool } from "@kinu.run/core";
+import type { GalleryCategory, RoomPerson, RoomReach, RoomSource, RoomTool } from "@kinu.run/core";
+
+export const CATEGORY_WORDS: Record<GalleryCategory, string> = { work: "Work", money: "Money", home: "Home", developer: "Developer", fun: "Fun" };
 
 /** A person as others see them: their name once they have opened the slate, else the email they were invited at. */
 export const nameOf = (person: RoomPerson) => person.name ?? person.email;

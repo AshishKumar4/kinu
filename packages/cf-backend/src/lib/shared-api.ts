@@ -35,6 +35,11 @@ const signedIn = Effect.gen(function* () {
   return v.parse(MeSchema, yield* Effect.promise(async () => res.json())).user;
 });
 
+/** Whether anyone is signed in on this browser: a public page draws its own shell for a visitor. */
+export function readSignedIn(): Promise<boolean> {
+  return settle(Effect.map(signedIn, (user) => user !== null));
+}
+
 /** The provider this session signed in with, by name ("Cloudflare"); null for a sign-in that is no provider's. */
 export function signedInWith(): Promise<string | null> {
   return settle(Effect.map(signedIn, (user) => user?.signedInWith ?? null));

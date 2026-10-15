@@ -10,16 +10,16 @@ import { Effect } from "effect";
 import { Loader } from "@cloudflare/kumo";
 import type { RoomCall, RoomEntry, RoomPerson, WorkspaceEntry } from "@kinu.run/core";
 import { detach, renderThrownChain, showing } from "@kinu.run/core/obs";
-import { ForkDialog, type RoomSlate } from "@/components/shared/ForkDialog";
+import { ForkDialog } from "@/components/shared/ForkDialog";
 import { HolderAsks, RoomDecisionDialogs } from "@/components/sharing/Decisions";
 import { Ended, LiveBar } from "@/components/sharing/LiveChrome";
 import { ShareSheet } from "@/components/sharing/ShareSheet";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { useRoom, type RoomLive } from "@/hooks/use-room";
-import { signInAndReturn, useRoomFrames } from "@/hooks/use-room-frames";
+import { hereForking, signInAndReturn, useRoomFrames } from "@/hooks/use-room-frames";
 import type { RoomDecision } from "@/lib/room-bridge";
-import { readRoomEntry, type RoomClosed } from "@/lib/room-client";
+import { readRoomEntry, type RoomClosed, type RoomSlate } from "@/lib/room-client";
 import { registerWorkspace } from "@/lib/user-api";
 
 /** An email to the slate's owner: once a session ended, the room has no one to ask through. */
@@ -52,19 +52,19 @@ export interface LiveOpened {
   readonly decide?: RoomDecision;
 }
 
-export function LiveSlate({ room, entry, linkKey, live, opened = {}, workspaces }: {
+export function LiveSlate({ room, entry, live, opened = {}, workspaces }: {
   room: RoomSlate;
   entry: RoomEntry;
-  linkKey: string | null;
   live?: RoomLive;
   opened?: LiveOpened;
   /** A fixture roster for the fork and edit picker; absent, it reads the account's own. */
   workspaces?: readonly WorkspaceEntry[];
 }) {
-  const { view, call } = useRoom({ workspace: room.workspace, slate: room.slate, linkKey, live });
+  const { view, call } = useRoom({ workspace: room.workspace, slate: room.slate, linkKey: room.key, live });
   const { deciding, done } = useRoomFrames({ view, call, opened: opened.decide ?? null });
   const [sharing, setSharing] = useState(opened.sheet ?? false);
-  const [picking, setPicking] = useState<"fork" | "edit" | null>(opened.pick ?? null);
+  const [search] = useSearchParams();
+  const [picking, setPicking] = useState<"fork" | "edit" | null>(opened.pick ?? (search.has("fork") ? "fork" : null));
   const [failure, setFailure] = useState<string | null>(null);
 
   // A call this page makes itself: its refusal shows here.
@@ -82,7 +82,7 @@ export function LiveSlate({ room, entry, linkKey, live, opened = {}, workspaces 
     <div className="flex h-screen w-screen flex-col p-bg p-text">
       <LiveBar session={session} presence={view.presence} onShare={view.sheet === null ? null : () => setSharing(true)}
         onEdit={() => (owner ? window.location.assign(`/workspace/${encodeURIComponent(room.workspace)}?slate=${encodeURIComponent(room.slate)}`) : setPicking("edit"))}
-        onFork={() => setPicking("fork")} />
+        onFork={() => (session.me === null ? signInAndReturn(hereForking()) : setPicking("fork"))} />
       <main className="relative min-h-0 flex-1">
         <iframe src={session.frame} title={session.title} data-live-frame className="block size-full border-0" />
         {view.ended !== null && <Ended ended={view.ended} slate={session.title} onAsk={() => { if (view.ended !== null) emailTo(view.ended.by); }} />}
@@ -114,7 +114,7 @@ export default function LiveSlatePage() {
     let live = true;
 
     detach(Effect.catchCause(
-      Effect.map(Effect.promise(() => readRoomEntry(workspace, slate, linkKey)), (answer) => { if (live) setEntry("open" in answer ? answer.open : answer.closed); }),
+      Effect.map(Effect.promise(() => readRoomEntry({ workspace, slate, key: linkKey })), (answer) => { if (live) setEntry("open" in answer ? answer.open : answer.closed); }),
       showing((chain) => { if (live) setFailure(chain); }),
     ));
 
@@ -137,5 +137,5 @@ export default function LiveSlatePage() {
     return <Closed {...closed} action={<FilledButton onClick={() => window.location.assign("/")}>Go to Kinu</FilledButton>} />;
   }
 
-  return <LiveSlate room={{ workspace, slate }} entry={entry} linkKey={linkKey} />;
+  return <LiveSlate room={{ workspace, slate, key: linkKey }} entry={entry} />;
 }

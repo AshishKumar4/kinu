@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet, matchPath, useLocation, useParams } from "react-router-dom";
 import { Suspense, type ReactNode } from "react";
 import Layout from "./components/layout";
+import GalleryShell from "./components/gallery/GalleryShell";
 import HomePage from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -28,6 +29,10 @@ const UserMcpPage = lazyRoute(async () => {
 const WelcomePage = lazyRoute(() => import("./pages/WelcomePage"));
 
 const DrivePage = lazyRoute(() => import("./pages/DrivePage"));
+
+const GalleryPage = lazyRoute(() => import("./pages/GalleryPage"));
+
+const GallerySlatePage = lazyRoute(() => import("./pages/GallerySlatePage"));
 
 const WorkspacesPage = lazyRoute(() => import("./pages/WorkspacesPage"));
 
@@ -125,6 +130,11 @@ export default function App() {
             <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
             <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
           </Route>
+        </Route>
+        {/* Public discovery: the app's shell signed in, a bar with Sign in signed out (GalleryShell). */}
+        <Route element={<GalleryShell />}>
+          <Route path={APP_ROUTES.gallery} element={<Page label="gallery"><GalleryPage /></Page>} />
+          <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />
         </Route>
         {/* Outside the shell and onboarding: whoever the slate is shared with, or holds its link, uses it here, signed in or not. */}
         <Route path={APP_ROUTES.liveSlate} element={<Page label="live-slate"><LiveSlatePage /></Page>} />

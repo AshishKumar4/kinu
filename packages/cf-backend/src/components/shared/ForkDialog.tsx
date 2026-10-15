@@ -15,16 +15,10 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { Modal } from "@/components/ui/Modal";
 import { nameOf, names } from "@/components/sharing/words";
-import { forkRoom, readForkPreview } from "@/lib/room-client";
+import { forkRoom, readForkPreview, type RoomSlate } from "@/lib/room-client";
 import { listWorkspaces } from "@/lib/user-api";
 
 const NEW_WORKSPACE = "\u0000new";
-
-/** A shared slate, by where its room is. */
-export interface RoomSlate {
-  readonly workspace: string;
-  readonly slate: string;
-}
 
 /** Where the editor's agent works on the shared slate: its chat, with the slate attached. */
 const editPath = (workspace: string, room: RoomSlate) =>
@@ -85,7 +79,7 @@ export function ForkDialog({ room, title, mode, onClose, workspaces, create }: {
     }), failed);
 
     const previewed = mode !== "fork" ? Effect.void
-      : Effect.catchCause(Effect.map(Effect.promise(() => readForkPreview(room.workspace, room.slate)), (read) => { if (mounted) setPreview(read); }), failed);
+      : Effect.catchCause(Effect.map(Effect.promise(() => readForkPreview(room)), (read) => { if (mounted) setPreview(read); }), failed);
 
     detach(Effect.all([listed, previewed], { concurrency: "unbounded", discard: true }));
 
@@ -107,7 +101,7 @@ export function ForkDialog({ room, title, mode, onClose, workspaces, create }: {
         return;
       }
 
-      const forked = yield* Effect.promise(async () => forkRoom(room.workspace, room.slate, workspace));
+      const forked = yield* Effect.promise(async () => forkRoom(room, workspace));
 
       yield* Effect.promise(async () => navigate(forkedPath(forked.workspace, forked.slate)));
     }), showing((chain) => {

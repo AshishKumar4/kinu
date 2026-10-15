@@ -42,6 +42,8 @@ export const PAGE_ROWS = {
   shared: ['slate-room'],
   liveSlate: ['slate-room'],
   liveSlatePart: ['slate-room'],
+  gallery: { unreachable: 'the Gallery reads /api/gallery, which the sharing build serves from its step 6; until then no deployed row has a listing to open' },
+  gallerySlate: { unreachable: 'a listed slate\'s page reads /api/gallery/:workspace/:slate, served from the same step 6' },
   deploy: ['deploy-door'],
   updates: { unreachable: 'the update offer answers only the deployment\'s recorded owner and 404s everyone else (updates/routes.ts), and the eval identity is not the owner' },
   connected: { unreachable: 'only a provider sign-in ends here, in a window it opened, and a deployed row signs in with a minted session, never through a provider' },

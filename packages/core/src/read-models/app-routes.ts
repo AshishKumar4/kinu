@@ -27,6 +27,10 @@ export const APP_ROUTES = {
   liveSlate: '/s/:workspace/:slate',
   /** One part of a shared slate, in its own frame inside the slate's page. */
   liveSlatePart: '/s/:workspace/:slate/parts/:part',
+  /** Slates people listed for anyone to use. */
+  gallery: '/gallery',
+  /** One listed slate: what it uses, what a fork gets, and Open, Fork, Star. */
+  gallerySlate: '/gallery/:workspace/:slate',
   deploy: '/deploy',
   updates: '/updates',
   /** Where a provider's sign-in ends in its helper window: it tells the tab that opened it, then closes. `?next=`

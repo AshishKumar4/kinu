@@ -376,10 +376,11 @@ worker.all('/client-node-stubs.ts', viteDevAsset);
 
 worker.all(`${AGENT_BUNDLE_DIRECTORY}/*`, () => new Response('Not found', { status: 404 }));
 
-// Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority.
-for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, appShell);
+// Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority. The Gallery and a
+// shared slate's live page are only their shell: the Gallery's and the room's own routes decide what a visitor reads.
+for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH, '/gallery']) worker.all(path, appShell);
 
-for (const prefix of ['/auth', '/assets', '/shared/blueprint']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
+for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
 
 worker.use('*', (c, next) => settle(Effect.gen(function* () {
   const request = c.req.raw;

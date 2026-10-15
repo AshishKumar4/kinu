@@ -1,7 +1,8 @@
 import { Effect, Cause } from 'effect';
 import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
-import { markStoreChanged, sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
+import { isWorkspaceName, markStoreChanged, sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
+import { SlateDirectoryName } from '@kinu.run/core/slates';
 import { diagnostics, recording, toKinuError, settle } from '@kinu.run/core/obs';
 
 const AFTER_LAST_RENDER_MS = 30_000;
@@ -239,6 +240,28 @@ async function photograph(browser: Browser, url: string): Promise<Uint8Array> {
   } finally {
     await page.close();
   }
+}
+
+/** A picture as a route names it: its slate, and the digest of one version. */
+export const PictureAddressSchema = v.object({
+  workspace: v.pipe(v.string(), v.check(isWorkspaceName)),
+  slate: SlateDirectoryName,
+  digest: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)),
+});
+
+/**
+ * A picture's bytes by its {@link pictureKey}, for a caller its route admitted: the owner's own route, or the Gallery's
+ * for a listed slate. `cache` is who may keep them; a digest names one version, so either keeps it for good. Null when
+ * there is none.
+ */
+export async function readSlatePicture(bucket: PictureBucket, key: string, cache: 'private' | 'public'): Promise<Response | null> {
+  const object = await bucket.get(key);
+
+  if (object === null) return null;
+
+  return new Response(object.body, {
+    headers: { 'content-type': 'image/webp', 'cache-control': `${cache}, max-age=31536000, immutable`, etag: object.httpEtag },
+  });
 }
 
 export function pictureKey(workspace: string, slate: string, digest: string): string {
