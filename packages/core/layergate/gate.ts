@@ -1,13 +1,13 @@
 // Digest primitives are imported directly, never via PipelineSubjects, so a fault injected into
 // `stableStringify` cannot corrupt the scoring that measures it.
 
-import { fnv1a64 } from '../../packages/core/src/utils/fnv1a';
-import { stableStringify } from '../../packages/core/src/safety/argument-digest';
-import { parseJsonValue } from '../../packages/core/src/utils/json';
+import { fnv1a64 } from '../src/utils/fnv1a';
+import { stableStringify } from '../src/safety/argument-digest';
+import { parseJsonValue } from '../src/utils/json';
 import { LAYERS, type Layer, type LayerObservation } from './layers';
 import type { PipelineSubjects } from './subjects';
 import { Cause, Effect } from 'effect';
-import { renderThrownChain, settle } from '../../packages/core/src/obs/index';
+import { renderThrownChain, settle } from '../src/obs/index';
 
 export type Baseline = Readonly<Record<string, string>>;
 

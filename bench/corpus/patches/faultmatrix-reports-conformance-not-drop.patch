@@ -1,7 +1,7 @@
-diff --git a/scripts/layergate/faults.ts b/scripts/layergate/faults.ts
+diff --git a/packages/core/layergate/faults.ts b/packages/core/layergate/faults.ts
 index 7930f7bef..c14eb107e 100644
---- a/scripts/layergate/faults.ts
-+++ b/scripts/layergate/faults.ts
+--- a/packages/core/layergate/faults.ts
++++ b/packages/core/layergate/faults.ts
 @@ -347,7 +347,7 @@ async function runFaults<S>(
      let maxOtherDropPp = 0;
  

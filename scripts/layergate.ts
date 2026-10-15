@@ -6,8 +6,8 @@
 //   bun scripts/layergate.ts --lock     # re-lock the baselines after an
 //                                       # intended behaviour change
 //
-// Two slices feed one report: core's LAYERS (scripts/layergate) and
-// the compaction-ladder slice (scripts/layergate/compaction.ts — core
+// Two slices feed one report: core's LAYERS (packages/core/layergate) and
+// the compaction-ladder slice (packages/compaction/layergate — core
 // declares that layer but cannot import the package that implements it). The
 // script is the only place both sides can meet, so it merges them here; core's
 // declared-but-unmeasured placeholder row is replaced by the measured slice.
@@ -21,16 +21,16 @@ import {
   createPipelineSubjects, lockBaseline, LOCKED_BASELINE, LAYERS, FAULTS,
   renderFaultMatrix, renderLayerGateReport, runFaultMatrix, runLayerGate,
   type Baseline, type Fault, type Layer, type LayerGateReport, type PipelineSubjects,
-} from './layergate/index';
+} from '../packages/core/layergate/index';
 import {
   COMPACTION_LAYERS, COMPACTION_FAULTS, createCompactionLadderSubjects, type CompactionLadderSubjects,
-} from './layergate/compaction';
-import { COMPACTION_LOCKED_BASELINE } from './layergate/compaction-baseline';
+} from '../packages/compaction/layergate/index';
+import { COMPACTION_LOCKED_BASELINE } from '../packages/compaction/layergate/baseline';
 import { createTestRuntime } from '../packages/core/tests/helpers';
 
-const CORE_BASELINE_FILE = join(import.meta.dir, 'layergate/baseline.ts');
+const CORE_BASELINE_FILE = join(import.meta.dir, '../packages/core/layergate/baseline.ts');
 
-const COMPACTION_BASELINE_FILE = join(import.meta.dir, 'layergate/compaction-baseline.ts');
+const COMPACTION_BASELINE_FILE = join(import.meta.dir, '../packages/compaction/layergate/baseline.ts');
 
 // The gate reads no storage — every prompt probe passes soulOverride — so any
 // runtime handle satisfies the one production signature that requires one.
@@ -75,7 +75,7 @@ if (process.argv.includes('--lock')) {
   const ladder = await lockBaseline(ladderSubjects, COMPACTION_LAYERS);
   writeBaseline(
     COMPACTION_BASELINE_FILE,
-    ["import type { Baseline } from './gate';"],
+    ["import type { Baseline } from '../../core/layergate/index';"],
     'COMPACTION_LOCKED_BASELINE',
     ladder,
   );

@@ -1,61 +1,61 @@
 // Every probe reaches production code through this record so a fault can swap one function. Swaps
 // only intercept gate calls, so layers must be dependency-closed (proved by unit-layergate.test.ts).
 
-import type { AgentRuntime } from '../../packages/core/src/types/agent-runtime';
-import { buildSystemPromptSync, type SystemPromptOptions } from '../../packages/core/src/prompt';
-import { compilePromptSurface } from '../../packages/core/src/prompting/surface';
-import { admitAgentsMd, renderAgentsMdSection } from '../../packages/core/src/prompting/agents-md';
-import { renderActiveSkillsSection } from '../../packages/core/src/skills/render';
-import { resolveActiveSkills } from '../../packages/core/src/skills/loader';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import { buildSystemPromptSync, type SystemPromptOptions } from '../src/prompt';
+import { compilePromptSurface } from '../src/prompting/surface';
+import { admitAgentsMd, renderAgentsMdSection } from '../src/prompting/agents-md';
+import { renderActiveSkillsSection } from '../src/skills/render';
+import { resolveActiveSkills } from '../src/skills/loader';
 import {
   DynamicContextLedger,
   renderDynamicContextBlock,
-} from '../../packages/core/src/prompting/volatile-context';
-import { renderFactsBlock } from '../../packages/core/src/memory/facts';
-import { composePrepareStep } from '../../packages/core/src/prompting/prepare-step';
-import { pruneStepToolOutputs } from '../../packages/core/src/prompting/step-prune';
+} from '../src/prompting/volatile-context';
+import { renderFactsBlock } from '../src/memory/facts';
+import { composePrepareStep } from '../src/prompting/prepare-step';
+import { pruneStepToolOutputs } from '../src/prompting/step-prune';
 import {
   applyCacheBreakpoints,
   cacheableSystem,
   markCacheTail,
   promptCacheOptions,
   resolvePromptCacheStrategy,
-} from '../../packages/core/src/prompting/cache-breakpoints';
-import { modelWindow } from '../../packages/core/src/context-window';
-import { clampSerializedToolResult, clampToolResult } from '../../packages/core/src/tools/clamp';
-import { applyFileEdits, formatFileSlice } from '../../packages/core/src/tools/file-edit';
-import { scanFileWindow } from '../../packages/core/src/tools/file-scan';
-import { withMountTable } from '../../packages/core/src/vfs/mounts';
-import { classifyTurnFailure, planOverflowRecovery } from '../../packages/core/src/turn-failure';
+} from '../src/prompting/cache-breakpoints';
+import { modelWindow } from '../src/context-window';
+import { clampSerializedToolResult, clampToolResult } from '../src/tools/clamp';
+import { applyFileEdits, formatFileSlice } from '../src/tools/file-edit';
+import { scanFileWindow } from '../src/tools/file-scan';
+import { withMountTable } from '../src/vfs/mounts';
+import { classifyTurnFailure, planOverflowRecovery } from '../src/turn-failure';
 import {
   buildCompactionSummaryPrompt,
   stripCheckpointPreamble,
   wrapCompactionSummary,
-} from '../../packages/core/src/compaction';
-import { buildDrainBatch } from '../../packages/core/src/events/hub/drain';
-import { renderForLLM } from '../../packages/core/src/events/hub/visibility';
-import { StepInjections } from '../../packages/core/src/prompting/step-injections';
-import { Inbox } from '../../packages/core/src/orchestrator/inbox';
-import { DrainScheduler } from '../../packages/core/src/orchestrator/drain-scheduler';
-import { reviewCommand } from '../../packages/core/src/safety/command-review';
-import { formatApproval, gateExec } from '../../packages/core/src/safety/approval-gate';
-import { argumentDigest } from '../../packages/core/src/safety/argument-digest';
-import { checkMisevolution } from '../../packages/core/src/safety/misevolution';
-import { drawArm, trialDecision } from '../../packages/core/src/evolution/trial-rules';
-import { hybridSearch } from '../../packages/core/src/memory/hybrid-search';
-import { reciprocalRankFusion } from '../../packages/core/src/memory/vector-store';
-import { delegationFeatures, renderDelegationFeatures } from '../../packages/core/src/evolution/delegation-features';
+} from '../src/compaction';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import { renderForLLM } from '../src/events/hub/visibility';
+import { StepInjections } from '../src/prompting/step-injections';
+import { Inbox } from '../src/orchestrator/inbox';
+import { DrainScheduler } from '../src/orchestrator/drain-scheduler';
+import { reviewCommand } from '../src/safety/command-review';
+import { formatApproval, gateExec } from '../src/safety/approval-gate';
+import { argumentDigest } from '../src/safety/argument-digest';
+import { checkMisevolution } from '../src/safety/misevolution';
+import { drawArm, trialDecision } from '../src/evolution/trial-rules';
+import { hybridSearch } from '../src/memory/hybrid-search';
+import { reciprocalRankFusion } from '../src/memory/vector-store';
+import { delegationFeatures, renderDelegationFeatures } from '../src/evolution/delegation-features';
 import {
   craftFailureBlame, craftInvocationError, craftInvocationSites,
-} from '../../packages/core/src/craft/in-episode';
-import { renderToolSchemaDescription } from '../../packages/core/src/tools/registry';
+} from '../src/craft/in-episode';
+import { renderToolSchemaDescription } from '../src/tools/registry';
 import {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
-} from '../../packages/core/src/orchestrator/turn-lifecycle';
+} from '../src/orchestrator/turn-lifecycle';
 import {
   serializeContentForHeads, inheritedContextFromHistory, narrowInheritedRole,
-} from '../../packages/core/src/orchestrator/heads-support';
+} from '../src/orchestrator/heads-support';
 
 export interface PipelineSubjects {
   /** Probes pass `soulOverride`, so the runtime handle is never read. */

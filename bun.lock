@@ -10,7 +10,6 @@
         "zod": "^4.3.6",
       },
       "devDependencies": {
-        "@better-compact/core": "^0.3.0",
         "@earendil-works/pi-ai": "^0.87.1",
         "@earendil-works/pi-coding-agent": "^0.87.1",
         "@effect/tsgo": "0.45.0",

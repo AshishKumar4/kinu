@@ -1,7 +1,7 @@
-diff --git a/scripts/layergate/gate.ts b/scripts/layergate/gate.ts
+diff --git a/packages/core/layergate/gate.ts b/packages/core/layergate/gate.ts
 index e808346d7..ba330abca 100644
---- a/scripts/layergate/gate.ts
-+++ b/scripts/layergate/gate.ts
+--- a/packages/core/layergate/gate.ts
++++ b/packages/core/layergate/gate.ts
 @@ -117,7 +117,7 @@ export function scoreAgainstBaseline(
  
      scores.push({

@@ -2,14 +2,14 @@
 // while leaving the others flat, measured against the clean run rather than the locked baseline.
 
 import type { ModelMessage } from 'ai';
-import type { PrepareStepContext } from '../../packages/core/src/extension';
-import { DynamicContextLedger, type DynamicContext } from '../../packages/core/src/prompting/volatile-context';
-import { StepInjections, type RecordedInjection } from '../../packages/core/src/prompting/step-injections';
-import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../../packages/core/src/tools/clamp';
+import type { PrepareStepContext } from '../src/extension';
+import { DynamicContextLedger, type DynamicContext } from '../src/prompting/volatile-context';
+import { StepInjections, type RecordedInjection } from '../src/prompting/step-injections';
+import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../src/tools/clamp';
 import { LAYERS, type Layer } from './layers';
 import { observePipeline, scoreAgainstBaseline } from './gate';
 import type { PipelineSubjects } from './subjects';
-import { renderThrownChain } from '../../packages/core/src/obs/index';
+import { renderThrownChain } from '../src/obs/index';
 
 export interface Fault<S = PipelineSubjects> {
   readonly id: string;

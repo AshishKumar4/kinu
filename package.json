@@ -156,7 +156,6 @@
   "//devDependencies:bun": "Bun 1.4.3 carries both oven-sh/bun#44279 (retired-realm crashes, which the canary pin was for) and #44581 (13a98b0dbd), whose absence left a synchronous spawn spinning over a zombie child: the production deploy contract row went silent in 12 of 48 runs on canary 9bd19c98e and 0 of 96 on 1.4.3 (2026-10-14, #83).",
   "//devDependencies:@nimbus-sh/runtime": "Nimbus numbers a runtime rebuild as a prerelease of its upstream version (3.13.14-1, the reproducible CPython core 0.16 requires), and semver ranks it below the plain 3.13.14, so a caret picks the older build. Both stay exact; move them with core.",
   "devDependencies": {
-    "@better-compact/core": "^0.3.0",
     "@earendil-works/pi-ai": "^0.87.1",
     "@earendil-works/pi-coding-agent": "^0.87.1",
     "@effect/tsgo": "0.45.0",
