@@ -6,7 +6,7 @@
  */
 import { Cause, Effect, Result } from 'effect';
 import { renderThrownChain, settle, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
-import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
+import { objectNamed, decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
@@ -195,7 +195,7 @@ async function controlAction<Id>(env: ActionEnv<Id>, action: ControlAction): Pro
     // Does not wake-and-claim: `removeWorkspace`/`destroyAgent` check ownership inside the call, and
     // claiming would run a broken workspace's scaffold bootstrap.
     const owner = await ownerCaller(env);
-    const user = env.UserDO.get(env.UserDO.idFromName(action.userId));
+    const user = objectNamed(env.UserDO, action.userId);
     await user.removeWorkspace(owner, action.workspace, action.userId);
     // Only after the registry says it is gone; a failed teardown must not leave a tombstone.
     await unindexWorkspace(env, { userId: action.userId, name: action.workspace });

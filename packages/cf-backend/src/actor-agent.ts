@@ -11,6 +11,7 @@ import {
   type AgentContext, type Connection, type ConnectionContext,
 } from "agents";
 import {
+  objectNamed,
   inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
@@ -2803,7 +2804,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const userId = this.getOwnerUserId();
 
     if (!userId) return null;
-    const stub: UserHubClient = this.env.UserDO.get(this.env.UserDO.idFromName(userId));
+    const stub: UserHubClient = objectNamed(this.env.UserDO, userId);
 
     return stub;
   }
@@ -2827,7 +2828,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected requireOwnerUserDO(): UserHubClient {
-    return this.env.UserDO.get(this.env.UserDO.idFromName(this.requireOwner()));
+    return objectNamed(this.env.UserDO, this.requireOwner());
   }
 
   /** Throws when no capability token exists; an unclaimed workspace reaches nothing. */

@@ -1,6 +1,7 @@
 /** Cross-workspace owner calls. Hosted actors share the root's isolate and workspace box, so their
  * file and execution operations need no owner RPC. */
 
+import { objectNamed } from '@kinu.run/core';
 import { type SlateCaller } from '@kinu.run/core/slates';
 import type {
   BlueprintBundle, BlueprintFork, JsonValue, LiveShareRecord, OperationCaller, OperationListing, OperationResult, ShareViewerClaim, SlateAnswer,
@@ -39,5 +40,5 @@ export function workspaceOwner<Id>(
   env: { OrchestratorAgent: WorkspaceOwnerNamespace<Id> },
   workspaceName: string,
 ): WorkspaceOwnerRpc {
-  return env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
+  return objectNamed(env.OrchestratorAgent, workspaceName);
 }

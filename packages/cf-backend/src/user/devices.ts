@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES } from '@kinu.run/core';
+import { objectNamed, DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES } from '@kinu.run/core';
 import {
   type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
@@ -643,7 +643,7 @@ export class UserDevices {
   /** The call still fails; the workspace is recorded so the next connect clears this notice. */
   private async announceDevicesUnavailable(workspaceOrAgent: string): Promise<void> {
     try {
-      const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(workspaceOrAgent));
+      const stub = objectNamed(this.host.env.OrchestratorAgent, workspaceOrAgent);
 
       await stub.announceDeviceUnavailable(this.registeredOfflineDevices());
       this.host.sqlx(
@@ -1089,7 +1089,7 @@ export class UserDevices {
     return deviceConsentOutcome({
       bound: this.getDeviceBinding(agentName, deviceId),
       deviceLabel,
-      ask: attemptInItsWords('unavailable', () => this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(agentName)).askDeviceConsent(request)),
+      ask: attemptInItsWords('unavailable', () => objectNamed(this.host.env.OrchestratorAgent, agentName).askDeviceConsent(request)),
       bind: attemptInItsWords('io', async () => {
         this.setDeviceBinding(agentName, deviceId, 'allow', action);
         await this.devicesMoved();
@@ -1248,7 +1248,7 @@ export class UserDevices {
       let watching = false;
 
       try {
-        const workspace = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(agent_name));
+        const workspace = objectNamed(this.host.env.OrchestratorAgent, agent_name);
         watching = (await workspace.devicesMoved()).watching;
       } catch (cause) {
         diagnostics.event('device.watcher_unreachable', { workspace: agent_name, error: renderThrownChain({ cause }) });

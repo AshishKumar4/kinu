@@ -13,6 +13,7 @@
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import {
+  objectNamed,
   escapeHtml, ingressAdmitted, PREVIEW_ENTRY_PATH, publicPage, SHARE_VIEWER_REQUESTS_PER_MINUTE, VIEWER_EXCHANGE_PATH, workspaceAddressRefusal,
 } from '@kinu.run/core';
 import { previewHostSuffix, previewPortSuffix } from '@kinu.run/core';
@@ -97,7 +98,7 @@ export async function previewEntry<Id>(
   const preview = target === null ? null : await verifiedPreview(env, target.hostname);
 
   if (target === null || preview === null) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
-  const stub = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(preview.workspace));
+  const stub = objectNamed(env.OrchestratorAgent, preview.workspace);
   const access = await stub.previewAccess(userId, preview.port);
 
   if (!access.owned) {
@@ -261,7 +262,7 @@ export async function handleNimbusPreviewHostRequest<Id>(
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
 
-  const stub = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspace));
+  const stub = objectNamed(env.OrchestratorAgent, workspace);
 
   // `request.body` passes unwrapped so a fixed-length upload stays fixed-length.
   // A WebSocket upgrade uses `fetch`: a 101 cannot cross a Durable Object RPC boundary.

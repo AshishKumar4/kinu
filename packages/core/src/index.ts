@@ -2507,7 +2507,7 @@ export {
 } from './execution/node-home';
 
 export {
-  type ObjectNamespace,
+  objectNamed, type ObjectNamespace,
   type PcUserNamespace,
   type PcIngressEnv,
   handlePcConnect,

@@ -2,6 +2,7 @@
  * How the control plane is addressed. Separate from `control-plane-do.ts` so
  * ingest callers do not load `cloudflare:workers` and the DO graph; keep the class import type-only.
  */
+import { objectNamed } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { ControlPlaneDO } from './control-plane-do';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -16,7 +17,7 @@ export interface ControlPlaneEnv<Id = DurableObjectId, Stub = DurableObjectStub<
 }
 
 export function controlPlaneStub<Id, Stub>(env: ControlPlaneEnv<Id, Stub>): Stub {
-  return env.ControlPlaneDO.get(env.ControlPlaneDO.idFromName(CONTROL_PLANE_SINGLETON));
+  return objectNamed(env.ControlPlaneDO, CONTROL_PLANE_SINGLETON);
 }
 
 /**

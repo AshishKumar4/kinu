@@ -7,7 +7,7 @@ import type { PageRequest } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import { err, json, publicError, publicText, safeJson, type RosterPage } from '@kinu.run/core';
+import { objectNamed, err, json, publicError, publicText, safeJson, type RosterPage } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {
@@ -140,9 +140,7 @@ controlRoutes.get('/api/control/workspaces/*', async (c) => workspaceList(c));
 
 controlRoutes.get('/api/control/incidents/*', async (c) => json({
   body: {
-    incidents: await c.env.MonitorDO
-      .get(c.env.MonitorDO.idFromName(MONITOR_SINGLETON))
-      .listIncidents(INCIDENT_MAX),
+    incidents: await objectNamed(c.env.MonitorDO, MONITOR_SINGLETON).listIncidents(INCIDENT_MAX),
   },
 }));
 
@@ -393,7 +391,7 @@ function readRoster<Id>(env: ControlEnv<Id>, userId: string): Effect.Effect<Rost
 
   return Effect.catchCause(Effect.gen(function* () {
     const owner = yield* Effect.promise(() => ownerCaller(env));
-    const user = env.UserDO.get(env.UserDO.idFromName(userId));
+    const user = objectNamed(env.UserDO, userId);
     const workspaces: RosterWorkspace[] = [];
     let cursor: string | null = null;
 

@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
 import {
+  objectNamed,
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
@@ -92,7 +93,7 @@ sharedRoutes.get('/api/shared', async (c) => json({ body: await library(c.env, c
 sharedRoutes.post('/api/shared/seen', async (c) => {
   const identity = c.get('identity');
 
-  await c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId)).sharesSeen(c.get('owner'), Date.now());
+  await objectNamed(c.env.UserDO, identity.userId).sharesSeen(c.get('owner'), Date.now());
 
   return json({ body: { seen: true } });
 });
@@ -108,7 +109,7 @@ sharedRoutes.post('/api/shared/revoke', async (c) => revoke(c.req.raw, c.env, c.
 sharedRoutes.post('/api/shared/live/open', async (c) => openLive(c.req.raw, c.env, c.get('identity')));
 
 async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
-  const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));
+  const userDO = objectNamed(env.UserDO, identity.userId);
   const slates: OwnedSlate[] = [];
   const mine: SharedRow[] = [];
 

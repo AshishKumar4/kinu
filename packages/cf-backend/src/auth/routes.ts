@@ -7,7 +7,7 @@ import {
   consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
 } from './store';
-import { sanitizeReturnTo } from '@kinu.run/core';
+import { objectNamed, sanitizeReturnTo } from '@kinu.run/core';
 import { escapeHtml, json, KINU_USER_AGENT, nonEmptyString, scopeList, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
@@ -352,7 +352,7 @@ function attachCloudflareWorkersAI<Id>(
   return Effect.gen(function* () {
     return yield* Effect.catchCause(Effect.gen(function* () {
       const credential = yield* Effect.promise(async () => cloudflareTokenToCredential(tokens));
-      const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+      const userDO = objectNamed(env.UserDO, userId);
       yield* Effect.promise(async () => userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential));
       // No model seeding: the built-in default tier already names the native Workers AI model.
       notifyWorkspacesModelSettingsChanged(env, userDO, ctx);

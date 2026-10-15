@@ -1,4 +1,5 @@
 import {
+  objectNamed,
   LimitCache, baseCredentialKey, limitReadable, readAccountUsage,
   type AccountUsage, type ObjectNamespace, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
@@ -39,7 +40,7 @@ export async function readUserAccountUsage<Id>(input: {
   const [usage, live] = await Promise.all([
     readAccountUsage(workspaces.map(({ name }) => ({
       name,
-      read: () => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(name)).accountSpend(),
+      read: () => objectNamed(env.OrchestratorAgent, name).accountSpend(),
     }))),
     cache.read(held.map(({ key }) => key).filter(limitReadable).map((key) => ({
       key,

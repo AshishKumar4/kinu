@@ -7,6 +7,7 @@
  */
 
 import {
+  objectNamed,
   buildSlateShareHost, liveSharePagePath, parseSlateShareLabel, previewHostSuffix, previewPortSuffix, workspaceAddressRefusal,
   ingressAdmitted, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
@@ -117,7 +118,7 @@ shareHostRoutes.all('*', async (c) => {
   const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(env, request), consented: cookie?.consented === true };
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
-  const stub: SlateShareHost = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspace));
+  const stub: SlateShareHost = objectNamed(env.OrchestratorAgent, workspace);
 
   // A WebSocket upgrade uses `fetch`: a 101 cannot cross a Durable Object RPC boundary.
   if (headers.get('upgrade')?.toLowerCase() === 'websocket') {
