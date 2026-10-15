@@ -21,11 +21,11 @@ const LOCK = join(import.meta.dir, '..', '..', '..', 'scripts', 'schema-genesis.
 
 const NameSchema = v.object({ name: v.string() });
 
-/** The product's tables `db` holds: those the genesis lock records, the platform's and the SDK's left out. */
+/** The product's tables and views `db` holds: those the genesis lock records, the platform's and the SDK's left out. */
 function madeTables(db: Database): string[] {
   const product = new Set(Object.keys(v.parse(v.record(v.string(), v.unknown()), JSON.parse(readFileSync(LOCK, 'utf8')))).map((key) => key.slice(0, key.indexOf('@'))));
 
-  return db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => v.parse(NameSchema, row).name).filter((table) => product.has(table));
+  return db.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name").all().map((row) => v.parse(NameSchema, row).name).filter((table) => product.has(table));
 }
 
 test('each Durable Object class makes the tables scripts/schema-classes.json names for it', () => {

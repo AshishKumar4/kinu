@@ -139,6 +139,19 @@ test('a default changed inside its quotes is a stale table, comment marks and al
   expect(rows(sql, "SELECT mark FROM marks WHERE id = 'n'")).toEqual([{ mark: 'a--new' }]);
 });
 
+test('a view its init declares anew is made again over tables that did not change, and what reads it with it', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT);
+    CREATE VIEW note_bodies AS SELECT id FROM notes;
+    CREATE VIEW note_count AS SELECT COUNT(*) AS n FROM note_bodies;
+    INSERT INTO notes VALUES ('a', 'kept');`, `
+    CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, body TEXT);
+    CREATE VIEW IF NOT EXISTS note_bodies AS SELECT id, body FROM notes;`, ['notes', 'note_bodies']);
+
+  expect(repairSchema(sql, writes, 'views')?.rebuilt).toEqual(['note_bodies']);
+  expect(rows(sql, 'SELECT id, body FROM note_bodies UNION ALL SELECT n, NULL FROM note_count')).toEqual([{ id: 'a', body: 'kept' }, { id: 1, body: null }]);
+});
+
 test('rows that cannot be copied refuse in SQLite\'s words, leaving every table and the stamp as they were', () => {
   const { sql, writes } = world(`
     CREATE TABLE heads (id TEXT PRIMARY KEY);

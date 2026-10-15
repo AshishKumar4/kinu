@@ -197,18 +197,40 @@ function dependents(rows: readonly SchemaRow[], tables: readonly string[]): Sche
   return rows.filter((row) => found.has(row));
 }
 
-/** The statement each of `tables` has as the init makes it now, read in a rolled-back trial. */
+/** The statement each of `tables`, and each view, has as the init makes it now, read in a rolled-back trial. */
 function initStatements(sql: SqlExec, writes: TableWrites, tables: readonly string[]): Effect.Effect<ReadonlyMap<string, string>, KinuError> {
   return inTransaction(writes, () => Effect.gen(function* () {
     yield* run(sql, 'PRAGMA defer_foreign_keys = ON');
+    const rows = schemaRows(sql);
+    const named = dependents(rows, tables);
 
-    for (const row of dependents(schemaRows(sql), tables)) yield* run(sql, `DROP ${row.type.toUpperCase()} "${row.name}"`);
+    for (const row of [...named, ...rows.filter((view) => view.type === 'view' && !named.includes(view))]) yield* run(sql, `DROP ${row.type.toUpperCase()} "${row.name}"`);
 
     for (const table of tables) yield* run(sql, `ALTER TABLE "${table}" RENAME TO "${table}${ASIDE}"`);
     yield* Effect.try({ try: () => { writes.init(); }, catch: (cause) => new KinuError('unsupported', `the init refused: ${String(cause)}`) });
 
-    return new Map(schemaRows(sql).filter((row) => row.type === 'table' && tables.includes(row.name)).map((row) => [row.name, row.sql ?? '']));
+    return new Map(schemaRows(sql).filter((row) => (row.type === 'table' && tables.includes(row.name)) || row.type === 'view').map((row) => [row.name, row.sql ?? '']));
   }), true);
+}
+
+/** Each view whose statement is not the one the init declares now dropped, with what reads it, and made again by the
+ *  init; what the init does not make is made again as it was. */
+function remakeViews(sql: SqlExec, writes: TableWrites, declared: ReadonlyMap<string, string>): Effect.Effect<string[], KinuError> {
+  const stale = schemaRows(sql).filter((row) => row.type === 'view' && declared.has(row.name) && normal(row.sql) !== normal(declared.get(row.name))).map((row) => row.name);
+
+  if (stale.length === 0) return Effect.succeed([]);
+
+  return inTransaction(writes, () => Effect.gen(function* () {
+    const dropped = dependents(schemaRows(sql), stale);
+
+    for (const row of [...dropped].reverse()) yield* run(sql, `DROP ${row.type.toUpperCase()} "${row.name}"`);
+    yield* Effect.try({ try: () => { writes.init(); }, catch: (cause) => new KinuError('unsupported', `the init refused: ${String(cause)}`) });
+    const made = new Set(schemaRows(sql).map((row) => row.name));
+
+    for (const row of dropped.filter((view) => !made.has(view.name))) yield* run(sql, row.sql ?? '');
+
+    return stale;
+  }), false);
 }
 
 /** The columns a row of `table` stores, generated ones not among them. */
@@ -342,23 +364,11 @@ function retire(sql: SqlExec, writes: TableWrites, table: string, outcome: Outco
 
 /** Every stale table's group brought up: all of them in one rebuild, which runs the init once; where that refuses,
  *  group by group, so the one that cannot be brought up is named and the rest are. The first refusal ends it. */
-function bringUpStale(sql: SqlExec, writes: TableWrites, outcome: Outcome): Effect.Effect<void> {
+function bringUpTables(sql: SqlExec, writes: TableWrites, outcome: Outcome, declared: ReadonlyMap<string, string>): Effect.Effect<void> {
   return Effect.gen(function* () {
     const names = tableNames(sql);
-    const held = writes.tables.filter((table) => names.includes(table));
-
-    if (held.length === 0) return;
-    const declared = yield* Effect.result(initStatements(sql, writes, held));
-
-    if (Result.isFailure(declared)) {
-      outcome.refused = declared.failure.message;
-
-      return;
-    }
-
-    outcome.unchecked.push(...held.filter((table) => !declared.success.has(table)));
     const current = new Map(schemaRows(sql).filter((row) => row.type === 'table').map((row) => [row.name, row.sql]));
-    const stale = held.filter((table) => declared.success.has(table) && normal(current.get(table)) !== normal(declared.success.get(table)));
+    const stale = writes.tables.filter((table) => names.includes(table) && declared.has(table) && normal(current.get(table)) !== normal(declared.get(table)));
     const parents = parentsOf(sql, names);
     const groups: string[][] = [];
 
@@ -374,10 +384,36 @@ function bringUpStale(sql: SqlExec, writes: TableWrites, outcome: Outcome): Effe
     }
 
     for (const group of groups) {
-      yield* bringUp(sql, writes, outcome, { group, declared: declared.success });
+      yield* bringUp(sql, writes, outcome, { group, declared });
 
       if (outcome.refused !== null) return;
     }
+  });
+}
+
+/** The init's statements read, then every stale table brought up, then every stale view made again. */
+function bringUpStale(sql: SqlExec, writes: TableWrites, outcome: Outcome): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const names = tableNames(sql);
+    const held = writes.tables.filter((table) => names.includes(table));
+
+    if (held.length === 0) return;
+    const declared = yield* Effect.result(initStatements(sql, writes, held));
+
+    if (Result.isFailure(declared)) {
+      outcome.refused = declared.failure.message;
+
+      return;
+    }
+
+    outcome.unchecked.push(...held.filter((table) => !declared.success.has(table)));
+    yield* bringUpTables(sql, writes, outcome, declared.success);
+
+    if (outcome.refused !== null) return;
+    const views = yield* Effect.result(remakeViews(sql, writes, declared.success));
+
+    if (Result.isFailure(views)) outcome.refused = views.failure.message;
+    else outcome.rebuilt.push(...views.success);
   });
 }
 

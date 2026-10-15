@@ -18,6 +18,7 @@ const FROM = {
   'webhook_secrets@packages/core/src/events/ingress/secrets.ts': ['secret_id TEXT PRIMARY KEY', 'created_at INTEGER NOT NULL'],
   'cp_audit@packages/core/src/control-plane/store.ts': ['id TEXT PRIMARY KEY'],
   'tails@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY'],
+  'head_scores@packages/core/src/heads.ts': ['SELECT * FROM heads'],
 };
 
 const TO = {
@@ -32,13 +33,14 @@ const TO = {
   'webhook_secrets@packages/core/src/events/ingress/secrets.ts': ['secret_id TEXT PRIMARY KEY'],
   'cp_audit@packages/core/src/control-plane/store.ts': ['id TEXT PRIMARY KEY', 'note TEXT'],
   'tails@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY', 'seq INTEGER NOT NULL DEFAULT NULL'],
+  'head_scores@packages/core/src/heads.ts': ['SELECT id, seq FROM heads'],
 };
 
 const { 'device_consent_requests@packages/core/src/safety/device-consent.ts': _removed, ...CANDIDATE } = TO;
 
 const CLASSES = {
   account: ['device_joins', 'device_connect_tickets', 'user_profile', 'workspace_overviews'],
-  agent: ['heads', 'tails'],
+  agent: ['heads', 'tails', 'head_scores'],
   local: ['driver_lease'],
 };
 
@@ -47,7 +49,7 @@ test('the changed tables come from the two locks: removed, reshaped, and added',
 
   expect(changed.map(({ table, change }) => `${table} ${change}`)).toEqual([
     'cp_audit reshaped', 'cp_feedback reshaped', 'device_connect_tickets reshaped', 'device_consent_requests removed', 'device_joins reshaped',
-    'driver_lease reshaped', 'heads reshaped', 'tails reshaped', 'webhook_secrets reshaped', 'workspace_overviews reshaped',
+    'driver_lease reshaped', 'head_scores reshaped', 'heads reshaped', 'tails reshaped', 'webhook_secrets reshaped', 'workspace_overviews reshaped',
   ]);
   expect(added).toEqual(['device_consent_asks']);
 });
@@ -79,6 +81,7 @@ test('the plan says what each repair does: rebuild, refill a cache, retire, leav
     'rebuilt where held, every row kept:',
     '  device_connect_tickets [account]',
     '  device_joins [account]',
+    '  head_scores [agent]: a view, made again by its init',
     'left as the build before made it, which takes this build\'s writes (no class makes it):',
     '  cp_feedback [no class]',
     'CLI-local, outside this deploy:',

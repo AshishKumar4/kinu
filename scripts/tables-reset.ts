@@ -143,6 +143,12 @@ export function verdictOf(table: ChangedTable, at: { from: GenesisLock; to: Gene
 
   if (classes.length > 0 && classes.every((name) => name === 'local')) return { ...verdict, does: 'local' };
 
+  // A view holds no rows: its class's repair makes it again from the init; none makes one no class's init does.
+  if (after.length === 1 && /^SELECT\b/iu.test(after[0] ?? '')) {
+    return classes.length > 0 ? { ...verdict, does: 'rebuild', why: 'a view, made again by its init' }
+      : { ...verdict, does: 'refuse', why: 'a view no class\'s init makes, so no repair makes it again' };
+  }
+
   if (classes.length === 0) {
     // No object repairs it: it stays as the build before made it, which must take this build's writes.
     const kept = new Set(after.map(columnOf));
