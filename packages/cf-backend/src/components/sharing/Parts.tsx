@@ -80,7 +80,7 @@ function Placeholder({ part, signedIn, act }: { part: Extract<PartView, { state:
 
   return (
     <div data-part-private className={HELD}>
-      <LockSimpleIcon size={22} className="p-text-3" />
+      <LockSimpleIcon size={22} className="shrink-0 p-text-3" />
       <p className="p-meta p-text-2">Private to {holders.join(", ")} · from {sourcesOf(part.sources)}</p>
       <div className="flex flex-wrap justify-center gap-1.5">
         {signedIn
@@ -151,7 +151,7 @@ export function PartFrameView({ part, signedIn, act }: { part: PartView; signedI
     case "waiting": {
       return (
         <div data-part-waiting className={HELD}>
-          <LockSimpleIcon size={22} className="p-text-3" />
+          <LockSimpleIcon size={22} className="shrink-0 p-text-3" />
           <p className="p-meta p-text-2">Waiting for {firstName(part.holder)} to lend this again</p>
           {signedIn
             ? <PartButton onClick={act.ask} data-part-ask>Ask {firstName(part.holder)}</PartButton>

@@ -408,10 +408,10 @@ export function RoomSlateFrame() {
       <h1 className="text-[17px] font-bold">{scene.heading}</h1>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         {scene.parts.map((part) => (
-          <section key={part.key} className="overflow-hidden rounded-lg border border-[#e5e7eb]">
+          <section key={part.key} className="flex flex-col overflow-hidden rounded-lg border border-[#e5e7eb]">
             <h2 className="border-b border-[#eef1f5] px-3 py-2 text-xs font-bold text-[#4a5568]">{part.label}</h2>
             <iframe src={`/gallery.html?frame=room-part&part=${part.key}&scheme=light`} title={part.label} data-slate-part={part.key}
-              className="block w-full border-0" style={{ height: part.height }} />
+              className="block w-full flex-1 border-0" style={{ minHeight: part.height }} />
           </section>
         ))}
       </div>
