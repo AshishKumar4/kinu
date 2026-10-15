@@ -130,9 +130,9 @@ export function bindingDecisionRun(binding: WorkersAIRunBinding): DecisionRun {
     const answer = await binding.run(modelId, body);
     const url = `${BINDING_PLACE}/${modelId}`;
 
-    if (answer instanceof Response) return answerOf(answer, modelId, url, body);
+    if (answer instanceof Response) return settle(answerOf(answer, modelId, url, body));
 
-    if (answer instanceof ReadableStream) return answerOf(new Response(answer), modelId, url, body);
+    if (answer instanceof ReadableStream) return settle(answerOf(new Response(answer), modelId, url, body));
 
     return answer;
   };
@@ -177,13 +177,13 @@ export function restDecisionRun(opts: {
       body: JSON.stringify(body),
     });
 
-    return answerOf(res, modelId, url, body);
+    return settle(answerOf(res, modelId, url, body));
   };
 }
 
 /** A decision answered over HTTP: its whole object, or its refusal read as the model stack reads one. */
-async function answerOf(res: Response, modelId: string, url: string, body: JsonObject): Promise<JsonObject> {
-  const text = await res.text();
+const answerOf = (res: Response, modelId: string, url: string, body: JsonObject): Effect.Effect<JsonObject, KinuError> => Effect.gen(function* () {
+  const text = yield* Effect.promise(async () => res.text());
   const answer = tolerate(() => readJsonObjectText(text), 'malformed-input');
 
   if (res.ok && answer) return answer;
@@ -199,5 +199,5 @@ async function answerOf(res: Response, modelId: string, url: string, body: JsonO
 
   const refusal = spentAllowanceRefusal(refused) ?? refused;
 
-  return settle(Effect.fail(new KinuError(providerRefusalCode({ cause: refusal }) ?? 'unavailable', refused.message, { cause: refusal })));
-}
+  return yield* new KinuError(providerRefusalCode({ cause: refusal }) ?? 'unavailable', refused.message, { cause: refusal });
+});
