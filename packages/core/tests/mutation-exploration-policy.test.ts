@@ -3,10 +3,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
-import { createTestActors, scratchDir } from '@kinu.run/test-utils';
+import { createTestActors, scratchDir, createRecordingLogger } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import { makeExecRaw, makeSql } from './helpers';
-import { createRecordingLogger } from '../src/obs/index';
 import * as pristineArchive from '../src/strategy/archive';
 import * as pristineClamp from '../src/tools/clamp';
 import * as pristineMergeBack from '../src/strategy/merge-back';

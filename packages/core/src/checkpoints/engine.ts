@@ -25,7 +25,7 @@ const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 /** A git run: `code` null when git never finished (a signal, an overfull buffer); `missing` when it could not start. */
-export interface CheckpointGitRun {
+interface CheckpointGitRun {
   readonly code: number | null;
   readonly stdout: string;
   readonly stderr: string;
@@ -73,7 +73,7 @@ export interface CheckpointEngineOptions {
 }
 
 /** A snapshot a mutation asks for. `turn` null is out of any turn: the turn key is `no-turn`. */
-export interface CheckpointRequest {
+interface CheckpointRequest {
   readonly agent: string;
   readonly dir: string;
   readonly turn: CheckpointTurnMeta | null;

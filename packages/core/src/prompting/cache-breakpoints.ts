@@ -346,7 +346,7 @@ export function promptCacheOptions(strategy: PromptCacheStrategy): ProviderOptio
   return strategy.kind === 'openai-prefix' && strategy.ttl !== undefined ? { openai: { promptCacheRetention: strategy.ttl } } : undefined;
 }
 
-export interface PromptCachePlanInput {
+interface PromptCachePlanInput {
   providerId?: string;
   modelId?: string;
   system: string;
@@ -356,7 +356,7 @@ export interface PromptCachePlanInput {
   retention?: CacheRetention;
 }
 
-export interface PromptCachePlan {
+interface PromptCachePlan {
   strategy: PromptCacheStrategy;
   system: CacheableSystem;
   providerOptions?: ProviderOptions;

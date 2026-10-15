@@ -5,7 +5,7 @@
  */
 import { expect, test } from 'bun:test';
 import { SubordinateRosterStore, actorConnectionTag } from '@kinu.run/core';
-import { createRecordingLogger, KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
 import { asPane, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import {
@@ -13,6 +13,7 @@ import {
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { wrapDatabase } from '@kinu.run/core/identity';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 /** A model call's own user turns, without the runtime's context blocks (which list other agents' briefs). */
 const openingOf = (run: RecordedGatewayRun): string => JSON.stringify(requestOf(run).messages.filter((message) =>

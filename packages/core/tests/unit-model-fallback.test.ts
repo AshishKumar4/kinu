@@ -10,12 +10,13 @@ import {
   createChatModel, createOpenAICompatProvider, createProviderRegistry, runChat,
   type AuthResolution, type ChatEvent, type ChatFallback, type ModelCallDeps,
 } from '../src/index';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 import type { MediaModality } from '../src/prompting/attachment-sanitizer';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import { ProviderPacer, providerPacer } from '../src/providers/pacing';
 import { attemptKey } from '../src/providers/attempt-identity';
 import type { ProviderWaitInfo } from '../src/providers/types';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 

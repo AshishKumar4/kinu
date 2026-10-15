@@ -1,7 +1,8 @@
 // detach runs an effect React calls and nothing awaits: its type admits no failure, and a defect is one diagnostic.
 import { Effect } from 'effect';
 import { describe, expect, test } from 'bun:test';
-import { createRecordingLogger, detach, KinuError, setDiagnosticsSink } from '../src/obs/index';
+import { detach, KinuError, setDiagnosticsSink } from '../src/obs/index';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 describe('detach', () => {
   test('refuses, at compile time, an effect that has not answered its failures', () => {

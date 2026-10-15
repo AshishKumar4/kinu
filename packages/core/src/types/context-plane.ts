@@ -20,7 +20,7 @@ export type StagedContextDeferral = 'unpaired_tool_call' | 'history_rewritten';
 
 export type ContextProposalClosure = 'superseded_by_edit' | 'history_rewritten';
 
-export type ContextEditEffect = 'step' | 'turn';
+type ContextEditEffect = 'step' | 'turn';
 
 export interface ContextEditEvent {
   readonly type: 'context_edit';

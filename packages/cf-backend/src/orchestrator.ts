@@ -139,7 +139,7 @@ import {
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, aggregateScore, type GepaRunSummary,
   qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -195,9 +195,9 @@ import {
   getExecutorFiles, readExecutorFile, listEnvironments,
   renameExecutorPathOp, deleteExecutorPathOp,
   ExecutorFileUpload, ExecutorFileDownload,
-  type DirEntry, type ExecutorTextFile, type ExecutorWriteResult,
+  type ExecutorTextFile, type FilesPage, type ExecutorWriteResult,
   cancelBackgroundJob, clearBackgroundJobs, dismissBackgroundJob,
-  jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
+  listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
@@ -3829,7 +3829,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Background jobs (#173): lifecycle lives in core BackgroundJobRunner; below is the @callable transport.
 
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    return jobResult(this.jobAuthorities.owning(jobId)?.store ?? this.jobs, jobId);
+    return (this.jobAuthorities.owning(jobId)?.store ?? this.jobs).get(jobId);
   }
 
   @callable()
@@ -3987,7 +3987,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */
   async recordGitHubEgress(facts: readonly GitHubFact[], actorId: string | null): Promise<void> {
-    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, source: 'egress', at: Date.now() });
+    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, at: Date.now() });
   }
 
   @callable() getWorkspaceGitHub(refresh = false): Promise<WorkspaceGitHubView> {
@@ -4270,7 +4270,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
-    // Planes only this root carries (declared in core/conformance/manifest.ts).
+    // Planes only this root carries (declared in test-utils/src/conformance/manifest.ts).
     initWebhookIngressTables(this.ctx.storage.sql);
 
     initSleepTimeUpdatesTable(execRaw);
@@ -5165,7 +5165,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
           id: c.id, parentId: c.parentId, source: c.source,
           scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
-          aggregateScore: c.aggregateScore, createdAt: c.createdAt,
+          aggregateScore: aggregateScore(c), createdAt: c.createdAt,
         }));
 
         // The membership table is core's; no raw SELECT across the package boundary.
@@ -6649,10 +6649,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Directory listing read off each executor's own raw handle, in that environment's paths. */
-  @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
+  /** A page of the folder from `from`; its answer names where the next starts. */
+  @callable() async getExecutorFiles(executorId: string, path: string, from?: number): Promise<FilesPage> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
 
-    return getExecutorFiles(this.rt.executionRouter, executorId, path);
+    return getExecutorFiles(this.rt.executionRouter, executorId, path, from);
   }
 
   @callable() async readExecutorFile(executorId: string, path: string): Promise<ExecutorTextFile> {

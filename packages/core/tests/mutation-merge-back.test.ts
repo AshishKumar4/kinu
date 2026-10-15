@@ -5,9 +5,8 @@
 import { describe, expect, test } from 'bun:test';
 import { symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { scratchDir, createRecordingLogger } from '@kinu.run/test-utils';
 import { MAX_TX_BLOB_BYTES } from '@nimbus-sh/core/constants.js';
-import { createRecordingLogger } from '../src/obs/index';
 import * as pristine from '../src/strategy/merge-back';
 import type {
   MemberApply, MemberFileChange, MergeMember, MergePolicy, MergeBackReport,

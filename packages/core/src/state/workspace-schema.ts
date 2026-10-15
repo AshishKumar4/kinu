@@ -1,5 +1,5 @@
 // The one table list every composition root creates, in one idempotent transaction. Root-only tables are
-// declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
+// declared in `test-utils/src/conformance/manifest.ts`, which checks `sqlite_master` against this.
 
 import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
 import { initAgentReportsTable } from '../subordinates/report-sequence';

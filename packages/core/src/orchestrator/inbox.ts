@@ -66,21 +66,8 @@ export function steerUserMessage(drained: ReadonlyArray<UserSteer>): ModelMessag
 /** Marks a durable user row as a landed steer. */
 export const STEER_METADATA_KEY = 'kinuSteer';
 
-/** Step index the steer was spliced into; durable half of {@link SteerStatusEvent}. */
+/** Step index the steer was spliced into; durable half of the `steer_status` event both backends broadcast. */
 export const STEER_STEP_METADATA_KEY = 'kinuSteerAtStep';
-
-export type SteerStatusDetail =
-  /** Lands at the running turn's next step boundary. */
-  | { status: 'queued'; steerId: string; text: string }
-  /** Spliced into the step `atStep` started, so a surface draws it inside the in-progress message. */
-  | { status: 'landed'; steerId: string; text: string; atStep: number }
-  /** An interrupt dropped it; the composer takes it back. */
-  | { status: 'returned'; steerId: string; text: string }
-  /** Ran as its own turn; that turn's opening row, same id, is its record. */
-  | { status: 'turn'; steerId: string; text: string };
-
-/** Broadcast by both backends for a user steer. */
-export type SteerStatusEvent = SteerStatusDetail & { type: 'steer_status' };
 
 export interface LandedSteerRow {
   readonly id: string;
@@ -144,7 +131,7 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
   )`);
   // A programmatic turn its producer heard queued, held until its turn settles: `id` is its idempotency key. A delivered
   // run's row keeps its end from the commit that ended it until a report carrying it reached its caller: inline
-  // (`run_end_json`), or spilled to a file as other large session payloads are (`run_end_path`, `run_end_digest`).
+  // (`run_end_json`), or spilled to a file as other large session payloads are (`run_end_path`).
   execRaw(`CREATE TABLE IF NOT EXISTS queued_turns (
     seq           INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id      TEXT NOT NULL,
@@ -154,11 +141,8 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     yields        INTEGER NOT NULL DEFAULT 0,
     run_end_json  TEXT,
     run_end_path  TEXT,
-    run_end_digest TEXT,
     UNIQUE (actor_id, id),
-    CHECK((run_end_json IS NULL AND run_end_path IS NULL AND run_end_digest IS NULL)
-      OR (run_end_json IS NOT NULL AND run_end_path IS NULL AND run_end_digest IS NULL)
-      OR (run_end_json IS NULL AND run_end_path IS NOT NULL AND run_end_digest IS NOT NULL))
+    CHECK(run_end_json IS NULL OR run_end_path IS NULL)
   )`);
 }
 
@@ -261,18 +245,18 @@ export class PendingSendStore {
 
   /** The delivered run held under `id` ended so, in the caller's commit: a restart tells it, never runs the run again. */
   recordRunEnd(id: string, end: SessionPayload): void {
-    void this.sql`UPDATE queued_turns SET run_end_json = ${end.json}, run_end_path = ${end.path}, run_end_digest = ${end.digest}
+    void this.sql`UPDATE queued_turns SET run_end_json = ${end.json}, run_end_path = ${end.path}
       WHERE actor_id = ${this.actorId} AND id = ${id} AND run_end_json IS NULL AND run_end_path IS NULL`;
   }
 
   /** Each delivered run's end kept here and not yet told, in the order its runs were held. */
   runEnds(): { readonly id: string; readonly metadata: JsonObject | null; readonly end: SessionPayload }[] {
-    return this.sql<{ id: string; metadata_json: string | null; run_end_json: string | null; run_end_path: string | null; run_end_digest: string | null }>`
-      SELECT id, metadata_json, run_end_json, run_end_path, run_end_digest FROM queued_turns
+    return this.sql<{ id: string; metadata_json: string | null; run_end_json: string | null; run_end_path: string | null }>`
+      SELECT id, metadata_json, run_end_json, run_end_path FROM queued_turns
       WHERE actor_id = ${this.actorId} AND (run_end_json IS NOT NULL OR run_end_path IS NOT NULL) ORDER BY seq ASC`
       .flatMap((row) => {
         // The WHERE above and the table's CHECK leave only references.
-        const end = payloadReference(row.run_end_json, row.run_end_path, row.run_end_digest);
+        const end = payloadReference(row.run_end_json, row.run_end_path);
 
         return end === null ? [] : [{ id: row.id, metadata: row.metadata_json === null ? null : parseJsonObject(row.metadata_json), end }];
       });

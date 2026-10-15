@@ -2,7 +2,7 @@
 
 export * from './types';
 
-export { computeParetoFront, sampleParentByWeight, bestAggregate, parentSelectionWeights } from './pareto';
+export { aggregateScore, computeParetoFront, sampleParentByWeight, bestAggregate, parentSelectionWeights } from './pareto';
 
 export { rolloutMinibatch, renderReflectionPrompt, proposeMutation } from './mutate';
 
@@ -18,5 +18,5 @@ export {
   persistGepaCandidate,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront,
   makePersistingHooks,
-  type GepaRunSummary, type GepaParetoEntry,
+  type GepaRunSummary, type GepaStopReason, type GepaParetoEntry,
 } from './persistence';

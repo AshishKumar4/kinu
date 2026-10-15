@@ -35,7 +35,7 @@ import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
 import type { SqlExecutor } from '../src/types/primitives';
 import {
-  cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob, jobResult,
+  cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
 } from '../src/read-models/background-jobs';
 import {
@@ -628,6 +628,23 @@ describe('executor file plane', () => {
     db.close();
   });
 
+  test("the root lists the workspace's own places, not the machine's directories beside them", async () => {
+    const db = new Database(':memory:');
+    const machines = new Map(Object.values(MOUNT_EXECUTORS).map((machine) => [machine, { isAvailable: () => true, files: machinePlane(machine, []) }]));
+    const { files } = workspaceFilePlane(createWorkspaceBundle(db), { mounts: standardMounts((name) => machines.get(name)), principal: {}, home: WORKSPACE_ROOT });
+    await files.mkdir('/home/main/proj', { recursive: true });
+
+    const root = await getExecutorFiles(router(files), 'workspace', '/');
+    const machineRoot = await files.readdir('/');
+
+    // The namespace's `/` holds the machine's own (`usr`, `tmp`, `proc`…); the owner's browser shows the workspace's.
+    expect(machineRoot.map((entry) => entry.name)).toEqual(expect.arrayContaining(['usr', 'tmp']));
+    expect(root.entries?.map((entry) => entry.name).sort()).toEqual(['computer', 'home', 'pc', 'slates']);
+    // Below `/` nothing is hidden: a path the agent names is reachable.
+    expect((await getExecutorFiles(router(files), 'workspace', '/home')).entries?.map((entry) => entry.name)).toEqual(['main']);
+    db.close();
+  });
+
   test('an environment with no file plane is an error value, not a throw', async () => {
     const { rt, db } = createTestRuntime();
     // Unknown id and a device with no filesystem yet both read as a rendered reason.
@@ -782,7 +799,7 @@ describe('background-job control plane', () => {
     const bareSql = makeSql(db);
     const jobs = new BackgroundJobStore(bareSql, createTestActors(bareSql, makeExecRaw(db)).main);
     expect(() => listBackgroundJobs(jobs)).toThrow(/no such table: background_jobs/);
-    expect(() => jobResult(jobs, 'j1')).toThrow(/no such table: background_jobs/);
+    expect(() => jobs.get('j1')).toThrow(/no such table: background_jobs/);
     expect(dismissBackgroundJob(jobs, 'j1')).toEqual({
       ok: false,
       error: expect.stringContaining('no such table: background_jobs'),

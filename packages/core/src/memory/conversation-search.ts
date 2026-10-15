@@ -30,7 +30,7 @@ export interface ConversationSearchHit {
   snippet: string;
 }
 
-export interface ConversationScrollMessage {
+interface ConversationScrollMessage {
   id: string;
   role: string;
   content: string;

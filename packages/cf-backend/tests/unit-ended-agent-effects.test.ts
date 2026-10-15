@@ -5,9 +5,10 @@
  * are no one's concern: what its turn owed them stands down.
  */
 import { expect, test } from 'bun:test';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { orchestratorHarness } from './helpers/actor-harness';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 test("an agent dismissed before its turn's effects ran owes no title: the effect stands down, and nothing is renamed", async () => {
   const workspace = orchestratorHarness();

@@ -13,7 +13,7 @@ import { ingressAdmitted, ingressDenied, peerIp } from './ingress-budget';
 import type { KvStore } from "@kinu.run/agent-utils";
 import * as v from "valibot";
 
-export interface PcUserStub {
+interface PcUserStub {
   issueDeviceConnectTicket(
     caller: UserCaller,
     token: string,

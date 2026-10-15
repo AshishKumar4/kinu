@@ -4,7 +4,7 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { Fault, Layer } from '@kinu.run/core';
+import type { Fault, Layer } from '../../core/layergate/index';
 import {
   buildPlan,
   matchesPlanSnapshot,
@@ -13,8 +13,8 @@ import {
   transformTurns,
   type BuildPlanInputs,
 } from '@better-compact/core';
-import { kinuCodec, kinuSpec } from './codec';
-import { compactionTranscriptPath } from './stores';
+import { kinuCodec, kinuSpec } from '../src/codec';
+import { compactionTranscriptPath } from '../src/stores';
 
 export interface CompactionLadderSubjects {
   readonly kinuCodec: typeof kinuCodec;

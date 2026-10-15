@@ -5,7 +5,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { oneMachine, toolExecute } from '@kinu.run/test-utils';
+import { oneMachine, toolExecute, type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
@@ -19,8 +19,12 @@ import {
 } from '../src/index';
 import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 import {
-  classifyErrorCode, createRecordingLogger, ERROR_CODES, KinuError,
-  type ErrorCode, type RecordingLogger, refusalOf, renderThrownChain,
+  classifyErrorCode,
+  ERROR_CODES,
+  KinuError,
+  type ErrorCode,
+  refusalOf,
+  renderThrownChain,
 } from '../src/obs/index';
 import { JsonObjectSchema } from '../src/utils/json';
 import { createTestRuntime, conversationsFor } from './helpers';

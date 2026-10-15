@@ -16,14 +16,11 @@ export {
 } from './agent-tracing';
 
 export {
-  createRecordingTracer,
   renderSelfPath,
   traceException,
   type TraceException,
   SPAN_ATTR_ISOLATE_GEN,
   SPAN_ATTR_SELF_PATH,
-  type RecordedSpan,
-  type RecordingTracer,
   type ScopedSpan,
   type SpanAttributeValue,
   type SpanOpenAttributes,
@@ -57,7 +54,6 @@ export {
   createCompositeLogger,
   createConsoleLogger,
   createLineLogger,
-  createRecordingLogger,
   diagnostics,
   relayedLine,
   setDiagnosticsSink,
@@ -71,8 +67,6 @@ export {
   type LogFieldValue,
   type Logger,
   type LoggableFields,
-  type RecordedLog,
-  type RecordingLogger,
   type RelayedLine,
   type ReservedFieldIsNotLoggable,
   type ReservedLogField,

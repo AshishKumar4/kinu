@@ -52,7 +52,7 @@ export interface AssembledTurnMessages {
  * Without `count` (or on `unsupported`) the gate still applies via the estimate, its media priced ({@link messageTokens}).
  * An unknown window leaves the limit unbounded, so only a known one refuses.
  */
-export interface TurnAdmission {
+interface TurnAdmission {
   count?(request: CountableRequest): Promise<InputTokenCount>;
   /** Part of what the provider prices, so part of what is measured. */
   tools?: ToolSet | undefined;
@@ -87,7 +87,7 @@ export interface CompactionTriggerReader {
   takeTrigger(sessionKey: string, historyLength: number): MeasuredCompactionTrigger;
 }
 
-export interface MeasuredCompactionTrigger {
+interface MeasuredCompactionTrigger {
   providerReportedTokens?: number;
   trigger: CompactionTrigger;
 }

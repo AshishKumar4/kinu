@@ -3,8 +3,7 @@
 // "The publication seal".
 import { describe, test, expect } from 'bun:test';
 import { MAX_TX_BLOB_BYTES, MAX_TX_LOGICAL_ROWS } from '@nimbus-sh/core/constants.js';
-import { present } from '@kinu.run/test-utils';
-import { createRecordingLogger, type RecordingLogger } from '../src/obs/index';
+import { present, type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
 import {
   MERGE_POLICIES, SETTLE_RULES, APPLY_PRECONDITIONS, TRANSACTION_BOUNDS,
   mergePolicyOf, memberDigestOf, baseDigestOf, planMemberApply,

@@ -7,6 +7,7 @@
 import type {
   GepaCandidate, EvalInstance, ReflectionLM,
 } from './types';
+import { aggregateScore } from './pareto';
 import { renderInput, truncate } from './text';
 import { stripMarkdownFences } from '../../providers/structured';
 
@@ -105,12 +106,12 @@ host API they call through, and the shape of what they return. A child that drop
 refused by the constraint gate downstream, after a full eval-set scoring pass has already been paid
 for it.
 
-Candidate A (aggregate ${opts.pair.a.aggregateScore.toFixed(3)}):
+Candidate A (aggregate ${aggregateScore(opts.pair.a).toFixed(3)}):
 \`\`\`
 ${truncate(opts.pair.a.source, 3000)}
 \`\`\`
 
-Candidate B (aggregate ${opts.pair.b.aggregateScore.toFixed(3)}):
+Candidate B (aggregate ${aggregateScore(opts.pair.b).toFixed(3)}):
 \`\`\`
 ${truncate(opts.pair.b.source, 3000)}
 \`\`\`

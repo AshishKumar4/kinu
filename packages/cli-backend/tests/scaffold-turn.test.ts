@@ -14,9 +14,9 @@ import {
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
-import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
+import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase, createRecordingLogger } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',

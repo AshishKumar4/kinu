@@ -1,20 +1,17 @@
 // cf composition roots observed on real actor instances, compared against
-// core/src/conformance/manifest.ts in both directions. Each plane is read where the product
+// test-utils/src/conformance/manifest.ts in both directions. Each plane is read where the product
 // produces it: the tools a model call carries, and the model lanes whose calls the object bills
 // when a public operation runs on them.
 import { describe, test, expect } from 'bun:test';
 import { asSchema } from 'ai';
 import * as v from 'valibot';
 import {
-  compareSurface, CONFORMANCE_PRODUCERS, observedOpEnum, renderConformanceFindings,
-  wiredProducers, type ObservedSurface,
-} from '@kinu.run/core';
-import {
   chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, improvementLanesRan, runDelegatedTask, until,
   workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent, mainDatabase,
 } from './helpers/actor-harness';
 import { chatCompletion, offeredTools, stubAiBinding } from './helpers/platform-gateway';
 import { present } from '@kinu.run/test-utils';
+import { compareSurface, CONFORMANCE_PRODUCERS, observedOpEnum, renderConformanceFindings, wiredProducers, type ObservedSurface } from '@kinu.run/test-utils/conformance';
 
 /** An advisor note and a curriculum proposal the gateway answers with, each in its reader's shape. */
 const ADVISOR_NOTE = JSON.stringify({ note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work' });

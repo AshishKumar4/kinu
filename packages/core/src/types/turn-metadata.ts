@@ -17,7 +17,7 @@ import { TurnReasonSchema, type TurnAuthorship, type TurnReason, type WorkMode }
 /** Who wrote a turn's words, stamped at enqueue. Defaults to harness, so a new event kind never renders as the operator's. */
 export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
 
-export type TurnAuthor = 'harness' | 'operator';
+type TurnAuthor = 'harness' | 'operator';
 
 /** Where the admitting path stores whom a turn answers: written there by the path, never taken from a caller. */
 const TURN_AUTHORSHIP_METADATA_KEY = 'kinuAuthorship';

@@ -78,17 +78,16 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
   // `root_id` trails the status so `listLive` (DISTINCT root_id of running heads) seeks only open rows.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_status ON head_journal(actor_id, status, root_id)`);
 
+  // A step is named by its id, which its head and seq generate; its key is the two.
   execRaw(`CREATE TABLE IF NOT EXISTS head_steps (
     actor_id TEXT NOT NULL,
-    id TEXT NOT NULL,
     head_id TEXT NOT NULL,
     seq INTEGER NOT NULL,
+    id TEXT GENERATED ALWAYS AS (head_id || '-s' || seq) VIRTUAL,
     parts_json TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    PRIMARY KEY (actor_id, id)
+    PRIMARY KEY (actor_id, head_id, seq)
   )`);
-
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_steps_head ON head_steps(actor_id, head_id, seq)`);
 
   execRaw(HEAD_MERGE_RESULTS_DDL);
 

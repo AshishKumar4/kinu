@@ -12,10 +12,10 @@ import type { ContainerEgressEnv, ContainerEventResolver, EgressWorkspace, KinuE
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import {
-  createRecordingLogger, setDiagnosticsSink, type RecordedLog,
+  setDiagnosticsSink,
 } from '@kinu.run/core/obs';
 import { closeReason, KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
+import { present, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
 
 // `agents` reaches `cloudflare:email`: mock first, then dynamic imports.
 mockAgentsSdk();

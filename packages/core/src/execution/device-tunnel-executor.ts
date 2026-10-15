@@ -1,5 +1,5 @@
-import { exists as nimbusExists, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
-import { direntType } from '../vfs/dirent';
+import { exists as nimbusExists, type Awaitable, type VFS, type VfsDirent, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { direntType, listedStat, type DirectoryPages } from '../vfs/dirent';
 /**
  * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
  * A fleet: with several live machines a call must name one (`{ device }`); files mount per machine under `/pc/<name>`.
@@ -305,6 +305,11 @@ class DevicePlane {
       if (this.isFleetRoot(path)) return this.routes().map((route) => ({ name: route.segment, type: 'directory' }));
 
       return settle(this.dispatch(path, (view, native) => view.readdir(native)));
+    },
+    readdirPage: async (path, window) => {
+      if (this.isFleetRoot(path)) return { entries: this.routes().map((route) => ({ name: route.segment, type: 'directory' as const })), next: null };
+
+      return settle(this.dispatch(path, (view, native) => view.readdirPage(native, window)));
     },
     stat: async (path, options): Promise<VfsStat | null> => {
       if (this.isFleetRoot(path)) return { size: 0, mtimeMs: 0, type: 'directory' };
@@ -613,7 +618,27 @@ const DeviceDigestWriteSchema = v.variant('ok', [
   v.object({ ok: v.literal(false), sha256: v.nullable(v.string()) }),
 ]);
 
-export type DeviceVFS = VFS & Required<CheckpointFiles> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange' | 'rmdir'>>;
+export type DeviceVFS = VFS & Required<CheckpointFiles> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange' | 'rmdir'>> & DirectoryPages;
+
+/** A listed entry: an older daemon reads no size or age beside the name, and they then stay unknown, never asked. */
+function listedEntry(entry: JsonValue): VfsDirent {
+  if (isJsonObject(entry)) {
+    const name = v.safeParse(v.string(), entry.name);
+
+    const kind = v.safeParse(v.string(), entry.type);
+
+    if (name.success) {
+      const type = direntType(kind.success ? kind.output : undefined);
+      const size = v.safeParse(v.number(), entry.size);
+      const mtimeMs = v.safeParse(v.number(), entry.mtimeMs);
+      const stat = listedStat(type, size.success ? size.output : undefined, mtimeMs.success ? mtimeMs.output : undefined);
+
+      return { name: name.output, type, ...(stat !== undefined && { stat }) };
+    }
+  }
+
+  return { name: JSON.stringify(entry), type: 'unknown' };
+}
 
 /** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
  *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
@@ -726,6 +751,20 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   });
 
   /** The step toward a confined root: Nimbus stats each directory on a path. */
+  /** One window of a directory as the daemon lists it, each entry with the size and age it read beside the name. */
+  const listWindow = (
+    path: string, root: string | null, offset: number, limit: number,
+  ): Effect.Effect<{ readonly entries: VfsDirent[]; readonly next: number | null }, KinuError | VfsError> => Effect.gen(function* () {
+    const raw: JsonValue | undefined = yield* call(DEVICE_METHOD.listFiles, [path, { root, offset, limit }], path);
+
+    const page: v.InferOutput<typeof DeviceListPageSchema> = yield* Effect.try({
+      try: () => v.parse(DeviceListPageSchema, raw),
+      catch: (cause) => new VfsError('EIO', 'device returned an unreadable directory page', path, { cause }),
+    });
+
+    return { entries: page.entries.map(listedEntry), next: page.next };
+  });
+
   const towardRoot = (path: string): Effect.Effect<string | null, VfsError> => Effect.gen(function* () {
     if ((yield* Effect.promise(() => consent.scope(deviceId))) === 'unconfined') return null;
     const root = yield* effectiveRoot();
@@ -784,31 +823,25 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
       if (step !== null) return [{ name: step, type: 'directory' as const }];
       const root = yield* guarded(path, 'scandir');
-      const entries: JsonValue[] = [];
+      const entries: VfsDirent[] = [];
 
       for (let offset: number | null = 0; offset !== null;) {
-        const raw: JsonValue | undefined = yield* call(DEVICE_METHOD.listFiles, [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], path);
-
-        const page: v.InferOutput<typeof DeviceListPageSchema> = yield* Effect.try({
-          try: () => v.parse(DeviceListPageSchema, raw),
-          catch: (cause) => new VfsError('EIO', 'device returned an unreadable directory page', path, { cause }),
-        });
+        const page: { readonly entries: VfsDirent[]; readonly next: number | null } = yield* listWindow(path, root, offset, DEVICE_LIST_PAGE_ENTRIES);
 
         entries.push(...page.entries);
         offset = page.next;
       }
 
-      return entries.map((entry) => {
-        if (isJsonObject(entry)) {
-          const name = v.safeParse(v.string(), entry.name);
+      return entries;
+    })),
 
-          const kind = v.safeParse(v.string(), entry.type);
+    readdirPage: (path, window) => settle(Effect.gen(function* () {
+      const step = yield* towardRoot(path);
 
-          if (name.success) return { name: name.output, type: direntType(kind.success ? kind.output : undefined) };
-        }
+      if (step !== null) return { entries: [{ name: step, type: 'directory' as const }], next: null };
+      const root = yield* guarded(path, 'scandir');
 
-        return { name: JSON.stringify(entry), type: 'unknown' as const };
-      });
+      return yield* listWindow(path, root, window.offset, Math.min(window.limit, DEVICE_LIST_PAGE_ENTRIES));
     })),
 
     stat: (path, options) => settle(Effect.gen(function* () {

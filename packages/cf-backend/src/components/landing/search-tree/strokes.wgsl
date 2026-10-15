@@ -44,9 +44,9 @@ struct Varying {
   let pixel = point + normal * side * half_width;
   let glow = look.x;
   let rgb = recede(palette, tone_color(palette, look.y, glow)) * glow_scale(palette, glow);
-  // On paper the mesh carries extra presence: a light-only lift that leaves
-  // the dark picture exactly where it was, matching hero-canvas.ts.
-  let lifted = look.z * mix(1.0, 2.4, palette.mode);
+  // Each ground's lift, as the picture asks: by default paper carries extra
+  // presence and the dark picture stays where it was, matching hero-canvas.ts.
+  let lifted = look.z * mix(palette.dark_lift, palette.light_lift, palette.mode);
 
   var out: Varying;
   out.position = to_clip(view, pixel);

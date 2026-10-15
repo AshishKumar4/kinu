@@ -182,10 +182,6 @@ function serverName(name: JsonValue): Effect.Effect<string, KinuError> {
   return trimmed.length > 64 ? Effect.fail(new KinuError('bad_input', '`name` must be <= 64 characters.')) : Effect.succeed(trimmed);
 }
 
-export function validateMcpServerName(name: JsonValue): string {
-  return settleSync(serverName(name));
-}
-
 function jsonColumn<Schema extends v.GenericSchema>(raw: string | null | undefined, schema: Schema): v.InferOutput<Schema> | null {
   if (!raw) return null;
   const parsed = v.safeParse(schema, tolerate(() => JSON.parse(raw), 'malformed-input'));

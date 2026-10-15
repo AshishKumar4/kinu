@@ -2,13 +2,14 @@
  *  bottom rule and the open tab's silhouette, and glides between tabs. */
 import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { PencilSimpleIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
+import { GearIcon, PencilSimpleIcon, PlusIcon, UsersThreeIcon, XIcon } from "@phosphor-icons/react";
 import { WORKSPACE_TITLE_MAX, type PanelAgent } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { composing } from "@/components/ui/form";
 import { TabOutline, useTabOutline } from "@/components/ui/TabOutline";
 import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
 import type { ChatActions } from "@/hooks/use-agents-nav";
+import { InspectorToggle, type InspectorControl } from "@/components/WorkbenchPanels";
 
 type Rename = (name: string) => Promise<void>;
 
@@ -134,5 +135,33 @@ function RenameField({ value, hint, subject, save, done }: { value: string; hint
         }} />
       {error && <span role="alert" data-failure className="p-bar-rename-error">{error}</span>}
     </span>
+  );
+}
+
+/** The bar's trailing actions: every agent, with those at work out of sight counted; the workspace's settings; and, on a
+ *  chat, the inspector's toggle. */
+export function WorkspaceBarActions({ workspace, working, view, inspector, onAgents }: {
+  workspace: string;
+  /** The agents at work with no tab of their own. */
+  working: number;
+  view: string | undefined;
+  inspector: InspectorControl | null;
+  onAgents: () => void;
+}) {
+  return (
+    <>
+      <button type="button" onClick={onAgents} className="p-bar-icon relative" aria-label="All agents" title="All agents">
+        <UsersThreeIcon size={16} />
+        {/* The agents at work out of sight, those with no tab of their own, counted where the owner can open them. */}
+        {working > 0 && (
+          <span data-working-agents={working} className="p-agents-badge absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums">
+            {working}
+          </span>
+        )}
+      </button>
+      <Link to={`/workspace/${workspace}/settings`} className="p-bar-icon" aria-current={view === "settings" ? "page" : undefined}
+        aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
+      {view === undefined && inspector && <InspectorToggle control={inspector} />}
+    </>
   );
 }

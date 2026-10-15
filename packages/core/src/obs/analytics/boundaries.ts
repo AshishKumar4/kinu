@@ -11,8 +11,8 @@ type BoundaryFamily = (typeof BOUNDARY_FAMILIES)[number];
 
 /**
  * `diagnostics`: no binding in reach; emits via core's logger and `install.ts` routes it.
- * `writer`: holds an env and calls a `record.ts` adapter; works in a DO, where no sink is
- * installed.
+ * `writer`: holds an env and calls a `record.ts` adapter; works wherever the env's dataset bindings
+ * reach, a DO included.
  */
 type BoundaryMechanism = 'diagnostics' | 'writer';
 

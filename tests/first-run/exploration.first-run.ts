@@ -20,8 +20,8 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import { isBackgroundHandle, ORCHESTRATOR_AGENT_SLUG, type RunEvent } from '../../packages/core/src/index';
+import { isBackgroundHandle, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
+import { ORCHESTRATOR_AGENT_SLUG, type RunEvent } from '../../packages/core/src/index';
 import {
   firstRunCaseId, firstRunCasePlan, type FirstRunDefect, type FirstRunSession, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';

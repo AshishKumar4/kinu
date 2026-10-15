@@ -18,7 +18,7 @@ import type { ToolErrorStep } from './tool-error-feedback';
 
 /** The tail breakpoints each step re-rolls. The system prompt's own breakpoint rides the turn's `instructions`
  *  (chat.ts), not the step. */
-export interface StepCachePlan {
+interface StepCachePlan {
   readonly strategy: PromptCacheStrategy;
 }
 

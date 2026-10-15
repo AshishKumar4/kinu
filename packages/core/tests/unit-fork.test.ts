@@ -204,7 +204,7 @@ describe('a workspace fork', () => {
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     // An answer mid-stream: its row is open and its parts live in stream_parts.
     chat.atomic(() => chat.messages.open('assistant', 'm2', 'output'));
-    chat.messages.streamOpenPart('m2', { partNo: 0, streamOrder: 0, descriptor: { json: '{"type":"text"}', path: null, digest: null }, text: 'partial' });
+    chat.messages.streamOpenPart('m2', { partNo: 0, streamOrder: 0, descriptor: { json: '{"type":"text"}', path: null }, text: 'partial' });
     chat.transcript.record({ id: 'm2', role: 'assistant', turnId: null, runId: null, metadata: null, parts: [{ messageId: 'm2', partNo: 0 }] });
 
     await expect(forkInto(src, tgt, { untilMessageId: 'm2' })).rejects.toThrow(/still open in the source/);

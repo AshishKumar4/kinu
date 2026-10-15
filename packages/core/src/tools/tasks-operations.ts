@@ -9,7 +9,7 @@ import { serve, serveTransactional, type Served } from '../operations/operation'
 import { codemodeNamespace } from './operation-surfaces';
 import { TASK_STATUSES, TASKS } from '../operations/tasks';
 
-export type RoleSwitchOutcome =
+type RoleSwitchOutcome =
   | { readonly kind: 'applied' }
   | { readonly kind: 'no-authority' }
   | { readonly kind: 'denied'; readonly text: string }

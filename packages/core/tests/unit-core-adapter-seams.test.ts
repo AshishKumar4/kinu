@@ -5,8 +5,8 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type FinishReason } from 'ai';
 import * as v from 'valibot';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
-import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
+import { setDiagnosticsSink } from '../src/obs/index';
+import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries, createRecordingLogger } from '@kinu.run/test-utils';
 import {
   buildModelCallEvent, type ModelCallReport,
   classifyRunEnd,

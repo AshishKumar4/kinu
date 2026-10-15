@@ -293,7 +293,7 @@ export function agentsProfileContext(
   };
 }
 
-export interface DelegatedProfile {
+interface DelegatedProfile {
   readonly resolved: ResolvedTurnProfile;
   readonly sources: ProfileProvenance;
 }

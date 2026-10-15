@@ -3,14 +3,9 @@ import { describe, test, expect } from 'bun:test';
 import { isStepCount, tool, type StopCondition, type ToolSet } from 'ai';
 import { z } from 'zod';
 import {
-  INTERRUPTED_TURN, runChat, createChatModel, isRateLimitedTurnError,
+  INTERRUPTED_TURN, runChat, createChatModel,
   type ChatEvent,
 } from '../src/index';
-
-/** Spelled out rather than imported, so rewording either sentence fails this file. */
-const STALLED_OPENING = 'Turn stalled:';
-
-const RATE_LIMITED_OPENING = 'Turn ended by provider rate limiting:';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -231,13 +226,3 @@ describe('definitive provider failures propagate', () => {
   });
 });
 
-describe('failure prose persisted by a node stays classifiable', () => {
-  test('the classifier reads a reason from the chain a node persisted', () => {
-    expect(isRateLimitedTurnError(
-      `run agent n1 to a report: ${RATE_LIMITED_OPENING} the provider asked this turn to wait 60s`,
-    )).toBe(true);
-    expect(isRateLimitedTurnError(
-      `run agent n1 to a report: ${STALLED_OPENING} nothing flowed for 300s`,
-    )).toBe(false);
-  });
-});

@@ -16,13 +16,13 @@ export type {
 } from './catalog';
 
 export {
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, ancestorPins,
 } from './resolve';
 
 export type {
   ProfileAuthorityInputs, ProviderCatalogSnapshot, TierSource, PinnedProfile,
   ProviderCacheOutcome, ProviderSnapshotRead,
-  ResolveTurnProfileInput, ResolveAgentTurnProfileInput, ResolvedTurnProfile,
+  ResolveTurnProfileInput, ResolvedTurnProfile,
 } from './resolve';
 
 export {

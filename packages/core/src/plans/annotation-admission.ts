@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { settleSync } from '../obs/effect';
 import { renderThrownChain } from '../obs/index';
 import type { DiffAnchor, NoteReply, ReviewAnnotation } from '../types/plans';
+import { utf8Bytes } from '../utils/text';
 
 export const MAX_PLAN_ANNOTATIONS_BYTES = 256 * 1024;
 
@@ -13,8 +14,6 @@ const NonEmptyStringSchema = v.pipe(v.string(), v.nonEmpty());
 const NonNegativeIntegerSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
 
 const NonNegativeNumberSchema = v.pipe(v.number(), v.finite(), v.minValue(0));
-
-export const byteLength = (text: string): number => new TextEncoder().encode(text).byteLength;
 
 const LineSchema = v.pipe(v.number(), v.integer(), v.minValue(1));
 
@@ -125,7 +124,7 @@ export function admitReviewAnnotations(input: { value: unknown; kept?: readonly 
       catch: (cause) => ({ error: `annotations must be JSON-serializable: ${renderThrownChain({ cause })}` }),
     });
 
-    if (byteLength(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) return yield* Effect.fail({ error: 'annotations exceed the maximum size of 256 KiB' });
+    if (utf8Bytes(encoded) > MAX_PLAN_ANNOTATIONS_BYTES) return yield* Effect.fail({ error: 'annotations exceed the maximum size of 256 KiB' });
 
     if (!Array.isArray(input.value)) return yield* Effect.fail({ error: 'annotations must be an array' });
     const values: readonly unknown[] = input.value;

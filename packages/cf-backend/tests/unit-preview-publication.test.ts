@@ -10,11 +10,11 @@ import {
   sandboxPreviewExposures,
   type SandboxPreviewExposures,
 } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
+import { present, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { KvStore } from '@kinu.run/agent-utils';
 import {
-  createRecordingLogger, setDiagnosticsSink, type RecordedLog,
+  setDiagnosticsSink,
 } from '@kinu.run/core/obs';
 import type { KinuDevbox } from '../src/kinu-devbox';
 

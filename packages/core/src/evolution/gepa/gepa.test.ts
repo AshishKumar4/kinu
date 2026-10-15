@@ -4,6 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { present } from '@kinu.run/test-utils';
 import {
+  aggregateScore,
   runGepa, computeParetoFront, sampleParentByWeight, bestAggregate,
   parentSelectionWeights, rolloutMinibatch, renderReflectionPrompt,
   type EvalInstance, type GepaBudget, type GepaCandidate, type MetricOutcome,
@@ -28,16 +29,12 @@ function mkCandidate(
   scores: Record<string, number>,
   createdAt = 0,
 ): GepaCandidate {
-  const m = new Map(Object.entries(scores));
-  const total = Array.from(m.values()).reduce((a, b) => a + b, 0);
-
   return {
     id: source,
     parentId: null,
     source,
-    scores: m,
+    scores: new Map(Object.entries(scores)),
     feedback: new Map(),
-    aggregateScore: m.size > 0 ? total / m.size : 0,
     createdAt,
   };
 }
@@ -239,7 +236,7 @@ describe('runGepa', () => {
     });
 
     expect(result.winner.source).toBe('better-source');
-    expect(result.winner.aggregateScore).toBeCloseTo(0.9, 5);
+    expect(aggregateScore(result.winner)).toBeCloseTo(0.9, 5);
   });
 
   test('rejects candidates exceeding maxSizeBytes — does not consume scoring budget', async () => {

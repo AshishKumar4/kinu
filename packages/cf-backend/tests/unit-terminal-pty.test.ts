@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { serveFamily } from './helpers/api';
 import {
-  createRecordingLogger, setDiagnosticsSink, type RecordedLog,
+  setDiagnosticsSink,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { LineTerminalState, terminalLane } from '@kinu.run/core';
@@ -20,6 +20,7 @@ mockAgentsSdk();
 const { terminalRoutes } = await import('../src/terminal-route');
 
 import type { TerminalRouteDeps, TerminalWorkspace } from '../src/terminal-route';
+import { type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
 
 
 interface TerminalDouble {

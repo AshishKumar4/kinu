@@ -66,3 +66,15 @@ export function decodeEntities(value: string, named: ReadonlyMap<string, string>
 export function utf8(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
 }
+
+/** Whitespace collapsed to single spaces and clipped to `max`, a clip marked with `...`. */
+export function oneLineClip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+
+  return flat.length <= max ? flat : `${flat.slice(0, max - 3).trimEnd()}...`;
+}
+
+/** The length of `text` in UTF-8 bytes, the unit a row or body limit counts. */
+export function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).byteLength;
+}

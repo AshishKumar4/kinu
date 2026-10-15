@@ -12,7 +12,8 @@ import { CAPABLE_HELLO } from './helpers/device-harness';
 import { DEVICE_UPDATE_COPY } from '../src/hooks/use-device-roster';
 import { pcRoutes } from '../src/pc-routes';
 import { makeKv } from './helpers/kv';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const SERVED = '0.3.0+served1';
 

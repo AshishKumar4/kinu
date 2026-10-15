@@ -3,10 +3,11 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { WORKSPACE_ROOT } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink, type Logger } from '@kinu.run/core/obs';
+import { setDiagnosticsSink, type Logger } from '@kinu.run/core/obs';
 
 import { AgentDatabase } from '../src/agent-facet/agent-database';
 import { makeCtx } from './helpers/platform-context';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 function unreachable(): never {
   throw new Error('the timer test reached the workspace');

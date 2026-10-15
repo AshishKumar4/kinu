@@ -1,4 +1,4 @@
-export interface MctsProgressOrder {
+interface MctsProgressOrder {
   readonly isolateGen: number;
   readonly pushSeq: number;
 }

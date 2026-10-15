@@ -5,7 +5,7 @@ import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } 
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  ArrowsClockwiseIcon, GitBranchIcon, GearIcon, ListIcon, UsersThreeIcon,
+  ArrowsClockwiseIcon, GitBranchIcon, ListIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import {
@@ -42,13 +42,13 @@ import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, turnRows } fro
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
-import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
+import { SLATE_PREFIX, agentTitle, mainPanelAgent, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { FileLinkContext } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
-import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
+import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
 import { RemoveWorkspaceDialog } from "@/components/RemoveWorkspaceDialog";
 import { DeleteChatDialog } from "@/components/DeleteChatDialog";
 import { NewChatView } from "@/components/workspaces/NewChatView";
@@ -57,7 +57,7 @@ import { WorkspaceSettings } from "@/pages/SettingsPage";
 import { useLayoutDrawer } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
-import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
+import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments, useOpeningMessage } from "@/components/workspaces/NewChatView";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -219,10 +219,8 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
 /** The workspace's own chat, where its answers' blocks resolve. */
 const WORKSPACE_CHAT = { actorId: null } as const;
 
-const MAIN_AGENT: PanelAgent = {
-  colour: 0, key: "main", label: "Main", category: "main", activity: "idle", parent: null,
-  open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
-};
+/** Main's row before the roster is read. */
+const MAIN_UNREAD = mainPanelAgent({ activity: "idle" });
 
 function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench }: {
   listed: readonly PanelAgent[] | null;
@@ -235,7 +233,7 @@ function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench
   const navigate = useNavigate();
 
   const agents = useMemo((): readonly PanelAgent[] => {
-    const main = listed?.find((agent) => agent.category === "main") ?? MAIN_AGENT;
+    const main = listed?.find((agent) => agent.category === "main") ?? MAIN_UNREAD;
 
     return [{ ...main, activity: mainActivity(main.activity, live) }, ...(listed ?? []).filter((agent) => agent.category !== "main")];
   }, [listed, live]);
@@ -331,7 +329,7 @@ function MainClearDialog({ open, agents, onClear, onClose }: {
 }) {
   if (!open) return null;
 
-  return <DeleteChatDialog title={agents.find((agent) => agent.key === MAIN_AGENT.key)?.label ?? MAIN_AGENT.label} clears onConfirm={onClear} onClose={onClose} />;
+  return <DeleteChatDialog title={agents.find((agent) => agent.key === MAIN_UNREAD.key)?.label ?? MAIN_UNREAD.label} clears onConfirm={onClear} onClose={onClose} />;
 }
 
 /** The workspace's own pages share the chat route's key, so the socket and the bar stay mounted across them. */
@@ -535,20 +533,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
         active={openBarItem(view, shown)}
         newChat={`/workspace/${workspace}/new`}
         leading={drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>}
-        trailing={<>
-          <button type="button" onClick={() => agentsNav.enter(workspace)} className="p-bar-icon relative" aria-label="All agents" title="All agents">
-            <UsersThreeIcon size={16} />
-            {/* The agents at work out of sight, those with no tab of their own, counted where the owner can open them. */}
-            {working > 0 && (
-              <span data-working-agents={working} className="p-agents-badge absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums">
-                {working}
-              </span>
-            )}
-          </button>
-          <Link to={`/workspace/${workspace}/settings`} className="p-bar-icon" aria-current={view === "settings" ? "page" : undefined}
-            aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
-          {view === undefined && inspector && <InspectorToggle control={inspector} />}
-        </>}
+        trailing={<WorkspaceBarActions workspace={workspace} working={working} view={view} inspector={inspector} onAgents={() => agentsNav.enter(workspace)} />}
       />
       {removing && <RemoveWorkspaceDialog workspace={{ name: workspace, displayName: editValue }} onClose={() => setRemoving(false)} />}
     </>

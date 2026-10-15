@@ -5,7 +5,7 @@ import { namespaceDeclaration } from './operation-surfaces';
 
 /** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts and UI. */
 
-// Reach is not permission: an actor gets reach ∩ the deps its backend wires (conformance/manifest.ts).
+// Reach is not permission: an actor gets reach ∩ the deps its backend wires (test-utils/src/conformance/manifest.ts).
 // A capability owns its codemode namespace when `codemode` equals its own key; *-codemode.ts factories rely on that.
 
 /**

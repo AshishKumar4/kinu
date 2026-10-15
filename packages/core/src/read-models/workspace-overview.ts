@@ -40,7 +40,7 @@ export const WorkspaceOverviewSchema = v.object({
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
 
-export type WorkspaceOverviewSlate = v.InferOutput<typeof WorkspaceOverviewSlateSchema>;
+type WorkspaceOverviewSlate = v.InferOutput<typeof WorkspaceOverviewSlateSchema>;
 
 export type WorkspaceOverviewShare = SlateShareCard;
 

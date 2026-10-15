@@ -4,7 +4,7 @@ import { diversityDirective } from './diversity';
 import type { WorkMode } from '../types/turn';
 
 /** A crafted tool as a branch is told about it; a branch reasons, it does not call tools. */
-export interface ExploreToolHint {
+interface ExploreToolHint {
   readonly name: string;
   readonly description: string;
 }

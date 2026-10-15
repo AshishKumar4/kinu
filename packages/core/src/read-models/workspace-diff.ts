@@ -1,6 +1,7 @@
 /**
  * Change-set read model: the workspace's own plane against a baseline, a Nimbus snapshot of the store taken at each
- * review (the one before it kept for Undo); other executors by read-only git diff. A read never moves the baseline.
+ * review (the one before it kept for Undo); other executors by read-only git diff. A read with no baseline captures
+ * the first, as creation does; otherwise a read never moves it.
  */
 
 import type { CredentialedVfs, SnapshotInfo, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
@@ -73,7 +74,7 @@ export interface ExecutorDiffResult {
 }
 
 /** What the change-set asks of the workspace store, Nimbus's SqliteVFS: its snapshots, and reads as one principal. */
-export type WorkspaceBaselineStore = Pick<SqliteVFS, 'snapshot' | 'snapshots' | 'dropSnapshotAsync' | 'diff' | 'at' | 'as'>;
+type WorkspaceBaselineStore = Pick<SqliteVFS, 'snapshot' | 'snapshots' | 'dropSnapshotAsync' | 'diff' | 'at' | 'as'>;
 
 /** The store, and the principal the change-set reads it as: a file that principal may not read is absent. */
 export interface WorkspaceBaselines {

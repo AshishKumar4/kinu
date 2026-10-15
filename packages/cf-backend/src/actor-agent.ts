@@ -146,7 +146,7 @@ import {
   type InstructionSourceRow, type InstructionSourceView,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
+  resolveTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   activeOperationProfile, captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
   inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
@@ -608,7 +608,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Created in the constructor: the only point guaranteed to precede every access on both cf roots
-   * (`onStart` may follow an RPC). Per-root by design; `core/conformance/manifest.ts` marks it
+   * (`onStart` may follow an RPC). Per-root by design; `test-utils/src/conformance/manifest.ts` marks it
    * absent for cli. The storage is asked its stamp first (identity/schema-stamp.ts): storage a release left behind gets
    * no init here, and the subclass's constructor repairs it with the whole root's init ({@link repairStorage}).
    */
@@ -1982,7 +1982,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private noteGitHubCall(descriptor: Pick<SerializableToolDescriptor, 'presetId' | 'name'>, args: JsonObject, result: string, actorId: string | null): void {
     if (descriptor.presetId !== GITHUB_MCP_PRESET) return;
-    recordGitHubActivity(this.boundSql, recognizeGitHubMcp(descriptor.name, args, result), { actorId, source: 'mcp', at: Date.now() });
+    recordGitHubActivity(this.boundSql, recognizeGitHubMcp(descriptor.name, args, result), { actorId, at: Date.now() });
   }
 
   private get mcpToolsCache(): McpToolSurfaceCache<ToolSet> {
@@ -4019,7 +4019,7 @@ export abstract class ActorAgent extends Agent<Env> {
       resolve: async () => {
         const inputs = await this.profileInputs();
 
-        return resolveAgentTurnProfile({
+        return resolveTurnProfile({
           ...inputs,
           ...ownProfileChoices(this.config, inputs),
           workMode: preparedMode ?? await this.preparedWorkMode(),
@@ -4040,7 +4040,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const inputs = await this.profileInputs();
 
     return {
-      profile: resolveAgentTurnProfile({
+      profile: resolveTurnProfile({
         ...inputs,
         ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), {
           explicitTier: input.explicitTier,

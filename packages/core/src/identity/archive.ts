@@ -73,7 +73,7 @@ export interface ArchiveSqlCursor {
   rows: number;
 }
 
-export interface ArchiveAgentsCursor {
+interface ArchiveAgentsCursor {
   phase: 'agents';
   actor: string;
   inner: ArchiveSqlCursor | null;
@@ -149,7 +149,7 @@ export interface ArchivePage {
   next: ArchiveCursor | null;
 }
 
-export interface ArchiveExportOptions {
+interface ArchiveExportOptions {
   workspace: string;
   source: 'cloud' | 'local';
   cursor?: ArchiveCursor | null;

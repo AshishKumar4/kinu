@@ -134,14 +134,26 @@ export function sampleParentByWeight(
   return bestAggregate(pool);
 }
 
+/** A candidate's aggregate: the mean of its per-instance scores, 0 with none. */
+export function aggregateScore(candidate: Pick<GepaCandidate, 'scores'>): number {
+  if (candidate.scores.size === 0) return 0;
+  let total = 0;
+
+  for (const score of candidate.scores.values()) total += score;
+
+  return total / candidate.scores.size;
+}
+
 /** Ties broken by createdAt (older wins). */
 export function bestAggregate(pool: ReadonlyArray<GepaCandidate>): GepaCandidate {
   if (pool.length === 0) return settleSync(Effect.die(new Error('bestAggregate: empty pool')));
   let best = pool[0];
 
   for (const c of pool) {
-    if (c.aggregateScore > best.aggregateScore) best = c;
-    else if (c.aggregateScore === best.aggregateScore && c.createdAt < best.createdAt) best = c;
+    const score = aggregateScore(c);
+    const bestScore = aggregateScore(best);
+
+    if (score > bestScore || (score === bestScore && c.createdAt < best.createdAt)) best = c;
   }
 
   return best;

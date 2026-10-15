@@ -2,7 +2,7 @@
  *  Nothing here is served; only the install command comes from the deployment. */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { JsonValueSchema, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
+import { JsonValueSchema, mainPanelAgent, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
 import type { UserProfile } from '@/lib/user-api';
 import { workspaceRpc, type SocketCall, type WorkspaceRpc } from '@/lib/workspace-rpc';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
@@ -43,7 +43,7 @@ const NO_FIGURES = { activeMs: 0, cacheEma: null };
 
 /** A project's day-to-day chats. */
 export const LANDING_CHATS: readonly PanelAgent[] = [
-  { colour: 0, key: 'main', label: 'Main', category: 'main', activity: 'working', parent: null, open: { kind: 'chat', path: null }, tab: true, input: true, figures: NO_FIGURES },
+  mainPanelAgent({ activity: 'working' }),
   { colour: 1, key: 'actor-gift-cards', label: 'Should checkout support gift cards?', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'gift-cards' }, tab: true, input: true, figures: NO_FIGURES },
   { colour: 2, key: 'actor-cart', label: 'Speed up cart render', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'cart-render' }, tab: true, input: true, figures: NO_FIGURES },
 ];

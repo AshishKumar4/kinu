@@ -7,7 +7,8 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { DeviceSocketHub, DeviceTerminalHub, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, deviceIdFromSocket, terminalFromSocket, watchedOutput, type DeviceExecOutput, type JsonValue } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
+import { createRecordingLogger } from '@kinu.run/test-utils/recording';
 
 const DEVICE = 'dev-probe';
 

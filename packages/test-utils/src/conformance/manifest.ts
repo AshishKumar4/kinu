@@ -4,11 +4,7 @@
  * against the real composition output in both directions. Test-plane only.
  */
 
-import { ASK_OWNER_TOOL, SUBMIT_PLAN_TOOL } from '../tools/registry';
-import type { BuiltinToolName } from '../tools/registry';
-import type { AgentsOp } from '../operations/agents';
-import { MEMORY } from '../operations/memory';
-import type { SpendSource } from '../events/model-call';
+import { ASK_OWNER_TOOL, MEMORY, SUBMIT_PLAN_TOOL, type AgentsOp, type BuiltinToolName, type SpendSource } from '@kinu.run/core';
 
 /**
  * Producers a root builds unconditionally. `fast` is excluded: whether it

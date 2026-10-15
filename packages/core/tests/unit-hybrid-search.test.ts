@@ -1,7 +1,7 @@
 /** hybridSearch: FTS5 + Vectorize merged via RRF. */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestFactsStore, present } from '@kinu.run/test-utils';
+import { createTestFactsStore, present, createRecordingLogger } from '@kinu.run/test-utils';
 import {
   hybridSearch,
   memorySnippetRehydrator,
@@ -12,7 +12,7 @@ import {
   type VectorStore,
   type VectorSearchHit,
 } from '../src/index';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { setDiagnosticsSink } from '../src/obs/index';
 
 const lexicalCorpus: LexicalHit[] = [
   { id: 'l-1', path: 'a.md', startLine: 1, endLine: 5, score: 0.9, snippet: 'exact match line' },

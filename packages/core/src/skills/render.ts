@@ -62,8 +62,8 @@ export function renderActiveSkillsSection(
 ): string {
   const system = placement === 'system';
 
-  const tier = activeSet.active.filter((skill) =>
-    system ? skill.trust !== 'unverified' : skill.trust === 'unverified');
+  const trusted = trustedActiveSkills(activeSet);
+  const tier = system ? trusted : activeSet.active.filter((skill) => !trusted.includes(skill));
 
   if (tier.length === 0) return '';
 

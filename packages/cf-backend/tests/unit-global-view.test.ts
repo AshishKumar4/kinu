@@ -15,7 +15,6 @@ import {
   agentIdentity,
   confineAgentTmp,
   provisionAgentHome,
-  AGENT_HOME_MODE,
   AGENT_UID_FLOOR,
   MAIN_AGENT,
   SESSION_UID,
@@ -128,7 +127,7 @@ describe('the layout — one function answers for every agent', () => {
 
     expect(await statOf(f.workspace, '/home/node-a')).toEqual({
       uid: agentIdentity(f.sql, 'node-a').uid,
-      mode: AGENT_HOME_MODE,
+      mode: 0o755,
     });
   });
 });
@@ -183,7 +182,7 @@ describe('permissions are the boundary — through the one real shell', () => {
     expect(() => f.workspace.vfs.as(nodeA).chmod('/home/node-a', 0o777)).toThrow(
       expect.objectContaining({ code: 'EPERM' }),
     );
-    expect((await statOf(f.workspace, '/home/node-a')).mode).toBe(AGENT_HOME_MODE);
+    expect((await statOf(f.workspace, '/home/node-a')).mode).toBe(0o755);
   });
 
   test('a node cannot give its home away, because chown is uid-0 only', async () => {

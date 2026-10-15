@@ -11,8 +11,10 @@ export struct Palette {
   // gilds instead of blowing out.
   mode: f32,
   recess: f32,
-  pad1: f32,
-  pad2: f32,
+  // Alpha on paper and on the dark ground: a picture may ask for its own, so a dense
+  // one reads as much on either ground.
+  light_lift: f32,
+  dark_lift: f32,
 }
 
 export struct View {

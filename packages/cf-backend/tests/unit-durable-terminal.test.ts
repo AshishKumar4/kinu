@@ -12,7 +12,6 @@ import {
   AgentReports, TERMINAL_EFFECT_RETRY_CEILING_MS, claimToolEffect, createFactsStore,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
-import { createRecordingLogger } from '@kinu.run/core/obs';
 import {
   agentWakes, chatSessionTurns, driveUntil, ledgerOver, mainRows, orchestratorHarness,
   reactivateOrchestratorHarness,
@@ -23,6 +22,7 @@ import { joinHarnessFibers } from './helpers/agents-sdk';
 import { catchNextOwingReport, loseNextHandoff } from './helpers/agent-facets';
 import type { SettledTurn, TurnHarness } from './helpers/turn-harness';
 import { wrapDatabase } from '@kinu.run/core/identity';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
 

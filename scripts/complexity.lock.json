@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-15",
-  "files": 3334,
-  "functions": 87178,
+  "files": 3331,
+  "functions": 87186,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -106,10 +106,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/drive-design/DriveDesignPage.tsx#DriveDesignPage",
-      "complexity": 31
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
       "complexity": 31
     },
@@ -170,10 +166,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/core/src/web/hero-canvas.ts#createCanvasRenderer>render",
-      "complexity": 29
-    },
-    {
       "key": "scripts/ladder.ts#claims",
       "complexity": 29
     },
@@ -191,10 +183,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
-      "complexity": 28
-    },
-    {
-      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
       "complexity": 28
     },
     {
@@ -307,6 +295,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/ChangesSurface.tsx#ChangesSurface",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
       "complexity": 26
     },
     {

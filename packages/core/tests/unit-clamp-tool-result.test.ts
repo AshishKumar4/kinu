@@ -12,9 +12,8 @@ import {
   withClampedToolResult,
   withClampedToolResults,
   DEFAULT_TOOL_RESULT_MAX_CHARS,
-  TOOL_OUTPUT_DIR,
 } from '../src/tools/clamp';
-import { TurnContextBudget } from '../src/context-budget';
+import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -62,7 +61,7 @@ describe('clampToolResult', () => {
     expect(clamped).toContain('TAIL-OF-OUTPUT');
 
     const path = markerPath(clamped);
-    expect(path).toStartWith(`${WORKSPACE_ROOT}/${TOOL_OUTPUT_DIR}/`);
+    expect(path).toStartWith(`${WORKSPACE_ROOT}/${SPILL_DIRS.toolOutput}/`);
     const restored = await readText(rt.storage.vfs, path);
     expect(restored).toBe(original);
   });
@@ -258,7 +257,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     expect(second.length).toBeLessThanOrEqual(FILE_READ_MAX_CHARS);
     expect(second.split('\n')[0]).toBe(`${next}\t${lines[next - 1]}`);
 
-    expect(await rt.storage.vfs.stat(TOOL_OUTPUT_DIR)).toBeNull();
+    expect(await rt.storage.vfs.stat(SPILL_DIRS.toolOutput)).toBeNull();
   });
 
   test('every result rides the one cap, and the turn ledger counts all of them', async () => {

@@ -1,30 +1,30 @@
-import { compactToolCall } from '../evolution/tool-call-record';
+import { compactToolCall } from '../src/evolution/tool-call-record';
 import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Layer decomposition of the turn pipeline plus each layer's deterministic assertion slice: literal fixtures,
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
 
 import { jsonSchema, tool, type ModelMessage, type ToolExecutionOptions } from 'ai';
-import { wordsOnly } from '../execution/command-call';
-import { ExtensionHost } from '../extension';
-import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
-import { TurnAccumulator } from '../orchestrator/turn-accumulator';
-import { TurnSteering } from '../orchestrator/turn-steering';
-import { observingCrafts } from '../delegation/actor-tools';
-import type { CraftLedger } from '../craft/in-episode';
-import { TurnContextBudget } from '../context-budget';
-import { TurnFileLedger } from '../vfs/file-ledger';
-import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
+import { wordsOnly } from '../src/execution/command-call';
+import { ExtensionHost } from '../src/extension';
+import { DynamicContextLedger, type DynamicContext } from '../src/prompting/volatile-context';
+import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { TurnSteering } from '../src/orchestrator/turn-steering';
+import { observingCrafts } from '../src/delegation/actor-tools';
+import type { CraftLedger } from '../src/craft/in-episode';
+import { TurnContextBudget } from '../src/context-budget';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
+import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../src/tools/registry';
 import { isVfsError, syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store';
-import type { BackendHost } from '../types/backend-host';
-import type { KinuEvent, ReadableKinuEvent } from '../events/hub/types';
-import type { LexicalHit } from '../memory/hybrid-search';
-import type { ActiveSkill } from '../skills/types';
-import { workspaceSkillPath } from '../skills/discover';
+import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../src/memory/vector-store';
+import type { BackendHost } from '../src/types/backend-host';
+import type { KinuEvent, ReadableKinuEvent } from '../src/events/hub/types';
+import type { LexicalHit } from '../src/memory/hybrid-search';
+import type { ActiveSkill } from '../src/skills/types';
+import { workspaceSkillPath } from '../src/skills/discover';
 import type { PipelineSubjects } from './subjects';
 import * as v from 'valibot';
-import type { RunEventInput } from '../events/types';
-import type { JsonValue } from '../utils/json';
+import type { RunEventInput } from '../src/events/types';
+import type { JsonValue } from '../src/utils/json';
 
 /** The model the step-pipeline probes price their steps for: its pricing is text and media alike. */
 const PRUNED_SPEC = 'anthropic/claude-sonnet-4-5';
@@ -260,7 +260,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'context-assembly/unconfigured-executors-excluded',
         asserts: 'an executor this workspace never configured is never described; an offline one still is',
         observe: (s) => s.compilePromptSurface({ executors: EXECUTORS })
-          .configuredExecutors.map((exec) => exec.name),
+          .executors.map((exec) => exec.name),
       },
       {
         id: 'context-assembly/system-prefix',
@@ -1604,7 +1604,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       'buildBuiltinTools is a composition root, not a layer: it wires tools/clamp, safety/approval-gate and ' +
       'memory/hybrid-search into one ToolSet, so a fault in it is not attributable to a single layer. Splitting it ' +
       'is a production change, out of scope for the gate. Composition output is covered by the backend conformance ' +
-      'gate instead (src/conformance): each backend runs its real root and diffs the result against the manifest.',
+      'gate instead (test-utils/src/conformance): each backend runs its real root and diffs the result against the manifest.',
   },
   {
     id: 'compaction-ladder',
@@ -1613,7 +1613,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [],
     unmeasuredBecause:
       '@kinu.run/compaction depends on @kinu.run/core, so core cannot import it without a cycle. Its slice lives IN ' +
-      'that package (src/layergate.ts, same Layer contract, own locked baseline); scripts/layergate.ts merges it ' +
+      'that package (packages/compaction/layergate, same Layer contract, own locked baseline); scripts/layergate.ts merges it ' +
       'into the report, replacing this placeholder row.',
   },
   {

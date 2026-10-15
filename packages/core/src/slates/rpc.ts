@@ -29,7 +29,7 @@ export type SlateCallResult = SlateAnswer<JsonValue>;
  * `agent.ask`'s answer, at once: the agent's reply as UTF-8 text, written as the agent writes it. A message that never
  * lands in a turn ends it with why.
  */
-export interface SlateReply {
+interface SlateReply {
   readonly reply: ReadableStream<Uint8Array>;
 }
 
