@@ -9,7 +9,7 @@ import {
   type LogEventName, type LogFields, type Logger, type RelayedLine,
 } from '../log';
 import * as v from 'valibot';
-import { boundaryOf, eventFamily } from './boundaries';
+import { agentRow } from './record';
 import { analyticsDigest, assertPublishableNames } from './privacy';
 import { AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA, type AnalyticsRow } from './schemas';
 import { FiniteNumber, analyticsPlane, type AnalyticsEnv } from './writer';
@@ -96,45 +96,30 @@ function opsRow(
   };
 }
 
-function agentRow(
-  event: LogEventName,
-  fields: LogFields,
-  reported: ErrorCode | '',
-): AnalyticsRow<typeof AGENT_METRICS_SCHEMA> {
+/** A diagnostic's row: its fields read and published as the typed writers' rows are. Token usage and delivery attempts
+ *  arrive only through typed `record.ts` writers. */
+function eventRow(event: LogEventName, fields: LogFields, reported: ErrorCode | ''): AnalyticsRow<typeof AGENT_METRICS_SCHEMA> {
   const code = errorCode(fields, reported);
 
-  return {
+  return agentRow({
     // Co-located DOs share this sink: no isolate default.
-    workspace: analyticsDigest(text(fields, 'workspace') || invocationWorkspace()),
+    workspace: text(fields, 'workspace') || invocationWorkspace(),
     kind: 'event',
-    family: eventFamily(event),
     event,
     outcome: classification(fields, 'outcome', code === '' ? 'ok' : 'failed'),
     code,
-    boundary: boundaryOf(event),
     agentKind: text(fields, 'agentKind'),
     provider: text(fields, 'provider'),
     model: text(fields, 'model'),
     tool: text(fields, 'tool'),
     source: text(fields, 'source'),
     reason: classification(fields, 'reason'),
-    count: 1,
     durationMs: count(fields, 'durationMs'),
     ttftMs: count(fields, 'ttftMs'),
     steps: count(fields, 'steps'),
     toolCalls: count(fields, 'toolCalls'),
-    // Token usage and delivery attempts arrive only through typed `record.ts` writers.
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    reasoning: 0,
-    neurons: 0,
-    usd: 0,
-    priced: 0,
-    attempts: 0,
     activation: count(fields, 'activation'),
-  };
+  });
 }
 
 function createAnalyticsLogger(env: AnalyticsEnv): Logger {
@@ -147,7 +132,7 @@ function createAnalyticsLogger(env: AnalyticsEnv): Logger {
       return;
     }
 
-    plane.agent.write(agentRow(name, fields, code));
+    plane.agent.write(eventRow(name, fields, code));
   };
 
   return {
