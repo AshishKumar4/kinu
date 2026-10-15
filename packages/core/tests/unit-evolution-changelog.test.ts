@@ -135,7 +135,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       WHERE actor_id = ${rt.actor.actorId} AND key = 'project.deploy_target'`;
 
     expect(shown).toContain('example.workers.dev');
-    expect(() => buildChangelog(rt.storage.sql, rt.actor)).toThrow(SyntaxError);
+    expect(() => buildChangelog(rt.storage.sql, rt.actor)).toThrow(expect.objectContaining({ code: 'io', cause: expect.any(SyntaxError) }));
   });
 
   test('groups all facts in the digest window into one aggregate card', () => {
