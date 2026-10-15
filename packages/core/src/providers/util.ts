@@ -221,6 +221,16 @@ function readErrorFailure(input: { readonly error: Error; readonly depth: number
   };
 }
 
+/** The provider's stable code, verbatim (Cloudflare's API numbers its codes); `type` stands in where none is given. */
+const ProviderCodeSchema = v.union([v.pipe(v.string(), v.trim(), v.nonEmpty()), v.pipe(v.number(), v.transform(String))]);
+
+/** The failure an envelope wraps: a gateway's `error`, stamped outside with code and status, or the first of Cloudflare's
+ *  API's `errors: [{ code, message }]`. */
+const WrappedFailureSchema = v.union([
+  v.pipe(v.object({ error: v.pipe(v.unknown(), v.check((inner) => inner !== undefined)) }), v.transform((fields) => fields.error)),
+  v.pipe(v.object({ errors: v.pipe(v.array(v.unknown()), v.minLength(1)) }), v.transform((fields) => fields.errors[0])),
+]);
+
 /** Null when nothing readable, so a caller keeps the reason it already had. */
 function readProviderFailure(
   input: { readonly cause: unknown; readonly depth: number },
@@ -248,21 +258,18 @@ function readProviderFailure(
   const fields = record.output;
   const status = v.safeParse(StatusFieldSchema, fields);
   const reported = status.success ? status.output.status ?? status.output.statusCode : undefined;
-
-  // Cloudflare's API numbers its codes.
-  const providerCode = nonEmptyString({ value: fields.code }) ?? nonEmptyString({ value: fields.type })
-    ?? (v.is(v.number(), fields.code) ? String(fields.code) : undefined);
+  const code = v.safeParse(ProviderCodeSchema, fields.code);
+  const providerCode = code.success ? code.output : nonEmptyString({ value: fields.type });
 
   const stated = nonEmptyString({ value: fields.message })
     ?? nonEmptyString({ value: fields.error_description })
     ?? nonEmptyString({ value: fields.detail });
 
-  // Gateways stamp code and status on the outer envelope; Cloudflare's API answers `errors: [{ code, message }]`.
-  const inner = fields.error ?? (Array.isArray(fields.errors) ? fields.errors[0] : undefined);
+  const wrapped = v.safeParse(WrappedFailureSchema, fields);
 
-  const nested = stated !== undefined || inner === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
+  const nested = stated !== undefined || !wrapped.success || depth >= PROVIDER_ERROR_MAX_DEPTH
     ? null
-    : readProviderFailure({ cause: inner, depth: depth + 1 });
+    : readProviderFailure({ cause: wrapped.output, depth: depth + 1 });
 
   // Name the keys, never the values: the values may leak.
   const named = Object.keys(fields).join(', ') || 'no fields';
