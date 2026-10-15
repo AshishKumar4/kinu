@@ -9,7 +9,7 @@ import {
 import { ulid } from './ulid';
 import type { SqlExec } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
-import { parseJsonValue, type JsonValue } from '../../utils/json';
+import type { JsonValue } from '../../utils/json';
 import { Effect } from 'effect';
 import { renderThrownChain, settle } from '../../obs/index';
 
@@ -30,9 +30,7 @@ const ReplyChannelRowSchema = v.object({
   holder_addr: v.string(),
   ttl_expires_at: v.number(),
   state: v.picklist(['open', 'replied', 'expired', 'aborted']),
-  reply_payload: v.nullable(v.string()),
   created_at: v.number(),
-  updated_at: v.number(),
 });
 
 const IdRowSchema = v.object({ id: v.string() });
@@ -62,10 +60,9 @@ export class ReplyChannelStore {
     const expires = now + (opts.ttl_ms_override ?? TTL_MS[opts.kind]);
     this.sql.exec(
       `INSERT INTO reply_channels
-         (actor_id, id, event_id, kind, holder_addr, ttl_expires_at,
-          state, reply_payload, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?)`,
-      this.actorId, id, opts.event_id, opts.kind, opts.holder_addr, expires, now, now,
+         (actor_id, id, event_id, kind, holder_addr, ttl_expires_at, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'open', ?)`,
+      this.actorId, id, opts.event_id, opts.kind, opts.holder_addr, expires, now,
     );
 
     return id;
@@ -88,8 +85,7 @@ export class ReplyChannelStore {
     this.actor.assertCurrent();
 
     const rows = this.sql.exec(
-      `SELECT id, event_id, kind, holder_addr, ttl_expires_at,
-              state, reply_payload, created_at, updated_at
+      `SELECT id, event_id, kind, holder_addr, ttl_expires_at, state, created_at
        FROM reply_channels WHERE actor_id = ? AND id = ?`, this.actorId, id,
     ).toArray();
 
@@ -103,9 +99,7 @@ export class ReplyChannelStore {
       holder_addr: r.holder_addr,
       ttl_expires_at: r.ttl_expires_at,
       state: r.state,
-      reply_payload: r.reply_payload === null ? null : parseJsonValue(r.reply_payload),
       created_at: r.created_at,
-      updated_at: r.updated_at,
     };
   }
 
@@ -127,7 +121,7 @@ export class ReplyChannelStore {
     if (channel.state !== 'open') return { outcome: 'channel_closed', state: channel.state };
 
     if (now > channel.ttl_expires_at) {
-      this.markState(id, 'expired', now);
+      this.markState(id, 'expired');
 
       return { outcome: 'channel_closed', state: 'expired' };
     }
@@ -139,14 +133,8 @@ export class ReplyChannelStore {
     return settle(Effect.tryPromise({ try: () => dispatcher.dispatch(channel, payload), catch: (cause) => ({ cause }) }).pipe(Effect.match({
       onSuccess: (r): ReplyOutcome => {
         if (!r.delivered) return { outcome: 'failed', detail: r.detail };
-        this.sql.exec(
-          `UPDATE reply_channels
-             SET state = 'replied',
-                 reply_payload = ?,
-                 updated_at = ?
-           WHERE actor_id = ? AND id = ?`,
-          JSON.stringify(payload ?? null), now, this.actorId, id,
-        );
+        // The channel keeps that it was answered; the reply itself went out through its dispatcher.
+        this.markState(id, 'replied');
 
         return { outcome: 'delivered' };
       },
@@ -154,24 +142,15 @@ export class ReplyChannelStore {
     })));
   }
 
-  abort(id: ReplyChannelId, now: number, reason?: string): void {
+  /** Closes an open channel no reply will travel: its event was a duplicate. */
+  abort(id: ReplyChannelId): void {
     this.actor.assertCurrent();
-    this.sql.exec(
-      `UPDATE reply_channels
-         SET state = 'aborted',
-             reply_payload = COALESCE(?, reply_payload),
-             updated_at = ?
-       WHERE actor_id = ? AND id = ? AND state = 'open'`,
-      reason ? JSON.stringify({ aborted: reason }) : null, now, this.actorId, id,
-    );
+    this.sql.exec(`UPDATE reply_channels SET state = 'aborted' WHERE actor_id = ? AND id = ? AND state = 'open'`, this.actorId, id);
   }
 
-  private markState(id: ReplyChannelId, state: ReplyChannelState, now: number): void {
+  private markState(id: ReplyChannelId, state: ReplyChannelState): void {
     this.actor.assertCurrent();
-    this.sql.exec(
-      `UPDATE reply_channels SET state = ?, updated_at = ? WHERE actor_id = ? AND id = ?`,
-      state, now, this.actorId, id,
-    );
+    this.sql.exec(`UPDATE reply_channels SET state = ? WHERE actor_id = ? AND id = ?`, state, this.actorId, id);
   }
 }
 

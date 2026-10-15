@@ -841,7 +841,6 @@
   "github_nodes@packages/core/src/github/activity.ts": [
     "node_id TEXT PRIMARY KEY",
     "repo TEXT NOT NULL",
-    "subject TEXT NOT NULL",
     "number INTEGER NOT NULL",
     "at INTEGER NOT NULL"
   ],
@@ -1128,9 +1127,7 @@
     "holder_addr TEXT NOT NULL DEFAULT ''",
     "ttl_expires_at INTEGER NOT NULL",
     "state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open', 'replied', 'expired', 'aborted'))",
-    "reply_payload TEXT",
     "created_at INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
   "request_renders@packages/core/src/session/schema.ts": [
@@ -1609,22 +1606,19 @@
     "trigger_id TEXT NOT NULL",
     "window_start INTEGER NOT NULL",
     "delivery_count INTEGER NOT NULL DEFAULT 0",
-    "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (trigger_id, window_start)"
   ],
   "webhook_replay_claims@packages/core/src/events/ingress/webhook.ts": [
     "trigger_id TEXT NOT NULL",
     "claim TEXT NOT NULL",
     "event_id TEXT",
-    "claimed_at INTEGER NOT NULL",
     "expires_at INTEGER NOT NULL",
     "PRIMARY KEY (trigger_id, claim)"
   ],
   "webhook_secrets@packages/core/src/events/ingress/secrets.ts": [
     "secret_id TEXT PRIMARY KEY",
     "trigger_id TEXT NOT NULL",
-    "secret TEXT NOT NULL",
-    "created_at INTEGER NOT NULL"
+    "secret TEXT NOT NULL"
   ],
   "workspace_activations@packages/core/src/identity/activations.ts": [
     "slot INTEGER PRIMARY KEY",

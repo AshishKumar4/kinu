@@ -125,7 +125,7 @@ export async function registerDurableWebhook(
 
   if (secret === null) return registered;
 
-  return settleSync(Effect.try({ try: () => secrets.put(secret_id, trigger_id, secret, now), catch: (cause) => ({ cause }) }).pipe(
+  return settleSync(Effect.try({ try: () => secrets.put(secret_id, trigger_id, secret), catch: (cause) => ({ cause }) }).pipe(
     Effect.tapError(() => Effect.sync(() => {
       registry.revoke(trigger_id, now);
       secrets.deleteByTrigger(trigger_id);
@@ -297,7 +297,6 @@ export function initWebhookIngressTables(sql: SqlExec): void {
       -- which is the at-most-once side of this trade and the correct one when
       -- the alternative is publishing a captured request twice.
       event_id   TEXT,
-      claimed_at INTEGER NOT NULL,
       -- When the claimed proof stops being admissible on its own terms, so the
       -- row stops being worth keeping. Bounded by the signature window, which
       -- is what bounds this table.
@@ -328,9 +327,8 @@ function claimSignedDelivery(
 
   if (held.success) return { event_id: held.output.event_id };
   sql.exec(
-    `INSERT INTO webhook_replay_claims (trigger_id, claim, event_id, claimed_at, expires_at)
-     VALUES (?, ?, NULL, ?, ?)`,
-    triggerId, claim.key, now, claim.expiresAt,
+    `INSERT INTO webhook_replay_claims (trigger_id, claim, event_id, expires_at) VALUES (?, ?, NULL, ?)`,
+    triggerId, claim.key, claim.expiresAt,
   );
 
   return null;
