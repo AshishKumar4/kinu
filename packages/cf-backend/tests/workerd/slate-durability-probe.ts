@@ -277,6 +277,23 @@ const EGRESS_SLATE = [
   '}',
 ].join('\n');
 
+/**
+ * Keeps what each run was given in its module scope, and reads the workspace through its env: the owner's own code, so
+ * its first call grants that read and every call runs confined. A stub sealed for another run is refused by the room, so
+ * a read that answers came through this run's own.
+ */
+const ISOLATED_SLATE = [
+  'import { SlateObject } from "kinu:slate";',
+  'const seen = [];',
+  'export class Slate extends SlateObject {',
+  '  async probe(tag) {',
+  '    seen.push(tag);',
+  '    const read = await this.env.workspace.readFile("/slates/isolated/package.json");',
+  '    return { seen: [...seen], read: typeof read };',
+  '  }',
+  '}',
+].join('\n');
+
 /** A page's call answered through its room: a value, a part, or a refusal (`room.ts`). */
 const PageCallAnswer = v.union([
   v.object({ ok: v.literal(true), value: v.union([v.object({ value: v.unknown() }), v.object({ part: v.unknown() })]) }),
@@ -421,6 +438,29 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     }
 
     return answers;
+  }
+
+  /**
+   * Confined runs of one function, by one person, holding one grant: two in turn, then two at once, each with its own
+   * argument. What each saw of the module's state, and whether its read through its own stub answered.
+   */
+  async isolatedRuns(input: { workspace: string; owner: string }): Promise<string[]> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/isolated/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Isolated' } }));
+    await this.writeSlateFile(target, '/slates/isolated/server.ts', ISOLATED_SLATE);
+    const owned = workspaceOwner(this.env, input.workspace);
+
+    const probe = async (tag: string): Promise<string> => {
+      const answered = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'isolated', method: 'probe', args: [tag] });
+
+      return JSON.stringify(answered.ok ? answered.value : { error: answered.error });
+    };
+
+    const consecutive = [await probe('first'), await probe('second')];
+
+    return [...consecutive, ...await Promise.all([probe('third'), probe('fourth')])];
   }
 
   /** A Plan caller's call of a slate method: refused before anything runs. */

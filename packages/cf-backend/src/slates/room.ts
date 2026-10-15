@@ -199,6 +199,9 @@ export class SlateRoom extends DurableObject<Env> {
   /** The shared server, started for the image it was loaded from. */
   private server: { readonly image: string; readonly facet: Fetcher<ProcessFacet>; readonly methods: readonly string[] } | null = null;
 
+  /** This incarnation of the room: a room retired and made again under its name loads its shared server afresh. */
+  private incarnation: string = crypto.randomUUID();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Asked once, never caught, as every class's database is (core state/schema-repair.ts). A room is made only by
@@ -269,6 +272,7 @@ export class SlateRoom extends DurableObject<Env> {
 
       for (const socket of this.ctx.getWebSockets()) socket.close(1000, 'The slate was removed');
       this.server = null;
+      this.incarnation = crypto.randomUUID();
       // The shared server's facet holds the slate's own storage: it goes too, so a slate made again starts empty.
       this.ctx.facets.delete('server');
       yield* Effect.promise(async () => this.ctx.storage.deleteAll());
@@ -370,8 +374,9 @@ export class SlateRoom extends DurableObject<Env> {
   }
 
   /**
-   * A worker of the image now running, its env the bindings for `run`; one isolate per id. The shared server keeps the
-   * mediated egress every slate had; a confined run reaches no network at all.
+   * A worker of the image now running, its env the bindings for `run`. The loader caches a worker by `id` for as long as
+   * this isolate lives, its env and its module state with it: an id is never given to two runs, nor to two incarnations of
+   * the room. The shared server keeps the mediated egress every slate had; a confined run reaches no network at all.
    */
   private worker(id: string, run: number | null): Effect.Effect<WorkerStub, KinuError> {
     return Effect.gen({ self: this }, function* () {
@@ -402,7 +407,7 @@ export class SlateRoom extends DurableObject<Env> {
       const image = this.caretaker.room().image ?? '';
 
       if (this.server?.image === image) return this.server.facet;
-      const worker = yield* this.worker(`kinu-room:${this.name()}:${image}`, null);
+      const worker = yield* this.worker(`kinu-room:${this.name()}:${this.incarnation}:${image}`, null);
       const process = this.ctx.facets.get<ProcessFacet>('server', () => ({ class: worker.getDurableObjectClass<ProcessFacet>(RUNNER_CLASS) }));
       const methods = yield* this.started(process);
 
@@ -423,12 +428,15 @@ export class SlateRoom extends DurableObject<Env> {
     });
   }
 
-  /** A confined run's facet: its own isolate, its env its own sealed stubs, its storage its own and dropped after. */
-  private confined(run: Run): Effect.Effect<Fetcher<ProcessFacet>, KinuError> {
+  /**
+   * A confined run's facet: an isolate of its own, `isolate` naming this run and this call alone, so no other run's
+   * sealed stubs or module state are in it (the model's premise that a run's label covers its whole heap). Its storage
+   * is its own and dropped after.
+   */
+  private confined(run: Run, isolate: string): Effect.Effect<Fetcher<ProcessFacet>, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const label = sha256Hex(JSON.stringify(run.label), 16);
-      const worker = yield* this.worker(`kinu-room-run:${this.name()}:${run.image}:${run.requester?.email ?? 'slate'}:${label}`, run.id);
-      const facet = this.ctx.facets.get<ProcessFacet>(`run:${String(run.id)}`, () => ({ class: worker.getDurableObjectClass<ProcessFacet>(RUNNER_CLASS) }));
+      const worker = yield* this.worker(`kinu-room-run:${this.name()}:${run.image}:${isolate}`, run.id);
+      const facet = this.ctx.facets.get<ProcessFacet>(`run:${isolate}`, () => ({ class: worker.getDurableObjectClass<ProcessFacet>(RUNNER_CLASS) }));
 
       yield* this.started(facet);
 
@@ -1094,10 +1102,11 @@ export class SlateRoom extends DurableObject<Env> {
 
       this.computing.add(key);
       yield* this.broadcast();
+      const isolate = `${String(run.id)}:${crypto.randomUUID()}`;
 
-      const answered = yield* Effect.result(Effect.ensuring(this.runMethod(run, this.confined(run)), Effect.sync(() => {
+      const answered = yield* Effect.result(Effect.ensuring(this.runMethod(run, this.confined(run, isolate)), Effect.sync(() => {
         this.computing.delete(key);
-        this.ctx.facets.delete(`run:${String(run.id)}`);
+        this.ctx.facets.delete(`run:${isolate}`);
       })));
 
       if (answered._tag === 'Success') this.caretaker.write(run.id, answered.success);
