@@ -50,7 +50,7 @@ import { CONTROL_PLANE_UI_ROUTE } from "./control-plane/access-gate";
 import { observeIdentity } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { api } from "./api/app";
-import { beneath, rawParam, rawPath, routeError, type ApiVariables, type FamilyEnv } from "./api/context";
+import { beneath, familyMount, rawParam, rawPath, routeError, type ApiVariables, type FamilyEnv } from "./api/context";
 import { keepDevboxGolden } from './devbox-golden';
 
 const RELEASE_ARTIFACT_PATH = `/downloads/:artifact{${RELEASE_ARTIFACT_NAME}}`;
@@ -302,11 +302,8 @@ type WorkerEnv = FamilyEnv<Env, WorkerVariables>;
 /** Registration order is dispatch order. */
 const worker = new Hono<WorkerEnv>({ getPath: rawPath });
 
-function mount<Bindings extends object, Variables extends object>(
-  family: Hono<FamilyEnv<Bindings, Variables>> & (Env extends Bindings ? unknown : never),
-): void {
-  worker.route('/', family);
-}
+/** Each family mounts at the root, its declared bindings checked against `Env`. */
+const mount = familyMount(worker);
 
 const appShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env);
 

@@ -74,7 +74,6 @@ import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WO
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
 import { WorkspaceSlates } from "./workspace-slates";
-import { OverviewPush } from "./overview-push";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
@@ -213,7 +212,7 @@ import {
   boundEventQuery,
   type WorkMode, WorkModeSchema,
   WORKSPACE_RUN_ID, activeOperationProfile, SLATES_ROOT,
-  buildWorkspaceOverview, type WorkspaceOverview,
+  buildWorkspaceOverview, OverviewPush, type WorkspaceOverview,
   projectJsonValue,
 } from "@kinu.run/core";
 import * as v from 'valibot';

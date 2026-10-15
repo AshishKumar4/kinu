@@ -1,11 +1,14 @@
 /**
  * A workspace's tile on its owner's roster, pushed as it changes: one push in flight at a time, with every change
  * meanwhile riding it; a tile like the last one pushed is not sent again; and a failure the platform may clear is
- * retried on a backoff, which a durable wake keeps. The workspace object folds the tile and says when it changed.
+ * retried on a backoff, which a durable wake keeps. The workspace object folds the tile and says when it changed;
+ * where the tile goes, and how work runs detached, are its host's.
  */
 import { Cause, Effect } from 'effect';
-import { recoveryBackoffMs, type WorkspaceOverview } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics } from '../obs/log';
+import { KinuError, toKinuError } from '../obs/error';
+import { recoveryBackoffMs } from '../utils/recovery-backoff';
+import type { WorkspaceOverview } from './workspace-overview';
 
 export interface OverviewPushHost {
   /** Read per push: the object names itself after its fields are made. */

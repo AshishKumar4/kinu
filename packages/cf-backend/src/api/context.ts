@@ -1,5 +1,5 @@
 import { Cause, Effect } from 'effect';
-import type { Context, Env as HonoEnv, MiddlewareHandler } from 'hono';
+import type { Context, Env as HonoEnv, Hono, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import {
   err, OwnerCapabilityUnavailableError, ownerCaller, PUBLIC_MESSAGE, publicError, type OwnerCapabilityEnv, type UserCaller,
@@ -17,6 +17,13 @@ export interface ApiVariables {
 export interface FamilyEnv<Bindings extends object, Variables extends object = ApiVariables> {
   Bindings: Bindings;
   Variables: Variables;
+}
+
+/** Mounts each route family on `host` at its root, checking the bindings the family declares against `Env`. */
+export function familyMount<HostEnv extends HonoEnv>(host: Hono<HostEnv>) {
+  return <Bindings extends object, Variables extends object>(family: Hono<FamilyEnv<Bindings, Variables>> & (Env extends Bindings ? unknown : never)): void => {
+    host.route('/', family);
+  };
 }
 
 /** The path as spelled: Hono's default decodes first (`/%6Cogin` would reach `/login`). */
