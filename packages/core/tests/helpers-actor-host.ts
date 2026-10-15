@@ -100,7 +100,7 @@ export function fixtureRunSources(actor: HostedActor, model: (spec: string) => L
     executors: () => [],
     config: actor.stores.config,
     models: {
-      catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set() },
+      catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set(), callsTools: () => undefined },
       // A suite's bare model id is addressed under the fake provider: a spec names its provider.
       normalize: (spec) => (spec.includes('/') ? spec : `fake/${spec}`),
       resolve: (spec) => model(spec.replace(/^fake\//, '')),

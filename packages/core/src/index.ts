@@ -800,7 +800,6 @@ export {
 export {
   assertToolsSupportedByModel,
   resolvePromptModelProfile,
-  type PromptModelCapability,
   type PromptModelContext,
   type PromptModelFamily,
   type PromptModelProfile,

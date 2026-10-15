@@ -47,7 +47,7 @@ export function fixtureRunSources(
     executors: () => [],
     config: actor.stores.config,
     models: {
-      catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set() },
+      catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set(), callsTools: () => undefined },
       normalize: (spec) => spec,
       resolve: (spec) => model(spec),
     },

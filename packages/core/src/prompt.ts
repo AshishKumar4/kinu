@@ -66,7 +66,6 @@ export type {
 } from './prompting/surface';
 
 export type {
-  PromptModelCapability,
   PromptModelContext,
   PromptModelFamily,
   PromptModelProfile,
