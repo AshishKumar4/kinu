@@ -175,7 +175,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
     const agent = await readyWorkspace(call, "device");
 
     if (agent instanceof Response) return agent;
-    opened = await agent.openDeviceTerminal(paneWindow(url));
+    opened = await agent.openDeviceTerminal(paneWindow(url), url.searchParams.get("device") ?? undefined);
   } catch (cause) {
     const error = toKinuError({
       doing: "reaching this workspace to open a terminal",

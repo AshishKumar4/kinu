@@ -5,8 +5,7 @@
     "origin_json TEXT NOT NULL",
     "delivery TEXT UNIQUE",
     "status TEXT NOT NULL DEFAULT 'pending'",
-    "created_at INTEGER NOT NULL",
-    "decided_at INTEGER"
+    "created_at INTEGER NOT NULL"
   ],
   "account_notes@packages/core/src/memory/account.ts": [
     "id TEXT PRIMARY KEY",
@@ -357,8 +356,7 @@
     "credential_id TEXT PRIMARY KEY",
     "user_id TEXT NOT NULL",
     "public_key TEXT NOT NULL",
-    "counter INTEGER NOT NULL",
-    "transports TEXT NOT NULL"
+    "counter INTEGER NOT NULL"
   ],
   "cache_warm@packages/core/src/providers/cache-warming.ts": [
     "actor_id TEXT PRIMARY KEY",
@@ -390,10 +388,8 @@
   "cli_agent_connect_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash TEXT PRIMARY KEY",
     "user_id TEXT NOT NULL",
-    "agent_class TEXT NOT NULL",
     "agent_name TEXT NOT NULL",
     "cli_token_hash TEXT NOT NULL",
-    "capabilities TEXT NOT NULL",
     "expires_at INTEGER NOT NULL"
   ],
   "compaction_archive@packages/core/src/state/workspace-schema.ts": [
@@ -545,7 +541,6 @@
     "note TEXT NOT NULL",
     "route TEXT NOT NULL",
     "workspace TEXT",
-    "object_key TEXT",
     "bytes INTEGER"
   ],
   "cp_users@packages/core/src/control-plane/store.ts": [
@@ -611,15 +606,18 @@
     "expires_at INTEGER NOT NULL",
     "token_was_current INTEGER"
   ],
-  "device_consent_requests@packages/core/src/safety/device-consent.ts": [
+  "device_consent_asks@packages/core/src/safety/device-consent.ts": [
     "consent_id TEXT PRIMARY KEY",
+    "actor_id TEXT",
     "device_id TEXT NOT NULL",
     "device_label TEXT NOT NULL",
     "method TEXT NOT NULL",
     "command TEXT NOT NULL",
     "workspace_name TEXT",
     "created_at INTEGER NOT NULL",
-    "expires_at INTEGER NOT NULL"
+    "epoch INTEGER NOT NULL",
+    "status TEXT NOT NULL DEFAULT 'queued'",
+    "decided_at INTEGER"
   ],
   "device_consent@packages/core/src/state/user-schema.ts": [
     "agent_name TEXT NOT NULL",
@@ -641,6 +639,8 @@
   ],
   "device_joins@packages/core/src/state/user-schema.ts": [
     "device_id TEXT PRIMARY KEY",
+    "ticket_hash TEXT NOT NULL UNIQUE",
+    "workspace TEXT",
     "expires_at INTEGER NOT NULL"
   ],
   "device_notice_pending@packages/core/src/state/user-schema.ts": [
@@ -1148,7 +1148,6 @@
   "sandbox_lifecycle_incidents@packages/cf-backend/src/sandbox-lifecycle.ts": [
     "incident_id TEXT PRIMARY KEY",
     "first_seen_at INTEGER NOT NULL",
-    "announced_at INTEGER",
     "outcome TEXT"
   ],
   "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
@@ -1493,8 +1492,7 @@
   ],
   "user_credentials_revision@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "revision INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "revision INTEGER NOT NULL"
   ],
   "user_credentials@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
@@ -1552,18 +1550,9 @@
   ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
-    "name TEXT NOT NULL",
-    "server_url TEXT NOT NULL",
-    "transport TEXT NOT NULL",
     "headers TEXT",
     "allowed_tools TEXT",
     "preset_id TEXT"
-  ],
-  "user_peer_grants@packages/core/src/state/user-schema.ts": [
-    "sender_user_id TEXT NOT NULL",
-    "sender_agent_name TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "PRIMARY KEY (sender_user_id, sender_agent_name)"
   ],
   "user_profile@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
@@ -1572,10 +1561,6 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "onboarded_at INTEGER"
-  ],
-  "user_schema_meta@packages/core/src/state/user-schema.ts": [
-    "key TEXT PRIMARY KEY",
-    "value TEXT NOT NULL"
   ],
   "user_share_cards@packages/core/src/state/user-schema.ts": [
     "owner_user_id TEXT NOT NULL",
@@ -1655,8 +1640,7 @@
   ],
   "workspace_logos@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "svg TEXT NOT NULL",
-    "drawn_at INTEGER NOT NULL"
+    "svg TEXT NOT NULL"
   ],
   "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
@@ -1665,8 +1649,8 @@
   ],
   "workspace_overviews@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
-    "decisions INTEGER NOT NULL",
+    "activity TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED CHECK (activity IN ('working', 'unfinished', 'idle'))",
+    "decisions INTEGER GENERATED ALWAYS AS (json_extract(overview, '$.decisionsWaiting')) STORED NOT NULL",
     "overview TEXT NOT NULL"
   ],
   "workspace_proposals@packages/core/src/safety/workspace-proposals.ts": [

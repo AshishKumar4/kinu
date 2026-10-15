@@ -9,7 +9,7 @@ import type { ElementHandle, Page } from 'puppeteer';
 import { detach } from '@kinu.run/core/obs';
 import { DESKTOP_CLIENT_ROOT } from '../../packages/core/src/http/desktop-client';
 import { withGallery } from '../../scripts/gallery-harness';
-import { openInspectorPage, sessionLine } from '../../scripts/product-flows';
+import { openInspectorPage, sessionLine } from '../../scripts/browser-page';
 
 declare global {
   interface Window {
@@ -49,6 +49,16 @@ const DESKTOP_FILL = `(() => {
   const area = document.querySelector('main').getBoundingClientRect();
   return Math.max(screen.width / area.width, screen.height / area.height);
 })()`;
+
+/** The owner's PC, by the label the gallery's account gives it. */
+const PC = "Ashish's MacBook";
+
+/** The control `required` names, once it has rendered: a chip or a button that arrives with a read. */
+async function waitForControl(page: Page, scope: string, role: string, name: string): Promise<ElementHandle> {
+  await page.waitForFunction((where, wanted) => [...document.querySelectorAll(`${where} button`)].some((button) => button.textContent?.trim() === wanted), SOON, scope, name);
+
+  return await required(page, scope, role, name);
+}
 
 /** The workspace shell's computer in its Environment panel, at its first session's terminal. */
 async function openTheComputer(page: Page, origin: string): Promise<void> {
@@ -286,19 +296,38 @@ describe('the Environment panel', () => {
     });
   });
 
-  test('a PC that is not connected is offered, not listed, and the offer opens the connect panel in place', async () => {
+  // Every machine on the owner's account shows in every workspace (the owner, 2026-10-14): one that is offline says so
+  // in its place, and the panel still offers to connect another.
+  test('a PC on the account that is offline shows in its place, and Connect a PC opens the connect panel there', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
 
       try {
         await page.setViewport({ width: 1100, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=environment&offline=device`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('[data-env-card="workspace"]', SOON);
-
-        expect(await page.$('[data-env-card="device"]')).toBeNull();
+        await (await waitForControl(page, '[data-env-card="device"]', 'button', PC)).click();
+        await page.waitForFunction((name) => document.querySelector('#inspector, body')?.textContent?.includes(`${name} is offline`) === true, SOON, PC);
         await (await required(page, 'body', 'button', 'Connect a PC')).click();
         await page.waitForSelector('[role="dialog"]', SOON);
         expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
+      } finally { await page.close(); }
+    });
+  });
+
+  // Production f9c17ac7b (the owner, 2026-10-14): a PC connected to the account but not yet held by this workspace was
+  // listed nowhere and offered nothing; the owner could reach it only through an agent's approval box.
+  test('a PC this workspace does not hold shows with one click to give it access, and then its terminal', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell&pc=ungranted`, { waitUntil: 'networkidle0' });
+        await page.click('#inspector button[aria-label="Environment"]');
+        await (await waitForControl(page, '#inspector', 'button', PC)).click();
+        await (await waitForControl(page, '#inspector', 'button', 'Give this workspace access')).click();
+        await page.waitForSelector('#inspector .xterm-rows', SOON);
+        expect(await page.$('#inspector [data-env-give-access]')).toBeNull();
       } finally { await page.close(); }
     });
   });
@@ -333,6 +362,25 @@ describe('the Environment panel', () => {
         await page.click('[data-desktop-return]');
         await page.waitForFunction(`${DESKTOP_FILL} < 0.9 && document.querySelector('[data-rail]') !== null`, SOON);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
+      } finally { await page.close(); }
+    });
+  });
+
+  // Staging fcc2e05d6: the computer-sessions row read the first session's line and terminal, kept mounted out of sight
+  // since D99, for a new session's; it waited 128 s for that shell and never saw the new folder.
+  test("the flows' reader reads the session shown, not one kept out of sight", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await openTheComputer(page, origin);
+        await (await required(page, '#inspector', 'tab', 'dev server')).click();
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace/storefront', ports: [':5173'] });
+
+        await page.click('#inspector button[aria-label="New session"]');
+        await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 3, SOON);
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace', ports: [] });
       } finally { await page.close(); }
     });
   });

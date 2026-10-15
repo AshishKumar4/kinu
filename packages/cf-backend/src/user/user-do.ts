@@ -10,7 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, ORCHESTRATOR_AGENT_SLUG, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -37,7 +37,7 @@ import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-se
 import { UserAccountMemory } from './account-memory';
 import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, SqlValue } from '@kinu.run/core';
 import {
-  UserSessions, CLI_AGENT_WEBSOCKET_CAPABILITY, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
+  UserSessions, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
 
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
@@ -118,7 +118,10 @@ export class UserDO extends Agent<Env> {
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
 
-  private readonly devices = new UserDevices({ ...this.host, chatgptSignIns: () => this.chatgpt.chatgptSignIns() });
+  private readonly devices = new UserDevices({
+    ...this.host, chatgptSignIns: () => this.chatgpt.chatgptSignIns(), accountName: () => this.name,
+    workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name),
+  });
 
   private readonly chatgpt = new UserChatGptSignIn({ ...this.host, devices: this.devices, vault: this.credentials });
 
@@ -267,10 +270,6 @@ export class UserDO extends Agent<Env> {
 
   hasWorkspace(caller: UserCaller, name: string): Promise<boolean> {
     return this.workspaces.hasWorkspace(caller, name);
-  }
-
-  hasPeerGrant(caller: UserCaller, senderAgentName: string, senderUserId: string): Promise<boolean> {
-    return this.workspaces.hasPeerGrant(caller, senderAgentName, senderUserId);
   }
 
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]> {
@@ -493,20 +492,13 @@ export class UserDO extends Agent<Env> {
 
   issueCliAgentConnectTicket(caller: UserCaller, input: {
     userId: string;
-    agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
     agentName: string;
     cliTokenHash: string;
-    capabilities?: Array<typeof CLI_AGENT_WEBSOCKET_CAPABILITY>;
   }): ReturnType<UserSessions['issueCliAgentConnectTicket']> {
     return this.sessions.issueCliAgentConnectTicket(caller, input);
   }
 
-  verifyCliAgentConnectTicket(caller: UserCaller, ticket: string, expected: {
-      userId: string;
-      agentClass: typeof ORCHESTRATOR_AGENT_SLUG;
-      agentName: string;
-      capability: typeof CLI_AGENT_WEBSOCKET_CAPABILITY;
-    }): Promise<CliAgentConnectTicketVerification> {
+  verifyCliAgentConnectTicket(caller: UserCaller, ticket: string, expected: { userId: string; agentName: string }): Promise<CliAgentConnectTicketVerification> {
     return this.sessions.verifyCliAgentConnectTicket(caller, ticket, expected);
   }
 
@@ -606,8 +598,12 @@ export class UserDO extends Agent<Env> {
     return this.terminals.openDeviceTerminal(caller, agentName, window, deviceId);
   }
 
-  issueDeviceJoin(caller: UserCaller): ReturnType<UserDevices['issueDeviceJoin']> {
-    return this.devices.issueDeviceJoin(caller);
+  issueDeviceJoin(caller: UserCaller, workspace: string | null): ReturnType<UserDevices['issueDeviceJoin']> {
+    return this.devices.issueDeviceJoin(caller, workspace);
+  }
+
+  joinDevice(caller: UserCaller, ticket: string, label?: string, replaces?: string): ReturnType<UserDevices['joinDevice']> {
+    return this.devices.joinDevice(caller, ticket, label, replaces);
   }
 
   registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): ReturnType<UserDevices['registerDevice']> {
@@ -676,6 +672,10 @@ export class UserDO extends Agent<Env> {
 
   listDeviceConsents(caller: UserCaller): ReturnType<UserDevices['listDeviceConsents']> {
     return this.devices.listDeviceConsents(caller);
+  }
+
+  grantDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserDevices['grantDeviceConsent']> {
+    return this.devices.grantDeviceConsent(caller, agentName, deviceId);
   }
 
   revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserDevices['revokeDeviceConsent']> {

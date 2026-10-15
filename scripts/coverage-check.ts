@@ -14,8 +14,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseLcov, type LcovRecord } from './coverage-lcov';
 import { packageOf } from './sources';
+import { REPO_ROOT as ROOT } from './repo-root';
 
-const ROOT = new URL('..', import.meta.url).pathname;
 
 const LCOV = join(ROOT, 'coverage', 'lcov.info');
 

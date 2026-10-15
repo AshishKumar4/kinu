@@ -47,7 +47,7 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   // A review's `turn_complete` is the quality read's count of turns.
   ['evolution_events', ['getQuality']],
   ['deferred_approvals', [...QUEUE, ...AGENTS]],
-  ['device_consent_requests', AGENTS],
+  ['device_consent_asks', AGENTS],
   ['workspace_proposals', QUEUE],
   ['proposed_tasks', QUEUE],
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork', ...AGENTS]],

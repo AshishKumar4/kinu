@@ -456,6 +456,23 @@ export function registerCloudDevice(
   }));
 }
 
+const CloudDeviceJoinSchema = v.object({ ...CloudDeviceRegistrationSchema.entries, label: v.string() });
+
+export type CloudDeviceJoin = v.InferOutput<typeof CloudDeviceJoinSchema>;
+
+/** A machine with no session registers as the device a browser's connect command names, spending its ticket. */
+export function joinCloudDevice(origin: string, join: { readonly ticket: string; readonly label?: string; readonly replaces?: string }): Promise<CloudDeviceJoin> {
+  const body: Record<string, JsonValue> = {};
+
+  body.ticket = join.ticket;
+
+  if (join.label) body.label = join.label;
+
+  if (join.replaces !== undefined) body.replaces = join.replaces;
+
+  return settle(cloudJson(CloudDeviceJoinSchema, origin, '/pc/join', { method: 'POST', body }));
+}
+
 export function listCloudDevices(origin: string, token: string): Promise<CloudDevice[]> {
   return settle(cloudJson(v.array(CloudDeviceSchema), origin, '/api/cli/devices', { token }));
 }

@@ -27,8 +27,8 @@ import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
 import { ANALYTICS_DATASET_SUFFIX, ANALYTICS_SCHEMAS, analyticsDataset, boundaryOf } from '@kinu.run/core/analytics';
 import * as record from '@kinu.run/core/analytics';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
 

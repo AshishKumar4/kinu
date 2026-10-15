@@ -145,12 +145,11 @@ export class UserWorkspaces {
     const parsed = v.parse(WorkspaceOverviewSchema, overview);
 
     const changed = this.host.sqlx(
-      `INSERT INTO workspace_overviews (name, overview, activity, decisions) VALUES (?, ?, ?, ?)
-       ON CONFLICT (name) DO UPDATE SET overview = excluded.overview, activity = excluded.activity,
-         decisions = excluded.decisions
+      `INSERT INTO workspace_overviews (name, overview) VALUES (?, ?)
+       ON CONFLICT (name) DO UPDATE SET overview = excluded.overview
        WHERE workspace_overviews.overview <> excluded.overview
        RETURNING name`,
-      name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting,
+      name, JSON.stringify(parsed),
     );
 
     if (changed.length === 0) return;
@@ -590,7 +589,7 @@ export class UserWorkspaces {
       const kept = sanitizeWorkspaceLogoSvg(svg);
 
       if (kept === null) this.host.sqlx(`DELETE FROM workspace_logos WHERE name = ?`, name);
-      else this.host.sqlx(`INSERT OR REPLACE INTO workspace_logos (name, svg, drawn_at) VALUES (?, ?, ?)`, name, kept, Date.now());
+      else this.host.sqlx(`INSERT OR REPLACE INTO workspace_logos (name, svg) VALUES (?, ?)`, name, kept);
       this.rosterChanged(name);
 
       return { drawn: kept !== null };
@@ -628,18 +627,6 @@ export class UserWorkspaces {
        WHERE name = ? AND delete_pending = 0
          AND create_pending = 0`,
       name,
-    )[0];
-
-    return row !== undefined;
-  }
-
-  /** Whether a foreign sender may deliver into this user's agents; same-owner peers need no grant. */
-  async hasPeerGrant(caller: UserCaller, senderAgentName: string, senderUserId: string): Promise<boolean> {
-    await this.host.requireTier(caller, 'peers.grants');
-
-    const row = this.host.sqlx(
-      `SELECT 1 AS x FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`,
-      senderUserId, senderAgentName,
     )[0];
 
     return row !== undefined;

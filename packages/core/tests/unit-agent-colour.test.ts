@@ -35,9 +35,10 @@ describe("an agent's colour", () => {
     expect(tiles[12]).not.toBe(tiles[0]);
   });
 
-  test('at every hue the eyes read on the tile, and its edge on either theme\'s grounds', () => {
-    const dark = [THEME_TOKENS.dark['--c-bg'], THEME_TOKENS.dark['--c-sidebar']];
-    const light = [THEME_TOKENS.light['--c-bg'], THEME_TOKENS.light['--c-sidebar']];
+  test('at every hue the eyes read on the tile, and its edge on every theme\'s grounds in either mode', () => {
+    const themes = Object.values(THEME_TOKENS);
+    const dark = themes.flatMap((theme) => [theme.dark['--c-bg'], theme.dark['--c-sidebar']]);
+    const light = themes.flatMap((theme) => [theme.light['--c-bg'], theme.light['--c-sidebar']]);
     const worst = { eyes: Number.POSITIVE_INFINITY, onDark: Number.POSITIVE_INFINITY, onLight: Number.POSITIVE_INFINITY };
 
     for (const hue of EVERY_TENTH_DEGREE) {

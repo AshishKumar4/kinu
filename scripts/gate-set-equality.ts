@@ -83,12 +83,12 @@ import { readFileSync } from 'node:fs';
 import { LADDER, deployGates, packageScripts } from './ladder';
 import { assertMeasured, finding } from './gate-ratchet';
 import { isParseable, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   collapsePath, identifierCalleeName, identifierText, IMPORT_CANDIDATES, importedNames,
   memberCalleeName, moduleSpecifiers, parse, regexPattern, type SyntaxNode, walk,
 } from './syntax';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** The one enumerator, and therefore the one file allowed to discover paths. */
 export const ENUMERATOR = 'scripts/sources.ts';

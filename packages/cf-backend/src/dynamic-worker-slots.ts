@@ -41,7 +41,14 @@ export class AgentIsolateSlots {
     return new KinuError('unavailable', withDynamicWorkerCapNamed(this.ledger, refusal).message, { cause: refusal });
   }
 
-  held<A>(key: string, open: () => Promise<AgentFacetCalls>, call: (isolate: AgentFacetCalls) => Promise<A>): Effect.Effect<A, KinuError> {
+  /** One call into the isolate under `key`, made once `first` has run, holding a platform slot while it runs. */
+  call<A>(
+    key: string, open: () => Promise<AgentFacetCalls>, call: (isolate: AgentFacetCalls) => Promise<A>, first: Effect.Effect<unknown, KinuError> = Effect.void,
+  ): Promise<A> {
+    return settle(Effect.andThen(first, this.#held(key, open, call)));
+  }
+
+  #held<A>(key: string, open: () => Promise<AgentFacetCalls>, call: (isolate: AgentFacetCalls) => Promise<A>): Effect.Effect<A, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const isolate = yield* Effect.promise(open);
 
@@ -78,68 +85,4 @@ export class AgentIsolateSlots {
       }
     });
   }
-}
-
-export function agentCallsThrough(through: <A>(call: (isolate: AgentFacetCalls) => Promise<A>) => Effect.Effect<A, KinuError>): AgentFacetCalls {
-  return {
-    activePlanReview: (...args) => settle(through((isolate) => isolate.activePlanReview(...args))),
-    planReviews: (...args) => settle(through((isolate) => isolate.planReviews(...args))),
-    savePlanReviewAnnotations: (...args) => settle(through((isolate) => isolate.savePlanReviewAnnotations(...args))),
-    dismissPlanReview: (...args) => settle(through((isolate) => isolate.dismissPlanReview(...args))),
-    ownerQuestions: (...args) => settle(through((isolate) => isolate.ownerQuestions(...args))),
-    dismissOwnerQuestions: (...args) => settle(through((isolate) => isolate.dismissOwnerQuestions(...args))),
-    admit: (...args) => settle(through((isolate) => isolate.admit(...args))),
-    landing: (...args) => settle(through((isolate) => isolate.landing(...args))),
-    sendState: (...args) => settle(through((isolate) => isolate.sendState(...args))),
-    awaitSend: (...args) => settle(through((isolate) => isolate.awaitSend(...args))),
-    interruptChat: (...args) => settle(through((isolate) => isolate.interruptChat(...args))),
-    wake: (...args) => settle(through((isolate) => isolate.wake(...args))),
-    modelSettingsChanged: (...args) => settle(through((isolate) => isolate.modelSettingsChanged(...args))),
-    revertTo: (...args) => settle(through((isolate) => isolate.revertTo(...args))),
-    clearConversation: (...args) => settle(through((isolate) => isolate.clearConversation(...args))),
-    owed: (...args) => settle(through((isolate) => isolate.owed(...args))),
-    owedWork: (...args) => settle(through((isolate) => isolate.owedWork(...args))),
-    answerTexts: (...args) => settle(through((isolate) => isolate.answerTexts(...args))),
-    answer: (...args) => settle(through((isolate) => isolate.answer(...args))),
-    newestFirst: (...args) => settle(through((isolate) => isolate.newestFirst(...args))),
-    armCompaction: (...args) => settle(through((isolate) => isolate.armCompaction(...args))),
-    forkHas: (...args) => settle(through((isolate) => isolate.forkHas(...args))),
-    forkPlan: (...args) => settle(through((isolate) => isolate.forkPlan(...args))),
-    forkCount: (...args) => settle(through((isolate) => isolate.forkCount(...args))),
-    forkRows: (...args) => settle(through((isolate) => isolate.forkRows(...args))),
-    forkClear: (...args) => settle(through((isolate) => isolate.forkClear(...args))),
-    forkStage: (snapshot, artifactDirectory, kind, rows) => settle(through((isolate) => isolate.forkStage(snapshot, artifactDirectory, kind, rows))),
-    forkPublish: (...args) => settle(through((isolate) => isolate.forkPublish(...args))),
-    drainAnswers: (...args) => settle(through((isolate) => isolate.drainAnswers(...args))),
-    lastUserMetadata: (...args) => settle(through((isolate) => isolate.lastUserMetadata(...args))),
-    turnPair: (...args) => settle(through((isolate) => isolate.turnPair(...args))),
-    standing: (...args) => settle(through((isolate) => isolate.standing(...args))),
-    steps: (...args) => settle(through((isolate) => isolate.steps(...args))),
-    runSteps: (...args) => settle(through((isolate) => isolate.runSteps(...args))),
-    listRuns: (...args) => settle(through((isolate) => isolate.listRuns(...args))),
-    runSummaries: (...args) => settle(through((isolate) => isolate.runSummaries(...args))),
-    runEvents: (...args) => settle(through((isolate) => isolate.runEvents(...args))),
-    runEventText: (...args) => settle(through((isolate) => isolate.runEventText(...args))),
-    idle: (...args) => settle(through((isolate) => isolate.idle(...args))),
-    deliverAdvice: (...args) => settle(through((isolate) => isolate.deliverAdvice(...args))),
-    step: (...args) => settle(through((isolate) => isolate.step(...args))),
-    frozen: (...args) => settle(through((isolate) => isolate.frozen(...args))),
-    history: (...args) => settle(through((isolate) => isolate.history(...args))),
-    historyPage: (...args) => settle(through((isolate) => isolate.historyPage(...args))),
-    messageCount: (...args) => settle(through((isolate) => isolate.messageCount(...args))),
-    inspect: (...args) => settle(through((isolate) => isolate.inspect(...args))),
-    inheritedContext: (...args) => settle(through((isolate) => isolate.inheritedContext(...args))),
-    workingContext: (...args) => settle(through((isolate) => isolate.workingContext(...args))),
-    turnRequests: (...args) => settle(through((isolate) => isolate.turnRequests(...args))),
-    turnRequest: (...args) => settle(through((isolate) => isolate.turnRequest(...args))),
-    spend: (...args) => settle(through((isolate) => isolate.spend(...args))),
-    context: (...args) => settle(through((isolate) => isolate.context(...args))),
-    searchConversations: (...args) => settle(through((isolate) => isolate.searchConversations(...args))),
-    scrollConversation: (...args) => settle(through((isolate) => isolate.scrollConversation(...args))),
-    browseConversations: (...args) => settle(through((isolate) => isolate.browseConversations(...args))),
-    admitted: (...args) => settle(through((isolate) => isolate.admitted(...args))),
-    interrupt: (...args) => settle(through((isolate) => isolate.interrupt(...args))),
-    recover: (...args) => settle(through((isolate) => isolate.recover(...args))),
-    archivePage: (...args) => settle(through((isolate) => isolate.archivePage(...args))),
-  };
 }

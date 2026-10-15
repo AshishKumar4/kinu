@@ -9,7 +9,7 @@ import { getAgentByName, type AgentContext } from 'agents';
 import * as v from 'valibot';
 import {
   commitWorkspaceCapability, freshWorkspaceCapability, ownerCaller,
-  type DeviceConsentAnswer, type SqlExec, type SqlValue, type UserCaller, DEVICE_METHOD,
+  type SqlExec, type SqlValue, type UserCaller, DEVICE_METHOD,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../../src/orchestrator';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -21,7 +21,7 @@ import { UserDO } from '../../src/user/user-do';
 export * from '../../src/server';
 
 const PROBE_METHODS = [
-  'pair', 'reconnecting', 'bindWorkspace', 'admit', 'run', 'cancelOwn', 'stopAgent', 'acknowledge', 'withdrawConsent', 'answerConsent', 'revoke', 'requests',
+  'pair', 'reconnecting', 'bindWorkspace', 'admit', 'run', 'cancelOwn', 'stopAgent', 'acknowledge', 'withdrawConsent', 'revoke', 'requests',
   'unstoppedSince', 'hostWorkspace', 'startParkedTurn', 'runOnMachine', 'stopWork', 'pendingConsents', 'releaseTurn',
 ];
 
@@ -31,12 +31,11 @@ const MODEL_CONTROL = 'http://probe-control.invalid';
 const FIXTURE_CREDENTIAL = { kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key' } as const;
 
 /** Each look at the workspace's prompts is an RPC hop, never a clock; this many and the prompt never came. */
-const CONSENT_LOOKS = 10_000;
 
 type ProbeEnv = ConstructorParameters<typeof UserDO>[1];
 
 type ConsentTarget = Pick<OrchestratorAgent,
-  'claimOwner' | 'listPendingConsents' | 'resolveDeviceConsent' | 'setModel' | 'runTaskFromMcp' | 'executeInExecutor' | 'cancelCurrentWork'
+  'claimOwner' | 'listPendingConsents' | 'setModel' | 'runTaskFromMcp' | 'executeInExecutor' | 'cancelCurrentWork'
   | 'onModelSettingsChanged'>;
 
 export interface InflightRow {
@@ -198,23 +197,6 @@ export class DeviceUserProbeDO extends UserDO {
 
   async withdrawConsent(workspace: string, deviceId: string): Promise<{ ok: boolean }> {
     return this.revokeDeviceConsent(await ownerCaller(this.env), workspace, deviceId);
-  }
-
-  /** The owner's answer on the workspace's consent card, once the workspace raised one. */
-  async answerConsent(workspace: string, decision: DeviceConsentAnswer): Promise<void> {
-    const target = await this.workspaceTarget(workspace);
-
-    for (let look = 0; look < CONSENT_LOOKS; look += 1) {
-      const [pending] = await target.listPendingConsents();
-
-      if (pending !== undefined) {
-        await target.resolveDeviceConsent(pending.consentId, decision);
-
-        return;
-      }
-    }
-
-    throw new Error(`${workspace} raised no consent card`);
   }
 
   async revoke(deviceId: string): Promise<{ ok: boolean; unstoppedCommands?: number }> {

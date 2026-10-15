@@ -96,7 +96,6 @@ export function initSandboxLifecycleTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS sandbox_lifecycle_incidents (
     incident_id   TEXT PRIMARY KEY,
     first_seen_at INTEGER NOT NULL,
-    announced_at  INTEGER,
     outcome       TEXT
   )`);
 }
@@ -104,7 +103,6 @@ export function initSandboxLifecycleTable(execRaw: RawSqlExec): void {
 interface IncidentRow {
   incident_id: string;
   first_seen_at: number;
-  announced_at: number | null;
   outcome: string | null;
 }
 
@@ -115,17 +113,15 @@ function readDeliveryState(
   sql: SqlExecutor, incidentId: string,
 ): {
   readonly firstSeenAt: number;
-  readonly announcedAt: number | null;
   readonly outcome: SendOutcome | null;
 } | null {
-  const row = sql<IncidentRow>`SELECT incident_id, first_seen_at, announced_at, outcome
+  const row = sql<IncidentRow>`SELECT incident_id, first_seen_at, outcome
     FROM sandbox_lifecycle_incidents WHERE incident_id = ${incidentId}`[0];
 
   if (!row) return null;
 
   return {
     firstSeenAt: row.first_seen_at,
-    announcedAt: row.announced_at,
     outcome: row.outcome === null ? null : v.parse(StoredOutcomeSchema, row.outcome),
   };
 }
@@ -196,8 +192,8 @@ export function acceptSandboxLifecycleIncident(
       });
     };
 
-    if (before !== null && before.announcedAt !== null && before.outcome !== null
-      && before.outcome !== 'undelivered') {
+    // Announced: delivered, mid-turn or queued. An undelivered outcome is retried.
+    if (before !== null && before.outcome !== null && before.outcome !== 'undelivered') {
       // `ok`: the agent has been told; a repeat is the container's conservative retry.
       recordSettlement('ok', '');
       deps.logActivity?.('sandbox_incident_duplicate', `${incident.stage}: ${incident.incidentId}`);
@@ -207,8 +203,8 @@ export function acceptSandboxLifecycleIncident(
 
     // Row lands before delivery so a lost delivery stays re-deliverable; `first_seen_at` is written once.
     void deps.sql`INSERT INTO sandbox_lifecycle_incidents
-      (incident_id, first_seen_at, announced_at, outcome)
-    VALUES (${incident.incidentId}, ${now}, NULL, NULL)
+      (incident_id, first_seen_at, outcome)
+    VALUES (${incident.incidentId}, ${now}, NULL)
     ON CONFLICT(incident_id) DO NOTHING`;
 
     const metadata: JsonObject = {
@@ -235,7 +231,7 @@ export function acceptSandboxLifecycleIncident(
 
     const landed = outcome !== 'undelivered';
     void deps.sql`UPDATE sandbox_lifecycle_incidents
-    SET outcome = ${outcome}, announced_at = ${landed ? now : null}
+    SET outcome = ${outcome}
     WHERE incident_id = ${incident.incidentId}`;
     // No code: the signal seam returns an outcome, not a classifiable cause.
     recordSettlement(landed ? 'ok' : 'failed', '');

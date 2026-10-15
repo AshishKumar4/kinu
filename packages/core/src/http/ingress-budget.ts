@@ -9,7 +9,6 @@ import { sha256Hex } from '../safety/argument-digest';
 
 const INGRESS_WINDOW_MS = 60_000;
 
-/** The window is in the key, so a hit is always this window's count. */
 const INGRESS_WINDOW_SCHEMA = v.object({ count: v.number() });
 
 export type IngressAdmission = 'admitted' | 'first-refusal' | 'refused';
@@ -19,6 +18,7 @@ export async function ingressAdmission(kv: KvStore, rail: string, source: string
   const now = Date.now();
   const windowStart = now - (now % INGRESS_WINDOW_MS);
   const key = `ingress:${String(windowStart)}:${await sha256Hex(`${rail}\u0000${source}`)}`;
+  // The window is the key's: a record read under it is that window's.
   const current = await readKvJson(kv, key, INGRESS_WINDOW_SCHEMA);
   const count = (current?.count ?? 0) + 1;
 

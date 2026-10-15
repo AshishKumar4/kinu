@@ -97,12 +97,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { isProductSource, isRunnableSuite, readMatching, trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import {
   functionOwner, isFunctionLike, ownerName, parse, walk,
   type SyntaxNode,
 } from './syntax';
 import {
-  candidateDefenders, requireCleanTargets, requireOwnWorktree, restoreMutant, root, runSuites, writeMutant,
+  candidateDefenders, requireCleanTargets, requireOwnWorktree, restoreMutant, runSuites, writeMutant,
 } from './mutation-runtime';
 
 /**

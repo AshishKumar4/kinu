@@ -14,7 +14,8 @@ export interface TunnelSocket {
   readyState: number;
 }
 
-const WS_OPEN = 1;
+/** WebSocket.OPEN; also used by the hub's terminals and the roster's multi-subscriber lane. */
+export const WS_OPEN = 1;
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 

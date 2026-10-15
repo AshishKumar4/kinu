@@ -380,6 +380,75 @@ it('the workspace terminal is the runtime shell: a typed line runs and its outpu
   }
 });
 
+/** What a person reads of a screen: the shell's semantic marks (OSC 133, ended by BEL) dropped, line ends as one. */
+function readable(screen: string): string {
+  const mark = '\u001b]133;';
+  let out = '';
+  let at = 0;
+
+  for (let start = screen.indexOf(mark); start >= 0; start = screen.indexOf(mark, at)) {
+    out += screen.slice(at, start);
+    const end = screen.indexOf('\u0007', start);
+
+    at = end < 0 ? screen.length : end + 1;
+  }
+
+  return (out + screen.slice(at)).replaceAll('\r\n', '\n');
+}
+
+// Production (the owner, 2026-10-14; Nimbus ask 57): each reattach recorded its own replay and a new prompt into the
+// scrollback, so the prompts on screen doubled per attach (2, 4 … 128 on staging 0e094da7d) and a resume's notice repeated.
+/** A workspace's terminal, a line run in it, and the screen a pane attaching then is shown. */
+async function settledTerminal(name: string) {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName(name));
+  const workspace = `durability-${name}`;
+
+  await subject().serveSlate({ workspace, owner: 'durability-owner', id: `beside-${name}`, body: 'served' });
+  await subject().typeToPrompt(workspace, 'echo ready-$((40+2))', 'ready-42');
+
+  return { subject, workspace };
+}
+
+it('a terminal attached again and again with no input shows the same screen, byte for byte', async () => {
+  const { subject, workspace } = await settledTerminal('reattach-same');
+  const screens: string[] = [];
+
+  for (let attach = 0; attach < 4; attach += 1) screens.push((await subject().reattachTerminal(workspace)).output);
+  expect(new Set(screens).size, screens.map((screen) => JSON.stringify(screen.slice(-160))).join('\n')).toBe(1);
+});
+
+it('a line typed between attaches adds exactly itself, its output and one prompt', async () => {
+  const { subject, workspace } = await settledTerminal('reattach-typed');
+  const before = (await subject().reattachTerminal(workspace)).output;
+  const lastPrompt = before.slice(before.lastIndexOf('\u001b]133;A\u0007'));
+
+  await subject().typeToPrompt(workspace, 'echo hi', 'hi\r\n');
+  const after = (await subject().reattachTerminal(workspace)).output;
+  const added = after.slice(before.length);
+  const ran = added.indexOf('\u001b]133;C\u0007');
+  const ended = added.indexOf('\u001b]133;D');
+
+  expect(after.startsWith(before)).toBe(true);
+  // The line as typed (the line editor redraws it in place, on the prompt it sits on), then one command's run.
+  expect(added.slice(0, ran)).toContain('echo hi');
+  expect([added.split('\u001b]133;A').length - 1, added.split('\u001b]133;C').length - 1]).toEqual([1, 1]);
+  // Its output, then one prompt and nothing after it.
+  expect(added.slice(ran + '\u001b]133;C\u0007'.length, ended)).toBe('hi\r\n');
+  expect(readable(added.slice(ended))).toBe(readable(lastPrompt));
+});
+
+it("after its object restarts, a terminal's notice is said once however often a pane attaches", async () => {
+  const { subject, workspace } = await settledTerminal('reattach-notice');
+
+  await abortAllDurableObjects();
+
+  for (let attach = 0; attach < 4; attach += 1) {
+    const screen = (await subject().reattachTerminal(workspace)).output;
+
+    expect(screen.split('Runtime resumed').length - 1, `attach ${String(attach + 1)}`).toBe(1);
+  }
+});
+
 // Staging 2026-10-08: a 20 MB print failed its row's write (SQLITE_TOOBIG) as an uncaught rejection.
 it('a print past the row limit runs, and its row keeps the head a reader shows with the length printed', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('clip'));

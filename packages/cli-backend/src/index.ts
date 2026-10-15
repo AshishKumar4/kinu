@@ -18,7 +18,7 @@ export {
 
 export { openWorkspaceCLI, readWorkspaceInfo, type WorkspaceInfo } from './open';
 
-export { requireSchemaGenesis, schemaGenesisOf, stampSchemaGenesis } from './schema-genesis';
+export { requireSchemaGenesis, schemaGenesisOf } from './schema-genesis';
 
 export { moveIntoFolder, publishStoreFiles, stageLocalArchive, type StagedLocalArchive } from './local-archive';
 

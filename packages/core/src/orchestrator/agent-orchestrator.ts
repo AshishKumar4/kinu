@@ -4,11 +4,10 @@
 
 import type { ModelMessage } from 'ai';
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator';
-import type { RunEndReason } from './turn-lifecycle';
 import { TurnSteering } from './turn-steering';
 import { DrainScheduler } from './drain-scheduler';
 import { Inbox, type UserSteerDeps } from './inbox';
-import { EvolutionLanes, improvementLanesOpen, type EvolutionLanesDeps } from './evolution-lanes';
+import { EvolutionLanes, type EvolutionLanesDeps } from './evolution-lanes';
 import type { EventLog } from '../events/hub/log';
 import type { ExecutionRecoveryRecord } from '../events/types';
 import type { PrepareStepContext, KinuExtension } from '../extension';
@@ -63,7 +62,7 @@ export class AgentOrchestrator extends EvolutionLanes {
     onToolResult: (ctx) => {
       const recovery = this.steering.onToolResult(ctx);
 
-      if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
+      if (recovery && this.evolutionThisTurn) this.recordRecovery(recovery);
     },
     prepareStep: (ctx: PrepareStepContext): Promise<ModelMessage[] | undefined> => {
       // The file ledger shows what a codemode program changed, which no tool-call signature can.
@@ -76,17 +75,19 @@ export class AgentOrchestrator extends EvolutionLanes {
   /** Recorded through the engine at observation time, since an episode can outlive this instance;
    *  collected here only for the turn's `execution_recovery` run event. */
   private turnRecoveries: RecoveryFinding[] = [];
-  /** Decided once per turn: a `--no-auto-evolve` run records no recovery findings. */
-  private observeRecoveries = false;
-  private turnEvolutionEnabled = false;
-  private activeWorkMode: WorkMode = 'build';
+  /**
+   * Decided once per turn: whether it evolves (the engine on, and not Plan). Read by the turn gate, by recovery
+   * observation (a `--no-auto-evolve` run records no findings) and by the turn's crafted-tool record, whose `eval` calls
+   * are observed where they run (`delegation/actor-tools.ts`). The turn's work mode itself is its session's.
+   */
+  private evolutionThisTurn: boolean;
   private activeMissions: readonly string[] = [];
   private readonly drains: DrainScheduler;
 
   constructor(private readonly deps: AgentOrchestratorDeps, steers?: UserSteerDeps) {
     super(deps);
-    this.acc = new TurnAccumulator(deps.sinks, deps.budget);
-    this.turnEvolutionEnabled = deps.engine.enabled;
+    this.evolutionThisTurn = deps.engine.enabled;
+    this.acc = new TurnAccumulator(deps.sinks, deps.budget, () => this.evolutionThisTurn);
     this.inbox = new Inbox(deps.host, (e, d) => this.logActivity(e, d), steers);
     this.signals = deps.deliveries.signals;
     this.drains = new DrainScheduler(
@@ -96,7 +97,7 @@ export class AgentOrchestrator extends EvolutionLanes {
   }
 
   protected override turnGate(): boolean {
-    return this.turnEvolutionEnabled;
+    return this.evolutionThisTurn;
   }
 
   /** Reset per-turn accounting from the turn's metadata. */
@@ -104,17 +105,10 @@ export class AgentOrchestrator extends EvolutionLanes {
     this.deps.engine.recoverInterruptedWork();
     this.acc.reset(now);
     this.steering.reset();
-    // Decided once per turn: with evolution off, crafted-tool scoring is off too.
     const tags = turnTags({ metadata });
-    const workMode = tags.mode;
-    this.activeWorkMode = workMode;
     this.activeMissions = [...tags.missionLabels];
-    const evolutionEnabled = this.deps.engine.enabled && workMode !== 'plan';
-    this.turnEvolutionEnabled = evolutionEnabled;
-    // Its `eval` calls are observed where they run (`delegation/actor-tools.ts`), into this turn's record.
-    this.acc.ledgers.craft.recording = evolutionEnabled;
+    this.evolutionThisTurn = this.deps.engine.enabled && tags.mode !== 'plan';
     this.turnRecoveries = [];
-    this.observeRecoveries = evolutionEnabled;
     this.inbox.beginTurn(tags.signalId);
     this.deps.budget?.activate(this.activeMissions);
   }
@@ -125,11 +119,7 @@ export class AgentOrchestrator extends EvolutionLanes {
 
   /** Restrict a Build turn to plan after accounting opens: closes improvement lanes without resetting accounting. */
   restrictTurnWorkMode(mode: WorkMode): void {
-    if (mode !== 'plan' || this.activeWorkMode === 'plan') return;
-    this.activeWorkMode = 'plan';
-    this.turnEvolutionEnabled = false;
-    this.acc.ledgers.craft.recording = false;
-    this.observeRecoveries = false;
+    if (mode === 'plan') this.evolutionThisTurn = false;
   }
 
   private recordRecovery(finding: RecoveryFinding): void {
@@ -169,14 +159,6 @@ export class AgentOrchestrator extends EvolutionLanes {
     return drainPendingEvents(this.deps, opts);
   }
 
-  // The settle spine is `declareTerminalRoster` (orchestrator/terminal-roster.ts). The pure rule below is public so a
-  // backend claiming the sub-effects separately asks it without re-spelling it.
-
-  /** Completed-only improvement lanes (advisor review, auto-title) open only after a completed build turn. */
-  improvementLanesOpen(status: RunEndReason, workMode?: WorkMode): boolean {
-    // `workMode` is for a replay on a fresh activation; absent means the live turn.
-    return improvementLanesOpen(status, workMode ?? this.activeWorkMode);
-  }
 }
 
 /**

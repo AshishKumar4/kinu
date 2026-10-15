@@ -4,7 +4,7 @@ import { detach } from '@kinu.run/core/obs';
 import { executorLabel } from '@kinu.run/core';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
-import { inspectorPageListed, openInspectorPage } from '../../scripts/product-flows';
+import { inspectorPageListed, openInspectorPage } from '../../scripts/browser-page';
 import type { Frame, Page } from 'puppeteer';
 
 async function serveSlate(page: Page): Promise<void> {

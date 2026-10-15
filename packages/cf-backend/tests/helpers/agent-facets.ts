@@ -6,8 +6,8 @@ import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/provide
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetCalls, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
 import type { AgentWorkspacePort } from '../../src/agent-facet/workspace-rpc';
-import { agentCallsThrough } from '../../src/dynamic-worker-slots';
-import { attemptInItsWords } from '@kinu.run/core/obs';
+import { attemptInItsWords, settle, type KinuError } from '@kinu.run/core/obs';
+import type { Effect } from 'effect';
 import { AgentDatabase } from '../../src/agent-facet/agent-database';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import { type AgentFacetPlacement, type AgentWorkspaceHost } from '../../src/agent-facets';
@@ -779,7 +779,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
       // A reset isolate fails every call it still held, as a dropped RPC does; a refusal crosses in its own words, as an
       // error thrown across an RPC does.
-      const calls = agentCallsThrough((call) => attemptInItsWords('io', () => untilLost(call(facet), lost.signal)));
+      const calls = facetCallsThrough(facet, (call) => attemptInItsWords('io', () => untilLost(call(), lost.signal)));
 
       const admit: AgentFacetCalls['admit'] = async (snapshot, delivery) => {
         const cut = deliveryCuts.get(placement.storageKey);
@@ -841,6 +841,71 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
       return { facet, calls: { ...calls, admit, interruptChat, context }, lost };
   }
+}
+
+/** `isolate`'s calls, each made through `through` as an RPC into it would be. */
+export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: () => Promise<A>) => Effect.Effect<A, KinuError>): AgentFacetCalls {
+  return {
+    activePlanReview: (...args) => settle(through(() => isolate.activePlanReview(...args))),
+    planReviews: (...args) => settle(through(() => isolate.planReviews(...args))),
+    savePlanReviewAnnotations: (...args) => settle(through(() => isolate.savePlanReviewAnnotations(...args))),
+    dismissPlanReview: (...args) => settle(through(() => isolate.dismissPlanReview(...args))),
+    ownerQuestions: (...args) => settle(through(() => isolate.ownerQuestions(...args))),
+    dismissOwnerQuestions: (...args) => settle(through(() => isolate.dismissOwnerQuestions(...args))),
+    admit: (...args) => settle(through(() => isolate.admit(...args))),
+    landing: (...args) => settle(through(() => isolate.landing(...args))),
+    sendState: (...args) => settle(through(() => isolate.sendState(...args))),
+    awaitSend: (...args) => settle(through(() => isolate.awaitSend(...args))),
+    interruptChat: (...args) => settle(through(() => isolate.interruptChat(...args))),
+    wake: (...args) => settle(through(() => isolate.wake(...args))),
+    modelSettingsChanged: (...args) => settle(through(() => isolate.modelSettingsChanged(...args))),
+    revertTo: (...args) => settle(through(() => isolate.revertTo(...args))),
+    clearConversation: (...args) => settle(through(() => isolate.clearConversation(...args))),
+    owed: (...args) => settle(through(() => isolate.owed(...args))),
+    owedWork: (...args) => settle(through(() => isolate.owedWork(...args))),
+    answerTexts: (...args) => settle(through(() => isolate.answerTexts(...args))),
+    answer: (...args) => settle(through(() => isolate.answer(...args))),
+    newestFirst: (...args) => settle(through(() => isolate.newestFirst(...args))),
+    armCompaction: (...args) => settle(through(() => isolate.armCompaction(...args))),
+    forkHas: (...args) => settle(through(() => isolate.forkHas(...args))),
+    forkPlan: (...args) => settle(through(() => isolate.forkPlan(...args))),
+    forkCount: (...args) => settle(through(() => isolate.forkCount(...args))),
+    forkRows: (...args) => settle(through(() => isolate.forkRows(...args))),
+    forkClear: (...args) => settle(through(() => isolate.forkClear(...args))),
+    forkStage: (snapshot, artifactDirectory, kind, rows) => settle(through(() => isolate.forkStage(snapshot, artifactDirectory, kind, rows))),
+    forkPublish: (...args) => settle(through(() => isolate.forkPublish(...args))),
+    drainAnswers: (...args) => settle(through(() => isolate.drainAnswers(...args))),
+    lastUserMetadata: (...args) => settle(through(() => isolate.lastUserMetadata(...args))),
+    turnPair: (...args) => settle(through(() => isolate.turnPair(...args))),
+    standing: (...args) => settle(through(() => isolate.standing(...args))),
+    steps: (...args) => settle(through(() => isolate.steps(...args))),
+    runSteps: (...args) => settle(through(() => isolate.runSteps(...args))),
+    listRuns: (...args) => settle(through(() => isolate.listRuns(...args))),
+    runSummaries: (...args) => settle(through(() => isolate.runSummaries(...args))),
+    runEvents: (...args) => settle(through(() => isolate.runEvents(...args))),
+    runEventText: (...args) => settle(through(() => isolate.runEventText(...args))),
+    idle: (...args) => settle(through(() => isolate.idle(...args))),
+    deliverAdvice: (...args) => settle(through(() => isolate.deliverAdvice(...args))),
+    step: (...args) => settle(through(() => isolate.step(...args))),
+    frozen: (...args) => settle(through(() => isolate.frozen(...args))),
+    history: (...args) => settle(through(() => isolate.history(...args))),
+    historyPage: (...args) => settle(through(() => isolate.historyPage(...args))),
+    messageCount: (...args) => settle(through(() => isolate.messageCount(...args))),
+    inspect: (...args) => settle(through(() => isolate.inspect(...args))),
+    inheritedContext: (...args) => settle(through(() => isolate.inheritedContext(...args))),
+    workingContext: (...args) => settle(through(() => isolate.workingContext(...args))),
+    turnRequests: (...args) => settle(through(() => isolate.turnRequests(...args))),
+    turnRequest: (...args) => settle(through(() => isolate.turnRequest(...args))),
+    spend: (...args) => settle(through(() => isolate.spend(...args))),
+    context: (...args) => settle(through(() => isolate.context(...args))),
+    searchConversations: (...args) => settle(through(() => isolate.searchConversations(...args))),
+    scrollConversation: (...args) => settle(through(() => isolate.scrollConversation(...args))),
+    browseConversations: (...args) => settle(through(() => isolate.browseConversations(...args))),
+    admitted: (...args) => settle(through(() => isolate.admitted(...args))),
+    interrupt: (...args) => settle(through(() => isolate.interrupt(...args))),
+    recover: (...args) => settle(through(() => isolate.recover(...args))),
+    archivePage: (...args) => settle(through(() => isolate.archivePage(...args))),
+  };
 }
 
 interface OpenFacet {

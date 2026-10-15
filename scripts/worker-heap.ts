@@ -63,8 +63,8 @@ import { ownerCaller } from '../packages/core/src/safety/workspace-capability';
 import { workersAiBinding } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
 import { buildAgentBundle } from '../packages/cf-backend/vite-agent-bundle';
 import { inspect, inspectAll, type Allocations, type HeapMakeup, type Inspector } from './worker-heap/inspector';
+import { REPO_ROOT } from './repo-root';
 
-const REPO_ROOT = join(import.meta.dir, '..');
 
 const CF_BACKEND = join(REPO_ROOT, 'packages/cf-backend');
 

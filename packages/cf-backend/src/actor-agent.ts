@@ -184,7 +184,9 @@ import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codem
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
-import type { AgentStoreBroker } from "./agent-facets";
+import { AgentStoreBroker } from "./agent-facets";
+import type { AgentFacetCalls } from "./agent-facet/agent-facet";
+import type { AgentSnapshot } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateRoute, SlateCallResult, SlateOperation, SlateReadModel, SlateSurfaceValue } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
@@ -2957,7 +2959,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const scope = record === null ? null : actorReach(actorPolicy(record));
 
     // A hire reaches its own confined surface; an agent whose programs reach the workspace's program surface, that one.
-    if (scope === null || scope.surface === 'confined') {
+    if (scope === null || scope.kind === 'confined') {
       return await this.withHostedActor(actor, async (hosted) => {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
@@ -2973,10 +2975,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const providers = actorNamespaces(this.surfaceActor(requested), SURFACE_POLICY.operations);
 
-    // Its external tools, where it reaches the workspace's.
-    const mcp = scope.external ? await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog)) : {};
+    // The workspace's own agent, which reaches its external tools.
+    const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
-    const external = scope.external ? { ...this.extensions.tools(), ...mcp } : {};
+    const external = { ...this.extensions.tools(), ...mcp };
 
     return await reachedIn(authority, providers, { ...external, ...this.getRawToolsForWorkMode(authority.mode) }, use);
   }
@@ -3272,12 +3274,17 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
       transcriptFor: (actor) => this.transcriptFor(actor),
-      ownRows: (actor, own) => this.agentStores(actor.actorId).inspect(own),
+      ownRows: (actor, own) => this.agentCall(actor.actorId, (isolate, snapshot) => isolate.inspect(snapshot, own)),
     }, request, authority);
   }
 
-  /** Every read or write of an agent's own stores goes here (D9). */
-  protected abstract agentStores(actorId: string): AgentStoreBroker;
+  /** Every read or write of an agent's own stores goes here (D9): a call into its isolate, bound to its snapshot. */
+  protected abstract agentCall<A>(actorId: string, call: (isolate: AgentFacetCalls, snapshot: AgentSnapshot) => Promise<A>): Promise<A>;
+
+  /** An agent's own stores as core's ports read them. */
+  protected agentStores(actorId: string): AgentStoreBroker {
+    return new AgentStoreBroker((call) => this.agentCall(actorId, call));
+  }
 
   /** Main's conversations are its own isolate's. */
   protected ownConversations(): ConversationRecall {
@@ -3294,10 +3301,9 @@ export abstract class ActorAgent extends Agent<Env> {
       // Strict: a dropped id cursor from an old client re-reads the newest page forever.
       const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
-      if (actor === undefined) return yield* Effect.promise(async () => this.agentStores(this.actorHandle().actorId).historyPage(page));
-      yield* this.requireSubordinateChat(actor);
+      if (actor !== undefined) yield* this.requireSubordinateChat(actor);
 
-      return yield* Effect.promise(async () => this.agentStores(actor).historyPage(page));
+      return yield* Effect.promise(async () => this.agentCall(actor ?? this.actorHandle().actorId, (isolate, snapshot) => isolate.historyPage(snapshot, page)));
     }));
   }
 
@@ -3904,10 +3910,10 @@ export abstract class ActorAgent extends Agent<Env> {
   }): DynamicContext {
     const { memoryTail, accountFacts, activeSkills } = step.reads;
     const held = this.heldDynamicOf(actor.reference);
-    const extras = reach.lanes ? this.extraDynamicContext() : {};
+    const extras = reach.kind === 'workspace' ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
-    const turn = reach.lanes && step.surface !== null ? turnTags(step.surface.item).reason : undefined;
-    const model = reach.lanes ? this.promptModelContextFor(step.profile.tier.model) : { id: step.profile.tier.model };
+    const turn = reach.kind === 'workspace' && step.surface !== null ? turnTags(step.surface.item).reason : undefined;
+    const model = reach.kind === 'workspace' ? this.promptModelContextFor(step.profile.tier.model) : { id: step.profile.tier.model };
 
     return collectDynamicContext({
       rt: actor.runtime,
@@ -3922,7 +3928,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(activeSkills !== null && activeSkills !== undefined && { activeSkills }),
       memoryTail,
       ...(accountFacts !== undefined && { accountFacts }),
-      ...(reach.external && { unavailableMcp: this._mcpUnavailable }),
+      ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: held.delegates,
       approvals: extras.approvals,

@@ -79,7 +79,7 @@ export class AccountResetProbeDO extends UserDO {
       ownerUserId: 'e'.repeat(32), workspace: 'her-ws', shareId: 'share-2', card: { kind: 'blueprint', title: 'Board', description: '', createdAt: 1, owner: 'ana@example.test' },
     });
     this.ctx.storage.sql.exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES ('srv-1', 'github', 'https://mcp.example/v1', 'auto')`,
+      `INSERT INTO user_mcp_servers (id) VALUES ('srv-1')`,
     );
     await this.setCredential(owner, 'anthropic.bearer', { kind: 'bearer', token: 'sk-probe' });
     this.ctx.storage.sql.exec(`INSERT INTO device_consent (agent_name, device_id, policy) VALUES ('ws-alpha', 'dev-1', 'allow')`);

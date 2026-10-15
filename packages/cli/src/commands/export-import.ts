@@ -16,10 +16,10 @@ import {
 import { tolerate } from '@kinu.run/core/obs';
 import { sqlStorageOver } from '@kinu.run/core/identity';
 import {
-  moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stageLocalArchive, stampSchemaGenesis, type StagedLocalArchive,
+  moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stageLocalArchive, type StagedLocalArchive,
 } from '@kinu.run/cli-backend';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
-import { formatBytes, workspaceArchiveTarget } from '@kinu.run/core';
+import { formatBytes, stampSchemaGenesis, workspaceArchiveTarget } from '@kinu.run/core';
 import {
   agentDbPath, agentDir, canonicalProjectRoot, defaultVirtualWorkspaceId, ensureAgentHome,
   placeLocalWorkspace, requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
@@ -121,7 +121,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
       const result = await restoreWorkspaceArchive(sqlStorageOver(db), readLines(file), { store: () => workspaceArchiveTarget(opened()) });
 
       restored = { rows: result.rows, tables: result.tables };
-      stampSchemaGenesis(db);
+      stampSchemaGenesis((ddl) => db.exec(ddl));
 
       // Locally every file is a real one, from either backend's archive.
       await publishStoreFiles(opened(), staging);

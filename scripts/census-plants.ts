@@ -18,8 +18,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import * as v from 'valibot';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = 'scripts/test-census.lock.json';
 

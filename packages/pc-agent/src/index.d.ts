@@ -22,7 +22,7 @@ export interface DeviceConfig {
   readonly token: string;
   /** One the daemon sends its token to: https, or plain http to this machine. */
   readonly origin: string;
-  /** The directory `kinu connect` ran in, absolute. */
+  /** The directory the owner linked, absolute: their home, or the one the connect command named. */
   readonly root: string;
 }
 

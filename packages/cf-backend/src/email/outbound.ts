@@ -6,7 +6,7 @@
 import {
   boundedMessageId, boundedReferences,
   JsonValueSchema,
-  type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore,
+  type EmailThreadAddr, type JsonValue,
 } from '@kinu.run/core';
 import { agentEmailAddress } from './inbound';
 import type { EmailOutbox, OutboundEmailMessage } from '@kinu.run/core';
@@ -145,53 +145,6 @@ export function createEmailThreadDispatcher(
         return { delivered: true };
       }));
     },
-  };
-}
-
-/** `pending` stays true while a retryable email channel is still open. */
-export interface EmailReplyDispatchResult {
-  delivered: number;
-  pending: boolean;
-}
-
-export async function dispatchEmailRepliesForTurn(
-  deps: { log: EventLog; replies: ReplyChannelStore },
-  drainTurnId: string,
-  replyText: string,
-  now: number,
-): Promise<EmailReplyDispatchResult> {
-  const events = deps.log.query({ turn_id: drainTurnId, variant: 'email' });
-
-  if (!replyText.trim()) {
-    return {
-      delivered: 0,
-      pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
-    };
-  }
-
-  let delivered = 0;
-
-  for (const ev of events) {
-    const channel = deps.replies.findOpenByEvent(ev.id);
-
-    if (!channel || channel.kind !== 'email_thread') continue;
-    const outcome = await deps.replies.reply(channel.id, replyText, now);
-    deps.log.appendNonEventRow({
-      kind: 'reply_attempt',
-      turn_id: drainTurnId,
-      step_idx: null,
-      parent_id: ev.id,
-      trace_id: ev.trace_id,
-      payload: { channel_id: channel.id, kind: 'email_thread', outcome },
-      now,
-    });
-
-    if (outcome.outcome === 'delivered') delivered++;
-  }
-
-  return {
-    delivered,
-    pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
   };
 }
 

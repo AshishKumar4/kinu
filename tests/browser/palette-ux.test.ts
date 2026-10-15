@@ -2,7 +2,9 @@
  * The app's palette as Chromium resolves it: each token is painted through a probe on the real stylesheet, so
  * the cascade, the light theme's overrides and every `var()` indirection are the browser's own.
  *
- * Every text role meets WCAG AA against every surface it can land on, on both themes. And Kumo, whose
+ * Every text role meets WCAG AA against every surface it can land on, in every theme and mode, and a control's edge
+ * stands out from the grounds beside it. Each theme draws its own palette, named on the root as the server names it.
+ * And Kumo, whose
  * components ship compiled, paints from the Kinu palette: its colour tokens are the only lever, and a token
  * left unmapped, or mapped to a literal, silently keeps Kumo's blue (or the dark value on the light theme).
  */
@@ -10,8 +12,12 @@ import { describe, expect, test } from 'bun:test';
 
 import { contrast, over, rgba, type Rgba, unruledClasses, withGallery } from '../../scripts/gallery-harness';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
+import { THEME_NAMES, type ThemeName } from '@kinu.run/core';
 
 const MODES = ['dark', 'light'] as const;
+
+/** Grounds a control's edge sits on: a field on the page, in the rail, or inside a card. */
+const CONTROL_GROUNDS = ['--c-bg', '--c-sidebar', '--c-surface'] as const;
 
 /** Surfaces a text role can land on; dim and micro-label roles land anywhere, dialogs included. */
 const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-elevated', '--c-overlay', '--c-recessed', '--c-fill'] as const;
@@ -39,12 +45,13 @@ const NON_TEXT = TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum;
 const ASKED = [
   ...SURFACES, ...TEXT_ROLES, ...FILLS.flatMap(([ink, fill]) => [ink, fill]),
   ...STATUSES.flatMap((status) => [`--c-${status}`, `--c-${status}-tint`]),
-  '--c-accent-mark', '--c-accent-subtle',
+  '--c-accent-mark', '--c-accent-subtle', '--c-input-border',
 ];
 
-/** What one theme computes: the mode it landed on, and each asked token as a probe's `color` resolves it. */
+/** What one theme and mode compute: the mode it landed on, and each asked token as a probe's `color` resolves it. */
 interface Palette {
   readonly mode: string | undefined;
+  readonly theme: string | undefined;
   /** Null for a token the document does not declare. */
   readonly colours: Readonly<Record<string, string | null>>;
 }
@@ -67,7 +74,7 @@ function paletteOf(asked: readonly string[]): Palette {
     probe.remove();
   }
 
-  return { mode: document.documentElement.dataset.mode, colours };
+  return { mode: document.documentElement.dataset.mode, theme: document.documentElement.dataset.theme, colours };
 }
 
 /** Kumo's colour families: the size scale and the raw neutral ramp are inputs, not surfaces the palette themes. */
@@ -141,16 +148,19 @@ type Mode = (typeof MODES)[number];
 const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 
 const { palettes, kumo } = await withGallery(async ({ newPage, origin }) => {
-  const byMode: Partial<Record<Mode, Palette>> = {};
+  const byLook: Partial<Record<`${ThemeName} ${Mode}`, Palette>> = {};
   const kumoByMode: Partial<Record<Mode, KumoRead>> = {};
 
   for (const mode of MODES) {
-    const page = await newPage();
-    // The pre-paint script reads the preference once, at load.
-    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
-    await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
-    byMode[mode] = await page.evaluate(paletteOf, ASKED);
-    await page.close();
+    for (const theme of THEME_NAMES) {
+      const page = await newPage();
+      // The pre-paint script reads the preference once, at load; the theme is named on the root, as the server names it.
+      await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
+      await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
+      await page.evaluate((name) => { document.documentElement.dataset.theme = name; }, theme);
+      byLook[`${theme} ${mode}`] = await page.evaluate(paletteOf, ASKED);
+      await page.close();
+    }
 
     // The workspace page mounts Kumo's compiled components: tabs, the composer's controls.
     const workspace = await newPage();
@@ -164,26 +174,42 @@ const { palettes, kumo } = await withGallery(async ({ newPage, origin }) => {
     await workspace.close();
   }
 
-  return { palettes: byMode, kumo: kumoByMode };
+  return { palettes: byLook, kumo: kumoByMode };
 });
 
-describe.each([...MODES])('the app palette on the %s theme', (mode) => {
-  const palette = palettes[mode];
+const LOOKS = THEME_NAMES.flatMap((theme) => MODES.map((mode) => [theme, mode] as const));
 
-  if (palette === undefined) throw new Error(`no palette was read on the ${mode} theme`);
+describe.each(LOOKS)('the %s palette, %s', (theme, mode) => {
+  const palette = palettes[`${theme} ${mode}`];
+
+  if (palette === undefined) throw new Error(`no palette was read for ${theme} ${mode}`);
 
   const colour = (name: string): Rgba => {
     const computed = palette.colours[name];
 
-    if (computed === null || computed === undefined) throw new Error(`${name} is not declared on the ${mode} theme`);
+    if (computed === null || computed === undefined) throw new Error(`${name} is not declared for ${theme} ${mode}`);
 
     return rgba(computed);
   };
 
-  test('the page is on the theme the pass claims, and declares every token the roles need', () => {
+  test('the page is on the theme and mode the pass claims, and declares every token the roles need', () => {
     // A renamed token would make the loops below measure a fallback colour and pass.
-    expect(palette.mode).toBe(mode);
+    expect({ theme: palette.theme, mode: palette.mode }).toEqual({ theme, mode });
     expect(ASKED.filter((name) => palette.colours[name] === null)).toEqual([]);
+  });
+
+  test('it is its own: no other theme draws this mode with the same ground, surface and text', () => {
+    const face = (read: Palette | undefined) => ['--c-bg', '--c-surface', '--c-text'].map((name) => read?.colours[name]).join(' ');
+    const twins = THEME_NAMES.filter((other) => other !== theme && face(palettes[`${other} ${mode}`]) === face(palette));
+
+    expect(twins).toEqual([]);
+  });
+
+  test("a control's edge stands out on every ground beside it", () => {
+    const failures = CONTROL_GROUNDS.map((ground) => ({ ground, ratio: contrast(colour('--c-input-border'), colour(ground)) }))
+      .filter((row) => row.ratio < NON_TEXT);
+
+    expect(failures).toEqual([]);
   });
 
   test('every text role meets AA on every surface', () => {

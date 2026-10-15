@@ -40,9 +40,9 @@ import { parsePlatformReport } from '../evals/src/platform';
 import { parseResults, trials } from '../evals/src/results';
 import { EvalRunSchema, readEvalRun } from './evals-artifacts';
 import { isEvalTask, trackedFiles } from './sources';
+import { REPO_ROOT as REPO } from './repo-root';
 import { servedHealth } from './served-health';
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 const DIST = join(REPO, 'packages/cf-backend/dist');
 

@@ -6,13 +6,22 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
 const SUITE = 'First-run · slate-browser';
 
-const CASE = 'slate-browser' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A slate\'s class opened a Chrome session as its caller, connected it through the eval program\'s browser gate, loaded a page and read its title, and did the same with a Kitesurf browser.',
+  missedBecause: 'The slate surface exposed openBrowser but refused connectBrowser: the sandbox half of driving a browser was installed only in eval programs, and a slate\'s egress carried no actor, so the gate refused every Chrome session.',
+  provedRedAt: null,
+  redDirection: 'Green requires title(engine, url) to answer \'Example Domain\' for both chrome and kitesurf. Before this, connectBrowser from a slate answered "runs only inside an eval program"; '
+    + 'packages/cf-backend/tests/workerd/slate-share.test.ts proves the gate admits the caller\'s own session and refuses another\'s.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'browse');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -33,7 +42,7 @@ describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
       purpose: 'Disposable slate that drives Chrome and Kitesurf from its class; no model task.',
       async run({ session }) {
         const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /slates/${SLATE}
@@ -79,5 +88,3 @@ END`));
     }, observations);
   });
 });
-
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

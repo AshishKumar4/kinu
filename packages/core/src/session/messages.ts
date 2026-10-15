@@ -56,6 +56,11 @@ export interface ClaimFences {
   openClaims(): ReadonlyMap<string, number>;
 }
 
+/** A turn's admission request at `epoch`: its claim writes the row, and the stream's first request answers to it. */
+export function admissionRequestId(turnId: string, epoch: number): string {
+  return `${turnId}:${epoch}:admission`;
+}
+
 /** The claim a write belongs to, and the check that throws once it is no longer current. */
 export interface ClaimFence {
   readonly turnId: string;

@@ -13,7 +13,7 @@ import {
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
-import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
+import { resetRecordedMcp, seedConfiguredMcpServer, seedMcpTools } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
@@ -95,8 +95,7 @@ async function userWorld(
 
   await user.userDO.ensureProfile(caller, account.email);
   await user.userDO.userMcp_list(caller);
-  user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-    VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL)`);
+  seedConfiguredMcpServer(user.sql, 'connection-id', { name: 'github', url: 'https://github.example/sse', transport: 'auto' });
 
   return { user, agent };
 }

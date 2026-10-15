@@ -17,15 +17,23 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { DriveListingSchema, MarkedSkillSchema } from '@kinu.run/core';
-import { firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { type KinuPublicSession } from '../../evals/src/session';
 import { webHeaders } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · drive';
 
-const CASE = 'drive' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The Drive shipped with no live proof: its unit proofs run the SDK\'s in-memory fake and the workerd tier binds no Mossaic object, so the real tenant store, the /shared mount and the /api/drive routes had never been driven on the deployed product.',
+  missedBecause: 'Every Drive suite is green over the fake; nothing opened the live tenant, put a file through the route, and read it back at /shared from a workspace shell.',
+  provedRedAt: null,
+  redDirection: 'Green requires GET /api/drive to list the reserved skills folder, a made folder and a put file to list back at their size and download as the same bytes, two workspaces of the owner to cat the file at /shared, a pasted skill to land under /skills as a skill on the listing and the mount, and the deletes to leave the root as found.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'drive');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -39,7 +47,7 @@ describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
       purpose: 'Disposable Drive probe over the live tenant store; no model task.',
       async run({ session, plan }) {
         const goals: EvalSubgoal[] = [];

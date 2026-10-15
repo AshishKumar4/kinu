@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
 import { KinuError } from '@kinu.run/core/obs';
 import { canaryActivations } from './durability-canary-telemetry';
-import { alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings } from './prod-logs';
+import {
+  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings, versionSignals,
+} from './prod-logs';
 
 const HOUR = 3_600_000;
 
@@ -157,6 +159,26 @@ describe('what one deployed version did, as a deploy reports it', () => {
   });
 
   // Staging under the tiers and the evals, 2026-09-30: at most 3 startups in an object-hour.
+  // What a later deploy compares when it reads this window again (telemetry-windows.ts): counters late rows only raise.
+  test('a later read compares counters late rows only raise: throws beside resets, owed sequences by name, a loop by its hour', () => {
+    const loop = ALERT_THRESHOLDS.startupsPerHour;
+
+    const signals = versionSignals({
+      ...quiet,
+      ended: [{ outcome: 'exception', entrypoint: 'KinuDevbox', count: 3, objects: 1 }, { outcome: 'canceled', entrypoint: 'KinuSandbox', count: 9, objects: 2 }],
+      deployResets: [{ entrypoint: 'KinuDevbox', count: 3 }],
+      effects: { ...quiet.effects, terminal: { ...quiet.effects.terminal, owed: [{ object: 'o', sequence: 'a/1', detail: 'owed' }, { object: 'o', sequence: 'b/2', detail: 'owed' }] } },
+      startups: [{ object: 'looping', hour: HOUR + 60_000, startups: loop }, { object: 'looping', hour: HOUR + 120_000, startups: 1 }, { object: 'quiet', hour: HOUR, startups: 3 }],
+    });
+
+    expect(signals.map(({ key, count, offset }) => ({ key, count, offset }))).toEqual([
+      { key: 'exceptions:KinuDevbox', count: 3, offset: 3 },
+      { key: 'owed:a/1', count: 1, offset: undefined },
+      { key: 'owed:b/2', count: 1, offset: undefined },
+      { key: `startups:looping:${String(HOUR)}`, count: loop + 1, offset: undefined },
+    ]);
+  });
+
   test('an object started as often as the product calls a wake loop is a finding, and the measured busiest is none', () => {
     const loop = ALERT_THRESHOLDS.startupsPerHour;
 

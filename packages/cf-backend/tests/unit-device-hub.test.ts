@@ -323,6 +323,7 @@ describe('DeviceTerminalHub socket ownership', () => {
     terminals.register('session-b', 'dev-a', 'workspace-b');
     terminals.attach('session-a', first.socket);
     terminals.attach('session-b', second.socket);
+    expect([await first.receive(), await second.receive()].map((frame) => JSON.parse(v.parse(v.string(), frame)))).toMatchObject([{ type: 'ready' }, { type: 'ready' }]);
 
     serving = new DeviceTerminalHub(ctx, hub);
     await expect(Promise.resolve().then(() => serving.attach('session-a', socketPeer().socket))).rejects.toMatchObject({ code: 'missing' });
@@ -342,6 +343,37 @@ describe('DeviceTerminalHub socket ownership', () => {
     serving.endPane('session-b', 'device revoked');
     expect(JSON.parse(v.parse(v.string(), await second.receive()))).toMatchObject({ type: 'error' });
     expect(await second.closed).toBe(1000);
+  });
+});
+
+// Production f9c17ac7b (2026-10-14): the shell's first bytes and its exit reached the hub before its pane attached
+// and were dropped (`device.terminal_output_unclaimed`), so the pane opened blank, or closed without saying why.
+describe('a device terminal before its pane attaches', () => {
+  /** What a pane was sent, in order: a frame as its parsed type, bytes as text. */
+  function pane() {
+    const seen: string[] = [];
+    const peer = socketPeer((data) => { seen.push(typeof data === 'string' ? v.parse(v.object({ type: v.string() }), JSON.parse(data)).type : Buffer.from(v.parse(v.instance(Uint8Array), data)).toString()); });
+
+    return { ...peer, seen };
+  }
+
+  test('the pane gets what the shell drew first, then its end', async () => {
+    const ctx = peerContext();
+    const terminals = new DeviceTerminalHub(ctx, new DeviceSocketHub(ctx));
+    const ended = pane();
+    const drawn = pane();
+
+    terminals.register('session-ended', 'dev-a', 'workspace-a');
+    terminals.toPane('session-ended', new Uint8Array(Buffer.from('bwrap: it could not start')));
+    terminals.paneExit('session-ended', 1);
+    terminals.attach('session-ended', ended.socket);
+    expect(ended.seen).toEqual(['ready', 'bwrap: it could not start', 'exit']);
+    expect(await ended.closed).toBe(1000);
+
+    terminals.register('session-drawn', 'dev-a', 'workspace-a');
+    terminals.toPane('session-drawn', new Uint8Array(Buffer.from('user@machine:~$ ')));
+    terminals.attach('session-drawn', drawn.socket);
+    expect(drawn.seen).toEqual(['ready', 'user@machine:~$ ']);
   });
 });
 
@@ -719,9 +751,9 @@ describe('the daemon keepalive, answered by the hub', () => {
   test('a pasted "ping" on a terminal pane is keystrokes, never an answered probe', async () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
-    const { device } = await connectDevice(harness);
+    const { deviceId, device } = await connectDevice(harness);
     await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
-    harness.consentDecision = 'always';
+    harness.grantDevice(WORKSPACE, deviceId);
 
     // The open frame is answered by hand: this socket pair has no far end.
     const opening = harness.userDO.openDeviceTerminal({ workspaceToken: workspace }, WORKSPACE, { cols: 80, rows: 24 });

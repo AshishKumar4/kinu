@@ -54,17 +54,28 @@ import { afterAll, describe, test } from 'vitest';
 
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import type { RunEvent } from '../../packages/core/src/index';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import { CRAFT_ANSWER as ANSWER, CRAFT_ASK as ASK } from './asks';
 
 const SUITE = 'First-run · codemode-craft';
 
-const CASE = 'codemode-craft' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A tool the agent built for itself would not run: the crafted body reached the '
+    + 'executor and failed instead of answering.',
+  missedBecause: 'every crafted-tool test hands the executor a body the TEST author wrote — an '
+    + '`async (args) => …` that is valid by construction — so the one thing a user depends on, '
+    + 'a body the MODEL wrote, was never executed by any suite.',
+  provedRedAt: null,
+  redDirection: 'RED against the deployed build at the time of writing, and it stays red until '
+    + "the CraftValidation lane's rebuild on codemode's modules+prelude lands. It is written "
+    + 'first and deliberately: this is the tier\'s own rule applied to itself.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'craft');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -81,6 +92,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       purpose: 'A precise engineer who builds small reusable tools and uses them rather than '
         + 'describing what they would do.',
@@ -181,4 +193,3 @@ describe(SUITE, () => {
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing five case modules
  *  (each of which resolves a live plan at import). */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

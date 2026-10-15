@@ -88,7 +88,7 @@ export function SidebarRail({ folded }: { folded: boolean }) {
               );
             })}
           </nav>
-          <Link to="/user/settings" aria-label="Account settings" title="Account settings" className="mt-auto flex size-[26px] items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">
+          <Link to="/user/settings" aria-label="Account settings" title="Account settings" className="mt-auto flex size-[26px] items-center justify-center rounded-full p-accent-subtle text-[12px] font-semibold p-accent-mark">
             {profile?.email?.[0]?.toUpperCase() ?? "?"}
           </Link>
         </div>

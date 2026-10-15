@@ -28,14 +28,32 @@ import {
 import { workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { callAgentRpc, listCloudAvailableModels } from '../../packages/cli/src/cloud-api';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
-import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type Answer } from './public-socket';
 
 const SUITE = 'First-run · multi-account';
 
-const CASE = 'multi-account' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'The owner asked on 2026-09-19 (m1447): "I would want multiple accounts per provider '
+    + 'capability for all providers, just like OMP has". The deployed product held one key per '
+    + 'provider: a second OpenAI key under a name could not sit beside the first, so no client could '
+    + 'list both and no workspace could say which one pays.',
+  missedBecause: 'every account proof stores its keys in a store the test built: core over an '
+    + 'in-memory vault, each backend over its own fixture, and the web panel over REST answered from '
+    + 'fixtures in the page. None stores a named key in the DEPLOYED vault and reads it back through '
+    + 'the panel listing, the CLI menu and a workspace\'s own choice.',
+  provedRedAt: 'e1051bd77',
+  redDirection: 'On e1051bd77 all seven subgoals miss on the mechanism: the vault refuses '
+    + '`openai.bearer@<name>` as an invalid credential key, so neither account is stored, listed or '
+    + 'removed; the CLI menu carries no accounts; `setProviderAccount` is no agent RPC method; and '
+    + '`setModel` refuses `openai@<name>/gpt-5.5`. Green needs the build with account keys (b29279646) '
+    + 'and a workspace\'s own account choice (61db52a07).',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'accounts');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -125,7 +143,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false, budgetMs: 5 * 60_000,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false, budgetMs: 5 * 60_000,
       purpose: 'Disposable multi-account probe; no model task.',
       async run({ session, plan, budget }) {
         const goals: EvalSubgoal[] = [];
@@ -223,4 +241,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

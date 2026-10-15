@@ -8,8 +8,8 @@ import { readDeployedGraph } from './deployed-graph';
 import { assertMeasured, finding } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = join(import.meta.dir, '..');
 
 const Config = v.object({ main: v.string() });
 

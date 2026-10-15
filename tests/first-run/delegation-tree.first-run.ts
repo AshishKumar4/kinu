@@ -24,9 +24,7 @@ import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { ORCHESTRATOR_AGENT_SLUG, type RunEvent } from '../../packages/core/src/index';
 import type { PublicMessage } from '../../evals/src/session';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { delivered, deliveredInLedger, finalAnswer, taskHires, type TaskHire } from './delegation-observation';
 import { ROOT } from '../../evals/src/helper-address';
 import { helperAnswer, helperRecord, hirerHeard } from './hires';
@@ -37,9 +35,23 @@ import {
 
 const SUITE = 'First-run · delegation-tree';
 
-const CASE = 'delegation-tree' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'Hosted subordinates that delegate in turn, settling a tree whose branches end at '
+    + 'different depths, had no deployed row: `delegation` hires at one level only.',
+  missedBecause: 'a nested hire runs in a subordinate the same workspace object hosts, one delegation '
+    + 'level down, and its answer reaches the root only through the middle helper\'s settlement, '
+    + 'none of which a one-level hire exercises.',
+  provedRedAt: 'b220f59f8',
+  redDirection: 'RED on the deployed build: a task hire settles at its helper\'s first turn end, so a helper '
+    + 'that hires its own and waits for the wake reports "has been hired" upward and the nested answer never '
+    + 'climbs; it stays red until a task hire waits for its helper\'s own delegated work. Also planted on '
+    + 'loopback `vite dev`: a delegation budget that refuses the nested hire leaves `nested-hire-settled` missed.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'tree');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -129,6 +141,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       modelCalls: 'expected',
       genesis: false,
       purpose: 'A precise coordinator that delegates exactly as asked and relays answers verbatim.',
@@ -163,4 +176,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

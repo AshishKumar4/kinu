@@ -658,6 +658,21 @@ export function whenActorTakesInput<Result>(sql: SqlExecutor, actorId: string, s
 }
 
 /** Local database access is already owner-authorized. This read never registers an actor. */
+/**
+ * A workspace's one birth: its identity row (this database is workspace `id`, named `name`, owned by `ownerUserId`) and
+ * its main actor, in the caller's transaction, over tables the caller has created. A local birth mints its id here.
+ */
+export function bearWorkspaceIdentity(sql: SqlExecutor, birth: {
+  readonly id?: string; readonly name: string; readonly ownerUserId?: string; readonly createdAt: number;
+}): ActorHandle {
+  const id = birth.id ?? crypto.randomUUID();
+  const ownerUserId = birth.ownerUserId ?? '';
+
+  void sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at) VALUES (${id}, ${birth.name}, ${ownerUserId}, ${birth.createdAt})`;
+
+  return new WorkspaceActorDirectory(sql, { workspaceId: id, ownerUserId }).createMain({ name: birth.name });
+}
+
 export function openWorkspaceMainActor(sql: SqlExecutor): ActorHandle {
   if (!tableExists(sql, 'workspace_identity')) throw new KinuError('missing', 'The workspace has no durable identity.');
   const rows = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;

@@ -193,7 +193,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'profile' && (
                   <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                    <div data-avatar className="size-16 rounded-full bg-[#2A2018] text-[22px] font-semibold text-[var(--c-accent)] flex items-center justify-center">
+                    <div data-avatar className="size-16 rounded-full p-accent-subtle text-[22px] font-semibold p-accent-mark flex items-center justify-center">
                       {letter}
                     </div>
                     <div className="w-full flex-1">

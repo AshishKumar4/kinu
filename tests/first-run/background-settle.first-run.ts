@@ -1,17 +1,36 @@
 import { afterAll, describe, test } from 'vitest';
 import { isBackgroundHandle, type RunEvent } from '../../packages/core/src/index';
 import type { EvalObservation } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { SETTLE_ASK, SETTLE_MARKER as MARKER } from './asks';
 import { backgroundSettleWait, firstRunReplyText } from './turn-settlement';
 
 const SUITE = 'First-run · background-settle';
 
-const CASE = 'background-settle' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A `run` on the sandbox that outlived the 30s foreground window detached to a '
+    + 'background job and replied with the handle — and the episode closed there. The job\'s '
+    + 'settled result either never woke the agent or woke it where nothing downstream could '
+    + 'see it: public-failure-recovery on 2fbe8695f recorded the detach and no reply carrying '
+    + 'the test\'s outcome.',
+  missedBecause: 'the detach half is asserted in isolation everywhere the threshold is '
+    + 'tested, and the wake half never was: no row asked the deployed product what a detached '
+    + 'run\'s settlement does to the transcript, so a wake that never lands reads the same as '
+    + 'a command still running.',
+  provedRedAt: '5e3acd011',
+  redDirection: 'RED live 2026-09-15 on deployed build 5e3acd011: a sleep-45-then-echo row '
+    + 'against https://kinu.run held in-flight 20 min with no wake run closing and no marker '
+    + 'reply — killed by the row\'s own 10 min budget at '
+    + '/home/mrwhite0racle/kinu-logs/failure-recovery-live/background-settle-live.log. The '
+    + 'retained 2fbe8695f episode (bench-artifacts/trajectory-product-1789455120159/'
+    + 'public-failure-recovery/events.jsonl) shows the same shape: the detached handle at '
+    + 'event 20 and a ledger that closed over a still-running job.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'wake');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -43,6 +62,7 @@ describe(SUITE, () => {
 
     await runFirstRunCase(PLAN, {
       id: CASE,
+      defect: DEFECT,
       // No genesis turn: the detach this row measures is its own prompt's,
       // and a reply spliced into a genesis turn under way is that turn's.
       genesis: false,
@@ -135,4 +155,3 @@ describe(SUITE, () => {
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules
  *  (each of which resolves a live plan at import). */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

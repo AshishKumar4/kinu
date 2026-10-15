@@ -35,12 +35,12 @@ export interface DeviceHubClient {
     caller: UserCaller,
     method: string,
     params: JsonValue[],
-    opts?: DeviceRpcOptions,
+    opts?: HubDeviceCallOptions,
   ): Promise<string | undefined>;
   acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void>;
 }
 
-export interface DeviceRpcOptions {
+export interface HubDeviceCallOptions {
   agentName?: string;
   /** The agent whose call this is: its Stop reaches the command, whichever turn ran it. */
   actorId?: string;
@@ -164,7 +164,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           } : undefined;
 
           const requestId = method === DEVICE_METHOD.exec ? rpcOpts?.requestId ?? nextDeviceRequestId() : undefined;
-          const deviceOptions: DeviceRpcOptions = { agentName: opts.agentName, actorId: opts.actorId, checkpoint };
+          const deviceOptions: HubDeviceCallOptions = { agentName: opts.agentName, actorId: opts.actorId, checkpoint };
 
           if (rpcOpts?.deviceId !== undefined) deviceOptions.deviceId = rpcOpts.deviceId;
 

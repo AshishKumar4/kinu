@@ -33,13 +33,13 @@ import { deployedConfig, type InfraEnvironment } from './infra-manifest';
 import { deleteApplicationByRest, deletedByRest, restCall } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
 import { HealthSchema } from './served-health';
+import { REPO_ROOT as REPO } from './repo-root';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
 export function environmentArgs(environment: InfraEnvironment): readonly string[] {
   return environment === 'production' ? [] : ['--env', environment];
 }
 
-const REPO = new URL('..', import.meta.url).pathname;
 
 /** wrangler resolves `wrangler.jsonc`, `.dev.vars` and the account from its cwd. */
 const CF_BACKEND = `${REPO}packages/cf-backend`;
@@ -162,13 +162,6 @@ export function r2Text(bucket: string, key: string): string | undefined {
   if (`${read.stderr}\n${read.stdout}`.includes('The specified key does not exist.')) return undefined;
 
   throw new Error(`wrangler r2 object get ${bucket}/${key} failed: ${why(read)}`);
-}
-
-/** `text` as the JSON object at `bucket/key` in R2, piped rather than through a file. */
-export function putR2Json(bucket: string, key: string, text: string): void {
-  const put = wrangler(['r2', 'object', 'put', `${bucket}/${key}`, '--pipe', '--content-type', 'application/json', '--remote'], { timeoutMs: 600_000, stdin: text });
-
-  if (!put.ok) throw new Error(`wrangler r2 object put ${bucket}/${key} failed: ${why(put)}`);
 }
 
 /** Built rather than written as a literal: an escape character inside a regex

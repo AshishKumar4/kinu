@@ -25,6 +25,7 @@ import { existsSync } from 'node:fs';
 
 import { assertMeasured, finding } from './gate-ratchet';
 import { readSources } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
 const EVIDENCE_LABELS: readonly EvidenceLabel[] = [
   'proven-by-probe',
@@ -103,7 +104,6 @@ export interface SchemaAudit {
   readonly byEvidence: ReadonlyMap<EvidenceLabel, number>;
 }
 
-const root = new URL('..', import.meta.url).pathname;
 
 /** Repo-local paths a citation names, and whether each one is still there. */
 function unresolvedRepoPaths(text: string): readonly string[] {

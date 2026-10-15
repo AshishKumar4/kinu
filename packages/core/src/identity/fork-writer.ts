@@ -6,7 +6,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 
 import type { SqlExecutor } from '../types/primitives';
 import { ForkStagingState } from './fork-staging';
-import { openWorkspaceMainActor, WorkspaceActorDirectory } from './workspace-actors';
+import { bearWorkspaceIdentity, openWorkspaceMainActor } from './workspace-actors';
 import { KinuError } from '../obs/error';
 import { forkArtifactPath } from './fork-plan';
 import type { ForkSnapshotHead } from './fork-rows';
@@ -82,8 +82,9 @@ export class ForkTargetWriter {
       const current = this.target<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`[0];
 
       if (!current) {
-        void this.target`INSERT INTO workspace_identity(id,name,owner_user_id,created_at) VALUES (${this.opts.workspaceId},${this.opts.workspaceName},${this.opts.ownerUserId ?? ''},${this.now})`;
-        new WorkspaceActorDirectory(this.target, { workspaceId: this.opts.workspaceId, ownerUserId: this.opts.ownerUserId ?? '' }).createMain({ name: this.opts.workspaceName });
+        bearWorkspaceIdentity(this.target, {
+          id: this.opts.workspaceId, name: this.opts.workspaceName, ownerUserId: this.opts.ownerUserId ?? '', createdAt: this.now,
+        });
       } else {
         if (current.id !== this.opts.workspaceId) return yield* new KinuError('denied', 'The fork target does not match its durable workspace identity.');
         openWorkspaceMainActor(this.target);
@@ -158,20 +159,8 @@ export class ForkTargetWriter {
 
       const forkPointMs = head.cut.createdAtMs;
 
-      // Identity: new id, name, created_at; owner carries through.
-      void this.target`DELETE FROM workspace_identity`;
-
-      if (this.opts.ownerUserId) {
-        void this.target`
-          INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
-          VALUES (${this.opts.workspaceId}, ${this.opts.workspaceName}, ${this.opts.ownerUserId}, ${this.now})
-        `;
-      } else {
-        void this.target`
-          INSERT INTO workspace_identity (id, name, created_at)
-          VALUES (${this.opts.workspaceId}, ${this.opts.workspaceName}, ${this.now})
-        `;
-      }
+      // Identity: new id, name, created_at; the owner `begin` bore it under carries through.
+      void this.target`UPDATE workspace_identity SET id = ${this.opts.workspaceId}, name = ${this.opts.workspaceName}, created_at = ${this.now}`;
 
       openWorkspaceMainActor(this.target).config.setDisplayName(this.opts.workspaceName);
 

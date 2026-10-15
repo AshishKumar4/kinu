@@ -13,9 +13,9 @@
  */
 import type { APP_ROUTES } from '../../packages/core/src/read-models/app-routes';
 import type { SURFACES } from '@kinu.run/core';
-import type { FirstRunCase } from './first-run';
 
-type Rows = readonly FirstRunCase[];
+/** Case ids, each a tracked `<id>.first-run.ts` (`wiring.test.ts` holds every row to one). */
+type Rows = readonly string[];
 
 interface Unreachable {
   readonly unreachable: string;
@@ -64,7 +64,7 @@ export const STRIP_ROWS = {
 export const ENTRY_ROWS = {
   tui: ['enter-sends'],
   cli: ['workspace-title', 'preview-address', 'command-refusal', 'multi-account'],
-  daemon: ['device-link', 'two-machines', 'approve-clears'],
+  daemon: ['device-link', 'device-join', 'two-machines', 'approve-clears'],
   shareHost: ['public-share', 'share-capability-cut', 'users-share'],
 } as const satisfies Record<string, Rows>;
 

@@ -549,7 +549,7 @@ export class FacetChat {
    *  reached. */
   private tell(at?: number): Promise<void> {
     const told = this.telling.then(async () => {
-      const ends = await this.session.runEndsOwed();
+      const ends = await this.session.runEnds.owed();
 
       // An arm whose wake the workspace already holds, still to come and no later, asks nothing new: that wake comes first,
       // and the agent tells what it owes then. Its standing rides the next crossing that carries a report: the turn's
@@ -565,7 +565,7 @@ export class FacetChat {
       this.standingUntold = false;
       await this.deps.workspace.owes(seq, next, holds, report);
       this.namedWake = next;
-      this.session.runEndsTold(ends);
+      this.session.runEnds.told(ends);
     });
 
     this.telling = hold(attempt({ doing: 'telling the workspace what an agent still owes', otherwise: 'unavailable' }, () => told));

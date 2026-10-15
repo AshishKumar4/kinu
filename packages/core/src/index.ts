@@ -164,7 +164,7 @@ export {
 
 export { SCHEMA_GENESIS } from './identity/schema-genesis';
 
-export { requireSchemaGenesis, SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
+export { requireSchemaGenesis, stampSchemaGenesis } from './identity/schema-stamp';
 
 export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
@@ -562,7 +562,7 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun, type DeliveredRunPorts } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
@@ -1046,6 +1046,7 @@ export {
 } from './execution/toolchain';
 
 export {
+  WS_OPEN,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   WORKSPACE_HAS_NO_OWNER, isWorkspaceUnattachedError, SEVERAL_DEVICES_CONNECTED, isDeviceAmbiguityError, isSandboxUnavailableError, DEVICE_DUPLICATE_REQUEST,
   DeviceCancelResultSchema, nextDeviceRequestId, DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
@@ -1059,7 +1060,7 @@ export {
 } from './execution/device-protocol';
 
 export {
-  DeviceSocketHub, deviceIdFromSocket, WS_OPEN, type DeviceSocket,
+  DeviceSocketHub, deviceIdFromSocket, type DeviceSocket,
   type DeviceSocketCtx,
 } from './execution/device-hub';
 
@@ -1524,10 +1525,10 @@ export {
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, initDeviceConsentRequestsTable, DEVICE_CONSENT_DENIED,
-  DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
-  type DeviceConsentDecision, type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest,
-  type PendingDeviceConsent, type PendingConsentRow, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, type DeviceConsentOutcome,
+  DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
+  type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
+  type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
 } from './safety/device-consent';
 
 export {
@@ -1694,9 +1695,11 @@ export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTur
 
 export {
   ChatSession, type ChatSessionOptions, type ChatSessionPorts, type OpenWork, type CompactOutcome, type ComposedRequest, type ChatTransport, type ChatTurnInput,
-  type PreparedTurn, type TurnOpening, type TurnOpeningAsk, openingCacheCold, type OwedTerminalEffectsInput, type SessionEvent, type TurnEndEvent, type SendOptions, type SendLandingWaiter, type DeliveredRun,
+  type PreparedTurn, type TurnOpening, type TurnOpeningAsk, openingCacheCold, type OwedTerminalEffectsInput, type SessionEvent, type TurnEndEvent, type SendOptions, type SendLandingWaiter,
   STEP_CUT_CHUNK, StepCutDataSchema,
 } from './orchestrator/chat-session';
+
+export type { DeliveredRun } from './orchestrator/chat-queue';
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
@@ -2265,7 +2268,10 @@ export {
   type PublicPageOptions,
 } from './http/public-shell';
 
-export { THEME_CSS, THEME_TOKENS, type Mode, type PublicToken, type RadiusRole, type TokenSet } from './web/theme';
+export {
+  accountTheme, DEFAULT_THEME, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed, type ColourToken, type Mode, type RadiusRole, type ThemeName,
+  type TokenSet,
+} from './web/theme';
 
 export { hueStops, rankHue } from './web/agent-colour';
 
@@ -2552,7 +2558,7 @@ export {
 
 export {
   type DeviceHubClient,
-  type DeviceRpcOptions,
+  type HubDeviceCallOptions,
   type HubDeviceTransportOpts,
   createHubDeviceTransport,
 } from './execution/hub-device-transport';
@@ -2603,6 +2609,9 @@ export {
   type PcIngressEnv,
   handlePcConnect,
   handlePcConnectTicket,
+  handlePcJoin,
+  deviceJoinTicketUser,
+  DEVICE_JOIN_TICKET_PREFIX,
   handlePcUpdateRefused,
 } from './http/pc-ingress';
 
@@ -2634,8 +2643,8 @@ export {
 
 export {
   validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
-  McpServerSummarySchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput, type McpServerSummary,
-  type McpTransport,
+  McpServerSummarySchema, McpTransportSchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput,
+  type McpServerSummary, type McpTransport,
 } from './mcp/servers';
 
 export type {

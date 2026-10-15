@@ -61,8 +61,8 @@ import {
 // `vite build` resolves it. Imported rather than named by path: see `buildClient`.
 import clientConfigFor from '../../packages/cf-backend/vite.config';
 import { withTestChrome } from '../../scripts/test-chrome';
+import { REPO_ROOT as REPO } from '../../scripts/repo-root';
 
-const REPO = join(import.meta.dir, '..', '..');
 
 const clientConfig = clientConfigFor({ command: 'build', mode: 'production' });
 

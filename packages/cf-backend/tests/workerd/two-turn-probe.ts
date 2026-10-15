@@ -8,7 +8,7 @@
 import { Agent, getAgentByName, getCurrentAgent, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
-import { Effect } from 'effect';
+import type { AgentFacetCalls } from '../../src/agent-facet/agent-facet';
 import {
   HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
   type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
@@ -30,7 +30,6 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { meterInPlace, type MeteredTurn, type SqlMeter, type TurnCrossings } from './sql-meter';
 import { Crossings } from './crossings';
 import { AgentWorkspaceHost, AgentWorkspaceRPC } from '../../src/agent-facets';
-import { agentCallsThrough } from '../../src/dynamic-worker-slots';
 import { UserDO } from '../../src/user/user-do';
 import { USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
 import type { AgentFacet as ProbeAgentFacet, SeededEntry } from './two-turn-probe-agent';
@@ -157,8 +156,20 @@ const NO_STANDING = { messageCount: 0, measures: { provider: null, gate: null },
  */
 const crossings = new Crossings('host.executeTool');
 
-/** The facet's calls as the workspace makes them. */
-const FACET_CALLS = Object.keys(agentCallsThrough(() => Effect.die('names only')));
+/** The facet's calls as the workspace makes them: every one of AgentFacetCalls, which the compiler holds this list to. */
+const FACET_CALLS = Object.keys({
+  activePlanReview: true, planReviews: true, savePlanReviewAnnotations: true, dismissPlanReview: true,
+  ownerQuestions: true, dismissOwnerQuestions: true, admit: true, landing: true, sendState: true, awaitSend: true,
+  interruptChat: true, wake: true, modelSettingsChanged: true, revertTo: true, clearConversation: true, owed: true,
+  owedWork: true, answerTexts: true, answer: true, newestFirst: true, armCompaction: true, forkHas: true,
+  forkPlan: true, forkCount: true, forkRows: true, forkClear: true, forkStage: true, forkPublish: true,
+  drainAnswers: true, lastUserMetadata: true, turnPair: true, standing: true, steps: true, runSteps: true,
+  listRuns: true, runSummaries: true, runEvents: true, runEventText: true, idle: true, deliverAdvice: true,
+  step: true, frozen: true, history: true, historyPage: true, messageCount: true, inspect: true,
+  inheritedContext: true, workingContext: true, turnRequests: true, turnRequest: true, spend: true, context: true,
+  searchConversations: true, scrollConversation: true, browseConversations: true, admitted: true, interrupt: true,
+  recover: true, archivePage: true,
+} satisfies Record<keyof AgentFacetCalls, true>);
 
 // The relay and the host whole, but what each keeps to itself; the account by the surface it serves.
 crossings.countAll(AgentWorkspaceRPC, 'relay', ['host', 'owned']);
@@ -327,7 +338,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const reason = (result: SlateAnswer<unknown>) => (result.ok ? 'ok' : result.reason);
     // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it.
     const call = async (id: string) => reason(await this.slateCallAs(ROOT_SLATE_CALLER, id, 'workspace', { path: ['exists'], args: ['/home'], invocation: null }));
-    const { items } = await this.agentStores(agent).historyPage({});
+    const { items } = await this.agentCall(agent, (isolate, snapshot) => isolate.historyPage(snapshot, {}));
     const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
     const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
     const ids = { answered: `${agent}/${answer}/card`, fromUser: `${agent}/${ask}/card`, asWorkspace: `${answer}/card` };
@@ -500,7 +511,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   async plantCrossings(): Promise<void> {
     const actorId = this.actorHandle().actorId;
 
-    await (await this.agentCalls(actorId)).newestFirst(this.agentSnapshot(actorId), 1);
+    await this.agentCall(actorId, (isolate, snapshot) => isolate.newestFirst(snapshot, 1));
     const { stub, caller } = await this.userHub();
 
     await stub.getCredentialsRevision(caller);

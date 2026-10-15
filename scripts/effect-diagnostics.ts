@@ -17,10 +17,10 @@ import * as v from 'valibot';
 
 import { assertMeasured, finding } from './gate-ratchet';
 import { isParseable, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 import { moduleSpecifiers, parse } from './syntax';
 import { checkedProjects } from './typecheck-coverage';
 
-const root = new URL('..', import.meta.url).pathname;
 
 const TOOL = fileURLToPath(new URL('./dist/effect-tsgo.cjs', import.meta.resolve('@effect/tsgo/package.json')));
 

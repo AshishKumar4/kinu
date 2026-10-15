@@ -35,10 +35,7 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
     case 'peer_async':
       if (d.same_owner) return 'authenticated';
 
-      if (d.receiver_grant_present) return 'external';
-
-      return settleSync(Effect.die(new IngressRejectedError('peer_async',
-        'cross-owner peer message requires explicit receiver-side grant')));
+      return settleSync(Effect.die(new IngressRejectedError('peer_async', 'a workspace admits peers of its own owner only')));
 
     case 'subordinate':
       return 'authenticated';

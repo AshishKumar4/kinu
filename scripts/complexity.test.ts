@@ -24,8 +24,8 @@ import {
   type Budget, type Measured,
 } from './complexity';
 import { isParseable, readMatching } from './sources';
+import { REPO_ROOT as root } from './repo-root';
 
-const root = new URL('..', import.meta.url).pathname;
 
 /* ── The counting rule, construct by construct ─────────────────────────── */
 

@@ -1,11 +1,9 @@
 /** The web: search, a page as Markdown, a screenshot, and remote browser sessions a program drives. */
 import * as v from 'valibot';
-import { defineOperation, type Impact } from './operation';
+import { defineOperation, described, type Impact } from './operation';
 
 /** Kitesurf has no session to keep: `connectBrowser` starts one per program under this id. */
 export const KITESURF_SESSION_ID = 'kitesurf';
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
 
 const Url = described(v.pipe(v.string(), v.url()), 'An absolute http(s) URL.');
 
@@ -13,12 +11,12 @@ const Engine = v.optional(described(v.picklist(['kitesurf', 'chrome']), 'kitesur
 
 const SessionView = v.strictObject({ id: v.string(), liveView: v.string() });
 
-/** Search, fetch and screenshot observe: the page a fetch spills or the image a screenshot saves is incidental, so a
- *  shared slate's viewer may use all three without approval (an owner decision). */
 /** The browser members a program's sandbox holds (`connectBrowser`, `pageTools`, `callPageTool`), by impact; a slate drives
  *  a page through them as a program does. */
 export const WEB_SANDBOX_IMPACTS = { connectBrowser: 'execute', pageTools: 'observe', callPageTool: 'execute' } as const satisfies Readonly<Record<string, Impact>>;
 
+/** Search, fetch and screenshot observe: the page a fetch spills or the image a screenshot saves is incidental, so a
+ *  shared slate's viewer may use all three without approval (an owner decision). */
 export const WEB = {
   search: defineOperation({
     ns: 'web', name: 'search', help: 'Search the web.', impact: 'observe', slate: true,

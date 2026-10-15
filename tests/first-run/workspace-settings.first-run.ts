@@ -23,17 +23,26 @@ import * as v from 'valibot';
 
 import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, type JsonValue } from '../../packages/core/src/index';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import {
-  FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
-} from './first-run';
+import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · workspace-settings';
 
-const CASE = 'workspace-settings' as const;
+const CASE = firstRunCaseId(import.meta.url);
 
-const PLAN = firstRunCasePlan(SUITE, CASE);
+/** What this case found, and what a red here means (`FirstRunDefect`). */
+const DEFECT: FirstRunDefect = {
+  found: 'A workspace\'s settings page writes its name, SOUL.md, shell approval mode and advisor '
+    + 'setting and exports the workspace, and no deployed row wrote a setting.',
+  missedBecause: 'the chat rows read what a turn left, so a write the workspace acknowledged and then '
+    + 'dropped, or a snapshot that stopped carrying the soul the page shows, passed them all.',
+  provedRedAt: null,
+  redDirection: 'Planted on a loopback `vite dev` build of this tree: a soul write that is acknowledged '
+    + 'and never stored leaves `soul-persisted` missed.',
+};
+
+const PLAN = firstRunCasePlan(SUITE, 'settings');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -201,7 +210,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', genesis: false,
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
       purpose: 'Disposable workspace-settings probe; no model task.',
       async run({ session, plan, budget }) {
         const subgoals: EvalSubgoal[] = [];
@@ -287,4 +296,3 @@ describe(SUITE, () => {
 
 /** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
  *  corpus and the defect register equal without importing the case modules. */
-export const DEFECT = FIRST_RUN_DEFECTS[CASE];

@@ -4,7 +4,7 @@ import { mock } from 'bun:test';
 import * as v from 'valibot';
 import type { AgentContext, Connection, ConnectionContext, FiberRecoveryContext, WSMessage } from 'agents';
 import { Lifecycle } from 'agents/lifecycle';
-import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
+import { parseJsonValue, type JsonObject, type JsonValue, type SqlExec, type SqlValue } from '@kinu.run/core';
 import type { McpCredentialTransport } from '@kinu.run/core';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { SdkError, SdkErrorCode } from '@modelcontextprotocol/client';
@@ -776,7 +776,7 @@ export interface RecordedMcpTransport {
   protocolVersion?: string;
 }
 
-/** A `cf_agents_mcp_servers` row: derived from `user_mcp_servers` and must never disagree with it. */
+/** A `cf_agents_mcp_servers` row: the catalog half of a configured server, beside Kinu's `user_mcp_servers` half. */
 export interface RecordedMcpServer {
   readonly id: string;
   readonly name: string;
@@ -978,12 +978,28 @@ export function failNextMcpDiscovery(error: Error): void {
 export function seedSdkMcpServer(
   id: string,
   transport: RecordedMcpTransport = {},
-  row: { callbackUrl?: string; clientId?: string | null } = {},
+  row: { callbackUrl?: string; clientId?: string | null; name?: string; url?: string } = {},
 ): void {
   mcpServers.set(id, {
-    id, name: id, url: `https://${id}.example/sse`,
+    id, name: row.name ?? id, url: row.url ?? `https://${id}.example/sse`,
     callbackUrl: row.callbackUrl ?? '', clientId: row.clientId ?? null, authUrl: null, transport,
     server_options: encodeSdkServerOptions(transport),
+  });
+}
+
+/** A configured server as an add leaves it: Kinu's half in `user_mcp_servers` (`sql`, the account's), and the catalog's
+ *  half in the manager's storage, its name, endpoint and transport. */
+export function seedConfiguredMcpServer(
+  sql: SqlExec,
+  id: string,
+  fields: { name?: string; url?: string; transport?: string; headers?: string | null; allowedTools?: string | null; presetId?: string | null } = {},
+): void {
+  sql.exec(
+    'INSERT INTO user_mcp_servers (id, headers, allowed_tools, preset_id) VALUES (?, ?, ?, ?)',
+    id, fields.headers ?? null, fields.allowedTools ?? null, fields.presetId ?? null,
+  );
+  seedSdkMcpServer(id, fields.transport === undefined ? {} : { type: fields.transport }, {
+    ...(fields.name !== undefined && { name: fields.name }), ...(fields.url !== undefined && { url: fields.url }),
   });
 }
 

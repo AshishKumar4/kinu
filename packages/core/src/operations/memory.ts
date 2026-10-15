@@ -1,9 +1,7 @@
 /** Durable memory: keyed facts, prose notes, and recall of the agent's past conversations. */
 import * as v from 'valibot';
 import { JsonValueSchema } from '../utils/json';
-import { defineOperation, type Operation } from './operation';
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
+import { described, namespace } from './operation';
 
 const count = (text: string, max: number) => v.optional(described(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(max)), text));
 
@@ -20,9 +18,7 @@ const ConversationMessage = v.strictObject({
 const ConversationSummary = v.strictObject({ conversationId: v.string(), messageCount: v.number(), startedAt: v.number(), lastActiveAt: v.number(), preview: v.string() });
 
 /** A memory operation; a write is planning too, so Plan turns keep it. */
-const memoryOp = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(
-  op: Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>,
-) => defineOperation({ ns: 'memory', slate: true, plan: true, ...op });
+const memoryOp = namespace('memory', { slate: true, plan: true });
 
 export const MEMORY = {
   remember: memoryOp({

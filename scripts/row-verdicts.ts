@@ -34,7 +34,7 @@ export async function endedNearSilence<Value>(work: Promise<Value>, end: () => P
   const silenced = near.promise.then(async (named) => {
     await end();
 
-    throw new Error(`the row went silent near its runner's bound${named === '' ? '' : ` while waiting for ${named}`}`);
+    throw new Error(`the run went silent near its runner's bound${named === '' ? '' : ` while waiting for ${named}`}`);
   });
 
   // The race holds both: when the notice wins, what the work rejects with once its browser is gone is handled by it.

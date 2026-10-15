@@ -13,7 +13,7 @@ import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
-import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type PortExposureResult, type PreviewRouteCheck } from './types';
+import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
 import { envContext } from './command-call';
 import { sha256Hex } from '../safety/argument-digest';
 import type { CommandCall } from '../safety/approval-gate';
@@ -175,8 +175,244 @@ function formatStartResult(result: NimbusStartResult): CommandResult {
   return commandResult({ stdout: lines.join('\n'), exitCode: running ? 0 : result.process.exitCode ?? 0 });
 }
 
-/** The live session's members, declared inside the workspace namespace. */
-/** The live Nimbus session's process, port and runtime members, and the lifecycle the workspace executor reports. */
+/** What every member of the live session works over: its box, the one way a call through it marks the session in use
+ *  and records its failure, and the exposure every port path shares. */
+interface NimbusReach {
+  readonly box: NimbusSandboxHandle;
+  readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
+  readonly exposeOn: (port: number) => Promise<PortExposureResult>;
+}
+
+/** `workspace.runCode`. */
+function runCodeMember({ box, touch }: NimbusReach): ExecutorTool {
+  return commandTool('Run code in Nimbus using the requested language runtime.', (args) => {
+    const runCode = box.runCode;
+
+    if (!runCode) return { refused: handleLacks('runCode') };
+    const code = parseInput(StringSchema, { value: args[0] });
+
+    if (code === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus runCode: code must be a string')) };
+    const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
+
+    return {
+      call: nimbusCall('runCode', code, options),
+      run: async (): Promise<CommandResult> => {
+        try {
+          return commandResult(await touch(() => runCode(code, options)));
+        } catch (err) {
+          return refusalOf(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
+        }
+      },
+    };
+  });
+}
+
+/** `workspace.startProcess`. */
+function startProcessMember({ box, touch }: NimbusReach): ExecutorTool {
+  return commandTool('Start a background process in Nimbus; returns while it is still running.', (args) => {
+    const startProcess = box.startProcess;
+
+    if (!startProcess) return { refused: handleLacks('startProcess') };
+    const command = parseInput(StringSchema, { value: args[0] });
+
+    if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string')) };
+    const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
+
+    return {
+      call: nimbusCall('startProcess', command, options),
+      run: async (): Promise<CommandResult> => {
+        try {
+          return formatStartResult(await touch(() => startProcess(command, options)));
+        } catch (err) {
+          return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
+        }
+      },
+    };
+  });
+}
+
+/** `workspace.killProcess`. */
+function killProcessMember({ box, touch }: NimbusReach): ExecutorTool {
+  return {
+    description: 'Kill a Nimbus process by pid.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      const processes = box.processes;
+
+      if (!processes?.kill) return handleLacks('process control');
+      // Bound at the guard: TypeScript drops narrowing inside closures, and binding keeps `this`.
+      const kill = processes.kill.bind(processes);
+      const input = parseInput(ProcessInputSchema, { value: args[0] });
+      const pid = v.is(v.number(), input) ? input : input?.pid;
+
+      if (pid === undefined || !Number.isFinite(pid)) {
+        return refusalOf(new KinuError('bad_input',
+          `nimbus killProcess: invalid pid ${stringifyResult({ value: args[0] })}`));
+      }
+
+      try {
+        return stringifyResult({ value: await touch(() => kill(pid)) });
+      } catch (err) {
+        return refusalOf(nimbusFailure({ doing: `nimbus killProcess ${pid}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `workspace.logs`. */
+function logsMember({ box, touch }: NimbusReach): ExecutorTool {
+  return {
+    description: 'Read Nimbus process logs.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      const processes = box.processes;
+
+      if (!processes?.logs) return handleLacks('process logs');
+      const readLogs = processes.logs.bind(processes);
+      const input = parseInput(ProcessInputSchema, { value: args[0] });
+      const pid = v.is(v.number(), input) ? input : input?.pid;
+      const limits = parseInput(LogLimitsSchema, { value: args[1] });
+
+      if (pid === undefined || !Number.isFinite(pid) || limits === undefined) {
+        return refusalOf(new KinuError('bad_input',
+          `nimbus logs: takes a pid and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`));
+      }
+
+      try {
+        return stringifyResult({ value: await touch(() => readLogs(pid, limits)) });
+      } catch (err) {
+        return refusalOf(nimbusFailure({ doing: `nimbus logs ${pid}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `workspace.exposePort`. */
+function exposePortMember({ box, exposeOn }: NimbusReach): ExecutorTool {
+  return {
+    description: 'Expose a listening Nimbus port. Returns the preview URL, then one line: "verified" when a '
+      + 'request to the URL reaches the server, or "not reached" naming the preview-route gate that refused. '
+      + 'The check never calls your server.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      if (!box.ports?.expose) return handleLacks('ports');
+      const input = parseInput(PortInputSchema, { value: args[0] });
+      const port = v.is(v.number(), input) ? input : input?.port;
+
+      if (port === undefined || !Number.isFinite(port) || port <= 0 || port > 65535) {
+        return refusalOf(new KinuError('bad_input',
+          `nimbus exposePort: invalid port ${stringifyResult({ value: args[0] })}`));
+      }
+
+      try {
+        const exposed = await exposeOn(port);
+
+        return exposed.supported
+          ? exposedPortText(exposed.url, port, exposed.route)
+          : refusalOf(new KinuError('unsupported', exposed.reason));
+      } catch (err) {
+        return refusalOf(nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `workspace.unexposePort`. */
+function unexposePortMember({ box, touch }: NimbusReach): ExecutorTool {
+  return {
+    description: 'Stop exposing a Nimbus port.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      const ports = box.ports;
+
+      if (!ports?.unexpose) return handleLacks('ports');
+      const unexpose = ports.unexpose.bind(ports);
+      const input = parseInput(PortInputSchema, { value: args[0] });
+      const port = v.is(v.number(), input) ? input : input?.port;
+
+      if (port === undefined || !Number.isFinite(port)) {
+        return refusalOf(new KinuError('bad_input',
+          `nimbus unexposePort: invalid port ${stringifyResult({ value: args[0] })}`));
+      }
+
+      try {
+        await touch(() => unexpose(port));
+
+        return `unexposed ${port}`;
+      } catch (err) {
+        return refusalOf(nimbusFailure({ doing: `nimbus unexposePort ${port}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `workspace.listPorts`. */
+function listPortsMember({ box, touch }: NimbusReach): ExecutorTool {
+  return {
+    description: 'List Nimbus exposed ports.',
+    execute: async (): Promise<string | Refusal> => {
+      // No port API is not the same fact as no exposed ports (AGENTS.md).
+      const ports = box.ports;
+
+      if (!ports?.list) return handleLacks('ports');
+      const list = ports.list.bind(ports);
+
+      try {
+        const exposed = await touch(() => list());
+
+        return JSON.stringify(exposed.map((p) => ({ ...p, url: p.url ?? ports.url?.(p.port) })));
+      } catch (err) {
+        return refusalOf(nimbusFailure({ doing: 'nimbus listPorts', cause: err }));
+      }
+    },
+  };
+}
+
+/** `workspace.installRuntime`. */
+function installRuntimeMember({ box, touch }: NimbusReach): ExecutorTool {
+  return {
+    description: 'Install or ensure a Nimbus runtime such as python, bun, or clang.',
+    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+      const spec = parseInput(StringSchema, { value: args[0] });
+
+      if (spec === undefined) {
+        return refusalOf(new KinuError('bad_input', 'nimbus installRuntime: spec must be a string'));
+      }
+
+      const runtimes = box.runtimes;
+      const install = runtimes?.install?.bind(runtimes);
+      const ensure = runtimes?.ensure?.bind(runtimes);
+
+      try {
+        if (install) await touch(() => install(spec));
+        else if (ensure) await touch(() => ensure(spec));
+        else return handleLacks('runtime installation');
+
+        return `installed ${spec}`;
+      } catch (err) {
+        return refusalOf(nimbusFailure({ doing: `nimbus installRuntime ${spec}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `workspace.listRuntimes`. */
+function listRuntimesMember({ box, touch }: NimbusReach): ExecutorTool {
+  return {
+    description: 'List Nimbus runtimes.',
+    execute: async (): Promise<string | Refusal> => {
+      const runtimes = box.runtimes;
+
+      if (!runtimes?.list) return handleLacks('runtime listing');
+      const list = runtimes.list.bind(runtimes);
+
+      try {
+        return stringifyResult({ value: await touch(() => list()) });
+      } catch (err) {
+        return refusalOf(nimbusFailure({ doing: 'nimbus listRuntimes', cause: err }));
+      }
+    },
+  };
+}
+
+/** The live Nimbus session's process, port and runtime members, declared inside the workspace namespace, and the
+ *  lifecycle the workspace executor reports. */
 export function nimbusSession(opts: NimbusSessionOpts) {
   const box = opts.box;
   let active = false;
@@ -219,200 +455,18 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     }
   };
 
+  const nimbus: NimbusReach = { box, touch, exposeOn };
+
   const tools: ExecutorProvider['tools'] = {
-    // Each reads its options once, by its own schema; what it runs is that reading (`commandTool`).
-    runCode: commandTool('Run code in Nimbus using the requested language runtime.', (args) => {
-      const runCode = box.runCode;
-
-      if (!runCode) return { refused: handleLacks('runCode') };
-      const code = parseInput(StringSchema, { value: args[0] });
-
-      if (code === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus runCode: code must be a string')) };
-      const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
-
-      return {
-        call: nimbusCall('runCode', code, options),
-        run: async (): Promise<CommandResult> => {
-          try {
-            return commandResult(await touch(() => runCode(code, options)));
-          } catch (err) {
-            return refusalOf(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
-          }
-        },
-      };
-    }),
-    startProcess: commandTool('Start a background process in Nimbus; returns while it is still running.', (args) => {
-      const startProcess = box.startProcess;
-
-      if (!startProcess) return { refused: handleLacks('startProcess') };
-      const command = parseInput(StringSchema, { value: args[0] });
-
-      if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string')) };
-      const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
-
-      return {
-        call: nimbusCall('startProcess', command, options),
-        run: async (): Promise<CommandResult> => {
-          try {
-            return formatStartResult(await touch(() => startProcess(command, options)));
-          } catch (err) {
-            return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
-          }
-        },
-      };
-    }),
-    killProcess: {
-      description: 'Kill a Nimbus process by pid.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        const processes = box.processes;
-
-        if (!processes?.kill) return handleLacks('process control');
-        // Bound at the guard: TypeScript drops narrowing inside closures, and binding keeps `this`.
-        const kill = processes.kill.bind(processes);
-        const input = parseInput(ProcessInputSchema, { value: args[0] });
-        const pid = v.is(v.number(), input) ? input : input?.pid;
-
-        if (pid === undefined || !Number.isFinite(pid)) {
-          return refusalOf(new KinuError('bad_input',
-            `nimbus killProcess: invalid pid ${stringifyResult({ value: args[0] })}`));
-        }
-
-        try {
-          return stringifyResult({ value: await touch(() => kill(pid)) });
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus killProcess ${pid}`, cause: err }));
-        }
-      },
-    },
-    logs: {
-      description: 'Read Nimbus process logs.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        const processes = box.processes;
-
-        if (!processes?.logs) return handleLacks('process logs');
-        const readLogs = processes.logs.bind(processes);
-        const input = parseInput(ProcessInputSchema, { value: args[0] });
-        const pid = v.is(v.number(), input) ? input : input?.pid;
-        const limits = parseInput(LogLimitsSchema, { value: args[1] });
-
-        if (pid === undefined || !Number.isFinite(pid) || limits === undefined) {
-          return refusalOf(new KinuError('bad_input',
-            `nimbus logs: takes a pid and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`));
-        }
-
-        try {
-          return stringifyResult({ value: await touch(() => readLogs(pid, limits)) });
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus logs ${pid}`, cause: err }));
-        }
-      },
-    },
-    exposePort: {
-      description: 'Expose a listening Nimbus port. Returns the preview URL, then one line: "verified" when a '
-        + 'request to the URL reaches the server, or "not reached" naming the preview-route gate that refused. '
-        + 'The check never calls your server.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!box.ports?.expose) return handleLacks('ports');
-        const input = parseInput(PortInputSchema, { value: args[0] });
-        const port = v.is(v.number(), input) ? input : input?.port;
-
-        if (port === undefined || !Number.isFinite(port) || port <= 0 || port > 65535) {
-          return refusalOf(new KinuError('bad_input',
-            `nimbus exposePort: invalid port ${stringifyResult({ value: args[0] })}`));
-        }
-
-        try {
-          const exposed = await exposeOn(port);
-
-          return exposed.supported
-            ? exposedPortText(exposed.url, port, exposed.route)
-            : refusalOf(new KinuError('unsupported', exposed.reason));
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: err }));
-        }
-      },
-    },
-    unexposePort: {
-      description: 'Stop exposing a Nimbus port.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        const ports = box.ports;
-
-        if (!ports?.unexpose) return handleLacks('ports');
-        const unexpose = ports.unexpose.bind(ports);
-        const input = parseInput(PortInputSchema, { value: args[0] });
-        const port = v.is(v.number(), input) ? input : input?.port;
-
-        if (port === undefined || !Number.isFinite(port)) {
-          return refusalOf(new KinuError('bad_input',
-            `nimbus unexposePort: invalid port ${stringifyResult({ value: args[0] })}`));
-        }
-
-        try {
-          await touch(() => unexpose(port));
-
-          return `unexposed ${port}`;
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus unexposePort ${port}`, cause: err }));
-        }
-      },
-    },
-    listPorts: {
-      description: 'List Nimbus exposed ports.',
-      execute: async (): Promise<string | Refusal> => {
-        // No port API is not the same fact as no exposed ports (AGENTS.md).
-        const ports = box.ports;
-
-        if (!ports?.list) return handleLacks('ports');
-        const list = ports.list.bind(ports);
-
-        try {
-          const exposed = await touch(() => list());
-
-          return JSON.stringify(exposed.map((p) => ({ ...p, url: p.url ?? ports.url?.(p.port) })));
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: 'nimbus listPorts', cause: err }));
-        }
-      },
-    },
-    installRuntime: {
-      description: 'Install or ensure a Nimbus runtime such as python, bun, or clang.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        const spec = parseInput(StringSchema, { value: args[0] });
-
-        if (spec === undefined) {
-          return refusalOf(new KinuError('bad_input', 'nimbus installRuntime: spec must be a string'));
-        }
-
-        const runtimes = box.runtimes;
-        const install = runtimes?.install?.bind(runtimes);
-        const ensure = runtimes?.ensure?.bind(runtimes);
-
-        try {
-          if (install) await touch(() => install(spec));
-          else if (ensure) await touch(() => ensure(spec));
-          else return handleLacks('runtime installation');
-
-          return `installed ${spec}`;
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus installRuntime ${spec}`, cause: err }));
-        }
-      },
-    },
-    listRuntimes: {
-      description: 'List Nimbus runtimes.',
-      execute: async (): Promise<string | Refusal> => {
-        const runtimes = box.runtimes;
-
-        if (!runtimes?.list) return handleLacks('runtime listing');
-        const list = runtimes.list.bind(runtimes);
-
-        try {
-          return stringifyResult({ value: await touch(() => list()) });
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: 'nimbus listRuntimes', cause: err }));
-        }
-      },
-    },
+    runCode: runCodeMember(nimbus),
+    startProcess: startProcessMember(nimbus),
+    killProcess: killProcessMember(nimbus),
+    logs: logsMember(nimbus),
+    exposePort: exposePortMember(nimbus),
+    unexposePort: unexposePortMember(nimbus),
+    listPorts: listPortsMember(nimbus),
+    installRuntime: installRuntimeMember(nimbus),
+    listRuntimes: listRuntimesMember(nimbus),
   };
 
   // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` install from the

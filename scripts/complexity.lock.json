@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-15",
-  "files": 3310,
-  "functions": 86487,
+  "files": 3324,
+  "functions": 86895,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -54,10 +54,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
-      "complexity": 36
-    },
-    {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
       "complexity": 36
     },
@@ -68,6 +64,10 @@
     {
       "key": "scripts/infra-manifest.ts#draftsFor",
       "complexity": 35
+    },
+    {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
+      "complexity": 34
     },
     {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
@@ -246,10 +246,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
-      "complexity": 27
-    },
-    {
       "key": "packages/core/src/vfs/context-plane.ts#localContextTree>document",
       "complexity": 27
     },
@@ -351,6 +347,10 @@
     },
     {
       "key": "packages/core/src/orchestrator/terminal-effects.ts#TerminalEffectLedger.attempt",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/prompting/prepare-step.ts#finishPrepareStep",
       "complexity": 26
     },
     {

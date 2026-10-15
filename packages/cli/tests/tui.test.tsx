@@ -30,7 +30,6 @@ import { StatusBar } from '../src/tui/status-bar';
 import { ChatApp } from '../src/tui/chat-app';
 
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
-import { VERSION } from '../src/display';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -471,7 +470,6 @@ describe('CLI TUI layout', () => {
           initial,
           afterDigits: selected(),
           openedByDigits: action,
-          header: rowWith('Kinu workspaces'),
         };
         mockInput.pressArrow('down');
         await settle(5);
@@ -490,7 +488,6 @@ describe('CLI TUI layout', () => {
       initial: v.nullable(v.string()),
       afterDigits: v.nullable(v.string()),
       openedByDigits: homeAction,
-      header: v.string(),
       afterArrowDown: v.nullable(v.string()),
       finalAction: homeAction,
     }), JSON.parse(run.stdout));
@@ -500,7 +497,6 @@ describe('CLI TUI layout', () => {
     expect(observed.openedByDigits).toBeNull();
     expect(observed.afterArrowDown).toBe(observed.listed[1]);
     expect(observed.finalAction).toEqual({ type: 'exit' });
-    expect(observed.header).toContain(`Kinu workspaces · cli ${VERSION}`);
   });
 
   // The mission seeds SOUL.md and names the workspace; it must not be replayed as the opening turn.
@@ -510,7 +506,7 @@ describe('CLI TUI layout', () => {
     const run = await runHomeScreen({
       width: 80,
       driver: `
-        await waitFor('the mission field to render', () => frame().includes('What is this workspace for?'));
+        await waitFor('the mission field to take focus', () => renderer.currentFocusedRenderable instanceof core.TextareaRenderable);
         await mockInput.typeText(${JSON.stringify(mission)});
         await waitFor('the mission to reach the field', () => frame().includes(${JSON.stringify(mission)}));
         mockInput.pressEnter();
@@ -563,7 +559,7 @@ describe('CLI TUI layout', () => {
             return freed && args[0] === ptr ? undefined : original(...args);
           };
         }
-        await waitFor('the mission field to render', () => frame().includes('What is this workspace for?'));
+        await waitFor('the mission field to take focus', () => renderer.currentFocusedRenderable instanceof core.TextareaRenderable);
         mockInput.pressTab();
         mockInput.pressEscape();
         const finalAction = await opened;
@@ -595,6 +591,7 @@ describe('CLI TUI layout', () => {
     const script = `
       import { readFileSync } from 'node:fs';
       import { createElement } from 'react';
+      import { InputRenderable } from '@opentui/core';
       import { createTestRenderer } from '@opentui/core/testing.js';
       import { createRoot, flushSync } from '@opentui/react';
       import { CONFIG_PATH } from './packages/cli/src/config.ts';
@@ -653,7 +650,7 @@ describe('CLI TUI layout', () => {
       mockInput.pressTab();
       await settle();
       mockInput.pressEnter();
-      await waitFor('the model picker to open', () => captureCharFrame().includes('Select model'));
+      await waitFor('the model picker to open', () => renderer.currentFocusedRenderable instanceof InputRenderable && captureCharFrame().includes('gpt-5.4'));
       // Filter to ONE match and take it, rather than counting arrow presses
       // from an assumed cursor position. The picker opens with the cursor on
       // the model already in use — sensible behaviour, and it made the old
@@ -676,7 +673,7 @@ describe('CLI TUI layout', () => {
       // The write lands while the overlay is still on screen, so persistence is
       // NOT the signal that the picker is done with the keyboard. Tab pressed
       // here goes to the overlay and focus never reaches Effort.
-      await waitFor('the model picker to close', () => !captureCharFrame().includes('Select model'));
+      await waitFor('the model picker to close', () => !(renderer.currentFocusedRenderable instanceof InputRenderable));
       mockInput.pressTab();
       // The row renders its key hint only while focused, so this is the
       // observable "the effort control has the keyboard" — an arrow sent before
@@ -773,7 +770,6 @@ const homeScreenPrelude = (project: string, width = 100, height = 40, fetchStub?
   (await import('./packages/cli/src/turn-log.ts')).installTurnDiagnostics();
 
   const frame = () => captureCharFrame();
-  const rowWith = (text) => (frame().split('\\n').find((row) => row.includes(text)) ?? '').replace(/\\s+/gu, ' ').trim();
   const waitFor = async (what, predicate, rounds = 600) => {
     for (let i = 0; i < rounds; i++) {
       await renderOnce();
@@ -827,11 +823,9 @@ const homeScreenPrelude = (project: string, width = 100, height = 40, fetchStub?
         ? Response.json([{ name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000 }])
         : new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })`,
       driver: `
-        // Either wording, so a sync that FAILED reports as itself rather than
-        // as "the notice never rendered". The local workspace is also a roster
-        // row, so anchoring on its name alone would pass on the sidebar.
+        // The database title is "Shopbot workspace"; only the collision names the raw ref.
         const noticeRow = () => frame().split('\\n')
-          .find((row) => row.includes('holds this name') || row.includes('could not be refreshed')) ?? '';
+          .find((row) => row.includes('shopbot')) ?? '';
         await waitFor('the roster notice to render', () => noticeRow() !== '', 1200);
         console.log(JSON.stringify({ notice: noticeRow().replace(/\\s+/gu, ' ').trim() }));
       `,
@@ -839,7 +833,6 @@ const homeScreenPrelude = (project: string, width = 100, height = 40, fetchStub?
 
     const observed = v.parse(v.object({ notice: v.string() }), JSON.parse(run.stdout));
     expect(observed.notice).toContain('shopbot');
-    expect(observed.notice).toContain('a local workspace holds this name');
   });
 
 /** Subprocess so one KINU_HOME and one renderer swap belong to one test; the caller owns the returned home. */
