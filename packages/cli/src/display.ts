@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeProviderError, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
+import { BUILTIN_TOOLS, describeProviderError, describeToolCall, fmtUsd, formatBytes, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
 import { clipText, TUI_MARKS, SPINNER_FRAMES } from '@kinu.run/core/tui';
 import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
 import { STEP_RESTART_NOTICE, type AgentSearchNode } from './agent-client';
@@ -510,14 +510,6 @@ function wrapText(text: string, width: number): string[] {
 
 export function printHelp(program: Command): void {
   console.log(renderHelp(program));
-}
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function printJson(value: JsonValue): void {

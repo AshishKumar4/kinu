@@ -66,6 +66,7 @@ export function clockTime(at: number | Date): string {
 	return CLOCK.format(at);
 }
 
+/** A byte count for a reader: one decimal under 10 KB and from a megabyte up, rounded. */
 export function formatBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
 
@@ -74,6 +75,19 @@ export function formatBytes(n: number): string {
 	if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 
 	return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/** A byte cap, compact ("1.5G"): at most one decimal, never rounded up, so a cap never reads as more than it is. */
+export function formatByteCap(bytes: number): string {
+	for (const [unit, scale] of [["G", 1024 ** 3], ["M", 1024 ** 2], ["K", 1024]] as const) {
+		if (bytes >= scale) {
+			const value = Math.floor((bytes / scale) * 10) / 10;
+
+			return `${Number.isInteger(value) ? String(value) : value.toFixed(1)}${unit}`;
+		}
+	}
+
+	return `${bytes}B`;
 }
 
 const SPAN_UNITS: ReadonlyArray<readonly [string, number]> = [["d", 86_400], ["h", 3_600], ["m", 60], ["s", 1]];

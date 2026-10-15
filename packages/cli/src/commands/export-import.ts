@@ -19,14 +19,14 @@ import {
   localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stampSchemaGenesis,
 } from '@kinu.run/cli-backend';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
-import { workspaceArchiveTarget } from '@kinu.run/core';
+import { formatBytes, workspaceArchiveTarget } from '@kinu.run/core';
 import {
   agentDbPath, agentDir, canonicalProjectRoot, defaultVirtualWorkspaceId, ensureAgentHome,
   placeLocalWorkspace, requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
 } from '../config';
 import { resolveAgentTarget } from '../agent-target';
 import { cloudArchivePage } from '../cloud-api';
-import { formatBytes, printError, OK, ACCENT, DIM } from '../display';
+import { printError, OK, ACCENT, DIM } from '../display';
 import * as v from 'valibot';
 
 interface RestoredArchiveCounts {

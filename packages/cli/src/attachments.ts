@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
 import { referencePrefixes, resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
 import { renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
-import { formatBytes } from './display';
+import { formatBytes } from '@kinu.run/core';
 
 /** Everything else is reachable through the agent's read tools; inlining would only burn context. */
 const INLINE_MEDIA_TYPES = new Map([
