@@ -60,7 +60,7 @@ import { callOperation, listOperations, type OperationCaller, type OperationList
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
-import { McpToolSurfaceSchema, ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
+import { ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
   AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
@@ -73,9 +73,10 @@ import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } f
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
+import { WorkspaceSlates } from "./workspace-slates";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
-import { initSlateBuildTable, SlateBuilds } from "@kinu.run/core/slates";
+import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
 import {
@@ -122,7 +123,7 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type SlateSurfaceCatalog, type LiveShareRecord,
+  type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
@@ -583,7 +584,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.changes.touched(paths);
         this.liveReadsMoved(readsMovedByFiles(paths));
         // With no slate host loaded, no slate process or build runs here: the change moves only the build records.
-        const ids = this._slates?.controller.filesChanged(paths) ?? this.slateBuilds.filesChanged(paths);
+        const ids = this.slateHosting.filesChanged(paths);
 
         if (ids.length === 0) return;
         markStoreChanged(this.ctx.storage.sql);
@@ -598,7 +599,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       ensureSlate: async (owner) => (await this.slates()).controller.ensureDurable(owner),
       // A process holds a port only once the host that runs it is loaded.
-      slateInvocation: (port, socket) => this._slates?.slateInvocation(port, socket) ?? null,
+      slateInvocation: (port, socket) => this.slateHosting.loaded?.slateInvocation(port, socket) ?? null,
       ...(this.pictureCapture() !== null && {
         pictures: {
           captures: (port, handle) => this.pictures.captures(port, handle, Date.now()),
@@ -2421,7 +2422,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return deafInbox ? [deafInbox] : [];
       },
-      failingSlates: () => this.slateBuilds.failing(ROOT_SLATE_CALLER.cred).map(({ slate, failure }) => `${slate}: ${failure}`),
+      failingSlates: () => this.slateHosting.builds.failing(ROOT_SLATE_CALLER.cred).map(({ slate, failure }) => `${slate}: ${failure}`),
     };
   }
 
@@ -5798,50 +5799,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await this.slates()).controller.build(caller, slate);
   }
 
-  /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */
-  protected async slateSurfaceCatalog(): Promise<SlateSurfaceCatalog> {
-    const descriptors = await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller());
-    const mcp = v.parse(McpToolSurfaceSchema, JSON.parse(descriptors));
-    const mcpServers = new Map<string, { title: string; tools: { name: string; readOnly: boolean }[] }>();
+  private _slateHosting: WorkspaceSlates | undefined;
 
-    for (const descriptor of mcp.descriptors) {
-      const group = mcpServers.get(descriptor.serverName) ?? { title: descriptor.serverName, tools: [] };
-      group.tools.push({ name: descriptor.name, readOnly: descriptor.readOnly === true });
-      mcpServers.set(descriptor.serverName, group);
-    }
-
-    return {
-      mcp: [...mcpServers.entries()].map(([server, group]) => ({ server, title: group.title, tools: group.tools })),
-      slates: Object.keys(await (await this.slates()).controller.projects(ROOT_SLATE_CALLER)),
-    };
-  }
-
-  private _slates: SlateHost | undefined;
-
-  private _slatesLoad: Promise<SlateHost> | undefined;
-
-  private _slateBuilds: SlateBuilds | undefined;
-
-  /** The slates' build records: a turn's every step reads them and a file change moves them, host loaded or not. */
-  private get slateBuilds(): SlateBuilds {
-    this._slateBuilds ??= new SlateBuilds(this.ctx.storage.sql);
-
-    return this._slateBuilds;
-  }
-
-  /**
-   * The slate host, loaded at its first use: it and the agent-core runtime its stores run on were most of the startup
-   * every isolate of the Worker paid, a workspace's own or not (L27).
-   */
-  protected slates(): Promise<SlateHost> {
-    this._slatesLoad ??= import("./slates/host").then(({ SlateHost }) => this.slateHost(SlateHost));
-
-    return this._slatesLoad;
-  }
-
-  private slateHost(Host: typeof SlateHost): SlateHost {
-    this._slates = new Host({
-      ctx: this.ctx, workspace: this.name, builds: this.slateBuilds,
+  /** The workspace's slates, made at their first use (workspace-slates.ts). */
+  private get slateHosting(): WorkspaceSlates {
+    this._slateHosting ??= new WorkspaceSlates({
+      ctx: this.ctx, workspace: this.name,
       session: () => this.hostedWorkspace().bundle.session(),
       facetManager: () => this.hostedWorkspace().facetManager(),
       bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
@@ -5854,7 +5817,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
         owners: async () => new Map([...await listPortReservations(this.ctx)].flatMap(([port, held]) => (held.owner === null ? [] : [[port, held.owner] as const]))),
       },
-      catalog: () => this.slateSurfaceCatalog(),
+      ownerToolDescriptors: async () => await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
       shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
       shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
       kv: this.env.AUTH_KV,
@@ -5874,7 +5837,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
     });
 
-    return this._slates;
+    return this._slateHosting;
+  }
+
+  private slates(): Promise<SlateHost> {
+    return this.slateHosting.load();
   }
 
   /**
@@ -5958,26 +5925,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await this.slates()).controller.readLiveShareRecord(share);
   }
 
-  /**
-   * Share row re-read through the S6 gate (revoked answers 'missing'); a `users` share forks for whom it admits,
-   * `public` for anyone signed in. Skeleton is the running slate's tree.
-   */
+  /** A live share's tree, for a user forking it, held to the share's admission and grant. */
   async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
-    const record = await (await this.slates()).controller.readLiveShareRecord(share);
-
-    if (!record.ok) return { ok: false, success: false, reason: record.reason, error: record.error };
-    const { record: row } = record.value;
-
-    if (row.visibility === 'users' && !(await this.slates()).controller.liveShareAdmitsUser(row.id, userId)) {
-      return { ok: false, success: false, reason: 'missing', error: 'No such share' };
-    }
-
-    if (row.grant.fork === false) {
-      return { ok: false, success: false, reason: 'denied', error: 'This share does not allow forking' };
-    }
-
-    return (await this.slates()).controller.liveShareBundle(row);
+    return (await this.slates()).controller.liveShareBundle(share, userId);
   }
+
 
   /** DO-only, like the blueprint twin, for the same reason. */
   async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
