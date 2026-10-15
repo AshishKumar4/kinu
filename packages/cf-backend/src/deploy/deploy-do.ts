@@ -97,9 +97,9 @@ const OWN_KEY: readonly string[] = [`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`, `${S
  *  `state` is not guessable by somebody who knows which run is authorizing. */
 const NONCE_BYTES = 16;
 
-/** Durable: the activation that writes the intent is often not the one that runs it. */
+/** Durable: the activation that writes the intent is often not the one that runs it. Whether it is an update is the
+ *  run record's presence, which the alarm reads. */
 const IntentSchema = v.object({
-  kind: v.picklist(['guided', 'update']),
   channelOrigin: v.pipe(v.string(), v.minLength(1)),
 });
 
@@ -264,7 +264,7 @@ export class DeployRunDO extends DurableObject<Env> {
     if (await this.going()) return this.snapshot();
 
     await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(parsed));
-    await this.wake({ kind: 'guided', channelOrigin: this.channelOrigin() });
+    await this.wake({ channelOrigin: this.channelOrigin() });
 
     return this.snapshot();
   }
@@ -279,9 +279,9 @@ export class DeployRunDO extends DurableObject<Env> {
 
     const record = await this.ctx.storage.get<string>(RECORD_KEY);
 
-    await this.wake(record === undefined
-      ? { kind: 'guided', channelOrigin: this.channelOrigin() }
-      : { kind: 'update', channelOrigin: v.parse(DeploymentRecordSchema, JSON.parse(record)).channelOrigin });
+    await this.wake({
+      channelOrigin: record === undefined ? this.channelOrigin() : v.parse(DeploymentRecordSchema, JSON.parse(record)).channelOrigin,
+    });
 
     return this.snapshot();
   }
@@ -319,7 +319,7 @@ export class DeployRunDO extends DurableObject<Env> {
     const token = await refreshDeployToken({ clientId: record.clientId, refreshToken: held ?? refreshToken });
 
     await this.landToken(record.clientId, token.accessToken, token.refreshToken, token.expiresInSeconds);
-    await this.wake({ kind: 'update', channelOrigin: record.channelOrigin });
+    await this.wake({ channelOrigin: record.channelOrigin });
 
     return this.snapshot();
   }

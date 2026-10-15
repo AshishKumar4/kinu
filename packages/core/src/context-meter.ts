@@ -5,7 +5,7 @@
 
 import { asSchema, type ModelMessage, type SystemModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
-import { CHARS_PER_TOKEN } from './token-estimate';
+import { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
 import { JsonObjectSchema } from './utils/json';
 import { Effect } from 'effect';
 import { diagnostics, renderThrownChain, settleSync } from './obs/index';
@@ -155,7 +155,7 @@ function composition(input: Parameters<typeof measureContext>[0], toolRows: read
     segments,
     measuredChars,
     charsPerToken: CHARS_PER_TOKEN,
-    estimatedTokens: Math.ceil(measuredChars / CHARS_PER_TOKEN),
+    estimatedTokens: estimateTokens(measuredChars),
   };
 }
 

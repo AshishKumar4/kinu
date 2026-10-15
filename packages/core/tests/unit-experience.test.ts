@@ -850,16 +850,16 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
     const goodPayload = JSON.stringify({ kind: 'lesson', text: 'Read the error before rerunning.' });
     void beta.rt.storage.sql`INSERT INTO imported_experience
       (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
-       status, turn_ids, imported_at, corroborated_at)
-      VALUES (${beta.rt.actor.actorId}, 'imp-good', 'exp-good', 'lesson', 'k1', 't1', ${goodPayload}, 'e', 'alpha', 'provisional', '[]', 1, NULL)`;
+       turn_ids, imported_at, corroborated_at)
+      VALUES (${beta.rt.actor.actorId}, 'imp-good', 'exp-good', 'lesson', 'k1', 't1', ${goodPayload}, 'e', 'alpha', '[]', 1, NULL)`;
     void beta.rt.storage.sql`INSERT INTO imported_experience
       (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
-       status, turn_ids, imported_at, corroborated_at)
-      VALUES (${beta.rt.actor.actorId}, 'imp-bad-json', 'exp-bad-json', 'lesson', 'k2', 't2', ${goodPayload}, 'e', 'alpha', 'provisional', 'not-json{{{', 2, NULL)`;
+       turn_ids, imported_at, corroborated_at)
+      VALUES (${beta.rt.actor.actorId}, 'imp-bad-json', 'exp-bad-json', 'lesson', 'k2', 't2', ${goodPayload}, 'e', 'alpha', 'not-json{{{', 2, NULL)`;
     void beta.rt.storage.sql`INSERT INTO imported_experience
       (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
-       status, turn_ids, imported_at, corroborated_at)
-      VALUES (${beta.rt.actor.actorId}, 'imp-bad-shape', 'exp-bad-shape', 'lesson', 'k3', 't3', ${goodPayload}, 'e', 'alpha', 'provisional', '[123]', 3, NULL)`;
+       turn_ids, imported_at, corroborated_at)
+      VALUES (${beta.rt.actor.actorId}, 'imp-bad-shape', 'exp-bad-shape', 'lesson', 'k3', 't3', ${goodPayload}, 'e', 'alpha', '[123]', 3, NULL)`;
 
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);

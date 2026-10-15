@@ -107,7 +107,6 @@ const USER_DO_METHODS = [
   'getProfile',
   'getProfileCatalog',
   'getWorkspaceProfileCatalog',
-  'hasPeerGrant',
   'hasWorkspace',
   'heldRows',
   'issueCliAgentConnectTicket',

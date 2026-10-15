@@ -429,7 +429,7 @@ describe('paging', () => {
       feedbackStore.recordFeedback(sql, {
         id: `f${String(i)}`, createdAt: 1_000 + i, userId: 'u1', email: 'a@x',
         note: `note ${String(i)}`, route: '/workspace/x', workspace: 'x',
-        objectKey: null, bytes: null,
+        bytes: null,
       });
       auditIds.push(store.appendAudit(sql, {
         actorEmail: 'ops@kinu.run', actorUserId: 'u1',
@@ -455,10 +455,9 @@ describe('feedback rows', () => {
     feedbackStore.recordFeedback(sql, {
       id: 'f1', createdAt: 1_000, userId: 'u1', email: 'a@x',
       note: 'the sidebar overlaps at 640px', route: '/workspace/alpha', workspace: 'alpha',
-      objectKey: null, bytes: null,
+      bytes: null,
     });
     const row = feedbackStore.listFeedback(sql).items[0];
-    expect(row?.objectKey).toBe(null);
     expect(row?.bytes).toBe(null);
     expect(row?.note).toBe('the sidebar overlaps at 640px');
     close();
@@ -469,7 +468,7 @@ describe('feedback rows', () => {
 
     const row = {
       id: 'f3', createdAt: 1_000, userId: 'u1', email: 'a@x', note: 'once',
-      route: '/', workspace: null, objectKey: null, bytes: null,
+      route: '/', workspace: null, bytes: null,
     };
 
     feedbackStore.recordFeedback(sql, row);

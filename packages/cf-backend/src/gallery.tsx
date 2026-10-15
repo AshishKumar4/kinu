@@ -5448,7 +5448,7 @@ const WORKSPACE_WORK = {
 };
 
 /** A first drive: never interrupted, never retried, serving nothing. */
-const FIRST_DRIVE = { epoch: 0, resumeAttempts: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
+const FIRST_DRIVE = { epoch: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
 
 const BACKGROUND_JOBS: BackgroundJob[] = [
   {

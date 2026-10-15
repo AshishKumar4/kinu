@@ -498,7 +498,6 @@ describe('what the endpoint stores', () => {
       note: 'the exploration tab is blank',
       route: '/workspace/checkout-fixes',
       workspace: 'checkout-fixes',
-      objectKey: null,
       bytes: null,
     }]);
   });
@@ -512,7 +511,6 @@ describe('what the endpoint stores', () => {
     const key = 'feedback/user-7/id-1.png';
     expect([...rec.objects.keys()]).toEqual([key]);
     expect(rec.rows[0]).toMatchObject({
-      objectKey: key,
       bytes: rec.objects.get(key)?.length,
       workspace: 'checkout-fixes',
     });

@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   AGENT_CONFIG_KEYS,
-  canonicalConversationId, setReasoningEffort,
+  setReasoningEffort,
 } from '../src/index';
 import { Database } from 'bun:sqlite';
 import { createTestSql } from '@kinu.run/test-utils';
@@ -261,7 +261,6 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.countIsolateGeneration(),
     (c) => c.setEmailNotificationsEnabled(false),
     (c) => c.setChatTitle('Coupon fix'),
-    (c) => { canonicalConversationId(c); },
   ];
 
   test('no key is readable-but-unwritable', () => {
@@ -301,15 +300,6 @@ describe('an actor\'s own account per provider', () => {
     expect(() => c.setProviderAccount('anthropic', 'Work Account')).toThrow('Invalid account name');
     expect(() => c.setProviderAccount('anthropic=x', 'work')).toThrow('Invalid provider id');
     expect(c.getProviderAccounts()).toEqual({});
-  });
-});
-
-describe('the canonical conversation id lives under its registered key', () => {
-  test('first open adopts default through AGENT_CONFIG_KEYS, later opens read it back', () => {
-    const c = setup();
-    expect(canonicalConversationId(c)).toBe('default');
-    expect(c.get(AGENT_CONFIG_KEYS.conversationId)).toBe('default');
-    expect(canonicalConversationId(c)).toBe('default');
   });
 });
 

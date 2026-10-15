@@ -76,8 +76,8 @@ export const ForkLessonRowSchema = v.object({
   turn_ids: v.string(),
   text: v.string(),
   source: v.string(),
-  status: v.picklist(['provisional', 'corroborated']),
   created_at: v.number(),
+  /** Null while provisional. */
   corroborated_at: v.nullable(v.number()),
 });
 

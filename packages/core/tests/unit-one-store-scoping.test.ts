@@ -803,7 +803,7 @@ describe('two actors, one database: reply_channels', () => {
     expect(b.findOpenByEvent('evt-1')?.id).toBe(idB);
     expect(a.get(idB)).toBeNull();
 
-    a.abort(idA, 2_000, 'socket closed');
+    a.abort(idA);
     expect(a.findOpenByEvent('evt-1')).toBeNull();
     expect(b.findOpenByEvent('evt-1')?.id).toBe(idB);
     w.close();

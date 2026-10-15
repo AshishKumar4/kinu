@@ -451,16 +451,6 @@ describe('the Claude subscription wire', () => {
     await expect(failed).rejects.toHaveProperty('cause.code', 'budget');
     expect(sent.length).toBe(1);
   });
-
-  test('a model name the retired claude binary made up is refused before anything is sent, pointing to /model', () => {
-    const { sent, fetchFn } = wire([]);
-
-    for (const retired of ['claude-opus-4-x', 'claude-sonnet-4-x', 'claude-haiku-4-x']) {
-      expect(() => createClaudeProvider().createModel(retired, deps(fetchFn, [login('t')]))).toThrow('Pick a Claude model with /model.');
-    }
-
-    expect(sent).toEqual([]);
-  });
 });
 
 describe('the Claude sign-in', () => {

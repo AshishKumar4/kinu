@@ -1,6 +1,6 @@
 /** Behavioural scorers over run events; each reports a denominator separately from passes. */
 import {
-  censusToolFailures, classifyToolFailure, parseStoredRunEvent, type ActorHandle, type RunEvent, type SqlExecutor,
+  censusToolFailures, classifyToolFailure, parseStoredRunEvent, type ActorHandle, type RunEvent, type SqlExecutor, type StoredRunEventRow,
 } from '@kinu.run/core';
 
 /**
@@ -35,12 +35,12 @@ function eventsOfType<K extends RunEvent['type']>(
 ): Extract<RunEvent, { type: K }>[] {
   actor.assertCurrent();
 
-  const rows = sql<{ payload: string }>`
-    SELECT payload FROM run_events
+  const rows = sql<StoredRunEventRow>`
+    SELECT run_id, event_index, type, ts, payload FROM run_events
     WHERE actor_id = ${actor.actorId} AND type = ${type}
     ORDER BY run_id ASC, event_index ASC`;
 
-  return rows.map((row) => parseStoredRunEvent(row.payload))
+  return rows.map((row) => parseStoredRunEvent(row))
     .filter((event): event is Extract<RunEvent, { type: K }> => event.type === type);
 }
 

@@ -250,7 +250,6 @@ export { DEFAULT_CONFIG } from './config';
 
 export {
   createAgentConfigStore, initAgentConfigTable, holdConfig,
-  canonicalConversationId,
   AGENT_CONFIG_KEYS,
   type AgentConfigStore, type ShellApprovalMode,
 } from './config/index';
@@ -1333,7 +1332,7 @@ export {
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
-  type StoredRunEvent,
+  type StoredRunEvent, type StoredRunEventRow,
   type ContextMeasures,
 } from './events/index';
 
@@ -1616,7 +1615,7 @@ export {
   type HeadMergePolicyDeps,
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, preparedHeadRun, type HeadRun, buildHeadAccumulatorTools,
-  buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
+  buildHeadSystemPrompt, buildHeadMessages,
   type HeadInferenceDeps, type RunInference,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS, spawnSeatedHead, type HeadSeat, type SeatedHeadDeps,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
@@ -2651,8 +2650,8 @@ export {
 
 export {
   validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
-  McpServerSummarySchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput, type McpServerSummary,
-  type McpTransport,
+  McpServerSummarySchema, McpTransportSchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput,
+  type McpServerSummary, type McpTransport,
 } from './mcp/servers';
 
 export type {

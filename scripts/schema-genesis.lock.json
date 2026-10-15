@@ -5,8 +5,7 @@
     "origin_json TEXT NOT NULL",
     "delivery TEXT UNIQUE",
     "status TEXT NOT NULL DEFAULT 'pending'",
-    "created_at INTEGER NOT NULL",
-    "decided_at INTEGER"
+    "created_at INTEGER NOT NULL"
   ],
   "account_notes@packages/core/src/memory/account.ts": [
     "id TEXT PRIMARY KEY",
@@ -312,7 +311,6 @@
     "error TEXT",
     "input_json TEXT",
     "epoch INTEGER NOT NULL DEFAULT 0",
-    "resume_attempts INTEGER NOT NULL DEFAULT 0",
     "attempt_started_at INTEGER",
     "resume_after INTEGER",
     "retry_of TEXT",
@@ -359,8 +357,7 @@
     "credential_id TEXT PRIMARY KEY",
     "user_id TEXT NOT NULL",
     "public_key TEXT NOT NULL",
-    "counter INTEGER NOT NULL",
-    "transports TEXT NOT NULL"
+    "counter INTEGER NOT NULL"
   ],
   "cache_warm@packages/core/src/providers/cache-warming.ts": [
     "actor_id TEXT PRIMARY KEY",
@@ -546,7 +543,6 @@
     "note TEXT NOT NULL",
     "route TEXT NOT NULL",
     "workspace TEXT",
-    "object_key TEXT",
     "bytes INTEGER"
   ],
   "cp_users@packages/core/src/control-plane/store.ts": [
@@ -845,7 +841,6 @@
   "github_nodes@packages/core/src/github/activity.ts": [
     "node_id TEXT PRIMARY KEY",
     "repo TEXT NOT NULL",
-    "subject TEXT NOT NULL",
     "number INTEGER NOT NULL",
     "at INTEGER NOT NULL"
   ],
@@ -917,7 +912,6 @@
     "payload_json TEXT NOT NULL",
     "evidence TEXT NOT NULL",
     "source_workspace TEXT NOT NULL",
-    "status TEXT NOT NULL CHECK (status IN ('provisional','corroborated'))",
     "turn_ids TEXT NOT NULL",
     "imported_at INTEGER NOT NULL",
     "corroborated_at INTEGER",
@@ -953,7 +947,6 @@
     "turn_ids TEXT NOT NULL",
     "text TEXT NOT NULL",
     "source TEXT NOT NULL CHECK (source IN (${sqlCheckList(LESSON_SOURCES)}))",
-    "status TEXT NOT NULL CHECK (status IN ('provisional','corroborated'))",
     "created_at INTEGER NOT NULL",
     "corroborated_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
@@ -1134,9 +1127,7 @@
     "holder_addr TEXT NOT NULL DEFAULT ''",
     "ttl_expires_at INTEGER NOT NULL",
     "state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open', 'replied', 'expired', 'aborted'))",
-    "reply_payload TEXT",
     "created_at INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
   "request_renders@packages/core/src/session/schema.ts": [
@@ -1160,7 +1151,6 @@
   "sandbox_lifecycle_incidents@packages/cf-backend/src/sandbox-lifecycle.ts": [
     "incident_id TEXT PRIMARY KEY",
     "first_seen_at INTEGER NOT NULL",
-    "announced_at INTEGER",
     "outcome TEXT"
   ],
   "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
@@ -1405,7 +1395,6 @@
     "trial_id TEXT NOT NULL",
     "turn_id TEXT NOT NULL",
     "segment_id TEXT NOT NULL",
-    "arm TEXT NOT NULL CHECK (arm IN (${sqlCheckList(ARMS)}))",
     "at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, trial_id, turn_id)"
   ],
@@ -1507,8 +1496,7 @@
   ],
   "user_credentials_revision@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "revision INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "revision INTEGER NOT NULL"
   ],
   "user_credentials@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
@@ -1566,18 +1554,9 @@
   ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
-    "name TEXT NOT NULL",
-    "server_url TEXT NOT NULL",
-    "transport TEXT NOT NULL",
     "headers TEXT",
     "allowed_tools TEXT",
     "preset_id TEXT"
-  ],
-  "user_peer_grants@packages/core/src/state/user-schema.ts": [
-    "sender_user_id TEXT NOT NULL",
-    "sender_agent_name TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "PRIMARY KEY (sender_user_id, sender_agent_name)"
   ],
   "user_profile@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
@@ -1586,10 +1565,6 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "onboarded_at INTEGER"
-  ],
-  "user_schema_meta@packages/core/src/state/user-schema.ts": [
-    "key TEXT PRIMARY KEY",
-    "value TEXT NOT NULL"
   ],
   "user_share_cards@packages/core/src/state/user-schema.ts": [
     "owner_user_id TEXT NOT NULL",
@@ -1616,22 +1591,19 @@
     "trigger_id TEXT NOT NULL",
     "window_start INTEGER NOT NULL",
     "delivery_count INTEGER NOT NULL DEFAULT 0",
-    "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (trigger_id, window_start)"
   ],
   "webhook_replay_claims@packages/core/src/events/ingress/webhook.ts": [
     "trigger_id TEXT NOT NULL",
     "claim TEXT NOT NULL",
     "event_id TEXT",
-    "claimed_at INTEGER NOT NULL",
     "expires_at INTEGER NOT NULL",
     "PRIMARY KEY (trigger_id, claim)"
   ],
   "webhook_secrets@packages/core/src/events/ingress/secrets.ts": [
     "secret_id TEXT PRIMARY KEY",
     "trigger_id TEXT NOT NULL",
-    "secret TEXT NOT NULL",
-    "created_at INTEGER NOT NULL"
+    "secret TEXT NOT NULL"
   ],
   "workspace_activations@packages/core/src/identity/activations.ts": [
     "slot INTEGER PRIMARY KEY",
@@ -1672,8 +1644,7 @@
   ],
   "workspace_logos@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "svg TEXT NOT NULL",
-    "drawn_at INTEGER NOT NULL"
+    "svg TEXT NOT NULL"
   ],
   "workspace_overview_nudges@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
@@ -1682,8 +1653,8 @@
   ],
   "workspace_overviews@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
-    "decisions INTEGER NOT NULL",
+    "activity TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED CHECK (activity IN ('working', 'unfinished', 'idle'))",
+    "decisions INTEGER GENERATED ALWAYS AS (json_extract(overview, '$.decisionsWaiting')) STORED NOT NULL",
     "overview TEXT NOT NULL"
   ],
   "workspace_proposals@packages/core/src/safety/workspace-proposals.ts": [
@@ -1693,8 +1664,6 @@
     "brief TEXT NOT NULL",
     "status TEXT NOT NULL DEFAULT 'pending'",
     "requested_at INTEGER NOT NULL",
-    "decided_at INTEGER",
-    "workspace TEXT",
-    "error TEXT"
+    "decided_at INTEGER"
   ]
 }

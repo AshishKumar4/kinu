@@ -124,7 +124,7 @@ const CHECKOUT_CHANGELOG = {
 };
 
 /** A first drive: never interrupted, never retried, serving nothing. */
-const FIRST_DRIVE = { epoch: 0, resumeAttempts: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
+const FIRST_DRIVE = { epoch: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
 
 const CHECKOUT_JOBS: BackgroundJob[] = [
   { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null, ...FIRST_DRIVE },

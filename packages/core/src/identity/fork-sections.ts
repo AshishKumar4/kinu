@@ -183,13 +183,13 @@ function lessonRows({ sql, plan }: ForkSectionSource): Iterable<ForkLessonRow> {
 
   return actorRows(sql, (actorId, after) => {
     const found = sql<ForkLessonRow & { rowid: number }>`
-      SELECT rowid, id, turn_ids, text, source, status, created_at, corroborated_at FROM lessons
+      SELECT rowid, id, turn_ids, text, source, created_at, corroborated_at FROM lessons
       WHERE actor_id = ${actorId} AND created_at <= ${cut} AND rowid > ${after} ORDER BY rowid LIMIT 1
     `[0];
 
     if (found === undefined) return undefined;
     const later = found.corroborated_at !== null && found.corroborated_at > cut;
-    const row = v.parse(ForkLessonRowSchema, { ...found, ...(later && { status: 'provisional', corroborated_at: null }) });
+    const row = v.parse(ForkLessonRowSchema, { ...found, ...(later && { corroborated_at: null }) });
 
     return { rowid: found.rowid, row };
   });
@@ -378,8 +378,8 @@ export const FORK_SECTIONS: ForkSections = {
     stage: ({ sql, actorId }, rows) => {
       for (const row of rows) {
         void sql`
-          INSERT INTO lessons (actor_id, id, turn_ids, text, source, status, created_at, corroborated_at)
-          VALUES (${actorId}, ${row.id}, ${row.turn_ids}, ${row.text}, ${row.source}, ${row.status}, ${row.created_at}, ${row.corroborated_at})
+          INSERT INTO lessons (actor_id, id, turn_ids, text, source, created_at, corroborated_at)
+          VALUES (${actorId}, ${row.id}, ${row.turn_ids}, ${row.text}, ${row.source}, ${row.created_at}, ${row.corroborated_at})
         `;
       }
     },

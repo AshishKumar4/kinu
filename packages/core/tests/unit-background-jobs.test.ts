@@ -85,7 +85,7 @@ describe('BackgroundJobStore', () => {
     expect(s.epochOf('e')).toBe(0);
 
     const claim = s.reclaim('e', s.epochOf('e') ?? -1);
-    expect(claim).toEqual({ epoch: 1, attempts: 1 });
+    expect(claim).toEqual({ epoch: 1 });
     expect(s.epochOf('e')).toBe(1);
 
     s.settle('e', 0, 'zombie result', 3);
@@ -101,11 +101,10 @@ describe('BackgroundJobStore', () => {
   test('reclaim bumps epoch + attempts monotonically across repeated eviction', () => {
     const s = newStore();
     s.create({ id: 'r', kind: 'think', workMode: 'build', now: 1 });
-    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 1, attempts: 1 });
-    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 2, attempts: 2 });
-    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 3, attempts: 3 });
+    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 1 });
+    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 2 });
+    expect(s.reclaim('r', s.epochOf('r') ?? -1)).toEqual({ epoch: 3 });
     expect(s.get('r')?.epoch).toBe(3);
-    expect(s.get('r')?.resumeAttempts).toBe(3);
     expect(s.reclaim('missing', s.epochOf('missing') ?? -1)).toBeNull();
   });
 
@@ -114,9 +113,9 @@ describe('BackgroundJobStore', () => {
     s.create({ id: 'c', kind: 'think', workMode: 'build', now: 1 });
     const read = s.epochOf('c') ?? -1;
 
-    expect(s.reclaim('c', read)).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.reclaim('c', read)).toEqual({ epoch: 1 });
     expect(s.reclaim('c', read)).toBeNull();
-    expect(s.get('c')).toMatchObject({ epoch: 1, resumeAttempts: 1 });
+    expect(s.get('c')).toMatchObject({ epoch: 1 });
   });
 
   test('the armed next attempt is a column: written, read back, and cleared by the claim that serves it', () => {
@@ -131,7 +130,7 @@ describe('BackgroundJobStore', () => {
     expect(s.listRunning().items[0]?.resumeAfter).toBe(5_000);
     expect(s.list()[0]?.resumeAfter).toBe(5_000);
 
-    expect(s.reclaim('w', s.epochOf('w') ?? -1, 6_000)).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.reclaim('w', s.epochOf('w') ?? -1, 6_000)).toEqual({ epoch: 1 });
     expect(s.get('w')?.resumeAfter).toBeNull();
     expect(s.resumesInWorkspace()).toEqual([]);
   });

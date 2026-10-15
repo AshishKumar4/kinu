@@ -18,7 +18,6 @@ interface StoredPasskey {
   readonly credentialId: string;
   readonly publicKey: string;
   readonly counter: number;
-  readonly transports: readonly string[];
 }
 
 export type Grant =
@@ -65,8 +64,7 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
     credential_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     public_key TEXT NOT NULL,
-    counter INTEGER NOT NULL,
-    transports TEXT NOT NULL
+    counter INTEGER NOT NULL
   )`;
   void sql`CREATE TABLE IF NOT EXISTS builtin_invites (
     token_hash TEXT PRIMARY KEY,
@@ -91,9 +89,9 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
   )`;
 }
 
-function storePasskey(sql: BuiltinSql, userId: string, { credentialId, publicKey, counter, transports }: StoredPasskey): void {
-  void sql`INSERT INTO builtin_passkeys (credential_id, user_id, public_key, counter, transports)
-      VALUES (${credentialId}, ${userId}, ${publicKey}, ${counter}, ${JSON.stringify(transports)})`;
+function storePasskey(sql: BuiltinSql, userId: string, { credentialId, publicKey, counter }: StoredPasskey): void {
+  void sql`INSERT INTO builtin_passkeys (credential_id, user_id, public_key, counter)
+      VALUES (${credentialId}, ${userId}, ${publicKey}, ${counter})`;
 }
 
 export function hasBuiltinOwner(sql: BuiltinSql): boolean {
@@ -190,17 +188,16 @@ export interface PasskeyAccount extends StoredPasskey, SigningAccount {}
 
 const PasskeyRowSchema = v.object({
   user_id: v.string(), email: v.string(), generation: v.number(), public_key: v.string(), counter: v.number(),
-  transports: v.pipe(v.string(), v.parseJson(), v.array(v.string())),
 });
 
 export function findPasskeyAccount(sql: BuiltinSql, credentialId: string): PasskeyAccount | null {
-  const parsed = v.safeParse(PasskeyRowSchema, sql`SELECT p.user_id, a.email, a.generation, p.public_key, p.counter, p.transports
+  const parsed = v.safeParse(PasskeyRowSchema, sql`SELECT p.user_id, a.email, a.generation, p.public_key, p.counter
     FROM builtin_passkeys p JOIN builtin_accounts a ON a.user_id = p.user_id WHERE p.credential_id = ${credentialId}`[0]);
 
   if (!parsed.success) return null;
   const row = parsed.output;
 
-  return { userId: row.user_id, email: row.email, generation: row.generation, credentialId, publicKey: row.public_key, counter: row.counter, transports: row.transports };
+  return { userId: row.user_id, email: row.email, generation: row.generation, credentialId, publicKey: row.public_key, counter: row.counter };
 }
 
 export function recordPasskeyUse(sql: BuiltinSql, credentialId: string, counter: number): void {

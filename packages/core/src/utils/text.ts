@@ -61,3 +61,8 @@ export function decodeEntities(value: string, named: ReadonlyMap<string, string>
     return Number.isFinite(point) && point > 0 && point < 0x110000 ? String.fromCodePoint(point) : '';
   });
 }
+
+/** `value` as UTF-8 bytes, in a buffer Web Crypto takes. */
+export function utf8(value: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(value);
+}

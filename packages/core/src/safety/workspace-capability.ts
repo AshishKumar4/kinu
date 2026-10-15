@@ -47,7 +47,6 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'workspaces.rename_self': 'workspace',
   /** The calling workspace's own tile only. */
   'workspaces.overview_self': 'workspace',
-  'peers.grants': 'workspace',
   /** Reading the owner's experience library published by other workspaces. */
   'experience.read': 'workspace',
   'experience.write': 'workspace',

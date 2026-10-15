@@ -35,8 +35,8 @@ export interface FeedbackAccepted {
   id: string;
 }
 
-/** Authoritative column list for the control-plane table. Screenshot columns are null together
- *  for note-only reports; bytes live in R2, `objectKey` points there. */
+/** Authoritative column list for the control-plane table. `bytes` is null for a note-only report; a screenshot's PNG
+ *  lives in R2 under its reporter and report (`feedback/<userId>/<id>.png`), where only its submission reaches it. */
 export const FeedbackRecordSchema = v.object({
   id: v.string(),
   createdAt: v.number(),
@@ -46,7 +46,6 @@ export const FeedbackRecordSchema = v.object({
   note: v.string(),
   route: v.string(),
   workspace: v.nullable(v.string()),
-  objectKey: v.nullable(v.string()),
   bytes: v.nullable(v.number()),
 });
 

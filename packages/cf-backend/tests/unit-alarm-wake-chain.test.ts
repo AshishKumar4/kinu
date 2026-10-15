@@ -275,7 +275,7 @@ describe('the workspace keeps exactly one wake per job', () => {
       await modelReached.promise;
 
       const redriven = present(jobsOver(db).get('bgjob-search'), 'the re-driven job');
-      expect(redriven).toMatchObject({ status: 'running', resumeAttempts: 1 });
+      expect(redriven).toMatchObject({ status: 'running', epoch: 1 });
 
       // Reach the next armed wake, or pass the saved resume instant if none is armed.
       const passAt = Math.max(
@@ -288,7 +288,7 @@ describe('the workspace keeps exactly one wake per job', () => {
 
       // A wake armed at or before the pass fires at once, and its pass arms it again.
       expect(armedWakes(db).filter((wake) => wake.time <= passAt)).toEqual([]);
-      expect(jobsOver(db).get('bgjob-search')?.resumeAttempts).toBe(1);
+      expect(jobsOver(db).get('bgjob-search')?.epoch).toBe(1);
     } finally {
       expect(await agent.cancelBackgroundJob('bgjob-search')).toEqual({ ok: true });
       await joinHarnessFibers();
