@@ -340,15 +340,15 @@ export function connectProvider(
           account,
           model: opts.model,
           local: opts.local ?? false,
-          store: async (key) => { await updateConfigFile((config) => withLocalApiKey(config, id, account, key)); },
-          clear: async () => { await updateConfigFile((config) => withLocalApiKey(config, id, account, null)); },
+          store: async (key) => { await updateConfigFile((config) => { withLocalApiKey(config, id, account, key); }); },
+          clear: async () => { await updateConfigFile((config) => { withLocalApiKey(config, id, account, null); }); },
         });
       case 'openai-compatible': return yield* connectOpenAiCompatible(port, opts.model, opts.local ?? false);
     }
   }));
 }
 
-function withLocalApiKey(config: KinuConfig, id: ApiKeyProviderId, account: string, key: string | null): KinuConfig {
+function withLocalApiKey(config: KinuConfig, id: ApiKeyProviderId, account: string, key: string | null): void {
   const next: LocalApiKeyProvider = { ...config.providers?.[id] };
   const accounts = { ...next.accounts };
 
@@ -363,7 +363,7 @@ function withLocalApiKey(config: KinuConfig, id: ApiKeyProviderId, account: stri
     next.apiKey = key;
   }
 
-  return withProvider(config, { [id]: next });
+  withProvider(config, { [id]: next });
 }
 
 async function connectCloudflare(port: ProviderConnectPort, origin: string | undefined): Promise<ProviderConnectOutcome> {
@@ -399,7 +399,7 @@ async function connectClaude(port: ProviderConnectPort, requestedModel: string |
     : null;
 
   const credential = await runClaudeSignIn(port);
-  await updateConfigFile((next) => withOAuthSession(next, 'claude', account, credential));
+  await updateConfigFile((next) => { withOAuthSession(next, 'claude', account, credential); });
 
   if (answered === null) return { kind: 'connected', summary: `Connected the Claude account ${account}`, detail: accountDetail('claude', account) };
 
@@ -443,7 +443,7 @@ async function connectChatGpt(port: ProviderConnectPort, requestedModel: string 
   if (result === null) return { kind: 'blocked', reason: 'The ChatGPT sign-in was skipped.', hint: 'Run kinu provider connect chatgpt when you want to use your ChatGPT plan.' };
 
   if (result.outcome === 'declined') return { kind: 'blocked', reason: 'You cancelled the ChatGPT sign-in.', hint: 'Run kinu provider connect chatgpt to try again.' };
-  await updateConfigFile((next) => withOAuthSession(next, 'chatgpt', account, chatgptSession(result.record)));
+  await updateConfigFile((next) => { withOAuthSession(next, 'chatgpt', account, chatgptSession(result.record)); });
 
   if (result.outcome === 'plan-disabled') {
     return {
@@ -485,7 +485,7 @@ async function suggestedChatGptModel(port: ProviderConnectPort, accessToken: str
   return models.find((entry) => entry.id === current)?.id ?? models[0]?.id ?? CHATGPT_DEFAULT_MODEL;
 }
 
-function withOAuthSession(config: KinuConfig, issuer: 'chatgpt' | 'claude', account: string, credential: LocalOAuthSession): KinuConfig {
+function withOAuthSession(config: KinuConfig, issuer: 'chatgpt' | 'claude', account: string, credential: LocalOAuthSession): void {
   const stored = config.providers?.[issuer] ?? {};
 
   const session: LocalOAuthSession = {
@@ -495,7 +495,7 @@ function withOAuthSession(config: KinuConfig, issuer: 'chatgpt' | 'claude', acco
     metadata: credential.metadata,
   };
 
-  return withProvider(config, {
+  withProvider(config, {
     [issuer]: account === MAIN_ACCOUNT ? { ...stored, ...session } : { ...stored, accounts: { ...stored.accounts, [account]: session } },
   });
 }
@@ -589,7 +589,7 @@ function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel: stri
       local,
       credKey: 'openai-compat.default',
       credential: { kind: 'openai-compat', ...endpoint },
-      storeLocally: async () => { await updateConfigFile((config) => withProvider(config, { openaiCompat: { default: endpoint } })); },
+      storeLocally: async () => { await updateConfigFile((config) => { withProvider(config, { openaiCompat: { default: endpoint } }); }); },
       clearLocally: async () => { await updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }); },
       // Usually Ollama or vLLM on this machine; the proxy is https-only and a Worker cannot reach loopback.
       endpoint: baseURL,
@@ -661,7 +661,7 @@ function connectOpenCode(port: ProviderConnectPort, requestedModel: string | und
       model = first.id;
     }
 
-    yield* Effect.promise(() => updateConfigFile((config) => withProvider(config, {})));
+    yield* Effect.promise(() => updateConfigFile((config) => { withProvider(config, {}); }));
 
     return {
       kind: 'connected',
@@ -718,17 +718,15 @@ function reachableFromTheInternet(baseURL: string): boolean {
 }
 
 /** Every local provider write goes through here, so the provider revision bump cannot be skipped. */
-function withProvider(config: KinuConfig, providers: NonNullable<KinuConfig['providers']>): KinuConfig {
-  return {
-    ...config,
-    providerRevision: (config.providerRevision ?? 0) + 1,
-    providers: {
-      ...config.providers,
-      ...providers,
-      openaiCompat: {
-        ...config.providers?.openaiCompat,
-        ...providers.openaiCompat,
-      },
+/** Sets `providers` in `config` and bumps its revision, so resident sessions re-read their listing. */
+function withProvider(config: KinuConfig, providers: NonNullable<KinuConfig['providers']>): void {
+  config.providerRevision = (config.providerRevision ?? 0) + 1;
+  config.providers = {
+    ...config.providers,
+    ...providers,
+    openaiCompat: {
+      ...config.providers?.openaiCompat,
+      ...providers.openaiCompat,
     },
   };
 }

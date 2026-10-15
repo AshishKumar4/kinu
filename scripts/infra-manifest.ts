@@ -1276,6 +1276,11 @@ export function liveClasses(exports: DeployedConfig['exports']): readonly string
   return Object.entries(exports ?? {}).flatMap(([name, entry]) => (entry.state === 'deleted' ? [] : [name]));
 }
 
+/** The R2 bucket `config` binds as `binding`, or none. */
+export function bucketOf(config: DeployedConfig, binding: string): string | undefined {
+  return config.r2_buckets?.find((entry) => entry.binding === binding)?.bucket_name;
+}
+
 /** What wrangler.jsonc deploys for `environment`, read as Wrangler reads it. */
 export function deployedConfig(environment: InfraEnvironment, configPath = WRANGLER_CONFIG): DeployedConfig {
   return environmentConfig(parseJsonc(
@@ -1283,6 +1288,32 @@ export function deployedConfig(environment: InfraEnvironment, configPath = WRANG
     WranglerConfigSchema,
     configPath,
   ), environment);
+}
+
+/** A wrangler environment's Worker and the origin it serves (`CLI_PUBLIC_ORIGIN`), as wrangler.jsonc declares them:
+ *  the tooling's one spelling of "production is kinu at kinu.run". */
+export interface Deployment {
+  readonly environment: InfraEnvironment;
+  readonly worker: string;
+  readonly origin: string;
+}
+
+export function deploymentOf(environment: InfraEnvironment, configPath = WRANGLER_CONFIG): Deployment {
+  const config = deployedConfig(environment, configPath);
+  const origin = config.vars?.CLI_PUBLIC_ORIGIN;
+
+  if (config.name === undefined || origin === undefined || origin === '') {
+    throw new Error(`wrangler.jsonc's ${environment} names no Worker or no CLI_PUBLIC_ORIGIN, so it has no deployment identity`);
+  }
+
+  return { environment, worker: config.name, origin };
+}
+
+/** The deployment serving `origin`, or undefined for an origin no environment serves (a loopback dev server). */
+export function deploymentAt(origin: string, configPath = WRANGLER_CONFIG): Deployment | undefined {
+  const wanted = origin.replace(/\/+$/u, '');
+
+  return INFRA_ENVIRONMENTS.map((environment) => deploymentOf(environment, configPath)).find((deployment) => deployment.origin === wanted);
 }
 
 /** The whole inventory of the Worker wrangler.jsonc declares for `environment`. */

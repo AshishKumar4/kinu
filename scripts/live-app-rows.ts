@@ -38,9 +38,10 @@ import {
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
+import { evidenceDir } from '@kinu.run/test-utils';
 
 /** Screenshots land beside the other lanes' evidence, outside the worktree. */
-const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'wave2-0917', 'browser');
+const SHOTS = evidenceDir('live-app-rows');
 
 mkdirSync(SHOTS, { recursive: true });
 

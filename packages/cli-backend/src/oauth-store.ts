@@ -5,8 +5,6 @@ import {
   chatgptLoginIssuer,
   CLAUDE_CRED_KEY,
   CLAUDE_LOGIN_ISSUER,
-  JsonObjectSchema,
-  JsonValueSchema,
   MAIN_ACCOUNT,
   accountCredentialKey,
   accountOf,
@@ -23,35 +21,10 @@ import {
   type OAuthCredential,
   type SubscriptionIssuer,
 } from '@kinu.run/core';
-import * as v from 'valibot';
-import { readFileSync } from 'node:fs';
-import { tolerate } from '@kinu.run/core/obs';
 import { registrationOf, revokeSession } from '../../pc-agent/src/chatgpt.js';
-import { withConfigLock } from './config-lock';
-import { writeSecretFile } from './secret-file';
+import { readConfigFile, updateConfigFile, type KinuConfig, type LocalOAuthSession } from './config-file';
 
-const storedLoginSchema = v.object({
-  accessToken: v.optional(v.string()),
-  refreshToken: v.optional(v.string()),
-  expiresAt: v.optional(v.number()),
-  metadata: v.optional(JsonObjectSchema),
-});
-
-type StoredLogin = v.InferOutput<typeof storedLoginSchema>;
-
-const storedIssuerSchema = v.object({
-  ...storedLoginSchema.entries,
-  accounts: v.optional(v.record(v.string(), storedLoginSchema)),
-});
-
-const kinuConfigSchema = v.objectWithRest({
-  providers: v.optional(v.objectWithRest({
-    chatgpt: v.optional(storedIssuerSchema),
-    claude: v.optional(storedIssuerSchema),
-  }, JsonValueSchema)),
-}, JsonValueSchema);
-
-type KinuConfigFile = v.InferOutput<typeof kinuConfigSchema>;
+type StoredLogin = LocalOAuthSession;
 
 interface OAuthIssuer {
   readonly section: 'chatgpt' | 'claude';
@@ -108,7 +81,7 @@ function renewable(login: { readonly accessToken?: string; readonly refreshToken
 export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof fetch } = {}): LocalOAuthStore {
   return {
     keys(): string[] {
-      const providers = readConfig(configPath).providers;
+      const providers = readConfigFile(configPath).providers;
 
       return [...ISSUERS].flatMap(([base, issuer]) => {
         const stored = providers?.[issuer.section];
@@ -119,12 +92,12 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
     },
 
     has(key: string): boolean {
-      return renewable(readCredential(configPath, key));
+      return renewable(credentialIn(readConfigFile(configPath), key));
     },
 
     async getAuth(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
       const issuer = issuerOf(key);
-      const credential = readCredential(configPath, key);
+      const credential = credentialIn(readConfigFile(configPath), key);
 
       if (!credential?.accessToken) return null;
       const rejected = authOpts?.rejected;
@@ -138,7 +111,7 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
     },
 
     async save(key: string, credential: OAuthCredential): Promise<void> {
-      await withConfigLock(configPath, () => { writeLogin(configPath, key, credentialToConfig(credential)); });
+      await updateConfigFile(configPath, (config) => { replaceLogin(config, key, credentialToConfig(credential)); });
     },
   };
 }
@@ -154,8 +127,8 @@ function renewUnderLock(
 ): Promise<LoginRenewal> {
   const issuer = issuerOf(key);
 
-  return withConfigLock(configPath, async (): Promise<LoginRenewal> => {
-    const latest = readCredential(configPath, key);
+  return updateConfigFile(configPath, async (config): Promise<LoginRenewal> => {
+    const latest = credentialIn(config, key);
 
     if (latest?.refreshToken === undefined) return 'revoked';
 
@@ -163,8 +136,8 @@ function renewUnderLock(
     const renewal = await rotateLogin(key, `refreshing the ${issuer.section} login`, () => issuer.renewal.refresh(latest, fetchFn));
 
     // A spent refresh token is retired, so no later call submits it again and the login reads as signed out.
-    if (renewal === 'revoked') writeLogin(configPath, key, signedOutLogin(issuer, latest.metadata));
-    else if (!('failed' in renewal)) writeLogin(configPath, key, credentialToConfig(renewal));
+    if (renewal === 'revoked') replaceLogin(config, key, signedOutLogin(issuer, latest.metadata));
+    else if (!('failed' in renewal)) replaceLogin(config, key, credentialToConfig(renewal));
 
     return renewal;
   });
@@ -193,8 +166,8 @@ export function signOutChatGptLogin(configPath: string, account: string, opts: {
   const key = accountCredentialKey(CHATGPT_CRED_KEY, account);
   const issuer = issuerOf(key);
 
-  return withConfigLock(configPath, async (): Promise<ChatGptSignOut> => {
-    const login = readLogin(configPath, key);
+  return updateConfigFile(configPath, async (config): Promise<ChatGptSignOut> => {
+    const login = loginIn(config, key);
 
     if (login === undefined) return { removed: false };
     const registration = registrationOf(login.metadata);
@@ -203,17 +176,16 @@ export function signOutChatGptLogin(configPath: string, account: string, opts: {
       ? undefined
       : await revokeSession({ clientId: registration.clientId, refreshToken: login.refreshToken, ...(opts.fetch !== undefined && { fetch: opts.fetch }) });
 
-    writeLogin(configPath, key, signedOutLogin(issuer, login.metadata));
+    replaceLogin(config, key, signedOutLogin(issuer, login.metadata));
 
     return { removed: login.accessToken !== undefined || login.refreshToken !== undefined, ...(revocation !== undefined && { unconfirmed: revocation.unconfirmed }) };
   });
 }
 
-/** Replaces one login, or removes it (null); the section's other logins and keys stay as they were. */
-function writeLogin(configPath: string, key: string, login: StoredLogin | null): void {
+/** Replaces one login in `config`, or removes it (null); the section's other logins and keys stay as they were. */
+function replaceLogin(config: KinuConfig, key: string, login: StoredLogin | null): void {
   const { section } = issuerOf(key);
   const account = accountOf(key);
-  const config = readConfig(configPath);
   const stored = config.providers?.[section] ?? {};
   const { accessToken: _access, refreshToken: _refresh, expiresAt: _expires, metadata: _metadata, accounts, ...rest } = stored;
 
@@ -225,18 +197,18 @@ function writeLogin(configPath: string, key: string, login: StoredLogin | null):
 
   const { [section]: _replaced, ...providers } = config.providers ?? {};
 
-  writeConfig(configPath, { ...config, providers: Object.keys(next).length === 0 ? providers : { ...providers, [section]: next } });
+  config.providers = Object.keys(next).length === 0 ? providers : { ...providers, [section]: next };
 }
 
-function readLogin(configPath: string, key: string): StoredLogin | undefined {
+function loginIn(config: KinuConfig, key: string): StoredLogin | undefined {
   const account = accountOf(key);
-  const stored = readConfig(configPath).providers?.[issuerOf(key).section];
+  const stored = config.providers?.[issuerOf(key).section];
 
   return account === MAIN_ACCOUNT ? stored : stored?.accounts?.[account];
 }
 
-function readCredential(configPath: string, key: string): OAuthCredential | null {
-  const login = readLogin(configPath, key);
+function credentialIn(config: KinuConfig, key: string): OAuthCredential | null {
+  const login = loginIn(config, key);
 
   if (!login?.accessToken) return null;
 
@@ -258,15 +230,3 @@ function credentialToConfig(credential: OAuthCredential): StoredLogin {
   };
 }
 
-/** `{}` when absent; a parse failure propagates so `save` cannot wipe other credentials. */
-function readConfig(configPath: string): KinuConfigFile {
-  const raw = tolerate(() => readFileSync(configPath, 'utf-8'), 'enoent');
-
-  if (raw === undefined) return {};
-
-  return v.parse(kinuConfigSchema, JSON.parse(raw));
-}
-
-function writeConfig(configPath: string, config: KinuConfigFile): void {
-  writeSecretFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-}

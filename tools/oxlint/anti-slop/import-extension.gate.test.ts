@@ -26,11 +26,12 @@ import { dirname, join, relative, resolve } from "node:path";
 import { isParseable, isRawNodeModule, readMatching, trackedFiles } from "../../../scripts/sources.ts";
 import { moduleSpecifiers, parse } from "../../../scripts/syntax.ts";
 import { lintJson, type LintDiagnostic } from "./shared/oxlint-json.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
 
 const repoRoot = process.cwd();
 
 const RULE = "require-runtime-import-extension";
-const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
+const config = readLintConfig(repoRoot);
 const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 const manifest = JSON.parse(
   readFileSync(join(repoRoot, "tools/oxlint/anti-slop/upstream.json"), "utf8"),

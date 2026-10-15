@@ -13,7 +13,7 @@
  */
 
 import { tolerate } from '@kinu.run/core/obs';
-import { currentOwner, ownerAlive, ProcessOwnerSchema, type ProcessOwner } from '../../process-owner';
+import { currentOwner, ownerAlive, ProcessOwnerSchema, type ProcessOwner } from './process-owner';
 import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import * as v from 'valibot';

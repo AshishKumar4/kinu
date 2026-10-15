@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-15",
-  "files": 3298,
-  "functions": 86358,
+  "files": 3316,
+  "functions": 86795,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -62,10 +62,6 @@
       "complexity": 36
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 35
-    },
-    {
       "key": "scripts/bench-external.ts#readHarborTrial",
       "complexity": 35
     },
@@ -75,10 +71,6 @@
     },
     {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
-      "complexity": 34
-    },
-    {
-      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
       "complexity": 34
     },
     {
@@ -139,10 +131,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
       "complexity": 30
     },
     {
@@ -211,10 +199,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
-      "complexity": 28
-    },
-    {
-      "key": "packages/cli/src/config.ts#resolveLLMConfig",
       "complexity": 28
     },
     {
@@ -323,10 +307,6 @@
     },
     {
       "key": "evals/src/sight.ts#look",
-      "complexity": 26
-    },
-    {
-      "key": "packages/cf-backend/src/components/ProfileCatalogSettings.tsx#ProfileCatalogSettings",
       "complexity": 26
     },
     {

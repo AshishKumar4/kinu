@@ -9,7 +9,7 @@ export type Load<Value> =
   | { phase: 'loading' }
   | { phase: 'settled'; answer: ControlAnswer<Value> };
 
-export interface ControlRead<Value> {
+interface ControlRead<Value> {
   load: Load<Value>;
   reload: () => void;
 }
@@ -171,12 +171,3 @@ export function when(at: number | null | undefined): string {
   return new Date(at).toLocaleString();
 }
 
-export function bytes(count: number | null): string {
-  if (count === null) return '—';
-
-  if (count < 1024) return `${String(count)} B`;
-
-  if (count < 1024 * 1024) return `${(count / 1024).toFixed(1)} KB`;
-
-  return `${(count / (1024 * 1024)).toFixed(1)} MB`;
-}

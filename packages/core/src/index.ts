@@ -436,7 +436,7 @@ export {
   type OverflowRecoveryDecision,
 } from './turn-failure';
 
-export { createVercelAILLM, createChatModel } from './llm';
+export { createChatModel } from './llm';
 
 // Surfaces import this instead of retyping the number.
 export { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
@@ -1311,7 +1311,6 @@ export {
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
   buildModelCallEvent,
-  unpricedLedgerSink,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -1527,10 +1526,10 @@ export {
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, initDeviceConsentRequestsTable, DEVICE_CONSENT_DENIED,
-  DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
-  type DeviceConsentDecision, type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest,
-  type PendingDeviceConsent, type PendingConsentRow, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, type DeviceConsentOutcome,
+  DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
+  type DeviceConsentAnswer, type DeviceActionSummary, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
+  type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
 } from './safety/device-consent';
 
 export {
@@ -2172,7 +2171,7 @@ export {
   type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';
 
-export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
+export { clockTime, fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { ownedStream, relayedAnswer } from './utils/relayed-answer';
 
@@ -2606,6 +2605,9 @@ export {
   type PcIngressEnv,
   handlePcConnect,
   handlePcConnectTicket,
+  handlePcJoin,
+  deviceJoinTicketUser,
+  DEVICE_JOIN_TICKET_PREFIX,
   handlePcUpdateRefused,
 } from './http/pc-ingress';
 

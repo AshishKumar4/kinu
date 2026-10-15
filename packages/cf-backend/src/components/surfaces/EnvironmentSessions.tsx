@@ -17,7 +17,7 @@ const SESSIONS_EVERY_MS = 3_000;
 export type SessionTone = "working" | "ready" | "danger" | "off" | "attention";
 
 /** A session's state: its dot's tone and its word. */
-export interface SessionReading { readonly tone: SessionTone; readonly word: string }
+interface SessionReading { readonly tone: SessionTone; readonly word: string }
 
 /** Waiting for an answer, running, done, failed, or not open. */
 export function sessionTone(session: TerminalSession): SessionReading {

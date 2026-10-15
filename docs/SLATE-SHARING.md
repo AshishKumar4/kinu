@@ -74,7 +74,11 @@ browsers and fetches (the agent's `web.screenshot` and rendered fetch, its and
 the owner's slates' programs' `fetch` of their own preview, a slate picture's
 capture) carry a five-minute pass that names the workspace, not a person. A
 share's viewer's calls and programs never carry it: a preview's slate runs as
-the owner, past any grant. Holding the URL alone opens nothing, so a preview needs no
+the owner, past any grant. On the local dev server (`vite dev`) the preview zone is
+`*.preview.localhost`, a name only the machine resolves, and every visit there is
+the workspace's own, as the dev identity's loopback is; its app is
+`http://localhost`, another site, so no cookie would be kept in its frames.
+Holding the URL alone opens nothing, so a preview needs no
 revocation of its own; to stop it, unexpose the port. A shared slate is opened
 by others only through its share (§5): the consent page for credentialed shares,
 the per-viewer request bound, the per-share daily spend bound and the audit row.

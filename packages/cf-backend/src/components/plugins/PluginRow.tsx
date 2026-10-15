@@ -1,6 +1,6 @@
 /** An endpoint URL is never the row's second line; the catalog description is. */
 import type { ComponentType, ReactNode } from "react";
-import { Status, type StatusTone } from "@/components/ui/Status";
+import type { StatusTone } from "@/components/ui/Status";
 
 export interface PluginStatus {
   readonly label: string;
@@ -17,12 +17,6 @@ export function PluginTile({ icon: Icon }: { icon: ComponentType<{ size?: number
 }
 
 export const PLUGIN_ACTION = "flex size-8 shrink-0 items-center justify-center rounded-lg p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text disabled:opacity-40 disabled:hover:bg-transparent";
-
-export const PLUGIN_PILL = "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 p-t-status p-text-3";
-
-export function PluginStatePill({ status }: { status: PluginStatus }) {
-  return <Status tone={status.tone}>{status.label}</Status>;
-}
 
 export function PluginRow({ tile, name, description, trailing, source, state, below }: {
   tile: ReactNode;

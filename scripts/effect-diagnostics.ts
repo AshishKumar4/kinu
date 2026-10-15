@@ -17,6 +17,8 @@ import * as v from 'valibot';
 
 import { assertMeasured, finding } from './gate-ratchet';
 import { isParseable, readMatching } from './sources';
+import { moduleSpecifiers, parse } from './syntax';
+import { checkedProjects } from './typecheck-coverage';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -59,19 +61,18 @@ function diagnose(project: Project): Report {
   return v.parse(ReportSchema, JSON.parse(run.stdout));
 }
 
-/** The projects `bun run typecheck` compiles, from its own `-p` arguments. */
-export function typecheckedProjects(manifest: string): readonly Project[] {
-  const script = v.parse(v.object({ scripts: v.object({ typecheck: v.string() }) }), JSON.parse(manifest)).scripts.typecheck;
+/** A project as `checkedProjects` names it, read the way `tsc -p` reads it: a config, or a directory holding one. */
+function projectOf(argument: string): Project {
+  return argument.endsWith('.json')
+    ? { config: argument, directory: argument.slice(0, argument.lastIndexOf('/')) }
+    : { config: `${argument}/tsconfig.json`, directory: argument };
+}
 
-  return [...script.matchAll(/(?:^|\s)-p\s+(\S+)/gu)].flatMap((match) => {
-    const argument = match[1] ?? '';
-
-    if (argument.length === 0) return [];
-
-    return argument.endsWith('.json')
-      ? [{ config: argument, directory: argument.slice(0, argument.lastIndexOf('/')) }]
-      : [{ config: `${argument}/tsconfig.json`, directory: argument }];
-  });
+/** Whether a file imports `effect` or a subpath. The text match keeps the parse to candidates; the parse keeps an
+ *  import spelled inside a string, a lint rule's fixture, from selecting a project the service then reads for nothing. */
+function importsEffect(file: string, text: string): boolean {
+  return /\bfrom ['"]effect(?:\/[^'"]*)?['"]/u.test(text)
+    && moduleSpecifiers(parse(file, text).root).some((specifier) => specifier === 'effect' || specifier.startsWith('effect/'));
 }
 
 /**
@@ -82,7 +83,7 @@ export function projectsImportingEffect(projects: readonly Project[], sources: R
   const selected = new Set<Project>();
 
   for (const [file, text] of sources) {
-    if (file.startsWith(`${FIXTURE}/`) || !/\bfrom ['"]effect(?:\/[^'"]*)?['"]/u.test(text)) continue;
+    if (file.startsWith(`${FIXTURE}/`) || !importsEffect(file, text)) continue;
 
     const owner = projects
       .filter(({ directory }) => file.startsWith(`${directory}/`))
@@ -107,7 +108,8 @@ function plantedLine(): number {
 export const BLIND_SPOTS: readonly string[] = [
   'WARNING AND SUGGESTION DIAGNOSTICS — NOT ENFORCED. Only error severity fails the gate; the pinned '
   + 'version\'s defaults decide which rules are errors, and the red half pins floatingEffect alone.',
-  'A PROJECT OUTSIDE `bun run typecheck` — NOT CHECKED. Projects come from that script\'s `-p` list.',
+  'A PROJECT `bun run check` DOES NOT COMPILE — NOT CHECKED. Projects come from `checkedProjects`, the list '
+  + '`gate:typecheck-coverage` holds to every tsconfig.',
   'A PROJECT THAT OVERRIDES `plugins` — NOT CHECKED. Every checked project must report files checked, '
   + 'so an override that silences one is red, but a project with no `effect` import is not run at all.',
 ];
@@ -130,7 +132,7 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  const projects = projectsImportingEffect(typecheckedProjects(readFileSync(`${root}package.json`, 'utf8')), readMatching(isParseable));
+  const projects = projectsImportingEffect(checkedProjects().map(projectOf), readMatching(isParseable));
   const findings: string[] = [];
   let checked = 0;
 

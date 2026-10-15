@@ -21,7 +21,7 @@ const SocketMessageSchema = v.variant("type", [
 export type SocketFrame = v.InferOutput<typeof SocketMessageSchema>;
 
 /** Which actor a pane speaks for: the workspace's own, or one hosted agent once its id is known. */
-export interface PaneIdentity {
+interface PaneIdentity {
   readonly isSubordinate: boolean;
   readonly ownActorId: string | null;
 }

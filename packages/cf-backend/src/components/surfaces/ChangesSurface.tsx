@@ -3,7 +3,8 @@ import { detach } from '@kinu.run/core/obs';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged, oneAtATime, pickDefaultExecutor, workspacePath, WORKSPACE_ROOT, type ChangeNotesResult, type ChangeSet, type ExecutorDiffResult, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";
 import { lazyRoute } from "@/lazy-route";
 import type { NotesStore } from "./changes/notes-provider";
@@ -26,7 +27,7 @@ function changeSetOf(source: string, result: ExecutorDiffResult): ChangeSet {
 }
 
 function answered(call: () => Promise<ChangeNotesResult>): Effect.Effect<ChangeNotesResult> {
-  return Effect.catchCause(Effect.promise(call), (failed) => Effect.succeed({ ok: false, error: describeError({ cause: Cause.squash(failed) }) }));
+  return Effect.catchCause(Effect.promise(call), (failed) => Effect.succeed({ ok: false, error: readFailureText({ cause: Cause.squash(failed) }) }));
 }
 
 function notesStore(rpc: WorkspaceRpc, source: string, current: () => ChangeSet | undefined): NotesStore {
@@ -224,7 +225,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
     }), (failed) => Effect.sync(() => {
       const cause = Cause.squash(failed);
       setReviewed(null);
-      setFailure(`Could not mark reviewed: ${describeError({ cause })}`);
+      setFailure(`Could not mark reviewed: ${readFailureText({ cause })}`);
     }));
   });
 
@@ -234,7 +235,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
 
     const refusal = yield* Effect.catchCause(
       Effect.map(Effect.promise(() => rpc("restoreWorkspaceBaseline", [])), (restored) => (restored.ok ? null : restored.error)),
-      (failed) => Effect.succeed(describeError({ cause: Cause.squash(failed) })),
+      (failed) => Effect.succeed(readFailureText({ cause: Cause.squash(failed) })),
     );
 
     if (refusal !== null) {

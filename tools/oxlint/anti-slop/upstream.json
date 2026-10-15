@@ -451,6 +451,9 @@
     "shared/lexical-type-parameters.ts": {
       "upstream": "1ae0aa3ec245f1dc43c4bbbd8be1e2e4230e5dc389d1ca4e8de8f51b62ceff29"
     },
+    "shared/lint-config.ts": {
+      "kinuOnly": true
+    },
     "shared/oxlint-json.ts": {
       "kinuOnly": true
     },

@@ -23,14 +23,17 @@ fi
 # The live consent the test preload asks for before a suite may read
 # KINU_ORIGIN (scripts/test-scratch-home.ts); these rows drive a deployment.
 export KINU_EVAL_LIVE=1
-export KINU_ORIGIN="${KINU_ORIGIN:-$(bun -e "import { EVAL_DEPLOYMENT_ORIGIN } from '@kinu.run/test-utils'; console.log(EVAL_DEPLOYMENT_ORIGIN)")}"
 
-# Each deployment's secret arrives in its own variable (evalWebIdentityEnv).
-IDENTITY_ENV="$(bun -e "import { evalWebIdentityEnv } from '@kinu.run/test-utils'; console.log(evalWebIdentityEnv(process.argv[1]))" "$KINU_ORIGIN")" \
-  && [[ -n "$IDENTITY_ENV" ]] \
-  || { echo "product-flows: cannot name the variable holding $KINU_ORIGIN's DEV_IDENTITY_SECRET." >&2; exit 1; }
+# The deployment, as KINU_EVAL_ORIGIN names it or the one default, and the variable its secret arrives in.
+mapfile -t TARGET <<< "$(bun scripts/eval-target.ts)"
+if [[ ${#TARGET[@]} -ne 2 ]]; then
+  echo "product-flows: no deployment to drive (scripts/eval-target.ts said why)." >&2
+  exit 1
+fi
+export KINU_EVAL_ORIGIN="${TARGET[0]}"
+IDENTITY_ENV="${TARGET[1]}"
 if [[ -z "${!IDENTITY_ENV:-}" ]]; then
-  echo "product-flows: $IDENTITY_ENV is not set, so the browser has no authority at $KINU_ORIGIN." >&2
+  echo "product-flows: $IDENTITY_ENV is not set, so the browser has no authority at $KINU_EVAL_ORIGIN." >&2
   echo "  Its value is that deployment's DEV_IDENTITY_SECRET, sent as x-kinu-dev-identity on every request." >&2
   exit 1
 fi
@@ -41,10 +44,12 @@ fi
 export KINU_EVAL_ACCOUNT=scripted
 bun scripts/eval-session-mint.ts || exit 1
 mapfile -t RESOLVED <<< "$(bun scripts/eval-credentials.ts)"
-if [[ ${#RESOLVED[@]} -ne 2 || "${RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
-  echo "product-flows: no CLI bearer for the $KINU_EVAL_ACCOUNT eval account at $KINU_ORIGIN." >&2
+if [[ ${#RESOLVED[@]} -ne 2 || "${RESOLVED[0]}" != "$KINU_EVAL_ORIGIN" ]]; then
+  echo "product-flows: no CLI bearer for the $KINU_EVAL_ACCOUNT eval account at $KINU_EVAL_ORIGIN." >&2
   exit 1
 fi
+# What the flows (tests/browser/product-flows.test.ts) and the CLI read: the origin eval-credentials resolved.
+export KINU_ORIGIN="${RESOLVED[0]}"
 KINU_EVAL_BACKEND=cloud KINU_TOKEN="${RESOLVED[1]}" bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$KINU_EVAL_ACCOUNT" || exit 1
 
 echo "── product flows ─────────────────────────────────────────"

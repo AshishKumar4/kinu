@@ -439,7 +439,7 @@ describe('what a hostname says about its own route', () => {
   const url = 'https://probe.kinu.run/api/health';
 
   test('a health stamp is this Worker; a 5xx is wired and unwell', () => {
-    expect(routeAnswer(url, 200, { build: { sha: 'abc' } }).state).toBe('present');
+    expect(routeAnswer(url, 200, { build: { version: '0.2.0+abc', sha: 'abc', builtAt: '2026-10-14T00:00:00.000Z' } }).state).toBe('present');
     expect(routeAnswer(url, 503, {}).state).toBe('unknown');
   });
 

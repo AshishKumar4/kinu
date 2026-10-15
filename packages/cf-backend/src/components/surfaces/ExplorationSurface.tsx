@@ -12,7 +12,8 @@ import {
 import { isRateLimitedTurnError, shownHeadStatus } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
-import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
+import { NodeTranscript, statusTone } from "@/components/NodeTranscript";
+import { StatusDot, type StatusTone } from "@/components/ui/Status";
 import type { HeadDeltas } from "@kinu.run/core";
 import { cleanNodeLabel, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { explorationForkTree, type MctsRow } from "@kinu.run/core";
@@ -129,16 +130,12 @@ export function ExplorationSurface({
   );
 }
 
-/**
- * `running` uses the pulsing accent as elsewhere in the product; in light mode
- * `--c-warning` is indistinguishable from `--c-text-3`.
- */
-const RUN_DOT = {
-  running: "p-dot-accent",
-  completed: "p-dot-success",
-  failed: "p-dot-danger",
-  partial: "p-dot-neutral",
-} satisfies Record<ForkRunSummary["status"], string>;
+const RUN_TONE = {
+  running: "live",
+  completed: "success",
+  failed: "danger",
+  partial: "neutral",
+} satisfies Record<ForkRunSummary["status"], StatusTone>;
 
 /**
  * The run's current state in one line, shared by the list, detail pane and band caption
@@ -180,7 +177,7 @@ function ForkRunRow(
     <button type="button" onClick={onSelect} aria-current={selected ? "true" : undefined}
       data-fork-run={run.id}
       className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 transition-colors ${selected ? "p-fill" : "p-card-hover"}`}>
-      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "p-dot-pulse" : ""}`} />
+      <StatusDot className="mt-1" tone={RUN_TONE[run.status]} />
       <div className="min-w-0 flex-1">
         <div className="p-row-text p-text truncate" title={run.task}>
           {run.name}
@@ -316,7 +313,7 @@ function RunDetailView({
   return (
     <div className="h-full min-h-0 flex flex-col rounded-xl border p-border p-surface overflow-hidden">
       <div className="shrink-0 flex items-start gap-2 border-b p-border px-3 py-2">
-        <span className={`mt-1.5 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "p-dot-pulse" : ""}`} />
+        <StatusDot className="mt-1.5" tone={RUN_TONE[run.status]} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5 min-w-0">
             <span className="p-row-text font-medium p-text truncate" title={run.task}>{run.name}</span>
@@ -497,7 +494,8 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   return (
     <button type="button" onClick={onOpen} data-run-node={node.id}
       className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
-      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : statusDot(shownHeadStatus(node.status, node.errorMessage))} ${live && moving ? "p-dot-pulse" : ""}`} />
+      <StatusDot className="mt-1" tone={rateLimited ? "warning" : statusTone(shownHeadStatus(node.status, node.errorMessage))}
+        {...(moving && { title: "Working now" })} />
       <div className="min-w-0 flex-1">
         <div className="p-row-text p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}

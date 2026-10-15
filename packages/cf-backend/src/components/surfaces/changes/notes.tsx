@@ -92,7 +92,7 @@ function spanOf(anchor: DiffAnchor, line: number, length: number): [number, numb
   return [Math.min(start, length), Math.min(end, length)];
 }
 
-export interface LineAt {
+interface LineAt {
   readonly path: string;
   readonly side: DiffSide;
   readonly line: number | null;

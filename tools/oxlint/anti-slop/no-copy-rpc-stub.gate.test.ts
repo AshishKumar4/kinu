@@ -10,23 +10,18 @@
 // The green fixture is the correction the four sites actually took — HOLD the stub in a typed
 // binding — so the gate proves there is a reachable green state and not merely a red one.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readSources } from "../../../scripts/sources.ts";
+import { readLintConfig } from "./shared/lint-config.ts";
+import { lintJson, type LintDiagnostic, type LintReport } from "./shared/oxlint-json.ts";
 
 const repoRoot = process.cwd();
 
 /** `oxlint -f json`. `code` is spelled `anti-slop(no-copy-rpc-stub)`. */
-type Diagnostic = { readonly code?: string; readonly filename?: string };
-type LintReport = {
-  readonly diagnostics: readonly Diagnostic[];
-  readonly number_of_files: number;
-  readonly number_of_rules: number;
-};
 
 /**
  * `resolveEgressInjection`'s vault view exactly as egress/outbound.ts stood when production
@@ -74,7 +69,7 @@ ${HISTORICAL_VAULT_VIEW}  return await vaultView.resolveEgressInjection!(host);
   },
 ];
 
-const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
+const config = readLintConfig(repoRoot);
 const manifest = JSON.parse(
   readFileSync(join(repoRoot, "tools/oxlint/anti-slop/upstream.json"), "utf8"),
 );
@@ -193,37 +188,19 @@ try {
     writeFileSync(join(goodDirectory, `${rule}.ts`), good);
   }
 
-  const lint = (directory: string): LintReport => {
-    const run = spawnSync(
-      "./node_modules/.bin/oxlint",
-      ["-c", ".oxlintrc.json", "-f", "json", directory],
-      { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-    );
-    assert.ok(run.stdout.length > 0, `oxlint produced no JSON for ${directory}:\n${run.stderr}`);
-    const report: LintReport = JSON.parse(run.stdout);
-    assert.equal(
-      report.number_of_files,
-      cases.length,
-      `oxlint linted ${report.number_of_files} of ${cases.length} fixtures in ${directory}; a run that skipped a fixture proves nothing about it`,
-    );
-    assert.ok(
-      report.number_of_rules > 0,
-      `oxlint ran ${report.number_of_rules} rules; a lint with no rules loaded reports no findings`,
-    );
-    return report;
-  };
+  const lint = (directory: string): LintReport => lintJson(["-c", ".oxlintrc.json", directory], { cwd: repoRoot, expectedFiles: cases.length });
 
   // The other anti-slop rules also run over these fixtures; their findings are not this gate's
   // subject.
-  const ruleOf = (diagnostic: Diagnostic): string | null => {
+  const ruleOf = (diagnostic: LintDiagnostic): string | null => {
     const match = /^anti-slop\(([a-z-]+)\)$/u.exec(diagnostic.code ?? "");
     const rule = match?.[1];
     return rule !== undefined && cases.some((entry) => entry.rule === rule) ? rule : null;
   };
   const firedIn = (
-    diagnostics: ReadonlyArray<Diagnostic>,
+    diagnostics: ReadonlyArray<LintDiagnostic>,
     rule: string,
-  ): ReadonlyArray<Diagnostic> =>
+  ): ReadonlyArray<LintDiagnostic> =>
     diagnostics.filter((d) => ruleOf(d) === rule && (d.filename ?? "").endsWith(`${rule}.ts`));
 
   const red = lint(badDirectory).diagnostics;

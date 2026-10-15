@@ -511,6 +511,33 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(await readText(files, shown)).toBe(`${'x'.repeat(600_000)}END`);
     await tunnel.rpc(DEVICE_METHOD.execAck, [requestId]);
   });
+
+  // 2026-10-14, the owner's machine: a sandboxed terminal's bwrap was told to report on a descriptor only a command's
+  // supervisor holds, so it exited before the shell started, and the Env tab showed a cursor and nothing else.
+  test('a sandboxed terminal opens a shell that answers what is typed into it', async () => {
+    const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    startDaemon(home, await releaseSigningEnv());
+    await served.sockets.until((hellos) => hellos[0] !== undefined);
+    const socket = present(served.sockets.items[0], 'the HELLO');
+    const proved = v.parse(ProvedHelloSchema, socket.hello);
+
+    if (proved.sandbox.capability !== 'sandboxed') return;
+    const session = 'rpc-terminal00-1';
+    const sandbox = { tier: 'sandboxed' as const, agentHome: join(proved.agentRoot, 'ws-terminal', 'home'), roots: [scratchDir('daemon-terminal')] };
+    socket.send({ id: session, method: DEVICE_METHOD.ptyOpen, params: [80, 24], sandbox });
+    expect(v.parse(ReplySchema, await socket.waitForReply(session)).error).toBeUndefined();
+    socket.send({ type: DEVICE_FRAMES.ptyInput, session, data: Buffer.from('echo $((6 * 7))\r').toString('base64') });
+
+    const ofSession = (type: string) => socket.frames.items.filter((frame) => frame.type === type && frame.session === session);
+    const shown = () => ofSession(DEVICE_FRAMES.ptyOutput).map((frame) => Buffer.from(String(frame.data), 'base64').toString()).join('');
+    // The shell answers, or its terminal ends: a sandbox that never started the shell ends it at once.
+    await socket.frames.until(() => /\b42\b/.test(shown()) || ofSession(DEVICE_FRAMES.ptyExit).length > 0);
+
+    expect({ answered: /\b42\b/.test(shown()), ended: ofSession(DEVICE_FRAMES.ptyExit) }).toEqual({ answered: true, ended: [] });
+    socket.send({ id: 'rpc-terminal00-2', method: DEVICE_METHOD.cancel, params: [session] });
+    await socket.waitForReply('rpc-terminal00-2');
+  });
 });
 
 // What a dropped socket left running could answer no one, and nothing could name, stop or observe it again.
@@ -626,7 +653,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     const proc = Bun.spawn({
       cmd: [process.execPath, '-e', `
         import { daemonStatus } from './packages/cli/src/device-connect.ts';
-        console.log(JSON.stringify(daemonStatus()));
+        console.log(JSON.stringify(await daemonStatus()));
       `],
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },
@@ -651,7 +678,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     const proc = Bun.spawn({
       cmd: [process.execPath, '-e', `
         import { daemonStatus } from './packages/cli/src/device-connect.ts';
-        console.log(JSON.stringify(daemonStatus()));
+        console.log(JSON.stringify(await daemonStatus()));
       `],
       cwd: repoRoot,
       env: { ...process.env, KINU_HOME: home },

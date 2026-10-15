@@ -23,9 +23,9 @@ import {
   localWorkspaceMembers,
   placeLocalWorkspace,
   requireAuthConfig,
-  requireLLMConfig,
+  requireModelDefaults,
   resolveAgentRef,
-  resolveLLMConfig,
+  resolveModelDefaults,
   upsertAgentConfig,
   validateWorkspaceId,
   type AgentMode,
@@ -93,7 +93,7 @@ export function isCloudAuthConfigured(): boolean {
 export function isLocalModelConfigured(): boolean {
   try {
     // An OpenAI-compatible endpoint counts before it names a model.
-    return resolveLLMConfig({ defaultModel: readDefaultTier()?.model }) !== null
+    return resolveModelDefaults({ defaultModel: readDefaultTier()?.model }).spec !== null
       || loadConfigFile().providers?.openaiCompat?.default !== undefined;
   } catch (error) {
     // Only the half-set-override diagnostic means "not usable yet".
@@ -146,7 +146,8 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   // Read before the workspace exists, so it reports who this agent JOINS.
   const peers = localWorkspaceMembers(workspaceId, cwd).map((peer) => peer.name);
   const tier = input.model === undefined ? await ensureDefaultTier() : readDefaultTier();
-  const llmConfig = requireLLMConfig({ ...input, defaultModel: tier?.model });
+  // A workspace no model could serve is refused before it is made.
+  requireModelDefaults({ ...input, defaultModel: tier?.model });
   mkdirSync(agentDir(name), { recursive: true });
 
   // Built under a partial name and published by the rename (as `kinu import` does). `agent.db` existing is what
@@ -158,7 +159,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   try {
     db.exec('PRAGMA journal_mode = WAL');
     // The slug (`workspace_identity.name`) addresses the workspace; the title heads SOUL.md and MEMORY.md.
-    const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig, home: workspaceHome(db) });
+    const rt = await createWorkspace(db, { name, title: displayName, purpose, home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = rt.actor.config;
 

@@ -24,7 +24,7 @@ async function reopenableWorkspace(label: string) {
   const runtimes = new Map<string, CLIRuntime>();
 
   try {
-    await createWorkspace(seed, { name: 'root', purpose: 'Recover retained work.', llm, home: workspaceHome(seed) });
+    await createWorkspace(seed, { name: 'root', purpose: 'Recover retained work.', home: workspaceHome(seed) });
   } finally {
     seed.close();
   }

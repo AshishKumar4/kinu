@@ -20,7 +20,6 @@ test("the opening carries the snapshot and every list the first screen draws, ea
     ...snapshot,
     pendingActions: await agent.listPendingActions(),
     backgroundJobs: await agent.listBackgroundJobs(WORK_TAB_JOBS),
-    workspaceWork: await agent.listWorkspaceWork(),
     inspectedWork: await agent.inspectWork(),
     subordinates: { value: await agent.listSubordinates() },
     pendingConsents: { value: await agent.listPendingConsents() },

@@ -17,6 +17,7 @@ import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { StatusDot } from "@/components/ui/Status";
 import type { AgentSurfaceProps } from "./AgentSurface";
 import type { ExplorationSurfaceProps } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
@@ -74,7 +75,7 @@ const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
 const slateId = (surface: SurfaceKind | null): string | null =>
   surface?.startsWith(SLATE_PREFIX) === true ? surface.slice(SLATE_PREFIX.length) : null;
 
-export interface WorkSurfaceProps {
+interface WorkSurfaceProps {
   surface: SurfaceKind;
   previewFocus?: string | null;
   planFocus?: string | null;
@@ -111,8 +112,8 @@ export interface WorkSurfaceProps {
   inspectedWork: readonly InspectedWork[];
   onRefreshJobs: () => void;
   pendingActions: PendingAction[];
-  /** Called after a decision so the decided row leaves on click, not on the next poll. */
-  onRefreshQueue?: () => void;
+  /** Opens an ask's card in the chat's attention stack, where Work's parked commands and proposals are decided. */
+  onOpenAsk?: (key: string) => void | Promise<void>;
   onChangelogSeen?: () => void;
   slates?: readonly SlateSummary[];
   slateReloads?: ReadonlyMap<string, number>;
@@ -277,7 +278,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             aria-label={`Preview ready: ${chip.title}`}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated @[28rem]:px-2.5"
           >
-            <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden="true" />
+            <StatusDot tone="live" />
             {/* A narrow column keeps the pulse and gives its words to the pages; the name is the control's either way. */}
             <span className="hidden @[28rem]:inline">Preview ready</span>
           </button>
@@ -293,7 +294,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               onOpenPlan={planPages.show}
               onReviewActor={props.onReviewActor}
               pendingActions={props.pendingActions}
-              onRefreshQueue={props.onRefreshQueue}
+              {...(props.onOpenAsk !== undefined && { onOpenAsk: props.onOpenAsk })}
               backgroundJobs={props.backgroundJobs}
               inspectedWork={props.inspectedWork}
               onRefreshJobs={props.onRefreshJobs}
@@ -350,7 +351,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           onCount={setChangeCount} />
       </div>
       <ListingStatus error={props.previewError} starting={props.previewStarting} onRetry={props.onRefreshPorts} />
-      {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
+      {connecting && <ConnectDeviceDialog workspace={props.workspace} onClose={closeConnect} />}
     </div>
   );
 }

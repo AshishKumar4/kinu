@@ -6,10 +6,10 @@ import { Data, Effect } from 'effect';
 import { settleSync } from '@kinu.run/core/obs';
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
-  CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink,
+  CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink, RunEventRecorder,
 } from '@kinu.run/core';
 import { tool } from 'ai';
-import { codemodeInputSchema, WORKSPACE_ROOT, cloudPlanes } from '@kinu.run/core';
+import { buildModelCallEvent, codemodeInputSchema, WORKSPACE_ROOT, WORKSPACE_RUN_ID, cloudPlanes } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
 import { createTestActors } from './actors';
 import {
@@ -47,6 +47,11 @@ const refuse = (capability: string, option: string): never => {
 
 /** A spend sink for a suite that observes no spend: each report is dropped. */
 export const unobservedSpend: ModelCallSink = () => undefined;
+
+/** A spend sink filing each report into `events`' workspace ledger, unpriced, as a session's sink files it. */
+export function unpricedLedger(events: Pick<RunEventRecorder, 'emit'>): ModelCallSink {
+  return (report) => { events.emit(WORKSPACE_RUN_ID, buildModelCallEvent(report, { effectiveSpec: null, pricing: null })); };
+}
 
 /**
  * A search backend's seams for a suite that observes none of them: spend is dropped, and a node's code or

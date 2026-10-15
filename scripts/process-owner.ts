@@ -2,7 +2,7 @@
  * One process named across time: the boot, the pid and the pid's start time. A reused pid or a
  * reboot reads as a process that has ended, so whatever a process leaves behind is judged by
  * whether its owner still runs, never by its age. The bench teardown manifests
- * (`fixtures/storage-matrix/cleanup.ts`) and the test scratch homes judge their owners with it.
+ * (`bench-teardown.ts`) and the test scratch homes judge their owners with it.
  */
 import { tolerate } from '@kinu.run/core/obs';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';

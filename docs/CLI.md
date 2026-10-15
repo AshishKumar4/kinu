@@ -582,6 +582,8 @@ Connect this PC so your agents can run commands on it.
 | --- | --- |
 | `--label <name>` | Name for this device (default: the hostname); skips the name prompt |
 | `--device <id>` | The device a browser issued for this machine, from its connect command |
+| `--join <ticket>` | The ticket a browser's connect command carries: joins this machine with no sign-in here |
+| `--root <dir>` | The folder your agents' file calls are scoped to (default: your home directory) |
 
 ```bash
 kinu connect --label studio

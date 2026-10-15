@@ -23,8 +23,10 @@ export interface WorkspaceInfo {
 }
 
 interface CLIOpenOptions {
-  /** Default endpoint for bare ids; null when nothing derives one. */
+  /** An endpoint this process was given (`--base-url` and `--auth`), served as itself; null without one. */
   llm: LLMProviderConfig | null;
+  /** The model a bare id or no choice means; absent, the given endpoint's own. */
+  defaultSpec?: string | null;
   providerCredentials?: ProviderCredentialSource;
   oauthStore?: LocalOAuthStore;
   /** The signed-in session, whose worker rates turns. */
@@ -38,9 +40,10 @@ export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;
 
 interface OpenedWorkspaceIdentity { readonly id: string; readonly name: string; readonly created_at: number }
 
+/** `name` is the one the user addresses the workspace by, which a refusal to open it names. */
 export function openWorkspaceCLI(
   db: Database,
-  dbPath: string,
+  name: string,
   config: CLIOpenConfig,
 ): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
   return settle(Effect.gen(function* () {
@@ -53,7 +56,7 @@ export function openWorkspaceCLI(
       initActorStateSchema(makeWorkspaceSchemaSql(db));
       identity = { id: config.actorBinding.reference.actorId, name: config.actorBinding.name, created_at: config.actorBinding.createdAt };
     } else {
-      requireSchemaGenesis(db, dbPath);
+      requireSchemaGenesis(db, name);
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
       const stored = sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
 
@@ -65,24 +68,34 @@ export function openWorkspaceCLI(
     yield* Effect.promise(() => localActorScaffoldSource({ actor: rt.actor, sql: rt.storage.sql,
       source: { path: rt.identity.scaffold.path, vfs: rt.agentStateVfs } }));
 
-    // The status fold every backend shares, scoped to `rt.actor` (a facet opens as its own actor), over the workspace's
-    // SOUL.md in its own space: its agents edit it, and may have emptied it.
-    const { purpose, soul, scaffoldVersion, searchNodeCount } = agentStatusFacts(sql, rt.actor, soulIn(rt.space), identity.name);
-
-    const memorySize = yield* Effect.promise(async () => memoryBytes(rt.agentStateVfs));
-
-    return {
-      rt,
-      info: {
-        id: identity.id,
-        name: identity.name,
-        purpose,
-        soul,
-        scaffoldVersion,
-        searchNodeCount,
-        memorySize,
-        createdAt: identity.created_at,
-      },
-    };
+    return { rt, info: yield* Effect.promise(() => workspaceInfo(rt, identity)) };
   }));
+}
+
+/** An opened root workspace's status, read now. */
+export function readWorkspaceInfo(rt: CLIRuntime): Promise<WorkspaceInfo> {
+  return settle(Effect.gen(function* () {
+    const identity = rt.storage.sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
+
+    if (!identity) return yield* new KinuError('missing', 'The workspace has no durable identity.');
+
+    return yield* Effect.promise(() => workspaceInfo(rt, identity));
+  }));
+}
+
+/** The status fold every backend shares, scoped to `rt.actor` (a facet opens as its own actor), over the workspace's
+ *  SOUL.md in its own space: its agents edit it, and may have emptied it. */
+async function workspaceInfo(rt: CLIRuntime, identity: OpenedWorkspaceIdentity): Promise<WorkspaceInfo> {
+  const { purpose, soul, scaffoldVersion, searchNodeCount } = agentStatusFacts(rt.storage.sql, rt.actor, soulIn(rt.space), identity.name);
+
+  return {
+    id: identity.id,
+    name: identity.name,
+    purpose,
+    soul,
+    scaffoldVersion,
+    searchNodeCount,
+    memorySize: await memoryBytes(rt.agentStateVfs),
+    createdAt: identity.created_at,
+  };
 }

@@ -4,8 +4,9 @@ import { join } from 'node:path';
 
 import { scratchDir } from '@kinu.run/test-utils';
 
-import { findMovable, withoutComments } from './capability-parity';
+import { findMovable } from './capability-parity';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
+import { projectsImportingEffect } from './effect-diagnostics';
 import {
   auditInterception, declaredSandboxClasses, nativeRoutingReasons, readInterceptionSources,
 } from './egress-interception';
@@ -200,15 +201,19 @@ describe('capability parity gate', () => {
     // and more than one means an edge is counted twice.
     expect(edges).toBe(1);
   });
+});
 
-  test('a tsconfig with comments is read, because tsconfig is JSONC', () => {
-    // Measured: one `//` line added to packages/cf-backend/tsconfig.json took
-    // eight tests in this file down with `Unrecognized token '/'`, and not one
-    // failure name mentioned tsconfig. The alias table is only reachable
-    // through that parse, so the failure mode is total.
-    expect(withoutComments('{ // note\n "a": "http://x", /* b */ "c": "\\"//\\"" }'))
-      .toBe('{ \n "a": "http://x",  "c": "\\"//\\"" }');
-    expect(JSON.parse(withoutComments('{ // note\n "a": 1 }\n'))).toEqual({ a: 1 });
+describe('effect diagnostics gate', () => {
+  test('a project is selected by an import of effect, never by a string that spells one', () => {
+    // A lint rule's fixture spells the import inside a string; the service would read its project for nothing.
+    const projects = [{ config: 'a/tsconfig.json', directory: 'a' }, { config: 'b/tsconfig.json', directory: 'b' }];
+
+    const selected = projectsImportingEffect(projects, new Map([
+      ['a/x.ts', "import { Effect } from 'effect';\nexport const x = Effect.void;\n"],
+      ['b/rule.test.ts', 'export const code = "import { Effect } from \'effect\'; export const p = Effect.void;";\n'],
+    ]));
+
+    expect(selected.map((project) => project.config)).toEqual(['a/tsconfig.json']);
   });
 });
 

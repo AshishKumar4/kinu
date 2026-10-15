@@ -915,7 +915,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 
     const holderOn = (db: Database, pid: number): JobHolder => processJobHolder(
       { sql: makeSql(db), execRaw: makeExecRaw(db), transactionSync: (write) => db.transaction(write).immediate() },
-      { pid, isAlive: (candidate) => alive.has(candidate) },
+      { pid, generation: '', isAlive: (holder) => alive.has(holder.pid) },
     );
 
     const racer = (db: Database, pid: number, name: string, holder = holderOn(db, pid)) => {

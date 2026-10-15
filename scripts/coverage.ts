@@ -3,9 +3,8 @@
  * Coverage over the UNION of suites the repo's runners claim, not a hand-picked
  * subset.
  *
- * `bash scripts/test.sh --coverage` exists but measures one command's own
- * selection: core + cf-backend + cli-backend + cli in a single `bun test`.
- * Measured 2026-09-01 in this worktree, that is 8,655 tests across 600 files in
+ * One `bun test` over core + cf-backend + cli-backend + cli measures that
+ * command's own selection. Measured 2026-09-01, that is 8,655 tests across 600 files in
  * 339 s and a single merged text table — no agent-utils, no devbox, no
  * compaction, no pc-agent, no scripts gates, no root `tests/`, no workerd
  * layer. A number that names itself "coverage" while missing most of the
@@ -49,7 +48,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { trackedTestFiles, bunWouldSkip } from './ladder';
-import { isAntiSlopRuleSuite, isBunDiscoverableSuite, isPythonSuite, isVitestEvalSuite } from './sources';
+import { isAntiSlopRuleSuite, isBunDiscoverableSuite, isPythonSuite, isVitestEvalSuite, packageOf } from './sources';
 import { parseLcov, mergeLcov } from './coverage-lcov';
 import type { LcovRecord } from './coverage-lcov';
 
@@ -104,10 +103,7 @@ function bunGroups(): SuiteGroup[] {
   const buckets = new Map<string, string[]>();
 
   for (const suite of allBunSuites()) {
-    let owner = 'tests';
-
-    if (suite.startsWith('packages/')) owner = suite.split('/')[1] ?? 'packages';
-    else if (suite.startsWith('scripts/')) owner = 'scripts';
+    const owner = packageOf(suite);
 
     // ONE exception to owner-grouping, and it is measured rather than stylistic.
     // `bun test --coverage` over all 62 `packages/cli` suites dies with
@@ -242,16 +238,6 @@ function reanchor(record: LcovRecord, vitestRoot: string): LcovRecord {
   if (record.file.startsWith('/') || record.file.includes('..')) return record;
 
   return { ...record, file: `${vitestRoot}/${record.file}` };
-}
-
-/** Per-record package attribution: the first path segment under packages/, or
- *  `scripts` / `tests` for the root suites. */
-function packageOf(file: string): string {
-  if (file.startsWith('packages/')) return file.split('/')[1] ?? 'packages';
-
-  if (file.startsWith('scripts/')) return 'scripts';
-
-  return 'tests';
 }
 
 interface FileCoverage {

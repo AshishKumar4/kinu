@@ -18,7 +18,7 @@ export interface PlacedEvent {
   readonly draw: (count: number) => ReactNode;
 }
 
-export interface EventPlacement {
+interface EventPlacement {
   /** The events that go before the message at an index of the thread. */
   readonly before: ReadonlyMap<number, ReactNode>;
   /** The events that came after every message. */

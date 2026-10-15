@@ -16,9 +16,10 @@ import {
   formatBytes, joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry,
 } from "@kinu.run/core";
 import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
-import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
+import { executorLabel, timeAgo, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useMounts } from "@/hooks/use-mounts";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { useUploads } from "@/hooks/use-uploads";
@@ -53,21 +54,6 @@ const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
 
 
 
-function fmtWhen(mtimeMs: number | undefined): string {
-  if (!mtimeMs) return "";
-  const delta = Date.now() - mtimeMs;
-
-  if (delta < 60e3) return "just now";
-
-  if (delta < 36e5) return `${Math.round(delta / 60e3)}m ago`;
-
-  if (delta < 864e5) return `${Math.round(delta / 36e5)}h ago`;
-
-  if (delta < 30 * 864e5) return `${Math.round(delta / 864e5)}d ago`;
-
-  return new Date(mtimeMs).toLocaleDateString();
-}
-
 export interface FilesSurfaceProps {
   rpc: WorkspaceRpc;
   executors: ExecutorInfo[];
@@ -100,8 +86,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const loadMounts = useCallback(() => rpc("listMounts", []), [rpc]);
-  const { resource: mountsResource, reload: reloadMounts } = useAsyncResource(loadMounts);
+  const { resource: mountsResource, reload: reloadMounts } = useMounts(rpc, executors);
   const mounts = lastValue(mountsResource) ?? [];
 
   const listDir = useCallback((dir: string): Promise<{ path: string; entries: DirEntry[] }> => settle(Effect.gen(function* () {
@@ -589,7 +574,8 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
 }) {
   const meta = [
     entry.type === "file" && entry.size != null ? formatBytes(entry.size) : null,
-    fmtWhen(entry.mtimeMs) || null,
+    // The app's one wording for an age, as Work and the stack say it.
+    entry.mtimeMs ? timeAgo(entry.mtimeMs) : null,
   ].filter(Boolean).join(" · ");
 
   return (

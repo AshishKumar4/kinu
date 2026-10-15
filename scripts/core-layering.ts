@@ -18,7 +18,8 @@
  */
 
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
-import { collapsePath, IMPORT_CANDIDATES, parse, walk } from './syntax';
+import { resolveSpecifier } from './import-graph';
+import { parse, walk } from './syntax';
 import type { Parsed, SyntaxNode } from './syntax';
 import { isDocument, isParseable, isTestFile, readMatching } from './sources';
 
@@ -81,22 +82,6 @@ export function edgesOf(parsed: Parsed): Edge[] {
   return edges;
 }
 
-/** A relative specifier resolved inside core, or undefined for anything that
- *  leaves the package. A relative edge naming no corpus file is FATAL: a
- *  dropped edge shrinks the graph in silence. */
-function resolveLocal(specifier: string, from: string, universe: ReadonlySet<string>): string | undefined {
-  if (!specifier.startsWith('.')) return undefined;
-  const base = collapsePath(`${from.slice(0, from.lastIndexOf('/'))}/${specifier}`);
-
-  for (const suffix of IMPORT_CANDIDATES) {
-    const candidate = `${base}${suffix}`;
-
-    if (universe.has(candidate)) return candidate;
-  }
-
-  throw new Error(`${GATE}: ${from} imports ${specifier}, which names no file in the corpus`);
-}
-
 export interface Violation {
   readonly from: string;
   readonly to: string;
@@ -115,10 +100,17 @@ export function findViolations(sources: ReadonlyMap<string, string>): Violation[
     const fromLayer = layerOf(file);
 
     for (const edge of edgesOf(parse(file, text))) {
-      const to = resolveLocal(edge.specifier, file, universe);
+      // Only a relative edge stays inside core, which declares no aliases.
+      if (!edge.specifier.startsWith('.')) continue;
+      const resolved = resolveSpecifier({ specifier: edge.specifier, from: file, universe, workspace: new Map(), aliases: [], strict: true });
 
-      if (to === undefined || layerOf(to) <= fromLayer) continue;
-      violations.push({ from: file, to, line: edge.line, typeOnly: edge.typeOnly });
+      // A relative edge naming no corpus file is FATAL: a dropped edge shrinks the graph in silence.
+      if (resolved.kind !== 'file' && resolved.kind !== 'asset') {
+        throw new Error(`${GATE}: ${file} imports ${edge.specifier}, which names no file in the corpus`);
+      }
+
+      if (layerOf(resolved.path) <= fromLayer) continue;
+      violations.push({ from: file, to: resolved.path, line: edge.line, typeOnly: edge.typeOnly });
     }
   }
 

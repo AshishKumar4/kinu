@@ -1,6 +1,6 @@
 /** `/pc/*`: the device tunnel's own auth (core `http/pc-ingress.ts`). */
 import { Hono } from 'hono';
-import { DEVICE_CONNECT_PATH, handlePcConnect, handlePcConnectTicket, handlePcUpdateRefused, type PcIngressEnv } from '@kinu.run/core';
+import { DEVICE_CONNECT_PATH, handlePcConnect, handlePcConnectTicket, handlePcJoin, handlePcUpdateRefused, type PcIngressEnv } from '@kinu.run/core';
 import { beneath, type FamilyEnv } from './api/context';
 
 export const pcRoutes = new Hono<FamilyEnv<PcIngressEnv<unknown>, object>>();
@@ -8,6 +8,10 @@ export const pcRoutes = new Hono<FamilyEnv<PcIngressEnv<unknown>, object>>();
 pcRoutes.post('/pc/connect-ticket', async (c) => handlePcConnectTicket(c.req.raw, c.env));
 
 pcRoutes.all('/pc/connect-ticket', async () => new Response('Method not allowed', { status: 405 }));
+
+pcRoutes.post('/pc/join', async (c) => handlePcJoin(c.req.raw, c.env));
+
+pcRoutes.all('/pc/join', async () => new Response('Method not allowed', { status: 405 }));
 
 pcRoutes.post('/pc/update-refused', async (c) => handlePcUpdateRefused(c.req.raw, c.env));
 

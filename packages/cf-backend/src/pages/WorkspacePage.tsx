@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  desktopClientUrl, executorLabel, ownerAsks, planSurface,
+  ownerAsks, planSurface,
 } from "@kinu.run/core";
 import type { OwedOwnerIntent, PlanReview, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
@@ -25,7 +25,8 @@ import { useFileDrop } from "@/hooks/use-file-drop";
 import { useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
 import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
 import { touchWorkspace } from "@/lib/user-api";
-import { describeError, useAsyncResource } from "@/hooks/use-async-resource";
+import { useAsyncResource } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { TurnRevert } from "@/components/RevertTurnDialog";
@@ -39,7 +40,6 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, turnRows } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
-import { DesktopScreen } from "@/components/surfaces/DesktopScreen";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
 import { SLATE_PREFIX, agentTitle, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
@@ -575,14 +575,6 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
 
-  if (view === "desktop") {
-    return (
-      <div className="flex min-h-0 flex-1 bg-black">
-        <DesktopScreen src={desktopClientUrl(location, workspace)} title={`${executorLabel("computer")}'s desktop`} />
-      </div>
-    );
-  }
-
   return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
     plan={state.activePlan} arrival={state.workspacePlanArrival}
     lineage={state.status?.forkLineage ?? null} agents={agents} open={open} />;
@@ -648,7 +640,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   }, []);
 
   const sideFailed = useCallback((source: SideSource) => (failed: Cause.Cause<unknown>) => Effect.sync(() => {
-    reportSide(source, describeError({ cause: Cause.squash(failed) }));
+    reportSide(source, readFailureText({ cause: Cause.squash(failed) }));
   }), [reportSide]);
 
   const reviewed = useReviewedPlan(subName, { plan: state.activePlan, rpc: state.rpc });
@@ -689,6 +681,17 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   // The workspace agent's questions, for each call's record in the transcript.
   const asked = useMemo(() => askedBy(state.ownerQuestions, null), [state.ownerQuestions]);
 
+  // The card the stack shows first: a Work row opens its ask here, on the workspace's own chat, which stacks them all.
+  const [askFocus, setAskFocus] = useState<string | null>(null);
+
+  // On an agent's chat, the workspace's own chat is opened: its stack holds every ask.
+  const openAsk = useCallback(async (key: string): Promise<void> => {
+    setAskFocus(key);
+
+    if (subName !== undefined) await navigate(`/workspace/${encodeURIComponent(agentId ?? "")}`);
+    workbench.current?.showChat();
+  }, [subName, navigate, agentId, workbench]);
+
   const attentionCalls = useMemo((): Omit<AttentionStackProps, "asks"> => ({
     rpc: workspaceRpc,
     owedIntents: state.owedIntents,
@@ -696,7 +699,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     onDecided: refreshPendingActions,
     onReview: (plan) => show(planSurface(plan)),
     decideMemory: decideAccountProposal,
-  }), [workspaceRpc, state.owedIntents, resolveConsent, refreshPendingActions, show, decideAccountProposal]);
+    focus: { chosen: askFocus, choose: setAskFocus },
+  }), [workspaceRpc, state.owedIntents, resolveConsent, refreshPendingActions, show, decideAccountProposal, askFocus]);
 
   const mainPane = `${agentId ?? ""}/main`;
   const ui = useConversationUiState(mainPane);
@@ -981,7 +985,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             inspectedWork={state.inspectedWork}
             onRefreshJobs={(...args: Parameters<typeof state.refreshBackgroundJobs>) => detach(Effect.promise(async () => state.refreshBackgroundJobs(...args)))}
             pendingActions={state.pendingActions}
-            onRefreshQueue={(...args: Parameters<typeof state.refreshPendingActions>) => detach(Effect.promise(async () => state.refreshPendingActions(...args)))}
+            onOpenAsk={openAsk}
             onChangelogSeen={state.clearChangelogUnseen}
             slates={state.slates}
             slateReloads={state.slateReloads}

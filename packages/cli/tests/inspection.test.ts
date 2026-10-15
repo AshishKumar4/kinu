@@ -10,15 +10,12 @@ import * as v from "valibot";
 import { describe, expect, test } from "bun:test";
 import {
   initWorkspaceSchema, MEMORY_PATH, openWorkspaceMainActor,
-  type LLMProviderConfig, type SpendSource, type Usage,
+  type SpendSource, type Usage,
 } from "@kinu.run/core";
 import { createWorkspace } from "@kinu.run/core/workspace-birth";
 import { makeSql, makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
 
 /** The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
-const DUMMY_LLM: LLMProviderConfig = {
-  name: "fake", baseURL: "http://localhost:0", headers: {}, model: "fake-model",
-};
 
 function newProjectDir(): string {
   const dir = scratchDir("test-project");
@@ -105,7 +102,7 @@ async function createLocalAgent(home: string, name: string): Promise<string> {
   const db = workspaceDatabase(join(dir, "agent.db"));
 
   try {
-    const rt = await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM, home: workspaceHome(db) });
+    const rt = await createWorkspace(db, { name, purpose: "Test purpose", home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     // `search_nodes` and `agent_log` are actor-private: seed under the main actor `createWorkspace` issued;
     // rows under any other id are silently invisible to `kinu swarm` and `kinu events`.

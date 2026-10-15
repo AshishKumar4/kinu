@@ -130,7 +130,7 @@ async function makeSandbox(options: SandboxOptions = {}): Promise<InstallSandbox
     '#!/bin/sh',
     'if [ "$1" = "--help" ]; then printf "  setup   connect your account\\n"; exit 0; fi',
     'if [ "$1" = "setup" ]; then echo "STUB-SETUP-RAN"; exit 0; fi',
-    'if [ "$1" = "connect" ]; then echo "STUB-CONNECT-RAN $*"; exit 0; fi',
+    'if [ "$1" = "connect" ]; then echo "STUB-CONNECT-RAN $* origin=$KINU_ORIGIN"; exit 0; fi',
     'exit 0',
   ].join('\n');
 
@@ -314,6 +314,26 @@ describe('install.sh terminal handling', () => {
     expect(run.exitCode, run.stderr).toBe(0);
     expect(run.stdout).toContain("STUB-CONNECT-RAN connect --label Ashish's Mac");
     expect(run.stdout).not.toContain('STUB-SETUP-RAN');
+  });
+
+  test("a browser's connect command hands kinu connect its device, its ticket and the deployment that served it", async () => {
+    const script = await servedScript('/install.sh');
+    const { home, stubBin } = await makeSandbox();
+    const ticket = `pjt_${'0'.repeat(32)}_${'t'.repeat(43)}`;
+
+    const install = buildCliInstallCommand({
+      origin: ORIGIN, setup: false, connect: true, device: 'dev-issued', join: ticket,
+    });
+
+    writeFileSync(join(home, 'install.sh'), script);
+
+    const run = await runToExit(['bash', '-c', install], {
+      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
+    });
+
+    expect(run.exitCode, run.stderr).toBe(0);
+    // Not the CLI's default origin: the machine joins the deployment whose command it ran.
+    expect(run.stdout).toContain(`STUB-CONNECT-RAN connect --device dev-issued --join ${ticket} origin=${ORIGIN}`);
   });
 
   test('a CLI that dies in raw mode leaves the terminal sane after the served script exits', async () => {

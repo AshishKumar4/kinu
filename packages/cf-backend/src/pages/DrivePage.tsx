@@ -545,7 +545,20 @@ function ownsNothing(contents: MineContents): boolean {
  * A place with nothing in it goes back to My stuff. A first visit to the Drive lands on Slates when there is one, else
  * on what is shared when My stuff holds nothing of its own.
  */
-function landing(tab: DriveTab, firstVisit: boolean, nothingOwned: boolean, library: SharedLibrary | null): ReactNode {
+/** Where the page is at: its place, whether it is a first visit to the Drive's root, and what its reads have said. */
+interface Arrival {
+  readonly tab: DriveTab;
+  readonly firstVisit: boolean;
+  /** The listing and the library have both answered. */
+  readonly settled: boolean;
+  readonly nothingOwned: boolean;
+  readonly library: SharedLibrary | null;
+}
+
+function landing({ tab, firstVisit, settled, nothingOwned, library }: Arrival): ReactNode {
+  // A first visit waits to know where it lands: My stuff is never drawn for a moment before Slates replaces it.
+  if (tab === "mine" && firstVisit && !settled) return <div className="flex h-full items-center justify-center" data-drive-landing><Loader size="base" /></div>;
+
   if (library === null) return null;
   const places = placesOf(library);
 
@@ -828,7 +841,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const contents = mineContents(path, lastValue(listing.resource)?.entries ?? []);
   const settled = [listing.resource, library.resource].every((resource) => resource.status !== "loading");
   const inSkills = path === DRIVE_SKILLS_DIR;
-  const redirect = landing(tab, isRoot && !v.safeParse(ChosenState, location.state).success, settled && ownsNothing(contents), shared);
+  const firstVisit = isRoot && !v.safeParse(ChosenState, location.state).success;
+
+  const redirect = landing({ tab, firstVisit, settled, nothingOwned: ownsNothing(contents), library: shared });
 
   if (redirect !== null) return redirect;
 

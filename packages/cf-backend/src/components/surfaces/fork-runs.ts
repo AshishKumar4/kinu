@@ -111,7 +111,7 @@ export function useLiveForkRuns(
   return { resource, reload, runs: lastValue(resource)?.items ?? null, hasActiveWork };
 }
 
-export interface ExplorationCanvasInput {
+interface ExplorationCanvasInput {
   rpc: WorkspaceRpc;
   isStreaming: boolean;
   backgroundJobs: readonly BackgroundJob[];

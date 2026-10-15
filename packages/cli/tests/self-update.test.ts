@@ -2,14 +2,15 @@
  * Only the origin is faked: archives are real tar.gz files and the staged `cli.js` runs under this Bun.
  * Env-dependent paths (KINU_HOME) run in subprocesses.
  */
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Server } from 'bun';
 import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { scratchDir, runToExit } from '@kinu.run/test-utils';
 import { generateReleaseSigningKey, signRelease, type JsonObject } from '@kinu.run/core';
+import { encodeLockOwner } from '../../cli-backend/src/config-lock';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -190,6 +191,21 @@ describe('refreshCliTree stages, verifies and swaps', () => {
     expect(readFileSync(join(home, 'cli', 'prev', 'cli.js'), 'utf-8')).toBe(before);
     expect(cliEntries(home)).toEqual(['current', 'prev']);
     expect(stub.hits.filter((hit) => hit === PLATFORM_ARTIFACT)).toHaveLength(1);
+  });
+
+  // The refresh lock named its holder by pid alone, so a pid the system had since given another process kept every
+  // later refresh out. The machine's lock names the process generation: a holder gone by that test is taken over.
+  test('a refresh lock whose pid now names another process is taken over, and the build lands', async () => {
+    const stub = startOrigin({ platform: await tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
+    const home = installedHome('1.0.0+old');
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
+
+    // A live pid, this test's own, under a start that was never its.
+    symlinkSync(encodeLockOwner({ version: 'v1', platform, token: randomUUID(), pid: process.pid, identity: 'another-start' }), join(home, 'cli', '.refresh.lock'));
+
+    expect(await refresh(home, stub.origin)).toBeNull();
+    expect(currentCli(home)).toBe(cliSource(SERVED));
+    expect(cliEntries(home)).toEqual(['current', 'prev']);
   });
 
   test('an unsigned manifest, or one signed by another key, downloads nothing (C1)', async () => {

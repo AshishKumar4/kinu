@@ -734,11 +734,11 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
 }
 
 export interface ApprovalStackVerdict {
-  /** The stack's cards once both commands parked: the open one first, then those behind it. */
+  /** The asks once both commands parked, newest first, as the parked card lists them. */
   readonly stacked: readonly string[];
-  /** What the open card showed before any answer. */
+  /** What the parked card showed before any answer. */
   readonly openWords: string;
-  /** The stack's cards once the open one was approved. */
+  /** The flow's asks once the newer was approved alone. */
   readonly afterFirst: readonly string[];
   /** What the chat showed once both answers reached the agent: each as its event, and the agent's reply to each. */
   readonly heard: { readonly approvedEvent: boolean; readonly deniedEvent: boolean; readonly approvedReply: boolean; readonly deniedReply: boolean };
@@ -753,22 +753,38 @@ const STACK_KEYS = `(() => {
   return [...open, ...behind];
 })()`;
 
-/** Presses the open card's answer named `words`. */
-function stackAnswer(words: string, key: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}] button`)})].find((button) => button.textContent?.trim() === ${JSON.stringify(words)})?.click()`;
+/**
+ * Opens the flow's own card, then presses its answer named `words`, in one page task: the account's other runs raise
+ * cards too (account memory reaches every workspace), and one created meanwhile takes the front of a stack no pointer
+ * is on, so a card opened in one step can be behind by the next.
+ */
+function answerOwnCard(key: string, words: string): string {
+  return `(() => {
+    const open = () => document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)});
+
+    if (open() === null) document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
+    const button = [...(open()?.querySelectorAll('button') ?? [])].find((each) => each.textContent?.trim() === ${JSON.stringify(words)});
+
+    button?.click();
+
+    return button !== undefined;
+  })()`;
 }
 
-async function openStackCard(page: Page, key: string): Promise<void> {
-  await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click()`);
-  await until(page, 'the flow\'s own card open', `document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)}) !== null`);
+/** Presses `words` on the flow's own card, opening it first if another took the front, until the press lands. */
+async function answerStackCard(page: Page, key: string, words: string): Promise<void> {
+  await until(page, `the flow's own card answered ${words}`, answerOwnCard(key, words));
 }
 
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
 
+/** The parked commands the flow's batch card lists, newest first, as their asks' keys. */
+const PARKED_ROWS = `[...document.querySelectorAll('[data-attention-card] [data-parked-command]')].map((row) => 'action:' + row.getAttribute('data-parked-command'))`;
+
 /**
- * Row: one turn parks two commands for its owner. They wait as a stack docked to the composer, the newer open;
- * approving it opens the other, denying that clears the stack, and each answer reaches the agent: its wake shows in
- * the chat as the event it is, and the agent answers each.
+ * Row: one turn parks two commands for its owner. They wait together on one card docked to the composer, the newer
+ * first; the newer approved alone, the other is its own card, and denying it clears the stack. Each answer reaches the
+ * agent: its wake shows in the chat as the event it is, and the agent answers each.
  */
 export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<ApprovalStackVerdict> {
   const workspace = await createFlowWorkspace(target, 'approvals');
@@ -777,23 +793,26 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
     await sendAndSettle(page, APPROVALS_ASK);
-    // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account.
-    const actions = `${STACK_KEYS}.filter((key) => key.startsWith('action:'))`;
+    // Actions belong to this fresh workspace; account-memory cards belong to every workspace of the account. The
+    // flow's card is opened first if another took the front.
+    await until(page, "both of the flow's parked commands on one card", `(() => {
+      if (${PARKED_ROWS}.length === 2) return true;
+      ${STACK_KEYS}.filter((key) => key.startsWith('action:')).forEach((key) => document.querySelector('[data-attention-behind="' + key + '"]')?.click());
 
-    await until(page, 'both of the flow\'s parked commands stacked', `${actions}.length === 2`);
-    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(actions));
-
-    await openStackCard(page, stacked[0]);
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(stacked[0])}]`)})?.textContent ?? ''`));
+      return false;
+    })()`);
+    const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(PARKED_ROWS));
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-attention-card]')?.textContent ?? ''`));
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
-    await page.evaluate(stackAnswer('Approve', stacked[0]));
-    await until(page, 'the flow\'s other card remains', `${remaining}.length === 1`);
+    // The older unticked, the newer approved alone.
+    await page.click(`[data-attention-card] [data-parked-command="${stacked[1].slice('action:'.length)}"] input`);
+    await answerStackCard(page, stacked[0], 'Approve 1');
+    await until(page, "the flow's other card remains", `${remaining}.length === 1`);
     const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
 
-    await openStackCard(page, stacked[1]);
-    await page.evaluate(stackAnswer('Deny', stacked[1]));
-    await until(page, 'the flow\'s own stack cleared', `${remaining}.length === 0`);
+    await answerStackCard(page, stacked[1], 'Deny');
+    await until(page, "the flow's own stack cleared", `${remaining}.length === 0`);
     await until(page, 'both answers in the chat and heard by the agent', `${CHAT_TEXT}.includes('You approved') && ${CHAT_TEXT}.includes('You denied')`
       + ` && /${DECISION_HEARD}[^]*approved/u.test(${CHAT_TEXT}) && /${DECISION_HEARD}[^]*denied/u.test(${CHAT_TEXT})`);
     const said = v.parse(v.string(), await page.evaluate(CHAT_TEXT));
@@ -862,7 +881,8 @@ export interface WorkspaceProposalVerdict {
   readonly created: { readonly name: string; readonly displayName: string } | null;
 }
 
-const PROPOSAL_CARD = '#inspector [data-workspace-proposal]';
+/** The proposal's card in the chat's attention stack, where Work's row for it opens it. */
+const PROPOSAL_CARD = '#chat [data-workspace-proposal]';
 
 /** A button in the proposal card, by its words. */
 function proposalButton(words: string): string {
@@ -870,8 +890,9 @@ function proposalButton(words: string): string {
 }
 
 /**
- * Row: the workspace's main agent proposes a new workspace, the owner approves it once in Work → Needs you, and it
- * exists under the owner's account with the proposed name, while the agent that asked is woken with its link.
+ * Row: the workspace's main agent proposes a new workspace, Work → Needs you lists it, its row opens its card in the
+ * chat's attention stack, the owner approves it there once, and it exists under the owner's account with the proposed
+ * name, while the agent that asked is woken with its link.
  */
 export async function agentProposesAWorkspace(target: FlowTarget): Promise<WorkspaceProposalVerdict> {
   const workspace = await createFlowWorkspace(target, 'proposal');
@@ -883,7 +904,9 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
     await sendAndSettle(page, WORKSPACE_PROPOSAL_ASK);
     await openInspector(page);
     await page.evaluate(stripTab('Work'));
-    await until(page, 'the proposal in Work → Needs you', `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
+    await until(page, 'the proposal in Work → Needs you', `document.querySelector('#inspector [data-section="work-needs-you"] [data-pending-action]') !== null`);
+    await page.click('#inspector [data-section="work-needs-you"] [data-pending-action]');
+    await until(page, "the proposal's card in the chat", `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
     const cardTitle = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(PROPOSAL_CARD)})?.textContent ?? ''`));
 
     await page.evaluate(proposalButton('/show its soul/iu'));
@@ -2235,6 +2258,19 @@ async function relisted(page: Page, act: () => Promise<void>, loadsDocument = fa
   return v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 }
 
+/** The Drive place a person's files are in, chosen where it is drawn: the column, or below `lg` the switch. */
+const MY_STUFF_PLACE = `[...document.querySelectorAll('[data-drive-place="mine"], [data-drive-tab="mine"]')].find((place) => place.getClientRects().length > 0)`;
+
+/**
+ * Opens My stuff, where New is: a first visit to the Drive lands on Slates when the account has a slate, as the
+ * approved design does. With My stuff the only place there is no column or switch, and the page is already there.
+ */
+async function openMyStuff(page: Page): Promise<void> {
+  await until(page, 'My stuff or its place', `document.querySelector('[data-drive-new]') !== null || ${MY_STUFF_PLACE} !== undefined`);
+  await page.evaluate(`document.querySelector('[data-drive-new]') === null && ${MY_STUFF_PLACE}?.click()`);
+  await until(page, "My stuff's New", `document.querySelector('[data-drive-new]') !== null`);
+}
+
 /** Name a Drive entry through the page's name dialog: the field opens with
  *  its current value selected, so typing replaces it. */
 async function nameInDialog(page: Page, name: string): Promise<void> {
@@ -2276,6 +2312,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
   try {
     await page.evaluateOnNewDocument(COUNT_DRIVE_LISTINGS);
     await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); }, true);
+    await openMyStuff(page);
     await relisted(page, async () => {
       await page.click('[data-drive-new]');
       await page.click('[data-drive-new-folder]');
@@ -2294,7 +2331,11 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
       await nameInDialog(page, renamed);
     });
 
-    const afterRename = await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
+    await relisted(page, async () => { await page.reload({ waitUntil: 'load' }); }, true);
+    await openMyStuff(page);
+    await painted(page);
+
+    const afterRename = v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 
     // Deleted through the page only where the page lists it; a missed rename is
     // the verdict's finding, and the `finally` below removes what is left.
@@ -2653,6 +2694,127 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
   }
 }
 
+export interface DesktopSwitchVerdict {
+  readonly workspace: string;
+  /** Milliseconds from choosing the terminal until it showed its prompt, and from choosing the desktop until it drew. */
+  readonly terminalAfterMs: number;
+  readonly desktopAfterMs: number;
+  /** Whether the desktop came back in the client it was left in, and the terminal in its own: nothing reopened. */
+  readonly keptDesktop: boolean;
+  readonly keptTerminal: boolean;
+  /** Expanded: the share of the workspace area the desktop spans on the axis it fills (its shape letterboxes the other),
+   *  the sidebar folded, and the client stayed. */
+  readonly expandedFill: number | null;
+  readonly expandedRailFolded: boolean;
+  readonly keptExpanded: boolean;
+  /** Back from expanded: the desktop in the column again, in the client it was left in. */
+  readonly keptReturned: boolean;
+}
+
+/**
+ * The terminal a person sees in the inspector: the one shown, of every one the column keeps open (D99). The first in
+ * the document is the oldest kept out of sight: staging fcc2e05d6's computer-sessions row read it for a new session's.
+ */
+const SHOWN_TERMINAL = `[...document.querySelectorAll('#inspector .xterm-rows')].find((rows) => rows.checkVisibility({ visibilityProperty: true }))`;
+
+/** The shown terminal's screen, where a person clicks to type. */
+const SHOWN_SCREEN = `${SHOWN_TERMINAL}?.closest('.xterm')?.querySelector('.xterm-screen')`;
+
+/** Clicks the shown terminal's screen as a person does, so what is typed next reaches that terminal. */
+async function clickShownTerminal(page: Page): Promise<void> {
+  const middle = v.parse(v.nullable(v.object({ x: v.number(), y: v.number() })), await page.evaluate(`(() => {
+    const box = ${SHOWN_SCREEN}?.getBoundingClientRect();
+    return box === undefined ? null : { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  })()`));
+
+  if (middle === null) throw new Error('no terminal shown to type into');
+  await page.mouse.click(middle.x, middle.y);
+}
+
+/** The desktop's client document, marked so a reopened one is told apart from the one left. */
+const DESKTOP_WINDOW = `document.querySelector('#inspector [data-desktop-frame] iframe')?.contentWindow`;
+
+/**
+ * Row: a computer's terminal and desktop switch without reopening either, and its desktop expands in place.
+ *
+ * Production 71d06f4a9 and f9c17ac7b (the owner, 2026-10-14): each switch between Terminal and Desktop showed a loading
+ * state, because the column dropped what it did not show and opened it again; and the desktop's full screen opened a
+ * new tab drawing a thin strip. The reader opens the desktop, the terminal, the desktop again, then expands it and
+ * comes back, and the row reads whether each came back in the client it was left in, and how long each switch took.
+ */
+export async function computerSwitchKeepsItsScreens(target: FlowTarget): Promise<DesktopSwitchVerdict> {
+  const workspace = await createFlowWorkspace(target, 'desktop-switch');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${workspace}`);
+
+    await openInspector(page);
+    await page.evaluate(stripTab('Environment'));
+    const computer = executorLabel('computer');
+
+    await until(page, 'the computer in the Environment panel', `[...document.querySelectorAll('#inspector button')].some((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)})`);
+    await page.evaluate(`[...document.querySelectorAll('#inspector button')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)}).click()`);
+    const tab = (name: string) => `[...document.querySelectorAll('#inspector [role="tab"]')].find((each) => (each.textContent ?? '').trim() === ${JSON.stringify(name)})`;
+    const shell = `${SESSION_TABS}[0]`;
+
+    await until(page, "the computer's Desktop tab", `${tab('Desktop')} !== undefined && ${shell} !== undefined`);
+    await page.evaluate(`${tab('Desktop')}.click()`);
+    await until(page, "the computer's desktop", DESKTOP_DRAWN);
+    await page.evaluate(`Object.assign(${DESKTOP_WINDOW}, { __kinuLeft: true })`);
+
+    const shellName = v.parse(v.string(), await page.evaluate(shell));
+    let chosen = performance.now();
+
+    await page.evaluate(`${tab(shellName)}.click()`);
+    await until(page, "the shell's prompt", `/[#$]\\s*$/m.test(${SHOWN_TERMINAL}?.textContent ?? '')`);
+    const terminalAfterMs = Math.round(performance.now() - chosen);
+
+    await page.evaluate(`window.__kinuTerminalLeft = ${SHOWN_TERMINAL}`);
+    chosen = performance.now();
+    await page.evaluate(`${tab('Desktop')}.click()`);
+    await until(page, 'the desktop again', DESKTOP_DRAWN);
+    const desktopAfterMs = Math.round(performance.now() - chosen);
+    const keptDesktop = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
+
+    await page.evaluate(`${tab(shellName)}.click()`);
+    await until(page, 'the shell again', `${SHOWN_TERMINAL} !== undefined`);
+    const keptTerminal = v.parse(v.boolean(), await page.evaluate(`${SHOWN_TERMINAL} === window.__kinuTerminalLeft`));
+
+    await page.evaluate(`${tab('Desktop')}.click()`);
+    await until(page, 'the desktop to show', DESKTOP_DRAWN);
+    const expand = `document.querySelector('#inspector [data-desktop-expand]')`;
+    const expandable = v.parse(v.boolean(), await page.evaluate(`${expand} !== null`));
+    let expandedFill: number | null = null;
+    let expandedRailFolded = false;
+    let keptExpanded = false;
+    let keptReturned = false;
+
+    if (expandable) {
+      await page.evaluate(`${expand}.click()`);
+
+      const fill = `(() => {
+        const screen = document.querySelector('#inspector [data-desktop-frame]')?.getBoundingClientRect();
+        const area = document.querySelector('main')?.getBoundingClientRect();
+        return screen === undefined || area === undefined ? 0 : Math.max(screen.width / area.width, screen.height / area.height);
+      })()`;
+
+      await until(page, 'the desktop to fill the workspace', `${fill} > 0.9`);
+      expandedFill = Math.round(v.parse(v.number(), await page.evaluate(fill)) * 100) / 100;
+      expandedRailFolded = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-rail-collapsed]') !== null`));
+      keptExpanded = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
+      await page.evaluate(`document.querySelector('[data-desktop-return]').click()`);
+      await until(page, 'the desktop back in the column', `${fill} < 0.9`);
+      keptReturned = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
+    }
+
+    await page.close();
+
+    return { workspace, terminalAfterMs, desktopAfterMs, keptDesktop, keptTerminal, expandedFill, expandedRailFolded, keptExpanded, keptReturned };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
 export interface AgentJobVerdict {
   readonly workspace: string;
   /** What the job's tab and its details said while it waited, and what its terminal showed once answered. */
@@ -2687,11 +2849,11 @@ export async function agentJobIsAnsweredInItsSession(target: FlowTarget): Promis
     await until(page, 'the job marked as waiting for input', `document.querySelector('#inspector [data-session-waiting]') !== null`);
     const markedWaiting = true;
 
-    await until(page, "the job's prompt on its screen", `(document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('Release to production?')`);
-    await page.click('#inspector .xterm-screen');
+    await until(page, "the job's prompt on its screen", `(${SHOWN_TERMINAL}?.textContent ?? '').includes('Release to production?')`);
+    await clickShownTerminal(page);
     await page.keyboard.type('y');
     await page.keyboard.press('Enter');
-    await until(page, "the job's answer on its screen", `(document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('release answered y')`);
+    await until(page, "the job's answer on its screen", `(${SHOWN_TERMINAL}?.textContent ?? '').includes('release answered y')`);
     await until(page, 'the wait mark gone', `document.querySelector('#inspector [data-session-waiting]') === null`);
     await page.close();
 
@@ -2712,13 +2874,18 @@ export interface SessionsVerdict {
 }
 
 /**
- * The open session's details line under `scope`: its folder and the ports under it. The folder is the one its element
- * names: its text holds the whole path for a wide pane and the last part for a narrow one (staging f1f0b451b).
+ * The shown session's details line under `scope`: its folder and the ports under it. The folder is the one its element
+ * names: its text holds the whole path for a wide pane and the last part for a narrow one (staging f1f0b451b). Only the
+ * shown pane's: the column keeps every opened session's pane mounted out of sight (D99).
  */
-export const sessionLine = (scope: string) => `(() => ({
-  folder: document.querySelector('${scope} [data-session-cwd]')?.getAttribute('data-session-cwd') ?? '',
-  ports: [...document.querySelectorAll('${scope} [data-session-port]')].map((port) => (port.textContent ?? '').trim()),
-}))()`;
+export const sessionLine = (scope: string) => `(() => {
+  const shown = (each) => each.checkVisibility({ visibilityProperty: true });
+
+  return {
+    folder: [...document.querySelectorAll('${scope} [data-session-cwd]')].find(shown)?.getAttribute('data-session-cwd') ?? '',
+    ports: [...document.querySelectorAll('${scope} [data-session-port]')].filter(shown).map((port) => (port.textContent ?? '').trim()),
+  };
+})()`;
 
 const SESSION_LINE = sessionLine('#inspector');
 
@@ -2747,8 +2914,8 @@ export async function computerSessionsComeBackByName(target: FlowTarget): Promis
     await until(page, "the computer's first session", `${SESSION_TABS}.length === 1`);
     await page.click('#inspector button[aria-label="New session"]');
     await until(page, 'a second session, open', `${SESSION_TABS}.length === 2 && document.querySelector('#inspector [role="tab"][aria-selected="true"]')?.textContent?.trim() === ${SESSION_TABS}[1]`);
-    await until(page, "the new session's shell", `document.querySelector('#inspector .xterm-rows') !== null && (document.querySelector('#inspector .xterm-rows')?.textContent ?? '').includes('#')`);
-    await page.click('#inspector .xterm-screen');
+    await until(page, "the new session's shell", `(${SHOWN_TERMINAL}?.textContent ?? '').includes('#')`);
+    await clickShownTerminal(page);
     await page.keyboard.type('mkdir -p /workspace/flow-web && cd /workspace/flow-web && python3 -m http.server 8765');
     await page.keyboard.press('Enter');
     await until(page, "the session's line naming its folder and port", `(() => { const line = ${SESSION_LINE}; return line.folder === '/workspace/flow-web' && line.ports.includes(':8765'); })()`);
@@ -2771,7 +2938,7 @@ export async function computerSessionsComeBackByName(target: FlowTarget): Promis
     await until(page, 'the size choices', `document.querySelector('[role="option"][aria-selected="false"]') !== null`);
     await (await page.$('[role="option"][aria-selected="false"]'))?.click();
     await until(page, 'the computer restarting', `document.querySelector('#inspector .xterm-rows') === null`);
-    await until(page, "the restarted computer's sessions", `${SESSION_TABS}.includes('web') && document.querySelector('#inspector .xterm-rows') !== null`);
+    await until(page, "the restarted computer's sessions", `${SESSION_TABS}.includes('web') && ${SHOWN_TERMINAL} !== undefined`);
     await page.evaluate(`[...document.querySelectorAll('#inspector [role="tab"]')].find((tab) => (tab.textContent ?? '').trim() === 'web').click()`);
     await until(page, "the renamed session's fresh shell in its folder", `(${SESSION_LINE}).folder === '/workspace/flow-web'`);
 

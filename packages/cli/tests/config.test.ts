@@ -5,7 +5,7 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, parseJsonValue,
+  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, OPENROUTER_DEFAULT_MODEL, parseJsonValue,
   type JsonObject, type JsonValue,
 } from "@kinu.run/core";
 import { createCLIRuntime } from '@kinu.run/cli-backend';
@@ -170,26 +170,30 @@ const CLOUD_ORIGIN = "https://kinu.example.com";
 
 const CLOUD_TOKEN = ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join("");
 
-describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
-  test("derives the worker AI proxy endpoint with the platform default model", async () => {
+describe("resolveModelDefaults — signed out, a provider's key alone", () => {
+  // The CLI named its own OpenRouter default beside the one the provider declares; the provider's is the one.
+  test("an OpenRouter key with no chosen model lands on OpenRouter's own default", async () => {
+    const out = await runResolveLLM({ providers: { openrouter: { apiKey: "or-test" } } });
+
+    expect(out).toEqual({ spec: `openrouter/${OPENROUTER_DEFAULT_MODEL}`, endpoint: null });
+  });
+});
+
+describe("resolveModelDefaults — signed-in Cloudflare AI", () => {
+  test("defaults to the platform's Workers AI model, served through the account", async () => {
     const out = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN });
-    expect(out).toEqual({
-      name: "workers-ai",
-      baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1`,
-      headers: { Authorization: `Bearer ${CLOUD_TOKEN}` },
-      model: DEFAULT_WORKERS_AI_MODEL_ID,
-    });
+    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null });
   });
 
-  test("honors a configured workers-ai model; non-workers-ai specs keep the default endpoint model", async () => {
+  test("honors a configured workers-ai model; non-workers-ai specs keep the platform default", async () => {
     const pinned = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/@cf/meta/llama-4" });
-    expect(pinned).toMatchObject({ name: "workers-ai", model: "@cf/meta/llama-4" });
+    expect(pinned).toEqual({ spec: "workers-ai/@cf/meta/llama-4", endpoint: null });
 
     const partner = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/minimax/m3" });
-    expect(partner).toMatchObject({ name: "workers-ai", model: "minimax/m3" });
+    expect(partner).toEqual({ spec: "workers-ai/minimax/m3", endpoint: null });
 
     const gateway = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "my-gateway/openai/gpt-4.1" });
-    expect(gateway).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
+    expect(gateway).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null });
   });
 
   test("signed-in Cloudflare AI remains the default when unrelated BYO keys exist", async () => {
@@ -199,7 +203,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       providers: { openai: { apiKey: "sk-test" } },
     });
 
-    expect(out).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
+    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null });
   });
 
   // Item 11.2: with every BYO credential and no chosen model, the native Workers AI model still wins.
@@ -216,12 +220,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       },
     });
 
-    expect(out).toEqual({
-      name: "workers-ai",
-      baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1`,
-      headers: { Authorization: `Bearer ${CLOUD_TOKEN}` },
-      model: DEFAULT_WORKERS_AI_MODEL_ID,
-    });
+    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null });
   });
 
   // A local Ollama accepts `@cf/deepseek-ai/…` and serves something else, so the local endpoint
@@ -238,20 +237,20 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
         origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, providers: { openaiCompat: compat },
       }, { defaultModel: model });
 
-      expect(out).toMatchObject({ name: "workers-ai", baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1` });
+      expect(out).toMatchObject({ spec: expect.stringMatching(/^workers-ai\//u), endpoint: null });
     }
 
     const local = await runResolveLLM({
       origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, providers: { openaiCompat: compat },
     }, { defaultModel: "openai-compat/gpt-oss:20b" });
 
-    expect(local).toMatchObject({ name: "openai-compat", baseURL: "http://localhost:11434/v1", model: "gpt-oss:20b" });
+    expect(local).toEqual({ spec: "openai-compat/gpt-oss:20b", endpoint: null });
   });
 
   test("an openai-compatible endpoint's extraHeaders overrides the API key's Authorization", async () => {
-    const sends = async (compat: JsonObject, headers: Record<string, string>) => expect(await runResolveLLM({
+    const sends = async (compat: JsonObject, headers: Record<string, string>) => expect(await runCompatAuth({
       providers: { openaiCompat: { default: { baseURL: "http://localhost:11434/v1", ...compat } } },
-    }, { defaultModel: "openai-compat/gpt-oss:20b" })).toEqual({ name: "openai-compat", baseURL: "http://localhost:11434/v1", headers, model: "gpt-oss:20b" });
+    })).toEqual({ baseURL: "http://localhost:11434/v1", headers });
 
     const base = { Authorization: "Bearer base", "X-Base": "b" };
 
@@ -267,7 +266,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       providers: { openai: { apiKey: "sk-test" } },
     }, { defaultModel: "openai/gpt-5.5" });
 
-    expect(out).toMatchObject({ name: "openai", model: "gpt-5.5" });
+    expect(out).toEqual({ spec: "openai/gpt-5.5", endpoint: null });
   });
 
   test("an explicit direct endpoint keeps precedence over the signed-in proxy", async () => {
@@ -276,32 +275,36 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       { env: { KINU_BASE_URL: "https://gateway.example/v1", KINU_AUTH: "Bearer direct" } },
     );
 
-    expect(out).toMatchObject({ name: "openai-compat", baseURL: "https://gateway.example/v1" });
+    // No model named: the endpoint serves Workers AI's default, so the default is spelled as Workers AI's.
+    expect(out).toMatchObject({
+      spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`,
+      endpoint: { name: "openai-compat", baseURL: "https://gateway.example/v1" },
+    });
   });
 
 });
 
-describe("resolveLLMConfig — registry-only providers", () => {
+describe("resolveModelDefaults — registry-only providers", () => {
   const registryOnly = [
     {
       name: "a claude-subscription spec resolves without any other provider",
-      spec: "claude/claude-opus-4-7", provider: "claude", model: "claude-opus-4-7",
+      spec: "claude/claude-opus-4-7",
     },
     {
-      name: "an opencode spec resolves through its bridge marker",
-      spec: "opencode/openai/gpt-5.6-sol", provider: "opencode", model: "openai/gpt-5.6-sol",
+      name: "an opencode spec resolves without any other provider",
+      spec: "opencode/openai/gpt-5.6-sol",
     },
   ];
 
   for (const registry of registryOnly) {
     test(registry.name, async () => {
       const out = await runResolveLLM({}, { env: { KINU_MODEL: registry.spec } });
-      expect(out).toEqual({ name: registry.provider, baseURL: "", headers: {}, model: registry.model });
+      expect(out).toEqual({ spec: registry.spec, endpoint: null });
     });
   }
 
-  test("nothing configured — signed out or expired — resolves to null", async () => {
-    expect(await runResolveLLM({})).toBeNull();
+  test("nothing configured — signed out or expired — names no model", async () => {
+    expect(await runResolveLLM({})).toEqual({ spec: null, endpoint: null });
 
     const expired = await runResolveLLM({
       origin: CLOUD_ORIGIN,
@@ -309,16 +312,16 @@ describe("resolveLLMConfig — registry-only providers", () => {
       tokenExpiresAt: new Date(Date.now() - 60_000).toISOString(),
     });
 
-    expect(expired).toBeNull();
+    expect(expired).toEqual({ spec: null, endpoint: null });
   });
 
-  test("requireLLMConfig still names the fixes when an endpoint is mandatory", async () => {
+  test("requireModelDefaults names the fixes when a model is mandatory", async () => {
     const kinuHome = scratchDir("cli-llm-req");
     writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
 
     const script = `
-      import { requireLLMConfig } from './packages/cli/src/config.ts';
-      try { console.log(JSON.stringify(requireLLMConfig())); }
+      import { requireModelDefaults } from './packages/cli/src/config.ts';
+      try { console.log(JSON.stringify(requireModelDefaults())); }
       catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
     `;
 
@@ -342,19 +345,31 @@ describe("resolveLLMConfig — registry-only providers", () => {
   });
 });
 
-/** resolveLLMConfig in a clean subprocess (config.ts binds KINU_HOME at import); `defaultModel` is the default tier's. */
+/** resolveModelDefaults in a clean subprocess (config.ts binds KINU_HOME at import); `defaultModel` is the default tier's. */
 async function runResolveLLM(
   config: JsonObject,
   { env: extraEnv = {}, defaultModel }: { env?: Record<string, string>; defaultModel?: string } = {},
 ): Promise<JsonValue> {
+  return runConfigScript(config, extraEnv, `
+    import { resolveModelDefaults } from './packages/cli/src/config.ts';
+    try { console.log(JSON.stringify(resolveModelDefaults(${JSON.stringify(defaultModel === undefined ? {} : { defaultModel })}))); }
+    catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
+  `);
+}
+
+/** How a model call reaches the configured OpenAI-compatible endpoint: the resolver's auth for it. */
+function runCompatAuth(config: JsonObject): Promise<JsonValue> {
+  return runConfigScript(config, {}, `
+    import { createConfiguredLocalModelResolver } from './packages/cli/src/local-model-resolver.ts';
+    const auth = await createConfiguredLocalModelResolver().resolver.getAuth('openai-compat.default');
+    console.log(JSON.stringify(auth));
+  `);
+}
+
+/** `script` in a clean subprocess over `config` (config.ts binds KINU_HOME at import), its JSON answer. */
+async function runConfigScript(config: JsonObject, extraEnv: Record<string, string>, script: string): Promise<JsonValue> {
   const kinuHome = scratchDir("cli-llm");
   writeFileSync(join(kinuHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
-
-  const script = `
-    import { resolveLLMConfig } from './packages/cli/src/config.ts';
-    try { console.log(JSON.stringify(resolveLLMConfig(${JSON.stringify(defaultModel === undefined ? {} : { defaultModel })}))); }
-    catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
-  `;
 
   const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome, ...extraEnv };
 

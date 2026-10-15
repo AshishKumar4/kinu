@@ -29,7 +29,7 @@ describe('assertExecutableRuntime', () => {
     const db = workspaceDatabase(dbPath);
 
     try {
-      const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM, home: workspaceHome(db) });
+      const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', home: workspaceHome(db) });
       // A complete AgentRuntime with no router.
       expect(rt.executionRouter).toBeFalsy();
       expect(() => assertExecutableRuntime(rt, 'behaviour eval'))
@@ -44,7 +44,7 @@ describe('assertExecutableRuntime', () => {
     const birth = workspaceDatabase(dbPath);
 
     try {
-      await createWorkspace(birth, { name: 'open', purpose: 'open', llm: LLM, home: workspaceHome(birth) });
+      await createWorkspace(birth, { name: 'open', purpose: 'open', home: workspaceHome(birth) });
       initWorkspaceSchema(makeWorkspaceSchemaSql(birth));
     } finally {
       birth.close();

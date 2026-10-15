@@ -3,12 +3,12 @@ import { Cause, Effect } from "effect";
 import { startTransition, useCallback, useEffect, useState } from "react";
 import type { AlternateTakeSet, TakePickOutcome } from "@kinu.run/core";
 import { settle } from "@kinu.run/core/obs";
-import { describeError } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type Rating = "positive" | "negative";
 
-export interface TurnAnnotations {
+interface TurnAnnotations {
   readonly feedback: Readonly<Record<string, Rating>>;
   readonly rate: (messageId: string, rating: Rating | null) => Promise<void>;
   readonly takes: Readonly<Record<string, AlternateTakeSet>>;
@@ -31,7 +31,7 @@ export function useTurnAnnotations({ rpc, connected, live, settledBranches, repo
   const [takes, setTakes] = useState<Record<string, AlternateTakeSet>>({});
 
   const failed = useCallback((source: "feedback" | "takes") => (cause: Cause.Cause<unknown>) => Effect.sync(() => {
-    report(source, describeError({ cause: Cause.squash(cause) }));
+    report(source, readFailureText({ cause: Cause.squash(cause) }));
   }), [report]);
 
   useEffect(() => {

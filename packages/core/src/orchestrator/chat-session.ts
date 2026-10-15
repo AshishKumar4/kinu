@@ -90,6 +90,27 @@ interface CommittedTurn {
 /** Reported rather than thrown, because the signal settle after it must run either way. */
 type TurnCommit = { readonly committed: CommittedTurn } | { readonly failure: KinuError };
 
+/** What one commit holds of a turn ({@link ChatSession.commitTurn}): its answer as it lands, what it owes, and how its run ended. */
+interface TurnCommitInput {
+  readonly item: QueueItem;
+  readonly answeredDeliveries: ReadonlySet<string>;
+  readonly lease: ActorTurnLease;
+  readonly turnId: string;
+  readonly event: string | undefined;
+  readonly assistantText: string;
+  readonly turnEnd: TurnEnd | null;
+  /** Null for a turn that owes no reminder. */
+  readonly openWork: OpenWork | null;
+  readonly preparedAssistant: PreparedConversationEntry | null;
+  readonly runError: string | null;
+  /** Classified once by the caller — see `closeRun`. */
+  readonly end: RunEndClassification;
+  readonly trialContext: readonly ModelMessage[];
+  readonly reachableTools: readonly string[];
+  readonly overflowRetry: boolean;
+}
+
+
 /** A `step-cut` as a chat stream carries it to a client, one that watches the turn from another process. */
 export const STEP_CUT_CHUNK = 'data-kinu-step-cut';
 
@@ -1959,8 +1980,40 @@ export class ChatSession {
 
   /** The executed turn's answer, committed with its run verdict, and its settled effects: answers its claim's outcome. */
   private async projectTurn(
-    item: QueueItem, eventName: string | undefined, lease: ActorTurnLease, { round, execution }: { readonly round: ChatRound | null; readonly execution: ActorExecutionResult },
+    item: QueueItem, eventName: string | undefined, lease: ActorTurnLease, executed: { readonly round: ChatRound | null; readonly execution: ActorExecutionResult },
   ): Promise<ClaimOutcome> {
+    const answer = await this.answerOf(item, eventName, lease, executed);
+    // One commit — see {@link commitTurn}.
+    const commit = this.commitTurn(answer);
+    const { runError } = answer;
+
+    // Once per turn, after settling begins, outside every failure path; an answer that never reached disk
+    // reports `completed: false`, so its events re-queue.
+    const durable = runError === null && 'committed' in commit;
+    this.actorSession.orchestrator.inbox.settle({ completed: durable });
+
+    if (durable) this.closeEventDeliveryLeases(answer.answeredDeliveries);
+
+    if (!('committed' in commit)) {
+      diagnostics.failure('turn.persist_failed', commit.failure);
+      // Its caller waits on the work: told it failed, by the commit that closes it, as any failed turn's caller is. Not
+      // durable, so the terminal event carries no final answer.
+      const message = renderThrownChain({ cause: commit.failure });
+      const told = this.callerReport(item, message);
+
+      return await this.failTurn(lease, message, {
+        runError, turn: () => this.snapshotTurn(item, ''), close: (failed) => this.endFailed(item, lease, failed, told),
+      });
+    }
+
+    return await this.settleCommitted(lease, commit.committed, answer);
+  }
+
+  /** What the executed turn commits: its answer as it lands on disk, what it owes, and how its run ended, classified once;
+   *  with the turn it ran, whose prompt cache its settle may keep warm. */
+  private async answerOf(
+    item: QueueItem, eventName: string | undefined, lease: ActorTurnLease, { round, execution }: { readonly round: ChatRound | null; readonly execution: ActorExecutionResult },
+  ): Promise<TurnCommitInput & { readonly prepared: PreparedTurn | null }> {
     const prepared = round?.prepared ?? null;
     const streamed = round?.streamed ?? { output: false };
     const fullText = execution.text;
@@ -2005,45 +2058,18 @@ export class ChatSession {
     // their leases close.
     const answeredDeliveries = this.answeredDeliveries(item);
 
-    // One commit — see {@link commitTurn}.
-    const commit = this.commitTurn({
-      item,
-      answeredDeliveries,
-      lease,
-      turnId: lease.turnId,
-      event: eventName,
-      assistantText: fullText,
-      turnEnd,
-      openWork,
-      preparedAssistant,
-      runError,
-      end,
-      trialContext: execution.admittedMessages,
-      reachableTools: Object.keys(prepared?.execution.chat.tools ?? {}),
-      overflowRetry,
-    });
+    return {
+      item, answeredDeliveries, lease, turnId: lease.turnId, event: eventName, assistantText: fullText, turnEnd, openWork,
+      preparedAssistant, runError, end, trialContext: execution.admittedMessages,
+      reachableTools: Object.keys(prepared?.execution.chat.tools ?? {}), overflowRetry, prepared,
+    };
+  }
 
-    // Once per turn, after settling begins, outside every failure path; an answer that never reached disk
-    // reports `completed: false`, so its events re-queue.
-    const durable = runError === null && 'committed' in commit;
-    this.actorSession.orchestrator.inbox.settle({ completed: durable });
-
-    if (durable) this.closeEventDeliveryLeases(answeredDeliveries);
-
-    if (!('committed' in commit)) {
-      diagnostics.failure('turn.persist_failed', commit.failure);
-      // Its caller waits on the work: told it failed, by the commit that closes it, as any failed turn's caller is. Not
-      // durable, so the terminal event carries no final answer.
-      const message = renderThrownChain({ cause: commit.failure });
-      const told = this.callerReport(item, message);
-
-      return await this.failTurn(lease, message, {
-        runError, turn: () => this.snapshotTurn(item, ''), close: (failed) => this.endFailed(item, lease, failed, told),
-      });
-    }
-
-    const { turn, owed, transition } = commit.committed;
-
+  /** The committed turn's effects, settled by core's one state machine, then its end: answers its run's end. */
+  private async settleCommitted(
+    lease: ActorTurnLease, { turn, owed, transition }: CommittedTurn,
+    { prepared, end, runError }: Pick<TurnCommitInput, 'end' | 'runError'> & { readonly prepared: PreparedTurn | null },
+  ): Promise<ClaimOutcome> {
     try {
       // The lane decides whether the prefix is worth keeping; a turn that ran nothing kept none. Its claim and run closed
       // with its answer (`commitTurn`). Its arming is the lane's advice, not the turn's: it is in flight beside the settle,
@@ -2096,24 +2122,7 @@ export class ChatSession {
 
   /** Answer, run verdict and frozen roster in one commit, since `resumeAll()` finds claims: an isolate that dies after it
    *  finds the turn answered and closed, never one to run again. Never throws. */
-  private commitTurn(input: {
-    readonly item: QueueItem;
-    readonly answeredDeliveries: ReadonlySet<string>;
-    readonly lease: ActorTurnLease;
-    readonly turnId: string;
-    readonly event: string | undefined;
-    readonly assistantText: string;
-    readonly turnEnd: TurnEnd | null;
-    /** Null for a turn that owes no reminder. */
-    readonly openWork: OpenWork | null;
-    readonly preparedAssistant: PreparedConversationEntry | null;
-    readonly runError: string | null;
-    /** Classified once by the caller — see `closeRun`. */
-    readonly end: RunEndClassification;
-    readonly trialContext: readonly ModelMessage[];
-    readonly reachableTools: readonly string[];
-    readonly overflowRetry: boolean;
-  }): TurnCommit {
+  private commitTurn(input: TurnCommitInput): TurnCommit {
     const { item, runError } = input;
 
     // At most one output-limit continuation: a turn is already one if queued (item stamp) or spliced

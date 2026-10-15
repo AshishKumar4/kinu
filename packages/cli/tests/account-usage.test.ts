@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import {
   AccountUsageSchema, initWorkspaceSchema, openWorkspaceMainActor,
-  type AccountUsage, type CallAccount, type LLMProviderConfig, type Usage,
+  type AccountUsage, type CallAccount, type Usage,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { makeSql, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
@@ -15,15 +15,13 @@ import { placeLocalWorkspace } from './helpers/local-refs';
 
 const repoRoot = resolve(import.meta.dir, '../../..');
 
-const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' };
-
 /** A local workspace whose ledger holds one model call per entry, each paid by `account`. */
 async function localWorkspace(home: string, name: string, calls: ReadonlyArray<{ usage: Usage; usd: number; account: CallAccount }>) {
   mkdirSync(join(home, name), { recursive: true });
   const db = workspaceDatabase(join(home, name, 'agent.db'));
 
   try {
-    await createWorkspace(db, { name, purpose: 'Spend fixture', llm: DUMMY_LLM, home: workspaceHome(db) });
+    await createWorkspace(db, { name, purpose: 'Spend fixture', home: workspaceHome(db) });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
 

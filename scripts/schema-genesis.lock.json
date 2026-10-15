@@ -292,7 +292,8 @@
   ],
   "background_job_holders@packages/core/src/jobs/process-holder.ts": [
     "job_id TEXT PRIMARY KEY",
-    "pid INTEGER NOT NULL"
+    "pid INTEGER NOT NULL",
+    "generation TEXT NOT NULL"
   ],
   "background_job_serves@packages/core/src/jobs/store.ts": [
     "actor_id TEXT NOT NULL",
@@ -613,15 +614,18 @@
     "expires_at INTEGER NOT NULL",
     "token_was_current INTEGER"
   ],
-  "device_consent_requests@packages/core/src/safety/device-consent.ts": [
+  "device_consent_asks@packages/core/src/safety/device-consent.ts": [
     "consent_id TEXT PRIMARY KEY",
+    "actor_id TEXT",
     "device_id TEXT NOT NULL",
     "device_label TEXT NOT NULL",
     "method TEXT NOT NULL",
     "command TEXT NOT NULL",
     "workspace_name TEXT",
     "created_at INTEGER NOT NULL",
-    "expires_at INTEGER NOT NULL"
+    "epoch INTEGER NOT NULL",
+    "status TEXT NOT NULL DEFAULT 'queued'",
+    "decided_at INTEGER"
   ],
   "device_consent@packages/core/src/state/user-schema.ts": [
     "agent_name TEXT NOT NULL",
@@ -643,6 +647,8 @@
   ],
   "device_joins@packages/core/src/state/user-schema.ts": [
     "device_id TEXT PRIMARY KEY",
+    "ticket_hash TEXT NOT NULL UNIQUE",
+    "workspace TEXT",
     "expires_at INTEGER NOT NULL"
   ],
   "device_notice_pending@packages/core/src/state/user-schema.ts": [
@@ -654,6 +660,7 @@
   "driver_lease@packages/core/src/execution/driver-lease.ts": [
     "id TEXT PRIMARY KEY",
     "pid INTEGER NOT NULL",
+    "generation TEXT NOT NULL",
     "token TEXT NOT NULL",
     "kind TEXT NOT NULL CHECK(kind IN ('interactive', 'daemon'))"
   ],

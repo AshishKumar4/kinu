@@ -253,6 +253,10 @@ export function installDriveFixture(frame: string): void {
   if (fixture === undefined) return;
   const next = window.fetch.bind(window);
   const drive = fixtureDrive(fixture.seeded);
+  // `&libraryHold=1`: the library read answers only once `__releaseLibrary` is called, as a slow account's does.
+  const held = new URLSearchParams(location.search).get("libraryHold") === "1" ? Promise.withResolvers<void>() : null;
+
+  Object.assign(window, { __releaseLibrary: () => held?.resolve() });
   // Opening Shared sees what it holds, as the account's stamp does.
   let seen = false;
 
@@ -265,7 +269,7 @@ export function installDriveFixture(frame: string): void {
     if (path === "/api/shared" && request.method === "GET") {
       const received = seen ? fixture.library.received.map(({ unseen: _, ...row }) => row) : fixture.library.received;
 
-      return Promise.resolve(Response.json({ ...fixture.library, received }));
+      return (held?.promise ?? Promise.resolve()).then(() => Response.json({ ...fixture.library, received }));
     }
 
     if (path === "/api/shared/seen" && request.method === "POST") {

@@ -82,9 +82,9 @@ async function workspaceWithMachine() {
   const ownerUserId = await accountIdFor(OAUTH_DEPLOYMENT, 'owner@kinu.example.com');
   const user = createTestUserDO({ deviceResponder: daemon(machine), durableObjectId: ownerUserId });
   opened.push(user);
-  // The owner let this workspace use the machine: device consent is not what these tests are about.
-  user.consentDecision = 'always';
   const { deviceId } = await user.userDO.registerDevice(await testOwner(), 'ashish@studio');
+  // The owner let this workspace use the machine: device consent is not what these tests are about.
+  user.grantDevice('files', deviceId);
   user.attachDevice(deviceId);
   await user.sendDeviceHello({ ...CAPABLE_HELLO, root: DEVICE_HOME, home: DEVICE_HOME });
   const token = await provisionTestWorkspace(user, 'files', 'files');

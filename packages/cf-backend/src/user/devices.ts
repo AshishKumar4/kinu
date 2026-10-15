@@ -1,12 +1,13 @@
 import { Effect } from 'effect';
 import { DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES } from '@kinu.run/core';
 import {
-  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceConsentDecision, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
 import { SingleUseTickets } from './single-use-tickets';
+import { DEVICE_JOIN_TICKET_PREFIX } from '@kinu.run/core';
 
 interface DeviceConsentCheck {
   agentName: string;
@@ -15,7 +16,9 @@ interface DeviceConsentCheck {
   params: JsonValue[];
   /** Present when the caller is the named workspace itself; the card then asks for the
    *  workspace's binding, which is what "always" records. */
-  workspaceName?: string;
+  workspaceName?: string | undefined;
+  /** The agent that made the call, whom the owner's answer wakes; absent for the owner's own. */
+  actorId?: string | undefined;
 }
 
 /** Measured from the last rotation (every accepted connect), so a copy of `device.json`
@@ -25,6 +28,8 @@ const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 /** How long a browser's connect command stays claimable: long enough to install the CLI and sign in. */
 const DEVICE_JOIN_TTL_MS = 30 * 60 * 1000;
+
+const DEVICE_JOIN_SPENT = 'This connect command has expired or was already used. Open Connect a machine again for a new one.';
 
 const DEVICE_NAME_MAX_LENGTH = 80;
 
@@ -143,12 +148,33 @@ const AbsolutePathSchema = v.pipe(v.string(), v.regex(/^\//), v.maxLength(4096))
 
 export interface UserDevicesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
   chatgptSignIns(): Promise<ReadonlyArray<{ readonly id: string; readonly label: string; readonly status: DeviceChatGptStatus | null }>>;
+  /** The account's user id, which this object is named by: a join ticket names it, so its claim finds this object. */
+  accountName(): string;
+  workspaceRegistered(name: string): boolean;
 }
+
+/** A device a browser issued: the id the machine registers as, and the workspace whose Environment asked for it. */
+type DeviceJoin = {
+  readonly device_id: string;
+  readonly workspace: string | null;
+};
 
 /** The served build as the connect that opened a device's socket read it. */
 const SERVED_STAMP_KEY = 'devices.served_stamp';
 
+/** The account's device grant epoch: every revocation advances it, so no approval given before it answers a call. */
+const CONSENT_EPOCH_KEY = 'devices.consent_epoch';
+
 /** The owner's machines: tunnels, tokens, consents, tiers and requests. */
+/** One workspace's binding to one machine, as the owner's Devices page and Env tab read it. */
+export interface DeviceBinding {
+  readonly agentName: string;
+  readonly deviceId: string;
+  readonly policy: string;
+  readonly lastMethod: string | null;
+  readonly lastSummary: string | null;
+}
+
 export class UserDevices {
   // The reverse-WS tunnel from a user's machine terminates here, not on an agent, so every agent
   // can reach the device via `deviceRpc()`. A WebSocket cannot cross RPC; the worker forwards the upgrade.
@@ -160,8 +186,12 @@ export class UserDevices {
   /** Single-use socket tickets a daemon trades its long-lived token for, so the token stays out of URLs and edge logs. */
   private readonly connectTickets: SingleUseTickets<{ device_id: string; token_was_current: number | null }>;
 
+  /** The ticket a browser's connect command carries, which registers its machine with no session there. */
+  private readonly joinTickets: SingleUseTickets<DeviceJoin>;
+
   constructor(private readonly host: UserDevicesHost) {
     this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_connect_tickets', ['device_id', 'token_was_current']);
+    this.joinTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_joins', ['device_id', 'workspace'], DEVICE_JOIN_TTL_MS);
     this._devices = new DeviceSocketHub(host.ctx);
     this._inflight = new DeviceRequestLedger(host.ctx.storage.sql);
   }
@@ -362,16 +392,23 @@ export class UserDevices {
     };
   }
 
-  /** The device a browser's connect command names, issued now: the machine that runs it registers as this id. Joins
-   *  past their time are dropped here, as the next is issued. */
-  async issueDeviceJoin(caller: UserCaller): Promise<{ deviceId: string }> {
-    await this.host.requireTier(caller, 'device.manage');
-    const deviceId = `dev-${nanoid(10)}`;
-    const now = Date.now();
-    this.host.sqlx(`DELETE FROM device_joins WHERE expires_at <= ?`, now);
-    this.host.sqlx(`INSERT INTO device_joins (device_id, expires_at) VALUES (?, ?)`, deviceId, now + DEVICE_JOIN_TTL_MS);
+  /**
+   * The device a browser's connect command names, issued now, and the ticket the command carries: the machine that
+   * runs it registers as this id, with a session there or with the ticket alone. `workspace` is the one whose
+   * Environment asked; the device is granted it on registering.
+   */
+  issueDeviceJoin(caller: UserCaller, workspace: string | null): Promise<{ deviceId: string; ticket: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
 
-    return { deviceId };
+      if (workspace !== null && !this.host.workspaceRegistered(workspace)) return yield* new KinuError('missing', `No workspace named ${workspace}.`);
+      const deviceId = `dev-${nanoid(10)}`;
+      const ticket = `${DEVICE_JOIN_TICKET_PREFIX}${this.host.accountName()}_${randomToken(32)}`;
+
+      this.joinTickets.mint(ticket, { device_id: deviceId, workspace }, Date.now());
+
+      return { deviceId, ticket };
+    }));
   }
 
   /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
@@ -380,8 +417,33 @@ export class UserDevices {
   registerDevice(caller: UserCaller, label?: string, replaces?: string, join?: string): Promise<{ deviceId: string; token: string }> {
     return settle(Effect.gen({ self: this }, function* () {
       yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
+      const claimed = join === undefined ? null : yield* this.claimDeviceJoin(join);
+
+      return yield* this.registered(caller, claimed, label, replaces);
+    }));
+  }
+
+  /**
+   * The machine a connect command's ticket was minted for, registered with no session: spent here, whatever comes of
+   * it, so a ticket a copied command still carries claims nothing once its machine joined.
+   */
+  joinDevice(caller: UserCaller, ticket: string, label?: string, replaces?: string): Promise<{ deviceId: string; token: string; label: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.host.requireTier(caller, 'device.manage'));
+      const claimed = this.joinTickets.spend(ticket, Date.now());
+
+      if (claimed === null) return yield* new KinuError('bad_input', DEVICE_JOIN_SPENT);
+      const registered = yield* this.registered(caller, claimed, label, replaces);
+
+      return { ...registered, label: this.deviceLabel(registered.deviceId) };
+    }));
+  }
+
+  /** A device registered under `claimed`'s id and granted its workspace in the same turn, or a new id with no grant. */
+  private registered(caller: UserCaller, claimed: DeviceJoin | null, label?: string, replaces?: string): Effect.Effect<{ deviceId: string; token: string }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
       const replaced = replaces === undefined ? null : yield* Effect.promise(() => this.deviceHoldingToken(caller, replaces));
-      const deviceId = join === undefined ? `dev-${nanoid(10)}` : yield* this.claimDeviceJoin(join);
+      const deviceId = claimed?.device_id ?? `dev-${nanoid(10)}`;
       const token = `pdt_${randomToken(32)}`;
       const tokenHash = sha256Hex(token);
       const now = Date.now();
@@ -391,22 +453,24 @@ export class UserDevices {
         deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
       );
 
+      // Connected from a workspace's Environment, it is that workspace's without asking: the grant an approval's
+      // "always" records. One deleted since the command was issued is granted nothing.
+      if (claimed?.workspace != null && this.host.workspaceRegistered(claimed.workspace)) this.setDeviceBinding(claimed.workspace, deviceId, 'allow');
+
       if (replaced !== null) yield* Effect.promise(() => this.revokeDevice(caller, replaced));
       else yield* Effect.promise(() => this.devicesMoved());
 
       return { deviceId, token };
-    }));
+    });
   }
 
-  private claimDeviceJoin(deviceId: string): Effect.Effect<string, KinuError> {
+  private claimDeviceJoin(deviceId: string): Effect.Effect<DeviceJoin, KinuError> {
     return Effect.suspend(() => {
-      const [claimed] = this.host.sqlx<{ device_id: string }>(
-        `DELETE FROM device_joins WHERE device_id = ? AND expires_at > ? RETURNING device_id`, deviceId, Date.now(),
+      const [claimed] = this.host.sqlx<{ device_id: string; workspace: string | null }>(
+        `DELETE FROM device_joins WHERE device_id = ? AND expires_at > ? RETURNING device_id, workspace`, deviceId, Date.now(),
       );
 
-      return claimed === undefined
-        ? Effect.fail(new KinuError('bad_input', 'This connect command has expired or was already used. Open Connect a machine again for a new one.'))
-        : Effect.succeed(claimed.device_id);
+      return claimed === undefined ? Effect.fail(new KinuError('bad_input', DEVICE_JOIN_SPENT)) : Effect.succeed(claimed);
     });
   }
 
@@ -642,12 +706,13 @@ export class UserDevices {
       if (consentAgent !== undefined) {
         // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
         // ride a sibling workspace's grant.
-        const consent = yield* attemptInItsWords('io', () => this.checkDeviceConsent({
+        const consent = yield* this.checkDeviceConsent({
           agentName: consentAgent, deviceId, method, params,
           workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
-        }));
+          actorId: opts?.actorId,
+        });
 
-        if (!consent.allowed) return yield* Effect.fail(new KinuError('denied', consent.reason));
+        if (!consent.allowed) return yield* Effect.fail(new KinuError(consent.code, consent.reason));
       }
 
       const frameSandbox = deviceMethodHas(method, 'deviceView') ? yield* this.frameSandboxFor(method, deviceId, proven) : null;
@@ -1001,63 +1066,39 @@ export class UserDevices {
     );
   }
 
-  /**
-   * Is this workspace bound to this device? Fails closed, but `reason` distinguishes a refusal from
-   * an unanswered prompt, so an unattended agent does not read an expiry as a revoked capability.
-   */
-  private async checkDeviceConsent(check: DeviceConsentCheck): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-    const { agentName, deviceId, method, params, workspaceName } = check;
-
-    const bound = this.getDeviceBinding(agentName, deviceId);
-
-    if (bound === 'allow') return { allowed: true };
-
-    if (bound === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
-    const action = summarizeDeviceAction(method, params);
-    let decision: DeviceConsentDecision;
-
-    try {
-      const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(agentName));
-
-      const base: DeviceConsentRequest = {
-        deviceId,
-        deviceLabel: this.deviceLabel(deviceId),
-        method: action.method,
-        command: action.command,
-      };
-
-      const request: DeviceConsentRequest = workspaceName
-        ? { ...base, workspaceName }
-        : base;
-
-      decision = await stub.awaitDeviceConsent(request);
-    } catch (error) {
-      // Nobody was asked, so this is the unanswered case, not a refusal.
-      diagnostics.event('device.consent_unreachable', { error: renderThrownChain({ cause: error }) });
-
-      return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
-    }
-
-    // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
-    if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
-
-    if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
-
-    if (decision === 'always') {
-      this.setDeviceBinding(agentName, deviceId, 'allow', action);
-      await this.devicesMoved();
-    }
-
-    return { allowed: true };
+  private consentEpoch(): number {
+    return v.parse(v.optional(v.number(), 0), this.host.ctx.storage.kv.get(CONSENT_EPOCH_KEY));
   }
 
-  async listDeviceConsents(caller: UserCaller): Promise<Array<{
-    agentName: string;
-    deviceId: string;
-    policy: string;
-    lastMethod: string | null;
-    lastSummary: string | null;
-  }>> {
+  /** A binding gone: every approval given before now is void, so none restores what the owner revoked. */
+  private grantsRevoked(): void {
+    this.host.ctx.storage.kv.put(CONSENT_EPOCH_KEY, this.consentEpoch() + 1);
+  }
+
+  /** Is this workspace bound to this device? Core's rule decides (`deviceConsentOutcome`): a standing binding, else the
+   *  workspace's ask, which an unreachable workspace leaves unanswered rather than refused. */
+  private checkDeviceConsent(check: DeviceConsentCheck): Effect.Effect<DeviceConsentOutcome, KinuError> {
+    const { agentName, deviceId, method, params, workspaceName, actorId } = check;
+    const action = summarizeDeviceAction(method, params);
+    const deviceLabel = this.deviceLabel(deviceId);
+
+    const request: DeviceConsentRequest = {
+      deviceId, deviceLabel, method: action.method, command: action.command, epoch: this.consentEpoch(),
+      ...(workspaceName !== undefined && { workspaceName }), ...(actorId !== undefined && { actorId }),
+    };
+
+    return deviceConsentOutcome({
+      bound: this.getDeviceBinding(agentName, deviceId),
+      deviceLabel,
+      ask: attemptInItsWords('unavailable', () => this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(agentName)).askDeviceConsent(request)),
+      bind: attemptInItsWords('io', async () => {
+        this.setDeviceBinding(agentName, deviceId, 'allow', action);
+        await this.devicesMoved();
+      }),
+    });
+  }
+
+  async listDeviceConsents(caller: UserCaller): Promise<DeviceBinding[]> {
     await this.host.requireTier(caller, 'device.consent');
 
     return this.host.sqlx<{
@@ -1075,6 +1116,29 @@ export class UserDevices {
     }));
   }
 
+  /**
+   * The owner gives one workspace one machine, from that workspace's Env tab: the binding the consent card's "always"
+   * records, decided by the owner in person rather than asked of them by an agent. Owner session only, so a workspace
+   * cannot grant itself a machine. Answers the binding it recorded.
+   */
+  async grantDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<DeviceBinding> {
+    const resolved = await this.host.requireTier(caller, 'device.consent');
+
+    return settle(Effect.gen({ self: this }, function* () {
+      if (resolved.kind !== 'owner_session') return yield* new KinuError('denied', 'Only the account owner can give a workspace a machine.');
+
+      const device = this.host.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId)[0];
+
+      if (device === undefined) return yield* new KinuError('missing', `No machine ${deviceId} on this account.`);
+
+      if (!this.host.workspaceRegistered(agentName)) return yield* new KinuError('missing', `No workspace named ${agentName}.`);
+      this.setDeviceBinding(agentName, deviceId, 'allow');
+      yield* Effect.promise(async () => this.devicesMoved());
+
+      return { agentName, deviceId, policy: 'allow', lastMethod: null, lastSummary: null };
+    }));
+  }
+
   /** Deletes the row (not 'deny') so the next call asks again; takes effect on that next call.
    *  Not a stop: running commands continue. `revokeDevice` ends live commands. */
   async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
@@ -1082,6 +1146,7 @@ export class UserDevices {
 
     if (!agentName || !deviceId) return { ok: false };
     this.host.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
+    this.grantsRevoked();
     await this.devicesMoved();
 
     return { ok: true };
@@ -1350,6 +1415,7 @@ export class UserDevices {
     // A revoked device is unreachable; drop its grants so the owner's audited roster shows only live
     // permissions.
     this.host.sqlx(`DELETE FROM device_consent WHERE device_id = ?`, deviceId);
+    this.grantsRevoked();
     this._devices.close(deviceId, 'device revoked');
     this.deleteRevokedDeviceWithoutIncident(deviceId);
 

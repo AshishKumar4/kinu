@@ -6,7 +6,7 @@ import { Loader } from "@cloudflare/kumo";
 import { CheckIcon } from "@phosphor-icons/react";
 import { LoadFailure } from "./LoadFailure";
 
-export interface ScrollBoundaryProps {
+interface ScrollBoundaryProps {
   /** Plural, lower-case: "forks", "runs". */
   what: string;
   /** Shown when exhausted; a count from a capped read is not a total. */

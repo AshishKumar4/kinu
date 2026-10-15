@@ -282,10 +282,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Read one dotted JSON field from stdin. Prints nothing when the body is not
-# JSON — which is exactly what a smoke test needs, because "not JSON" is how a
-# missing asset presents itself (the SPA shell under a JSON
-# content-type).
 # The validator's reading in a wrangler upload's <log>: its startup in ms, `refused`, or `none`.
 startup_reading() {
   if grep -qF 'Script startup exceeded CPU time limit' "$1"; then echo refused; return; fi
@@ -294,6 +290,10 @@ startup_reading() {
   echo "${said:-none}"
 }
 
+# Read one dotted JSON field from stdin. Prints nothing when the body is not
+# JSON — which is exactly what a smoke test needs, because "not JSON" is how a
+# missing asset presents itself (the SPA shell under a JSON
+# content-type).
 json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
@@ -974,7 +974,7 @@ else
   echo -e "${BOLD}Step 4b: Publishing the tiers' scripted model${NC}"
   KINU_SCRIPTED_SECRETS="$(umask 077 && mktemp -t kinu-scripted-secrets.XXXXXX.json)"
   bun -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({ SCRIPTED_MODEL_KEY: process.env.KINU_SCRIPTED_MODEL_KEY }))' "$KINU_SCRIPTED_SECRETS"
-  bunx wrangler deploy -c scripts/scripted-model-worker.jsonc --secrets-file "$KINU_SCRIPTED_SECRETS"
+  npx wrangler deploy -c scripts/scripted-model-worker.jsonc --secrets-file "$KINU_SCRIPTED_SECRETS"
   KINU_SCRIPTED_PUBLISHED=$?
   rm -f "$KINU_SCRIPTED_SECRETS"
   if [ "$KINU_SCRIPTED_PUBLISHED" != "0" ]; then
@@ -1025,8 +1025,6 @@ fi
 # (packages/test-utils/src/eval-identity.ts): each deployment has its own.
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
-# Production, the baseline leg's origin: the evals measure the candidate on staging against it.
-EVAL_BASELINE_ORIGIN="https://kinu.run"
 
 # THE STATISTICS, on armada (L19). scripts/evals-map.ts runs each trial as one `armada map` task at
 # this commit, both legs at once: every eval task five trials each on staging, which must be serving
@@ -1035,19 +1033,23 @@ EVAL_BASELINE_ORIGIN="https://kinu.run"
 # statistical map starts so two jobs cannot multiply the one Muse budget. Its completed verdict is
 # stored beside the verified record; either may finish first, and promotion waits for both.
 KINU_EVALS_OUT=""
-KINU_EVALS_WHY=""
 start_evals() {
   local out="$KINU_DEPLOY_REPORT/evals-map"
   mkdir -p "$out"
-  setsid nohup bash -c '
-    bun scripts/ladder.ts --deploy-phase=soak
-    bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?
-    bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak
-    exec bun scripts/evals-map.ts "$1" --out="$2" --record --post="$1"
-  ' _ "$KINU_SHA" "$out" >"$out/driver.log" 2>&1 </dev/null &
+  setsid nohup bash -c 'run_soak; exec bun scripts/evals-map.ts "$1" --out="$2" --record --post="$1"' \
+    _ "$KINU_SHA" "$out" >"$out/driver.log" 2>&1 </dev/null &
   KINU_EVALS_OUT="$out"
   report dispatched "the evals of $KINU_SHA on armada, every task five trials each on staging against production" "$out/driver.log"
 }
+
+# The soak's run, its verdict into the report, and the report rendered again: the soak alone, or before the evals.
+# Exported, so the detached shells that run it have it.
+run_soak() {
+  bun scripts/ladder.ts --deploy-phase=soak
+  bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?
+  bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak
+}
+export -f run_soak
 
 # THE EVAL ACCOUNTS' PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment
 # one drives: this one and, for a staging build, production, the baseline the evals compare it with. The evals and the
@@ -1065,8 +1067,7 @@ provision_eval_keys() {
 # deployment serves and never awaited, so a real model's minutes are outside this deploy's 20-minute wall and its red
 # outside this deploy's verdict: the soak writes into this report's soak section and renders it again when it ends.
 start_soak() {
-  setsid nohup bash -c 'bun scripts/ladder.ts --deploy-phase=soak; bun scripts/deploy-report.ts runner "$KINU_DEPLOY_REPORT" soak $?; bun scripts/deploy-report.ts render "$KINU_DEPLOY_REPORT" after-soak' \
-    >"$KINU_DEPLOY_REPORT/soak.log" 2>&1 </dev/null &
+  setsid nohup bash -c run_soak >"$KINU_DEPLOY_REPORT/soak.log" 2>&1 </dev/null &
   report dispatched "the eval soak, one trial of every task on $KINU_EVAL_ORIGIN; its reds re-render this report" "$KINU_DEPLOY_REPORT/soak.log"
 }
 
@@ -1092,9 +1093,11 @@ else
   # Started first, so its hours run while the wave runs here. Without its run
   # this build has no verdict to be promoted on, so a failed start is a red.
   if [ "$KINU_EVALS" = "1" ] && [ "$KINU_SERVING" = "1" ]; then
+    # Production, the baseline leg's origin, as wrangler.jsonc declares it: the evals measure the candidate on staging
+    # against it.
+    EVAL_BASELINE_ORIGIN="$(bun "$KINU_ROOT/scripts/eval-target.ts" production | head -1)"
     if provision_eval_keys "$KINU_EVAL_ORIGIN" "$EVAL_BASELINE_ORIGIN"; then
-      start_evals \
-        || step_red evals "the evals" "evals-map.ts was not started for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
+      start_evals
     fi
   fi
   if [ -z "$KINU_TIERS_WHY" ]; then
@@ -1150,18 +1153,20 @@ fi
 # is a red of this deploy whatever its tests said, in the report under
 # `telemetry` (L18); so is telemetry it cannot read, and telemetry whose reads
 # still disagree after an hour. Its window ends when the wave's last row that
-# drove the deployment did (the ladder's `traffic` mark), not at its verdict: every
-# row of the window's events has landed ten minutes after its end
+# drove the deployment did (the ladder's `traffic` mark), not at its verdict:
+# 99.96% of a window's rows have landed three minutes after its end
 # (`SETTLE_HOLD_MS`), so the first read then that agrees with the one before it
-# settles it, and the rows that drove nothing, the devbox contracts on their
-# own Worker and the source rows, run out inside that wait. With no such row,
-# the window ends now.
+# settles it. The rest are read by later deploys: this one keeps its window in
+# the releases bucket and reads again every window earlier deploys kept, so a
+# row that landed late is a red of this report, named for its version
+# (scripts/telemetry-windows.ts). With no row that drove the deployment, the
+# window ends now.
 if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
   echo ""
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
   KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
   bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
-    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} || KINU_REDS=1
+    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" || KINU_REDS=1
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────

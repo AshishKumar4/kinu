@@ -6,9 +6,10 @@ import type { McpServerSummary } from "@kinu.run/core";
 import { mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
+import { Status } from "@/components/ui/Status";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import {
-  PluginRow, PluginStatePill, PluginTile,
+  PluginRow, PluginTile,
 } from "@/components/plugins/PluginRow";
 import { McpPresetCards, presetBrand } from "@/components/plugins/McpPresetCards";
 import { BrandMark } from "@/components/ui/BrandMark";
@@ -111,7 +112,7 @@ export default function PluginsPage() {
               return (
                 <PluginRow key={server.id} name={server.name} description={serverLine(server)}
                   state={status.label} tile={<PluginTile icon={PlugsConnectedIcon} />}
-                  trailing={<PluginStatePill status={status} />} />
+                  trailing={<Status tone={status.tone}>{status.label}</Status>} />
               );
             }))}
         />

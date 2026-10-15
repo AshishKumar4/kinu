@@ -28,7 +28,7 @@ export interface ChatImageSource {
 
 export const ChatImageContext = createContext<ChatImageSource | null>(null);
 
-export type Picture =
+type Picture =
   | { readonly kind: "file"; readonly key: string; readonly path: string; readonly machine: ImageMachine; readonly device?: string }
   | { readonly kind: "data"; readonly key: string; readonly label: string; readonly src: string }
   | { readonly kind: "web"; readonly key: string; readonly url: string; readonly host: string };

@@ -4,7 +4,7 @@
  */
 import { startTransition, useCallback, useMemo, useState } from "react";
 import type { FileUIPart } from "ai";
-import { describeError } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 import type { ComposerNotice } from "@/components/Composer";
 import type { InlineSteer } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
@@ -71,7 +71,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
       setDraft((current) => current === "" ? text : `${current}\n\n${text}`);
       setSettled(cause instanceof KinuError && cause.code === "cancelled"
         ? { id: NOTICE_ID, tone: "info", text: "Stopped before the agent read this, so it is back here." }
-        : { id: NOTICE_ID, tone: "danger", text: `Could not send to the turn: ${describeError({ cause })}` });
+        : { id: NOTICE_ID, tone: "danger", text: `Could not send to the turn: ${readFailureText({ cause })}` });
     }))));
   }, [draft, setDraft, attachments, sendChat]);
 
@@ -80,7 +80,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     startTransition(() => settle(Effect.catchCause(Effect.promise(() => abortChat()), (failed) => Effect.sync(() => {
       setSettled({
         id: NOTICE_ID, tone: "danger",
-        text: `Could not stop the turn: ${describeError({ cause: Cause.squash(failed) })}`,
+        text: `Could not stop the turn: ${readFailureText({ cause: Cause.squash(failed) })}`,
       });
     }))));
   }, [abortChat]);

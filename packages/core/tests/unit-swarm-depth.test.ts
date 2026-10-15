@@ -16,7 +16,6 @@ import { selectFrontierNode, type FrontierPolicy } from '../src/mcts/frontier';
 import { diversityAngle } from '../src/mcts/diversity';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { RunEventRecorder } from '../src/events/recorder';
-import { unpricedLedgerSink } from '../src/events/model-call-event';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
 import { explorationForkTree } from '../src/read-models/fork-tree-rows';
@@ -31,7 +30,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { LLM, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import { createTestActors, present, unobservedSpend } from '@kinu.run/test-utils';
+import { createTestActors, present, unobservedSpend, unpricedLedger } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { refuseHostNode } from './helpers-actor-host';
 
@@ -515,7 +514,7 @@ describe('a thought node\'s call is swarm spend', () => {
     const prompts: string[] = [];
 
     const result = await runSwarm(
-      { reportModelCall: unpricedLedgerSink(events), rt, hostNode: NO_NODE, model: () => answering(null, [OPTIMAL], prompts), mode: 'build' },
+      { reportModelCall: unpricedLedger(events), rt, hostNode: NO_NODE, model: () => answering(null, [OPTIMAL], prompts), mode: 'build' },
       resolved({ depth: 1, branches: 3 }),
     );
 

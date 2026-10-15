@@ -7,7 +7,7 @@ import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
-import { describeError } from "@/hooks/use-async-resource";
+import { readFailureText } from "@kinu.run/core";
 import { renderThrownChain, showing, tolerate, detach, hold } from "@kinu.run/core/obs";
 import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
@@ -28,6 +28,8 @@ export interface TerminalPaneProps {
   leading?: ReactNode;
   /** The computer's terminal session this pane attaches to (D90); the box's first without one. */
   session?: string;
+  /** The PC this pane's shell opens on, when the account has several; the one connected without it. */
+  device?: string;
   /** The pane's bar on the terminal's own ground, under a rule its caller draws, where tabs sit above it. */
   barOnGround?: boolean;
   /** What the bar's right edge offers besides the terminal's own action: a split, say. */
@@ -87,7 +89,7 @@ const KEEPALIVE_MS = 60_000;
 /** xterm's default is 1000 lines, which a build log overruns in seconds. */
 const SCROLLBACK_LINES = 5_000;
 
-export function TerminalPane({ workspace, executor, outputs, onExecute, leading, session, barOnGround, trailing }: TerminalPaneProps) {
+export function TerminalPane({ workspace, executor, outputs, onExecute, leading, session, device, barOnGround, trailing }: TerminalPaneProps) {
   const lane = terminalLane(executor);
   const frame = { leading, barOnGround, trailing };
 
@@ -95,7 +97,7 @@ export function TerminalPane({ workspace, executor, outputs, onExecute, leading,
 
   if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} frame={frame} />;
 
-  return <PtyTerminal workspace={workspace} executor={executor} session={session} frame={frame} />;
+  return <PtyTerminal workspace={workspace} executor={executor} session={session} device={device} frame={frame} />;
 }
 
 /** What a pane's caller puts in its bar, and where the bar sits. */
@@ -179,9 +181,11 @@ function useTerminalPalette(termRef: RefObject<Terminal | null>, theme: Theme): 
  * frames out. The device speaks `ready`/`exit`/`error` frames and is connected at `ready`; the native PTY sends bytes
  * only, is connected at open, and needs the keepalive and a restart the device does not.
  */
-function PtyTerminal({ workspace, executor, session, frame }: { workspace: string; executor: string; session?: string; frame: FrameParts }) {
-  // The computer's session rides every route's query; the device and its first session name none.
-  const sessionQuery = session === undefined ? "" : `&session=${encodeURIComponent(session)}`;
+function PtyTerminal({ workspace, executor, session, device: machine, frame }: { workspace: string; executor: string; session?: string; device?: string; frame: FrameParts }) {
+  // The computer's session rides every route's query; the device and its first session name none. A PC names itself.
+  const sessionQuery = (session === undefined ? "" : `&session=${encodeURIComponent(session)}`)
+    + (machine === undefined ? "" : `&device=${encodeURIComponent(machine)}`);
+
   const device = executor === "device";
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -288,7 +292,7 @@ function PtyTerminal({ workspace, executor, session, frame }: { workspace: strin
         }
       }), (failed) => Effect.sync(() => {
         if (keepaliveOperations.current.get(keepaliveKey) === owner) {
-          setFailure(describeError({ cause: Cause.squash(failed) }));
+          setFailure(readFailureText({ cause: Cause.squash(failed) }));
         }
       })), Effect.sync(() => {
         if (keepaliveOperations.current.get(keepaliveKey) === owner) {
@@ -314,7 +318,7 @@ function PtyTerminal({ workspace, executor, session, frame }: { workspace: strin
     );
 
     if (!response.ok) {
-      setFailure(describeError({ cause: await response.text() }));
+      setFailure(readFailureText({ cause: await response.text() }));
 
       return;
     }
@@ -537,13 +541,13 @@ function LineTerminal(
         if (thrown !== undefined) {
           // A rejected exec produces no output row, so clear the marker and reprint the prompt here.
           clearBusy(term, lineState);
-          term.write(`\x1b[31m${describeError(thrown)}\x1b[0m\r\n`);
+          term.write(`\x1b[31m${readFailureText(thrown)}\x1b[0m\r\n`);
           writePrompt(term);
         }
       }), (failed) => Effect.sync(() => {
         if (lineState.finishCommand(generation) && termRef.current === term) {
           clearBusy(term, lineState);
-          setFailure(describeError({ cause: Cause.squash(failed) }));
+          setFailure(readFailureText({ cause: Cause.squash(failed) }));
         }
       })), Effect.sync(() => {
         if (commandOperation.current === owner) commandOperation.current = null;

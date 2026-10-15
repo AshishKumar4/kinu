@@ -59,6 +59,13 @@ export function shortAge(at: number): string | null {
 	return `${Math.floor(s / 31_536_000)}y`;
 }
 
+const CLOCK = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+
+/** The hour and minute of a moment ("3:07 PM"), the one way the app reads a clock. */
+export function clockTime(at: number | Date): string {
+	return CLOCK.format(at);
+}
+
 export function formatBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
 

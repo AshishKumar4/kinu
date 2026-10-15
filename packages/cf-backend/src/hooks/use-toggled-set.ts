@@ -1,7 +1,7 @@
 
 import { useCallback, useState } from "react";
 
-export interface ToggledSet {
+interface ToggledSet {
 	readonly set: ReadonlySet<string>;
 	readonly toggle: (member: string) => void;
 	readonly clear: () => void;

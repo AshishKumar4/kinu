@@ -27,6 +27,21 @@ async function answer(page: Page, words: string): Promise<void> {
   }, words);
 }
 
+/** Presses the open card's button that starts with `words` (a parked batch counts its choice: "Approve 1"). */
+async function press(page: Page, words: string): Promise<void> {
+  await page.$$eval('[data-attention-card] button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.trim().startsWith(label) === true);
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} on the open card`);
+    button.click();
+  }, words);
+}
+
+/** Unticks a parked command in the open card's batch. */
+async function untick(page: Page, id: string): Promise<void> {
+  await page.click(`[data-attention-card] [data-parked-command="${id}"] input`);
+}
+
 /** The decisions sent to the agent, in order, as `[id, decision]`. */
 async function decisions(page: Page): Promise<string[][]> {
   const recorded = await page.evaluate(() => document.documentElement.dataset.galleryDecisions ?? '[]');
@@ -49,24 +64,30 @@ async function opened(page: Page, origin: string, query: string): Promise<void> 
   await page.goto(`${origin}/gallery.html?frame=workspacepage${query}`, { waitUntil: 'networkidle0' });
 }
 
-test('two approvals arrive as a stack: the newer open, answering it opens the other, and both answers reach the agent', async () => {
+test('two parked commands are one card: some are chosen and decided, the rest stay, and every answer reaches the agent', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
     await opened(page, origin, '&asks=two');
     await page.waitForSelector('[data-attention-stack]');
 
-    expect(await stacked(page)).toEqual(['action:park-publish', 'action:park-push']);
+    // Both are on the newer one's card, each ticked; none waits behind it, and one card has no place to count.
+    expect(await stacked(page)).toEqual(['action:park-publish']);
+    expect(await page.$('[data-attention-position]')).toBeNull();
+    expect(await page.$$eval('[data-attention-card] [data-parked-command] input', (boxes) => boxes.map((box) => box instanceof HTMLInputElement && box.checked)))
+      .toEqual([true, true]);
     expect(await page.$eval('[data-attention-card]', (card) => card.textContent)).toContain('npm publish --access public');
     // The Work tab reads the same queue: what it counts is what the stack holds.
     await openWork(page);
     await page.waitForFunction(() => document.querySelector('[data-section="work-needs-you"]') !== null);
     expect(await workCount(page)).toBe(2);
 
-    await answer(page, 'Approve');
+    await untick(page, 'park-push');
+    await press(page, 'Approve 1');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-push');
     expect(await stacked(page)).toEqual(['action:park-push']);
     expect(await page.$('[data-attention-position]')).toBeNull();
 
+    // One left is its own card again.
     await answer(page, 'Always allow');
     await page.waitForFunction(() => document.querySelector('[data-attention-stack]') === null);
     expect(await decisions(page)).toEqual([['park-publish', 'approved'], ['park-push', 'always']]);
@@ -88,17 +109,27 @@ test('only what waits on the owner is stacked, newest first; an older card can b
     await opened(page, origin, '&asks=mixed&consent=waiting');
     await page.waitForSelector('[data-attention-stack]');
 
-    // The version under trial waits on nobody: it stays in Work. The workspace's pane stacks its agents' asks too.
+    // The version under trial waits on nobody: it stays in Work. The workspace's pane stacks its agents' asks too; the
+    // three parked commands share the newest one's card.
     expect(await page.$eval('[data-attention-stack]', (stack) => stack.getAttribute('data-attention-count'))).toBe('7');
-    expect(await stacked(page)).toEqual(['action:park-publish', 'action:park-push', 'action:park-write']);
-    expect(await page.$eval('[data-attention-behind="action:park-write"]', (strip) => strip.textContent)).toContain('+4');
-
-    await page.click('[data-attention-behind="action:park-write"]');
-    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-write');
+    expect((await stacked(page))[0]).toBe('action:park-publish');
+    expect(await page.$$eval('[data-attention-card] [data-parked-command]', (rows) => rows.map((row) => row.getAttribute('data-parked-command'))))
+      .toEqual(['park-publish', 'park-push', 'park-write']);
     expect(await page.$eval('[data-attention-card] [data-parked-write="park-write"] button', (button) => button.getAttribute('aria-expanded'))).toBe('false');
 
-    await answer(page, 'Deny');
+    // An older card behind is answered first.
+    const older = (await stacked(page)).at(-1) ?? '';
+
+    await page.click(`[data-attention-behind="${older}"]`);
+    await page.waitForFunction((key) => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === key, {}, older);
+
+    // Back on the parked card, one command alone is denied.
+    await page.click('[data-attention-behind="action:park-publish"]');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-publish');
+    await untick(page, 'park-publish');
+    await untick(page, 'park-push');
+    await press(page, 'Deny 1');
+    await page.waitForFunction(() => document.querySelectorAll('[data-attention-card] [data-parked-command]').length === 2);
     expect(await decisions(page)).toEqual([['park-write', 'denied']]);
     await page.close();
   });
@@ -110,8 +141,9 @@ test('an account-memory proposal waits in the stack as the user object sends it,
     await opened(page, origin, '&asks=two&memory=waiting');
     await page.waitForSelector('[data-attention-card="memory:amp_city"], [data-attention-behind="memory:amp_city"]');
 
-    // Newest first: the proposal, a minute old, between the commands parked 30 s and 90 s ago.
-    expect(await stacked(page)).toEqual(['action:park-publish', 'memory:amp_city', 'action:park-push']);
+    // Newest first: the parked commands' card, the newer parked 30 s ago, then the proposal, a minute old; the command
+    // parked 90 s ago is on the commands' card, not behind it.
+    expect(await stacked(page)).toEqual(['action:park-publish', 'memory:amp_city']);
     await page.click('[data-attention-behind="memory:amp_city"]');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'memory:amp_city');
     expect(await page.$eval('[data-attention-card]', (card) => card.textContent)).toContain('owner_city: "Lisbon"');
@@ -119,7 +151,8 @@ test('an account-memory proposal waits in the stack as the user object sends it,
     await answer(page, 'Keep for every workspace');
     await page.waitForFunction(() => document.documentElement.dataset.galleryMemoryDecisions === 'amp_city:accept ');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-publish');
-    expect(await stacked(page)).toEqual(['action:park-publish', 'action:park-push']);
+    // The two parked commands are one card again.
+    expect(await stacked(page)).toEqual(['action:park-publish']);
     await page.close();
   });
 });
@@ -132,7 +165,7 @@ test('an account-memory proposal still waits in the stack when the roster socket
     await opened(page, origin, '&asks=two&memory=waiting&rosterSocket=refused');
     await page.waitForSelector('[data-attention-card="memory:amp_city"], [data-attention-behind="memory:amp_city"]');
 
-    expect(await stacked(page)).toEqual(['action:park-publish', 'memory:amp_city', 'action:park-push']);
+    expect(await stacked(page)).toEqual(['action:park-publish', 'memory:amp_city']);
     await page.close();
   });
 });
@@ -145,7 +178,8 @@ test('the next card answers at once, while the queue is still being read again a
     await opened(page, origin, '&asks=two&asksHold=1');
     await page.waitForSelector('[data-attention-stack]');
 
-    await answer(page, 'Approve');
+    await untick(page, 'park-push');
+    await press(page, 'Approve 1');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-push');
     // The re-read is held: the next card is answered before it lands.
     await answer(page, 'Deny');
@@ -187,12 +221,14 @@ test('a refused answer keeps its card open and says why; the next try lands', as
     await opened(page, origin, '&asks=two&decide=refused');
     await page.waitForSelector('[data-attention-stack]');
 
-    await answer(page, 'Approve');
-    await page.waitForSelector('[data-attention-card] [role="alert"]');
-    expect(await page.$eval('[data-attention-card] [role="alert"]', (alert) => alert.textContent)).toContain('the approval store is unavailable');
-    expect(await stacked(page)).toEqual(['action:park-publish', 'action:park-push']);
+    await untick(page, 'park-push');
+    await press(page, 'Approve 1');
+    await page.waitForFunction(() => (document.querySelector('[data-attention-card]')?.textContent ?? '').includes('the approval store is unavailable'));
+    // The choice stands: the refused one is still the one ticked.
+    expect(await page.$$eval('[data-attention-card] [data-parked-command] input', (boxes) => boxes.map((box) => box instanceof HTMLInputElement && box.checked)))
+      .toEqual([true, false]);
 
-    await answer(page, 'Approve');
+    await press(page, 'Approve 1');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-push');
     expect(await decisions(page)).toEqual([['park-publish', 'approved']]);
     await page.close();
@@ -212,6 +248,49 @@ test('an agent\'s own pane stacks the asks that agent raised, and none of the wo
     expect(await page.$$eval(`${pane} [data-attention-card], ${pane} [data-attention-behind]`, (cards) => cards.map((card) => card.getAttribute('data-attention-card') ?? card.getAttribute('data-attention-behind'))))
       .toEqual(['action:plan:coupon-auditor:pa-1:1']);
     expect(await page.$eval(`${pane} [data-attention-card]`, (card) => card.textContent)).toContain('Audit every coupon rule');
+    await page.close();
+  });
+});
+
+test("a parked command's row in Work opens its card in the workspace's chat, from an agent's chat too", async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=mixed&consent=waiting');
+    await page.waitForSelector('[data-attention-stack]');
+    // Something else is shown first.
+    const first = (await stacked(page)).at(-1) ?? '';
+
+    await page.click(`[data-attention-behind="${first}"]`);
+    await page.waitForFunction((key) => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === key, {}, first);
+    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/checkout-fixes/agents/coupon-auditor'); });
+    await openWork(page);
+    await page.waitForSelector('[data-pending-action="park-write"]');
+
+    // The workspace's own chat is shown, its stack open on that command's card, the batch it is part of.
+    await page.click('[data-pending-action="park-write"]');
+    await page.waitForFunction(() => document.querySelector('[data-agent-pane="checkout-fixes/main"] [data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-write');
+    expect(await page.$$eval('[data-attention-card] [data-parked-command]', (rows) => rows.map((row) => row.getAttribute('data-parked-command'))))
+      .toEqual(['park-publish', 'park-push', 'park-write']);
+    await page.close();
+  });
+});
+
+test("a card that arrives while the owner is on the open one waits behind it, so the press lands where they aimed", async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=two');
+    await page.waitForSelector('[data-attention-stack]');
+    expect(await stacked(page)).toEqual(['action:park-publish']);
+
+    // A proposal newer than both commands would take the front of a stack nobody is on; the pointer is on this one.
+    await page.hover('[data-attention-card] button');
+    await page.evaluate(() => { window.dispatchEvent(new Event('gallery:arrive-ask')); });
+    await page.waitForFunction(() => document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '3');
+    expect((await stacked(page))[0]).toBe('action:park-publish');
+
+    // The commands decided, the next opens: the newest that waits.
+    await press(page, 'Approve all');
+    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:proposal-late');
     await page.close();
   });
 });

@@ -25,7 +25,7 @@ import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/c
 import { accountApi, type AccountApiVariables } from './account-api';
 import * as v from 'valibot';
 
-const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
+const DeviceJoinRequestSchema = v.object({ label: v.optional(v.string()), workspace: v.optional(v.string()) });
 
 const CheckpointSchema = v.array(v.object({ key: v.string(), sealed: v.string() }));
 
@@ -35,7 +35,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'setDisplayName' | 'getProfileCatalog' | 'putProfileCatalog'
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
-  | 'setDeviceTier' | 'revokeDeviceConsent'
+  | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
@@ -251,22 +251,27 @@ userRoutes.post('/api/user/workspaces/:name/touch', (c) => settle(Effect.tryProm
   catch: (cause) => authoredRefusal({ doing: 'recording this workspace visit', cause }),
 })));
 
-// The device is issued here, so the page that asked watches the one row the machine registers as.
-userRoutes.post('/api/user/devices', async (c) => {
-  const body = await safeJson(c.req.raw, OptionalLabelSchema);
-  const cliOrigin = cliOriginFor(c);
-  const { deviceId } = await c.get('stub').issueDeviceJoin(c.get('owner'));
+// The device is issued here, so the page that asked watches the one row the machine registers as. The command carries
+// the ticket that registers it, so the machine needs no sign-in; asked from a workspace, the device is granted it.
+userRoutes.post('/api/user/devices', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const body = await safeJson(c.req.raw, DeviceJoinRequestSchema);
+    const cliOrigin = cliOriginFor(c);
+    const { deviceId, ticket } = await c.get('stub').issueDeviceJoin(c.get('owner'), body?.workspace ?? null);
 
-  const installCommand = buildCliInstallCommand({
-    origin: cliOrigin,
-    setup: false,
-    connect: true,
-    label: body?.label,
-    device: deviceId,
-  });
+    const installCommand = buildCliInstallCommand({
+      origin: cliOrigin,
+      setup: false,
+      connect: true,
+      label: body?.label,
+      device: deviceId,
+      join: ticket,
+    });
 
-  return json({ body: { origin: cliOrigin, installCommand, deviceId } }, { status: 201 });
-});
+    return json({ body: { origin: cliOrigin, installCommand, deviceId } }, { status: 201 });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'issuing a connect command', cause }),
+})));
 
 userRoutes.delete('/api/user/devices/:id/unstopped', (c) => settle(Effect.tryPromise({
   try: async () => {
@@ -316,14 +321,31 @@ userRoutes.put('/api/user/devices/:id/sandbox', async (c) => {
   return json({ body: { ok: true } });
 });
 
-userRoutes.delete('/api/user/devices/:id/consent', async (c) => {
+/** One workspace's binding to one machine, named by the path's device and the query's `agentName`. */
+function bindingAsked(c: UserContext): { readonly agentName: string; readonly deviceId: string } | null {
   const agentName = new URL(c.req.url).searchParams.get('agentName')?.trim();
 
-  if (!agentName) return err(400, 'Query must carry ?agentName=');
+  return agentName ? { agentName, deviceId: decodeURIComponent(rawParam(c, 'id')) } : null;
+}
 
-  const result = await c.get('stub').revokeDeviceConsent(
-    c.get('owner'), agentName, decodeURIComponent(rawParam(c, 'id')),
-  );
+// The owner gives this workspace this machine from the workspace's Env tab; the answer is the binding recorded.
+userRoutes.post('/api/user/devices/:id/consent', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    const asked = bindingAsked(c);
+
+    return asked === null
+      ? err(400, 'Query must carry ?agentName=')
+      : json({ body: await c.get('stub').grantDeviceConsent(c.get('owner'), asked.agentName, asked.deviceId) });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'giving this workspace the machine', cause }),
+})));
+
+userRoutes.delete('/api/user/devices/:id/consent', async (c) => {
+  const asked = bindingAsked(c);
+
+  if (asked === null) return err(400, 'Query must carry ?agentName=');
+
+  const result = await c.get('stub').revokeDeviceConsent(c.get('owner'), asked.agentName, asked.deviceId);
 
   if (!result.ok) return err(400, 'grant not revoked');
 

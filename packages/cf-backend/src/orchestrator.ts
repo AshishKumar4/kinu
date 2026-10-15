@@ -236,7 +236,7 @@ import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
-  type DeviceConsentAnswer, type DeviceConsentDecision,
+  type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal,
   type DeviceConsentRequest, type PendingDeviceConsent,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, performBoundWrite, ParkedWriteFiles,
   reviewParkedWrite, type ParkedWriteReview,
@@ -1008,6 +1008,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     for (const { event, detail } of lines) this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`);
   }
 
+  /**
+   * Whether an effect `actorId`'s settled turn owed of its own name or its advisor stands down: the agent was dismissed or
+   * retired before the effect ran, so neither is anyone's concern. An ended effect, logged as one, never as a failure.
+   */
+  private effectEnded(actorId: string, effect: 'auto_title' | 'advisor_review'): boolean {
+    const record = this.actorHost().describe(actorId);
+    const standing = record === null ? 'retired' : actorStanding(record);
+
+    if (standing === 'live') return false;
+    diagnostics.event('turn.terminal_effect_ended', { actor: actorId, effect, standing });
+
+    return true;
+  }
+
   agentWorkspace(actorId: string): AgentWorkspaceHost {
     if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
     this.agentKey(actorId);
@@ -1111,7 +1125,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         });
       },
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
-      autoTitle: (subject, title) => hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject, title),
+      // An ended agent's name is no one's concern: nothing to title.
+      autoTitle: async (subject, title) => this.effectEnded(actorId, 'auto_title') ? null : await hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject, title),
       turnSettled: async (settled) => {
         if (!actorPolicy(this.agentOf(actorId)).workspaceAgent) {
           return settleSync(Effect.fail(new KinuError('denied', "Only the workspace's own agent hands its turns to the workspace.")));
@@ -1122,6 +1137,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       runSettled: async (run) => { this.runSettled(actorId, run); },
       hireAdvisor: async (advisor) => {
+        if (this.effectEnded(actorId, 'advisor_review')) return;
         const reference = actorReferenceOf(this.actingAgentOf(actorId));
 
         await this.actorAdvisor(this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' })).hire(advisor);
@@ -2418,12 +2434,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Parked commands, held: DeferredApprovalStore's create, decide, spend and settle run over `sql`, which drops them. */
   private readonly queuedApprovals = this.held.hold(['deferred_approvals'], () => this.deferrals.approvals());
 
-  /** Approvals combine consent prompts and parked commands; a parked command's effect has not happened. Consents expire
-   *  with time, so they are read each time. */
+  private readonly consentApprovals = this.held.hold(['device_consent_asks'], () => this.consents.approvals());
+
+  /** Approvals combine device consent asks and parked commands; a parked command's effect has not happened. */
   protected override extraDynamicContext(): ActorDynamicContextExtras {
     return {
       approvals: () => {
-        const items = [...this.consents.approvals(), ...this.queuedApprovals()];
+        const items = [...this.consentApprovals(), ...this.queuedApprovals()];
 
         return { items, total: items.length };
       },
@@ -4064,6 +4081,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._consents ??= new DeviceConsentRegistry({
       store: new DeviceConsentStore(this.boundSql),
       newId: () => `cons-${nanoid(10)}`,
+      wake: this.ownerAnswerWake('device consent'),
       // Wire shapes stay inline: the broadcast-wiring gate reads `broadcast({ type: … })` off source.
       announce: (notice) => {
         this.overviewChanged();
@@ -4116,10 +4134,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return settle(Effect.map(this.proposals.decide(asked.id, asked.answer), (decided) => ({ decided: decided !== null, workspace: decided?.workspace ?? null })));
   }
 
-  /** Called by the UserDO over DO RPC. Resolves on decision or `timeout`; `timeout` is not
-   *  `deny`, since an unanswered prompt means the owner was away. */
-  async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
-    return this.consents.request(req);
+  /** Called by the UserDO over DO RPC: what a device call may do now. A call that raises or re-issues a waiting ask is
+   *  NOT RUN, and the owner's answer wakes its asker. */
+  async askDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentVerdict> {
+    return this.consents.ask(req);
   }
 
   async announceDeviceUnavailable(
@@ -4138,7 +4156,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async resolveDeviceConsent(consentId: string, decision: DeviceConsentAnswer): Promise<{ ok: boolean }> {
-    return { ok: this.consents.resolve(consentId, decision) };
+    return { ok: await this.consents.resolve(consentId, decision) };
   }
 
   /** Lets the chat re-render cards after a reload. */
@@ -4147,14 +4165,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.consents.list();
   }
 
+  /** Wakes the actor an owner's answer is for. Read through `this.orch` at delivery time, never captured: the queues
+   *  that wake are reachable from the runtime's own construction path. A hire is woken on its own durable queue, as its
+   *  jobs wake it. */
+  private ownerAnswerWake(answered: string): (actorId: string, signal: AgentSignal) => Effect.Effect<void, KinuError> {
+    return (actorId, signal) => Effect.asVoid(attempt({ doing: `waking ${actorId} with the owner's ${answered}`, otherwise: 'io' }, () => this.agentDeliveries(actorId).signals.send(signal)));
+  }
+
   // Deferred approval (core safety/deferred-approval.ts): only a parked write runs on approval.
   protected _deferrals: DeferredApprovalQueue | null = null;
   protected get deferrals(): DeferredApprovalQueue {
     this._deferrals ??= new DeferredApprovalQueue({
       store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
-      // Read through `this.orch` at delivery time, never captured: this getter is reachable
-      // from the runtime's own construction path. A hire is woken on its own durable queue, as its jobs wake it.
-      wake: (actorId, signal) => Effect.asVoid(attempt({ doing: `waking ${actorId} with the owner's decision`, otherwise: 'io' }, () => this.agentDeliveries(actorId).signals.send(signal))),
+      wake: this.ownerAnswerWake('decision'),
       // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
       // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
@@ -6323,7 +6346,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return {
         ...snapshot,
-        pendingActions: reads.pendingActions, backgroundJobs: reads.backgroundJobs, workspaceWork: reads.workspaceWork,
+        // The work rows decide the tab's presence here; the page's one work read draws them.
+        pendingActions: reads.pendingActions, backgroundJobs: reads.backgroundJobs,
         inspectedWork: reads.inspectedWork, subordinates, pendingConsents, workspaceAgents,
       };
     }));
@@ -6424,7 +6448,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private slowOverview: {
     readonly sqlRevision: number;
     readonly slateRevision: number;
-    readonly expiresAt: number;
     readonly inputs: Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun' | 'awaitsSettings'>;
   } | null = null;
 
@@ -6433,11 +6456,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const slateRevision = storeRevision(this.ctx.storage.sql);
     const held = this.slowOverview;
 
-    if (held !== null && held.sqlRevision === sqlRevision && held.slateRevision === slateRevision && Date.now() < held.expiresAt) {
-      return held.inputs;
-    }
-
-    const pendingConsents = new DeviceConsentStore(this.boundSql).live(Date.now());
+    if (held !== null && held.sqlRevision === sqlRevision && held.slateRevision === slateRevision) return held.inputs;
+    const pendingConsents = this.consents.list();
 
     const [activePlan, listing, hostedPlans, questions] = await Promise.all([
       this.getActivePlanReview(),
@@ -6465,10 +6485,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return this.overviewInputs();
     }
 
-    this.slowOverview = {
-      sqlRevision, slateRevision, inputs,
-      expiresAt: pendingConsents.reduce((at, consent) => Math.min(at, consent.expiresAt), Infinity),
-    };
+    this.slowOverview = { sqlRevision, slateRevision, inputs };
 
     return inputs;
   }
@@ -6763,6 +6780,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   openDeviceTerminal(
     window: { cols: number; rows: number },
+    /** The PC the pane names, when the account has several connected; the one connected without it. */
+    device?: string,
   ): Promise<{ session: string; user: string } | { error: string }> {
     return settle(Effect.suspend(() => {
       const user = this.getOwnerUserId();
@@ -6771,7 +6790,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
       return Effect.matchCause(Effect.promise(async () => this.requireOwnerUserDO().openDeviceTerminal(
-        await this.userCaller(), this.workspaceName(), window,
+        await this.userCaller(), this.workspaceName(), window, device,
       )), {
         onSuccess: (opened) => ({ session: opened.session, user }),
         onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),

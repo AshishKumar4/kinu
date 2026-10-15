@@ -73,7 +73,7 @@ export function useAgentsNav(): AgentsNavValue {
 }
 
 /** The open workspace's agents, and whether the sidebar shows them in place of the workspace list. */
-export interface OpenAgentsPanel {
+interface OpenAgentsPanel {
   readonly panel: WorkspaceAgentsPanel | null;
   readonly drilled: boolean;
 }

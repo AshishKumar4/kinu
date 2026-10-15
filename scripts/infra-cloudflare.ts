@@ -32,6 +32,7 @@ import { classifyErrorCode, tolerate } from '@kinu.run/core/obs';
 import { deployedConfig, type InfraEnvironment } from './infra-manifest';
 import { deleteApplicationByRest, deletedByRest, restCall } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
+import { HealthSchema } from './served-health';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
 export function environmentArgs(environment: InfraEnvironment): readonly string[] {
@@ -149,6 +150,18 @@ export function wrangler(argv: readonly string[], run: WranglerRun = {}): Run {
     stderr: result.stderr ?? '',
     code: result.status ?? -1,
   };
+}
+
+/** The object at `bucket/key` in R2 as text, or none where the bucket holds no such key: wrangler's own words for an
+ *  object that does not exist. Any other failure is no answer at all, and throws. */
+export function r2Text(bucket: string, key: string): string | undefined {
+  const read = wrangler(['r2', 'object', 'get', `${bucket}/${key}`, '--pipe', '--remote'], { timeoutMs: 600_000 });
+
+  if (read.ok) return read.stdout;
+
+  if (`${read.stderr}\n${read.stdout}`.includes('The specified key does not exist.')) return undefined;
+
+  throw new Error(`wrangler r2 object get ${bucket}/${key} failed: ${why(read)}`);
 }
 
 /** Built rather than written as a literal: an escape character inside a regex
@@ -625,12 +638,6 @@ export function secretListing(run: Run): Observation & { readonly names?: readon
 
 /* ── Routes, domains and DNS ──────────────────────────────────────────── */
 
-/** `/api/health`'s build stamp. Only the field that identifies the Worker. */
-// `build` is null until the first FULL deploy stamps the assets — a stampless
-// Kinu is still THIS Worker (the smoke gate owns sha equality, deploy.sh:315),
-// and refusing it made the first gated deploy impossible: the gate demanded a
-// stamp only the deploy it was blocking could create.
-const HealthStamp = v.object({ build: v.nullable(v.object({ sha: v.string() })) });
 
 /**
  * Whether a hostname reaches THIS Worker, asked of the internet rather than of
@@ -678,7 +685,10 @@ const PreviewRefusal = v.object({ code: v.literal('NOT_A_PREVIEW') });
  *  Pure, so the classification is testable without the network. */
 export function routeAnswer(url: string, status: number, body: JsonValue): Observation {
   if (status >= 500) return unknown(`${url} answered ${String(status)} — reachable but unwell`);
-  const stamp = v.safeParse(HealthStamp, body);
+  // `build` is null until the first FULL deploy stamps the assets — a stampless Kinu is still THIS Worker (the smoke
+  // gate owns sha equality), and refusing it made the first gated deploy impossible: the gate demanded a stamp only
+  // the deploy it was blocking could create.
+  const stamp = v.safeParse(HealthSchema, body);
 
   if (stamp.success) {
     const hostname = new URL(url).hostname;

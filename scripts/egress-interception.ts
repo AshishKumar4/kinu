@@ -23,7 +23,7 @@ const WORKER_ENTRY = 'packages/cf-backend/src/server.ts';
 
 export function readInterceptionSources(): Map<string, string> {
   return readMatching(file => isProductSource(file) || (file.startsWith("packages/devbox/")
-    && isParseable(file) && !isTestFile(file) && !file.includes("/tests/")));
+    && isParseable(file) && !isTestFile(file)));
 }
 
 /**

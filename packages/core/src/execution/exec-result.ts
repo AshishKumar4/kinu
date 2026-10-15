@@ -56,11 +56,12 @@ export function commandResult(result: ExecOutcome): CommandResult {
   return (result.exitCode ?? 0) === 0 ? output : refusalOf(new KinuError('io', output, { execution: { exitCode: result.exitCode ?? 0 } }));
 }
 
-/** As the shell tool answers the model: a command that ran says first where it started. Programs read `commandResult`. */
-export function commandResultAt(result: ExecOutcome): CommandResult {
+/** With `reportCwd`, as the shell tool answers the model: a command that ran says first where it started. Without, as
+ *  programs read it (`commandResult`). */
+export function commandResultAt(result: ExecOutcome, reportCwd: boolean): CommandResult {
   const answer = commandResult(result);
 
-  if (result.cwd === undefined || result.refusal !== undefined) return answer;
+  if (!reportCwd || result.cwd === undefined || result.refusal !== undefined) return answer;
 
   return v.is(v.string(), answer) ? `cwd: ${result.cwd}\n${answer}` : { ...answer, error: `cwd: ${result.cwd}\n${answer.error}` };
 }
