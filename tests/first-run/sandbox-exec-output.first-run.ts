@@ -22,11 +22,11 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
-import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
+import { isBackgroundHandle, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents, settledJob } from './turn-settlement';
 import { EXEC_OUTPUT_ASK as ASK, EXEC_OUTPUT_COMMANDS as COMMANDS } from './asks';
-import { isBackgroundHandle, type RunEvent } from '../../packages/core/src/index';
+import type { RunEvent } from '../../packages/core/src/index';
 
 const SUITE = 'First-run · sandbox-exec-output';
 

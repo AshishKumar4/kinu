@@ -102,7 +102,6 @@
   "packages/core/src/identity/naming.ts#workspaceTitlePrompt (unreached-export)",
   "packages/core/src/jobs/runner.ts#MAX_CONCURRENT_DETACHED_JOBS (unreached-export)",
   "packages/core/src/jobs/runner.ts#backgroundJobWakeTrigger (unreached-export)",
-  "packages/core/src/jobs/threshold.ts#isBackgroundHandle (unreached-export)",
   "packages/core/src/mcts/evaluation.ts#isParseFailure (unreached-export)",
   "packages/core/src/mcts/evaluation.ts#judgeCallBudget (unreached-export)",
   "packages/core/src/memory/note.ts#MEMORY_TAIL_MAX_CHARS (unreached-export)",

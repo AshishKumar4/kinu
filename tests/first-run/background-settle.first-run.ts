@@ -1,6 +1,6 @@
 import { afterAll, describe, test } from 'vitest';
-import { isBackgroundHandle, type RunEvent } from '../../packages/core/src/index';
-import type { EvalObservation } from '@kinu.run/test-utils';
+import type { RunEvent } from '../../packages/core/src/index';
+import { isBackgroundHandle, type EvalObservation } from '@kinu.run/test-utils';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { SETTLE_ASK, SETTLE_MARKER as MARKER } from './asks';
 import { backgroundSettleWait, firstRunReplyText } from './turn-settlement';

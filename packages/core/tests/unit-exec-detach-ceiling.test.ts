@@ -3,14 +3,13 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
-import { createTestActorsOver, handClock, hostDeliveries, oneMachine, present, toolExecute } from '@kinu.run/test-utils';
+import { createTestActorsOver, handClock, hostDeliveries, oneMachine, present, toolExecute, isBackgroundHandle } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { createHubDeviceTransport, type DeviceHubClient } from '../src/execution/hub-device-transport';
 import type { DeviceExecOutput } from '../src/execution/device-tunnel';
 import type { ExecutorProvider } from '../src/execution/types';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
-import { isBackgroundHandle } from '../src/jobs/threshold';
 import { wrapToolsForBackground, type BackgroundableTool } from '../src/jobs/background-wrap';
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner, type BackgroundJobRunnerDeps } from '../src/jobs/runner';

@@ -7,8 +7,7 @@ import {
   USAGE_FIELDS, WORKSPACE_RUN_ID,
   type HeadFileChange, type RunEvent, type Usage,
 } from '../src/index';
-import { present, testActorHandle } from '@kinu.run/test-utils';
-import { isBackgroundHandle } from '../src/jobs/threshold';
+import { present, testActorHandle, isBackgroundHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
 /** The page a read gets when it states no limit. */

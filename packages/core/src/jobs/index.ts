@@ -11,7 +11,6 @@ export {
 export {
   withBackgroundThreshold,
   withSpawnDetach,
-  isBackgroundHandle,
   BACKGROUND_POLICY,
   invocationBackgroundPolicy,
   SPAWN_STARTED_OPTION,
