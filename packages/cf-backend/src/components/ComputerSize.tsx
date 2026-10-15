@@ -6,16 +6,16 @@ import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu
 import { Card, Choice, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { getAccountSandboxSize, setAccountSandboxSize } from "../lib/user-api";
-import { ACCOUNT_DEFAULT, sandboxSizeText, sizeSpecs, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/sandbox-size-text";
-import type { SandboxSizeState } from "../sandbox-size";
+import { getAccountComputerSize, setAccountComputerSize } from "../lib/user-api";
+import { ACCOUNT_DEFAULT, computerSizeText, sizeSpecs, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/computer-size-text";
+import type { ComputerSizeState } from "../computer-size";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const shownIn = (show: (message: string) => void) => (failure: { readonly cause?: unknown }) =>
   Effect.sync(() => { show(renderThrownChain({ cause: failure.cause ?? failure })); });
 
-export interface ComputerSizeState {
-  readonly state: SandboxSizeState | null;
+export interface ComputerSizeControl {
+  readonly state: ComputerSizeState | null;
   /** What the size it runs at, or will start at, gives: `2 vCPU · 8 GiB`. */
   readonly specs: string | null;
   readonly pending: "resize" | "start" | null;
@@ -33,7 +33,7 @@ const startPending = (pending: "resize" | "start" | null) => (pending === "start
  * reads it again first: a computer its terminal woke since the page read it restarts, and the view says so (staging
  * f1f0b451b kept a terminal through the restart, then showed it closed).
  */
-export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSizeState {
+export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSizeControl {
   const load = useCallback(() => (enabled ? rpc("getComputerSize", []) : Promise.resolve(null)), [rpc, enabled]);
   const { resource, set } = useAsyncResource(load);
   const [pending, setPending] = useState<"resize" | "start" | null>(null);
@@ -41,11 +41,11 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
   const [choosing, setChoosing] = useState<BoxSize | null>(null);
   const state = lastValue(resource);
 
-  const act = (action: "resize" | "start", doing: string, change: () => Promise<SandboxSizeState | null>) => {
+  const act = (action: "resize" | "start", doing: string, change: () => Promise<ComputerSizeState | null>) => {
     setPending(action);
     setFailure(null);
 
-    const call = (read: () => Promise<SandboxSizeState | null>) => attempt({ doing, otherwise: "io" }, read).pipe(
+    const call = (read: () => Promise<ComputerSizeState | null>) => attempt({ doing, otherwise: "io" }, read).pipe(
       Effect.map((next) => { if (next !== null) set(next); }),
     );
 
@@ -87,7 +87,7 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
 }
 
 /** The head's size control: the size's name, and every size with what it gives in its list. */
-export function ComputerSize({ state: size }: { state: ComputerSizeState }) {
+export function ComputerSize({ state: size }: { state: ComputerSizeControl }) {
   const { state } = size;
 
   if (state === null) return null;
@@ -108,8 +108,8 @@ export function ComputerSize({ state: size }: { state: ComputerSizeState }) {
   );
 }
 
-export function SandboxSizeSettings() {
-  const { resource, reload, set } = useAsyncResource(getAccountSandboxSize);
+export function ComputerSizeSettings() {
+  const { resource, reload, set } = useAsyncResource(getAccountComputerSize);
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -117,7 +117,7 @@ export function SandboxSizeSettings() {
     setSaving(true);
     setFailure(null);
 
-    return attempt({ doing: "saving the default computer size", otherwise: "io" }, () => setAccountSandboxSize(size)).pipe(
+    return attempt({ doing: "saving the default computer size", otherwise: "io" }, () => setAccountComputerSize(size)).pipe(
       Effect.map(() => { set(size); }),
       Effect.catch(shownIn(setFailure)),
       Effect.ensuring(Effect.sync(() => { setSaving(false); })),
@@ -133,7 +133,7 @@ export function SandboxSizeSettings() {
             <Choice
               label="Default computer size"
               value={account ?? DEFAULT_BOX_SIZE}
-              options={BOX_SIZE_ORDER.map((size) => ({ value: size, label: sandboxSizeText(size) }))}
+              options={BOX_SIZE_ORDER.map((size) => ({ value: size, label: computerSizeText(size) }))}
               onChange={(value) => detach(choose(value))}
               disabled={saving}
             />
