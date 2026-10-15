@@ -6,9 +6,10 @@ import { runFixtures, type FixtureRun, type Manifest, type Verdict } from './upg
 
 /** A deployment as the fixtures meet it: the bucket's anchor, and what the fixture account still holds. */
 function staging(holds: { anchor: Manifest | null; kept: boolean }) {
-  const retired: string[] = [];
+  // Each sweep, by the anchor it kept.
+  const swept: string[] = [];
   const checked: string[] = [];
-  const state = { anchor: holds.anchor, kept: holds.kept, seeds: 0, retired, fresh: 0, checked };
+  const state = { anchor: holds.anchor, kept: holds.kept, seeds: 0, swept, fresh: 0, checked };
 
   const run: FixtureRun = {
     anchor: async () => state.anchor,
@@ -39,7 +40,7 @@ function staging(holds: { anchor: Manifest | null; kept: boolean }) {
       // What the seed made is what the account holds now.
       state.kept = true;
     },
-    retire: async (made) => { state.retired.push(made.seededAt); },
+    sweep: async (kept) => { state.swept.push(kept?.seededAt ?? 'nothing'); },
   };
 
   return { state, run };
@@ -57,7 +58,7 @@ test('a continuity miss is red, run twice, and leaves the baseline and the ancho
 
   expect(await runFixtures(run, silent)).toBe(false);
   expect(await runFixtures(run, silent)).toBe(false);
-  expect(state).toEqual({ anchor: BASELINE, kept: false, seeds: 0, retired: [], fresh: 0, checked: ['baseline', 'baseline'] });
+  expect(state).toEqual({ anchor: BASELINE, kept: false, seeds: 0, swept: [], fresh: 0, checked: ['baseline', 'baseline'] });
 });
 
 test('every fixture gone while the anchor is still there is a miss, never a first seed', async () => {
@@ -71,20 +72,22 @@ test('after a full reset, which deletes the anchor, one first seed; the deploy a
   const { state, run } = staging({ anchor: null, kept: false });
 
   expect(await runFixtures(run, silent)).toBe(true);
-  expect({ seeds: state.seeds, anchor: state.anchor?.seededAt, checked: state.checked }).toEqual({ seeds: 1, anchor: 'seed-1', checked: [] });
+  // What runs that stopped part way left is swept with it: everything but the first anchor.
+  expect({ seeds: state.seeds, anchor: state.anchor?.seededAt, checked: state.checked, swept: state.swept })
+    .toEqual({ seeds: 1, anchor: 'seed-1', checked: [], swept: ['seed-1'] });
 
   expect(await runFixtures(run, silent)).toBe(true);
-  expect({ seeds: state.seeds, anchor: state.anchor?.seededAt, checked: state.checked, retired: state.retired })
-    .toEqual({ seeds: 2, anchor: 'seed-2', checked: ['seed-1'], retired: ['seed-1'] });
+  expect({ seeds: state.seeds, anchor: state.anchor?.seededAt, checked: state.checked, swept: state.swept })
+    .toEqual({ seeds: 2, anchor: 'seed-2', checked: ['seed-1'], swept: ['seed-1', 'seed-2'] });
   // Each seed's file takes the path the baseline's does not.
   expect(state.anchor?.note.path).toBe('notes/upgrade-b.md');
 });
 
-test('a seed that does not hold is removed, and the anchor stays the baseline it would have replaced', async () => {
+test('a seed that does not hold is swept, keeping the baseline, which stays the anchor', async () => {
   const { state, run } = staging({ anchor: BASELINE, kept: true });
 
   const failing: FixtureRun = { ...run, seed: async (made) => ({ ...await run.seed(made), verdicts: [['the seed holds', false, 'its share never arrived']] }) };
 
   expect(await runFixtures(failing, silent)).toBe(false);
-  expect({ anchor: state.anchor?.seededAt, retired: state.retired }).toEqual({ anchor: 'baseline', retired: ['seed-1'] });
+  expect({ anchor: state.anchor?.seededAt, swept: state.swept }).toEqual({ anchor: 'baseline', swept: ['baseline'] });
 });
