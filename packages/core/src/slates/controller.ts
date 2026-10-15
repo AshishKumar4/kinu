@@ -30,6 +30,7 @@ import type { SlateProcess } from './process';
 import { parseSlateProject, slateTitle, type SlateProject } from './project';
 import {
   requireSlateWorkMode, slateIdFor, SlateOperationSchema, type SlateAnswer, type SlateCallResult, type SlateOperation, type SlateProblem, type SlateSummary,
+  SlateFileChangeSchema, SlateFilePath, type SharedSlateFiles, type SlateFileChange,
 } from './rpc';
 import { WorkspaceSlates } from './runtime';
 import type { BlueprintBundle, BlueprintFork, SlateCapabilityGraph } from './sharing';
@@ -84,6 +85,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   /** The slate's room goes with it: its people, grants, state and sessions, so its pages answer nothing. */
   forgetRoom?(slate: string): Promise<void>;
   previewed?(slate: string): void;
+  /** A slate someone shared with this workspace's owner: read or changed through its room, as that owner. */
+  readonly shared?: (caller: SlateCaller, operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>) => Promise<SlateCallResult>;
 }
 
 /** `body`'s value, or its failure as the refusal `doing` names: a slate answer never fails. */
@@ -246,6 +249,13 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       case 'restore': return running(async () => answered({ value: (await (await this.slates(caller.cred)).restore(new SlateId(operation.id), new SlateVersionId(operation.version))).toData() }));
       case 'graph': return running(async () => answered({ value: await this.graph(operation.id) }));
       case 'save': return running(async () => this.savePage(caller, operation.page));
+      case 'sharedFiles': case 'sharedEdit': {
+        const { shared } = this.ports;
+
+        if (shared === undefined) return Effect.fail(new KinuError('unsupported', 'Editing a slate someone shared with you needs the cloud'));
+
+        return running(async () => shared(caller, operation));
+      }
     }
   }
 
@@ -291,6 +301,63 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
       return { slates, problems };
     }));
+  }
+
+  /** The text files of `slate`'s tree, as an editor's agent reads them: its source, not its dependencies or history. */
+  sharedFiles(slate: string): Promise<SlateAnswer<SharedSlateFiles>> {
+    return settle(answer(`reading slate ${slate}'s files`, Effect.gen({ self: this }, function* () {
+      const vfs = (yield* Effect.promise(async () => this.ports.session())).vfs.as(CRED_SESSION_USER);
+      const root = `${SLATES_ROOT}/${slate}`;
+
+      if (!vfs.exists(root)) return yield* new KinuError('missing', `No slate ${slate}`);
+      const files: { path: string; text: string }[] = [];
+      const pending = [root];
+
+      for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+        for (const entry of vfs.readdir(dir)) {
+          const path = `${dir}/${entry.name}`;
+          const relative = path.slice(root.length + 1);
+
+          if (!v.is(SlateFilePath, relative)) continue;
+
+          if (entry.type === 'directory') pending.push(path);
+
+          if (entry.type !== 'file') continue;
+          const bytes = vfs.readFile(path);
+
+          if (!bytes.includes(0)) files.push({ path: relative, text: new TextDecoder().decode(bytes) });
+        }
+      }
+
+      return { files: files.sort((a, b) => a.path.localeCompare(b.path)) };
+    })));
+  }
+
+  /** An editor's change to `slate`'s files, written where the workspace keeps them; what builds of it is the editor's. */
+  writeShared(slate: string, files: SlateFileChange): Promise<SlateAnswer<readonly string[]>> {
+    return settle(answer(`changing slate ${slate}'s files`, Effect.gen({ self: this }, function* () {
+      const change = v.safeParse(SlateFileChangeSchema, files);
+
+      if (!change.success) return yield* new KinuError('bad_input', change.issues[0].message);
+      const vfs = (yield* Effect.promise(async () => this.ports.session())).vfs.as(CRED_SESSION_USER);
+      const root = `${SLATES_ROOT}/${slate}`;
+
+      if (!vfs.exists(root)) return yield* new KinuError('missing', `No slate ${slate}`);
+
+      for (const [path, text] of Object.entries(change.output)) {
+        const at = `${root}/${path}`;
+
+        if (text === null) {
+          if (vfs.exists(at)) vfs.unlink(at);
+          continue;
+        }
+
+        vfs.mkdir(at.slice(0, at.lastIndexOf('/')), { recursive: true });
+        vfs.writeFile(at, text);
+      }
+
+      return Object.keys(change.output).sort();
+    })));
   }
 
   /** An answer's page kept as a slate of the workspace's own: its HTML as the slate's page, under the page's title. */

@@ -44,6 +44,27 @@ export type SlateSurfaceResult = SlateAnswer<SlateSurfaceValue>;
 
 const VersionId = v.pipe(v.string(), v.minLength(1));
 
+/** A file of a slate's tree as an editor names it: relative, plain segments, nothing of its dependencies or its history. */
+export const SlateFilePath = v.pipe(
+  v.string(),
+  v.regex(/^[\w.-]+(?:\/[\w.-]+)*$/u, 'A slate file is a relative path of plain names'),
+  v.check((path) => !path.split('/').some((part) => part === '.' || part === '..'), 'A slate file path stays inside the slate'),
+  v.check((path) => !/^(?:node_modules|\.git)(?:\/|$)/u.test(path), 'A slate file is its source, not its dependencies or history'),
+);
+
+/** An editor's change to a shared slate's files: each path's new text, or null to delete it. */
+export const SlateFileChangeSchema = v.pipe(v.record(SlateFilePath, v.nullable(v.string())), v.check((files) => Object.keys(files).length > 0, 'A change names a file'));
+
+export type SlateFileChange = v.InferOutput<typeof SlateFileChangeSchema>;
+
+/** A shared slate's text files, as an editor's agent reads them. */
+export const SharedSlateFilesSchema = v.object({ files: v.array(v.object({ path: v.string(), text: v.string() })) });
+
+export type SharedSlateFiles = v.InferOutput<typeof SharedSlateFilesSchema>;
+
+/** Another workspace's slate, as the room that shares it is named: its workspace and its directory there. */
+const SharedSlateAddress = { workspace: v.pipe(v.string(), v.minLength(1)), slate: SlateDirectoryName };
+
 
 
 export const SlateOperationSchema = v.variant('op', [
@@ -60,6 +81,9 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('graph'), id: SlateDirectoryName }),
   // Keeps an answer's `<slate-ui>` page, addressed as the chat draws it, as a slate with files under its title.
   v.strictObject({ op: v.literal('save'), page: v.pipe(v.string(), v.minLength(1)) }),
+  // A slate someone shared with this workspace's owner to edit: its files read, and changed, through its room.
+  v.strictObject({ op: v.literal('sharedFiles'), ...SharedSlateAddress }),
+  v.strictObject({ op: v.literal('sharedEdit'), ...SharedSlateAddress, files: SlateFileChangeSchema }),
 ]);
 
 export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
@@ -78,6 +102,8 @@ export const SLATE_PROGRAM_MEMBERS = {
   graph: { on: 'slate', params: [] },
   restore: { on: 'slate', params: ['version'] },
   save: { on: 'directory', params: ['page'] },
+  sharedFiles: { on: 'directory', params: ['workspace', 'slate'] },
+  sharedEdit: { on: 'directory', params: ['workspace', 'slate', 'files'] },
 } as const satisfies Record<Exclude<SlateOperation['op'], 'call'>, SlateMemberSpec>;
 
 function programMember(operation: SlateOperation): string {
@@ -87,8 +113,8 @@ function programMember(operation: SlateOperation): string {
 }
 
 const READ_ONLY_OPERATIONS: Record<SlateOperation['op'], boolean> = {
-  list: true, history: true, graph: true,
-  preview: false, methods: false, call: false, commit: false, fork: false, restore: false, remove: false, save: false,
+  list: true, history: true, graph: true, sharedFiles: true,
+  preview: false, methods: false, call: false, commit: false, fork: false, restore: false, remove: false, save: false, sharedEdit: false,
 };
 
 /** Reads run in Plan; the rest change resources or run authored code, as `methods` does by booting the slate. */

@@ -123,7 +123,7 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type BlueprintBundle, type BlueprintFork, type SlateAnswer,
+  type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SharedSlateFiles, type SlateFileChange,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
@@ -5814,6 +5814,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return room;
       },
       ownerEmail: async () => (await this.email.ownerEmail())?.toLowerCase() ?? null,
+      // This workspace's owner editing a slate shared with them: its room, which knows who may edit it, decides.
+      shared: (operation) => this.editShared(operation),
       forgetRoom: async (slate) => {
         await this.slateRoom(slate).retire();
         this.slateRooms.forget(slate);
@@ -5908,6 +5910,36 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable() async listSlates() {
     return (await this.slates()).controller.list(ROOT_SLATE_CALLER);
+  }
+
+  /** DO-only: this workspace's owner reading or changing a slate shared with them to edit; its room, which knows who may, decides. */
+  editShared(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateAnswer<SharedSlateFiles | readonly string[]>> {
+    return settle(slateAnswer(`editing ${operation.workspace}/${operation.slate}`, Effect.gen({ self: this }, function* () {
+      const owner = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.email.ownerEmail());
+
+      if (owner === null) return yield* new KinuError('denied', 'This workspace has no owner to edit as');
+      const editor = owner.toLowerCase();
+      const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(operation.workspace, roomHandle(operation.workspace, operation.slate))));
+
+      const answered = yield* attempt({ doing: 'asking the slate\'s room', otherwise: 'unavailable' },
+        async () => (operation.op === 'sharedFiles' ? room.editorFiles(editor) : room.editorEdit(editor, operation.files)));
+
+      if (answered === null) return yield* new KinuError('denied', `${operation.slate} is not shared with you to edit`);
+
+      if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
+
+      return answered.value;
+    })));
+  }
+
+  /** DO-only: one of this workspace's slates' files, for an editor its room let in. */
+  async slateFilesFor(slate: string): Promise<SlateAnswer<SharedSlateFiles>> {
+    return (await this.slates()).controller.sharedFiles(slate);
+  }
+
+  /** DO-only: an editor's change to one of this workspace's slates, which its room let in; built and published as theirs. */
+  async editSlateAs(slate: string, editor: string, files: SlateFileChange): Promise<SlateAnswer<readonly string[]>> {
+    return (await this.slates()).editAs(slate, editor.toLowerCase(), files);
   }
 
   /** DO-only: a fork's bundle of one of this workspace's slates, its code alone; its room has said who may fork it. */

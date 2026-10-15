@@ -5,7 +5,7 @@ import { objectNamed } from '@kinu.run/core';
 import { type SlateCaller } from '@kinu.run/core/slates';
 import type {
   BlueprintBundle, BlueprintFork, JsonValue, OperationCaller, OperationListing, OperationResult, SlateAnswer,
-  SlateCallRequest, SlateCallResult, SlateOperation, SlateSurfaceResult,
+  SlateCallRequest, SlateCallResult, SlateOperation, SlateSurfaceResult, SharedSlateFiles, SlateFileChange,
 } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 
@@ -22,6 +22,10 @@ export interface WorkspaceOwnerRpc {
   cancelOperation(callId: string): Promise<void>;
   /** Admits a fork of `parent` (`<workspace>/<slate>`): its room, when made, knows the code is not its owner's. */
   admitBlueprint(bundle: BlueprintBundle, parent: string): Promise<SlateAnswer<BlueprintFork>>;
+  /** A slate's text files, for an editor its room let in. */
+  slateFilesFor(slate: string): Promise<SlateAnswer<SharedSlateFiles>>;
+  /** An editor's change to a slate, which its room let in: written, built, and published as theirs. */
+  editSlateAs(slate: string, editor: string, files: SlateFileChange): Promise<SlateAnswer<readonly string[]>>;
   /** A fork's bundle of a slate: its code alone. */
   slateForkBundle(slate: string, source: string): Promise<SlateAnswer<BlueprintBundle>>;
   /** The modules of a slate's image, by content digest, for its room to load; refused when one is gone. */

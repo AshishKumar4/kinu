@@ -318,6 +318,9 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   draftRoom(workspace: string, id: string): Promise<boolean>;
   roomExists(workspace: string, id: string): Promise<boolean>;
   rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }>;
+  editorEdits(input: { workspace: string; id: string; editorWorkspace: string; editor: string; server: string }): Promise<{
+    before: string; files: string[]; edited: string; page: string | null; author: string | null; afterRemoval: string;
+  }>;
   putPicture(workspace: string, slate: string, digest: string): Promise<void>;
   pictureKeys(workspace: string): Promise<string[]>;
   openWorkspace(workspace: string, owner: string): Promise<void>;

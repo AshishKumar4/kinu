@@ -13,7 +13,7 @@ import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { cookieForTicket, frameTicket, roomHandle, roomObjectName, ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { handleSlateRoomHostRequest } from '../../src/slates/room-routes';
-import { ROOM_PERSON_HEADER } from '../../src/slates/room';
+import { ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
 import { GALLERY_OBJECT } from '../../src/gallery/gallery-do';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -23,7 +23,7 @@ import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
-import type { JsonValue } from '@kinu.run/core';
+import { SharedSlateFilesSchema, type JsonValue, type SlateCallResult } from '@kinu.run/core';
 import type {
   DurabilityReservation,
   PreviewAnswer,
@@ -731,6 +731,72 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
    * link the Gallery listed before the removal, and the one it lists after, still let a visitor in.
    */
   async rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }> {
+    const { room, call, close } = await this.ownerSocket(workspace, id);
+    const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
+    const listed = async (): Promise<string | null> => (await gallery.slate(workspace, id, null))?.listing.url ?? null;
+
+    await call({ op: 'setAudience', audience: 'anyone' });
+    await call({ op: 'list', line: 'A probe slate', category: 'fun' });
+    const before = await listed();
+
+    await call({ op: 'invite', email: 'gone@probe.local', role: 'use' });
+    await call({ op: 'remove', email: 'gone@probe.local' });
+    const after = await listed();
+    const opens = async (url: string | null): Promise<boolean> => url !== null && await room.ticketFor(null, new URL(url, 'https://app.test').searchParams.get('k')) !== null;
+
+    close();
+
+    return { moved: before !== after, before: await opens(before), after: await opens(after) };
+  }
+
+  /**
+   * The owner of `workspace` adds the owner of `editorWorkspace` to edit slate `id`, and the editor's own workspace reads
+   * and changes it through the room: what each step answered, and the page and author after the edit.
+   */
+  async editorEdits(input: { workspace: string; id: string; editorWorkspace: string; editor: string; server: string }): Promise<{
+    before: string; files: string[]; edited: string; page: string | null; author: string | null; afterRemoval: string;
+  }> {
+    const target = await this.workspaceTarget(input.editorWorkspace);
+
+    await this.claimWorkspace(target, input.editorWorkspace, input.editor);
+    const email = probeEmail(input.editor);
+    const editor = workspaceOwner(this.env, input.editorWorkspace);
+    const shared = { workspace: input.workspace, slate: input.id };
+    const said = (answer: SlateCallResult): string => (answer.ok ? 'ok' : answer.reason);
+    const before = said(await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedEdit', ...shared, files: { 'server.ts': input.server } }));
+    const { room, call, close } = await this.ownerSocket(input.workspace, input.id);
+
+    await call({ op: 'invite', email, role: 'edit' });
+    const read = await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedFiles', ...shared });
+    const files = read.ok ? v.parse(SharedSlateFilesSchema, read.value).files.map((file) => file.path) : [];
+    const edited = said(await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedEdit', ...shared, files: { 'server.ts': input.server } }));
+    const ticket = await room.ticketFor({ email: this.ctx.storage.kv.get<string>(`owner:${input.workspace}`) ?? '', name: 'owner' }, null);
+    const page = ticket === null ? null : await this.pageAt(ticket);
+    const author = await room.author();
+
+    await call({ op: 'remove', email });
+    const afterRemoval = said(await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedEdit', ...shared, files: { 'server.ts': input.server } }));
+
+    close();
+
+    return { before, files, edited, page, author, afterRemoval };
+  }
+
+  /** A page of the slate's own host, entered with `entry`, as the owner's frame opens it. */
+  private async pageAt(entry: string): Promise<string | null> {
+    const exchange = await handleSlateRoomHostRequest(new Request(entry), this.env);
+    const cookie = exchange?.headers.get('set-cookie')?.split(';')[0];
+
+    if (cookie === undefined) return null;
+    const page = await handleSlateRoomHostRequest(new Request(`${new URL(entry).origin}/`, { headers: { cookie } }), this.env);
+
+    return page === null ? null : await page.text();
+  }
+
+  /** The room's own socket, as its owner holds it: each call answered in turn. */
+  private async ownerSocket(workspace: string, id: string): Promise<{
+    room: DurableObjectStub<SlateRoom>; call: (body: JsonValue) => Promise<void>; close: () => void;
+  }> {
     const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, roomHandle(workspace, id))));
     const owner = this.ctx.storage.kv.get<string>(`owner:${workspace}`) ?? '';
 
@@ -760,21 +826,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       await answered.promise;
     };
 
-    const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
-    const listed = async (): Promise<string | null> => (await gallery.slate(workspace, id, null))?.listing.url ?? null;
-
-    await call({ op: 'setAudience', audience: 'anyone' });
-    await call({ op: 'list', line: 'A probe slate', category: 'fun' });
-    const before = await listed();
-
-    await call({ op: 'invite', email: 'gone@probe.local', role: 'use' });
-    await call({ op: 'remove', email: 'gone@probe.local' });
-    const after = await listed();
-    const opens = async (url: string | null): Promise<boolean> => url !== null && await room.ticketFor(null, new URL(url, 'https://app.test').searchParams.get('k')) !== null;
-
-    socket.close();
-
-    return { moved: before !== after, before: await opens(before), after: await opens(after) };
+    return { room, call, close: () => { socket.close(); } };
   }
 
   /** Whether `id`'s room still holds anything of the slate's. */

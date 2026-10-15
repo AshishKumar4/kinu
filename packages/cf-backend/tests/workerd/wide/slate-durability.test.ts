@@ -226,6 +226,20 @@ it('the owner removing someone re-keys the link, and the Gallery lists the new o
   expect(await subject.rekeyedListing('durability-rekeyed', 'listed')).toEqual({ moved: true, before: false, after: true });
 });
 
+it('someone added to edit a slate changes it from their own workspace: built in the owner’s, published as theirs', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('edited'));
+
+  await subject.serveSlate({ workspace: 'durability-edited', owner: 'durability-owner', id: 'board', body: 'owner-body' });
+
+  expect(await subject.editorEdits({
+    workspace: 'durability-edited', id: 'board', editorWorkspace: 'durability-editor-ws', editor: 'durability-editor',
+    server: 'import { SlateObject } from "kinu:slate";\nexport class Slate extends SlateObject {\n  async fetch() { return new Response("editor-body"); }\n}\n',
+  })).toEqual({
+    // Not added yet, then added: the files read, the change built and published as theirs, then removed again.
+    before: 'denied', files: ['package.json', 'server.ts'], edited: 'ok', page: 'editor-body', author: 'durability-editor@probe.local', afterRemoval: 'denied',
+  });
+});
+
 it('a removed slate’s picture goes with it, and its neighbour’s stays', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('pictures'));
   await subject.serveSlate({ workspace: 'durability-pictures', owner: 'durability-owner', id: 'keeper', body: 'keeper-body' });

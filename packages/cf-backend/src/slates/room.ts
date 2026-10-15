@@ -22,6 +22,7 @@ import {
   type JsonValue, type OpsCaller, type PartView, type Repair, type RoomAccess, type RoomAsk, type RoomAudience, type RoomCall,
   type RoomPerson, type RoomReach, type RoomServerFrame, type RoomService, type RoomSource, type RoomView, type SheetView,
   GALLERY_CATEGORIES, slateHostOrigin, type BlueprintBundle, type ForkPreview, type SerializableToolDescriptor, type SlateAnswer, type SlateSurfaceResult,
+  type SharedSlateFiles, type SlateFileChange,
   type SlateSurfaceValue, type TablesAnswer,
 } from '@kinu.run/core';
 import {
@@ -1475,6 +1476,33 @@ export class SlateRoom extends DurableObject<Env> {
         return { fn, lent: lent !== undefined, needs: used === undefined ? null : serviceOf(used.server) };
       }),
     };
+  }
+
+  /** Who published the code running now: its owner, or someone they added to edit it. Null before it first ran. */
+  async author(): Promise<string | null> {
+    return this.exists() ? this.caretaker.room().imageAuthor : null;
+  }
+
+  /**
+   * The slate's files, for someone the owner added to edit it, read by their own agent from their own workspace. The
+   * workspace that asks names its owner; the room answers only a person it lets edit.
+   */
+  async editorFiles(editor: string): Promise<SlateAnswer<SharedSlateFiles> | null> {
+    if (!this.exists() || !this.caretaker.canEdit(editor)) return null;
+    const room = this.caretaker.room();
+
+    return await workspaceOwner(this.env, room.workspace).slateFilesFor(room.slate);
+  }
+
+  /**
+   * An editor's change to the slate's files: written in its owner's workspace, built there, and published here as the
+   * editor's, so the editor's own grants follow it and everyone else's wait for their holders (`RoomCaretaker.publish`).
+   */
+  async editorEdit(editor: string, files: SlateFileChange): Promise<SlateAnswer<readonly string[]> | null> {
+    if (!this.exists() || !this.caretaker.canEdit(editor)) return null;
+    const room = this.caretaker.room();
+
+    return await workspaceOwner(this.env, room.workspace).editSlateAs(room.slate, editor, files);
   }
 
   /** The code a visitor who may fork the slate gets: its workspace's bundle of it, or null when they may not. */

@@ -319,7 +319,7 @@ export type { SlateProcess } from './slates/process';
 
 export {
   isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, isJsonAnswer,
-  type SlateSummary, type SlateProblem,
+  type SlateSummary, type SlateProblem, SharedSlateFilesSchema, type SharedSlateFiles, type SlateFileChange,
 } from './slates/rpc';
 
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateStorageCall } from './slates/state';

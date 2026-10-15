@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import {
-  SlateController, slateAnswer, heldSlateKey, initEphemeralSlateTable, initSlateUsageTable, slateStorageCall,
+  SlateController, slateAnswer, heldSlateKey, initEphemeralSlateTable, initSlateUsageTable, slateStorageCall, ROOT_SLATE_CALLER,
   type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
 } from '@kinu.run/core/slates';
 import {
@@ -10,7 +10,7 @@ import {
   SlateCallRequestSchema, workModeRefusal, routeSlateCall, issuedSlateInvocation,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
-  type SlateSurfaceCatalog, type EphemeralSlateAddress,
+  type SlateSurfaceCatalog, type EphemeralSlateAddress, SharedSlateFilesSchema, type SharedSlateFiles, type SlateFileChange, type SlateOperation,
 } from '@kinu.run/core';
 import { attempt, inItsWords, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -50,6 +50,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   slateRoom(id: string, title: string, owner: string): Promise<SlateRoomStub>;
   /** The workspace owner's email, as rooms name people; null where the workspace has no owner with one. */
   ownerEmail(): Promise<string | null>;
+  /** A slate another workspace's owner shared with this one's to edit, read or changed through its room (`SlateRoom.editorFiles`). */
+  shared?(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateAnswer<SharedSlateFiles | readonly string[]>>;
 }
 
 /** What the host asks of a slate's room. */
@@ -102,6 +104,7 @@ export class SlateHost {
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.forgetRoom !== undefined && { forgetRoom: deps.forgetRoom.bind(deps) }),
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
+      ...(deps.shared !== undefined && { shared: async (_caller: SlateCaller, operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>) => this.shared(operation) }),
     });
     this.resident = new ResidentSlateProcesses({
       session: deps.session, facetManager: deps.facetManager, bundler: deps.bundler, retained: () => this.controller.builds.retained(),
@@ -274,6 +277,42 @@ export class SlateHost {
     });
   }
 
+  /** The editor of a slate whose build is being published now, while an edit of theirs builds: its room's image author. */
+  private readonly editing = new Map<string, string>();
+
+  /**
+   * An editor's change to one of this workspace's slates, by way of its room, which said they may edit it: the files
+   * written, then built and published to the room as the editor's, so only the editor's own grants follow the new image.
+   */
+  editAs(id: string, editor: string, files: SlateFileChange): Promise<SlateAnswer<readonly string[]>> {
+    return settle(slateAnswer(`${editor}'s edit of slate ${id}`, Effect.gen({ self: this }, function* () {
+      const written = yield* Effect.promise(async () => this.controller.writeShared(id, files));
+
+      if (!written.ok) return yield* new KinuError(written.reason, written.error);
+      this.editing.set(id, editor);
+      yield* Effect.ensuring(
+        attempt({ doing: `building slate ${id}`, otherwise: 'io' }, async () => this.ensure(ROOT_SLATE_CALLER, id)),
+        Effect.sync(() => { this.editing.delete(id); }),
+      );
+
+      return written.value;
+    })));
+  }
+
+  /** This workspace's owner reading or changing a slate shared with them: answered as a slate operation answers. */
+  shared(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateCallResult> {
+    return settle(slateAnswer(`slate ${operation.workspace}/${operation.slate}`, Effect.gen({ self: this }, function* () {
+      const answered = yield* attempt({ doing: 'asking the slate\'s room', otherwise: 'unavailable' }, async () => this.deps.shared?.(operation) ?? null);
+
+      if (answered === null) return yield* new KinuError('unsupported', 'This workspace edits no shared slate');
+
+      if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
+
+      // Its files cross from another workspace's object: held to their shape as every reader of them holds them.
+      return operation.op === 'sharedFiles' ? v.parse(SharedSlateFilesSchema, answered.value) : v.parse(v.array(v.string()), answered.value);
+    })));
+  }
+
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
     return (await this.controller.processes.booted(caller, id)).process;
   }
@@ -294,7 +333,7 @@ export class SlateHost {
       if (!version.ok) return yield* new KinuError(version.reason, version.error);
 
       const { methods } = yield* attempt({ doing: `publishing slate ${id}`, otherwise: 'unavailable' }, async () => room.publish({
-        author: owner, image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title: slateTitle(source.project, id), secret,
+        author: this.editing.get(id) ?? owner, image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title: slateTitle(source.project, id), secret,
         source: version.value,
       }));
 

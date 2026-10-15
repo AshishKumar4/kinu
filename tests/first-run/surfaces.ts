@@ -87,4 +87,5 @@ export const CAPABILITY_ROWS = {
   'a correction sent while the agent works': ['steer-correction'],
   'several accounts of one provider, each listed and chosen per workspace': ['multi-account'],
   'a turn rated from the user\'s reply by the decision model': ['turn-rated'],
+  'a slate edited from their own workspace by someone its owner added to edit it': ['slate-edit'],
 } as const satisfies Record<string, Rows>;
