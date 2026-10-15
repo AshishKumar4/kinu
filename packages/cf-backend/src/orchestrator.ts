@@ -169,7 +169,6 @@ import {
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
-  EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
   type EmailAdmission, type IncomingEmail,
   PeerHub, type PeerMessage, type ReceiveResult,
   getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
@@ -250,11 +249,8 @@ import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold,
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
-import { agentEmailAddress } from "./email/inbound";
-import {
-  createEmailThreadDispatcher,
-  sendInboundEmailReceipt, sendOwnerEmail,
-} from "./email/outbound";
+import { createEmailThreadDispatcher } from "./email/outbound";
+import { WorkspaceEmail } from "./workspace-email";
 import { EmailOutbox } from "@kinu.run/core";
 import {
   acceptSandboxLifecycleIncident, initSandboxLifecycleTable,
@@ -2409,7 +2405,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return { items, total: items.length };
       },
       extraMissingCapabilities: () => {
-        const deafInbox = this.emailInbox.dropNotice(Date.now());
+        const deafInbox = this.email.inbox.dropNotice(Date.now());
 
         return deafInbox ? [deafInbox] : [];
       },
@@ -2606,7 +2602,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;
-        this.emailOwnerNotification('Evolution changelog digest', event.message);
+        this.email.ownerNotification('Evolution changelog digest', event.message);
       });
     }
 
@@ -3354,7 +3350,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected notifyOwner(subject: string, body: string): void {
-    this.emailOwnerNotification(subject, body);
+    this.email.ownerNotification(subject, body);
   }
 
   /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision. */
@@ -7023,97 +7019,53 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.peerHub.receive(msg);
   }
 
-  /** Null means unclaimed or no profile email. A failed lookup must throw, not read as null
-   * and silently refuse the owner's own mail. */
-  private async getOwnerEmail(): Promise<string | null> {
-    if (!this.getOwnerUserId()) return null;
-    const { stub, caller } = await this.userHub();
-
-    return (await stub.getProfile(caller))?.email ?? null;
-  }
-
-  private _emailInbox: EmailInbox | null = null;
-  /** Held across the activation, like the in-memory inbound rate window it owns. */
-  private get emailInbox(): EmailInbox {
-    this._emailInbox ??= new EmailInbox({
+  private _email: WorkspaceEmail | null = null;
+  /** Held across the activation, like the in-memory inbound rate window its inbox owns. */
+  private get email(): WorkspaceEmail {
+    this._email ??= new WorkspaceEmail({
       log: this.eventLog,
       replies: this.replyChannels,
       triggers: this.triggerRegistry,
       vfs: () => this.rt.storage.vfs,
       sql: this.ctx.storage.sql,
-      ownerEmail: () => this.getOwnerEmail(),
       onAdmitted: () => { this.armDurableWake(); },
+      env: this.env,
+      name: this.name,
+      outbox: () => this.emailOutbox,
+      displayName: () => this.safeDisplayName(),
+      notifications: () => this.config.getEmailNotificationsEnabled(),
+      setNotifications: (enabled) => { this.config.setEmailNotificationsEnabled(enabled); },
+      operatorConnected: () => this.ctx.getWebSockets().length > 0,
+      owned: () => this.getOwnerUserId() !== null,
+      hub: () => this.userHub(),
+      detach: (work) => { this.detachOwned(work); },
     });
 
-    return this._emailInbox;
+    return this._email;
   }
 
   /** Pre-parse sender check so unauthorized senders cannot force a MIME parse; admits nothing,
    * the delivery re-checks. */
   async authorizeEmailSender(from: string): Promise<{ authorized: boolean; reason?: string }> {
-    return this.emailInbox.authorizes(from);
+    return this.email.inbox.authorizes(from);
   }
 
-  /** Email counterpart of acceptWebhookDelivery: trust gate, publish, and reply thread run here
-   * atomically. Receipt is awaited (floating promises die on eviction) and sent only on fresh admission. */
+  /** Email counterpart of acceptWebhookDelivery: trust gate, publish, and reply thread run here atomically. */
   async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
-    const admission = await this.emailInbox.accept(opts);
-
-    if (admission.admitted && !admission.duplicate && admission.thread && admission.event_id) {
-      await sendInboundEmailReceipt({
-        email: this.env.EMAIL,
-        agentDisplayName: this.safeDisplayName(),
-        outbox: this.emailOutbox,
-      }, admission.thread, admission.event_id);
-    }
-
-    return admission;
+    return await this.email.accept(opts);
   }
 
   async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
-    const domain = this.env.EMAIL_DOMAIN;
-
-    return {
-      address: domain ? agentEmailAddress(this.name, domain) : null,
-      allowlist: readEmailAllowlist(this.triggerRegistry),
-      notifications: this.config.getEmailNotificationsEnabled(),
-    };
+    return this.email.ingress();
   }
 
-  /** Owner's verified address is always allowed; an empty list revokes the email_route trigger.
-   * Reached only through the owner-authenticated + step-up route. */
+  /** Reached only through the owner-authenticated + step-up route. */
   async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
-    return setEmailAllowlist(this.triggerRegistry, allow, Date.now());
+    return await this.email.allow(allow);
   }
 
   async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {
-    this.config.setEmailNotificationsEnabled(enabled);
-
-    return { notifications: this.config.getEmailNotificationsEnabled() };
-  }
-
-  /** Skipped when notifications are off, platform pieces are missing, or an operator socket is live
-   * (email is the away channel, not a duplicate feed). */
-  private emailOwnerNotification(subject: string, text: string): void {
-    const notification = planOwnerNotification({
-      enabled: this.config.getEmailNotificationsEnabled(),
-      operatorConnected: this.ctx.getWebSockets().length > 0,
-      subject,
-      text,
-    });
-
-    if (!notification) return;
-    this.detachOwned(logged('email.owner_notification_failed', { doing: 'sending the owner an away-channel notification', otherwise: 'unavailable' },
-      async () => {
-        await sendOwnerEmail({
-          email: this.env.EMAIL,
-          emailDomain: this.env.EMAIL_DOMAIN,
-          agentName: this.name,
-          agentDisplayName: this.safeDisplayName(),
-          ownerEmail: await this.getOwnerEmail(),
-          outbox: this.emailOutbox,
-        }, notification);
-      }, { subject }));
+    return this.email.notify(enabled);
   }
 
   /** Newest first; returns bare rows, not an envelope. Reachable via CLI RPC with no route in the
