@@ -70,8 +70,8 @@ A workspace holds the state. Agents are the actors that work inside it.
   them is peer mail, not a report up a tree. Subordinates stay children: they
   inherit their root's directory as their workspace plane, keep their own SQL
   identity, and never hold the peer transport. Each agent owns one durable
-  conversation, its id recorded in `agent_config`
-  (`canonicalConversationId`, `packages/core/src/config/conversation.ts`). An
+  conversation, the chat session `CHAT_SESSION_ID`
+  (`packages/core/src/session/transcript-schema.ts`). An
   interactive CLI, a one-shot `kinu exec` and the daemon's agent host drive
   that same conversation instead of minting one per process. Recorded JSONL
   files are diagnostics.
