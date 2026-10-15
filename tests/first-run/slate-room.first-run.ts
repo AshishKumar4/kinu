@@ -112,20 +112,7 @@ function openRoom(origin: string, headers: Readonly<Record<string, string>>, pat
   return opened.promise;
 }
 
-describe(SUITE, () => {
-  liveTest(`MEASURED: ${CASE}`, async () => {
-    if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
-    await runFirstRunCase(PLAN, {
-      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
-      purpose: 'A slate shared with a second account in its room, used together, then the person removed; no model task.',
-      async run({ session, plan }) {
-        const goals: EvalSubgoal[] = [];
-        const owner = webHeaders(plan.identity);
-        const recipient = webHeaders({ ...plan.identity, account: 'devices' });
-        const workspace = session.workspace;
-        const entry = async (headers: Record<string, string>) => await fetch(`${plan.origin}${roomEntryPath(workspace, SLATE)}`, { headers });
-
-        const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /slates/${SLATE}
+const PROBE_SOURCE = `mkdir -p /slates/${SLATE}
 cat > /slates/${SLATE}/package.json <<'END'
 {"main":"server.ts","slate":{"title":"Room probe"}}
 END
@@ -140,80 +127,121 @@ export class Slate extends SlateObject {
   }
   async fetch() { return new Response("${BODY}"); }
 }
-END`));
+END`;
+
+/** The room as its pieces are reached from the app's origin. */
+interface Room {
+  readonly origin: string;
+  readonly workspace: string;
+  entry(headers: Record<string, string>): Promise<Response>;
+  socket(headers: Record<string, string>): Promise<RoomSocket>;
+}
+
+/** A session on the slate's own host: entered through its view's ticket, its calls under the cookie that sets. */
+interface HostSession {
+  readonly entered: number | null;
+  readonly page: number | null;
+  readonly body: string | null;
+  call(method: string, args: unknown[]): Promise<Response | null>;
+}
+
+async function enterHost(view: RoomView | null): Promise<HostSession> {
+  const frame = view?.session.frame ?? '';
+  const entered = frame === '' ? null : await fetch(frame, { redirect: 'manual' });
+  const cookie = entered?.headers.get('set-cookie')?.split(';')[0] ?? null;
+  const host = frame === '' ? '' : new URL(frame).origin;
+  const page = cookie === null ? null : await fetch(`${host}/`, { headers: { cookie } });
+
+  return {
+    entered: entered?.status ?? null, page: page?.status ?? null, body: page === null ? null : await page.text(),
+    call: async (method, args) => cookie === null ? null : await fetch(`${host}/__kinu/call`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ method, args }),
+    }),
+  };
+}
+
+/** The added person uses the slate, then the owner removes them: what each saw. */
+async function usedThenRemoved(room: Room, owner: RoomSocket, people: { recipient: Record<string, string>; email: string }): Promise<EvalSubgoal[]> {
+  const member = await room.socket(people.recipient);
+
+  try {
+    const host = await enterHost(await member.view((each) => each.session.frame !== ''));
+    const call = await host.call('add', ['member']);
+    const called = call === null ? null : v.safeParse(Called, await call.json());
+
+    const used: EvalSubgoal = {
+      what: 'added-person-uses-the-same-slate',
+      reached: host.page === 200 && host.body === BODY && called?.success === true && called.output.value.value === 2,
+      detail: JSON.stringify({ entered: host.entered, page: host.page, body: host.body?.slice(0, 80) ?? null, call: call?.status ?? null }),
+    };
+
+    await owner.call({ op: 'remove', email: people.email });
+    const ended = await member.view((each) => each.ended !== null);
+    const after = await host.call('add', ['again']);
+    const afterEntry = await room.entry(people.recipient);
+
+    return [used, {
+      what: 'removed-person-is-ended', reached: ended?.ended?.kind === 'removed' && after?.status === 403 && afterEntry.status === 403,
+      detail: JSON.stringify({ ended: ended?.ended ?? null, call: after?.status ?? null, entry: afterEntry.status }),
+    }];
+  } finally {
+    member.close();
+  }
+}
+
+async function sharedAndUsed(room: Room, headers: { owner: Record<string, string>; recipient: Record<string, string> }, email: string): Promise<EvalSubgoal[]> {
+  const owner = await room.socket(headers.owner);
+
+  try {
+    const added = await owner.call({ op: 'invite', email, role: 'edit' });
+    const memberEntry = await room.entry(headers.recipient);
+    const opened = memberEntry.ok ? v.parse(RoomEntrySchema, await memberEntry.json()) : null;
+
+    const admitted: EvalSubgoal = {
+      what: 'added-person-opens', reached: 'id' in added && added.refusal === null && opened?.access === 'edit',
+      detail: JSON.stringify({ added, entry: memberEntry.status, access: opened?.access ?? null }),
+    };
+
+    return [admitted, ...await usedThenRemoved(room, owner, { recipient: headers.recipient, email })];
+  } finally {
+    await owner.call({ op: 'remove', email });
+    owner.close();
+  }
+}
+
+describe(SUITE, () => {
+  liveTest(`MEASURED: ${CASE}`, async () => {
+    if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
+    await runFirstRunCase(PLAN, {
+      id: CASE, defect: DEFECT, modelCalls: 'none', genesis: false,
+      purpose: 'A slate shared with a second account in its room, used together, then the person removed; no model task.',
+      async run({ session, plan }) {
+        const owner = webHeaders(plan.identity);
+        const recipient = webHeaders({ ...plan.identity, account: 'devices' });
+
+        const room: Room = {
+          origin: plan.origin, workspace: session.workspace,
+          entry: async (headers) => await fetch(`${plan.origin}${roomEntryPath(session.workspace, SLATE)}`, { headers }),
+          socket: async (headers) => await openRoom(plan.origin, headers, roomSocketPath(session.workspace, SLATE)),
+        };
+
+        const setup = v.parse(Exec, await session.execute('workspace', PROBE_SOURCE));
 
         if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
         const { email } = v.parse(Profile, await (await fetch(`${plan.origin}/api/user/profile`, { headers: recipient })).json());
         const first = await session.slateOp({ op: 'call', id: SLATE, method: 'add', args: ['owner'] });
-
-        goals.push({ what: 'owner-call-publishes', reached: JSON.stringify(first) === JSON.stringify(1), detail: JSON.stringify(first).slice(0, 200) });
-
-        const ownerEntry = await entry(owner);
+        const ownerEntry = await room.entry(owner);
         const ownerOpened = ownerEntry.ok ? v.parse(RoomEntrySchema, await ownerEntry.json()) : null;
-        const strangerEntry = await entry(recipient);
+        const strangerEntry = await room.entry(recipient);
 
-        goals.push({
-          what: 'unshared-is-refused', reached: ownerOpened?.access === 'owner' && strangerEntry.status === 403,
-          detail: JSON.stringify({ owner: ownerEntry.status, access: ownerOpened?.access ?? null, recipient: strangerEntry.status }),
-        });
-
-        const ownerRoom = await openRoom(plan.origin, owner, roomSocketPath(workspace, SLATE));
-
-        try {
-          const added = await ownerRoom.call({ op: 'invite', email, role: 'edit' });
-          const memberEntry = await entry(recipient);
-          const opened = memberEntry.ok ? v.parse(RoomEntrySchema, await memberEntry.json()) : null;
-
-          goals.push({
-            what: 'added-person-opens', reached: 'id' in added && added.refusal === null && opened?.access === 'edit',
-            detail: JSON.stringify({ added, entry: memberEntry.status, access: opened?.access ?? null }),
-          });
-
-          const memberRoom = await openRoom(plan.origin, recipient, roomSocketPath(workspace, SLATE));
-
-          try {
-            const view = await memberRoom.view((each) => each.session.frame !== '');
-            const frame = view?.session.frame ?? '';
-            const entered = frame === '' ? null : await fetch(frame, { redirect: 'manual' });
-            const cookie = entered?.headers.get('set-cookie')?.split(';')[0] ?? null;
-            const host = frame === '' ? '' : new URL(frame).origin;
-            const page = cookie === null ? null : await fetch(`${host}/`, { headers: { cookie } });
-            const pageBody = page === null ? null : await page.text();
-
-            const call = cookie === null ? null : await fetch(`${host}/__kinu/call`, {
-              method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ method: 'add', args: ['member'] }),
-            });
-
-            const called = call === null ? null : v.safeParse(Called, await call.json());
-
-            goals.push({
-              what: 'added-person-uses-the-same-slate',
-              reached: page?.status === 200 && pageBody === BODY && called?.success === true && called.output.value.value === 2,
-              detail: JSON.stringify({ entered: entered?.status ?? null, page: page?.status ?? null, body: pageBody?.slice(0, 80) ?? null, call: call?.status ?? null }),
-            });
-
-            await ownerRoom.call({ op: 'remove', email });
-            const ended = await memberRoom.view((each) => each.ended !== null);
-
-            const after = cookie === null ? null : await fetch(`${host}/__kinu/call`, {
-              method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ method: 'add', args: ['again'] }),
-            });
-
-            const afterEntry = await entry(recipient);
-
-            goals.push({
-              what: 'removed-person-is-ended', reached: ended?.ended?.kind === 'removed' && after?.status === 403 && afterEntry.status === 403,
-              detail: JSON.stringify({ ended: ended?.ended ?? null, call: after?.status ?? null, entry: afterEntry.status }),
-            });
-          } finally {
-            memberRoom.close();
-          }
-        } finally {
-          await ownerRoom.call({ op: 'remove', email });
-          ownerRoom.close();
-        }
-
-        return goals;
+        return [
+          { what: 'owner-call-publishes', reached: JSON.stringify(first) === JSON.stringify(1), detail: JSON.stringify(first).slice(0, 200) },
+          {
+            what: 'unshared-is-refused', reached: ownerOpened?.access === 'owner' && strangerEntry.status === 403,
+            detail: JSON.stringify({ owner: ownerEntry.status, access: ownerOpened?.access ?? null, recipient: strangerEntry.status }),
+          },
+          ...await sharedAndUsed(room, { owner, recipient }, email),
+        ];
       },
     }, observations);
   });
