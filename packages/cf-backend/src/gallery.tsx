@@ -6,7 +6,7 @@ import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Link, MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { mainPanelAgent, restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
@@ -20,7 +20,7 @@ import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  TrashIcon, BrainIcon, GearIcon, ListIcon, UsersThreeIcon,
+  TrashIcon, BrainIcon, ListIcon,
 } from "@phosphor-icons/react";
 import "virtual:kinu-theme.css";
 import "./index.css";
@@ -38,7 +38,7 @@ import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
 import { Composer, useProviderWaitNotice, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import type { WorkMode } from "@kinu.run/core";
-import { WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
+import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
@@ -4280,10 +4280,7 @@ function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {
         : { agent, to: "/workspace/checkout-fixes", rename: async () => {}, remove: () => {} }))}
       active={active}
       newChat="/workspace/checkout-fixes/new"
-      trailing={<>
-        <button type="button" className="p-bar-icon" aria-label="All agents" title="All agents"><UsersThreeIcon size={16} /></button>
-        <Link to="/workspace/checkout-fixes/settings" className="p-bar-icon" aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
-      </>}
+      trailing={<WorkspaceBarActions workspace="checkout-fixes" working={0} view={undefined} inspector={null} onAgents={() => {}} />}
     />
   );
 }
