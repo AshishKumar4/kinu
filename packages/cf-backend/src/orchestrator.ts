@@ -4254,7 +4254,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const agents = await Promise.all(reached.map(async ({ name, placement }) => ({ name, ...await (await agentFacet(this.ctx, this.env, placement)).opsTables() })));
 
     // Every slate's room, by name: a room is made on its slate's first run, and one never made answers an empty census.
-    const slates = this.storageRefusal === undefined && this.addressedName !== null
+    // A Nimbus sibling holds no slates.
+    const slates = !this.nimbusSibling && this.storageRefusal === undefined
       ? this.ctx.storage.sql.exec('SELECT DISTINCT id FROM slates').toArray().map((row) => v.parse(v.object({ id: v.string() }), row).id)
       : [];
 
@@ -4262,8 +4263,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return {
       name: workspace, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
-      workspaces: [], accounts: [], agents,
-      rooms: workspace === null ? [] : slates.map((slate) => roomObjectName(workspace, roomHandle(workspace, slate))),
+      workspaces: [], accounts: [], agents, rooms: slates.map((slate) => roomObjectName(workspace, roomHandle(workspace, slate))),
     };
   }
 
