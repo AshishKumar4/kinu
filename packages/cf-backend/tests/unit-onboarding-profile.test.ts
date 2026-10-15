@@ -12,6 +12,7 @@ import { getProfile, setDisplayName } from '../src/lib/user-api';
 import { accountRoutes, type AccountRoutesEnv } from '../src/user/account-routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { serveFamily } from './helpers/api';
+import { unreachableNamespace } from './helpers/bindings';
 import { workspaceObject } from './helpers/bindings';
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -30,6 +31,7 @@ test('a new account names itself in onboarding and reads its profile back', asyn
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     UserDO: { idFromName: (name) => name, get: () => user.userDO },
     OrchestratorAgent: { idFromName: (name) => name, get: () => workspaceObject({}) },
+    GALLERY: unreachableNamespace('GALLERY'),
   };
 
   // The app mounts the owner-only account family ahead of the user family (api/app.ts).

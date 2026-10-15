@@ -1172,6 +1172,7 @@ const PUBLIC_API = [
   '/api/shared/blueprint/', // a signed blueprint id
   '/api/workspaces/:name/webhook/', // a signed delivery URL
   '/api/rooms/', // a slate room's link key, or the session its route reads itself
+  '/api/gallery', // read by anyone; a star or report reads its session itself
 ];
 
 describe('worker wiring', () => {

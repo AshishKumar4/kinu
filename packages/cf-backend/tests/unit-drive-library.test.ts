@@ -51,10 +51,13 @@ async function ownerWorld(): Promise<{ env: Env; user: TestUserDO; agent: ActorH
 
  return agent.agent; } },
     UserDO: { idFromName: (name: string) => name, get: () => user.userDO },
+    // The Gallery holds no star of theirs.
+    GALLERY: { idFromName: (name: string) => name, get: () => ({ starred: async () => [] }) },
   });
 
-  // SAFETY: constructed above is every member the shared routes read: the account namespace whose tiles the library
-  // lists and the workspace namespace it must not touch. Nothing unassigned is reachable from the requests driven.
+  // SAFETY: constructed above is every member the shared routes read: the account namespace whose tiles and cards the
+  // library lists, the Gallery's stars, and the workspace namespace it must not touch. Nothing unassigned is reachable
+  // from the requests driven.
   const env = partialEnv as Env;
 
   cleanups.push(() => { user.close(); });

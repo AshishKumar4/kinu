@@ -236,6 +236,11 @@ export class SlateBuilds {
     if (slates.length > 0) this.#failing.clear();
   }
 
+  /** Every slate a build was recorded for and not forgotten since: each one published has a room. */
+  slates(): string[] {
+    return this.db.exec(`SELECT DISTINCT slate FROM slate_images ORDER BY slate`).toArray().map((row) => v.parse(v.object({ slate: v.string() }), row).slate);
+  }
+
   forget(slate: string): void {
     this.db.exec(`DELETE FROM slate_images WHERE slate = ?`, slate);
     this.db.exec(`DELETE FROM slate_build_inputs WHERE slate = ?`, slate);

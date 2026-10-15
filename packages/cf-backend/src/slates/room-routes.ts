@@ -6,7 +6,7 @@
 import { Hono, type Context } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
-import { hostTokenHolds, parseSlateShareLabel, previewHostSuffix, RoomEntrySchema, type RoomEntry } from '@kinu.run/core';
+import { hostTokenHolds, parseSlateShareLabel, previewHostSuffix, RoomEntrySchema, safeJson, type Forked, type RoomEntry } from '@kinu.run/core';
 import { requestIdentity, type AuthIdentity } from '../auth/session';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
@@ -56,6 +56,8 @@ function addressOf(c: Context) {
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
+const ForkBody = v.object({ workspace: v.string() });
+
 roomRoutes.get('/api/rooms/:workspace/:slate/entry', async (c) => {
   const signedIn = await visitorOf(c.req.raw, c.env);
   const room = await openedRoom(c.env, addressOf(c), signedIn);
@@ -87,6 +89,41 @@ roomRoutes.get('/api/rooms/:workspace/:slate', async (c) => {
   if (key !== null) headers.set(ROOM_KEY_HEADER, key);
 
   return await room.fetch(new Request(c.req.raw, { headers }));
+});
+
+/** What forking the slate brings this signed-in visitor. */
+roomRoutes.get('/api/rooms/:workspace/:slate/fork', async (c) => {
+  const { workspace, slate } = addressOf(c);
+  const signed = await visitorOf(c.req.raw, c.env);
+
+  if (signed === null) return new Response('Sign in to fork this slate.', { status: 401, headers: NO_STORE });
+  const preview = await roomOf(c.env, workspace, slate).forkPreview(signed.visitor, new URL(c.req.url).searchParams.get('k'));
+
+  return preview === null ? new Response('This slate is not yours to fork.', { status: 403, headers: NO_STORE }) : Response.json(preview, { headers: NO_STORE });
+});
+
+/** Forks the slate into one of the visitor's own workspaces: its code alone, with every requirement theirs to meet. */
+roomRoutes.post('/api/rooms/:workspace/:slate/fork', async (c) => {
+  const { workspace, slate } = addressOf(c);
+  const signed = await visitorOf(c.req.raw, c.env);
+
+  if (signed === null) return new Response('Sign in to fork this slate.', { status: 401, headers: NO_STORE });
+  const body = await safeJson(c.req.raw, ForkBody);
+
+  if (!body) return new Response('Body must be { workspace }', { status: 400, headers: NO_STORE });
+  const into = await claimOwnedWorkspace(c.env, signed.identity.userId, body.workspace);
+
+  if (Result.isFailure(into)) return new Response('That workspace is not yours.', { status: 403, headers: NO_STORE });
+  const bundle = await roomOf(c.env, workspace, slate).forkBundle(signed.visitor, new URL(c.req.url).searchParams.get('k'));
+
+  if (bundle === null) return new Response('This slate is not yours to fork.', { status: 403, headers: NO_STORE });
+
+  if (!bundle.ok) return new Response(bundle.error, { status: 409, headers: NO_STORE });
+  const forked = await into.success.admitBlueprint(bundle.value);
+
+  return forked.ok
+    ? Response.json({ workspace: forked.value.workspace, slate: forked.value.slate } satisfies Forked, { headers: NO_STORE })
+    : new Response(forked.error, { status: 409, headers: NO_STORE });
 });
 
 /** The slate's page in a frame: the visitor, as the app knows them, sent on to the slate's own host with a ticket. */

@@ -319,9 +319,10 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
             CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=',
           },
           // The registry for npm, and the egress policy's targets for a slate's own fetch (slate-egress.test.ts).
-          outboundService: async (request) => egressFake(request) ?? registryOutbound(request),
-          // A git network facet imports its bundle from ASSETS, as the deployed Worker serves it.
-          serviceBindings: { ASSETS: nimbusAssets },
+          outboundService: slateOutbound,
+          // A git network facet imports its bundle from ASSETS, as the deployed Worker serves it; a workspace's deletion
+          // stops main, whose isolate loads the agent bundle from the same ASSETS.
+          serviceBindings: { ASSETS: durabilityAssets },
           durableObjects: {
             SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
@@ -629,6 +630,16 @@ const sharedTestOptions = {
       if (error.message.includes('probe: the object died mid-plan')) return false;
     },
 } satisfies NonNullable<UserConfig['test']>;
+
+/** The durability probe's assets: the agent bundle main's isolate loads, and the git network facet's bundle. */
+async function durabilityAssets(request: Request): Promise<Response> {
+  return new URL(request.url).pathname.startsWith('/_agent/') ? await agentAssets()(request) : nimbusAssets(request);
+}
+
+/** The durability probe's egress: the policy's fake targets for a slate's own fetch, else the npm registry. */
+async function slateOutbound(request: Request): Promise<Response> {
+  return egressFake(request) ?? await registryOutbound(request);
+}
 
 /** The far side of a slate's fetch: a public page, a redirect to the metadata address, and what reached that address. */
 function egressFake(request: Request): Response | null {

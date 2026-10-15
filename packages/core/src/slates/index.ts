@@ -50,3 +50,5 @@ export {
   linkKeyHolds, linkUrl, roomHandle, roomObjectName, frameTicket, cookieForTicket, readPass, frameCookieHeader, frameCookieOf,
   ROOM_ENTER_PATH, type FrameClaim,
 } from './room/passes';
+
+export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';

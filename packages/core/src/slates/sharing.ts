@@ -64,6 +64,10 @@ export const ShareCardSchema = v.object({
   owner: v.string(),
   visibility: v.optional(LiveShareVisibilitySchema),
   fork: v.optional(v.boolean()),
+  /** A slate room's card: the role it was shared with, or none when it was used through its link. */
+  role: v.optional(v.picklist(['edit', 'use'] as const)),
+  /** A slate room's card: where it opens. */
+  url: v.optional(v.string()),
 });
 
 export type ShareCard = v.InferOutput<typeof ShareCardSchema>;

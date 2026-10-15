@@ -4,7 +4,8 @@
  */
 import { Hono } from 'hono';
 import * as v from 'valibot';
-import { err, json, safeJson, type DriveLibrary, type DriveSlate, type UserCaller } from '@kinu.run/core';
+import { err, json, safeJson, type DriveLibrary, type DriveRoomCard, type DriveSlate, type UserCaller } from '@kinu.run/core';
+import { GALLERY_OBJECT } from '../gallery/gallery-do';
 import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
 import type { AuthIdentity } from '../auth/session';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
@@ -51,5 +52,17 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     for (const slate of overview.slates) slates.push({ id: slate.id, title: slate.title, workspace, ...(slate.picture !== null && { picture: slate.picture }) });
   }
 
-  return { slates, shared: [], used: [], starred: [] };
+  // What rooms wrote to this account: a slate shared with this person carries the role it was shared with; one used
+  // through its link carries none, and its link.
+  const seenAt = await userDO.sharesSeenAt(owner) ?? 0;
+
+  const cards: DriveRoomCard[] = (await userDO.sharesReceived_list(owner)).flatMap((held) => held.card.url === undefined ? [] : [{
+    workspace: held.workspace, slate: held.shareId, title: held.card.title, owner: { email: held.card.owner, name: null },
+    relation: held.card.role === undefined ? 'used' as const : 'shared' as const, ...(held.card.role !== undefined && { role: held.card.role }),
+    at: held.receivedAt, ...(held.receivedAt > seenAt && { unseen: true as const }), url: held.card.url,
+  }]);
+
+  const starred = await env.GALLERY.get(env.GALLERY.idFromName(GALLERY_OBJECT)).starred(identity.email.trim().toLowerCase());
+
+  return { slates, shared: cards.filter((card) => card.relation === 'shared'), used: cards.filter((card) => card.relation === 'used'), starred };
 }

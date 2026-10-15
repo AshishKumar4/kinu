@@ -17,18 +17,18 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
   censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
-  JsonValueSchema, McpToolSurfaceSchema, ownerCaller, roomFramePath, roomPartPath, sha256Hex, slateAddressImpact, slateCallAddress,
+  JsonValueSchema, McpToolSurfaceSchema, ownerCaller, roomFramePath, roomPagePath, roomPartPath, sha256Hex, slateAddressImpact, slateCallAddress,
   RoomClientFrameSchema,
   type JsonValue, type OpsCaller, type PartView, type Repair, type RoomAccess, type RoomAsk, type RoomAudience, type RoomCall,
   type RoomPerson, type RoomReach, type RoomServerFrame, type RoomService, type RoomSource, type RoomView, type SheetView,
-  slateHostOrigin, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, type TablesAnswer,
+  GALLERY_CATEGORIES, slateHostOrigin, type BlueprintBundle, type ForkPreview, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, type TablesAnswer,
 } from '@kinu.run/core';
 import {
   canonicalRoot, frameTicket, linkKeyHolds, linkUrl, ROOM_ENTER_PATH, type FrameClaim,
   RoomCaretaker, codecIsFree, flows, initSlateRoomTables, slateAnswer, ROOT_SLATE_CALLER,
   type Access, type Audience, type Codec, type Elem, type Grant, type RoomMember, type Run, type Session, type Tag,
 } from '@kinu.run/core/slates';
-import { attempt, inItsWords, KinuError, settle, settleSync, type ErrorCode } from '@kinu.run/core/obs';
+import { attempt, diagnostics, inItsWords, KinuError, settle, settleSync, type ErrorCode } from '@kinu.run/core/obs';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { accountIdFor } from '../auth/store';
 import { callUserMcpTool } from '../user-mcp-call';
@@ -36,6 +36,7 @@ import { codemodeEgress } from '../codemode-egress';
 import { slateBatchStub } from './rpc-transport';
 import type { RoomBindingName, RoomBindingProps } from './room-bindings';
 import { sealedPart } from './room-parts';
+import { GALLERY_OBJECT } from '../gallery/gallery-do';
 import type { UserDO } from '../user/user-do';
 
 /** Who a request is, as the Worker's route proved it. */
@@ -132,6 +133,9 @@ const OWN_GRANTS_PER_CALL = 8;
 
 /** What a personal grant made for its holder's own code admits: any input up to this size. */
 const OWN_GRANT_INPUT_BYTES = 256 * 1024;
+
+/** The GitHub tool a reader check asks with the reader's own connection: a repository it finds is one they read. */
+const READER_CHECK_TOOL = 'search_repositories';
 
 /** A part's key: one function on one input, for one person when what it reads is theirs. */
 function partKey(fn: string, args: readonly JsonValue[], requester: string | null): string {
@@ -245,12 +249,36 @@ export class SlateRoom extends DurableObject<Env> {
   }
 
   /** Its slate was removed: everyone's sessions end, and the room keeps nothing, so every address of it answers 404. */
-  async retire(): Promise<void> {
-    for (const socket of this.ctx.getWebSockets()) socket.close(1000, 'The slate was removed');
-    this.server = null;
-    // The shared server's facet holds the slate's own storage: it goes too, so a slate made again starts empty.
-    this.ctx.facets.delete('server');
-    await this.ctx.storage.deleteAll();
+  retire(): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.exists()) {
+        const room = this.caretaker.room();
+
+        if (this.caretaker.listing() !== null) {
+          yield* attempt({ doing: 'unlisting the slate', otherwise: 'unavailable' },
+            async () => this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT)).unlist(room.workspace, room.slate));
+        }
+
+        for (const member of this.caretaker.members()) {
+          if (member.role === 'edit' || member.role === 'use') yield* this.cardOrRecord(member.email, null);
+        }
+      }
+
+      for (const socket of this.ctx.getWebSockets()) socket.close(1000, 'The slate was removed');
+      this.server = null;
+      // The shared server's facet holds the slate's own storage: it goes too, so a slate made again starts empty.
+      this.ctx.facets.delete('server');
+      yield* Effect.promise(async () => this.ctx.storage.deleteAll());
+    }));
+  }
+
+  /** A Drive card the room could not write is recorded, not fatal: the slate itself is unchanged by it. */
+  private cardOrRecord(email: string, card: { readonly role?: 'edit' | 'use'; readonly url?: string } | null): Effect.Effect<void> {
+    const room = this.caretaker.room();
+
+    return Effect.catch(this.card(email, card), (failure) => Effect.sync(() => {
+      diagnostics.failure('slate.card_failed', failure, { workspace: room.workspace, slate: room.slate });
+    }));
   }
 
   exists(): boolean {
@@ -295,6 +323,8 @@ export class SlateRoom extends DurableObject<Env> {
 
       // The image starts here and now, so a build that will not run is the build's error, not its first visitor's.
       yield* this.sharedServer();
+
+      if (this.caretaker.listing() !== null) yield* this.syncGallery();
       yield* this.broadcast();
 
       return { methods: this.server?.methods ?? [] };
@@ -454,6 +484,14 @@ export class SlateRoom extends DurableObject<Env> {
       if (access === null) return new Response('Not shared with you', { status: 403 });
 
       if (visitor !== null && access.kind !== 'link') this.caretaker.named(visitor.email, visitor.name);
+
+      // Someone signed in who came by the link keeps it in their Drive, under Used, with the link to come back by.
+      if (visitor !== null && access.kind === 'link') {
+        const link = yield* Effect.promise(async () => linkUrl(this.env, this.caretaker.room()));
+
+        if (link !== null) yield* this.cardOrRecord(visitor.email, { url: new URL(link).pathname + new URL(link).search });
+      }
+
       const pair = new WebSocketPair();
       const state: SocketState = { email: visitor?.email ?? null, name: visitor?.name ?? null, access, parts: [], where: null, typing: null };
 
@@ -505,14 +543,31 @@ export class SlateRoom extends DurableObject<Env> {
       const actor = state.email;
 
       switch (call.op) {
-        case 'setAudience': return yield* care(() => { this.setAudience(actor, call.audience); });
-        case 'invite': return yield* care(() => { this.caretaker.invite(actor, call.email.trim().toLowerCase(), call.role); });
-        case 'setRole': return yield* care(() => { this.caretaker.invite(actor, call.email, call.role); });
-        case 'remove': return yield* care(() => { this.caretaker.remove(actor, call.email); });
+        case 'setAudience': {
+          yield* care(() => { this.setAudience(actor, call.audience); });
+
+          return yield* this.syncGallery();
+        }
+
+        case 'invite': case 'setRole': {
+          const email = call.email.trim().toLowerCase();
+
+          yield* care(() => { this.caretaker.invite(actor, email, call.role); });
+
+          return yield* this.card(email, { role: call.role });
+        }
+
+        case 'remove': {
+          yield* care(() => { this.caretaker.remove(actor, call.email); });
+
+          return yield* this.card(call.email, null);
+        }
+
         case 'leave': {
           if (actor === null) return yield* refuse('denied', 'Sign in to leave a slate');
+          yield* care(() => { this.caretaker.remove(actor, actor); });
 
-          return yield* care(() => { this.caretaker.remove(actor, actor); });
+          return yield* this.card(actor, null);
         }
 
         case 'here': {
@@ -535,9 +590,88 @@ export class SlateRoom extends DurableObject<Env> {
         case 'setLendShown': return yield* care(() => { this.setLendShown(actor, call.fn, call.shown); });
         case 'showTo': case 'showToMembers': case 'decline': return yield* care(() => { this.answerAsk(actor, call.ask, call.op); });
         case 'approve': case 'send': return yield* care(() => { this.decideWaiting(actor, call.ask, true); });
-        case 'list': case 'unlist': case 'check':
-          return yield* refuse('unsupported', `${call.op} is not available yet`);
+        case 'check': return yield* this.check(session, call.part);
+        case 'list': {
+          yield* care(() => { this.caretaker.list(actor, { line: call.line, category: call.category }, Date.now()); });
+
+          return yield* this.syncGallery();
+        }
+
+        case 'unlist': {
+          yield* care(() => { this.caretaker.unlist(actor); });
+
+          return yield* this.syncGallery();
+        }
       }
+    });
+  }
+
+  private sheetListing(): SheetView['listing'] {
+    const listing = this.caretaker.listing();
+    const category = v.safeParse(v.picklist(GALLERY_CATEGORIES), listing?.category);
+
+    return listing === null || !category.success ? null : { line: listing.line, category: category.output };
+  }
+
+  /**
+   * The Gallery says what the room says: the slate's listing while it has one, with its link, title, what a fork needs
+   * and whether a part runs with its author's own lend; nothing once it has none.
+   */
+  private syncGallery(): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const room = this.caretaker.room();
+      const listing = this.sheetListing();
+      const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
+      const url = listing === null ? null : yield* Effect.promise(async () => linkUrl(this.env, room));
+
+      if (listing === null || url === null) {
+        yield* attempt({ doing: 'unlisting the slate', otherwise: 'unavailable' }, async () => gallery.unlist(room.workspace, room.slate));
+
+        return;
+      }
+
+      const owner = this.caretaker.members().find((member) => member.role === 'owner');
+      const grants = this.caretaker.grants();
+      const needs = new Map(grants.map((grant) => [serviceOf(grant.server).title, serviceOf(grant.server)]));
+
+      yield* attempt({ doing: 'listing the slate', otherwise: 'unavailable' }, async () => gallery.list({
+        workspace: room.workspace, slate: room.slate, title: room.title, line: listing.line, category: listing.category,
+        ownerName: owner?.name ?? owner?.email.slice(0, owner.email.indexOf('@')) ?? '', url: new URL(url).pathname + new URL(url).search,
+        needs: [...needs.values()], files: Object.keys(room.modules ?? {}).filter((name) => name !== RUNNER_MODULE).sort(),
+        readsAuthor: grants.some((grant) => !grant.personal), picture: null,
+      }));
+    });
+  }
+
+  /**
+   * The card a person's Drive holds for this slate: shared with them as `role`, or used through its link (`role`
+   * absent), or none. Written to their account by the room, which alone knows; their Drive reads it without asking.
+   */
+  private card(email: string, card: { readonly role?: 'edit' | 'use'; readonly url?: string } | null): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const room = this.caretaker.room();
+      const owner = this.caretaker.owner();
+      const caller = yield* attempt({ doing: 'reaching the account', otherwise: 'unavailable' }, async () => ownerCaller(this.env));
+
+      const [recipient, ownerAccount] = yield* attempt({ doing: 'naming the accounts', otherwise: 'unavailable' },
+        async () => Promise.all([accountIdFor(this.env, email), accountIdFor(this.env, owner)]));
+
+      const account = this.userObject(recipient);
+
+      if (card === null) {
+        yield* attempt({ doing: `taking ${email}'s card back`, otherwise: 'unavailable' }, async () => account.shareCards_remove(caller, ownerAccount, room.workspace, room.slate));
+
+        return;
+      }
+
+      yield* attempt({ doing: `giving ${email} the slate's card`, otherwise: 'unavailable' }, async () => account.shareCards_put(caller, {
+        ownerUserId: ownerAccount, workspace: room.workspace, shareId: room.slate,
+        card: {
+          kind: 'live', title: room.title, description: '', createdAt: Date.now(), owner,
+          ...(card.role !== undefined && { role: card.role }),
+          url: card.url ?? roomPagePath(room.workspace, room.slate),
+        },
+      }));
     });
   }
 
@@ -594,6 +728,44 @@ export class SlateRoom extends DurableObject<Env> {
         });
       });
       this.needs.delete(part);
+    });
+  }
+
+  /**
+   * The reader check (docs/SLATE-SHARING-SECURITY.md §2.1): for each source in the part this person may not see, their
+   * own connection is asked whether it reads that source directly. A GitHub repository reads to them when their own
+   * search finds it; what the room records is what their account answered now, a yes or a no.
+   */
+  private check(session: Session, part: string): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const email = session.email;
+      const cell = this.caretaker.cell(part);
+
+      if (email === null || cell === null) return yield* refuse('missing', 'Sign in and open the part to check it');
+      const facts = this.caretaker.facts();
+      const closed = cell.label.filter((elem) => elem.holder !== email && !flows(facts, [elem], email));
+
+      for (const elem of closed) {
+        const root = v.parse(v.record(v.string(), v.string()), JSON.parse(elem.root));
+        const { owner, repo } = root;
+
+        if (serviceOf(elem.server).kind !== 'github' || owner === undefined || repo === undefined) {
+          return yield* refuse('unsupported', `${serviceOf(elem.server).title} cannot say who reads it; ask ${elem.holder} instead`);
+        }
+
+        const descriptor = yield* this.mcpDescriptor(email, elem.server, READER_CHECK_TOOL);
+
+        if (descriptor === null) return yield* refuse('missing', `Connect your own ${serviceOf(elem.server).title} to check`);
+        const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, email));
+        const caller = yield* attempt({ doing: 'reaching the account', otherwise: 'unavailable' }, async () => ownerCaller(this.env));
+
+        const answered = yield* attempt({ doing: `asking ${serviceOf(elem.server).title} who reads ${owner}/${repo}`, otherwise: 'unavailable' },
+          async () => callUserMcpTool({ stub: this.userObject(account), caller }, descriptor, { query: `repo:${owner}/${repo}` }, undefined));
+
+        const reads = answered.toLowerCase().includes(`${owner}/${repo}`.toLowerCase());
+
+        yield* care(() => { this.caretaker.checked(email, elem, reads); });
+      }
     });
   }
 
@@ -1219,6 +1391,36 @@ export class SlateRoom extends DurableObject<Env> {
     });
   }
 
+  /**
+   * What forking the slate would bring this visitor: its code, and per function whether it runs with someone's lend,
+   * which a fork does not keep (`Confinement.lean`: `a_fork_starts_with_its_code_alone`). Null when they may not fork.
+   */
+  async forkPreview(visitor: RoomVisitor | null, key: string | null): Promise<ForkPreview | null> {
+    if (!this.exists() || visitor === null || await this.access(visitor, key) === null || !this.caretaker.mayFork(visitor.email)) return null;
+    const room = this.caretaker.room();
+    const owner = this.caretaker.members().find((member) => member.role === 'owner');
+    const grants = this.caretaker.grants();
+    const fns = [...new Set(grants.map((grant) => grant.fn))].sort();
+
+    return {
+      title: room.title, owner: this.person(owner, owner?.email ?? ''),
+      parts: fns.map((fn) => {
+        const lent = grants.find((grant) => grant.fn === fn && !grant.personal);
+        const used = lent ?? grants.find((grant) => grant.fn === fn);
+
+        return { fn, lent: lent !== undefined, needs: used === undefined ? null : serviceOf(used.server) };
+      }),
+    };
+  }
+
+  /** The code a visitor who may fork the slate gets: its workspace's bundle of it, or null when they may not. */
+  async forkBundle(visitor: RoomVisitor, key: string | null): Promise<SlateAnswer<BlueprintBundle> | null> {
+    if (await this.forkPreview(visitor, key) === null) return null;
+    const room = this.caretaker.room();
+
+    return await workspaceOwner(this.env, room.workspace).slateForkBundle(room.slate);
+  }
+
   /** The slate's own host, entered by this visitor now: a ticket of theirs for its entry, or null when they may not open it. */
   async ticketFor(visitor: RoomVisitor | null, key: string | null): Promise<string | null> {
     if (!this.exists()) return null;
@@ -1321,7 +1523,7 @@ export class SlateRoom extends DurableObject<Env> {
         audience, url,
         people: people.map((member) => ({ person: this.person(member, member.email), role: member.role === 'edit' ? 'edit' : 'use' })),
         privateOf: this.caretaker.members().filter((member) => member.email !== owner && personal.has(member.email)).map((member) => this.person(member, member.email)),
-        listing: null,
+        listing: this.sheetListing(),
         lends: ownFns.flatMap((fn) => {
           const own = grants.find((grant) => grant.holder === owner && grant.fn === fn && grant.personal);
           const lend = grants.find((grant) => grant.holder === owner && grant.fn === fn && !grant.personal);

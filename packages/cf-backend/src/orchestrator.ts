@@ -70,6 +70,7 @@ import type { ChatWire } from './chat-transport';
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
+import type { SlateRoom } from "./slates/room";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable, SlateBuilds } from "@kinu.run/core/slates";
@@ -246,6 +247,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
+import { GALLERY_OBJECT } from './gallery/gallery-do';
 import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
@@ -4635,7 +4637,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const changed = yield* Effect.promise(() => this.pictures.captureDue(capture, now));
         span.setAttribute('kinu.pictures_changed', changed);
 
-        if (changed) this.overviewChanged();
+        if (changed) {
+          this.overviewChanged();
+          // A listed slate's Gallery card shows its newest picture; the Gallery ignores a slate it does not list.
+          const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
+
+          for (const [slate, digest] of this.pictures.digests()) yield* Effect.promise(async () => gallery.pictured(this.name, slate, digest));
+        }
       }), phaseFailed(span, { doing: 'photographing the slates due a picture', otherwise: 'unavailable' }, (failure) => {
         diagnostics.failure('slate.pictures_failed', failure);
       }))));
@@ -5377,7 +5385,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
+  /** The room of one of this workspace's slates, by the name every caller reaches it by. */
+  private slateRoom(slate: string): DurableObjectStub<SlateRoom> {
+    return this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate))));
+  }
+
   private async releaseOutsideState(): Promise<void> {
+    // A room serves its own image: one left behind would keep its slate's page, link and Gallery listing open. Every
+    // slate built here was published to its room, a slate whose files a shell removed included.
+    if (this.storageRefusal === undefined) {
+      await Promise.all(this.slateBuilds.slates().map(async (slate) => { await this.slateRoom(slate).retire(); }));
+    }
+
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
@@ -5904,16 +5923,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       messageBlock: (address) => this.answerBlock(address),
       slateRoom: async (slate, title, owner) => {
-        const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate))));
+        const room = this.slateRoom(slate);
 
         await room.create({ workspace: this.name, slate, title, owner, parent: null });
 
         return room;
       },
       ownerEmail: async () => (await this.getOwnerEmail())?.toLowerCase() ?? null,
-      forgetRoom: async (slate) => {
-        await this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate)))).retire();
-      },
+      forgetRoom: async (slate) => { await this.slateRoom(slate).retire(); },
     });
 
     return this._slates;
@@ -5999,6 +6016,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable() async listSlates() {
     return (await this.slates()).controller.list(ROOT_SLATE_CALLER);
+  }
+
+  /** DO-only: a fork's bundle of one of this workspace's slates, its code alone; its room has said who may fork it. */
+  async slateForkBundle(slate: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return (await this.slates()).controller.forkBundle(slate);
   }
 
   /** Admits into this workspace as a new slate that calls this workspace's own surface; nothing runs. */

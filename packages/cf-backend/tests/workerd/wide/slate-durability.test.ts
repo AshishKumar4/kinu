@@ -202,6 +202,19 @@ it('a removed slate’s page is gone, and a new slate under its name is a new ro
   expect(await subject.rpcPreview(again.url, 'ping')).toEqual({ ok: true, value: '{"rows":1}' });
 });
 
+it('a deleted workspace’s slates leave no page behind: their rooms go with it', async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('deleted'));
+  // `destroyAgent` takes the owner's user id, which is 32 hex.
+  const owner = 'd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0';
+
+  const boot = await subject.serveSlate({ workspace: 'durability-deleted', owner, id: 'keeper', body: 'keeper-body' });
+
+  expect(await subject.drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+  await subject.deleteWorkspace('durability-deleted', owner);
+  // The room serves its own image, so only its retirement ends the page: the owner included, no one gets in.
+  expect(await subject.drivePreview(boot.url)).toEqual({ status: 403, body: '' });
+});
+
 it('a removed slate’s picture goes with it, and its neighbour’s stays', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('pictures'));
   await subject.serveSlate({ workspace: 'durability-pictures', owner: 'durability-owner', id: 'keeper', body: 'keeper-body' });

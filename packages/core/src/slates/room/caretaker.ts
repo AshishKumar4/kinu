@@ -96,6 +96,13 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
     last_at INTEGER NOT NULL,
     PRIMARY KEY (fn, email)
   )`);
+  // The slate's Gallery listing while it is listed: its owner's words for it. Only while its link is on.
+  execRaw(`CREATE TABLE IF NOT EXISTS room_listing (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    line TEXT NOT NULL,
+    category TEXT NOT NULL,
+    listed_at INTEGER NOT NULL
+  )`);
 }
 
 // ── Rows ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -426,7 +433,43 @@ export class RoomCaretaker {
 
       if (on && this.room().secret !== null) return yield* refused('denied', 'The code holds a secret: the link stays off until it is gone');
       this.db.exec('UPDATE room SET link = ?, link_gen = ? WHERE id = 1', on ? 1 : 0, this.fresh());
+
+      // A listing is the link: with the link off, nothing is listed.
+      if (!on) this.db.exec('DELETE FROM room_listing');
     }));
+  }
+
+  /** `publish`, in the model's words: the owner lists the slate in the Gallery. Its link must be on. */
+  list(actor: string | null, listing: { readonly line: string; readonly category: string }, now: number): void {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      yield* this.requireOwner(actor, 'list it');
+
+      if (!this.room().link) return yield* refused('denied', 'Only a slate anyone with its link can open is listed: turn its link on first');
+      const line = listing.line.trim();
+
+      if (line === '' || line.length > 140) return yield* refused('bad_input', 'A listing says what the slate is in 1 to 140 characters');
+      this.db.exec(
+        'INSERT INTO room_listing (id, line, category, listed_at) VALUES (1, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET line = excluded.line, category = excluded.category',
+        line, listing.category, now,
+      );
+    }));
+  }
+
+  unlist(actor: string | null): void {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      yield* this.requireOwner(actor, 'unlist it');
+      this.db.exec('DELETE FROM room_listing');
+    }));
+  }
+
+  /** The listing while the slate is listed. */
+  listing(): { readonly line: string; readonly category: string; readonly listedAt: number } | null {
+    const row = this.db.exec('SELECT line, category, listed_at FROM room_listing WHERE id = 1').toArray()[0];
+
+    if (row === undefined) return null;
+    const parsed = v.parse(v.object({ line: v.string(), category: v.string(), listed_at: v.number() }), row);
+
+    return { line: parsed.line, category: parsed.category, listedAt: parsed.listed_at };
   }
 
   /** `collaborate`: someone added, or their role changed, at a new generation. */

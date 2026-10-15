@@ -314,6 +314,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
   wakeOnce(workspace: string): Promise<void>;
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;
+  deleteWorkspace(workspace: string, owner: string): Promise<void>;
   putPicture(workspace: string, slate: string, digest: string): Promise<void>;
   pictureKeys(workspace: string): Promise<string[]>;
   openWorkspace(workspace: string, owner: string): Promise<void>;

@@ -713,6 +713,11 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return { ok: value.removed, port: value.port };
   }
 
+  /** The owner's deletion of the whole workspace, as their account's roster runs it. */
+  async deleteWorkspace(workspace: string, owner: string): Promise<void> {
+    await this.env.UserDO.get(this.env.UserDO.idFromName(owner)).removeWorkspace(await ownerCaller(this.env), workspace, owner);
+  }
+
   /** A stand-in for the picture a capture stores. */
   async putPicture(workspace: string, slate: string, digest: string): Promise<void> {
     await this.env.SLATE_PICTURES?.put(pictureKey(workspace, slate, digest), new Uint8Array([1]), { httpMetadata: { contentType: 'image/webp' } });

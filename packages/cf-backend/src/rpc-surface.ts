@@ -262,6 +262,7 @@ const ORCHESTRATOR_METHODS = [
   // A slate's room, and the room reading its image back: DO-to-DO only.
   'ensureSlateRoom',
   'slateImageModules',
+  'slateForkBundle',
   'acceptEmailDelivery',
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',

@@ -386,6 +386,7 @@
     "room_grants",
     "room_images",
     "room_lend_uses",
+    "room_listing",
     "room_members",
     "room_readers",
     "room_shows"

@@ -3,6 +3,7 @@ import type { OrchestratorAgent } from "./src/orchestrator";
 import type { KinuDevbox } from "./src/kinu-devbox";
 import type { UserDO } from "./src/user/user-do";
 import type { SlateRoom } from "./src/slates/room";
+import type { GalleryDO } from "./src/gallery/gallery-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
@@ -40,6 +41,8 @@ declare global {
     ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
     /** One per slate: the caretaker of who may do what with it (docs/SLATE-SHARING-SECURITY.md). */
     SLATE_ROOM: DurableObjectNamespace<SlateRoom>;
+    /** The Gallery's index, one for the deployment (src/gallery/gallery-do.ts). */
+    GALLERY: DurableObjectNamespace<GalleryDO>;
     /** Native workspace container owner. */
     KinuDevbox: DurableObjectNamespace<KinuDevbox>;
     /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare door). */
