@@ -531,7 +531,7 @@ test('a landed edit preserves the recorded tail exactly, with a woven block and 
   const ledger = new DynamicContextLedger();
   // Live state renders a block, so the rendered array is longer than the raw one.
   const dynamic = { ledger, snapshot: () => ({ recoveries: ['a finding proven by execution'] }) };
-  const prune = { contextWindow: 4_000, modelOutputLimit: 1_000 };
+  const prune = { contextWindow: 4_000, modelOutputLimit: 1_000, spec: 'anthropic/claude-sonnet-4-5' };
   const bulky = 'x'.repeat(200_000);
 
   // The older tool result is prunable; the newest is protected.
@@ -648,7 +648,7 @@ async function twoStepTurns(prune: StepPruneBudget, output: (turn: number) => st
 /** 2026-09-23, 300 two-step turns through the CLI: every request stored a copy of every tool exchange and one row per
  *  prompt message, so turn 2 added 77 rows and turn 300 added 4,845, and turn time grew with them. */
 test('a turn stores and runs only what it added, and every request reads back as the messages it sent', async () => {
-  const added = await twoStepTurns({ contextWindow: 200_000, modelOutputLimit: 8_000 }, (turn) => `output ${String(turn)}`);
+  const added = await twoStepTurns({ contextWindow: 200_000, modelOutputLimit: 8_000, spec: 'anthropic/claude-sonnet-4-5' }, (turn) => `output ${String(turn)}`);
 
   // Each turn adds the same four messages, so after the first it writes the same rows and runs the same statements,
   // however long the history: a statement per carried message is latency the clock would show later.
@@ -658,7 +658,7 @@ test('a turn stores and runs only what it added, and every request reads back as
 /** Review 2026-09-24: pruning rebuilt each pruned result every step, so every request encoded and looked up all of them. */
 test('a pruned tool result keeps its identity, so a turn runs the same statements however many are pruned', async () => {
   // Every result outgrows the window's prune batch, so each step prunes all but the newest: one more a turn.
-  const added = await twoStepTurns({ contextWindow: 8_000, modelOutputLimit: 2_000 }, (turn) => `${String(turn).padStart(3, '0')}${'x'.repeat(19_997)}`);
+  const added = await twoStepTurns({ contextWindow: 8_000, modelOutputLimit: 2_000, spec: 'anthropic/claude-sonnet-4-5' }, (turn) => `${String(turn).padStart(3, '0')}${'x'.repeat(19_997)}`);
 
   expect(added.slice(1)).toEqual(added.slice(1).map(() => added[1]));
 });

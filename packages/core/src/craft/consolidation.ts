@@ -6,6 +6,7 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import { craftScores, effectiveScore } from './ema';
 import { isoDate, nowMs } from '../utils/date';
+import { appendMemoryNote } from '../memory/note';
 import { DEFAULT_CONFIG } from '../config';
 
 const RETIREMENT_THRESHOLD = DEFAULT_CONFIG.craftStore.retirementThreshold;
@@ -49,9 +50,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
     rt.craftStore.delete(name);
   }
 
-  await rt.memory.append(
-    'memory/MEMORY.md',
-    `\n### CraftStore consolidation (${isoDate()}): retired ${toRetire.length} stale tools: ${toRetire.join(', ')}\n`,
-  );
-  await rt.memory.index('memory/MEMORY.md');
+  await appendMemoryNote(rt.memory, `Retired ${String(toRetire.length)} stale tools: ${toRetire.join(', ')}`, {
+    heading: 'CraftStore consolidation', date: isoDate(),
+  });
 }

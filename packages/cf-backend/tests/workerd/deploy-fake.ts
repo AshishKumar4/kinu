@@ -379,6 +379,8 @@ interface Held {
   namespaces: string[];
   buckets: string[];
   indexes: string[];
+  /** Each index's shape, as Vectorize reports it. */
+  indexConfigs: Map<string, { dimensions: number; metric: string }>;
   gateways: string[];
   apps: string[];
   secrets: Map<string, string>;
@@ -417,6 +419,7 @@ function fresh(): Held {
     namespaces: [],
     buckets: [],
     indexes: [],
+    indexConfigs: new Map(),
     gateways: [],
     apps: [],
     secrets: new Map<string, string>(),
@@ -446,6 +449,7 @@ function reset(): void {
   held.namespaces = empty.namespaces;
   held.buckets = empty.buckets;
   held.indexes = empty.indexes;
+  held.indexConfigs = empty.indexConfigs;
   held.gateways = empty.gateways;
   held.apps = empty.apps;
   held.secrets = empty.secrets;
@@ -632,11 +636,12 @@ async function api(url: URL, request: Request): Promise<Response> {
   }
 
   if (path.endsWith('/vectorize/v2/indexes') && request.method === 'GET') {
-    return envelope(held.indexes.map((name) => ({ name })));
+    return envelope(held.indexes.map((name) => ({ name, config: held.indexConfigs.get(name) ?? null })));
   }
 
   if (path.endsWith('/vectorize/v2/indexes')) {
     held.indexes.push(named('name'));
+    held.indexConfigs.set(named('name'), v.parse(v.object({ dimensions: v.number(), metric: v.string() }), body.config));
     held.creates.push(`vectorize:${named('name')}`);
 
     return envelope({ name: named('name') });

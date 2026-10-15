@@ -23,7 +23,7 @@ import {
   type CliSessionOptions,
 } from './session';
 import { SessionRecorder } from './session-recorder';
-import { normalizeModelMenu, type AgentModelMenu } from '@kinu.run/core';
+import { MEMORY_PATH, normalizeModelMenu, type AgentModelMenu } from '@kinu.run/core';
 import {
   findForkPivot,
   readConversation,
@@ -427,7 +427,7 @@ export class LocalAgentClient implements AgentClient {
   }
 
   async readMemory(): Promise<string> {
-    return await this.deps.rt.memory.read('memory/MEMORY.md') ?? '';
+    return await this.deps.rt.memory.read(MEMORY_PATH) ?? '';
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {

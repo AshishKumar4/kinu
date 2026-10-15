@@ -8,7 +8,8 @@ import { SqliteSlateStore } from '../src/slates/store';
 import { WorkspaceSlates } from '../src/slates/runtime';
 import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
 import { Database } from 'bun:sqlite';
-import { archiveSqlFromDatabase, writeWorkspaceArchive, restoreWorkspaceArchive } from '../src/identity/archive';
+import { writeWorkspaceArchive, restoreWorkspaceArchive } from '../src/identity/archive';
+import { sqlStorageOver } from '../src/identity/inline-primitives';
 
 test('Slate source operations require Nimbus atomic-embedding rollback coherence', async () => {
   const ws = createTestWorkspace();
@@ -58,11 +59,11 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     await slates.restore(id, first.id);
     expect(vfs.readFileString(`${directory}/server.js`)).toBe('first version');
     expect(store.getVersion(second.id)?.source.value).toBe(second.source.value);
-    const archive = await writeWorkspaceArchive(archiveSqlFromDatabase(ws.db), { workspace: 'workspace', source: 'cloud' });
+    const archive = await writeWorkspaceArchive(sqlStorageOver(ws.db), { workspace: 'workspace', source: 'cloud' });
     const restored = new Database(':memory:');
 
     try {
-      await restoreWorkspaceArchive(archiveSqlFromDatabase(restored), archive);
+      await restoreWorkspaceArchive(sqlStorageOver(restored), archive);
       const restoredSession = await createWorkspaceBundle(restored).session();
       const restoredContent = new WorkspaceSlateContentStore(restoredSession.vfs.as(CRED_KERNEL));
 

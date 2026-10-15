@@ -9,7 +9,9 @@ import {
   outputReserveTokens,
   stepContextLimit,
   type ModelWindow,
+  type StepPruneBudget,
 } from '../src/index';
+import { messageTokens } from '../src/prompting/media-tokens';
 import { present } from '@kinu.run/test-utils';
 
 function toolExchange(i: number, outputChars: number): ModelMessage[] {
@@ -47,8 +49,11 @@ const WINDOW = 64_000;
 
 const MAX_OUTPUT = 20_000;
 
-function budgetFor(contextWindow: number): ModelWindow {
-  return { contextWindow, modelOutputLimit: MAX_OUTPUT };
+/** A text-priced model: these steps carry no media, so any model prices them by their characters. */
+const SPEC = 'anthropic/claude-sonnet-4-5';
+
+function budgetFor(contextWindow: number): StepPruneBudget {
+  return { contextWindow, modelOutputLimit: MAX_OUTPUT, spec: SPEC };
 }
 
 function resultPart(message: ModelMessage): ToolResultPart {
@@ -146,7 +151,7 @@ describe('pruneStepToolOutputs', () => {
   // The SDK rebuilds every step from the original history, so the pass never sees its own output;
   // its bytes must stay identical until a whole batch of new output arrives, or each step is a cache write.
   test('the boundary moves once per batch, not once per step', () => {
-    const limits: ModelWindow = { contextWindow: 200_000, modelOutputLimit: 64_000 };
+    const limits: StepPruneBudget = { contextWindow: 200_000, modelOutputLimit: 64_000, spec: SPEC };
     const STEPS = 40;
     const turn: ModelMessage[] = [{ role: 'user', content: 'ship the feature' }];
     let previous: string | null = null;
@@ -172,9 +177,28 @@ describe('pruneStepToolOutputs', () => {
     }
   });
 
+  // core-rest review P1-34: the pruner priced an image at a flat 1,200 tokens while admission priced it for the model,
+  // so a step the pruner passed was one the admission gate measured over the limit.
+  test('a step is priced as the admission gate prices it, an image at its model\'s rate', () => {
+    // A 2,000-pixel-square PNG's header: a Claude 4.7 model is charged thousands of tokens for it.
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x07, 0xd0, 0, 0, 0x07, 0xd0]), Buffer.alloc(64, 1)]);
+
+    const turn: ModelMessage[] = [
+      { role: 'user', content: [{ type: 'image', image: png.toString('base64'), mediaType: 'image/png' }, { type: 'text', text: 'fix what this shows' }] },
+      ...toolExchange(0, 12_000), ...toolExchange(1, 12_000), ...toolExchange(2, 12_000),
+    ];
+
+    const budget: StepPruneBudget = { contextWindow: 14_000, modelOutputLimit: 3_000, spec: 'anthropic/claude-opus-4-7' };
+    // Over the limit by the admission gate's measure only once the image is priced for the model.
+    expect(messageTokens(budget.spec, turn)).toBeGreaterThan(stepContextLimit(budget));
+
+    const pruned = present(pruneStepToolOutputs(turn, budget), 'pruned step');
+    expect(messageTokens(budget.spec, pruned)).toBeLessThanOrEqual(stepContextLimit(budget));
+  });
+
   test('a pass frees a share of the allocation, so a larger window frees more per pass', () => {
     // The quantum is a share of the allocation, not a fixed token count.
-    const truncatedByFirstPass = (limits: ModelWindow): number => {
+    const truncatedByFirstPass = (limits: StepPruneBudget): number => {
       const turn: ModelMessage[] = [{ role: 'user', content: 'go' }];
 
       for (let step = 0; ; step++) {
@@ -185,8 +209,8 @@ describe('pruneStepToolOutputs', () => {
       }
     };
 
-    const sonnet = truncatedByFirstPass({ contextWindow: 200_000, modelOutputLimit: 64_000 });
-    const million = truncatedByFirstPass({ contextWindow: 1_000_000, modelOutputLimit: 128_000 });
+    const sonnet = truncatedByFirstPass({ contextWindow: 200_000, modelOutputLimit: 64_000, spec: SPEC });
+    const million = truncatedByFirstPass({ contextWindow: 1_000_000, modelOutputLimit: 128_000, spec: SPEC });
     expect(sonnet).toBeGreaterThan(1);
     expect(million).toBeGreaterThan(sonnet);
   });
@@ -213,7 +237,7 @@ describe('composePrepareStep with pruning', () => {
   // Pruning precedes the weave, so the pruner must reserve room for the ledger blocks the weave adds back.
   test('the pruner is charged for the ledger blocks the weave adds back', async () => {
     const messages = bigTurn();
-    const budget: ModelWindow = { contextWindow: 120_000, modelOutputLimit: 36_000 };
+    const budget: StepPruneBudget = { contextWindow: 120_000, modelOutputLimit: 36_000, spec: SPEC };
     expect(await composePrepareStep({ prune: budget }, { stepNumber: 3, messages, steps: [] }))
       .toBeUndefined();
 
@@ -284,11 +308,11 @@ describe('outputReserveTokens', () => {
 
   test('a published allowance that fills the window still leaves half for the instruction', () => {
     // A non-positive limit reads as "do not prune", which would switch the pass off for these models.
-    const shared: ModelWindow = { contextWindow: 262_144, modelOutputLimit: 262_144 };
+    const shared: StepPruneBudget = { contextWindow: 262_144, modelOutputLimit: 262_144, spec: SPEC };
     expect(stepContextLimit(shared)).toBe(131_072);
     expect(pruneStepToolOutputs(bigTurn(), shared)).toBeUndefined();
 
-    const tight: ModelWindow = { contextWindow: WINDOW, modelOutputLimit: WINDOW };
+    const tight: StepPruneBudget = { contextWindow: WINDOW, modelOutputLimit: WINDOW, spec: SPEC };
     expect(stepContextLimit(tight)).toBe(WINDOW / 2);
     expect(pruneStepToolOutputs(bigTurn(), tight)).toBeDefined();
   });

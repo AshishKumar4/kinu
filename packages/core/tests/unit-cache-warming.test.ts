@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  CacheWarmStore, CacheWarmingLane, initCacheWarmTable, warmUsage,
+  CacheWarmStore, CacheWarmingLane, initCacheWarmTable, normalizeAnthropicUsage,
   type CacheWarmSeams, type JsonObject, type ModelCallReport, type ModelSpec, type Usage,
 } from '../src/index';
 import { KinuError } from '../src/obs/index';
@@ -313,8 +313,14 @@ describe('when the chain stops', () => {
 
 describe('the warm answer', () => {
   test('reads the cache-inclusive input and keeps absence', () => {
-    expect(warmUsage({ input_tokens: 4, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0, output_tokens: 0 }))
+    expect(normalizeAnthropicUsage({ input_tokens: 4, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0, output_tokens: 0 }))
       .toEqual({ input: 40_004, cacheRead: 40_000, cacheWrite: 0, output: 0 });
-    expect(warmUsage({})).toEqual({});
+    expect(normalizeAnthropicUsage({})).toEqual({});
+  });
+
+  // core-rest review P1-30: the warm's own reader dropped the one-hour subset, so a warm priced it at the 5-minute rate.
+  test('keeps the one-hour cache write, which prices at its own rate', () => {
+    expect(normalizeAnthropicUsage({ input_tokens: 2, cache_creation_input_tokens: 30_000, cache_creation: { ephemeral_1h_input_tokens: 30_000 } }))
+      .toEqual({ input: 30_002, cacheWrite: 30_000, cacheWrite1h: 30_000 });
   });
 });

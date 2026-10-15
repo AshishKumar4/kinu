@@ -94,7 +94,7 @@ function requestBytes(messages: readonly ModelMessage[] | undefined): number {
  *  normalized for the destination and cache markers on the tail, both of which copy messages, and a
  *  prune budget. The dynamic block and the step context are the turn's own. */
 const PIPELINE = {
-  prune: { contextWindow: 200_000, modelOutputLimit: 8_000 },
+  prune: { contextWindow: 200_000, modelOutputLimit: 8_000, spec: 'anthropic/claude-sonnet-4-5' },
   destination: { providerId: 'anthropic' },
   cache: { strategy: { kind: 'anthropic' as const } },
 } satisfies StepPipeline;

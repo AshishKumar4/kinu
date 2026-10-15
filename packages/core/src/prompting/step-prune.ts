@@ -18,6 +18,7 @@ import { renderThrownChain } from '../obs/index';
 import { binaryReplacer } from '../utils/json';
 import { StableCopies } from './stable-copies';
 import { stepContextLimit, type ModelWindow } from '../context-window';
+import { messageTokens } from './media-tokens';
 
 /** A quarter of the allocation per pass (a fixed count is a no-op on 1M and clears 32k); never zero. */
 function stepPruneBatchTokens(limits: ModelWindow): number {
@@ -27,6 +28,8 @@ function stepPruneBatchTokens(limits: ModelWindow): number {
 const PRUNED_OUTPUT_HEAD_CHARS = 2_000;
 
 export interface StepPruneBudget extends ModelWindow {
+  /** The model the step goes to: its messages are priced as the admission gate prices them for it (`messageTokens`). */
+  readonly spec: string;
   /** Tokens added after this pass (the dynamic-context ledger weaves after pruning); without it the pass under-prunes. */
   reservedTokens?: number;
 }
@@ -51,14 +54,14 @@ export function pruneStepToolOutputs(
 
   let total = budget.reservedTokens ?? 0;
 
-  for (const message of messages) total += estimatedTokens(message);
+  for (const message of messages) total += estimatedTokens(message, budget.spec);
   const over = total - limit;
 
   if (over <= 0) return undefined;
 
   const batch = stepPruneBatchTokens(budget);
   const target = Math.ceil(over / batch) * batch;
-  const doomed = resultsToTruncate(messages, target);
+  const doomed = resultsToTruncate(messages, target, budget.spec);
 
   if (doomed.size === 0) return undefined;
   let changed = false;
@@ -75,7 +78,7 @@ export function pruneStepToolOutputs(
 }
 
 /** Oldest-first until `target` is met; the newest result is never a candidate. */
-function resultsToTruncate(messages: readonly ModelMessage[], target: number): Set<ToolResultPart> {
+function resultsToTruncate(messages: readonly ModelMessage[], target: number, spec: string): Set<ToolResultPart> {
   const candidates: ToolResultPart[] = [];
 
   for (const message of messages) candidates.push(...toolResultPartsOf(message));
@@ -85,12 +88,11 @@ function resultsToTruncate(messages: readonly ModelMessage[], target: number): S
 
   for (const part of candidates) {
     if (freed >= target) break;
-    const before = serializedOutputLength(part);
     const truncated = truncateResultPart(part);
 
     if (truncated === part) continue;
     doomed.add(part);
-    freed += Math.max(0, Math.round((before - serializedOutputLength(truncated)) / 4));
+    freed += Math.max(0, resultTokens(part, spec) - resultTokens(truncated, spec));
   }
 
   return doomed;
@@ -168,7 +170,7 @@ function serializeOutput(part: ToolResultPart): string | null {
     case 'json':
     case 'error-json':
       return safeStringify({ value: output.value });
-    // An image is never pruned into base64 text; `serializedOutputLength` prices it flat.
+    // An image is never pruned into base64 text; `serializedOutputLength` counts it flat toward the threshold.
     case 'content':
       return output.value.map((item) => (item.type === 'text' ? item.text : `[${item.type}]`)).join('\n');
     case 'execution-denied':
@@ -182,56 +184,25 @@ function serializedOutputLength(part: ToolResultPart): number {
   return (serializeOutput(part)?.length ?? 0) + media * ESTIMATED_MEDIA_CHARS;
 }
 
-/** Chars/4, the compaction engine's scale. Media is priced flat (providers charge by dimensions). */
+/** What one image or file counts toward a result's truncation threshold, in characters; its price is `messageTokens`'. */
 const ESTIMATED_MEDIA_CHARS = 4_800;
 
-/** A step's messages are the SDK's own frozen objects, so each is priced once per turn, not once per step. */
-const ESTIMATED = new WeakMap<ModelMessage, number>();
+/** A step's messages are the SDK's own frozen objects, so each is priced once per turn and model, not once per step. */
+const ESTIMATED = new WeakMap<ModelMessage, { readonly spec: string; readonly tokens: number }>();
 
-function estimatedTokens(message: ModelMessage): number {
+function estimatedTokens(message: ModelMessage, spec: string): number {
   const held = ESTIMATED.get(message);
 
-  if (held !== undefined) return held;
-  const tokens = estimateMessageTokens(message);
-  ESTIMATED.set(message, tokens);
+  if (held?.spec === spec) return held.tokens;
+  const tokens = messageTokens(spec, [message]);
+  ESTIMATED.set(message, { spec, tokens });
 
   return tokens;
 }
 
-function estimateMessageTokens(message: ModelMessage): number {
-  let chars = 0;
-
-  if (!Array.isArray(message.content)) {
-    chars = message.content.length;
-  } else {
-    for (const part of message.content) {
-      switch (part.type) {
-        case 'text':
-        case 'reasoning':
-          chars += part.text.length;
-          break;
-        case 'tool-call':
-          chars += part.toolName.length + jsonLength({ value: part.input });
-          break;
-        case 'tool-result':
-          chars += serializedOutputLength(part);
-          break;
-        case 'image':
-        case 'file':
-        case 'reasoning-file':
-          chars += ESTIMATED_MEDIA_CHARS;
-          break;
-
-        case 'custom':
-        case 'tool-approval-request':
-        case 'tool-approval-response':
-        default:
-          chars += jsonLength({ value: part });
-      }
-    }
-  }
-
-  return Math.max(0, Math.round(chars / 4));
+/** One result as the admission gate prices it, wherever it rides. */
+function resultTokens(part: ToolResultPart, spec: string): number {
+  return messageTokens(spec, [{ role: 'tool', content: [part] }]);
 }
 
 function safeStringify(input: { value: unknown }): string {
@@ -241,8 +212,3 @@ function safeStringify(input: { value: unknown }): string {
     return `unserializable step part: ${renderThrownChain({ cause: error })}`;
   }
 }
-
-function jsonLength(input: { value: unknown }): number {
-  return safeStringify(input).length;
-}
-

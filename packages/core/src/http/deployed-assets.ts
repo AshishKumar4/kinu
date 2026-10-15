@@ -27,10 +27,15 @@ export interface BuildStamp {
   signature?: string;
 }
 
-export const BuildStampSchema = v.object({
+/** Which build a deployment is: each field present and not blank, wherever a build names itself. */
+export const BuildIdentitySchema = v.object({
   version: v.pipe(v.string(), v.trim(), v.minLength(1)),
   sha: v.pipe(v.string(), v.trim(), v.minLength(1)),
   builtAt: v.pipe(v.string(), v.trim(), v.minLength(1)),
+});
+
+export const BuildStampSchema = v.object({
+  ...BuildIdentitySchema.entries,
   checksums: v.optional(v.record(v.string(), v.string())),
   signature: v.optional(v.string()),
 });

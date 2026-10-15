@@ -8,6 +8,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { periodicCraftConsolidation } from '../src/craft/consolidation';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
+import { MEMORY_PATH, parseMemoryNotes } from '../src/memory/note';
 
 describe('CraftStore consolidation', () => {
   test('does nothing with empty CraftStore', async () => {
@@ -34,6 +35,8 @@ describe('CraftStore consolidation', () => {
     const remaining = rt.craftStore.list();
     expect(remaining).toHaveLength(1);
     expect(remaining[0].name).toBe('fresh_tool');
+    // core-rest review P1-2: the record was all heading and no body, so the memory reader dropped it.
+    expect(parseMemoryNotes(await rt.memory.read(MEMORY_PATH) ?? '').map((note) => note.content)).toContain('Retired 1 stale tools: stale_tool');
   });
 
   test('BUG-2: does NOT retire all tools when all are stale', async () => {

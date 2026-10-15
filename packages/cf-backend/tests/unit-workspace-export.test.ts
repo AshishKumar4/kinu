@@ -6,12 +6,13 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { archiveSqlFromDatabase, CHAT_SESSION_ID, readWorkspaceArchivePage, restoreWorkspaceArchive, SessionHistory, AGENT_RPC_ACCESS, requiredRpcAccess, type ActorHandle, type ArchiveCursor, type SqlExec } from '@kinu.run/core';
+import { CHAT_SESSION_ID, readWorkspaceArchivePage, restoreWorkspaceArchive, SessionHistory, AGENT_RPC_ACCESS, requiredRpcAccess, type ActorHandle, type ArchiveCursor, type SqlExec } from '@kinu.run/core';
 import { seedTranscriptEntry, readTranscriptRows } from '@kinu.run/test-utils';
 import { createTestActor, createTestWorkspace } from '../../core/tests/helpers';
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
 import { wrapDatabase } from '@kinu.run/core/identity';
 import { claimFences } from '@kinu.run/core';
+import { sqlStorageOver } from '@kinu.run/core/identity';
 
 /** Enough chained entries that one page cannot hold the conversation. */
 const MESSAGES = 450;
@@ -48,7 +49,7 @@ async function workspace(): Promise<WorkspaceFixture> {
     said.push(content);
   }
 
-  return { sql: archiveSqlFromDatabase(ws.db), db: ws.db, actor, vfs: ws.vfs, said };
+  return { sql: sqlStorageOver(ws.db), db: ws.db, actor, vfs: ws.vfs, said };
 }
 
 /** The runaway guard refuses rather than returning a truncated archive that fails elsewhere. */
@@ -78,7 +79,7 @@ describe('cloud workspace export', () => {
     expect(pages).toBeGreaterThan(1);
 
     const target = new Database(':memory:');
-    const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(target), lines);
+    const result = await restoreWorkspaceArchive(sqlStorageOver(target), lines);
     expect(result.source).toBe('cloud');
 
     // Read back through the production transcript reader: rows landed without their chain read as empty here.

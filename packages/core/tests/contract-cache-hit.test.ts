@@ -12,7 +12,7 @@ import {
   createWorkersAIProvider,
   DynamicContextLedger, type DynamicContext,
   TurnAccumulator, ExtensionHost,
-  CacheWarmStore, CacheWarmingLane, initCacheWarmTable, warmUsage,
+  CacheWarmStore, CacheWarmingLane, initCacheWarmTable, normalizeAnthropicUsage,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CODEX_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue, type KinuExtension, type Usage,
@@ -700,7 +700,7 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
       wake: () => {},
       // The warm reaches the same provider cache the turn wrote: a hit means its prefix is the turn's, byte for byte.
       send: async ({ body }) => {
-        const usage = warmUsage(anthropicUsage(oracle.submit(anthropicView(body)), false));
+        const usage = normalizeAnthropicUsage(anthropicUsage(oracle.submit(anthropicView(body)), false));
         warms.push(usage);
 
         return { usage };

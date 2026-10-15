@@ -88,9 +88,6 @@ interface MissionRow {
   exhaustedAt: number | null;
 }
 
-/** Guards a debit against a cycle the declare-time check missed. */
-const MAX_CHAIN_DEPTH = 32;
-
 interface MissionDebit {
   tokens: number;
   usd: number;
@@ -158,13 +155,13 @@ export class MissionBudgetLedger {
     return row ? toRow(row) : null;
   }
 
-  /** Innermost first. */
+  /** Innermost first, to the outermost ancestor however deep; `seen` ends a cycle no declare can make. */
   chain(label: string): MissionRow[] {
     const out: MissionRow[] = [];
     const seen = new Set<string>();
     let cursor: string | null = label;
 
-    while (cursor !== null && !seen.has(cursor) && out.length < MAX_CHAIN_DEPTH) {
+    while (cursor !== null && !seen.has(cursor)) {
       seen.add(cursor);
       const row: MissionRow | null = this.get(cursor);
 
