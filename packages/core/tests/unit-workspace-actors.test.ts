@@ -77,6 +77,24 @@ describe('one workspace actor directory', () => {
     expect(head.storageKey).toBe(head.actorId);
   });
 
+  // core-rest review P2-17: the retired set was written inside the caller's transaction and a rollback left it standing.
+  test('a retirement its transaction rolled back leaves the actor\'s handle usable', () => {
+    const { db, directory } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+    const hired = directory.apply(main, [], { action: 'register', name: 'reader', origin: 'agent', lifetime: 'durable', creationId: 'c-reader' });
+    const reader = directory.open(hired.reference.actorId);
+
+    expect(() => db.transaction(() => {
+      directory.apply(main, [], { action: 'retire', name: 'reader', reference: hired.reference });
+      expect(() => reader.assertCurrent()).toThrow(expect.objectContaining({ code: 'missing' }));
+      throw new Error('the caller failed after the retirement');
+    })()).toThrow('the caller failed after the retirement');
+
+    expect(reader.assertCurrent()).toBeUndefined();
+    directory.apply(main, [], { action: 'retire', name: 'reader', reference: hired.reference });
+    expect(() => reader.assertCurrent()).toThrow(expect.objectContaining({ code: 'missing' }));
+  });
+
   test('foreign and forged handles cannot act as a parent', () => {
     const first = workspace('first', 'owner');
     const second = workspace('second', 'owner');

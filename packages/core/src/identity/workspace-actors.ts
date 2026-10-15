@@ -177,7 +177,10 @@ export interface WorkspaceActorDirectoryOptions {
 export class WorkspaceActorDirectory {
   private readonly handles = new WeakSet<ActorHandle>();
 
-  /** Actors this directory retired. It is the only writer of `workspace_actors`, so a handle asks this set, not the row. */
+  /**
+   * Actors this directory wrote a retirement for. It is the only writer of `workspace_actors`, so a handle asks this set,
+   * not the row; only one in it reads its row, which says whether the retirement held or a rollback undid it.
+   */
   private readonly ended = new Set<string>();
 
   /**
@@ -226,13 +229,26 @@ export class WorkspaceActorDirectory {
 
   /** `also` runs after the directory's own checks and can only refuse further, never authorise. */
   private issue(row: WorkspaceActor, also?: () => Effect.Effect<void, KinuError>): ActorHandle {
-    const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => (this.ended.has(row.actorId)
+    const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => (this.retired(row.actorId)
       ? Effect.fail(new KinuError('missing', 'The actor identity is no longer present.'))
       : also?.() ?? Effect.void));
 
     this.handles.add(handle);
 
     return handle;
+  }
+
+  /** Whether `actorId`'s retirement stands: read from its row only once this directory wrote one. */
+  private retired(actorId: string): boolean {
+    if (!this.ended.has(actorId)) return false;
+
+    const [row] = this.sql<{ retired: number }>`
+      SELECT retiring_at IS NOT NULL OR deleted_at IS NOT NULL AS retired FROM workspace_actors WHERE actor_id = ${actorId}`;
+
+    // Undone by the rollback of the transaction that wrote it: the actor is live again.
+    if (row !== undefined && row.retired === 0) this.ended.delete(actorId);
+
+    return row === undefined || row.retired === 1;
   }
 
   describe(handle: ActorHandle): WorkspaceActor {
