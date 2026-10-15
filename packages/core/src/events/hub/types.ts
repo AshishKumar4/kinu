@@ -319,7 +319,6 @@ export type IngressDescriptor =
       variant: 'peer_agent';
       payload: PeerAgentPayload;
       same_owner: boolean;
-      receiver_grant_present: boolean;
     }
   | {
       // One trust domain: possession of the worker-side stub is the authorization.

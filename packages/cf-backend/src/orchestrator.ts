@@ -2571,12 +2571,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return await stub.receivePeerMessage(msg);
       },
       isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
-      // A failed lookup is not a refusal: it rejects the delivery, and the sender's outbox retries it.
-      hasGrant: async (senderAgentName, senderUserId) => {
-        const { stub, caller } = await this.userHub();
-
-        return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
-      },
       scheduleDispatch: (at) => this.wakes.arm(KINU_TIMER_JOB, at),
       onAdmitted: () => { this.armDurableWake(); },
     });

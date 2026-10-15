@@ -632,16 +632,4 @@ export class UserWorkspaces {
 
     return row !== undefined;
   }
-
-  /** Whether a foreign sender may deliver into this user's agents; same-owner peers need no grant. */
-  async hasPeerGrant(caller: UserCaller, senderAgentName: string, senderUserId: string): Promise<boolean> {
-    await this.host.requireTier(caller, 'peers.grants');
-
-    const row = this.host.sqlx(
-      `SELECT 1 AS x FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`,
-      senderUserId, senderAgentName,
-    )[0];
-
-    return row !== undefined;
-  }
 }

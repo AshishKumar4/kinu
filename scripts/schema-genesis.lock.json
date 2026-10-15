@@ -1570,12 +1570,6 @@
     "allowed_tools TEXT",
     "preset_id TEXT"
   ],
-  "user_peer_grants@packages/core/src/state/user-schema.ts": [
-    "sender_user_id TEXT NOT NULL",
-    "sender_agent_name TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "PRIMARY KEY (sender_user_id, sender_agent_name)"
-  ],
   "user_profile@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "email TEXT NOT NULL",
