@@ -711,13 +711,22 @@ export const PLATFORM_CATALOG = {
     onBreach: 'the page ends at FILES_PAGE_ENTRIES and the reader asks again from `next`; a machine is asked one window of that size',
     observable: [],
     firstPartySignal: true,
+    measurements: [
+      { scenario: 'a 56,762-entry machine folder read whole, each entry statted (de5c43919\'s parent): reader heap, peak added, no page answered in 690 s', value: 441_073_905, unit: 'bytes' },
+      { scenario: 'the same, reader resident memory, peak added', value: 1_023_963_136, unit: 'bytes' },
+      { scenario: 'the same folder a page at a time, all 349 pages read in 6.4 s, no entry statted: reader heap, peak added', value: 6_380_261, unit: 'bytes' },
+      { scenario: 'the same, reader resident memory, peak added', value: 21_823_488, unit: 'bytes' },
+      { scenario: 'the largest page answered', value: 12_347, unit: 'bytes' },
+    ],
     notes:
       'Stands for do.isolate.transient_alloc_reset and worker.memory_kill_is_burst_sensitive, as run_events.page_bytes '
       + 'does, and is the same text bound so the two pages can be in flight together. Observed in production on '
       + '2026-10-14: workspace pine-brook-a26400b1 opened its PC in Files, whose /tmp held 56,762 entries; the folder '
       + 'was read whole and each entry statted through the hub, and the object was reset for memory 11 times in an hour '
       + 'inside websocket messages. The entry count is derived, not chosen: this bound over the longest entry a listing '
-      + 'can answer (a 255-byte name whose every byte JSON escapes to six characters).',
+      + 'can answer (a 255-byte name whose every byte JSON escapes to six characters). The measurements are the reader '
+      + 'in Bun against the real device daemon (packages/cli/tests/daemon-update.test.ts), not the object itself: the '
+      + 'whole-folder read passed the 128 MB isolate wall three times over.',
   },
 
   'rpc.clone_refused': {
