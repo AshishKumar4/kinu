@@ -21,7 +21,8 @@ import { fmtSpan } from '../../utils/format';
 import { retryAfterOf } from '../fallback-cooldown';
 import { inAttempt, type Attempt } from './attempt';
 import { generateFromStream } from './stream-generate';
-import { abortableSleep, providerPacer, type ProviderPacer } from '../pacing';
+import { providerPacer, type ProviderPacer } from '../pacing';
+import { abortableSleep } from '../../utils/abort';
 import type { ProviderWaitInfo } from '../types';
 import { attemptKey, recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 
@@ -137,7 +138,7 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
 
 function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, open: Open<T>): Effect.Effect<T, KinuError> {
   const capture: AttemptIdentityCapture = { identity: null };
-  const sleep = policy.sleep ?? abortableSleep;
+  const sleep = policy.sleep ?? ((ms: number, signal?: AbortSignal) => abortableSleep(ms, signal, 'reject'));
   const now = policy.now ?? Date.now;
   const random = policy.random ?? Math.random;
   const pacer = policy.pacer ?? providerPacer;
