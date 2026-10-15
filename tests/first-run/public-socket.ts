@@ -74,10 +74,15 @@ export interface PublicSocket {
 export function openPublicSocket(
   origin: string, identity: PublicWebIdentity, path: string, budget: AbortSignal,
 ): PublicSocket {
+  return openSocketAs(origin, webHeaders(identity), path, budget);
+}
+
+/** {@link openPublicSocket} as whoever `headers` say: a session cookie's holder, say, as a signed-in browser is. */
+export function openSocketAs(origin: string, headers: Readonly<Record<string, string>>, path: string, budget: AbortSignal): PublicSocket {
   const url = new URL(path, origin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 
-  const socket = new HEADER_WEBSOCKET(url.toString(), { headers: webHeaders(identity) });
+  const socket = new HEADER_WEBSOCKET(url.toString(), { headers: { ...headers } });
   const rpcs = new Map<string, PendingRpc>();
   const turns = new Map<string, PendingTurn>();
   const broadcasts = new Set<PendingBroadcast>();

@@ -678,7 +678,7 @@ async function walkTables(environment: InfraEnvironment, recordFile: string): Pr
   writeLines(`${recordFile}.census.tsv`, censusLines(reached));
   console.log(`tables: every database's tables and rows in ${recordFile}.census.tsv`);
 
-  if (failed.length > 0) throw new Error(`${String(failed.length)} database(s) refused, unreached, or moved rows (above); the record stays started`);
+  if (failed.length > 0) throw new Error(`${String(failed.length)} database(s) refused, or moved rows in a rebuild (above); the record stays started`);
 
   record({ putRecord: tablesRecordPut(config) }, recordFile, { ...started, state: 'done' });
   console.log(`tables: done; recorded at resets/${started.tag}.json`);

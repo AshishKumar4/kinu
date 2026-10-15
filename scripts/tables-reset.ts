@@ -15,8 +15,8 @@
  * on it, and its census read back with what its repair did. It starts from the accounts `/ops/roots` names (the builtin
  * sign-in directory, every user the control plane has seen, the eval service's own), follows each account to its
  * workspaces and each workspace to its agents, and reaches besides every object Cloudflare lists, which names only
- * objects holding KV data and so misses a database that holds only SQL. A refused, unreachable or row-losing database
- * fails the walk; the census goes beside the record.
+ * objects holding KV data and so misses a database that holds only SQL. A refused or row-losing database fails the
+ * walk; one it could not reach is a gap in the census, named with why. The census goes beside the record.
  *
  * THE PASS. `/ops/tables` and `/ops/roots` admit a one-time pass this step writes into the deployment's AUTH_KV with
  * wrangler, the authority `reset.ts wipe` deletes with, and deletes when it is done; no session reaches them.
@@ -242,7 +242,9 @@ export function censusLines(reached: readonly Reached[]): string[] {
   return [...unreachable, ...storesOf(reached).flatMap((store) => store.answer.census.map((row) => `${store.kind}\t${store.label}\t${row.table}\t${String(row.rows)}`))].sort();
 }
 
-/** What the walk found, to print, and the databases that fail it. */
+/** What the walk found, to print, and the databases that fail it: a repair that refused, or one whose rebuilt table's
+ *  rows moved. An object the walk did not reach is a gap in its census, never a failure: it repairs at its first
+ *  request, which correctness waits on, and the walk only warms. */
 export interface WalkReport {
   readonly lines: string[];
   readonly failed: string[];
@@ -266,7 +268,7 @@ export function walkLines(reached: readonly Reached[], listed: number): WalkRepo
     const repair = store.answer.repair;
     const parts = [['rebuilt', repair?.rebuilt], ['refilled', repair?.refilled], ['retired', repair?.retired]] as const;
 
-    return `  ${store.kind} ${store.label} (${String(repair?.ms ?? 0)} ms): ${parts.filter(([, tables]) => (tables?.length ?? 0) > 0).map(([what, tables]) => `${what} ${tables?.join(', ') ?? ''}`).join('; ') || 'stamped'}`;
+    return `  ${store.kind} ${store.label}: ${parts.filter(([, tables]) => (tables?.length ?? 0) > 0).map(([what, tables]) => `${what} ${tables?.join(', ') ?? ''}`).join('; ') || 'stamped'}`;
   };
 
   const section = (title: string, lines: readonly string[]) => (lines.length === 0 ? [] : [title, ...lines.map((line) => `  ${line}`)]);
@@ -279,9 +281,9 @@ export function walkLines(reached: readonly Reached[], listed: number): WalkRepo
       ...section('UNCHECKED (held, but the init made no shape to compare; left as they are):', unchecked),
       ...section('REFUSED (kept as they are, refusing every call with why):', refused),
       ...section('ROWS MOVED in a rebuild:', moved),
-      ...section('UNREACHED:', unreached),
+      ...section('UNREACHED, a gap in this census (each repairs at its first request on this build):', unreached),
     ],
-    failed: [...refused, ...moved, ...unreached],
+    failed: [...refused, ...moved],
   };
 }
 
@@ -316,7 +318,6 @@ const RepairSchema = v.object({
   unchecked: v.array(v.string()),
   tables: v.array(v.object({ table: v.string(), before: v.nullable(v.number()), after: v.nullable(v.number()) })),
   refused: v.nullable(v.string()),
-  ms: v.number(),
 });
 
 const StoreEntries = {
@@ -374,20 +375,45 @@ interface Walking {
   readonly reached: Map<string, Reached>;
 }
 
-/** The objects of `className` named or listed and not yet asked, asked in batches; each answer's leads, kept. */
-async function reachEach({ target, pass, reached }: Walking, className: ResetClass, asked: { names: readonly string[]; ids: readonly string[] }): Promise<void> {
-  const names = [...new Set(asked.names)].filter((name) => ![...reached.values()].some((object) => object.className === className && object.name === name));
-  const ids = [...new Set(asked.ids)].filter((id) => !reached.has(id));
+/** What an object answers while its host still runs the build before, which has no `opsTables`: a new version reaches
+ *  each machine on its own, so an object can start on the old one seconds after every edge serves the new (staging,
+ *  2026-10-15: a workspace started on the build before 6 s after the edge served the candidate, in the very batch whose
+ *  other workspaces started on the candidate). */
+const BUILD_BEFORE = /does not implement the method "opsTables"/u;
+
+/** How long the walk waits before asking such an object again. */
+const ASK_AGAIN_MS = 2_000;
+
+/** `asked` of `className`, in batches; each answer kept, over any earlier one for the same object. */
+async function askEach({ target, pass, reached }: Walking, className: ResetClass, asked: { names: readonly string[]; ids: readonly string[] }): Promise<void> {
   const batches: OpsBody[] = [];
 
-  for (let at = 0; at < names.length; at += OPS_OBJECTS_PER_REQUEST) batches.push({ class: className, ids: [], names: names.slice(at, at + OPS_OBJECTS_PER_REQUEST) });
+  for (let at = 0; at < asked.names.length; at += OPS_OBJECTS_PER_REQUEST) batches.push({ class: className, ids: [], names: asked.names.slice(at, at + OPS_OBJECTS_PER_REQUEST) });
 
-  for (let at = 0; at < ids.length; at += OPS_OBJECTS_PER_REQUEST) batches.push({ class: className, ids: ids.slice(at, at + OPS_OBJECTS_PER_REQUEST), names: [] });
+  for (let at = 0; at < asked.ids.length; at += OPS_OBJECTS_PER_REQUEST) batches.push({ class: className, ids: asked.ids.slice(at, at + OPS_OBJECTS_PER_REQUEST), names: [] });
 
   for (const body of batches) {
     const answer = await askAdmitted(target, pass, { path: 'tables', body, schema: OpsAnswerSchema });
 
-    for (const object of answer.objects) if (!reached.has(object.id)) reached.set(object.id, { className, ...object });
+    for (const object of answer.objects) reached.set(object.id, { className, ...object });
+  }
+}
+
+/** The objects of `className` named or listed and not yet asked, asked in batches; each answer's leads, kept. One that
+ *  started on the build before is asked again, for as long as a version may take to reach every machine (the smoke
+ *  test's bound); past it, it is a gap in the census, which repairs at its first request on the candidate. */
+async function reachEach(walking: Walking, className: ResetClass, asked: { names: readonly string[]; ids: readonly string[] }): Promise<void> {
+  const { target, reached } = walking;
+  const names = [...new Set(asked.names)].filter((name) => ![...reached.values()].some((object) => object.className === className && object.name === name));
+
+  await askEach(walking, className, { names, ids: [...new Set(asked.ids)].filter((id) => !reached.has(id)) });
+
+  for (let left = Math.ceil((target.candidate?.propagationMs ?? 0) / ASK_AGAIN_MS); left > 0; left -= 1) {
+    const behind = [...reached.values()].filter((object) => object.className === className && BUILD_BEFORE.test(object.error ?? ''));
+
+    if (behind.length === 0) return;
+    await target.pause(ASK_AGAIN_MS);
+    await askEach(walking, className, { names: behind.flatMap((object) => object.name ?? []), ids: behind.flatMap((object) => (object.name === undefined ? [object.id] : [])) });
   }
 }
 
