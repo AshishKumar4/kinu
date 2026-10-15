@@ -1099,7 +1099,7 @@ export {
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleWorkspaceSlates,
   actorHomeName,
-  MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
+  MAIN_AGENT, SESSION_UID, AGENT_UID_FLOOR,
   type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';
 
@@ -1586,7 +1586,7 @@ export {
 } from './jobs/index';
 
 export {
-  TaskListStore, initTaskListTable, MAX_TASK_TITLE_CHARS, taskSettled, taskTreePhase,
+  TaskListStore, initTaskListTable, taskSettled, taskTreePhase,
   type AgentTask, type AgentTaskTree, type TaskStatus,
 } from './tools/task-store';
 
@@ -2391,7 +2391,6 @@ export {
 } from './providers/model-menu';
 
 export {
-  ESC_ESC_BEAT_MS,
   type InputState,
   initialInputState,
   type InputMachineEvent,

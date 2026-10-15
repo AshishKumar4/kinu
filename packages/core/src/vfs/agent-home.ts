@@ -20,11 +20,11 @@ import { SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 export const MAIN_AGENT = 'main';
 
 /** Owner writes; everyone reads and traverses. */
-export const AGENT_HOME_MODE = 0o755;
+const AGENT_HOME_MODE = 0o755;
 
 
 /** Owner only, and discarded with the agent. */
-export const AGENT_TMP_MODE = 0o700;
+const AGENT_TMP_MODE = 0o700;
 
 /** The substrate's session identity; an unnamed exec runs as it. */
 export const SESSION_UID = 1000;
