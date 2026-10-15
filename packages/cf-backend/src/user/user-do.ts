@@ -37,7 +37,7 @@ import { UserDevices, type DeviceCancellationOutcome } from './devices';
 import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
-import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall } from './mcp-servers';
+import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall, type McpToolSurface } from './mcp-servers';
 import { UserAccountMemory } from './account-memory';
 import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, SqlValue } from '@kinu.run/core';
 import {
@@ -586,7 +586,7 @@ export class UserDO extends Agent<Env> {
     return this.mcpServers.userMcp_remove(caller, id);
   }
 
-  userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
+  userMcp_toolDescriptors(caller: UserCaller): Promise<McpToolSurface> {
     return this.mcpServers.userMcp_toolDescriptors(caller);
   }
 

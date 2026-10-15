@@ -29,7 +29,7 @@ import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
 import type { UserDO } from '../../src/user/user-do';
-import type { McpToolCall } from '../../src/user/mcp-servers';
+import type { McpToolCall, McpToolSurface } from '../../src/user/mcp-servers';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
   actorPolicy, actorReferenceOf, announcementOf,
@@ -1762,17 +1762,17 @@ export function makeEnv(
 
             return { servers: 1 };
           },
-          userMcp_toolDescriptors: async (): Promise<string> => {
+          userMcp_toolDescriptors: async (): Promise<McpToolSurface> => {
             if (userPlane) userPlane.descriptorReads = (userPlane.descriptorReads ?? 0) + 1;
 
             if (userPlane?.mcp?.cold === true) {
               const servers = [...new Set(userPlane.mcp.descriptors.map((tool) => tool.serverName))];
 
-              return JSON.stringify({ descriptors: [], unavailable: servers.map((server) => ({ server, reason: 'not connected when this turn opened' })) });
+              return { descriptors: [], unavailable: servers.map((server) => ({ server, reason: 'not connected when this turn opened' })) };
             }
 
             if (userPlane?.mcp !== undefined && userPlane.failDescriptors === undefined) {
-              return JSON.stringify({ descriptors: userPlane.mcp.descriptors, unavailable: [] });
+              return { descriptors: [...userPlane.mcp.descriptors], unavailable: [] };
             }
 
             throw userPlane?.failDescriptors

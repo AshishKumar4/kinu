@@ -3,7 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { actorPolicy, assignmentDelivery, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type CodemodeBuilder, type SeatedActor, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
-import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, parseActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateLifetime, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, parseActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
@@ -206,10 +206,6 @@ function cfRuntimeOf(actor: SeatedActor, what: string): Effect.Effect<CFRuntime,
   return isCFRuntime(runtime) ? Effect.succeed(runtime) : Effect.fail(new KinuError('unsupported', `${what} must run on the cf runtime`));
 }
 
-function hostedLifetime(record: WorkspaceActor): SubordinateLifetime {
-  return record.lifetime;
-}
-
 /** Admit work and report the delivery branch; only this actor knows whether a turn is live. */
 function admitHostedTask(
   seams: HostedActorSeams,
@@ -338,7 +334,7 @@ export async function retireStalledTask(
   new EventLog(seams.exec, child.handle).dismiss(turn.turnId, 'stalled: cut off at one step too many times', 'system');
 
   const owed = await terminalTaskReport({
-    lifetime: hostedLifetime(child.record),
+    lifetime: child.record.lifetime,
     ending: 'recovered',
     assistantText: 'This task was cut off at the same step too many times by resets of the workspace (a platform memory or '
       + 'time limit), so it is not being run again. A reset may have come from other work in the workspace, not from this task.',
@@ -459,7 +455,7 @@ export function hostedOwedReport(
     if (seams.roster(hirer).finishTurn(actor.record.name, ended.ending, Date.now())) seams.announce(hirer);
 
     return yield* Effect.promise(() => owedSubordinateTurnReport({
-      lifetime: hostedLifetime(actor.record), ending: ended.ending, assistantText: ended.assistantText, narration: async () => ended.narration,
+      lifetime: actor.record.lifetime, ending: ended.ending, assistantText: ended.assistantText, narration: async () => ended.narration,
       reports: turn.reports, ownerDriven: turn.ownerDriven,
       delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle), ...(turn.taskId !== null && { turnTaskId: turn.taskId }) }),
     }));

@@ -613,7 +613,7 @@ export class UserMcpServers {
 
   /** Descriptors for already-connected MCP servers, filtered by `allowed_tools`. On the turn's
    *  critical path: starts and awaits no network work; `unavailable` lists servers not yet ready. */
-  async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
+  async userMcp_toolDescriptors(caller: UserCaller): Promise<McpToolSurface> {
     await this.host.requireTier(caller, 'mcp.tools');
 
     const catalog = this.catalog();
@@ -622,7 +622,7 @@ export class UserMcpServers {
       `SELECT id, allowed_tools, preset_id FROM user_mcp_servers`,
     ), catalog);
 
-    if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
+    if (rows.length === 0) return { descriptors: [], unavailable: [] };
 
     const allowedById = new Map<string, ReadonlySet<string> | null>();
     // A corrupt list offers nothing of its server, and says why where the turn reads the unavailable ones.
@@ -704,7 +704,7 @@ export class UserMcpServers {
     // Code-unit order, so the surface this sorts hashes the same every time.
     out.sort((a, b) => compareCodeUnits(a.toolKey, b.toolKey));
 
-    return JSON.stringify({ descriptors: out, unavailable } satisfies McpToolSurface);
+    return { descriptors: out, unavailable };
   }
 
   /** Called over RPC by the orchestrator's per-tool closure; the result must be JSON-serializable. */

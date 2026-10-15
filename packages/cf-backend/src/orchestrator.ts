@@ -35,7 +35,7 @@ import {
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
   type LoopOrigin, type NodeHomeHost,
-  type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
+  type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   actorStanding, isSubordinateOrigin,
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
@@ -75,6 +75,7 @@ import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
 import { WorkspaceSlates } from "./workspace-slates";
 import { OverviewPush } from "./overview-push";
+import type { McpToolSurface } from "./user/mcp-servers";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
@@ -382,7 +383,7 @@ type AssembledSurfaceParts = Omit<ActorSurface, 'surface' | 'descriptors' | 'dig
 
 interface SourcePlanes {
   /** The owner's MCP descriptors, settled; null where no turn reaches them. */
-  readonly descriptors: Promise<PromiseSettledResult<string>> | null;
+  readonly descriptors: Promise<PromiseSettledResult<McpToolSurface>> | null;
   /** The hub's device check, which never rejects: a failure keeps the last snapshot. */
   readonly device: Promise<unknown>;
   /** The account's facts its turn reads once, which never rejects (a failed read is logged and answers none); null with
@@ -1009,12 +1010,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       // Its own named shell, never the agent's: the session user's identity must not reach the agent's commands.
       stateSession: async () => await this.hostedWorkspace().session({ shellId: agentStateShellId(this.actingAgentOf(actorId).storageKey) }),
-      memory: () => new AgentMemory(async () => {
-        const reference = actorReferenceOf(this.actingAgentOf(actorId));
-        const actor = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
-
-        return actor.runtime.memory;
-      }),
+      memory: () => new AgentMemory(async () => (await this.agentSeat(actorId)).runtime.memory),
       program: async (bound, ...args) => {
         this.admitWork();
 
@@ -1069,9 +1065,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // What its turns are built on, seeded as a turn's preparation seeds it; no surface is built for no turn.
       scaffold: async () => {
         this.admitWork();
-        const reference = actorReferenceOf(this.actingAgentOf(actorId));
-        // The seat it holds, which a run of its may have taken, as its turn's preparation reads it; else its own.
-        const actor = this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
+        const actor = await this.agentSeat(actorId);
 
         // As its turn's sources ask it first: the workspace agent's program is installed before it is read.
         if (actorReach(actorPolicy(actor.record)).kind === 'workspace') await this.ensureOwnedScaffold();
@@ -1111,12 +1105,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       runSettled: async (run) => { this.runSettled(actorId, run); },
       hireAdvisor: async (advisor) => {
         if (this.effectEnded(actorId, 'advisor_review')) return;
-        const reference = actorReferenceOf(this.actingAgentOf(actorId));
-
-        await this.actorAdvisor(this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' })).hire(advisor);
+        await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor);
       },
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
-      birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.boundExec(), this.agentBound(actorId).handle), drainTurnId),
+      birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
         vfs: this.rt.storage.vfs,
         config: this.agentBound(actorId).stores.config,
@@ -1129,7 +1121,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Asked only by a turn that never prepared: one that did reads what its preparation and its tools answered.
       openWork: async () => this.openWorkOf(actorId),
-      enqueueTurn: (input) => this.enqueueHostedTurn(this.actorHost().bindStores(actorReferenceOf(this.actingAgentOf(actorId))), input),
+      enqueueTurn: (input) => this.enqueueHostedTurn(this.agentBound(actorId), input),
       executeTool: (call) => {
         this.admitWork();
         this.agentActivity(actorId, call.activity);
@@ -1174,6 +1166,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private agentBound(actorId: string): BoundActor {
     return this.actorHost().bindStores(actorReferenceOf(this.actingAgentOf(actorId)));
+  }
+
+  /** The seat an agent holds, which a run of its may have taken, as its turn's preparation reads it; else its own. */
+  private async agentSeat(actorId: string): Promise<SeatedActor> {
+    const reference = actorReferenceOf(this.actingAgentOf(actorId));
+
+    return this.actorHost().hosted(reference) ?? await this.actorHost().acquire(reference, { kind: 'actor' });
   }
 
   /** The tile reads an agent's chat turn as its room hears it open and close. */
@@ -1364,15 +1363,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.workspaceActors();
   }
 
-  /**
-   * Immutable catalogs are shared by value; per-actor state (event log, governor, broadcast)
-   * is built per actor in `actor-hosting.ts` and is never this object's own.
-   */
-  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`; its writes name the reads they move. */
-  protected boundExec(): SqlExec {
-    return this.watchedExec;
-  }
-
+  /** Immutable catalogs are shared by value; per-actor state (event log, governor, broadcast) is built per actor in
+   *  `actor-hosting.ts` and is never this object's own. */
   private workspaceHostSeams(): WorkspaceHostSeams {
     return {
       env: this.env,
@@ -1380,7 +1372,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       agent: this,
       holdLane: (body) => this.holdLane(body),
       currentTurn: (reference) => this.currentTurnOf(reference),
-      exec: this.boundExec(),
+      exec: this.watchedExec,
       sql: this.boundSql,
       directory: this.workspaceActors(),
       workspaceName: this.workspaceName(),
@@ -1440,7 +1432,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected hostedSeams(): HostedActorSeams {
     return {
       host: this.actorHost(),
-      exec: this.boundExec(),
+      exec: this.watchedExec,
       directory: this.workspaceActors(),
       turnInFlight: (reference) => this.hostedTurnInFlight(reference),
       sources: async (actor) => await this.actorSources(actor, actorReach(actorPolicy(actor.record)), null),
@@ -1754,7 +1746,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The workspace agent's own tools in `mode` outside any turn of its: a scaffold's rollout, a slate's call, a retry. */
   protected override ownTools(mode: WorkMode, scope: string | null): ActorToolsets {
-    const root = this.actorHost().bindStores(actorReferenceOf(this.actorHandle()));
+    const root = this.rootBound();
     const operation = () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
 
     return this.actorTools({ ...root, runtime: this.rt }, surfaceReach(actorPolicy(root.record), { authorship: 'owner', mode, awaitsReply: false }, true), mode, {
@@ -1766,7 +1758,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps {
-    const root = this.actorHost().bindStores(actorReferenceOf(this.actorHandle()));
+    const root = this.rootBound();
 
     return this.actorAgentsToolDeps({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), mode, () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null);
   }
@@ -2247,7 +2239,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private reactionsDueAt(now: number): number | null {
     const due = this.reactingAgents()
-      .map((record) => new EventLog(this.boundExec(), this.actorHost().bindStores(actorReferenceOf(record)).handle).nextPendingDrainAt(now) ?? Infinity);
+      .map((record) => new EventLog(this.watchedExec, this.actorHost().bindStores(actorReferenceOf(record)).handle).nextPendingDrainAt(now) ?? Infinity);
 
     const at = Math.min(Infinity, ...due);
 
@@ -2258,7 +2250,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Effect.gen({ self: this }, function* () {
       for (const record of this.reactingAgents()) {
         const reference = actorReferenceOf(record);
-        const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
+        const log = new EventLog(this.watchedExec, this.actorHost().bindStores(reference).handle);
         const dueAt = log.nextPendingDrainAt(now);
 
         if (dueAt === null || dueAt > now) continue;
@@ -2727,16 +2719,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The edge's one resolution of a name or `/`-joined path to the actor id everything downstream keys on. */
   resolveHostedActorRoute(target: string): Promise<{ ok: true; actorId: string } | Refusal> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
-        yield* this.owner();
-        const actor = this.hostedTarget(target);
-
-        if (actor === null) return yield* new KinuError('missing', 'The actor is not available for client execution.');
-
-        return { ok: true as const, actorId: actor.handle.actorId };
-      }), refusing('resolving a hosted actor chat path', 'io'));
-    }));
+    return settle(Effect.catchCause(
+      Effect.map(this.hostedChild(target), ({ child }) => ({ ok: true as const, actorId: child.handle.actorId })),
+      refusing('resolving a hosted actor chat path', 'io'),
+    ));
   }
 
   /** Each step a live subordinate its parent's roster still employs: a dismissal keeps rows, not chat. */
@@ -3632,13 +3618,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A sandbox that died mid-restore sends no settle. */
   private recheckSandboxRestore(): void {
-    const namespace = this.env.KinuDevbox;
+    const box = this.computerBox();
 
-    if (namespace === undefined) return;
+    if (box === undefined) return;
 
     if (this.config.get(SANDBOX_STARTING) == null && this.config.get(SANDBOX_REFUSED) == null) return;
     this.detachOwned(logged('computer.restore_recheck_failed', { doing: "reading the computer's restore state", otherwise: 'unavailable' }, async () => {
-      await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
+      await this.sandboxRestore(await box.restoreStatus());
     }, { workspace: this.name }));
   }
 
@@ -4474,7 +4460,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A search's actor outlives its run until {@link reclaimSettledExplorationActors} retires it. */
   private hasExplorationActors(): boolean {
-    return this.boundExec().exec(
+    return this.watchedExec.exec(
       `SELECT 1 FROM workspace_actors WHERE origin = 'swarm' AND deleted_at IS NULL AND retiring_at IS NULL LIMIT 1`,
     ).toArray().length > 0;
   }
@@ -5353,9 +5339,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ).revokeAll();
     }
 
-    if (this.env.KinuDevbox) {
-      const sb = this.env.KinuDevbox.getByName(sandboxIdForWorkspace(this.name));
+    const sb = this.computerBox();
 
+    if (sb !== undefined) {
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.
       await sb.discardState();
@@ -5818,7 +5804,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
         owners: async () => new Map([...await listPortReservations(this.ctx)].flatMap(([port, held]) => (held.owner === null ? [] : [[port, held.owner] as const]))),
       },
-      ownerToolDescriptors: async () => await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
+      ownerMcpSurface: async () => await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
       shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
       shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
       kv: this.env.AUTH_KV,
@@ -6097,13 +6083,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.computerBox()?.closeTerminalSession(id);
   }
 
+  /** The workspace's computer, where this deployment binds one. */
   private computerBox(): SandboxBox | undefined {
     return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
   }
 
   /** The box keeps the account default its next start uses, so every read and change pushes the owner's current one. */
   private async withSizedBox(act: (box: SandboxBox) => Promise<void>): Promise<SandboxSizeState | null> {
-    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
+    const box = this.computerBox();
 
     if (box === undefined) return null;
     const account = await this.accountSandboxSize();

@@ -5,13 +5,14 @@
  */
 import * as v from 'valibot';
 import { McpToolSurfaceSchema, type SlateSurfaceCatalog } from '@kinu.run/core';
+import type { McpToolSurface } from './user/mcp-servers';
 import { ROOT_SLATE_CALLER, SlateBuilds } from '@kinu.run/core/slates';
 import type { SlateHost, SlateHostDeps } from './slates/host';
 
 /** What the host is made with, but for what this class keeps itself: its build records and its catalog. */
 export interface WorkspaceSlatesHost extends Omit<SlateHostDeps, 'builds' | 'catalog'> {
-  /** The owner's MCP tools as the account describes them, the JSON a catalog names servers and tools from. */
-  readonly ownerToolDescriptors: () => Promise<string>;
+  /** The owner's MCP tools as the account describes them, which a catalog names servers and tools from. */
+  readonly ownerMcpSurface: () => Promise<McpToolSurface>;
 }
 
 export class WorkspaceSlates {
@@ -56,7 +57,8 @@ export class WorkspaceSlates {
 
   /** Names only, never surfaces: the graph shows what a slate has reached; each call is still decided as it comes. */
   async catalog(): Promise<SlateSurfaceCatalog> {
-    const mcp = v.parse(McpToolSurfaceSchema, JSON.parse(await this.deps.ownerToolDescriptors()));
+    // Crossed an RPC from the owner's object: held to the surface's schema as every reader of it holds it.
+    const mcp = v.parse(McpToolSurfaceSchema, await this.deps.ownerMcpSurface());
     const mcpServers = new Map<string, { title: string; tools: { name: string; readOnly: boolean }[] }>();
 
     for (const descriptor of mcp.descriptors) {

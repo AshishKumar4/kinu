@@ -75,7 +75,7 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
-  EvolutionLanes, drainPendingEvents, ActorAdvisor, turnLedgers, type SeatedActor, type DynamicDelegate,
+  EvolutionLanes, drainPendingEvents, ActorAdvisor, turnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -713,6 +713,11 @@ export abstract class ActorAgent extends Agent<Env> {
    * Abstract because it is built from root state this base class does not hold. */
   protected abstract actorHost(): ActorHost<CFSeat>;
 
+  /** The workspace agent's stores, bound as its root actor. */
+  protected rootBound(): BoundActor {
+    return this.actorHost().bindStores(actorReferenceOf(this.actorHandle()));
+  }
+
   /** Read directly by the inspection path and slate descent, which resolve actors by name. */
   protected abstract actorDirectoryStore(): WorkspaceActorDirectory;
 
@@ -813,7 +818,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected subordinateRuntime(): SubordinateRuntime {
     this._subordinateRuntime ??= hostedSubordinateRuntime(
       this.hostedSeams(),
-      () => this.actorHost().bindStores(actorReferenceOf(this.actorHandle())),
+      () => this.rootBound(),
     );
 
     return this._subordinateRuntime;
@@ -2472,7 +2477,7 @@ export abstract class ActorAgent extends Agent<Env> {
         case 'mcp': {
           // The role admits MCP tools by descriptor key, same as `toolAllowed(d.toolKey)` in native turns.
           const { stub, caller } = yield* Effect.promise(async () => this.userHub());
-          const surface = async (): Promise<McpToolSurface> => v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
+          const surface = async (): Promise<McpToolSurface> => v.parse(McpToolSurfaceSchema, await stub.userMcp_toolDescriptors(caller));
           let offered = yield* Effect.promise(surface);
 
           // A slate call is not a turn opening: a server the user object is still dialling is waited for, once.
@@ -3309,7 +3314,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * means. No owner or no identity, no user-level tools: checked rather than caught, as userCaller() throws only when no
    * token was issued, and a real read failure must not silently empty the surface.
    */
-  protected userMcpDescriptors(): Promise<PromiseSettledResult<string>> | null {
+  protected userMcpDescriptors(): Promise<PromiseSettledResult<McpToolSurface>> | null {
     if (!this.getOwnerUserId() || !this.workspaceCapabilityToken()) return null;
     const asked = this.userCaller().then(async (caller) => await this.requireOwnerUserDO().userMcp_toolDescriptors(caller));
 
@@ -3337,7 +3342,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (surface.status === 'rejected') throw surface.reason;
 
-          return v.parse(McpToolSurfaceSchema, JSON.parse(surface.value));
+          return v.parse(McpToolSurfaceSchema, surface.value);
         },
         {
           ...read.value.window(),
@@ -3478,7 +3483,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async composeNextRequest(): Promise<ComposedRequest> {
     const history = await this.mainWorkingContext();
     const mode = await this.preparedWorkMode();
-    const root = this.actorHost().bindStores(actorReferenceOf(this.actorHandle()));
+    const root = this.rootBound();
 
     const surface = await this.actorSurface({ ...root, runtime: this.rt }, {
       key: { actorId: root.handle.actorId, turnId: WORKSPACE_RUN_ID, runId: WORKSPACE_RUN_ID },
