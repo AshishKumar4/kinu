@@ -22,6 +22,7 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
     id INTEGER PRIMARY KEY CHECK (id = 1),
     workspace TEXT NOT NULL,
     slate TEXT NOT NULL,
+    title TEXT NOT NULL,
     link INTEGER NOT NULL,
     link_gen INTEGER NOT NULL,
     image TEXT,
@@ -94,7 +95,7 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
 const AudienceSchema = v.union([v.literal('anyone'), v.array(v.string())]);
 
 const RoomRow = v.object({
-  workspace: v.string(), slate: v.string(), link: v.number(), link_gen: v.number(), image: v.nullable(v.string()),
+  workspace: v.string(), slate: v.string(), title: v.string(), link: v.number(), link_gen: v.number(), image: v.nullable(v.string()),
   image_author: v.nullable(v.string()), secret: v.nullable(v.string()), foreign_code: v.number(), parent: v.nullable(v.string()),
   next: v.number(),
 });
@@ -102,6 +103,8 @@ const RoomRow = v.object({
 export interface RoomRecord {
   readonly workspace: string;
   readonly slate: string;
+  /** The slate's title, from the image running: written with the image. */
+  readonly title: string;
   readonly link: boolean;
   readonly linkGen: number;
   readonly image: string | null;
@@ -280,11 +283,13 @@ export class RoomCaretaker {
   // ── The room ──────────────────────────────────────────────────────────────────────────────────────────────────
 
   /** A room is created once, by its owner's first run of the slate; a fork's names the room it was forked from. */
-  create(input: { readonly workspace: string; readonly slate: string; readonly owner: string; readonly parent: string | null }): void {
+  create(input: {
+    readonly workspace: string; readonly slate: string; readonly title: string; readonly owner: string; readonly parent: string | null;
+  }): void {
     if (this.maybeRoom() !== null) return;
     this.db.exec(
-      'INSERT INTO room (id, workspace, slate, link, link_gen, image, image_author, secret, foreign_code, parent, next) VALUES (1, ?, ?, 0, 0, NULL, NULL, NULL, ?, ?, 1)',
-      input.workspace, input.slate, input.parent === null ? 0 : 1, input.parent,
+      'INSERT INTO room (id, workspace, slate, title, link, link_gen, image, image_author, secret, foreign_code, parent, next) VALUES (1, ?, ?, ?, 0, 0, NULL, NULL, NULL, ?, ?, 1)',
+      input.workspace, input.slate, input.title, input.parent === null ? 0 : 1, input.parent,
     );
     this.db.exec("INSERT INTO room_members (email, name, role, gen) VALUES (?, NULL, 'owner', 0)", input.owner);
   }
@@ -296,7 +301,7 @@ export class RoomCaretaker {
     const parsed = v.parse(RoomRow, row);
 
     return {
-      workspace: parsed.workspace, slate: parsed.slate, link: parsed.link === 1, linkGen: parsed.link_gen,
+      workspace: parsed.workspace, slate: parsed.slate, title: parsed.title, link: parsed.link === 1, linkGen: parsed.link_gen,
       image: parsed.image, imageAuthor: parsed.image_author,
       secret: parsed.secret === null ? null : v.parse(SecretSightingSchema, JSON.parse(parsed.secret)),
       foreign: parsed.foreign_code === 1, parent: parsed.parent,
@@ -454,15 +459,15 @@ export class RoomCaretaker {
    * else's stay at the image they were made for, so they are suspended until their holder renews them. The secret
    * sighting is the new image's, set in the same statement.
    */
-  publish(author: string, image: string, secret: SecretSighting | null): void {
+  publish(author: string, built: { readonly image: string; readonly title: string; readonly secret: SecretSighting | null }): void {
     if (!this.canEdit(author)) fail('denied', `${author} cannot change this slate`);
     const owner = this.owner();
-    const room = this.room();
+    const { image, title, secret } = built;
 
-    if (room.image === image) return;
+    if (this.room().image === image) return;
     this.db.exec(
-      'UPDATE room SET image = ?, image_author = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
-      image, author, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
+      'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
+      image, author, title, secret === null ? null : JSON.stringify(secret), author !== owner ? 1 : 0, secret !== null ? 1 : 0,
     );
     this.db.exec('UPDATE room_grants SET image = ? WHERE holder = ?', image, author);
 

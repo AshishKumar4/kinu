@@ -30,6 +30,8 @@ export interface WorkspaceOwnerRpc {
   shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>>;
   // Fork flag and the caller's admission are checked in the owner's object, never trusted from the route.
   liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>>;
+  /** The slate's room, made on its first need by this workspace, which alone names its owner. */
+  ensureSlateRoom(slate: string): Promise<SlateAnswer<{ readonly handle: string }>>;
 }
 
 /** The class is not named here: this module is in graphs whose `Env` is not the worker's. */

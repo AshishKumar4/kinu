@@ -61,6 +61,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     UserDO: unreachableObjects('UserDO'),
     MonitorDO: unreachableObjects('MonitorDO'),
     ControlPlaneDO: unreachableObjects('ControlPlaneDO'),
+    SLATE_ROOM: unreachableObjects('SLATE_ROOM'),
     KinuDevbox: unreachableObjects('KinuDevbox'),
     DeployRunDO: unreachableObjects('DeployRunDO'),
     AUTH_KV: unreachableKvNamespace('AUTH_KV'),
