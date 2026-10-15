@@ -125,10 +125,18 @@ export function rowsOf(sql: SqlExec, table: string): number {
   return v.parse(CountSchema, sql.exec(`SELECT COUNT(*) AS rows FROM "${table}"`).toArray()[0]).rows;
 }
 
-/** A statement as two builds may have spelled it alike: comments, spacing and a dropped `IF NOT EXISTS` aside. */
+/** A statement's tokens: a quoted string or name (kept exactly), a comment, spacing, a paren or comma, or a word. */
+const TOKEN = /'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|\s+|[(),]|[^'"`[\s(),\-/]+|./gu;
+
+/** A statement as two builds may have spelled it alike: its comments, its spacing and `IF NOT EXISTS` aside. Quoted text
+ *  (a string, a quoted name) is kept exactly, so a changed default is seen. */
 function normal(statement: string | null | undefined): string {
-  return (statement ?? '').replace(/\/\*[\s\S]*?\*\//gu, ' ').replace(/--[^\n]*/gu, ' ').replace(/\s+/gu, ' ')
-    .replace(/\s*([(),])\s*/gu, '$1').replace(/ IF NOT EXISTS /iu, ' ').trim();
+  const tokens = ((statement ?? '').match(TOKEN) ?? []).map((token) => (/^(?:--|\/\*|\s)/u.test(token) ? ' ' : token));
+
+  const kept = tokens.filter((token, at) => token !== ' '
+    || !(at === 0 || at === tokens.length - 1 || /^[(), ]$/u.test(tokens[at - 1] ?? '') || /^[(),]$/u.test(tokens[at + 1] ?? '')));
+
+  return kept.join('').replace(/^(CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER|VIEW) )IF NOT EXISTS /iu, '$1');
 }
 
 /** Each table's parents: the tables its foreign keys name, read once. */
@@ -167,10 +175,26 @@ function groupOf(parents: ReadonlyMap<string, readonly string[]>, table: string)
   return orderedGroup(parents, [...group]);
 }
 
-/** The triggers and views whose statement names one of `tables`: a rename would rewrite them to the name set aside. */
+/** The triggers and views whose statement names one of `tables`, or a view that does, transitively, in the order the
+ *  database holds them: a rename would rewrite them to the name set aside, or fail over a view it dropped. */
 function dependents(rows: readonly SchemaRow[], tables: readonly string[]): SchemaRow[] {
-  return rows.filter((row) => (row.type === 'trigger' || row.type === 'view')
-    && tables.some((table) => row.tbl_name === table || new RegExp(`\\b${table}\\b`, 'iu').test(row.sql ?? '')));
+  const names = new Set(tables);
+  const found = new Set<SchemaRow>();
+  const namesOne = (row: SchemaRow) => [...names].some((name) => row.tbl_name === name || new RegExp(`\\b${name}\\b`, 'iu').test(row.sql ?? ''));
+
+  for (let grown = true; grown;) {
+    const next = rows.filter((row) => (row.type === 'trigger' || row.type === 'view') && !found.has(row) && namesOne(row));
+
+    for (const row of next) {
+      found.add(row);
+
+      if (row.type === 'view') names.add(row.name);
+    }
+
+    grown = next.length > 0;
+  }
+
+  return rows.filter((row) => found.has(row));
 }
 
 /** The statement each of `tables` has as the init makes it now, read in a rolled-back trial. */
@@ -211,12 +235,15 @@ function copyBack(sql: SqlExec, table: string): Effect.Effect<void, KinuError> {
   });
 }
 
-/** `group` (parents first) rebuilt in the init's shape, keeping every row: set aside by name, its indexes and the
- *  triggers and views that name it dropped, made anew by the init, copied back, its triggers made after the copy, and
- *  the set-aside copies dropped, in one transaction that ends on a foreign key check. A table of the group the init
- *  does not make (one that refers to a stale table, made after its object started) is made again as it was, with its
- *  indexes and triggers; so is a view the init does not make. */
-function rebuild(sql: SqlExec, writes: TableWrites, group: readonly string[]): Effect.Effect<void, KinuError> {
+/** `group` (parents first) rebuilt in the init's shape, keeping every row (unless `copy` is off, for a cache made anew
+ *  empty): set aside by name, its indexes and the triggers and views that name it dropped, made anew by the init, copied
+ *  back, its triggers made after the copy, and the set-aside copies dropped, in one transaction that ends on a foreign
+ *  key check. A table of the group the init does not make (one that refers to a stale table, made after its object
+ *  started) is made again as it was, with its indexes and triggers; so is every view, and every trigger of a table
+ *  outside the group, that the init does not make. */
+function rebuild(sql: SqlExec, writes: TableWrites, change: { readonly group: readonly string[]; readonly copy: boolean }): Effect.Effect<void, KinuError> {
+  const { group, copy } = change;
+
   return inTransaction(writes, () => Effect.gen(function* () {
     yield* run(sql, 'PRAGMA defer_foreign_keys = ON');
     const before = schemaRows(sql);
@@ -227,10 +254,10 @@ function rebuild(sql: SqlExec, writes: TableWrites, group: readonly string[]): E
 
     for (const table of group) yield* run(sql, `ALTER TABLE "${table}" RENAME TO "${table}${ASIDE}"`);
     yield* Effect.try({ try: () => { writes.init(); }, catch: (cause) => new KinuError('unsupported', `the init refused: ${String(cause)}`) });
-    const madeByInit = new Set(schemaRows(sql).filter((row) => row.type === 'table').map((row) => row.name));
-    const kept = before.filter((row) => row.type === 'table' && group.includes(row.name) && !madeByInit.has(row.name));
+    const present = new Set(schemaRows(sql).filter((row) => row.type === 'table').map((row) => row.name));
+    const remade = new Set(group.filter((table) => present.has(table)));
 
-    for (const row of kept) yield* run(sql, row.sql ?? '');
+    for (const row of before.filter((table) => table.type === 'table' && group.includes(table.name) && !remade.has(table.name))) yield* run(sql, row.sql ?? '');
     const triggers = schemaRows(sql).filter((row) => row.type === 'trigger' && group.includes(row.tbl_name));
 
     for (const row of triggers) yield* run(sql, `DROP TRIGGER "${row.name}"`);
@@ -238,29 +265,31 @@ function rebuild(sql: SqlExec, writes: TableWrites, group: readonly string[]): E
     // Rows the init seeded go: the copy brings the rows the database held, and the init after the repair seeds anew.
     for (const table of [...group].reverse()) yield* run(sql, `DELETE FROM "${table}"`);
 
-    for (const table of group) yield* copyBack(sql, table);
+    if (copy) for (const table of group) yield* copyBack(sql, table);
 
     for (const table of [...group].reverse()) yield* run(sql, `DROP TABLE "${table}${ASIDE}"`);
 
     for (const row of triggers) yield* run(sql, row.sql ?? '');
     const made = new Set(schemaRows(sql).map((row) => row.name));
-    const restored = [...indexes, ...named].filter((row) => !made.has(row.name) && (row.type === 'view' || !madeByInit.has(row.tbl_name)));
 
-    for (const row of restored) yield* run(sql, row.sql ?? '');
+    // What the init made anew is the init's; what it did not make is the database's own, made again as it was.
+    for (const row of [...indexes, ...named].filter((dropped) => !made.has(dropped.name) && (dropped.type === 'view' || !remade.has(dropped.tbl_name)))) {
+      yield* run(sql, row.sql ?? '');
+    }
+
     const orphaned = sql.exec('PRAGMA foreign_key_check').toArray().length;
 
     if (orphaned > 0) return yield* new KinuError('unsupported', `the rebuilt rows break ${String(orphaned)} foreign key(s)`);
   }), false);
 }
 
-/** `group` dropped, children first, for the init to make anew empty. */
-function dropGroup(sql: SqlExec, writes: TableWrites, group: readonly string[]): Effect.Effect<void, KinuError> {
+/** A retired table dropped, with the triggers and views that name it, which no build makes again either. */
+function dropRetired(sql: SqlExec, writes: TableWrites, table: string): Effect.Effect<void, KinuError> {
   return inTransaction(writes, () => Effect.gen(function* () {
     yield* run(sql, 'PRAGMA defer_foreign_keys = ON');
 
-    for (const row of dependents(schemaRows(sql), group)) yield* run(sql, `DROP ${row.type.toUpperCase()} "${row.name}"`);
-
-    for (const table of [...group].reverse()) yield* run(sql, `DROP TABLE "${table}"`);
+    for (const row of dependents(schemaRows(sql), [table]).reverse()) yield* run(sql, `DROP ${row.type.toUpperCase()} "${row.name}"`);
+    yield* run(sql, `DROP TABLE "${table}"`);
   }), false);
 }
 
@@ -280,11 +309,11 @@ function bringUp(sql: SqlExec, writes: TableWrites, outcome: Outcome, stale: { r
   return Effect.gen(function* () {
     const { group, declared } = stale;
     const before = group.map((table) => ({ table, rows: rowsOf(sql, table) }));
-    const rebuilt = yield* Effect.result(rebuild(sql, writes, group));
+    const rebuilt = yield* Effect.result(rebuild(sql, writes, { group, copy: true }));
     const losing = before.filter(({ rows }) => rows > 0).map(({ table }) => table);
 
     const refilled = Result.isFailure(rebuilt) && losing.every((table) => REGENERABLE.test(declared.get(table) ?? ''))
-      && Result.isSuccess(yield* Effect.result(dropGroup(sql, writes, group)));
+      && Result.isSuccess(yield* Effect.result(rebuild(sql, writes, { group, copy: false })));
 
     if (Result.isFailure(rebuilt) && !refilled) {
       outcome.refused = `${group.join(', ')}: ${rebuilt.failure.message}`;
@@ -305,7 +334,7 @@ function retire(sql: SqlExec, writes: TableWrites, table: string, outcome: Outco
 
     if (referrers(parents, table).some((child) => rowsOf(sql, child) > 0)) return;
 
-    if (Result.isFailure(yield* Effect.result(dropGroup(sql, writes, [table])))) return;
+    if (Result.isFailure(yield* Effect.result(dropRetired(sql, writes, table)))) return;
     outcome.retired.push(table);
     outcome.tables.push({ table, before: rows, after: null });
   });
@@ -337,7 +366,7 @@ function bringUpStale(sql: SqlExec, writes: TableWrites, outcome: Outcome): Effe
     const all = [...new Set(groups.flat())];
     const before = all.map((table) => ({ table, rows: rowsOf(sql, table) }));
 
-    if (all.length > 0 && Result.isSuccess(yield* Effect.result(rebuild(sql, writes, orderedGroup(parents, all))))) {
+    if (all.length > 0 && Result.isSuccess(yield* Effect.result(rebuild(sql, writes, { group: orderedGroup(parents, all), copy: true })))) {
       outcome.rebuilt.push(...all);
       outcome.tables.push(...before.map(({ table, rows }) => ({ table, before: rows, after: rowsOf(sql, table) })));
 
@@ -376,7 +405,7 @@ export function repairSchema(sql: SqlExec, writes: TableWrites, database: string
     diagnostics.event('schema.repaired', {
       schema: repair.schema, database, ms: repair.ms, rebuilt: repair.rebuilt.join(','), refilled: repair.refilled.join(','),
       retired: repair.retired.join(','), unchecked: repair.unchecked.join(','), refused: repair.refused ?? '',
-      tables: repair.tables.map(({ table, before, after }) => `${table}:${String(before)}→${String(after)}`).join(' '),
+      tables: repair.tables.map(({ table, before, after }) => `${table}:${String(before)}->${String(after)}`).join(' '),
     });
 
     return repair;

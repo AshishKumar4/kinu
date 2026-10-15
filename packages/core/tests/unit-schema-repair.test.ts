@@ -110,6 +110,35 @@ test('a trigger the init makes does not run on the rows the rebuild copies back,
   expect(rows(sql, 'SELECT COUNT(*) AS n FROM entry_log')).toEqual([{ n: 3 }]);
 });
 
+test('a trigger of a table outside the rebuild that names a rebuilt one is made again, and a view over a view', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE notes (id TEXT PRIMARY KEY, old TEXT);
+    CREATE TABLE audit (note TEXT);
+    CREATE TABLE edits (id TEXT);
+    CREATE TRIGGER edits_note AFTER INSERT ON edits BEGIN INSERT INTO audit SELECT id FROM notes WHERE id = new.id; END;
+    CREATE VIEW note_ids AS SELECT id FROM notes;
+    CREATE VIEW note_count AS SELECT COUNT(*) AS n FROM note_ids;
+    INSERT INTO notes VALUES ('a', 'x');`, `
+    CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS audit (note TEXT);
+    CREATE TABLE IF NOT EXISTS edits (id TEXT);`, ['notes', 'audit', 'edits']);
+
+  expect(repairSchema(sql, writes, 'dependents')?.rebuilt).toEqual(['notes']);
+  sql.exec("INSERT INTO edits VALUES ('a')");
+  expect(rows(sql, 'SELECT note FROM audit UNION ALL SELECT n FROM note_count')).toEqual([{ note: 'a' }, { note: 1 }]);
+});
+
+test('a default changed inside its quotes is a stale table, comment marks and all', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE marks (id TEXT PRIMARY KEY, mark TEXT NOT NULL DEFAULT 'a--old');
+    INSERT INTO marks (id) VALUES ('m');`, `
+    CREATE TABLE IF NOT EXISTS marks (id TEXT PRIMARY KEY, mark TEXT NOT NULL DEFAULT 'a--new');`, ['marks']);
+
+  expect(repairSchema(sql, writes, 'marks')?.rebuilt).toEqual(['marks']);
+  sql.exec("INSERT INTO marks (id) VALUES ('n')");
+  expect(rows(sql, "SELECT mark FROM marks WHERE id = 'n'")).toEqual([{ mark: 'a--new' }]);
+});
+
 test('rows that cannot be copied refuse in SQLite\'s words, leaving every table and the stamp as they were', () => {
   const { sql, writes } = world(`
     CREATE TABLE heads (id TEXT PRIMARY KEY);
@@ -126,14 +155,19 @@ test('rows that cannot be copied refuse in SQLite\'s words, leaving every table 
 test('rows that cannot be copied are dropped only from a regenerable cache, which the init makes anew', () => {
   const { sql, writes } = world(`
     CREATE TABLE overviews (name TEXT PRIMARY KEY);
+    CREATE TABLE pins (name TEXT REFERENCES overviews(name));
+    CREATE INDEX pins_name ON pins(name);
     INSERT INTO overviews VALUES ('w');`, `
     CREATE TABLE IF NOT EXISTS overviews ( /* regenerable cache, refilled by each workspace's push */
       name TEXT PRIMARY KEY, overview TEXT NOT NULL);`, ['overviews']);
 
   const repair = repairSchema(sql, writes, 'overviews');
 
-  expect({ refilled: repair?.refilled, tables: repair?.tables, refused: repair?.refused }).toEqual({ refilled: ['overviews'], tables: [{ table: 'overviews', before: 1, after: 0 }], refused: null });
-  sql.exec("INSERT INTO overviews VALUES ('w', '{}')");
+  expect({ refilled: repair?.refilled, refused: repair?.refused }).toEqual({ refilled: ['overviews', 'pins'], refused: null });
+  expect(repair?.tables).toEqual([{ table: 'overviews', before: 1, after: 0 }, { table: 'pins', before: 0, after: 0 }]);
+  // The empty table that refers to the cache, which the init does not make, is made again as it was, index and all.
+  sql.exec("INSERT INTO overviews VALUES ('w', '{}'); INSERT INTO pins VALUES ('w')");
+  expect(rows(sql, "SELECT name FROM sqlite_master WHERE name = 'pins_name'")).toHaveLength(1);
   expect(readStamp(writes.stamps, sql, 'agent')).toBe('current');
 });
 

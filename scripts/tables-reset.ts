@@ -111,9 +111,11 @@ function columnOf(part: string): string | null {
   return TABLE_CONSTRAINT.test(part) ? null : (part.split(/\s+/u)[0] ?? '').replaceAll('"', '');
 }
 
-/** A column a row cannot be written without: NOT NULL, no default, not generated, not a rowid alias. */
+/** A column a row cannot be written without: NOT NULL, no default (or a NULL one), not generated, not a rowid alias. */
 function required(part: string): boolean {
-  return /\bNOT NULL\b/iu.test(part) && !/\bDEFAULT\b|\bGENERATED\b|^\S+\s+INTEGER\s+PRIMARY KEY\b/iu.test(part);
+  const defaulted = /\bDEFAULT\b/iu.test(part) && !/\bDEFAULT\s+\(?\s*NULL\b/iu.test(part);
+
+  return /\bNOT NULL\b/iu.test(part) && !defaulted && !/\bGENERATED\b|^\S+\s+INTEGER\s+PRIMARY KEY\b/iu.test(part);
 }
 
 /** One changed table as the plan finds it. */
@@ -133,7 +135,8 @@ export function verdictOf(table: ChangedTable, at: { from: GenesisLock; to: Gene
   const before = byTable(at.from).tables.get(table.table)?.parts ?? [];
   const after = byTable(at.to).tables.get(table.table)?.parts ?? [];
   const held = new Set(before.map(columnOf));
-  const unfillable = after.filter((part) => columnOf(part) !== null && !held.has(columnOf(part)) && required(part)).map(columnOf);
+  const added = after.filter((part) => columnOf(part) !== null && !held.has(columnOf(part)));
+  const unfillable = added.filter(required).map(columnOf);
   const verdict = { table: table.table, classes };
 
   if (table.change === 'removed') return { ...verdict, does: 'retire' };
@@ -146,7 +149,7 @@ export function verdictOf(table: ChangedTable, at: { from: GenesisLock; to: Gene
     const dropped = before.filter((part) => columnOf(part) !== null && !kept.has(columnOf(part)) && required(part)).map(columnOf);
 
     const reasons = [
-      ...unfillable.length > 0 ? [`its new column(s) ${unfillable.join(', ')} have no value to take`] : [],
+      ...added.length > 0 ? [`it lacks this build's new column(s) ${added.map(columnOf).join(', ')}`] : [],
       ...dropped.length > 0 ? [`its old column(s) ${dropped.join(', ')} refuse this build's rows`] : [],
       ...after.some((part) => columnOf(part) === null && !before.includes(part)) ? ['its constraints changed'] : [],
       ...after.some((part) => columnOf(part) !== null && held.has(columnOf(part)) && !before.includes(part)) ? ['a column it keeps changed'] : [],

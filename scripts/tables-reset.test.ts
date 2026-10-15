@@ -16,6 +16,8 @@ const FROM = {
   'heads@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY'],
   'cp_feedback@packages/core/src/control-plane/store.ts': ['id TEXT PRIMARY KEY', 'object_key TEXT'],
   'webhook_secrets@packages/core/src/events/ingress/secrets.ts': ['secret_id TEXT PRIMARY KEY', 'created_at INTEGER NOT NULL'],
+  'cp_audit@packages/core/src/control-plane/store.ts': ['id TEXT PRIMARY KEY'],
+  'tails@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY'],
 };
 
 const TO = {
@@ -28,13 +30,15 @@ const TO = {
   'heads@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY', 'seq INTEGER NOT NULL'],
   'cp_feedback@packages/core/src/control-plane/store.ts': ['id TEXT PRIMARY KEY'],
   'webhook_secrets@packages/core/src/events/ingress/secrets.ts': ['secret_id TEXT PRIMARY KEY'],
+  'cp_audit@packages/core/src/control-plane/store.ts': ['id TEXT PRIMARY KEY', 'note TEXT'],
+  'tails@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY', 'seq INTEGER NOT NULL DEFAULT NULL'],
 };
 
 const { 'device_consent_requests@packages/core/src/safety/device-consent.ts': _removed, ...CANDIDATE } = TO;
 
 const CLASSES = {
   account: ['device_joins', 'device_connect_tickets', 'user_profile', 'workspace_overviews'],
-  agent: ['heads'],
+  agent: ['heads', 'tails'],
   local: ['driver_lease'],
 };
 
@@ -42,8 +46,8 @@ test('the changed tables come from the two locks: removed, reshaped, and added',
   const { changed, added } = changedTables(FROM, CANDIDATE);
 
   expect(changed.map(({ table, change }) => `${table} ${change}`)).toEqual([
-    'cp_feedback reshaped', 'device_connect_tickets reshaped', 'device_consent_requests removed', 'device_joins reshaped',
-    'driver_lease reshaped', 'heads reshaped', 'webhook_secrets reshaped', 'workspace_overviews reshaped',
+    'cp_audit reshaped', 'cp_feedback reshaped', 'device_connect_tickets reshaped', 'device_consent_requests removed', 'device_joins reshaped',
+    'driver_lease reshaped', 'heads reshaped', 'tails reshaped', 'webhook_secrets reshaped', 'workspace_overviews reshaped',
   ]);
   expect(added).toEqual(['device_consent_asks']);
 });
@@ -64,7 +68,9 @@ test('the plan says what each repair does: rebuild, refill a cache, retire, leav
 
   expect(planLines(verdicts, added)).toEqual([
     'REFUSED (the deploy stops here):',
+    '  cp_audit [no class]: no class\'s init makes it, so no repair reaches it, and as the build before left it it lacks this build\'s new column(s) note',
     '  heads [agent]: its new column(s) seq have no default, so its rows cannot be kept, and its DDL does not declare it a regenerable cache',
+    '  tails [agent]: its new column(s) seq have no default, so its rows cannot be kept, and its DDL does not declare it a regenerable cache',
     '  webhook_secrets [no class]: no class\'s init makes it, so no repair reaches it, and as the build before left it its old column(s) created_at refuse this build\'s rows',
     'LOSES DATA, a regenerable cache made anew empty where its rows cannot be copied, then refilled by:',
     '  workspace_overviews [account]: each workspace\'s overview push',

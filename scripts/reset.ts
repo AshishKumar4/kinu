@@ -24,6 +24,9 @@
  *   bun scripts/reset.ts tables-plan <environment> <record> [--from <sha>]
  *                                                     before the upload: what each object's repair of the tables
  *                                                     the release changed will do, and what refuses
+ *   bun scripts/reset.ts tables-record <environment> <record>
+ *                                                     just before the upload: the plan's record published as the
+ *                                                     rollback barrier
  *   bun scripts/reset.ts tables <environment> <record>
  *                                                     after it: every object opened, so each repairs itself, and
  *                                                     its census (scripts/tables-reset.ts)
@@ -460,9 +463,9 @@ async function confirmedAtTerminal(words = PRODUCTION_CONFIRMATION, what = 'dele
 }
 
 /** A tables release's commands (scripts/tables-reset.ts). */
-const TABLES_COMMANDS = ['served', 'stamps', 'census', 'tables-plan', 'tables'] as const;
+const TABLES_COMMANDS = ['served', 'stamps', 'census', 'tables-plan', 'tables-record', 'tables'] as const;
 
-/** `served`, `stamps`, `census`, `tables-plan` and `tables`: a tables release's commands. */
+/** `served`, `stamps`, `census`, `tables-plan`, `tables-record` and `tables`: a tables release's commands. */
 async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environment: InfraEnvironment, args: readonly string[]): Promise<number> {
   const [recordFile, flag, from] = args;
 
@@ -500,10 +503,12 @@ async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environm
     return await planTables({ environment, recordFile, from });
   }
 
+  if (command === 'tables-record' && recordFile !== undefined && flag === undefined) return publishTables(environment, recordFile);
+
   if (command === 'tables' && recordFile !== undefined && flag === undefined) return await walkTables(environment, recordFile);
 
   console.error('usage: bun scripts/reset.ts served <environment> | stamps <environment> | census <environment> <out> '
-    + '| tables-plan <environment> <record> [--from <sha>] | tables <environment> <record>');
+    + '| tables-plan <environment> <record> [--from <sha>] | tables-record <environment> <record> | tables <environment> <record>');
 
   return 2;
 }
@@ -574,7 +579,18 @@ function releaseVerdicts(from: string) {
   const before = readGenesisLockText(fromLock.stdout.toString());
   const after = readGenesisLockText(atCandidate('scripts/schema-genesis.lock.json'));
   const classes = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(atCandidate('scripts/schema-classes.json')));
-  const { changed, added } = changedTables(before, after);
+  const lockDiff = changedTables(before, after);
+  // The lock keeps every genesis it held, so a table retired since `from` may still be in both: its retired list says so.
+  const retiredAt = (text: string) => v.parse(v.array(v.string()), JSON.parse(text));
+  const servedRetired = Bun.spawnSync(['git', 'show', `${from}:scripts/schema-retired.json`]);
+  const wasRetired = servedRetired.exitCode === 0 ? retiredAt(servedRetired.stdout.toString()) : [];
+
+  const retired = retiredAt(atCandidate('scripts/schema-retired.json'))
+    .filter((table) => !wasRetired.includes(table) && !lockDiff.changed.some((entry) => entry.table === table))
+    .map((table) => ({ table, change: 'removed' as const }));
+
+  const changed = [...lockDiff.changed, ...retired].sort((a, b) => a.table.localeCompare(b.table));
+  const { added } = lockDiff;
   const declared = (table: string) => Object.keys(after).find((key) => key.startsWith(`${table}@`))?.slice(table.length + 1);
 
   const verdicts = changed.map((table) => {
@@ -627,10 +643,25 @@ async function planTables(input: { environment: InfraEnvironment; recordFile: st
 
   const tag = `tables-${new Date().toISOString().replace(/[-:]|\.\d+/gu, '')}`;
 
-  record({ putRecord: tablesRecordPut(config) }, recordFile, {
+  const planned: Reset = {
     environment, worker: config.name ?? '', tag, at: new Date().toISOString(), placeholderVersion: '', classes: [], applications: [], state: 'started',
     kind: 'tables', from, candidate, tables: changed.map((table) => ({ ...table, classes: [...verdicts.find((verdict) => verdict.table === table.table)?.classes ?? []] })),
-  });
+  };
+
+  // Kept here until `tables-record` publishes it just before the upload: a deploy that stops before then changed nothing,
+  // and must leave no barrier a rollback would refuse to cross.
+  writeFileSync(recordFile, JSON.stringify(planned));
+
+  return 0;
+}
+
+/** Just before the upload, the first moment any object repairs: the plan's record published as the barrier no rollback
+ *  crosses. `tables-record <environment> <record>`. */
+function publishTables(environment: InfraEnvironment, recordFile: string): number {
+  const { config } = plan(environment);
+
+  record({ putRecord: tablesRecordPut(config) }, recordFile, v.parse(ResetSchema, JSON.parse(readFileSync(recordFile, 'utf8'))));
+  console.log(`tables: the plan's record published as the rollback barrier`);
 
   return 0;
 }
@@ -716,7 +747,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
   console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record> | pending <environment> <record> '
     + '| served <environment> | stamps <environment> | census <environment> <out> | tables-plan <environment> <record> [--from <sha>] '
-    + '| tables <environment> <record>');
+    + '| tables-record <environment> <record> | tables <environment> <record>');
 
   return 2;
 }

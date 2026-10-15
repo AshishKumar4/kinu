@@ -245,7 +245,7 @@ if [ "$KINU_RESET" = "1" ]; then
 fi
 
 # The plan is the candidate's lock against the build the deployment serves now, read before the upload replaces it;
-# its record is written before the upload, which is the first moment any object repairs.
+# its record is kept here and published just before the upload, the first moment any object repairs.
 KINU_TABLES_RECORD=""
 if [ "$KINU_RESET_TABLES" = "1" ]; then
   if [ "$KINU_RESET" = "1" ] || [ "$KINU_GATES_ONLY" = "1" ]; then
@@ -775,6 +775,12 @@ if [ "$KINU_RESET" = "1" ]; then
   KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
   bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
     || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
+fi
+
+# The tables plan's record becomes the rollback barrier only now, the last step before any object can repair.
+if [ "$KINU_RESET_TABLES" = "1" ]; then
+  bun "$KINU_ROOT/scripts/reset.ts" tables-record "$KINU_ENV" "$KINU_TABLES_RECORD" \
+    || { publish_red "the tables plan's record could not be published as the rollback barrier; nothing was uploaded"; return 1; }
 fi
 
 # ── Step 3: Deploy Kinu ───────────────────────────────────────

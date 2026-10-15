@@ -110,21 +110,23 @@ export function genesisModule(lockText: string, classesText: string, retiredText
     + `export const SCHEMA_RETIRED: readonly string[] = ${JSON.stringify(retired)};\n`;
 }
 
-/** Whether the product's stamps are those of the lock and the classes on disk. */
-function genesisModuleCurrent(): boolean {
-  return existsSync(GENESIS_MODULE)
-    && readFileSync(GENESIS_MODULE, 'utf8') === genesisModule(readFileSync(GENESIS_LOCK, 'utf8'), readFileSync(SCHEMA_CLASSES, 'utf8'), readFileSync(SCHEMA_RETIRED, 'utf8'));
+/** Whether the product's stamps are those of the lock and the classes on disk, and its retired list the corpus's. */
+function genesisModuleCurrent(state: Pick<Survey, 'tables' | 'views' | 'retired'>): boolean {
+  const retired = retiredNow(state);
+
+  return existsSync(GENESIS_MODULE) && readFileSync(SCHEMA_RETIRED, 'utf8') === retired
+    && readFileSync(GENESIS_MODULE, 'utf8') === genesisModule(readFileSync(GENESIS_LOCK, 'utf8'), readFileSync(SCHEMA_CLASSES, 'utf8'), retired);
 }
 
-/** The retired list with every table `before` declared and `after` does not: a lock that drops a table retires it. */
-function retiredAfter(before: GenesisLock, after: GenesisLock): string {
-  const names = (lock: GenesisLock) => new Set(Object.keys(lock).map((key) => key.slice(0, key.indexOf('@'))));
-  const kept = names(after);
+/** The retired list: every table it named, and every table the lock holds that no product file declares any longer
+ *  (the lock keeps every genesis it ever held), never one a file declares. */
+function retiredNow(state: Pick<Survey, 'tables' | 'views' | 'retired'>): string {
+  const declared = new Set([...state.tables, ...state.views].map(({ table }) => table));
   const retired = new Set(v.parse(v.array(v.string()), JSON.parse(readFileSync(SCHEMA_RETIRED, 'utf8'))));
 
-  for (const table of names(before)) if (!kept.has(table)) retired.add(table);
+  for (const key of state.retired) retired.add(key.slice(0, key.indexOf('@')));
 
-  for (const table of kept) retired.delete(table);
+  for (const table of declared) retired.delete(table);
 
   return `${JSON.stringify([...retired].sort(), null, 2)}\n`;
 }
@@ -691,8 +693,7 @@ if (import.meta.main) {
 
     const lockText = `${JSON.stringify(update.next, null, 2)}\n`;
 
-    // Read before the lock is written over: a table the old lock declared and this one does not is retired.
-    const retiredText = existsSync(GENESIS_LOCK) ? retiredAfter(readGenesisLock(), readGenesisLockText(lockText)) : readFileSync(SCHEMA_RETIRED, 'utf8');
+    const retiredText = retiredNow(state);
 
     writeFileSync(GENESIS_LOCK, lockText);
     writeFileSync(SCHEMA_RETIRED, retiredText);
@@ -703,12 +704,14 @@ if (import.meta.main) {
     );
 
     for (const key of update.added) console.log(`  + ${key}`);
-  } else if (!genesisModuleCurrent()) {
+  } else if (!genesisModuleCurrent(state)) {
     console.error(finding({
       invariant: 'each class of database is stamped with the digest of the genesis of the tables its init makes',
       at: 'packages/core/src/identity/schema-genesis.ts',
-      found: 'SCHEMA_STAMPS that are not the digests of scripts/schema-genesis.lock.json over scripts/schema-classes.json',
-      silently: 'a database whose class\'s tables changed opens under the new schema and fails on its first missing column',
+      found: 'SCHEMA_STAMPS that are not the digests of scripts/schema-genesis.lock.json over scripts/schema-classes.json, '
+        + 'or a scripts/schema-retired.json that misses a table no file declares any longer',
+      silently: 'a database whose class\'s tables changed opens under the new schema and fails on its first missing column, '
+        + 'or keeps a table no build reads forever',
       fix: 'bun scripts/schema-drift.ts --lock',
     }));
     process.exit(1);
