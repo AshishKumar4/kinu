@@ -350,10 +350,8 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS cli_agent_connect_tickets (
       ticket_hash    TEXT PRIMARY KEY,
       user_id        TEXT NOT NULL,
-      agent_class    TEXT NOT NULL,
       agent_name     TEXT NOT NULL,
       cli_token_hash TEXT NOT NULL,
-      capabilities   TEXT NOT NULL,
       expires_at     INTEGER NOT NULL
     )
   `);
