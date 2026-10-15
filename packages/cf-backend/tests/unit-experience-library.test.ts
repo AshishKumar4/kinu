@@ -78,7 +78,7 @@ describe('the experience library is owner-scoped and provenance is proven', () =
     const { harness, alpha, beta } = await twoWorkspaces();
     const published = await alpha.publish(lesson('Read the error before rerunning.'));
 
-    expect(await beta.get(published.id)).toMatchObject({ id: published.id, sourceWorkspace: ALPHA, kind: 'lesson' });
+    expect(await beta.get(published.id)).toMatchObject({ id: published.id, sourceWorkspace: ALPHA, payload: { kind: 'lesson' } });
     expect(await beta.get('exp-nope')).toBeNull();
     harness.close();
   });

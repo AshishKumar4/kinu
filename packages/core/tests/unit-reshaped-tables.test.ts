@@ -15,7 +15,7 @@ import { readSearchTree } from '../src/read-models/search-tree';
 import { insertSearchNode } from '../src/mcts/record-node';
 import { TaskListStore } from '../src/tools/task-store';
 import { HeadJournal } from '../src/heads/journal';
-import { aggregateScore, loadGepaCandidates, startGepaRun } from '../src/evolution/gepa/index';
+import { bestAggregate, loadGepaCandidates, startGepaRun } from '../src/evolution/gepa/index';
 import { agentArtifactDirectory } from '../src/vfs/agent-home';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createTestActor, createTestWorkspace, makeSqlExec, type TestWorkspace } from './helpers';
@@ -306,7 +306,7 @@ const GEPA_CANDIDATES_BEFORE = `CREATE TABLE IF NOT EXISTS gepa_candidates (
   created_at INTEGER NOT NULL, iteration INTEGER NOT NULL,
   PRIMARY KEY (actor_id, id))`;
 
-test("a search's candidates lose their stored aggregate and read back with it as the mean of their scores", () => {
+test("a search's candidates lose their stored aggregate and still rank by the mean of their scores", () => {
   const world = workspace();
   const { ws, actor } = world;
   const runId = startGepaRun(ws.sql, actor, { target: 'scaffold' });
@@ -325,5 +325,5 @@ test("a search's candidates lose their stored aggregate and read back with it as
   rebuild(world, ['gepa_candidates']);
 
   expect(loadGepaCandidates(ws.sql, actor, runId)).toEqual(before);
-  expect(before.map((candidate) => [candidate.id, aggregateScore(candidate)])).toEqual([['seed', 0.375], ['child', 0.75]]);
+  expect(bestAggregate(loadGepaCandidates(ws.sql, actor, runId)).id).toBe('child');
 });

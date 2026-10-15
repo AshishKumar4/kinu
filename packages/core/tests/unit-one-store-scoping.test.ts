@@ -663,7 +663,7 @@ describe('two actors, one database: imported_experience', () => {
     initImportedExperienceTable(w.execRaw);
 
     const entry = {
-      id: 'lib-1', kind: 'fact' as const, key: 'deploy_target',
+      id: 'lib-1', key: 'deploy_target',
       title: 'deploy target', evidence: 'used twice', sourceWorkspace: 'other',
       publishedAt: 1,
       payload: { kind: 'fact' as const, key: 'deploy_target', value: 'x.workers.dev', confidence: 0.9 },
