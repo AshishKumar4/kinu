@@ -72,7 +72,7 @@ test('trial preparation preserves a live slot, deletes stale workspaces and refu
       },
       {
         table: 'user_mcp_servers',
-        put: async () => { db.run("INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES ('srv-1', 'github', 'https://mcp.example/v1', 'auto')"); },
+        put: async () => { db.run("INSERT INTO user_mcp_servers (id) VALUES ('srv-1')"); },
         clear: () => harness.userDO.userMcp_remove(owner, 'srv-1'),
       },
       {

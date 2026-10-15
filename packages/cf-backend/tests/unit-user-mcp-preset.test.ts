@@ -16,6 +16,13 @@ import { durableObjectStorage } from './helpers/programmatic-host';
 // Imported after `mockAgentsSdk` registers: mcp.ts binds the provider class at load.
 const { RegisteredAppOAuthClientProvider } = await import('../src/user/user-do');
 
+/** A server's name, endpoint and transport, where they live: the SDK's catalog row. */
+function catalogOf(id: string): { name: string; serverUrl: string; transport: string | undefined } | undefined {
+  const row = recordedMcpServers().find((server) => server.id === id);
+
+  return row === undefined ? undefined : { name: row.name, serverUrl: row.url, transport: row.transport.type };
+}
+
 function harness(options?: TestUserDOOptions): TestUserDO {
   resetRecordedMcp();
 
@@ -33,16 +40,10 @@ describe('an MCP preset add', () => {
 
     expect(added.authUrl).toBe('https://mcp.cloudflare.com/authorize?test');
 
-    const [row] = sqlExec(h.db).exec(
-      `SELECT name, server_url, transport, preset_id
-         FROM user_mcp_servers
-        WHERE id = ?`,
-      added.id,
-    ).toArray();
+    const [row] = sqlExec(h.db).exec(`SELECT preset_id FROM user_mcp_servers WHERE id = ?`, added.id).toArray();
 
     expect(row?.preset_id).toBe('cloudflare');
-    expect(row?.server_url).toBe('https://mcp.cloudflare.com/mcp');
-    expect(row?.transport).toBe('streamable-http');
+    expect(catalogOf(added.id)).toMatchObject({ serverUrl: 'https://mcp.cloudflare.com/mcp', transport: 'streamable-http' });
 
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.presetId).toBe('cloudflare');
@@ -63,9 +64,7 @@ describe('an MCP preset add', () => {
     expect(added.authUrl).toBeNull();
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT name, server_url, preset_id, headers
-         FROM user_mcp_servers
-        WHERE id = ?`,
+      `SELECT preset_id, headers FROM user_mcp_servers WHERE id = ?`,
       added.id,
     ).toArray();
 
@@ -92,12 +91,7 @@ describe('an MCP preset add', () => {
       'https://kinu.example',
     );
 
-    const [row] = sqlExec(h.db).exec(
-      `SELECT name, server_url FROM user_mcp_servers WHERE id = ?`,
-      added.id,
-    ).toArray();
-
-    expect(row?.server_url).toBe('https://gmailmcp.googleapis.com/mcp/v1');
+    expect(catalogOf(added.id)?.serverUrl).toBe('https://gmailmcp.googleapis.com/mcp/v1');
     h.close();
   });
 
@@ -127,9 +121,7 @@ describe('an MCP preset add', () => {
     expect(added.authUrl).toBe('https://github.com/login/oauth/authorize?test');
 
     const [row] = sqlExec(h.db).exec(
-      `SELECT name, preset_id
-         FROM user_mcp_servers
-        WHERE id = ?`, added.id,
+      `SELECT preset_id FROM user_mcp_servers WHERE id = ?`, added.id,
     ).toArray();
 
     expect(row?.preset_id).toBe('github');
@@ -222,6 +214,7 @@ describe('a cold activation over a preset row', () => {
 
     const [row] = sqlExec(first.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
     const id = v.parse(v.string(), row?.id);
+    const added = catalogOf(id);
 
     seedSdkMcpServer(id, {
       type: 'streamable-http',
@@ -229,6 +222,7 @@ describe('a cold activation over a preset row', () => {
     }, {
       callbackUrl: 'https://kinu.example/api/user/mcp/callback',
       clientId: 'stale-dcr-client',
+      ...(added !== undefined && { name: added.name, url: added.serverUrl }),
     });
 
     const woken = createTestUserDO({ storage: first.db, mcpAppCredentials: ['github'] });

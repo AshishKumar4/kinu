@@ -197,11 +197,7 @@ describe("only an envelope sealed under this deployment's key opens", () => {
       `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
       'openai.bearer', 'bearer', plaintext,
     );
-    sqlExec(first.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
-       VALUES (?, ?, ?, ?, ?, NULL)`,
-      'planted', 'planted', 'https://mcp.example/sse', 'auto', plainHeaders,
-    );
+    sqlExec(first.db).exec(`INSERT INTO user_mcp_servers (id, headers, allowed_tools) VALUES (?, ?, NULL)`, 'planted', plainHeaders);
 
     await expect(first.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))
       .rejects.toThrow('opening the stored credential openai.bearer');
