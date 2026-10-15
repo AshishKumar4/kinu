@@ -3974,7 +3974,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */
   async recordGitHubEgress(facts: readonly GitHubFact[], actorId: string | null): Promise<void> {
-    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, source: 'egress', at: Date.now() });
+    recordGitHubActivity(this.boundSql, v.parse(v.array(GitHubFactSchema), facts), { actorId, at: Date.now() });
   }
 
   @callable() getWorkspaceGitHub(refresh = false): Promise<WorkspaceGitHubView> {

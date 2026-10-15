@@ -1969,7 +1969,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private noteGitHubCall(descriptor: Pick<SerializableToolDescriptor, 'presetId' | 'name'>, args: JsonObject, result: string, actorId: string | null): void {
     if (descriptor.presetId !== GITHUB_MCP_PRESET) return;
-    recordGitHubActivity(this.boundSql, recognizeGitHubMcp(descriptor.name, args, result), { actorId, source: 'mcp', at: Date.now() });
+    recordGitHubActivity(this.boundSql, recognizeGitHubMcp(descriptor.name, args, result), { actorId, at: Date.now() });
   }
 
   private get mcpToolsCache(): McpToolSurfaceCache<ToolSet> {
