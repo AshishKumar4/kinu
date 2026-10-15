@@ -94,10 +94,7 @@ export interface ActorSessionOptions {
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
-export interface ActorTurnLease {
-  readonly actorId: string;
-  readonly runId: string;
-  readonly turnId: string;
+export interface ActorTurnLease extends ExecutionKey {
   readonly signal: AbortSignal;
 }
 
@@ -612,11 +609,6 @@ export class ActorSession {
 
     if (active.reserved !== null && !active.claimSettled) this.closeClaim(active, 'indeterminate')();
     this.active = null;
-  }
-
-  /** Called once the turn's answer is durable, or as its preparation failed, before any model or tool work. */
-  settleTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): void {
-    this.closeTurnClaim(lease, outcome)();
   }
 
   /**

@@ -18,7 +18,7 @@ import {
   craftedToolDescription, type CraftedTool,
   CRAFTED_TOOL_NAMESPACE, nativeToolFunctions,
   initCompletedTurnTable, createCompletedTurnStore,
-  initEventsHubTables, EventLog,
+  initEventsHubTables, EventLog, improvementLanesOpen,
   type ModelPricing, type CompletedTurn, type SqlExec,
   type BackendHost, type BroadcastEvent, type ProgrammaticTurn,
 } from '../src/index';
@@ -646,12 +646,8 @@ describe('the post-settle lane verdict is ONE core decision', () => {
 
   for (const [status, mode, open] of cases) {
     test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the improvement lanes`, () => {
-      const { orch } = seamOrchestrator();
-      orch.beginTurn(Date.now(), mode === 'plan' ? { kinuMode: 'plan' } : {});
-      // As the `improvement_lanes` row asks: the live mode on the producing activation, the recorded
-      // mode on replay.
-      expect(orch.improvementLanesOpen(status)).toBe(open);
-      expect(orch.improvementLanesOpen(status, mode)).toBe(open);
+      // As the `improvement_lanes` row asks, from the mode the turn ran in, on its producing activation or a replay.
+      expect(improvementLanesOpen(status, mode)).toBe(open);
     });
   }
 });

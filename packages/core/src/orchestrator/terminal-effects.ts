@@ -208,8 +208,8 @@ function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect 
 
 /** The recording, the lessons and the drain: owed where the actor's evolution tables and event log are. */
 export function turnRecordingEffects(deps: {
-  /** Read when an effect runs: the recording agent's session may be bound after this table is built, as it is hosted. */
-  /** Null while the session is not bound: the effect stays owed, and replays once it is. */
+  /** Read when an effect runs: the recording agent's session may be bound after this table is built, as it is hosted.
+   *  Null while the session is not bound: the effect stays owed, and replays once it is. */
   readonly orchestrator: () => RecordingSession | null;
   readonly engine: Pick<EvolutionEngine, 'learnFromTurn'>;
 }): TerminalEffectTable {
@@ -384,13 +384,14 @@ export function branchesTerminalEffect(deps: {
   });
 }
 
-/** The window append is idempotent on the message's identity. Continuity, mode and the evolution gate come off the row. A plan turn records nothing. */
 /** What an effect over an agent's session says while the session is not bound yet. */
 const UNBOUND_SESSION = { status: 'owed', detail: "the recording agent's session is not bound yet" } as const;
 
 /** The recording agent's session, as its effects reach it. */
 type RecordingSession = Pick<AgentOrchestrator, 'recordTurn' | 'drainPendingEvents'>;
 
+/** The window append is idempotent on the message's identity. Continuity, mode and the evolution gate come off the row.
+ *  A plan turn records nothing. */
 function turnRecordTerminalEffect(
   orchestrator: () => RecordingSession | null,
 ): TerminalEffect {

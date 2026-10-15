@@ -19,12 +19,10 @@ import { endWhenSettled } from '../turn-trace';
 import { diagnostics, KinuError, settle, type ScopedSpan } from '../obs/index';
 import { JsonObjectSchema, JsonValueSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import type { CodemodeProvider } from '../types/codemode';
-import { defineOperation, opaque, serve, type OperationCall, type Served } from '../operations/operation';
+import { defineOperation, described, opaque, serve, type OperationCall, type Served } from '../operations/operation';
 import { codemodeNamespace, nativeTool } from '../tools/operation-surfaces';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { AGENTS_IMPACTS, AGENTS_SLATE, type AgentsOp } from '../operations/agents';
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
 
 const text = (max: number, about: string) => described(v.pipe(v.string(), v.nonEmpty(), v.maxLength(max)), about);
 

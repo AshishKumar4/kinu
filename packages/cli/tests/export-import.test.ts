@@ -17,7 +17,7 @@ import {
 import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { stampSchemaGenesis } from '@kinu.run/cli-backend';
+import { stampSchemaGenesis } from '@kinu.run/core';
 import { createMemoryVfs, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { sqlStorageOver } from '@kinu.run/core/identity';
@@ -67,7 +67,7 @@ function seedWorkspace(path: string): void {
     initActorClaimTables((ddl) => { db.exec(ddl); });
     db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
     db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);
-    stampSchemaGenesis(db);
+    stampSchemaGenesis((ddl) => db.exec(ddl));
 
     for (let i = 0; i < 300; i++) seedEntry(db, `m${i}`, `note ${i} with "quotes"`, i);
 

@@ -236,7 +236,7 @@ import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
-  type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal,
+  type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal, bearWorkspaceIdentity,
   type DeviceConsentRequest, type PendingDeviceConsent,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, performBoundWrite, ParkedWriteFiles,
   reviewParkedWrite, type ParkedWriteReview,
@@ -4272,9 +4272,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The first claim or fork. */
   protected bearWorkspace(identityName: string, ownerUserId: string): void {
     this.ctx.storage.transactionSync(() => {
-      void this.sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
-        VALUES (${this.ctx.id.toString()}, ${identityName}, ${ownerUserId}, ${Date.now()})`;
-      this.workspaceActors().createMain({ name: this.name });
+      // Through the bound handle, as the roster's own writes go: a read held on the actors sees main arrive.
+      bearWorkspaceIdentity(this.boundSql, { id: this.ctx.id.toString(), name: identityName, ownerUserId, createdAt: Date.now() });
     });
     this.registerCompactionExtension();
   }

@@ -9,12 +9,7 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
 import { getCurrentScaffoldVersion, type ActorHandle, type SqlExecutor, type VersionedScaffoldSource } from '@kinu.run/core';
 import { KinuError, settle } from '@kinu.run/core/obs';
-import { requireSchemaGenesis as requireGenesis, SCHEMA_GENESIS_STAMP } from '@kinu.run/core';
-
-/** Marks a database this Kinu made outside `createWorkspace`, which stamps its own. */
-export function stampSchemaGenesis(db: Database): void {
-  db.exec(`PRAGMA user_version = ${String(SCHEMA_GENESIS_STAMP)}`);
-}
+import { requireSchemaGenesis as requireGenesis } from '@kinu.run/core';
 
 /** The seven hex digits a database is stamped with, or null for one no Kinu stamped. */
 export function schemaGenesisOf(db: Database): string | null {

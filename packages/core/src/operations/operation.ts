@@ -71,6 +71,19 @@ export interface Served {
   readonly runSync?: (input: JsonValue) => OperationResult;
 }
 
+/** A schema with the description a model and a program read of it. */
+export const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
+
+/** The fields each operation of a namespace names for itself; where and when it runs defaults to its namespace's. */
+type OwnFields<I extends OperationInput, O extends v.GenericSchema> = Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>
+  & Partial<Pick<Operation<I, O>, 'plan' | 'slate'>>;
+
+/** The declarer of namespace `ns`'s operations: each names its own fields over `defaults`, which it may override. */
+export function namespace(ns: string, defaults: Partial<Pick<Operation, 'plan'>> & Pick<Operation, 'slate'>) {
+  return <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, const O extends v.GenericSchema>(op: OwnFields<I, O>): Operation<I, O> =>
+    defineOperation({ ns, ...defaults, ...op });
+}
+
 export function defineOperation<const I extends OperationInput, const O extends v.GenericSchema>(op: Operation<I, O>): Operation<I, O> {
   return op;
 }

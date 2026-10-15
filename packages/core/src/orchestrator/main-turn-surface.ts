@@ -42,7 +42,7 @@ export class TurnSurface {
     this.continuity = opening.continuity;
     this.evolutionEnabled = opening.evolutionEnabled;
     // A turn that records evolution scores the crafted tools its calls run here.
-    this.ledgers = turnLedgers(opening.evolutionEnabled);
+    this.ledgers = turnLedgers(() => opening.evolutionEnabled);
     this.#actor = opening.actor;
   }
 

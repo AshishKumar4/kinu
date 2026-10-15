@@ -229,7 +229,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     const actor = await database.acquire();
     const chat = new FacetChat({ actor, database, workspace: this.workspaceCalls, models: (deps) => this.models(deps), storage: this.ctx.storage, pacer: this.pacer });
 
-    chat.session.measureSessionStart({ restored: chat.session.restoreHistory() });
+    chat.session.measureSessionStart({ restored: chat.session.restoreWorkingHistory() });
     this.held = chat;
 
     return chat;
@@ -264,7 +264,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private admission(snapshot: AgentSnapshot, delivery: OwedDelivery, producer: InputProducer): Effect.Effect<{ readonly chat: FacetChat; readonly answer: DeliveryAnswer }, KinuError> {
     const parsed = v.parse(DeliverySchema, delivery);
 
-    return Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closing
+    return Effect.flatMap(this.withChat(snapshot, (chat) => chat), (chat) => (chat.session.closed
       // Closing: owed to its next start, so the crossing fails and the workspace's wake crosses it again.
       ? Effect.fail(new KinuError('unavailable', 'The agent is closing; the delivery is owed to its next start.'))
       : attemptInItsWords('io', () => chat.session.admitDelivery(parsed, producer)).pipe(

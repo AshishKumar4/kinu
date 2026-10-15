@@ -1,8 +1,6 @@
 /** A shell command in one runtime: the workspace's by default, or the computer's, or a user's machine. */
 import * as v from 'valibot';
-import { defineOperation } from './operation';
-
-const described = <S extends v.GenericSchema>(schema: S, text: string) => v.pipe(schema, v.description(text));
+import { defineOperation, described } from './operation';
 
 const RUNTIME = "Default workspace; or computer, or a user's machine by its nickname from the execution status, which is required when several are connected.";
 

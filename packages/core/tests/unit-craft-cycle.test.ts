@@ -39,7 +39,7 @@ function fakeLedger(initial: string[] = [], dropped: string[] = []): CraftLedger
 
 /** A recording turn's record. */
 function recording(): TurnCraftLedger {
-  return new TurnCraftLedger(true);
+  return new TurnCraftLedger(() => true);
 }
 
 let calls = 0;
@@ -118,7 +118,7 @@ describe('craft observation — the trigger', () => {
 
   test('with auto-evolution off nothing is observed and nothing is recorded', async () => {
     const ledger = fakeLedger(['sum']);
-    const turn = new TurnCraftLedger(false);
+    const turn = new TurnCraftLedger(() => false);
 
     await block(turn, ledger, 'await tools.sum(1)');
     expect(ledger.observations).toEqual([]);
@@ -257,14 +257,17 @@ describe('craft observation — what it refuses to guess at', () => {
     expect(ledger.observations).toEqual([]);
   });
 
-  test('reset clears the turn and stops its recording', async () => {
+  test("reset clears the turn; whether it records is its owner's to say, read each time", async () => {
     const ledger = fakeLedger(['sum']);
-    const turn = recording();
+    let evolving = true;
+    const turn = new TurnCraftLedger(() => evolving);
 
     await block(turn, ledger, 'await tools.sum(1)');
     expect(turn.snapshot()).not.toBeNull();
     turn.reset();
     expect(turn.snapshot()).toBeNull();
+    expect(turn.recording).toBe(true);
+    evolving = false;
     expect(turn.recording).toBe(false);
   });
 });
@@ -272,10 +275,9 @@ describe('craft observation — what it refuses to guess at', () => {
 describe('craft observation — what the turn reports as crafted-tool use', () => {
   /** A turn's `eval` calls observed into its accumulator, as both backends' turns are. */
   async function turnUsage(ledger: ReturnType<typeof fakeLedger>, codes: readonly string[], enabled = true): Promise<string[]> {
-    const acc = new TurnAccumulator();
+    const acc = new TurnAccumulator(undefined, undefined, () => enabled);
 
     acc.reset(Date.now());
-    acc.ledgers.craft.recording = enabled;
 
     for (const code of codes) await block(acc.ledgers.craft, ledger, code);
 

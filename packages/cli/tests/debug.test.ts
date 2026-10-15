@@ -10,7 +10,8 @@ import {
   initRunEventTables, initSearchTables, recordExploration,
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
-import { makeSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
+import { makeSql } from '@kinu.run/cli-backend';
+import { stampSchemaGenesis } from '@kinu.run/core';
 import { scratchDir, createTestActorsOver, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
@@ -74,7 +75,7 @@ const PRIVATE_KEY = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
  */
 function seedInvestigationWorkspace(dbPath: string): void {
   const db = workspaceDatabase(dbPath, { create: true });
-  stampSchemaGenesis(db);
+  stampSchemaGenesis((ddl) => db.exec(ddl));
   const execRaw = (sql: string) => { db.exec(sql); };
 
   initRunEventTables(execRaw);

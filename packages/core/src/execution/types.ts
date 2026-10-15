@@ -134,10 +134,10 @@ export interface ExecutorStatus {
   mounts?: string[];
 }
 
-/** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
 /** What a program reaches of an executor: its members, and the status that sizes `computer.resize`. */
 export type ExecutorProviderSurface = Pick<ExecutorProvider, 'name' | 'tools' | 'positionalArgs' | 'getStatus'>;
 
+/** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
 export interface ExecutorProvider {
   readonly name: string;
 
@@ -253,8 +253,7 @@ export interface ExecutionRouter {
 
   getProvider(name: string): ExecutorProvider | undefined;
 
-  /** Available providers only, formatted for createExecuteTool's `providers`. */
-  /** The executors attached and available now, as programs reach them. */
+  /** The executors attached and available now, as programs reach them: createExecuteTool's `providers`. */
   getProviders(): ExecutorProviderSurface[];
 
   listExecutors(): ExecutorInfo[];
