@@ -233,7 +233,7 @@ const platformNow = Date.now.bind(Date);
 let advancedMs = 0;
 
 /** The end of a shell prompt: its OSC 133;B semantic mark (FinalTerm), which the runtime shell writes after each. */
-export const PROMPT_END_MARK = '\u001b]133;B\u0007';
+const PROMPT_END_MARK = '\u001b]133;B\u0007';
 
 type TerminalDrive =
   | { ok: true; frames: string[]; output: string }
