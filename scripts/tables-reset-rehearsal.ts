@@ -10,6 +10,10 @@
  *
  * The workspace is not named `eval-`, which the eval sweep deletes after its lease, since deploys run in between.
  * Credentials are the eval identity's (`resolveWebIdentity`): its owner, and its `devices` account as the recipient.
+ * A release may move the eval identity to another account (it is derived as the deployment's sign-in derives one), so
+ * the rehearsal also seeds a builtin sign-in account, a real one, whose id must not move: a workspace and a file,
+ * which `check` must find on the same account. KINU_REHEARSAL_BUILTIN_EMAIL and KINU_REHEARSAL_BUILTIN_PASSWORD name
+ * it; KINU_REHEARSAL_BUILTIN_INVITE (or _SETUP, the deployment's setup token) registers it if it cannot sign in.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
@@ -17,14 +21,17 @@ import { SLATES_ROOT } from '@kinu.run/core';
 import { createWorkspace, resolveWebIdentity, webHeaders, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 
+const NoteSchema = v.object({ path: v.string(), text: v.string() });
+
 const StateSchema = v.object({
   workspace: v.string(),
-  file: v.object({ path: v.string(), text: v.string() }),
+  file: NoteSchema,
   said: v.string(),
   slate: v.string(),
   share: v.string(),
   recipient: v.string(),
   joinDevice: v.string(),
+  builtin: v.optional(v.object({ email: v.string(), workspace: v.string(), file: NoteSchema })),
 });
 
 type State = v.InferOutput<typeof StateSchema>;
@@ -81,6 +88,82 @@ async function until(read: () => Promise<boolean>): Promise<boolean> {
   return false;
 }
 
+/** What builtin sign-in and registration are posted: registration adds its grant. */
+interface BuiltinSignIn {
+  readonly email: string;
+  readonly password: string;
+  readonly invite?: string;
+  readonly setup?: string;
+}
+
+/** The builtin account's session cookie, signed in (or registered, with an invite or the setup token); null where
+ *  the rehearsal names none. */
+async function builtinSession(origin: string): Promise<{ readonly email: string; readonly cookie: string } | null> {
+  const email = process.env.KINU_REHEARSAL_BUILTIN_EMAIL ?? '';
+  const password = process.env.KINU_REHEARSAL_BUILTIN_PASSWORD ?? '';
+
+  if (email === '' || password === '') return null;
+
+  const post = (path: string, body: BuiltinSignIn) => fetch(`${origin}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000),
+  });
+
+  const invite = process.env.KINU_REHEARSAL_BUILTIN_INVITE;
+  const setup = process.env.KINU_REHEARSAL_BUILTIN_SETUP;
+  let answer = await post('/api/auth/builtin/password/sign-in', { email, password });
+
+  if (answer.status === 401 && (invite !== undefined || setup !== undefined)) answer = await post('/api/auth/builtin/password/register', { email, password, invite, setup });
+  const cookie = answer.headers.get('set-cookie')?.split(';')[0];
+
+  if (answer.status !== 200 || cookie === undefined) throw new Error(`signing in as ${email} answered ${String(answer.status)}: ${(await answer.text()).slice(0, 300)}`);
+
+  return { email, cookie };
+}
+
+/** One request as the builtin account's browser makes it. */
+async function asBuiltin(origin: string, cookie: string, path: string, init: { method?: string; body?: string; type?: string } = {}): Promise<{ status: number; text: string }> {
+  const headers = new Headers({ cookie, origin });
+
+  if (init.body !== undefined) headers.set('content-type', init.type ?? 'application/json');
+  const answer = await fetch(`${origin}${path}`, { method: init.method ?? 'GET', headers, body: init.body, signal: AbortSignal.timeout(60_000) });
+
+  return { status: answer.status, text: await answer.text() };
+}
+
+/** A workspace and a file on the builtin account, if the rehearsal names one. */
+async function seedBuiltin(origin: string, stamp: string): Promise<State['builtin']> {
+  const session = await builtinSession(origin);
+
+  if (session === null) return undefined;
+  const created = await asBuiltin(origin, session.cookie, '/api/user/workspaces', { method: 'POST', body: JSON.stringify({ name: `rehearsal-builtin-${stamp}` }) });
+  const workspace = /"name":"([^"]+)"/u.exec(created.text)?.[1];
+
+  if (created.status >= 300 || workspace === undefined) throw new Error(`the builtin account's workspace answered ${String(created.status)}: ${created.text.slice(0, 300)}`);
+  const note = { path: 'notes/builtin.md', text: `a real account's file, written ${stamp}\n` };
+  const query = new URLSearchParams({ executor: 'workspace', path: note.path });
+  const put = await asBuiltin(origin, session.cookie, `/api/workspaces/${encodeURIComponent(workspace)}/files?${query.toString()}`, { method: 'PUT', body: note.text, type: 'application/octet-stream' });
+
+  if (put.status >= 300) throw new Error(`writing the builtin account's file answered ${String(put.status)}: ${put.text.slice(0, 300)}`);
+  console.log(`seed: builtin account ${session.email}: workspace ${workspace}; file ${note.path}`);
+
+  return { email: session.email, workspace, file: note };
+}
+
+/** The builtin account's verdicts: signed in again, its roster and its file as they were. */
+async function checkBuiltin(origin: string, seeded: NonNullable<State['builtin']>): Promise<Array<[string, boolean, string]>> {
+  const session = await builtinSession(origin);
+
+  if (session === null) return [['the builtin account signs in', false, 'KINU_REHEARSAL_BUILTIN_EMAIL and _PASSWORD are not set']];
+  const roster = await asBuiltin(origin, session.cookie, '/api/user/workspaces');
+  const query = new URLSearchParams({ executor: 'workspace', path: seeded.file.path });
+  const read = await asBuiltin(origin, session.cookie, `/api/workspaces/${encodeURIComponent(seeded.workspace)}/files?${query.toString()}`);
+
+  return [
+    ['the builtin account keeps its id: its roster names its workspace', roster.status === 200 && roster.text.includes(seeded.workspace), `workspaces answered ${String(roster.status)}`],
+    ['the builtin account\'s file reads as written', read.status === 200 && read.text === seeded.file.text, `files answered ${String(read.status)}`],
+  ];
+}
+
 async function seed(origin: string, file: string): Promise<boolean> {
   const { owner, recipient } = identities(origin);
   const stamp = new Date().toISOString().replace(/[-:T]|\.\d+Z/gu, '').slice(0, 12);
@@ -109,6 +192,9 @@ async function seed(origin: string, file: string): Promise<boolean> {
   const joinDevice = /"deviceId":"([^"]+)"/u.exec(joined.text)?.[1] ?? '';
 
   const state: State = { workspace, file: note, said, slate: SLATE, share, recipient: RECIPIENT, joinDevice };
+  const builtin = await seedBuiltin(origin, stamp);
+
+  if (builtin !== undefined) state.builtin = builtin;
 
   writeFileSync(file, JSON.stringify(state, null, 2));
   console.log(`seed: workspace ${workspace}; file ${note.path}; share ${share} ${received ? 'received' : 'NOT received'} by ${RECIPIENT}; `
@@ -147,6 +233,8 @@ async function check(origin: string, file: string): Promise<boolean> {
 
     if (device !== undefined) await call(origin, owner, `/api/user/devices/${encodeURIComponent(device)}`, { method: 'DELETE' });
   }
+
+  if (state.builtin !== undefined) verdicts.push(...await checkBuiltin(origin, state.builtin));
 
   for (const [what, held, detail] of verdicts) console.log(`check: ${held ? 'ok  ' : 'MISS'} ${what}${held ? '' : ` (${detail})`}`);
 

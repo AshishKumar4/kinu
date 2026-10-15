@@ -7,7 +7,7 @@
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { opsCaller, ownerCaller, resetTables, type TablesAnswer } from '@kinu.run/core';
+import { opsCaller, ownerCaller, repairSchema, type Repair, type TablesAnswer } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
@@ -21,7 +21,12 @@ const PROBE_OWNER_ID = '0123456789abcdef0123456789abcdef';
 
 const PLANTED = 'the older stamp is planted';
 
-/** The production orchestrator with what no production path has: planting the old table, and its wake entry. */
+/** How a planted workspace was left: a column the build before had (rebuilt away, its rows kept), or a table whose
+ *  rows this build's shape cannot take (refused). */
+export type Planted = 'stale' | 'refusing';
+
+/** The production orchestrator with what no production path has: planting an older build's storage, and its wake
+ *  entry. */
 export class OrchestratorAgent extends ProductionOrchestrator {
   constructor(ctx: AgentContext, env: ConstructorParameters<typeof ProductionOrchestrator>[1]) {
     super(ctx, env);
@@ -30,9 +35,20 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'plantOlderStamp', 'wakeOnce']);
   }
 
-  /** Its storage stamped as an older build's; once that is on disk (an abort discards writes that are not), the
-   *  object is evicted, so the next access constructs over it. */
-  async plantOlderStamp(): Promise<void> {
+  /** Its storage left as an older build's, with an older stamp; once that is on disk (an abort discards writes that
+   *  are not), the object is evicted, so the next access constructs over it. */
+  async plantOlderStamp(planted: Planted): Promise<void> {
+    const { sql } = this.ctx.storage;
+
+    if (planted === 'stale') {
+      sql.exec('ALTER TABLE trial_turns ADD COLUMN arm TEXT');
+      sql.exec("INSERT INTO trial_turns (actor_id, trial_id, turn_id, segment_id, at, arm) VALUES ('main', 'trial', 'turn', 'segment', 1, 'candidate')");
+    } else {
+      sql.exec('DROP TABLE trial_turns');
+      sql.exec('CREATE TABLE trial_turns (actor_id TEXT NOT NULL, trial_id TEXT NOT NULL, turn_id TEXT NOT NULL, PRIMARY KEY (actor_id, trial_id, turn_id))');
+      sql.exec("INSERT INTO trial_turns VALUES ('main', 'trial', 'turn')");
+    }
+
     this.ctx.storage.kv.put('kinu.schema_stamp', 1);
     await this.ctx.storage.sync();
     this.ctx.abort(PLANTED);
@@ -85,8 +101,8 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
     return getAgentByName<ProbeEnv, OrchestratorAgent>(this.env.OrchestratorAgent, workspace);
   }
 
-  /** A claimed workspace, then an older build's stamp planted in its storage and the object evicted over it. */
-  async plantRefusedWorkspace(workspace: string): Promise<string> {
+  /** A claimed workspace, then an older build's storage planted and the object evicted over it. */
+  async plantOlderWorkspace(workspace: string, planted: Planted): Promise<string> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
     await userDO.ensureProfile(owner, 'owner@probe.local', 'Owner');
@@ -95,7 +111,7 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
 
     try {
-      await (await this.target(workspace)).plantOlderStamp();
+      await (await this.target(workspace)).plantOlderStamp(planted);
 
       return 'the object answered after its eviction';
     } catch (cause) {
@@ -157,12 +173,13 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
   }
 
   /**
-   * A reshaped table rebuilt on this object's own SQLite, as the tables step rebuilds one on a Durable Object: what the
-   * platform admits of it (the deferred foreign keys, `table_info`, `foreign_key_check`, a rowid copied back) is only
-   * seen here. Its rows, a referring table's, and the rowids must all survive.
+   * A reshaped table rebuilt on this object's own SQLite, as a repair rebuilds one on a Durable Object: what the
+   * platform admits of it (renames, the deferred foreign keys, `table_info`, `foreign_key_check`, a rowid copied back)
+   * is only seen here. Its rows, a referring table's, and the rowids must all survive.
    */
-  async rebuilt(): Promise<{ readonly answer: Pick<TablesAnswer, 'held' | 'rebuilt' | 'dropped'>; readonly notes: unknown[]; readonly children: unknown[] }> {
+  async rebuilt(): Promise<{ readonly repair: Pick<Repair, 'rebuilt' | 'refused'> | null; readonly notes: unknown[]; readonly children: unknown[] }> {
     const { sql } = this.ctx.storage;
+    let stamp = 1;
 
     sql.exec(`CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL, digest TEXT, CHECK (digest IS NULL OR length(digest) = 4))`);
     sql.exec(`CREATE INDEX notes_digest ON notes(digest)`);
@@ -170,23 +187,26 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
     sql.exec(`INSERT INTO notes (rowid, id, body, digest) VALUES (7, 'a', 'kept', 'abcd')`);
     sql.exec(`INSERT INTO notes_children VALUES ('c', 'a')`);
 
-    const answer = resetTables(sql, { tables: [{ table: 'notes', change: 'reshaped' }], drop: true }, {
-      schema: 'agent', stamps: { read: () => 0, write: () => {} }, transactionSync: this.ctx.storage.transactionSync.bind(this.ctx.storage),
+    const repair = repairSchema(sql, {
+      schema: 'agent', tables: ['notes', 'notes_children'], stamps: { read: () => stamp, write: (next) => { stamp = next; } },
+      transactionSync: this.ctx.storage.transactionSync.bind(this.ctx.storage),
       init: () => {
         sql.exec(`CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, body TEXT NOT NULL)`);
         sql.exec(`CREATE TABLE IF NOT EXISTS notes_children (id TEXT PRIMARY KEY, note TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE)`);
       },
-    });
+    }, 'probe');
 
     return {
-      answer: { held: answer.held, rebuilt: answer.rebuilt, dropped: answer.dropped },
+      repair: repair === null ? null : { rebuilt: repair.rebuilt, refused: repair.refused },
       notes: sql.exec('SELECT rowid AS r, id, body FROM notes').toArray(),
       children: sql.exec('SELECT id, note FROM notes_children').toArray(),
     };
   }
 
-  /** The tables step's own call: what it found of the stamp, before it brought the storage to this build. */
-  async repaired(workspace: string): Promise<string> {
-    return (await (await this.target(workspace)).opsTables(await opsCaller(this.env), { tables: [], drop: true })).stamp;
+  /** The deploy's walk of `workspace`: what its repair did, why it is refused if it is, and the agents it opened. */
+  async walked(workspace: string): Promise<Pick<TablesAnswer, 'refused' | 'agents'> & { readonly rebuilt: readonly string[] }> {
+    const answer = await (await this.target(workspace)).opsTables(await opsCaller(this.env));
+
+    return { rebuilt: answer.repair?.rebuilt ?? [], refused: answer.refused, agents: answer.agents };
   }
 }

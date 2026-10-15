@@ -485,8 +485,8 @@ describe("deploy gate", () => {
       .toEqual({ status: 1, events: [phaseRun('preflight')], ci: ['bun scripts/ladder.ts --ci-verdict=testsha'], said: true, refused: true });
   });
 
-  // A build that moves a class's stamp refuses every database of that class until the tables step reaches it, so it
-  // never deploys without the step (scripts/reset.ts stamps).
+  // A build that moves a class's stamp repairs every database of that class at first contact, so it never deploys
+  // without its plan having been printed (scripts/reset.ts stamps).
   test('a build that moves a stamp is refused without --reset-tables, before anything runs', async () => {
     const moved = await runDeploy({ stampsMoved: true });
     const plain = await runDeploy({});

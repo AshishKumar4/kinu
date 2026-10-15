@@ -3,10 +3,9 @@
  * conversation, sends, claims and runs are kept, and a meter on that SQLite. Exported under the shipped class name,
  * which the workspace object loads by name.
  */
-import { CHAT_SESSION_ID, SessionHistory, WorkspaceActorDirectory, type JsonObject } from '@kinu.run/core';
+import { CHAT_SESSION_ID, SessionHistory, WorkspaceActorDirectory, type JsonObject, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 import { seedTranscriptEntry } from '@kinu.run/test-utils/transcript';
 import { AgentFacet as ShippedAgentFacet } from '../../src/agent-facet/agent-facet';
-import { agentSql } from '../../src/agent-facet/agent-database';
 import { meterInPlace, type OperationCost, type SqlMeter } from './sql-meter';
 import { Crossings, type PhasedCrossings } from './crossings';
 import { claimFences } from '@kinu.run/core';
@@ -75,7 +74,8 @@ export class AgentFacet extends ShippedAgentFacet {
 
   /** `entries` into `actorId`'s conversation, as its store records them; their text is short enough to need no files. */
   async seedChat(actorId: string, entries: readonly SeededEntry[]): Promise<void> {
-    const sql = agentSql(this.ctx.storage.sql);
+    const sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
+      this.ctx.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
 
     const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
 

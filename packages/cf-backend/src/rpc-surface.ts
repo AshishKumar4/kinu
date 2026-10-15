@@ -219,7 +219,7 @@ export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
 /** `deleteAccount` must work when start throws. */
-/** Never gated: a deletion must work when start throws, and a release's tables reset touches tables alone. */
+/** Never gated: a deletion must work when start throws, and the deploy's tables walk reads tables alone. */
 const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTables']);
 
 export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => !USER_DO_STARTLESS.has(name));
@@ -340,8 +340,8 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...ORCHESTRATOR_METHODS,
 ];
 
-/** Never gated: a deletion must work when start throws, and must not start a workspace to delete it; a release's
- *  tables reset touches tables alone, and must not start every workspace to reach them. */
+/** Never gated: a deletion must work when start throws, and must not start a workspace to delete it; the deploy's
+ *  tables walk reads tables alone, and must not start every workspace to reach them. */
 const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'quietForDeletion', 'evalAbortActivation', 'opsTables']);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [

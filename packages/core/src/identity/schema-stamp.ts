@@ -5,9 +5,9 @@
  *
  * - the class's stamp: it holds the tables its init makes, as this build declares them, and is opened;
  * - none (0) and none of the class's tables: nothing made it yet, so it is made and stamped;
- * - anything else: a release changed its class's tables since it was made, and nothing of it is read or written but
- *   by the tables step that brings it to this build (`scripts/reset.ts tables`); a Durable Object made before stamps
- *   were per class (0, with its tables) is such a database, which the step repairs and stamps.
+ * - anything else: a release changed its class's tables since it was made, and its object repairs it before anything
+ *   else reads it (state/schema-repair.ts); a Durable Object made before stamps were per class (0, with its tables) is
+ *   such a database. One whose repair refuses is read by nothing until a release can bring it up.
  *
  * A change to one class's tables moves only its stamp, so it puts no other class's databases into repair. A local
  * database and an export are refused under another stamp: Kinu never migrates them.
@@ -87,14 +87,13 @@ export function writeStamp(stamps: StampStore, schema: SchemaClass): void {
   stamps.write(SCHEMA_STAMPS[schema]);
 }
 
-/** The refusal a Durable Object behind this build answers every call with until the tables step reaches it. */
+/** The refusal a Durable Object answers every call with when its repair could not bring it to this build. */
 export class StoragePredatesReleaseError extends KinuError {
   override readonly name = 'StoragePredatesReleaseError';
 
-  constructor(readonly schema: SchemaClass, readonly stamp: number) {
-    super('unavailable', `This ${schema}'s storage was made before this release changed its tables (it is stamped ${stamp.toString(16)}, `
-      + `this build ${SCHEMA_STAMPS[schema].toString(16)}): the deploy's tables step (scripts/reset.ts tables) has not reached it yet. `
-      + 'Try again in a few minutes.');
+  constructor(readonly schema: SchemaClass, readonly reason: string) {
+    super('unavailable', `This ${schema}'s storage could not be brought to this release's tables, so it is kept as it is `
+      + `and nothing reads it until a release can: ${reason}`);
   }
 }
 

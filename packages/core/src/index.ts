@@ -80,10 +80,11 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
+export { REGENERABLE, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
+
 export {
-  OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, resetTables, TablesRequestSchema,
-  type AgentTables, type ChangedTable, type HeldTable, type OpsCaller, type TableRows, type TablesAnswer, type TablesRequest, type TableWrites,
-} from './state/tables-reset';
+  censusOf, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, type OpsCaller, type StoreCensus, type TableRows, type TablesAnswer,
+} from './state/ops-tables';
 
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type WorkspaceKeyedRows } from './state/user-schema';
 
@@ -165,7 +166,7 @@ export {
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive';
 
-export { SCHEMA_STAMPS } from './identity/schema-genesis';
+export { SCHEMA_RETIRED, SCHEMA_STAMPS, SCHEMA_TABLES } from './identity/schema-genesis';
 
 export {
   durableStamps, pragmaStamps, readStamp, requireSchemaStamp, stampSchemaGenesis, StoragePredatesReleaseError, writeStamp,

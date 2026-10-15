@@ -449,7 +449,7 @@ export function agentDatabase(workspace: Database, storageKey: string): Database
 
   agents.set(storageKey, db);
   databases.set(workspace, agents);
-  openAgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable });
+  openAgentDatabase(contextOver(db, storageKey).storage, null, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable });
 
   return db;
 }
@@ -846,7 +846,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 /** `isolate`'s calls, each made through `through` as an RPC into it would be. */
 export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: () => Promise<A>) => Effect.Effect<A, KinuError>): AgentFacetCalls {
   return {
-    opsTables: (request) => settle(through(() => isolate.opsTables(request))),
+    opsTables: () => settle(through(() => isolate.opsTables())),
     activePlanReview: (...args) => settle(through(() => isolate.activePlanReview(...args))),
     planReviews: (...args) => settle(through(() => isolate.planReviews(...args))),
     savePlanReviewAnnotations: (...args) => settle(through(() => isolate.savePlanReviewAnnotations(...args))),

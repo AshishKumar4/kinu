@@ -288,13 +288,13 @@ interface AttributionProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
-  plantRefusedWorkspace(workspace: string): Promise<string>;
+  plantOlderWorkspace(workspace: string, planted: 'stale' | 'refusing'): Promise<string>;
   seed(workspace: string): Promise<SeedAnswer>;
   chat(workspace: string): Promise<ChatAnswers>;
   wake(workspace: string): Promise<string>;
   exported(workspace: string): Promise<string>;
-  repaired(workspace: string): Promise<string>;
-  rebuilt(): Promise<{ readonly answer: { readonly held: unknown[]; readonly rebuilt: readonly string[]; readonly dropped: readonly string[] }; readonly notes: unknown[]; readonly children: unknown[] }>;
+  walked(workspace: string): Promise<{ readonly rebuilt: readonly string[]; readonly refused: string | null; readonly agents: readonly unknown[] }>;
+  rebuilt(): Promise<{ readonly repair: { readonly rebuilt: readonly string[]; readonly refused: string | null } | null; readonly notes: unknown[]; readonly children: unknown[] }>;
 }
 
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {

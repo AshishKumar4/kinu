@@ -15,8 +15,8 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
-import { agentSql, initAgentDatabaseTables, openAgentDatabase, type AgentDatabase } from './agent-database';
-import { durableStamps, resetTables, TablesRequestSchema, type AgentTables, type TablesRequest } from '@kinu.run/core';
+import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
+import { censusOf, type Repair, type StoreCensus } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -52,8 +52,8 @@ class AgentContextTree extends RpcTarget implements ContextTreeRemote {
 }
 
 export interface AgentFacetCalls {
-  /** A release's tables reset of this agent's database (`OrchestratorAgent.opsTables`). */
-  opsTables(request: TablesRequest): Promise<Omit<AgentTables, 'name'>>;
+  /** The deploy's walk of this agent's database (`OrchestratorAgent.opsTables`). */
+  opsTables(): Promise<StoreCensus>;
   /** Resolves once its chat holds the delivery in its own store, with the report its admission makes. */
   admit(snapshot: AgentSnapshot, delivery: Delivery): Promise<AdmittedDelivery>;
   landing(snapshot: AgentSnapshot, id: string): Promise<SendLanding>;
@@ -203,21 +203,25 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
 
-  /** A release's tables reset, from its workspace (reached only through the workspace's `ctx.facets`, which checked the
-   *  step's capability): what this agent's database holds of the changed tables, and with `drop`, brought to this
-   *  build, made again by its own init and stamped. */
-  async opsTables(request: TablesRequest): Promise<Omit<AgentTables, 'name'>> {
-    const { tables, drop } = v.parse(TablesRequestSchema, request);
-    const { storage } = this.ctx;
+  /** The deploy's walk, from its workspace (reached only through the workspace's `ctx.facets`, which checked the walk's
+   *  capability): this agent's database opened so it repairs itself, its tables and their rows, and what that did. */
+  opsTables(): Promise<StoreCensus> {
+    const repair = this.repaired();
 
-    return resetTables(storage.sql, { tables, drop }, {
-      schema: 'agent', stamps: durableStamps(storage.kv), transactionSync: (write) => storage.transactionSync(write),
-      init: () => { initAgentDatabaseTables(storage, { sql: agentSql(storage.sql), exec: storage.sql }); },
-    });
+    return Promise.resolve({ census: censusOf(this.ctx.storage.sql), repair, refused: repair?.refused ?? null });
+  }
+
+  /** This activation's repair of its database, run once, at its first open. */
+  private repair: { readonly done: Repair | null } | undefined;
+
+  private repaired(): Repair | null {
+    this.repair ??= { done: repairAgentDatabase(this.ctx.storage, `agent of ${this.env.WORKSPACE_NAME}`) };
+
+    return this.repair.done;
   }
 
   private open(snapshot: AgentSnapshot): AgentDatabase {
-    this.database ??= openAgentDatabase(this.ctx.storage, {
+    this.database ??= openAgentDatabase(this.ctx.storage, this.repaired(), {
       agent: () => this.workspace(), home: this.env.HOME, state: () => this.state(),
       enqueueTurn: (input) => this.enqueue(snapshot, input),
       admitDelivery: async (delivery) => (await this.admit(snapshot, delivery, 'self')).answer,

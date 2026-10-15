@@ -88,11 +88,13 @@
 # before anything runs. A reset whose build never uploaded is finished by the next deploy with `--reset`,
 # whose pre-upload infrastructure phase defers exactly the rows that reset's record deleted.
 #
-# `--reset-tables` keeps every object and drops only the tables this release changed against the build the
-# deployment served before, on every object that holds them, between the upload and the smoke test
-# (`scripts/reset.ts tables`, scripts/tables-reset.ts). Chosen per release, never automatic. It prints the plan
-# with each table's class and rows per object; on production it asks for a typed confirmation naming the tables.
-# Its record goes where a reset's does, and a rerun drops nothing a finished one made.
+# `--reset-tables` is how a release that reshapes tables ships: every object keeps its storage and repairs its own
+# tables the first time the new build opens it (core state/schema-repair.ts). Before the upload it prints the plan,
+# what each repair does to each table this release changed against the build the deployment serves, and stops on
+# anything that would refuse; on production it asks for a typed confirmation naming the tables whose rows go. After
+# the upload, once this deploy's version answers, it opens every object once, so each repairs itself before a user
+# waits on it, and prints what each did (`scripts/reset.ts tables-plan` and `tables`, scripts/tables-reset.ts).
+# Chosen per release, never automatic. Its record goes where a reset's does, and a rerun of the walk is harmless.
 #
 # Idempotent: safe to re-run.
 set -uo pipefail
@@ -242,30 +244,29 @@ if [ "$KINU_RESET" = "1" ]; then
   fi
 fi
 
-# A tables reset runs through the candidate's own /ops/tables, so it can only plan once the build is up; the build the
-# deployment serves now is what it diffs the genesis lock against, read before the upload replaces it.
+# The plan is the candidate's lock against the build the deployment serves now, read before the upload replaces it;
+# its record is written before the upload, which is the first moment any object repairs.
 KINU_TABLES_RECORD=""
-KINU_TABLES_FROM=""
 if [ "$KINU_RESET_TABLES" = "1" ]; then
   if [ "$KINU_RESET" = "1" ] || [ "$KINU_GATES_ONLY" = "1" ]; then
-    echo -e "${RED}--reset-tables drops tables after the upload: --reset deletes every object anyway, and --gates-only stops before the build.${NC}"
+    echo -e "${RED}--reset-tables keeps every object: --reset deletes them all anyway, and --gates-only stops before the build.${NC}"
     exit 2
   fi
   if [ "$KINU_ENV" = "production" ] && [ ! -t 0 ]; then
-    echo -e "${RED}A production tables reset is confirmed at a terminal, and this run has none. Nothing was deployed or dropped.${NC}"
+    echo -e "${RED}A production tables release is confirmed at a terminal, and this run has none. Nothing was deployed.${NC}"
     exit 1
   fi
   KINU_TABLES_RECORD="$(mktemp -t kinu-tables.XXXXXX.json)"
-  KINU_TABLES_FROM="$(bun "$KINU_ROOT/scripts/reset.ts" served "$KINU_ENV")" || exit 1
-  echo -e "${BOLD}RESET TABLES: after the upload, the tables changed since $KINU_TABLES_FROM are dropped on every object of $KINU_ENV that holds them; the plan prints then.${NC}"
+  echo -e "${BOLD}TABLES: every object repairs the tables this release changed the first time the new build opens it. The plan:${NC}"
+  bun "$KINU_ROOT/scripts/reset.ts" tables-plan "$KINU_ENV" "$KINU_TABLES_RECORD" || exit 1
 elif [ "$KINU_RESET" != "1" ] && [ "$KINU_ROLLBACK" != "1" ] && [ "$KINU_GATES_ONLY" != "1" ]; then
-  # A build that moves a class's stamp refuses every database of that class until the tables step reaches it, so it
-  # never ships without the step.
+  # A build that moves a class's stamp repairs every database of that class at first contact, so it never ships
+  # without its plan having been read.
   KINU_STAMPS_MOVED="$(bun "$KINU_ROOT/scripts/reset.ts" stamps "$KINU_ENV")"
   case $? in
     0) ;;
     3)
-      echo -e "${RED}This build moves the stamp of: $KINU_STAMPS_MOVED. Every such database is refused until the tables step reaches it: deploy with --reset-tables.${NC}"
+      echo -e "${RED}This build moves the stamp of: $KINU_STAMPS_MOVED. Every such database repairs its tables when the new build first opens it: deploy with --reset-tables, which prints what each repair does first.${NC}"
       exit 1
       ;;
     *) exit 1 ;;
@@ -826,15 +827,25 @@ fi
 
 cd "$KINU_ROOT" || { publish_red "cannot cd to $KINU_ROOT"; return 1; }
 
-# ── Step 3b: The tables reset ─────────────────────────────────
-# Through the version just deployed, before the smoke test reads it: until it runs, an object holding an old table
-# fails what reads the new shape. A stop here is finished by running the same command again.
+# ── Step 3b: The tables walk ──────────────────────────────────
+# Every object opened once through the version just deployed, so each repairs itself before a user waits on it, and
+# what each repair did printed. Correctness never waits on it: an object it misses repairs at its first request. It
+# starts once this deploy's version answers (`ours`, as the smoke test reads it), and asks each batch again while an
+# edge still answers with the build before, for as long (KINU_PROPAGATION_SECONDS).
 if [ "$KINU_RESET_TABLES" = "1" ]; then
   echo ""
-  echo -e "${BOLD}Step 3b: Resetting the tables this release changed on $KINU_WORKER${NC}"
+  echo -e "${BOLD}Step 3b: Opening every object of $KINU_WORKER, so each repairs its tables${NC}"
   KINU_RECORD_ARGS=("$KINU_TABLES_RECORD")
-  bun "$KINU_ROOT/scripts/reset.ts" tables "$KINU_ENV" "$KINU_TABLES_RECORD" --from "$KINU_TABLES_FROM" \
-    || { publish_red "the tables reset failed; its lines say what it dropped before it stopped, and 'bun scripts/reset.ts tables $KINU_ENV $KINU_TABLES_RECORD --from $KINU_TABLES_FROM' finishes it"; return 1; }
+  KINU_TABLES_BODY="$(mktemp -t kinu-tables-health.XXXXXX)"
+  ours "$KINU_TABLES_BODY" --max-time 15 "${KINU_URL}api/health"
+  rm -f "$KINU_TABLES_BODY"
+  FINDING="$(not_ours "/api/health")"
+  if [ -n "$FINDING" ]; then
+    publish_red "the tables walk did not start: $FINDING; every object still repairs at its first request, and 'KINU_VERSION=$KINU_VERSION bun scripts/reset.ts tables $KINU_ENV $KINU_TABLES_RECORD' walks them"
+    return 1
+  fi
+  KINU_VERSION="$KINU_VERSION" KINU_PROPAGATION_SECONDS="$KINU_PROPAGATION_SECONDS" bun "$KINU_ROOT/scripts/reset.ts" tables "$KINU_ENV" "$KINU_TABLES_RECORD" \
+    || { publish_red "the tables walk found databases refused, unreached or moved (its lines name them); 'KINU_VERSION=$KINU_VERSION bun scripts/reset.ts tables $KINU_ENV $KINU_TABLES_RECORD' walks again"; return 1; }
 fi
 
 # ── Step 4: Post-deploy smoke test ───────────────────────────────
