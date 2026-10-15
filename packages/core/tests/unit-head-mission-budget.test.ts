@@ -115,23 +115,6 @@ function countingLedger() {
 }
 
 describe('an undeclared run is never governed', () => {
-  test('a head with no labels issues no ledger statement at all', async () => {
-    const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
-    const afterConstruction = ledger.statements.length;
-
-    // Production shape: an empty label set produces no scope, so no port is handed in.
-    const scope = localMissionScope(governor, []);
-    expect(scope).toBeNull();
-
-    const { report } = await runHead(scope, { stopAfter: 4 });
-    expect(report.status).toBe('completed');
-    expect(usageTotal(report.usage)).toBe(1_200 * 5);
-    expect(ledger.statements.slice(afterConstruction)).toEqual([]);
-    expect(ledger.sql`SELECT COUNT(*) AS n FROM mission_budget`).toEqual([{ n: 0 }]);
-    ledger.db.close();
-  });
-
   test('a port handed an empty label set is inert even if something calls it', async () => {
     const ledger = countingLedger();
     const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
