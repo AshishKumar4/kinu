@@ -34,7 +34,7 @@ import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
-  JOB_ASK, JOB_STARTED,
+  JOB_ASK, JOB_NOT_STARTED, JOB_STARTED,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_BEFORE, SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_WORK_ASK,
@@ -2837,7 +2837,13 @@ export async function agentJobIsAnsweredInItsSession(target: FlowTarget): Promis
     const page = await openWorkspacePage(target, `/workspace/${workspace}`);
 
     await sendAndSettle(page, JOB_ASK);
-    await until(page, "the agent's reply that its job started", `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(JOB_STARTED)})`);
+    // Either way the agent says it: a job that did not start fails the row here, in the agent's words.
+    const said = `(document.querySelector('#chat')?.textContent ?? '')`;
+
+    await until(page, "the agent's reply that its job started", `[${JSON.stringify(JOB_STARTED)}, ${JSON.stringify(JOB_NOT_STARTED)}].some((words) => ${said}.includes(words))`);
+    const reply = v.parse(v.string(), await page.evaluate(said));
+
+    if (!reply.includes(JOB_STARTED)) throw new Error(`the agent's job did not start: ${reply.slice(reply.indexOf(JOB_NOT_STARTED), reply.indexOf(JOB_NOT_STARTED) + 400)}`);
     await openInspector(page);
     await page.evaluate(stripTab('Environment'));
     const computer = executorLabel('computer');

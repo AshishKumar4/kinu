@@ -517,12 +517,31 @@ export const JOB_COMMAND = 'printf "Release to production? (y/N) "; read answer;
 
 export const JOB_STARTED = 'JOB STARTED';
 
-/** A background job's wake (core jobs/store.ts): its id, and what its program answered. */
-const JOB_WAKE = /^Background \w+ job (bgjob-[\w-]+) (?:completed|failed|cancelled)/u;
+/** How the script says the job did not start, before the cause in its own words. */
+export const JOB_NOT_STARTED = 'The job did not start';
+
+/** A background job's wake (core jobs/runner.ts `wakeText`): its id, and whether it completed. */
+const JOB_WAKE = /^Background \w+ job (bgjob-[\w-]+) (completed|failed|was CANCELLED)/u;
 
 /** The job is started once a program's value carries its id; anything else is said in its own words. */
 function jobOutcome(result: string): ScriptedAnswer {
-  return { text: result.includes('processId') ? JOB_STARTED : `The job did not start: ${result.slice(0, 300)}` };
+  return { text: result.includes('processId') ? JOB_STARTED : `${JOB_NOT_STARTED}: ${result.slice(0, 300)}` };
+}
+
+/**
+ * The turn a backgrounded start's wake opens. The wake names its job and, but for a hire's, carries no result: it asks
+ * for `agent.jobResult`, whose row holds the program's value (staging fcc2e05d6 read the wake alone, and said the job
+ * did not start). A wake that carries its result, a hire's, is read as it stands; a failed one says why.
+ */
+function wokenAnswer(request: ScriptedRequest, jobId: string, completed: boolean): ScriptedAnswer {
+  const latest = request.userTexts.at(-1) ?? '';
+
+  if (!completed || latest.includes('processId')) return jobOutcome(latest);
+  const read = request.turn.at(-1);
+
+  return read === undefined
+    ? { toolCall: { name: 'eval', arguments: { code: `return await agent.jobResult('${jobId}');` } } }
+    : jobOutcome(read.result);
 }
 
 /**
@@ -534,8 +553,9 @@ function jobOutcome(result: string): ScriptedAnswer {
  */
 function jobAnswer(request: ScriptedRequest): ScriptedAnswer | undefined {
   const latest = request.userTexts.at(-1) ?? '';
+  const woken = JOB_WAKE.exec(latest);
 
-  if (JOB_WAKE.test(latest) && request.userTexts.some((text) => text.includes(JOB_ASK))) return jobOutcome(latest);
+  if (woken !== null && request.userTexts.some((text) => text.includes(JOB_ASK))) return wokenAnswer(request, woken[1] ?? '', woken[2] === 'completed');
 
   if (!latest.includes(JOB_ASK)) return undefined;
   const ran = request.turn.at(-1);
