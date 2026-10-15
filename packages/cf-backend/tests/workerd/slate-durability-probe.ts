@@ -232,6 +232,9 @@ const platformNow = Date.now.bind(Date);
 
 let advancedMs = 0;
 
+/** The end of a shell prompt: its OSC 133;B semantic mark (FinalTerm), which the runtime shell writes after each. */
+const PROMPT_END_MARK = '\u001b]133;B\u0007';
+
 type TerminalDrive =
   | { ok: true; frames: string[]; output: string }
   | { ok: false; error: string };
@@ -806,6 +809,36 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       return { ok: true, frames, output };
     } finally {
       socket.close(1000, 'drive complete');
+    }
+  }
+
+  /**
+   * Types `line` on a fresh terminal socket and reads until `token` is printed and a prompt follows it (its OSC 133;B
+   * end mark), so the shell has settled before the socket goes.
+   */
+  async typeToPrompt(workspace: string, line: string, token: string): Promise<string> {
+    const socket = await this.terminalSocket(workspace);
+    let output = '';
+
+    const settled = new Promise<void>((resolve) => {
+      socket.addEventListener('message', (event) => {
+        const parsed = v.safeParse(WorkspaceTerminalOutputSchema, JSON.parse(String(event.data)));
+
+        if (parsed.success && parsed.output.type === 'output') output += parsed.output.data;
+
+        const at = output.indexOf(token);
+
+        if (at >= 0 && output.indexOf(PROMPT_END_MARK, at) >= 0) resolve();
+      });
+    });
+
+    try {
+      socket.send(JSON.stringify({ type: 'input', data: `${line}\r` }));
+      await settled;
+
+      return output;
+    } finally {
+      socket.close(1000, 'typed');
     }
   }
 
