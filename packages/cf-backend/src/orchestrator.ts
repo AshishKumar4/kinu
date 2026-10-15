@@ -40,7 +40,7 @@ import {
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
-import { censusOf, requireOps, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
+import { censusOf, requireOps, slateTitle, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
@@ -247,8 +247,9 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { Cause, Effect, Exit, Result } from 'effect';
+import { roomHandle, roomObjectName } from './slates/room-passes';
+import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold, KinuError, refusalOf, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -4252,9 +4253,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const reached = !this.nimbusSibling && this.storageRefusal === undefined && this.workspaceBorn() ? this.keptAgents() : [];
     const agents = await Promise.all(reached.map(async ({ name, placement }) => ({ name, ...await (await agentFacet(this.ctx, this.env, placement)).opsTables() })));
 
+    // Every slate's room, by name: a room is made on its slate's first run, and one never made answers an empty census.
+    // A Nimbus sibling holds no slates.
+    const slates = !this.nimbusSibling && this.storageRefusal === undefined
+      ? this.ctx.storage.sql.exec('SELECT DISTINCT id FROM slates').toArray().map((row) => v.parse(v.object({ id: v.string() }), row).id)
+      : [];
+
+    const workspace = this.addressedName;
+
     return {
-      name: this.addressedName, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
-      workspaces: [], accounts: [], agents,
+      name: workspace, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
+      workspaces: [], accounts: [], agents, rooms: slates.map((slate) => roomObjectName(workspace, roomHandle(workspace, slate))),
     };
   }
 
@@ -6017,6 +6026,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     return (await this.slates()).controller.liveShareBundle(row);
+  }
+
+  /** DO-only: the app's room route asks for it after proving the caller owns this workspace. */
+  async ensureSlateRoom(slate: string): Promise<SlateAnswer<{ readonly handle: string }>> {
+    const owner = await this.getOwnerEmail();
+
+    if (owner === null) return { ok: false, ...refusalOf(new KinuError('unavailable', 'This workspace has no owner to make a room for')) };
+
+    const project = await settle(Effect.result(attempt(
+      { doing: `slate ${slate}`, otherwise: 'missing' },
+      async () => (await this.slates()).controller.project(CRED_SESSION_USER, slate),
+    )));
+
+    if (Result.isFailure(project)) return { ok: false, ...refusalOf(project.failure) };
+    const handle = roomHandle(this.name, slate);
+    const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, handle)));
+
+    await room.create({ workspace: this.name, slate, title: slateTitle(project.success, slate), owner: owner.toLowerCase(), parent: null });
+
+    return { ok: true, value: { handle } };
   }
 
   /** DO-only, like the blueprint twin, for the same reason. */

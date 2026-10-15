@@ -35,6 +35,8 @@ export interface TablesAnswer extends StoreCensus {
   readonly accounts: readonly string[];
   /** A born workspace's agents, each its own database, opened by the workspace. */
   readonly agents: readonly (StoreCensus & { readonly name: string })[];
+  /** A workspace's slate rooms, by the name each object is reached by. */
+  readonly rooms: readonly string[];
 }
 
 const OPS_LABEL = 'kinu.deploy.tables.v1';

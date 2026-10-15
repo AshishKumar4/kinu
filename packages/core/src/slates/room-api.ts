@@ -383,6 +383,8 @@ export const DriveRoomCardSchema = v.object({
   /** Shared only. */
   role: v.optional(RoomRoleSchema),
   at: v.number(),
+  /** Shared with this person since they last opened Shared. */
+  unseen: v.optional(v.literal(true)),
 });
 
 export type DriveRoomCard = v.InferOutput<typeof DriveRoomCardSchema>;
@@ -408,6 +410,27 @@ export const GALLERY_SORTS = ['trending', 'new', 'stars'] as const;
 export const GallerySortSchema = v.picklist(GALLERY_SORTS);
 
 export type GallerySort = v.InferOutput<typeof GallerySortSchema>;
+
+/** A slate of this person's own, as the Drive lists it: its audience once its room has one. */
+export const DriveSlateSchema = v.object({
+  id: v.string(),
+  title: v.string(),
+  workspace: v.string(),
+  audience: v.optional(RoomAudienceSchema),
+  picture: v.optional(v.string()),
+});
+
+export type DriveSlate = v.InferOutput<typeof DriveSlateSchema>;
+
+/** `GET /api/shared`: the person's own slates, the ones shared with them, the ones they used, and the ones they starred. */
+export const DriveLibrarySchema = v.object({
+  slates: v.array(DriveSlateSchema),
+  shared: v.array(DriveRoomCardSchema),
+  used: v.array(DriveRoomCardSchema),
+  starred: v.array(GalleryListingSchema),
+});
+
+export type DriveLibrary = v.InferOutput<typeof DriveLibrarySchema>;
 
 /** What forking a slate brings: its code; per part, whether it ran with someone's lend, which the fork does not keep. */
 export const ForkPreviewSchema = v.object({

@@ -24,7 +24,7 @@ function world(written: readonly string[]) {
 
         if (id.toString().startsWith('f')) throw new Error('reached by id before any named start');
 
-        return { name: id.name ?? null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [] };
+        return { name: id.name ?? null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [], rooms: [] };
       },
     }),
   });
@@ -35,6 +35,7 @@ function world(written: readonly string[]) {
     DEV_USER_EMAIL: 'eval-service@kinu.run',
     UserDO: namespace('UserDO'),
     OrchestratorAgent: namespace('OrchestratorAgent'),
+    SLATE_ROOM: namespace('SlateRoom'),
   };
 
   return { env, asked };
@@ -100,4 +101,15 @@ test('the walk starts from the builtin directory and the eval service\'s account
   // The service, `devices` and `scripted`, each by the id the deployment's sign-in derives.
   expect(accounts).toHaveLength(4);
   expect(accounts[0]).toBe(BUILTIN_ACCOUNTS_OBJECT);
+});
+
+test('a SlateRoom batch reaches the rooms\' namespace, by name', async () => {
+  const { env, asked } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
+
+  const response = await opsRoutes.fetch(new Request('https://kinu.test/ops/tables', {
+    method: 'POST', body: JSON.stringify({ class: 'SlateRoom', ids: [], names: ['jarvis/0123456789'] }), headers: { authorization: `Bearer ${PASS}` },
+  }), env);
+
+  expect(response.status).toBe(200);
+  expect(asked).toEqual([`SlateRoom:${sha256Hex('jarvis/0123456789')}`]);
 });

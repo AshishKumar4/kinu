@@ -94,10 +94,10 @@ test('the plan says what each repair does: rebuild, refill a cache, retire, leav
 
 const REPAIR: Repair = {
   schema: 'account', rebuilt: ['device_joins'], refilled: [], retired: ['user_peer_grants'], unchecked: [],
-  tables: [{ table: 'device_joins', before: 2, after: 2 }, { table: 'user_peer_grants', before: 1, after: null }], refused: null, ms: 40,
+  tables: [{ table: 'device_joins', before: 2, after: 2 }, { table: 'user_peer_grants', before: 1, after: null }], refused: null,
 };
 
-const answer = (over: Partial<TablesAnswer>): TablesAnswer => ({ name: null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [], ...over });
+const answer = (over: Partial<TablesAnswer>): TablesAnswer => ({ name: null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [], rooms: [], ...over });
 
 const ACCOUNT: Reached = { className: 'UserDO', id: 'a'.repeat(64), name: 'u1', answer: answer({ census: [{ table: 'user_profile', rows: 1 }, { table: 'device_joins', rows: 2 }], repair: REPAIR }) };
 
@@ -121,45 +121,50 @@ test('a census is one sorted line per database and table, an unreachable object 
   ]);
 });
 
-test('the walk names what each repair did, and fails on a refused, an unreached, or a row-moving database', () => {
+test('the walk names what each repair did, fails on a refused or a row-moving database, and names a gap in its census', () => {
   const { lines, failed } = walkLines([ACCOUNT, WORKSPACE, LOST], 1);
 
   expect(lines).toEqual([
     '3 database(s) in 3 object(s), 1 of them listed by Cloudflare; 1 repaired by this walk (the rest were already at this build, or repaired by a request first)',
-    '  UserDO u1 (40 ms): rebuilt device_joins; retired user_peer_grants',
+    '  UserDO u1: rebuilt device_joins; retired user_peer_grants',
     'REFUSED (kept as they are, refusing every call with why):',
     '  OrchestratorAgent jarvis: trial_turns: NOT NULL constraint failed: trial_turns.segment_id',
-    'UNREACHED:',
+    'UNREACHED, a gap in this census (each repairs at its first request on this build):',
     `  OrchestratorAgent ${'c'.repeat(64)}: reached by id before any named start`,
   ]);
-  expect(failed).toHaveLength(2);
+  expect(failed).toEqual(['OrchestratorAgent jarvis: trial_turns: NOT NULL constraint failed: trial_turns.segment_id']);
 
   const moved: Reached = { ...ACCOUNT, answer: answer({ repair: { ...REPAIR, tables: [{ table: 'device_joins', before: 2, after: 1 }] } }) };
 
   expect(walkLines([moved], 0).failed).toEqual(['UserDO u1: device_joins 2 → 1']);
 });
 
-/** What the walk is led to from `name`: the directory names a builtin account, an account its workspace. */
+/** What the walk is led to from `name`: the directory names a builtin account, an account its workspace, a workspace
+ *  its slate's room. */
 function leadsOf(className: OpsBody['class'], name: string): Partial<TablesAnswer> {
   if (name === 'directory') return { accounts: ['u-builtin'] };
 
-  return className === 'UserDO' ? { workspaces: [`${name}-ws`] } : { name };
+  if (className === 'UserDO') return { workspaces: [`${name}-ws`] };
+
+  return className === 'OrchestratorAgent' ? { name, rooms: [`${name}/0123456789`] } : { name };
 }
 
-/** A deployment as the walk meets it: its roots, its accounts' workspaces and directory, Cloudflare's lists, and an
- *  edge that answers `stale` times as the build before (which has no `/ops`) and once with the pass not yet seen. */
-function deployment(stale: number) {
+/** A deployment as the walk meets it: its roots, its accounts' workspaces and directory, Cloudflare's lists, an edge
+ *  that answers `stale` times as the build before (which has no `/ops`) and once with the pass not yet seen, and a
+ *  workspace that starts `onBuildBefore` times on the build before. */
+function deployment(stale: number, onBuildBefore = 0) {
   const admitted: string[] = [];
   const forgotten: string[] = [];
   const asked: OpsBody[] = [];
   let behind = stale;
   let unseen = 1;
+  let starting = onBuildBefore;
 
+  // `u-builtin-ws` starts on the build before while its machine has not the candidate yet, `onBuildBefore` asks long.
   const objectAnswer = (body: OpsBody) => [
-    ...body.names.map((name) => ({
-      id: sha256Hex(name), name,
-      answer: answer(leadsOf(body.class, name)),
-    })),
+    ...body.names.map((name) => (name === 'u-builtin-ws' && starting-- > 0
+      ? { id: sha256Hex(name), name, error: `reaching OrchestratorAgent ${name}: The RPC receiver does not implement the method "opsTables".` }
+      : { id: sha256Hex(name), name, answer: answer(leadsOf(body.class, name)) })),
     ...body.ids.map((id) => ({ id, answer: answer({}) })),
   ];
 
@@ -197,9 +202,10 @@ test('the walk follows the roots to the directory\'s accounts and every account\
     'UserDO 50 id(s)',
     'UserDO 10 id(s)',
     'OrchestratorAgent u-seen-ws,u-builtin-ws',
+    'SlateRoom u-seen-ws/0123456789,u-builtin-ws/0123456789',
   ]);
   // `u-seen` was listed too, and named first: it is asked once.
-  expect({ reached: reached.length, listed }).toEqual({ reached: 65, listed: 61 });
+  expect({ reached: reached.length, listed }).toEqual({ reached: 67, listed: 61 });
   expect(forgotten).toEqual(admitted);
 });
 
@@ -216,4 +222,24 @@ test('an edge that still serves the build before after the propagation bound fai
 
   await expect(walk({ ...target, candidate: { version: 'v-candidate', propagationMs: 0 } })).rejects.toThrow('/ops/roots answered 404 from version v-before, not the candidate v-candidate');
   expect(forgotten).toHaveLength(1);
+});
+
+test('an object that starts on the build before is asked again until it starts on the candidate', async () => {
+  const { target, asked } = deployment(0, 2);
+  const { reached } = await walk(target);
+
+  expect(asked.filter((body) => body.class === 'OrchestratorAgent').slice(-2).map((body) => body.names)).toEqual([['u-builtin-ws'], ['u-builtin-ws']]);
+  expect(reached.find((object) => object.name === 'u-builtin-ws')?.answer?.name).toBe('u-builtin-ws');
+});
+
+test('one still on the build before past the propagation bound is a gap in the census, which fails nothing', async () => {
+  const { target } = deployment(0, Number.POSITIVE_INFINITY);
+  const { reached } = await walk({ ...target, candidate: { version: 'v-candidate', propagationMs: 4_000 } });
+  const report = walkLines(reached, 0);
+
+  expect(report.failed).toEqual([]);
+  expect(report.lines.slice(-2)).toEqual([
+    'UNREACHED, a gap in this census (each repairs at its first request on this build):',
+    '  OrchestratorAgent u-builtin-ws: reaching OrchestratorAgent u-builtin-ws: The RPC receiver does not implement the method "opsTables".',
+  ]);
 });

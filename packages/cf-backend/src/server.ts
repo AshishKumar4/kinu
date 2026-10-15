@@ -107,6 +107,8 @@ export { MonitorDO } from "./monitor/monitor-do";
 
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
 
+export { SlateRoom } from "./slates/room";
+
 export { DeployRunDO } from "./deploy/deploy-do";
 
 // Exports are what workerd exposes on `ctx.exports` (`enable_ctx_exports`).

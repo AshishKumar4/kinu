@@ -805,7 +805,7 @@ export class UserDO extends Agent<Env> {
 
     return {
       name: null, census, repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
-      workspaces: workspaces.map(({ name }) => name), accounts: accounts.map(({ user_id }) => user_id), agents: [],
+      workspaces: workspaces.map(({ name }) => name), accounts: accounts.map(({ user_id }) => user_id), agents: [], rooms: [],
     };
   }
 

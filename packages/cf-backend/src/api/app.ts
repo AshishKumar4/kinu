@@ -20,6 +20,7 @@ import { userRoutes } from '../user/routes';
 import { deployRoutes } from '../deploy/routes';
 import { updatesRoutes } from '../updates/routes';
 import { sharedPublicRoutes, sharedRoutes } from '../shared/routes';
+import { roomRoutes } from '../slates/room-routes';
 import { driveRoutes } from '../drive/routes';
 import { feedbackRoutes } from '../feedback/routes';
 import { clientErrorRoutes } from '../client-error/route';
@@ -62,6 +63,8 @@ mount(deployRoutes);
 app.get('/api/health', async (c) => healthResponse(c.req.raw, c.env));
 
 mount(sharedPublicRoutes);
+
+mount(roomRoutes);
 
 // Unanswered public paths are the app shell's.
 app.all('/api/health', async (c) => serveApp(c.req.raw, c.env));

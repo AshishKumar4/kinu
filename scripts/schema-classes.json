@@ -393,5 +393,15 @@
     "workspace_actors",
     "workspace_identity",
     "workspace_proposals"
+  ],
+  "room": [
+    "room",
+    "room_asks",
+    "room_cells",
+    "room_grants",
+    "room_lend_uses",
+    "room_members",
+    "room_readers",
+    "room_shows"
   ]
 }

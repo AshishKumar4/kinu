@@ -64,7 +64,6 @@ export interface Repair {
   readonly tables: readonly TouchedTable[];
   /** Why the database could not be brought to this build, in SQLite's words: it stays refused. */
   readonly refused: string | null;
-  readonly ms: number;
 }
 
 const NameSchema = v.object({ name: v.string() });
@@ -423,7 +422,6 @@ function bringUpStale(sql: SqlExec, writes: TableWrites, outcome: Outcome): Effe
 export function repairSchema(sql: SqlExec, writes: TableWrites, database: string): Repair | null {
   return settleSync(Effect.gen(function* () {
     if (readStamp(writes.stamps, sql, writes.schema) !== 'behind') return null;
-    const started = performance.now();
     const outcome: Outcome = { rebuilt: [], refilled: [], retired: [], unchecked: [], tables: [], refused: null };
 
     yield* bringUpStale(sql, writes, outcome);
@@ -436,10 +434,12 @@ export function repairSchema(sql: SqlExec, writes: TableWrites, database: string
       writeStamp(writes.stamps, writes.schema);
     }
 
-    const repair: Repair = { schema: writes.schema, ...outcome, ms: Math.round(performance.now() - started) };
+    // No duration: a Durable Object's clock stands still while its code runs synchronously, so it would read 0; the
+    // invocation's own CPU time in Workers Logs is the cost of a repair.
+    const repair: Repair = { schema: writes.schema, ...outcome };
 
     diagnostics.event('schema.repaired', {
-      schema: repair.schema, database, ms: repair.ms, rebuilt: repair.rebuilt.join(','), refilled: repair.refilled.join(','),
+      schema: repair.schema, database, rebuilt: repair.rebuilt.join(','), refilled: repair.refilled.join(','),
       retired: repair.retired.join(','), unchecked: repair.unchecked.join(','), refused: repair.refused ?? '',
       tables: repair.tables.map(({ table, before, after }) => `${table}:${String(before)}->${String(after)}`).join(' '),
     });
