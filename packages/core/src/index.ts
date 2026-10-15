@@ -2623,7 +2623,7 @@ export {
 } from './mcp/client';
 
 export {
-  validateMcpServerInput, validateMcpServerName, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
+  validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpPresetAvailabilitySchema,
   McpServerSummarySchema, McpTransportSchema, type McpConnectionStatus, type McpPresetAvailability, type McpServerInput,
   type McpServerSummary, type McpTransport,
 } from './mcp/servers';

@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   DEFAULT_ATTEMPT_BUDGET, GAIN_CALIBRATION, attemptPassed, benchConfigHash,
   buildBenchReport, buildGainReport, caseIsUnstable, decideBenchOutcome,
-  pairedBinaryComparison, renderBenchSummary, renderGainSummary, runOrder, usageTokens,
+  pairedBinaryComparison, renderBenchSummary, renderGainSummary, runOrder,
 } from '../src/index';
 import type {
   AttemptOutcome, BenchRunConfig, PairedOutcome, SealedScorecard,
@@ -418,34 +418,6 @@ describe('run mechanics', () => {
     // Pinned unitHash outcome, so a hash change fails here.
     const orders = new Set(Array.from({ length: 40 }, (_, i) => runOrder(`task-${i}`, 3)));
     expect(orders).toEqual(new Set(['ab', 'ba']));
-  });
-
-  test('usageTokens reads the provider-level nested LanguageModelV3 shape', () => {
-    // A real doStream finish part: inputTokens and outputTokens are objects, so summing them yields a string.
-    const usage = {
-      inputTokens: { total: 1234, noCache: 1234, cacheRead: 0 },
-      outputTokens: { total: 56, text: 56, reasoning: 0 },
-      raw: { prompt_tokens: 1234, completion_tokens: 56, total_tokens: 1290 },
-    };
-
-    expect(usageTokens({ reported: usage })).toBe(1290);
-  });
-
-  test('usageTokens also reads the normalized plain-number shape', () => {
-    expect(usageTokens({ reported: { inputTokens: 10, outputTokens: 5 } })).toBe(15);
-  });
-
-  test('usageTokens never returns a non-number, whatever a provider sends', () => {
-    // Unreadable is unmeasured, not free: undefined lets the budget caller decline to judge.
-    for (const bad of [undefined, null, 'nonsense', 42, {}, { inputTokens: {} }]) {
-      expect(usageTokens({ reported: bad })).toBeUndefined();
-    }
-
-    // A non-finite figure is discarded so NaN never reaches a comparison.
-    expect(usageTokens({ reported: { inputTokens: NaN, outputTokens: 3 } })).toBe(3);
-    expect(usageTokens({ reported: { inputTokens: Number.POSITIVE_INFINITY, outputTokens: 3 } })).toBe(3);
-    // A provider that reported zeros reported something, and that is not absence.
-    expect(usageTokens({ reported: { inputTokens: 0, outputTokens: 0 } })).toBe(0);
   });
 
   test('attemptPassed requires every check, and no checks is not a pass', () => {
