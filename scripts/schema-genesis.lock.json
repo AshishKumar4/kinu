@@ -5,8 +5,7 @@
     "origin_json TEXT NOT NULL",
     "delivery TEXT UNIQUE",
     "status TEXT NOT NULL DEFAULT 'pending'",
-    "created_at INTEGER NOT NULL",
-    "decided_at INTEGER"
+    "created_at INTEGER NOT NULL"
   ],
   "account_notes@packages/core/src/memory/account.ts": [
     "id TEXT PRIMARY KEY",

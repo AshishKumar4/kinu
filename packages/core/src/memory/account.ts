@@ -117,8 +117,7 @@ export function initAccountMemoryTables(execRaw: RawSqlExec): void {
       origin_json   TEXT NOT NULL,
       delivery      TEXT UNIQUE,
       status        TEXT NOT NULL DEFAULT 'pending',
-      created_at    INTEGER NOT NULL,
-      decided_at    INTEGER
+      created_at    INTEGER NOT NULL
     )
   `);
 }
@@ -232,7 +231,7 @@ export class AccountMemoryStore {
 
       this.transaction(() => {
         if (decision === 'accept') this.write(proposal, origin);
-        void this.sql`UPDATE account_memory_proposals SET status = ${decision === 'accept' ? 'accepted' : 'declined'}, decided_at = ${Date.now()} WHERE id = ${id}`;
+        void this.sql`UPDATE account_memory_proposals SET status = ${decision === 'accept' ? 'accepted' : 'declined'} WHERE id = ${id}`;
       });
       markStoreChanged(this.sql);
 
