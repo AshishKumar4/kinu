@@ -42,6 +42,7 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
+import { HeldRead } from "./account-reads";
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
 import { agentFacet, agentStateShellId, AgentMemory, AgentWorkspaceHost, headDeltas, jsonLines, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import type { AnswerMetadataReply } from "./agent-facet/agent-turn";
@@ -221,7 +222,6 @@ import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
   EVOLUTION_LANE_FIBER,
-  HeldRead,
   readTurnContinuity,
   unownedWorkspace,
   type ActorDynamicContextExtras,
@@ -950,7 +950,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       accounts: () => this.config.getProviderAccounts(),
       noteRequest: (actorId, lastRequestAt) => this.warmingOf(actorId).noteRequest(lastRequestAt),
       openWork: (actorId) => this.openWorkOf(actorId),
-      credentialsRevision: () => this.openedCredentialsRevision(),
+      credentialsRevision: () => this.account.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
       advisor: (actor) => this.actorAdvisor(actor),
@@ -1694,7 +1694,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const { runtime } = actor;
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     // The workspace's own agent reads the account's memory whoever owns it; a hire, only once it is owned.
-    const account = reach.actor.kind === 'workspace' ? this.accountMemory({ by: 'agent', agent: actor.record.name }) : this.accountMemoryFor(actor.record.name);
+    const proposer = { by: 'agent', agent: actor.record.name } as const;
+    const account = reach.actor.kind === 'workspace' ? this.account.memory(proposer) : this.account.ownedMemory(proposer);
     const { report } = scope;
 
     const codemode = (finished: CodemodeSurface) => {
@@ -1858,7 +1859,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private settingsAtOpen(): Promise<Exit.Exit<void, KinuError>> {
-    return hold(attempt({ doing: "reading the account's settings as an agent's work opens", otherwise: 'unavailable' }, () => this.accountSettingsAtOpen()));
+    return hold(attempt({ doing: "reading the account's settings as an agent's work opens", otherwise: 'unavailable' }, () => this.account.settingsAtOpen()));
   }
 
   /** A preparation's account reads: those its admission started, or started now; a run's surface takes no planes. Its
@@ -1895,7 +1896,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       descriptors: turn && reach.kind === 'workspace' ? this.userMcpDescriptors() : null,
       device: reach.kind === 'workspace' ? runtime.deviceTransport.refreshStatus() : Promise.resolve(),
-      facts: turn ? this.accountFactsForTurn() : null,
+      facts: turn ? this.account.factsForTurn(this.actorHandle().name) : null,
     };
   }
 
@@ -1975,7 +1976,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
-      accountFacts: () => planes.facts ?? this.accountFactsForTurn(),
+      accountFacts: () => planes.facts ?? this.account.factsForTurn(this.actorHandle().name),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       operation: (profile, operationInputs) => captureOperationProfile({
         actor: actor.handle, profile, inputs: operationInputs, runId: turn?.surface.key.runId ?? WORKSPACE_RUN_ID, turnId: turn?.surface.key.turnId ?? null,
@@ -3526,7 +3527,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
       armWake: () => { this.armDurableWake(); }, workspace: this.name,
       // Reads the account and proposes to it; the owner accepts what is kept.
-      account: () => (this.getOwnerUserId() === null ? undefined : this.accountMemory({ by: 'background' })),
+      account: () => this.account.ownedMemory({ by: 'background' }),
     });
   }
 

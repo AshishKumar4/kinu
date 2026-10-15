@@ -23,7 +23,7 @@ import {
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
-import type { AccountMemory, AccountProposer, Fact } from '@kinu.run/core';
+import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
 import {
@@ -47,7 +47,7 @@ import {
 } from "./cli/rpc-gate";
 import { codemodeSurface, HeldReads, hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
-import { attempt, attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
+import { attemptInItsWords, createAgentTracing, hold, recording, renderThrownChain, type AgentTracing, settle, settleSync, settleLoggedSync, settleLogged } from "@kinu.run/core/obs";
 import {
   createActorCompaction, type CompactionExtension,
   createCompactionStateStore,
@@ -192,9 +192,8 @@ import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateDispatchContext } from "./slates/host";
 import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
-import type { UserDO } from "./user/user-do";
 import type { McpToolSurface } from "./user/mcp-servers";
-import type { UserDoRpcMethod } from "./rpc-surface";
+import { AccountReads, type UserHubClient } from "./account-reads";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
@@ -228,9 +227,6 @@ const RUN_EVENT_EMIT_FAILED = {
 interface AsyncTaskOwner {
   promise: Promise<Exit.Exit<void>> | null;
 }
-
-/** Only RPC methods rpc-surface.ts declares reachable; any other is a compile error. */
-type UserHubClient = Pick<UserDO, UserDoRpcMethod>;
 
 /** One actor's half of its job runner. */
 type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
@@ -435,46 +431,6 @@ export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 /** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
 export function unownedWorkspace(): KinuError {
   return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
-}
-
-/** One read held until dropped; a failed read is not held, so the next need asks again. */
-export class HeldRead<A> {
-  #held: Promise<A> | null = null;
-  #value: A | undefined = undefined;
-
-  get(read: () => Promise<A>): Promise<A> {
-    const held = this.#held ?? read();
-
-    this.#held = held;
-
-    return settle(attempt({ doing: 'reading what the account says', otherwise: 'unavailable' }, () => held).pipe(
-      Effect.tap((value) => Effect.sync(() => { if (this.#held === held) this.#value = value; })),
-      Effect.tapError(() => Effect.sync(() => { if (this.#held === held) this.#held = null; })),
-    ));
-  }
-
-  /** Reads again, holding what it held until the new read answers; a failed read leaves that standing. */
-  again(read: () => Promise<A>): Promise<A> {
-    this.#held = null;
-
-    return this.get(read);
-  }
-
-  /** What it holds once read; none until a first read answers. */
-  get current(): A | undefined {
-    return this.#value;
-  }
-
-  /** Holds what the account already said. */
-  hold(value: A): void {
-    this.#held = Promise.resolve(value);
-    this.#value = value;
-  }
-
-  drop(): void {
-    this.#held = null;
-    this.#value = undefined;
-  }
 }
 
 export abstract class ActorAgent extends Agent<Env> {
@@ -929,7 +885,7 @@ export abstract class ActorAgent extends Agent<Env> {
     getOwnerUserId: () => this.getOwnerUserId(),
     getUserCaller: () => this.userCaller(),
     // Asked of the same UserDO the registry reads; held as `accountSettingsAtOpen` keeps it current.
-    getCredentialsRevision: () => this.credentialsRevision(),
+    getCredentialsRevision: () => this.account.credentialsRevision(),
     onProviderWait: (info) => { this.noteProviderWait(info); },
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts?.[provider],
@@ -2964,7 +2920,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
-        }, this.agentStores(hosted.handle.actorId).conversations(), this.accountMemoryFor(hosted.record.name));
+        }, this.agentStores(hosted.handle.actorId).conversations(), this.account.ownedMemory({ by: 'agent', agent: hosted.record.name }));
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
         const authority = await this.hostedSlateAuthority(hosted, requested, providers, Object.keys(surface.native));
@@ -3024,7 +2980,7 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       memory: () => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore, facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
-        account: this.accountMemory({ by: 'agent', agent: this.actorHandle().name }),
+        account: this.account.memory({ by: 'agent', agent: this.actorHandle().name }),
       }),
       files: () => {
         // The turn the program runs in, else ledgers of the program's own.
@@ -3120,45 +3076,10 @@ export abstract class ActorAgent extends Agent<Env> {
     return { stub: this.requireOwnerUserDO(), caller: await this.userCaller() };
   }
 
-  /**
-   * The account's memory as `proposer` reaches it, through the owner's user object; each call finds the hub then, so a
-   * toolset built before the workspace was claimed reaches it once it is. `proposer` is who a proposal names.
-   */
-  protected accountMemory(proposer: AccountProposer): AccountMemory {
-    return {
-      facts: async () => {
-        const { stub, caller } = await this.userHub();
-
-        return await stub.accountMemory_facts(caller);
-      },
-      searchNotes: async (query, limit) => {
-        const { stub, caller } = await this.userHub();
-
-        return await stub.accountMemory_searchNotes(caller, query, limit);
-      },
-      propose: async (proposal, delivery) => {
-        const { stub, caller } = await this.userHub();
-
-        return await stub.accountMemory_propose(caller, proposal, proposer, delivery);
-      },
-    };
-  }
-
-  /** The account's memory for the agent named `agent`, or none where this workspace has no owner to hold it. */
-  protected accountMemoryFor(agent: string): AccountMemory | undefined {
-    return this.getOwnerUserId() === null ? undefined : this.accountMemory({ by: 'agent', agent });
-  }
-
-  /** The account's facts for one turn's memory block; a user object that does not answer costs the turn that block's
-   *  account lines, never the turn. */
-  accountFactsForTurn(): Promise<readonly Fact[]> {
-    return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' }, async () => await this.accountMemory({ by: 'agent', agent: this.actorHandle().name }).facts()),
-      (failure) => Effect.sync(() => {
-        diagnostics.failure('memory.account_read_failed', failure, { workspace: this.name });
-
-        return [];
-      })));
-  }
+  /** What the owner's account says that a turn reads, asked of its user object as this workspace. */
+  protected readonly account = new AccountReads({
+    hub: () => this.userHub(), owned: () => this.getOwnerUserId() !== null, workspace: () => this.name,
+  });
 
   /** `record` lets core emit the `profile_resolution` run event; this backend only picks where it goes. */
   protected async profileInputs(): Promise<ProfileAuthorityInputs> {
@@ -3170,52 +3091,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected profileCatalog(): Promise<ProfileCatalogEnvelope> {
-    return this.heldCatalog.get(() => this.askAccount((stub, caller) => stub.getWorkspaceProfileCatalog(caller)));
-  }
-
-  /** One read of the account, as this workspace: the account's hub and the caller it reads as. */
-  private async askAccount<A>(read: (stub: UserHubClient, caller: UserCaller) => Promise<A>): Promise<A> {
-    const { stub, caller } = await this.userHub();
-
-    return await read(stub, caller);
-  }
-
-  /**
-   * The account's reads a turn makes, held under their refresh rule (design v2 §3, §8): read at their first need, and read
-   * again only once the account's settings moved: it says so to a workspace awake when they change
-   * (`accountReadsExpire`), and one at rest, which a change does not wake, asks as a turn opens
-   * (`accountSettingsAtOpen`).
-   */
-  private readonly heldRevision = new HeldRead<number>();
-
-  private readonly heldCatalog = new HeldRead<ProfileCatalogEnvelope>();
-
-  /** The account says its model settings changed: what it said before is read again at its next need. */
-  protected accountReadsExpire(): void {
-    this.heldRevision.drop();
-    this.heldCatalog.drop();
-  }
-
-  /**
-   * A turn opens: one call asks the account its settings revision, and the catalog held here is read again only if its
-   * version moved; the credentials' revision is the answer itself. A turn opens on what the account says now, though a
-   * change made while this workspace rested never reached it.
-   */
-  protected async accountSettingsAtOpen(): Promise<void> {
-    const now = await this.askAccount((stub, caller) => stub.getSettingsRevision(caller));
-
-    if (this.heldCatalog.current?.version !== now.catalog) this.heldCatalog.drop();
-    this.heldRevision.hold(now.credentials);
-  }
-
-  /** The account's credentials revision a turn's open last read; null before one opened in this activation. */
-  protected openedCredentialsRevision(): number | null {
-    return this.heldRevision.current ?? null;
-  }
-
-  /** The account's credentials revision as this workspace holds it, read at its first need. */
-  protected credentialsRevision(): Promise<number> {
-    return this.heldRevision.get(() => this.askAccount((stub, caller) => stub.getCredentialsRevision(caller)));
+    return this.account.catalog();
   }
 
   /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
@@ -4106,7 +3982,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // Also drops the provider registry (caches per-agent OAuth refreshers) so a disconnected
     // provider stops being marked available.
     this.ownedModelServices.invalidate();
-    this.accountReadsExpire();
+    this.account.expire();
   }
 
   // All credentials live in UserDO; providers resolve auth headers through the UserDO stub at
