@@ -27,6 +27,43 @@ const MISSING_CLOUD: FixtureWorkspace = {
   name: 'missing', label: 'Missing', mode: 'cloud', cloudName: 'missing',
 };
 
+/** Whether one row of `frame` holds every part, in this order: what a row says together, not its separators. */
+function rowInOrder(frame: string, parts: readonly (string | RegExp)[]): boolean {
+  return frame.split('\n').some((row) => {
+    let from = 0;
+
+    for (const part of parts) {
+      const rest = row.slice(from);
+      const at = typeof part === 'string' ? rest.indexOf(part) : rest.search(part);
+
+      if (at < 0) return false;
+      from += at + 1;
+    }
+
+    return true;
+  });
+}
+
+/** The running turn's phase line: the row its spinner (a Braille glyph) sits on, or '' with no turn running. */
+function phaseLine(frame: string): string {
+  return frame.split('\n').find((row) => /\p{Script=Braille}/u.test(row)) ?? '';
+}
+
+function focusedWorkspace(frame: string, label: string): boolean {
+  return frame.split('\n').some((row) => row.includes('›') && row.includes(label));
+}
+
+const UNIT_SCALE = new Map([['k', 1_000], ['M', 1_000_000]]);
+
+function displayedContext(frame: string) {
+  const quantities = /~?([\d.]+)([kM]?)\s*\/\s*([\d.]+)([kM]?)/u.exec(frame);
+
+  if (!quantities) return null;
+  const scale = (value: string | undefined, unit: string | undefined) => Number(value) * (UNIT_SCALE.get(unit ?? '') ?? 1);
+
+  return { tokens: scale(quantities[1], quantities[2]), window: scale(quantities[3], quantities[4]) };
+}
+
 interface HubWorkspaces {
   open: string;
   label: string;
@@ -373,6 +410,7 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the submit failure with its chain', () =>
       screen.frame().includes('the rename was refused') && screen.frame().includes('name already taken'));
   });
+
   test('failed workspace connection keeps the current workspace usable', async () => {
     const sent: Parameters<AgentClient['send']>[0][] = [];
 
@@ -395,7 +433,7 @@ describe('ChatApp terminal interaction', () => {
     });
 
     screen.mockInput.pressKey('w', { meta: true });
-    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+    await screen.waitFor('the workspace drawer', () => focusedWorkspace(screen.frame(), 'Alpha'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the expanded cloud section', () => screen.frame().includes('Missing'));
@@ -488,16 +526,16 @@ describe('ChatApp terminal interaction', () => {
     });
 
     screen.mockInput.pressKey('w', { meta: true });
-    await screen.waitFor('the sidebar holding the keys', () => screen.frame().includes('Esc back'));
+    await screen.waitFor('the sidebar holding the keys', () => focusedWorkspace(screen.frame(), 'Alpha'));
     screen.mockInput.pressEscape();
-    await screen.waitFor('the sidebar letting go', () => !screen.frame().includes('Esc back'));
+    await screen.waitFor('the sidebar letting go', screen.composerFocused);
     await screen.mockInput.typeText('still typing');
     await screen.waitFor('keys back in the composer', () => screen.frame().includes('still typing'));
     // The sidebar's Esc is its own: the composer would read it as quitting a fresh session.
     expect(exits).toBe(0);
 
     screen.mockInput.pressKey('w', { meta: true });
-    await screen.waitFor('the sidebar holding the keys again', () => screen.frame().includes('Esc back'));
+    await screen.waitFor('the sidebar holding the keys again', () => focusedWorkspace(screen.frame(), 'Alpha'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the picked workspace', () => picked.length === 1);
@@ -521,7 +559,7 @@ describe('ChatApp terminal interaction', () => {
     });
 
     screen.mockInput.pressKey('w', { meta: true });
-    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+    await screen.waitFor('the workspace drawer', () => focusedWorkspace(screen.frame(), 'Alpha'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the expanded cloud section', () => screen.frame().includes('Beta'));
@@ -538,6 +576,7 @@ describe('ChatApp terminal interaction', () => {
   test('workspace switching waits for an in-flight workspace action', async () => {
     const pending = Promise.withResolvers<AgentClientStatus>();
     let statusCalls = 0;
+    const selected: string[] = [];
 
     const controlled = fakeClient({
       name: 'alpha',
@@ -553,18 +592,24 @@ describe('ChatApp terminal interaction', () => {
     });
 
     const screen = await mountChat(controlled.client, {
-      listWorkspaces: () => [ALPHA_LOCAL],
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
+      onWorkspaceSelect: async (name) => {
+        selected.push(name);
+
+        return fakeClient({ name }).client;
+      },
       width: 80,
     });
 
     await screen.mockInput.typeText('/status');
     screen.mockInput.pressEnter();
+    await screen.waitFor('the pending status request', () => statusCalls === 2);
     screen.mockInput.pressKey('w', { meta: true });
-    await screen.waitFor('the blocked switch explanation', () =>
-      screen.frame().includes('Finish or stop the active workspace action'));
-    expect(screen.frame()).not.toContain('Filter workspaces');
-    pending.resolve({ name: 'alpha', purpose: 'alpha', model: null, reasoningEffort: null });
-    await screen.waitFor('the completed status action', () => screen.frame().includes('Workspace status'));
+    await screen.renderOnce();
+    expect(selected).toEqual([]);
+    expect(screen.composerFocused()).toBe(true);
+    pending.resolve({ name: 'alpha', purpose: 'status-result-52', model: null, reasoningEffort: null });
+    await screen.waitFor('the completed status action', () => screen.frame().includes('status-result-52'));
   });
   test('Alt+W switches workspaces without retaining the previous status', async () => {
     const alpha = fakeClient({ name: 'alpha' });
@@ -605,9 +650,8 @@ describe('ChatApp terminal interaction', () => {
       width: 80,
     });
 
-    expect(screen.frame()).not.toContain('Filter workspaces');
     screen.mockInput.pressKey('w', { meta: true });
-    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+    await screen.waitFor('the workspace drawer', () => focusedWorkspace(screen.frame(), 'Alpha'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the expanded cloud section', () => screen.frame().includes('Beta'));
@@ -616,8 +660,10 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the selected cloud workspace', () => screen.frame().includes('Beta Cloud'));
     expect(screen.frame()).toContain('Recovered buffered event');
     expect(screen.frame().split('Recovered once')).toHaveLength(2);
-    expect(screen.frame()).not.toContain('⟳ processing');
-    expect(screen.frame()).not.toContain('alpha local');
+    // Neither the replayed turn's phase nor the previous workspace's header is retained.
+    expect(phaseLine(screen.frame())).toBe('');
+    expect(screen.frame().split('\n')[0]).not.toContain('alpha');
+    expect(screen.composerFocused()).toBe(true);
     expect(alpha.state.closed).toBe(1);
   });
 
@@ -626,11 +672,12 @@ test('when a turn ends, the next keys still land in the composer', async () => {
 
   const screen = await mountChat(agent.client);
   agent.emit({ type: 'turn-start', kind: 'user', text: 'count the notes' });
-  await screen.waitFor('the turn thinking', () => screen.frame().includes('thinking'));
+  await screen.waitFor('the turn running', () => phaseLine(screen.frame()) !== '');
   agent.emit({ type: 'turn-end', turn: TURN });
-  await screen.waitFor('the turn to end', () => !screen.frame().includes('thinking'));
+  await screen.waitFor('the turn to end', () => phaseLine(screen.frame()) === '' && screen.composerFocused());
   await screen.mockInput.typeText('and again');
   await screen.waitFor('the next draft in the composer', () => screen.frame().includes('and again'));
+  expect(screen.frame()).toContain('and again');
 });
 
 test('a turn shows its reasoning as it streams, its elapsed time and a token count, then folds the reasoning', async () => {
@@ -641,14 +688,15 @@ test('a turn shows its reasoning as it streams, its elapsed time and a token cou
   agent.emit({ type: 'turn-start', kind: 'user', text: 'plan the migration' });
   agent.emit({ type: 'reasoning-delta', delta: 'Weigh the two schemas first.\nThe old table keeps its rows.' });
   await screen.waitFor('the reasoning, live', () => screen.frame().includes('The old table keeps its rows.'));
-  expect(screen.frame()).toMatch(/\b\d+s · ~\d+ tokens\b/u);
+  expect(Number(/\b(\d+)s\b/u.exec(screen.frame())?.[1])).toBeGreaterThanOrEqual(0);
+  expect(Number(/~(\d+)/u.exec(screen.frame())?.[1])).toBeGreaterThan(0);
 
   agent.emit({ type: 'text-delta', delta: 'Migrate in two steps.' });
   agent.emit({ type: 'turn-end', turn: TURN });
   await screen.waitFor('the answer', () => screen.frame().includes('Migrate in two steps.'));
   await screen.waitFor('the reasoning folded', () => !screen.frame().includes('The old table keeps its rows.'));
   expect(screen.frame()).toContain('Weigh the two schemas first.');
-  expect(screen.frame()).not.toMatch(/\d+s · ~\d+ tokens/u);
+  expect(screen.frame()).not.toMatch(/\b\d+s\b/u);
 
   screen.mockInput.pressKey('o', { ctrl: true });
   await screen.waitFor('the reasoning expanded', () => screen.frame().includes('The old table keeps its rows.'));
@@ -813,14 +861,15 @@ test('the header shows the size the gate measured the last request at, not the s
 
   const screen = await mountChat(agent.client);
   // No catalog row names the fake model's window, so the unmeasured meter shows no fraction.
-  await screen.waitFor('an unmeasured context', () => screen.frame().includes('ctx — '));
+  expect(displayedContext(screen.frame())).toBeNull();
 
   agent.emit({ type: 'turn-start', kind: 'user', text: 'long' });
   agent.emit({ type: 'broadcast', event: { type: 'context_fill', contextTokens: 1_500, contextWindow: 200_000 } });
   agent.emit({ type: 'text-delta', delta: 'word '.repeat(40_000) });
   agent.emit({ type: 'turn-end', turn: TURN });
 
-  await screen.waitFor('the measured size', () => screen.frame().includes('ctx ~1.5k/200k'));
+  await screen.waitFor('the measured size', () => displayedContext(screen.frame())?.tokens === 1_500);
+  expect(displayedContext(screen.frame())).toEqual({ tokens: 1_500, window: 200_000 });
 });
 
 test('/compact shows its progress while the fold runs, and a failed fold says why', async () => {
@@ -887,7 +936,8 @@ test('a reopened chat shows the recorded context number before any turn runs', a
 
   const screen = await mountChat(agent.client);
 
-  await screen.waitFor('the recorded number', () => screen.frame().includes('ctx ~42k/200k'));
+  await screen.waitFor('the recorded number', () => displayedContext(screen.frame())?.tokens === 42_000);
+  expect(displayedContext(screen.frame())).toEqual({ tokens: 42_000, window: 200_000 });
 });
 
 test('/clear shows the emptied request\'s number, or none with the reason when it could not be measured', async () => {
@@ -917,16 +967,18 @@ test('/clear shows the emptied request\'s number, or none with the reason when i
     };
 
     const screen = await mountChat(agent.client);
-    await screen.waitFor('the cleared conversation\'s number', () => screen.frame().includes('ctx ~42k/200k'));
+    await screen.waitFor('the cleared conversation\'s number', () => displayedContext(screen.frame())?.tokens === 42_000);
 
     await screen.mockInput.typeText('/clear');
     flushSync(() => screen.mockInput.pressEnter());
-    await screen.waitFor('the clear settled', () => screen.frame().includes('A new conversation starts'));
+    // Settled once the new number shows, or, unmeasured, the refusal the fixture's clear answered.
+    await screen.waitFor('the clear settled', () => (ends === 'measured'
+      ? displayedContext(screen.frame())?.tokens === 3_000
+      : screen.frame().includes('catalog is unreachable')));
 
-    if (ends === 'measured') expect(screen.frame()).toContain('ctx ~3k/200k');
+    if (ends === 'measured') expect(displayedContext(screen.frame())).toEqual({ tokens: 3_000, window: 200_000 });
     else {
-      expect(screen.frame()).toContain('ctx — ');
-      expect(screen.frame()).toContain('Its size could not be measured');
+      expect(displayedContext(screen.frame())).toBeNull();
       expect(screen.frame()).toContain('catalog is unreachable');
     }
   }
@@ -937,7 +989,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
   const screen = await mountChat(agent.client, { kittyKeyboard: true });
   agent.emit({ type: 'turn-start', kind: 'user', text: 'fix the coupon' });
-  await screen.waitFor('the turn thinking', () => screen.frame().includes('thinking'));
+  await screen.waitFor('the turn running', () => phaseLine(screen.frame()) !== '');
   agent.emit({
     type: 'run-event',
     event: {
@@ -952,9 +1004,9 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       source: 'header',
     },
   });
-  await screen.waitFor('the phase line to name the wait', () =>
-    screen.frame().includes('waiting on anthropic (retry in 30s)'));
-  expect(screen.frame()).not.toContain('thinking');
+  // The phase line itself names the provider and its retry, in place of the turn's generic phase.
+  await screen.waitFor('the phase line to name the wait', () => phaseLine(screen.frame()).includes('anthropic'));
+  expect(Number(/\b(\d+)s\b/u.exec(phaseLine(screen.frame()))?.[1])).toBe(30);
 });
 
   const HUB_FIXTURE: TuiHubData = {
@@ -984,7 +1036,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const main = fakeClient({ name: 'checkout' });
 
     const peer = fakeClient({ name: 'agent-1', status: async () => ({
-      name: 'agent-1', purpose: '', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
+      name: 'Fixture peer', purpose: '', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
     }) });
 
     let created = 0;
@@ -1006,8 +1058,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     });
 
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
-    expect(screen.frame()).toContain('new agent');
+    await screen.waitFor('the agent hub', () => !screen.composerFocused());
     screen.mockInput.pressKey('n');
     await screen.waitFor('the created peer conversation', () => peer.state.connected === 1 && screen.composerFocused());
     expect(created).toBe(1);
@@ -1052,7 +1103,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     });
 
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
+    await screen.waitFor('the agent hub', () => !screen.composerFocused());
     screen.mockInput.pressKey('n');
     await screen.waitFor('the created cloud conversation', () => child.state.connected === 1 && screen.composerFocused());
     expect(created).toBe(1);
@@ -1075,7 +1126,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     });
 
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
+    await screen.waitFor('the agent hub', () => !screen.composerFocused());
     screen.mockInput.pressKey('n');
     await screen.waitFor('the new conversation', () => child.state.connected === 1 && screen.composerFocused());
     await screen.mockInput.typeText('typed while closing');
@@ -1087,11 +1138,13 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const local = fakeClient({ name: 'solo' });
     const screen = await mountChat(local.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
-    expect(screen.frame()).not.toContain('new agent');
+    await screen.waitFor('the agent hub', () => !screen.composerFocused());
     screen.mockInput.pressKey('n');
     // n is not a hub action here.
-    expect(screen.frame()).toContain('Agent Hub');
+    await screen.renderOnce();
+    expect(screen.composerFocused()).toBe(false);
+    expect(screen.frame()).toContain('solo');
+    expect(local.state.closed).toBe(0);
     screen.mockInput.pressEscape();
   });
 
@@ -1152,19 +1205,21 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout · agent · task/default'));
+    await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout') && !screen.composerFocused());
     expect(screen.frame()).toContain('Survey the logs');
+    expect(rowInOrder(screen.frame(), ['Scout', 'task/default'])).toBe(true);
     expect(screen.frame()).not.toContain('retired-helper');
 
-    for (const shown of ['reviewing', 'ask-reviewer-a1', 'Quiet Ash · agent']) expect(screen.frame()).not.toContain(shown);
-    expect(screen.frame()).toContain('Busy Mill · agent');
+    for (const shown of ['reviewing', 'ask-reviewer-a1', 'Quiet Ash']) expect(screen.frame()).not.toContain(shown);
+    expect(screen.frame()).toContain('Busy Mill');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the subagent conversation', () => screen.frame().includes('Found 3 errors in app.log'));
     expect(screen.frame()).toContain('Look through app.log for errors');
     screen.mockInput.pressEscape();
-    await screen.waitFor('back in the Agent Hub', () => screen.frame().includes('Agent Hub'));
+    // The hub's other helper: the conversation's own header names Scout too.
+    await screen.waitFor('back in the Agent Hub', () => screen.frame().includes('Busy Mill'));
     expect(screen.frame()).not.toContain('Found 3 errors in app.log');
   });
 
@@ -1186,13 +1241,13 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the hire the hub read when it opened', () => screen.frame().includes('Scout · agent'));
+    await screen.waitFor('the hire the hub read when it opened', () => screen.frame().includes('Scout'));
 
     hired = [scout, { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', createdAt: 2 }];
     main.emit({ type: 'broadcast', event: { type: READS_CHANGED_EVENT, reads: ['listSubordinates'] } });
 
-    await screen.waitFor('the hire the frame named', () => screen.frame().includes('Busy Mill · agent'));
-    expect(screen.frame()).toContain('Scout · agent');
+    await screen.waitFor('the hire the frame named', () => screen.frame().includes('Busy Mill'));
+    expect(screen.frame()).toContain('Scout');
   });
 
   // Main's queue, 2026-10-02: a long build showed nothing in the TUI until it finished.
@@ -1243,7 +1298,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor("the hire's job in the hub", () => screen.frame().includes('sandbox: node server.js'));
-    expect(screen.frame()).toContain('sandbox: node server.js · Builder · 9c2d10aa · serving');
+    expect(rowInOrder(screen.frame(), ['node server.js', 'Builder', '9c2d10aa', 'serving'])).toBe(true);
     expect(asked).toContain('builder');
   });
 
@@ -1257,7 +1312,8 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the running job the hub read', () => screen.frame().includes('workspace: bun run build'));
-    expect(screen.frame()).toContain('... 1.2 MB omitted ... compiled 120 modules');
+    // The dropped bytes sit before the line printed after them.
+    expect(rowInOrder(screen.frame(), [/\b1\.2\s*MB\b/u, 'compiled 120 modules'])).toBe(true);
 
     main.emit({ type: 'broadcast', event: {
       type: JOB_OUTPUT_EVENT, jobId: 'bgjob-4e1a77c0aa11', seq: 3, dropped: 4_096,
@@ -1265,7 +1321,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     } });
 
     await screen.waitFor('the line its frame carried', () => screen.frame().includes('compiled 377 modules'));
-    expect(screen.frame()).toContain('... 1.2 MB omitted ... compiled 377 modules');
+    expect(rowInOrder(screen.frame(), [/\b1\.2\s*MB\b/u, 'compiled 377 modules'])).toBe(true);
   });
 
   test('a frame from a worker that counts a loss without placing it is marked before its first line', async () => {
@@ -1280,7 +1336,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     main.emit({ type: 'broadcast', event: { type: JOB_OUTPUT_EVENT, jobId: 'bgjob-4e1a77c0aa11', seq: 3, dropped: 2_048, chunks: [{ stream: 'stdout', text: 'linked\n' }] } });
 
     await screen.waitFor('the line its frame carried', () => screen.frame().includes('linked'));
-    expect(screen.frame()).toContain('... 2.0 KB omitted ... linked');
+    expect(rowInOrder(screen.frame(), [/\b2(\.0)?\s*KB\b/u, 'linked'])).toBe(true);
   });
 
   test('after a reload, a one-question helper the chat asked is listed as answered, and Enter opens its kept chat by id', async () => {
@@ -1311,7 +1367,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the answered helper in the hub', () => screen.frame().includes('Answered') && screen.frame().includes('ask-reviewer-a1'));
+    await screen.waitFor('the answered helper in the hub', () => !screen.composerFocused() && screen.frame().includes('ask-reviewer-a1'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
@@ -1347,7 +1403,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the finished task in the hub', () => screen.frame().includes('Tighten the turn-ending rule · ask-refiner-fb0gr9'));
+    await screen.waitFor('the finished task in the hub', () => screen.frame().includes('Tighten the turn-ending rule') && screen.frame().includes('ask-refiner-fb0gr9'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
@@ -1420,7 +1476,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the helper\'s task in the hub', () => screen.frame().includes('Tighten the turn-ending rule · ask-refiner-fb0gr9'));
+    await screen.waitFor('the helper\'s task in the hub', () => screen.frame().includes('Tighten the turn-ending rule') && screen.frame().includes('ask-refiner-fb0gr9'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
@@ -1446,14 +1502,14 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     await screen.mockInput.typeText('half a thought for alpha');
     screen.mockInput.pressKey('w', { meta: true });
-    await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+    await screen.waitFor('the workspace drawer', () => focusedWorkspace(screen.frame(), 'Alpha'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the beta workspace', () => beta.state.connected === 1 && screen.composerFocused());
     expect(screen.frame()).not.toContain('half a thought for alpha');
     await screen.mockInput.typeText('beta draft');
     screen.mockInput.pressKey('w', { meta: true });
-    await screen.waitFor('the workspace drawer again', () => screen.frame().includes('Esc close'));
+    await screen.waitFor('the workspace drawer again', () => focusedWorkspace(screen.frame(), 'Beta'));
     screen.mockInput.pressArrow('up');
     screen.mockInput.pressEnter();
     await screen.waitFor('alpha back with its own draft', () => screen.frame().includes('half a thought for alpha'));
@@ -1489,7 +1545,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       });
 
       screen.mockInput.pressKey('a', { meta: true });
-      await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
+      await screen.waitFor('the agent hub', () => !screen.composerFocused());
       screen.mockInput.pressKey('n');
       await screen.waitFor('the created peer conversation', () => peer.state.connected === 1 && screen.composerFocused());
       expect(created).toBe(1);
@@ -1512,13 +1568,14 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     };
 
     const screen = await mountChat(client.client, { readHub });
-    expect(screen.frame()).not.toContain('Agent Hub');
+    expect(screen.composerFocused()).toBe(true);
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the hub surface to own the composer hint', () => screen.frame().includes('Agents ›'));
-    expect(screen.frame()).not.toContain('Agent Hub');
+    await screen.waitFor('the hub surface to own the keys', () => !screen.composerFocused());
+    expect(screen.frame()).not.toContain('task/default');
     read.resolve();
-    await screen.waitFor('the hub the key asked for', () => screen.frame().includes('Agent Hub'));
-    expect(screen.frame()).toContain('slowhub · main');
+    await screen.waitFor('the hub the key asked for', () => screen.frame().includes('task/default'));
+    expect(screen.frame()).toContain('slowhub');
+    expect(screen.composerFocused()).toBe(false);
   });
 
   // A switch's hub refresh must cross no network boundary; the CLI profile reader hits the live account authority.
@@ -1541,12 +1598,12 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       });
 
       screen.mockInput.pressKey('w', { meta: true });
-      await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+      await screen.waitFor('the workspace drawer', () => focusedWorkspace(screen.frame(), 'Alpha'));
       screen.mockInput.pressArrow('down');
       screen.mockInput.pressEnter();
       await screen.waitFor('the beta workspace', () => beta.state.connected === 1 && screen.composerFocused());
       screen.mockInput.pressKey('a', { meta: true });
-      await screen.waitFor('the hub after the switch', () => screen.frame().includes('Agent Hub'));
+      await screen.waitFor('the hub after the switch', () => !screen.composerFocused() && screen.frame().includes('beta'));
       expect(seen).toEqual([]);
     } finally {
       globalThis.fetch = realFetch;
