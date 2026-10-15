@@ -16,7 +16,7 @@ import {
 import { tolerate } from '@kinu.run/core/obs';
 import { sqlStorageOver } from '@kinu.run/core/identity';
 import {
-  localArchiveSource, localArchiveTarget, moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stampSchemaGenesis,
+  moveIntoFolder, publishStoreFiles, requireSchemaGenesis, stageLocalArchive, stampSchemaGenesis, type StagedLocalArchive,
 } from '@kinu.run/cli-backend';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { formatBytes, workspaceArchiveTarget } from '@kinu.run/core';
@@ -115,19 +115,16 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     try {
       // Published WAL, as `kinu create` publishes it: a database is switched only while it is private.
       db.exec('PRAGMA journal_mode = WAL');
-      const files = localArchiveTarget(staging);
       let store: ReturnType<typeof createInlineWorkspace> | null = null;
       const opened = () => (store ??= createInlineWorkspace(db));
 
-      const result = await restoreWorkspaceArchive(sqlStorageOver(db), readLines(file), {
-        files: () => files, store: () => workspaceArchiveTarget(opened()),
-      });
+      const result = await restoreWorkspaceArchive(sqlStorageOver(db), readLines(file), { store: () => workspaceArchiveTarget(opened()) });
 
       restored = { rows: result.rows, tables: result.tables };
       stampSchemaGenesis(db);
 
-      // Locally every file is a real one: a cloud archive's own-space files, agent state too, land with a local archive's.
-      await publishStoreFiles(opened().vfs, files);
+      // Locally every file is a real one, from either backend's archive.
+      await publishStoreFiles(opened(), staging);
     } finally {
       db.close();
     }
@@ -166,21 +163,22 @@ async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage | 's
 
 async function* localArchivePages(name: string, output: string): AsyncGenerator<ArchivePage> {
   const local = resolveLocalAgent(name);
-  const files = localArchiveSource({ space: dirname(local.dbPath), folder: local.cwd }, resolve(output));
-
   const db = new Database(local.dbPath, { readonly: true });
+  let staged: StagedLocalArchive | null = null;
 
   try {
     requireSchemaGenesis(db, local.name);
+    staged = await stageLocalArchive({ space: dirname(local.dbPath), folder: local.cwd }, resolve(output));
     const sql = sqlStorageOver(db);
     let cursor: ArchiveCursor | null = null;
 
     do {
-      const page = await readWorkspaceArchivePage(sql, { workspace: local.name, source: 'local', cursor, files });
+      const page = await readWorkspaceArchivePage(sql, { workspace: local.name, source: 'local', cursor, store: staged.store });
       yield page;
       cursor = page.next;
     } while (cursor);
   } finally {
+    staged?.close();
     db.close();
   }
 }

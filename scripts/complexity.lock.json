@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-14",
+  "measuredAt": "2026-10-15",
   "files": 3311,
-  "functions": 86506,
+  "functions": 86477,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -343,10 +343,6 @@
     },
     {
       "key": "packages/compaction/src/extension.ts#compactionExtension>transformContext",
-      "complexity": 26
-    },
-    {
-      "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage>gen",
       "complexity": 26
     },
     {
