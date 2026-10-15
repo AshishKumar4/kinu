@@ -260,7 +260,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           modules: probeModules('plan-announce-probe.ts', { ...probeRuntime, keepNames: true }),
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
+            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
             USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', useSQLite: true },
           },
@@ -303,7 +303,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
+            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -322,7 +322,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             HIRE_PROBE: { className: 'HireProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
+            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -346,7 +346,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
+            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -388,7 +388,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
+            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -439,7 +439,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           outboundService: probeOutbound,
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
+            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
