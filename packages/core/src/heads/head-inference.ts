@@ -32,6 +32,7 @@ import { Cause, Effect, Exit } from 'effect';
 import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
 import type { CompactionTriggerReader } from '../orchestrator/turn-context';
+import { improvementLanesOpen } from '../orchestrator/evolution-lanes';
 import type { ActorTurnClaim, ClaimOutcome, PreparingClaim } from '../orchestrator/actor-claims';
 import type { ActorExecutionInput, ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
 import type { ChatEvent } from '../chat';
@@ -459,7 +460,7 @@ async function adviseCompletedTurn({ session, input, deps, lease, outcome }: Com
 
   if (deps.advise !== undefined) return await deps.advise(turn, Object.keys(deps.tools), input.mode);
 
-  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return;
+  if (!improvementLanesOpen('completed', input.mode)) return;
 
   await session.advisor.hire(session.advisor.snapshot(turn, Object.keys(deps.tools)));
 }
