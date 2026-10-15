@@ -40,8 +40,8 @@ export async function rolloutMinibatch<I, E>(
   return { outcomes, metricCalls: minibatch.length };
 }
 
-/** The full per-instance trace is never shortened: GEPA's result is that natural-language
- *  feedback over whole trajectories beats a scalar reward (arXiv:2507.19457). */
+/** Each per-instance trace is windowed to its evidence budget, never dropped: GEPA's result is that
+ *  natural-language feedback over trajectories beats a scalar reward (arXiv:2507.19457). */
 export function renderReflectionPrompt<I, E>(opts: {
   parent: GepaCandidate;
   minibatch: ReadonlyArray<EvalInstance<I, E>>;

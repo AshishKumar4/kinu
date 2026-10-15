@@ -1,6 +1,7 @@
 /**
  * Change-set read model: the workspace's own plane against a baseline, a Nimbus snapshot of the store taken at each
- * review (the one before it kept for Undo); other executors by read-only git diff. A read never moves the baseline.
+ * review (the one before it kept for Undo); other executors by read-only git diff. A read with no baseline captures
+ * the first, as creation does; otherwise a read never moves it.
  */
 
 import type { CredentialedVfs, SnapshotInfo, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
