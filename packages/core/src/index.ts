@@ -1608,7 +1608,7 @@ export {
   type HeadMergePolicyDeps,
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, preparedHeadRun, type HeadRun, buildHeadAccumulatorTools,
-  buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
+  buildHeadSystemPrompt, buildHeadMessages,
   type HeadInferenceDeps, type RunInference,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS, spawnSeatedHead, type HeadSeat, type SeatedHeadDeps,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,

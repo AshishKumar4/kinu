@@ -13,7 +13,7 @@ import { defineOperation, serve } from '../operations/operation';
 import { operationTool } from '../tools/operation-surfaces';
 import { HEAD_BUILTIN_TOOLS, OWNER_STOPPED, unreportedHead } from '../heads/types';
 import { stoppedByOwner } from './live-workers';
-import { HeadCapture, withHeadCaptureRecording } from '../heads/head-inference';
+import { HeadCapture } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { RunInference } from '../heads/head-inference';
 import type { SeatedActor } from '../state/actor-host';
@@ -257,15 +257,11 @@ function buildProposeTool(
   };
 }
 
-/**
- * Confined builtins, the report tool, and the proposal when one could be granted. Every call is
- * recorded into the capture.
- */
+/** Confined builtins, the report tool, and the proposal when one could be granted. */
 function buildNodeToolSet(input: {
   readonly deps: NodeLoopDeps;
   /** The node's one input: its calls claim under it, in its run. */
   readonly turnId: string;
-  readonly capture: HeadCapture;
   readonly scratch: NodeScratch;
   readonly arbitrate: NodeArbiter | null;
   readonly jobRunner: BackgroundJobRunner;
@@ -294,8 +290,8 @@ function buildNodeToolSet(input: {
     },
   };
 
-  // The proposal merges after the finish, so the sandbox never declares it; the background wrap
-  // runs inside the capture so the transcript records the handle the model was told.
+  // The proposal merges after the finish, so the sandbox never declares it; the session's ledger records each call, the
+  // background handle the model was told included.
   return buildToolSurface({
     rt: deps.actor.runtime,
     conversations: deps.conversations,
@@ -307,14 +303,11 @@ function buildNodeToolSet(input: {
     codemode: deps.codemode,
     post: input.arbitrate ? buildProposeTool(input.arbitrate, scratch) : undefined,
     effectClaims: { ...deps.receipts, execution: () => ({ turnId: input.turnId, runId: deps.runId }) },
-    wrapFinished: (finished) => withHeadCaptureRecording(
-      wrapToolsForBackground(finished, {
-        jobRunner: input.jobRunner,
-        backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
-        mode: () => input.mode,
-      }),
-      input.capture,
-    ),
+    wrapFinished: (finished) => wrapToolsForBackground(finished, {
+      jobRunner: input.jobRunner,
+      backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
+      mode: () => input.mode,
+    }),
   });
 }
 
@@ -411,7 +404,6 @@ async function runNodeLoop(
   const tools = buildNodeToolSet({
     deps,
     turnId: spec.headInput.id,
-    capture,
     scratch,
     arbitrate: deps.arbitrate,
     jobRunner,

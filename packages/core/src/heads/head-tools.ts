@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { defineOperation, serve } from '../operations/operation';
 import { operationTool } from '../tools/operation-surfaces';
 import { buildToolSurface, type CodemodeBuilder } from '../tools/builtins';
-import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
+import { buildHeadAccumulatorTools, HeadCapture } from './head-inference';
 import { HEAD_BUILTIN_TOOLS, MERGE_STRATEGIES } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
@@ -107,16 +107,10 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     workMode: input.mode,
     webSearch: deps.webSearch,
     admitted: HEAD_BUILTIN_TOOLS,
-    wrapCalls: (tools) => withHeadCaptureRecording(tools, capture),
     extra,
     allowed: input.allowedTools,
     codemode: deps.codemode,
     effectClaims: deps.effectClaims,
-    wrapFinished: (finished) => {
-      const backgrounded = wrapToolsForBackground(finished, deps.jobs);
-
-      // `eval` is built over the finished surface, after `wrapCalls` recorded the rest, so its calls are recorded here.
-      return backgrounded.eval === undefined ? backgrounded : { ...backgrounded, ...withHeadCaptureRecording({ eval: backgrounded.eval }, capture) };
-    },
+    wrapFinished: (finished) => wrapToolsForBackground(finished, deps.jobs),
   });
 }
