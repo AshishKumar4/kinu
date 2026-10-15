@@ -265,7 +265,7 @@ import {
 
 import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import type { BoxSize } from "@kinu.run/devbox/sizes";
-import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY, type SandboxSizeState } from "./sandbox-size";
+import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
@@ -6167,16 +6167,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.rt.executionRouter ? listEnvironments(this.rt.executionRouter) : [];
   }
 
-  @callable() async getComputerSize(): Promise<SandboxSizeState | null> {
+  @callable() async getComputerSize(): Promise<ComputerSizeState | null> {
     return await this.withSizedBox(async () => {});
   }
 
   /** The owner's try-again for a refused start: the box's one start path, which clears the refusal. */
-  @callable() async startComputer(): Promise<SandboxSizeState | null> {
+  @callable() async startComputer(): Promise<ComputerSizeState | null> {
     return await this.withSizedBox(async (box) => { await box.start(); });
   }
 
-  @callable() async resizeComputer(size: string | null): Promise<SandboxSizeState | null> {
+  @callable() async resizeComputer(size: string | null): Promise<ComputerSizeState | null> {
     return await this.withSizedBox(async (box) => { await box.resize(size); });
   }
 
@@ -6202,11 +6202,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** The box keeps the account default its next start uses, so every read and change pushes the owner's current one. */
-  private async withSizedBox(act: (box: SandboxBox) => Promise<void>): Promise<SandboxSizeState | null> {
+  private async withSizedBox(act: (box: SandboxBox) => Promise<void>): Promise<ComputerSizeState | null> {
     const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
 
     if (box === undefined) return null;
-    const account = await this.accountSandboxSize();
+    const account = await this.accountComputerSize();
     await box.useDefaultSize(account);
     await act(box);
     const size = await box.boxSize();
@@ -6214,10 +6214,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null, startRefused: size.startRefused ?? null };
   }
 
-  private async accountSandboxSize(): Promise<BoxSize | null> {
+  private async accountComputerSize(): Promise<BoxSize | null> {
     const owner = this.getOwnerUserDO();
 
-    return owner === null ? null : accountSandboxSize(await owner.getConfig(await this.userCaller(), SANDBOX_SIZE_CONFIG_KEY));
+    return owner === null ? null : accountComputerSize(await owner.getConfig(await this.userCaller(), COMPUTER_SIZE_CONFIG_KEY));
   }
 
   /** Browser-only; delegates to the same orchestration policy as the model's agents tool. */

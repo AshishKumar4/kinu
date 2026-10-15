@@ -1889,7 +1889,7 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
   // Read as `result.plans` / `result.tasks`.
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
-  // A `SandboxSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
+  // A `ComputerSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
   if (method === "getComputerSize") return rpcResult(galleryComputerSize(null)).json<T>();
 
   if (method === "resizeComputer") return rpcResult(await galleryResize(args ?? [])).json<T>();

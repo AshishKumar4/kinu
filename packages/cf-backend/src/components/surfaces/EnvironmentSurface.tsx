@@ -25,7 +25,7 @@ import { Loader } from "@cloudflare/kumo";
 import { lastValue } from "@/hooks/use-async-resource";
 import { useMounts } from "@/hooks/use-mounts";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { ComputerSize, useComputerSize, type ComputerSizeState } from "@/components/SandboxSize";
+import { ComputerSize, useComputerSize, type ComputerSizeControl } from "@/components/ComputerSize";
 import { Effect } from "effect";
 import type { TerminalSession } from "@kinu.run/devbox";
 import { useWorkspaceArea, type WorkspaceArea } from "@/components/layout";
@@ -145,7 +145,7 @@ function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReadi
  * The computer's state: restarting under a resize, waiting on a session's prompt, asleep while stopped (it wakes when
  * used), else as any machine. A session open on it says it woke since its size was read.
  */
-function computerStatus(mount: MountInfo, exec: ExecutorInfo | undefined, size: ComputerSizeState, seen: { waiting: boolean; awake: boolean }): StatusReading {
+function computerStatus(mount: MountInfo, exec: ExecutorInfo | undefined, size: ComputerSizeControl, seen: { waiting: boolean; awake: boolean }): StatusReading {
   if (size.pending === "resize") return { word: "Restarting", tone: "working" };
 
   if (seen.waiting) return { word: "Needs input", tone: "attention" };

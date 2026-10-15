@@ -1,4 +1,4 @@
-// The sandbox size in Kinu (DEVBOX-DECISIONS D50): the owner's account default through the user config route, which
+// The computer's size in Kinu (DEVBOX-DECISIONS D50): the owner's account default through the user config route, which
 // takes only a size the table names, the words the Environment card and User settings show for it, and
 // `computer.resize` through the adapter.
 import './helpers/ui-module-globals';
@@ -12,8 +12,8 @@ import type { AuthIdentity } from '../src/auth/session';
 import type { KinuDevbox } from '../src/kinu-devbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
-import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../src/sandbox-size';
-import { sandboxSizeText, sizeSpecs, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/sandbox-size-text';
+import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../src/computer-size';
+import { computerSizeText, sizeSpecs, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/computer-size-text';
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE } from '@kinu.run/devbox/sizes';
 import { settingsSection } from '../src/components/SettingsRail';
 import { serveFamily } from './helpers/api';
@@ -39,9 +39,9 @@ async function sizeRoute(env: UserRoutesEnv<string>, method: string, value?: str
   if (value !== undefined) init.body = JSON.stringify({ value });
 
   const answered = await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(
-    new Request(`https://kinu.example.com/api/user/config/${SANDBOX_SIZE_CONFIG_KEY}`, init), env);
+    new Request(`https://kinu.example.com/api/user/config/${COMPUTER_SIZE_CONFIG_KEY}`, init), env);
 
-  if (answered === null) throw new Error('the user routes did not answer the sandbox size');
+  if (answered === null) throw new Error('the user routes did not answer the computer size');
 
   return answered;
 }
@@ -67,7 +67,7 @@ describe("the owner's account default", () => {
   });
 
   test('a stored value that names no size reads as no choice', () => {
-    expect([accountSandboxSize('large'), accountSandboxSize('huge'), accountSandboxSize(null)]).toEqual(['large', null, null]);
+    expect([accountComputerSize('large'), accountComputerSize('huge'), accountComputerSize(null)]).toEqual(['large', null, null]);
   });
 });
 
@@ -76,8 +76,8 @@ describe('what the owner reads', () => {
     const offered = workspaceSizeOptions('large');
 
     expect(offered.map((option) => option.value)).toEqual(['account', ...BOX_SIZE_ORDER]);
-    expect(offered[0]?.label).toContain(sandboxSizeText('large'));
-    expect(workspaceSizeOptions(null)[0]?.label).toContain(sandboxSizeText(DEFAULT_BOX_SIZE));
+    expect(offered[0]?.label).toContain(computerSizeText('large'));
+    expect(workspaceSizeOptions(null)[0]?.label).toContain(computerSizeText(DEFAULT_BOX_SIZE));
 
     for (const size of BOX_SIZE_ORDER) {
       expect(offered.find((option) => option.value === size)?.label).toContain(BOX_SIZES[size].label);
@@ -86,8 +86,8 @@ describe('what the owner reads', () => {
   });
 
   const NOTES = [
-    { name: 'a sandbox running at its size says nothing more', state: { account: null, chosen: null, size: 'medium', running: 'medium', startRefused: null }, pending: false, says: null },
-    { name: 'a stopped sandbox says nothing more', state: { account: null, chosen: 'large', size: 'large', running: null, startRefused: null }, pending: false, says: null },
+    { name: 'a computer running at its size says nothing more', state: { account: null, chosen: null, size: 'medium', running: 'medium', startRefused: null }, pending: false, says: null },
+    { name: 'a stopped computer says nothing more', state: { account: null, chosen: 'large', size: 'large', running: null, startRefused: null }, pending: false, says: null },
   ] as const;
 
   for (const { name, state, pending, says } of NOTES) {
