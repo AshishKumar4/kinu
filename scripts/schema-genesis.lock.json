@@ -1218,9 +1218,10 @@
   ],
   "room_readers@packages/core/src/slates/room/caretaker.ts": [
     "email TEXT NOT NULL",
+    "holder TEXT NOT NULL",
     "server TEXT NOT NULL",
     "root TEXT NOT NULL",
-    "PRIMARY KEY (email, server, root)"
+    "PRIMARY KEY (email, holder, server, root)"
   ],
   "room_shows@packages/core/src/slates/room/caretaker.ts": [
     "id INTEGER PRIMARY KEY",

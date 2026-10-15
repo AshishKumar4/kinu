@@ -976,11 +976,11 @@ requirements:
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.mint
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.admit
     remainingEvidence:
-      - The caretaker (packages/core/src/slates/room/caretaker.ts) is the model's step function on SQLite; unit-slate-room.test.ts replays the model's attacks against it, but no fixture is generated from the model yet
+      - The caretaker (packages/core/src/slates/room/caretaker.ts) is the model's step function on SQLite; refinement-sharing.test.ts replays 300 generated traces of model events against it (PR-SHARE-002), and unit-slate-room.test.ts the model's attacks
       - Ids and generations come from one counter per room (`room.next`), as in the model
   PR-SHARE-002:
     statement: On one shared slate every grant a run holds was minted by its holder to that slate and function and admits the run's argument; a person's own connection is exercised only in that person's own requests, never another collaborator's, a link visitor's or the slate's own work; another person's run reaches the owner's authority only as a lend the owner minted; every admission holds each grant live at its current generation, bound to the code revision that runs, with the argument in the declared domain; an effect someone else's call asks for runs only on its holder's approval of that generation, argument and step; and removing the requester check, the revision binding or the one-step approval lets a collaborator drive another's connection, an editor run the owner's effect, or one approval repeat an effect.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.Sharing.Confinement.confinement_is_kept
       - Kinu.Sharing.Confinement.every_run_holds_only_grants_of_its_own_slate_and_function
@@ -1001,9 +1001,15 @@ requirements:
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.decide
       - packages/cf-backend/src/slates/room-bindings.ts#RoomBinding
     remainingEvidence:
-      - Built in the room: every run's env holds only stubs the room sealed with its run id (room-bindings.ts), and admission is the caretaker's; a refinement fixture of permits over admit and toolStep is not generated yet
+      - lean/fixtures/sharing-traces.json holds 300 traces of 30 model events on one slate, each with whether permits lets it through; refinement-sharing.test.ts replays them against the caretaker on bun:sqlite, which agrees on every step, admit and toolStep included
+      - One step differs by design: a person's own data in their own request, through their own grant, to a sink that may not see it; the model refuses it and the room lets it wait for that person (go when they wrote the code), which the test checks each time
+      - The traces keep to the caretaker's fragment: one function's code edited (the room binds a grant to the whole image, so an edit suspends every grant at once), grants only taken back, and no removal of someone who still lends or shows, which the room drops and the model keeps
+      - Approvals are not in the traces: the room decides a step that waits, where the model registers an approval ahead of it; unit-slate-room.test.ts holds the room's approvals
+      - Every run's env holds only stubs the room sealed with its run id (room-bindings.ts); the Durable Object's SQLite build is not exercised by the fixture
       - Unforgeable references and the codec's soundness are premises; Workers RPC stubs with host-sealed props and the bounded codec are what the build must show satisfy them
       - Credentials are outside the model; that no credential byte enters a run's isolate is the reference premise, not a theorem
+    refinement:
+      - lean/fixtures/sharing-traces.json :: packages/core/tests/refinement-sharing.test.ts
   PR-SHARE-003:
     statement: A fork of a shared slate is owned by its forker, at the source's code, with no member, link, listing, grant, declassification, run or state; in every reachable state its runs hold only its own grants, never its parent's; listing a slate in the Gallery changes nothing but the listing; and a fork that kept its source's lends would still call the owner's server after the owner stopped sharing.
     status: proved-in-abstract-model
@@ -1014,15 +1020,16 @@ requirements:
       - Kinu.Sharing.Attacks.a_fork_keeps_the_owners_lend_without_bare_forks
       - Kinu.Sharing.Attacks.bare_forks_hold_no_lend
     tsRefs:
+      - packages/cf-backend/src/slates/room.ts#SlateRoom.forkBundle
       - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.admit
       - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.liveBundle
     remainingEvidence:
-      - Not built as modelled; today's blueprint admission already carries no credential and admits every requirement unsatisfied, which the build keeps
+      - Built: a fork is asked of the slate's room (room-routes.ts, SlateRoom.forkPreview and forkBundle), which admits a signed-in person who can open it, a link visitor only with its key; the bundle is the code alone, admitted into a workspace the forker owns with every requirement unsatisfied; the fork row (tests/first-run/slate-fork.first-run.ts) drives it on a deployment
       - Code is modelled as a revision, not as data; a secret a person types into code is outside the model and is what the publish-time secret scan looks for
       - The Gallery's own object and index are not modelled; that a listing is a projection which never mints is the model's publish step
   PR-SHARE-004:
     statement: Revocation is one step of one caretaker, its linearization point; afterwards no run that held a switched-off grant at an earlier generation acts or releases again, even after the grant is switched back on, no session a removed person held before (membership or link) and no session of a stopped link is current again, a withdrawn declassification is never live again, and without generations a revoked call resumes and reaches its requester.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.Sharing.Revocation.a_dead_run_is_refused_everything
       - Kinu.Sharing.Revocation.a_grants_generation_never_returns
@@ -1037,11 +1044,13 @@ requirements:
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.revoke
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.runOk
     remainingEvidence:
-      - The room serializes grants, sessions and declassifications in one object and checks the generation at admission, after every wait, before each tool step and before each release (`runOk`); unit-slate-room.test.ts revokes between admission and a queued approval, between tool steps and before release, and no workerd test does yet
+      - The room serializes grants, sessions and declassifications in one object and checks the generation at admission, after every wait, before each tool step and before each release (`runOk`); the generated traces (PR-SHARE-002) take grants back, stop the link and remove people between admissions, tool steps and releases, and the caretaker agrees with the model on each; unit-slate-room.test.ts revokes between admission and a queued approval; no workerd test does yet
       - Bytes already released are not recalled, and remote work dispatched before a revocation may complete after it; dispatch is the boundary the caretaker controls, and the model claims nothing past it
+    refinement:
+      - lean/fixtures/sharing-traces.json :: packages/core/tests/refinement-sharing.test.ts
   PR-SHARE-005:
     statement: Data origin on a shared slate. For any fixed history with no event opening a source to a principal (its holder declassifying it to them, or a reader check finding they read it), that principal is shown the same values and placeholders, in the same order, by releases, rendered shared state and tool arguments, whatever the source holds; inserting anywhere an action of a run that read the source changes nothing they are shown; only a tag's holder can declassify it; and without the per-tag holder check, labels on persisted state, the tool-flow check, the sink audience, or with labelled runs free to post shared state, someone's private data reaches a person who cannot read it.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.Sharing.Origin.output_cells_are_kept
       - Kinu.Sharing.Origin.one_step_keeps_q_blind
@@ -1066,12 +1075,15 @@ requirements:
       - packages/core/src/slates/room/labels.ts#audienceFlows
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.render
     remainingEvidence:
-      - Built in the room: each grant's source is a tag, a run's label is fixed at admission, labels are stored with shared state, and every release, render and tool argument is checked; a refinement fixture of flows and of the label a run gets is not generated from this model yet
+      - Built in the room: each grant's source is a tag, a run's label is fixed at admission, labels are stored with shared state, and every release, render and tool argument is checked; the generated traces (PR-SHARE-002) check each release and tool step against flows and audFlows, and each render's shown-or-placeholder against flows, after reader checks and shows of every kind
+      - A reader check is of one tag, the holder's read included (room_readers keys the holder); the traces found the room matching by source alone, which let a check of one person's read open another's
       - Runtime isolation is a premise; one run is one isolate whose label covers its whole heap, so the shared slate server never holds labelled content, only opaque handles
       - Sealed rendering is a premise; labelled content reaches a screen in a frame the slate's own client code cannot read, so a request carries only what its person chose to send
       - Reader checks are a premise; a check run with the reader's own grant must answer yes only if the reader may see what the source held, then or since, and a grant's declared sink must include everyone its effect reaches
       - The schedule is a premise; a confined run cannot request admissions, mint, declassify, approve or edit code, so its own choices are only the actions the insertion theorem covers
       - Timing, termination and refusal channels and relaying by a recipient are outside the model
+    refinement:
+      - lean/fixtures/sharing-traces.json :: packages/core/tests/refinement-sharing.test.ts
   PR-SHARE-006:
     statement: The sharing model asks little of people. A call once admitted stays admissible until a grant of it is switched off, the code moves past the revision it was granted for, or its session ends; a placeholder asks exactly the holders of the sources the viewer cannot read, and their consent to that part shows it and no other part; connecting one's own source admits one's personal part; and being added lets a person in.
     status: proved-in-abstract-model

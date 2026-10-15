@@ -70,11 +70,14 @@ export function initSlateRoomTables(execRaw: RawSqlExec): void {
     images TEXT,
     audience TEXT NOT NULL
   )`);
+  // A check is of one tag, the holder's read of the source included: what one person's connection reads of a source
+  // need not be what another's does (`Model.Core.readers`).
   execRaw(`CREATE TABLE IF NOT EXISTS room_readers (
     email TEXT NOT NULL,
+    holder TEXT NOT NULL,
     server TEXT NOT NULL,
     root TEXT NOT NULL,
-    PRIMARY KEY (email, server, root)
+    PRIMARY KEY (email, holder, server, root)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS room_cells (
     key TEXT PRIMARY KEY,
@@ -655,17 +658,17 @@ export class RoomCaretaker {
   }
 
   /** `readerCheck`: what the source's own check said, with the reader's own connection. */
-  checked(email: string, tag: Pick<Tag, 'server' | 'root'>, reads: boolean): void {
-    if (reads) this.db.exec('INSERT OR IGNORE INTO room_readers (email, server, root) VALUES (?, ?, ?)', email, tag.server, tag.root);
-    else this.db.exec('DELETE FROM room_readers WHERE email = ? AND server = ? AND root = ?', email, tag.server, tag.root);
+  checked(email: string, tag: Tag, reads: boolean): void {
+    if (reads) this.db.exec('INSERT OR IGNORE INTO room_readers (email, holder, server, root) VALUES (?, ?, ?, ?)', email, tag.holder, tag.server, tag.root);
+    else this.db.exec('DELETE FROM room_readers WHERE email = ? AND holder = ? AND server = ? AND root = ?', email, tag.holder, tag.server, tag.root);
   }
 
   facts(): LabelFacts {
-    const readers = this.db.exec('SELECT email, server, root FROM room_readers').toArray()
-      .map((row) => v.parse(v.object({ email: v.string(), server: v.string(), root: v.string() }), row));
+    const readers = this.db.exec('SELECT email, holder, server, root FROM room_readers').toArray()
+      .map((row) => v.parse(v.object({ email: v.string(), holder: v.string(), server: v.string(), root: v.string() }), row));
 
     return {
-      reads: (email, tag) => readers.some((row) => row.email === email && row.server === tag.server && row.root === tag.root),
+      reads: (email, tag) => readers.some((row) => row.email === email && sameTag(row, tag)),
       shows: this.shows(),
     };
   }
