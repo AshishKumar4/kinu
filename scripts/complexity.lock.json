@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-15",
-  "files": 3311,
-  "functions": 86477,
+  "files": 3310,
+  "functions": 86487,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -222,10 +222,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
-      "complexity": 27
-    },
-    {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 27
     },
@@ -326,6 +322,10 @@
       "complexity": 26
     },
     {
+      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
+      "complexity": 26
+    },
+    {
       "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
       "complexity": 26
     },
@@ -375,10 +375,6 @@
     },
     {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
-      "complexity": 26
-    },
-    {
-      "key": "packages/core/tests/unit-deploy-flow.test.ts#FakeCloudflare.answer",
       "complexity": 26
     },
     {

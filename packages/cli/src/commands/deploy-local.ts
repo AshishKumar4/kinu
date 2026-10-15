@@ -11,7 +11,7 @@ import { get } from 'node:http';
 import { execFile, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import {
-  HealthAnswerSchema, LOCAL_PORT, LocalConfigSchema, fetchReleaseArtifact, fetchReleaseManifest, localLayout, releaseDir,
+  HealthAnswerSchema, LOCAL_PORT, LocalConfigSchema, fetchReleaseArtifact, fetchReleaseManifest, localAddress, localLayout, releaseDir,
   renderLocalConfig, renderWorkerdConfig, unhostedBindings, workerdDirectories,
   type LocalConfig, type LocalLayout, type TarArtifact,
 } from '@kinu.run/core/deploy';
@@ -70,7 +70,7 @@ export function localDoor(action: string | undefined, opts: { origin?: string; p
     const started = yield* startLocalInstance();
 
     console.log(started === null
-      ? `${DIM('A local Kinu is already running')} ${DIM((yield* localConfig()).address)}`
+      ? `${DIM('A local Kinu is already running')} ${DIM(localAddress((yield* localConfig()).port))}`
       : `${OK('✓')} Local Kinu on ${ACCENT(started.address)} ${DIM(`pid ${String(started.pid)}`)}`);
   }));
 }
@@ -187,7 +187,7 @@ function startLocalInstance(): Effect.Effect<LocalInstance | null, KinuError> {
 
       if (answer !== 'serving') return yield* Effect.die((yield* Effect.promise(async () => unserved(answer, layout, config, () => ended))));
 
-      return { pid: child.pid, address: config.address };
+      return { pid: child.pid, address: localAddress(config.port) };
     }), Effect.sync(() => {
       closeSync(log);
     }));
@@ -206,17 +206,17 @@ async function unserved(
     const taken = await connects(config.port);
 
     return new Error(taken
-      ? `Local Kinu exited while starting (${ended() ?? 'reason unknown'}) and ${config.address} `
+      ? `Local Kinu exited while starting (${ended() ?? 'reason unknown'}) and ${localAddress(config.port)} `
         + `is answered by another process. Free that port, or pick one with --port. See ${layout.log}`
       : `Local Kinu exited while starting (${ended() ?? 'reason unknown'}). See ${layout.log}`);
   }
 
   if (answer === 'foreign') {
-    return new Error(`${config.address} is answered by something that is not Kinu. `
+    return new Error(`${localAddress(config.port)} is answered by something that is not Kinu. `
       + `Stop it, or pick another port with --port. See ${layout.log}`);
   }
 
-  return new Error(`Local Kinu did not answer on ${config.address}. `
+  return new Error(`Local Kinu did not answer on ${localAddress(config.port)}. `
     + `It may still be starting: \`kinu deploy local status\`, or stop it with \`kinu deploy local stop\`. `
     + `See ${layout.log}`);
 }
@@ -272,7 +272,7 @@ function report(): Effect.Effect<void, KinuError> {
 
     const since = ` ${DIM(`since ${state.startedAt}`)}`;
 
-    console.log(`${OK('✓')} Local Kinu ${ACCENT(config.version)} on ${ACCENT(config.address)} `
+    console.log(`${OK('✓')} Local Kinu ${ACCENT(config.version)} on ${ACCENT(localAddress(config.port))} `
       + `${DIM(`pid ${String(state.pid)}`)}${since}`);
   });
 }

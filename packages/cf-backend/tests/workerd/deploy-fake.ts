@@ -206,7 +206,6 @@ function manifestText(build: DeployFakeServedBuild): string {
       modules: files().filter(([path]) => path.startsWith('worker/')).map(([path]) => path.slice('worker/'.length)),
       modulesPath: 'worker',
       assets: 'client',
-      assetsBinding: 'ASSETS',
       crons: [],
     },
     bindings: [
@@ -383,6 +382,8 @@ interface Held {
   indexConfigs: Map<string, { dimensions: number; metric: string }>;
   gateways: string[];
   apps: string[];
+  /** Each app's Access policy names, in creation order. */
+  policies: Map<string, string[]>;
   secrets: Map<string, string>;
   uploads: number;
   creates: string[];
@@ -422,6 +423,7 @@ function fresh(): Held {
     indexConfigs: new Map(),
     gateways: [],
     apps: [],
+    policies: new Map(),
     secrets: new Map<string, string>(),
     uploads: 0,
     creates: [],
@@ -452,6 +454,7 @@ function reset(): void {
   held.indexConfigs = empty.indexConfigs;
   held.gateways = empty.gateways;
   held.apps = empty.apps;
+  held.policies = empty.policies;
   held.secrets = empty.secrets;
   held.uploads = 0;
   held.creates = empty.creates;
@@ -583,6 +586,17 @@ async function stalled(method: string, path: string, answer: Response): Promise<
   return answer;
 }
 
+/** Access policies by app: the step finds its Owners policy before it writes one, and a PUT names it in place. */
+function accessPolicy(method: string, [, app = '', id]: RegExpExecArray, named: (key: string) => string): Response {
+  const policies = held.policies.get(app) ?? [];
+
+  if (method === 'GET') return envelope(policies.map((name, at) => ({ id: `policy-${String(at + 1)}`, name })));
+
+  if (id === undefined) held.policies.set(app, [...policies, named('name')]);
+
+  return envelope({ id: id ?? `policy-${String(policies.length + 1)}` });
+}
+
 /** `creates` is appended only by a POST that really made something: proof a resumed run creates nothing twice. */
 async function api(url: URL, request: Request): Promise<Response> {
   const path = `${url.pathname.replace('/client/v4', '')}${url.search}`;
@@ -667,7 +681,9 @@ async function api(url: URL, request: Request): Promise<Response> {
     return envelope({ id: `app-${named('domain')}` });
   }
 
-  if (path.includes('/access/apps/') && path.endsWith('/policies')) return envelope({ id: 'policy-1' });
+  const policyPath = /\/access\/apps\/([^/]+)\/policies(?:\/([^/]+))?$/.exec(path);
+
+  if (policyPath !== null) return accessPolicy(request.method, policyPath, named);
 
   if (path.endsWith('/workers/subdomain')) return envelope({ subdomain: SUBDOMAIN });
 

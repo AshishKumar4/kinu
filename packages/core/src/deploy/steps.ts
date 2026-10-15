@@ -293,6 +293,9 @@ function gatewayStep(): DeployStep {
   };
 }
 
+/** The Access policy that names who may sign in: the owner and the addresses they listed. */
+const OWNERS_POLICY = 'Owners';
+
 function accessStep(): DeployStep {
   return {
     id: 'access',
@@ -327,13 +330,22 @@ function accessStep(): DeployStep {
         context.facts.set(FACT_ACCESS_APP, appId);
         context.facts.set(FACT_OWNER_EMAIL, context.inputs.ownerEmail);
 
+        // Found and updated, never added again: a second sitting keeps one Owners policy, at today's addresses.
+        const policies = yield* Effect.promise(async () => cloudflareResult(
+          context.transport,
+          { method: 'GET', path: `${base}/${appId}/policies` },
+          v.array(v.object({ id: v.string(), name: v.optional(v.string()) })),
+        ));
+
+        const owners = policies.find((policy) => policy.name === OWNERS_POLICY);
+
         yield* Effect.promise(async () => cloudflareResult(
           context.transport,
           {
-            method: 'POST',
-            path: `${base}/${appId}/policies`,
+            method: owners === undefined ? 'POST' : 'PUT',
+            path: owners === undefined ? `${base}/${appId}/policies` : `${base}/${appId}/policies/${owners.id}`,
             body: {
-              name: 'Owners',
+              name: OWNERS_POLICY,
               decision: 'allow',
               include: [...emails].map((email) => ({ email: { email } })),
             },

@@ -29,7 +29,6 @@ const MANIFEST: ReleaseManifest = {
     modules: ['index.js', 'chunk.js'],
     modulesPath: 'worker',
     assets: 'client',
-    assetsBinding: 'ASSETS',
     crons: ['*/15 * * * *'],
   },
   bindings: [
@@ -114,6 +113,20 @@ class FakeCloudflare implements CloudflareTransport {
   readonly gateways: string[] = [];
 
   readonly apps: string[] = [];
+
+  /** Each Access policy, under the app it guards. */
+  readonly policies: { app: string; id: string; name: string; include: unknown }[] = [];
+
+  /** An app's policies listed, one added, or one replaced in place. */
+  private accessPolicy(method: string, [, app = '', id]: RegExpExecArray, body: JsonObject): JsonValue {
+    if (method === 'GET') return this.policies.filter((policy) => policy.app === app).map(({ id: held, name }) => ({ id: held, name }));
+    const policy = { app, id: id ?? `policy-${String(this.policies.length + 1)}`, name: bodyText(body, 'name'), include: body.include ?? null };
+
+    if (method === 'PUT') this.policies.splice(this.policies.findIndex((held) => held.id === id), 1, policy);
+    else this.policies.push(policy);
+
+    return { id: policy.id };
+  }
 
   readonly objects: string[] = [];
 
@@ -319,7 +332,9 @@ class FakeCloudflare implements CloudflareTransport {
       return { id: `app-${domain}` };
     }
 
-    if (path.includes('/access/apps/') && path.endsWith('/policies')) return { id: 'policy-1' };
+    const policyPath = /\/access\/apps\/([^/]+)\/policies(?:\/([^/]+))?$/.exec(path);
+
+    if (policyPath !== null) return this.accessPolicy(call.method, policyPath, body);
 
     if (path.endsWith('/workers/subdomain')) return { subdomain: 'acme' };
 
@@ -634,6 +649,24 @@ describe('a second sitting on the same account', () => {
     expect(cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.includes('/r2/buckets/')))
       .toEqual([]);
   });
+
+  // core-rest review P2-18: the Access step POSTed a new Owners policy on every sitting.
+  test('keeps one Owners policy and sets its addresses to today\'s', async () => {
+    await run();
+    const [held] = cloudflare.policies;
+
+    if (held === undefined) throw new Error('the first sitting made no Owners policy');
+    held.include = [{ email: { email: 'gone@example.com' } }];
+    ledger = new ArrayLedger();
+    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
+
+    await run();
+
+    expect(cloudflare.policies.map(({ name, include }) => ({ name, include }))).toEqual([{
+      name: 'Owners', include: ['owner@example.com', 'second@example.com'].map((email) => ({ email: { email } })),
+    }]);
+  });
 });
 
 describe('a refusal', () => {
@@ -903,7 +936,6 @@ describe('the workerd configuration for a local instance', () => {
     expect(config).toEqual({
       version: '0.4.0+abc1234',
       port: 8787,
-      address: 'http://127.0.0.1:8787',
       renderedAt: '2026-09-18T00:00:00.000Z',
     });
   });
