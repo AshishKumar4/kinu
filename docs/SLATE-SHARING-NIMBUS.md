@@ -77,10 +77,11 @@ The slate's `package.json` declares each part as `slate.parts.<name> = { fn, inp
    It then spawns a private process from the slate's current image, with `globalOutbound: null`. The process's env holds only `workspace`, a binding whose props name the viewer, the slate, the revision and the run. It calls `fn(...args)` once, or `fn(...args, action)` for an action. Then the process ends and its facet SQLite is deleted.
 4. Each `workspace.*` call the run makes goes from its binding to **the viewer's own account**:
    - `mcp.<server>.<tool>` runs under a consent for this slate and revision, inside its root and tools;
-   - `ai` runs through the viewer's `slateAi`;
-   - `web` runs through the viewer's own browser.
+   - `ai` runs through the viewer's `slateAi` (their own provider; the model is given no tools).
 
-   Every other namespace is refused (the owner's memory, files, db, agents, slates, `this.storage`). An effect tool answers `needs-approval` with its exact payload. Once the viewer approves, the next run admits that one effect, with that payload, once.
+   Every other namespace is refused at the binding: `web` (no browser drive, no URL fetch), and everything of the owner's (memory, files, db, agents, slates) and `this.storage`.
+
+   An MCP call dispatches without asking only when it is **contained**: on the consented server and root, with a tool its server marks `readOnlyHint: true` and `openWorldHint: false` (`containedTool`). Its arguments then reach that server alone. Any other call can carry what the part read somewhere else: a send, a fetch tool, or a read the server does not declare closed-world. Such a call needs `effects` in the consent, and it answers `needs-approval` with its exact destination (server, tool, root) and payload. Once the viewer approves, the next run admits that one call, with that payload, once (`EffectApprovals`).
 5. The answer (`PartRunAnswer`) goes to the viewer alone:
    - `html`: cut by `sealedPart` and drawn in the content frame;
    - `actions`: Kinu controls that run the part again;
@@ -91,14 +92,14 @@ The slate's `package.json` declares each part as `slate.parts.<name> = { fn, inp
 **What the slate's code can do with a viewer's personal data:**
 - read it through that viewer's own connections, within their consent for this revision;
 - compute on it in memory, including with the viewer's own AI;
-- pass it as arguments to that viewer's own read tools;
-- pass it to that viewer's effect tools only after they approve the exact payload;
+- pass it as arguments to that viewer's contained tools, which reach only the consented server and root;
+- pass it to any other tool of theirs, a read included, only after they approve that exact payload and destination;
 - return markup and actions drawn by Kinu, for that viewer only;
 - propose a payload for the viewer to show everyone.
 
 **What it cannot do:**
 - write shared state, or keep anything after the run: no durable storage, no module state across runs (Nimbus keys each process's isolate by pid, `manager.js:7261,7367`, measured);
-- reach the network (`globalOutbound: null`);
+- reach the network (`globalOutbound: null`), drive a browser, or fetch a URL;
 - reach the owner's workspace namespaces;
 - run any script in a browser that holds the data;
 - choose who sees its output;
@@ -106,7 +107,7 @@ The slate's `package.json` declares each part as `slate.parts.<name> = { fn, inp
 
 **Residual channels, not promised:**
 - the timing of a run, and its existence in the owner's Nimbus process table (pid, title `slate <id>`; no arguments, no viewer);
-- the arguments of read tools, which reach the services the viewer connected;
+- what a contained tool's server does with its arguments: its own `readOnlyHint`/`openWorldHint` marks are trusted, so a server that marks itself closed-world and forwards anyway is a server the viewer connected and trusted;
 - what Kinu's trusted host code handles in passing.
 
 The shared page learns nothing from a part's size, because it fixes the size.
@@ -137,7 +138,24 @@ The shared page learns nothing from a part's size, because it fixes the size.
 | H11: owner's reach | Personal data never enters the shared app's storage, the owner's namespaces or the owner's records |
 | H12: attribution | Only `show(value, from)` carries a viewer, and Kinu sets it |
 
-## 6. Lanes
+## 6. Evidence
+
+- **Attack replays** (workerd, real host, real confined Nimbus processes; the viewer's account faked with the real
+  `partCallVerdict`, `containedTool` and `EffectApprovals`): `packages/cf-backend/tests/workerd/personal-parts.test.ts`,
+  7 attacks: the own part drawn and cut; every way out refused (shared storage, owner namespaces, network, browser),
+  with no row of the workspace holding the private value; delegated egress through an open-world tool held until its
+  exact call is approved, once; runs keep nothing and a replayed run name is refused; a send approved once; an edit
+  re-asks; Show writes exactly the confirmed value.
+- **Mutations**: `/mnt/local/kinu/tmp/sharing/mutations-nimbus/` (`README.md`, `run.py`, a `.diff` and `.log` per
+  guard): each of the nine guards removed turns its attack red.
+- **The viewer's account** (`UserDO.slatePartTool`, `slatePartAi`, consents and approvals):
+  `packages/cf-backend/tests/unit-slate-consents-account.test.ts`, `unit-slate-consent-routes.test.ts`,
+  `packages/core/tests/unit-slate-consents.test.ts`.
+- **Proofs**: `lean/Kinu/SharingNimbus/` (requirements `PR-SHARE-NIMBUS-001`–`008`), refined against the TypeScript
+  policy on 461 generated cases (`lean/fixtures/share-policy-cases.json`, `packages/core/tests/refinement-share-policy.test.ts`).
+  The proofs are of the policy; the host's routing, the confined process and the sealed drawing are the replays' to show.
+
+## 7. Lanes
 
 - **SuddenGrouse (lead, integrates `feat/sharing-nimbus`):** hosting back on the Nimbus durable app, the confined part run and its binding, the client route (§3), consents, approvals and revision binding, the Show route, the restated Lean model and the workerd attack replays (H1–H5, H11).
 - **EssentialJackal:** deleting the rooms (`SlateRoom`, the caretaker and labels, the `room_*` tables), restoring and extending the base share path, re-pointing Gallery, fork and Drive (`GalleryListingSync`), `owner` mode's reach list and approvals, schema review with Main, and the first-run rows.

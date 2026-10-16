@@ -30,6 +30,7 @@ import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { CodemodeLauncher } from '../../src/codemode-sandbox';
 import type { SlateBinding } from '../../src/slates/bindings';
+import type { PartBinding } from '../../src/slates/part-binding';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
@@ -368,6 +369,17 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   drive(session: string): Promise<string>;
   typed(say: string, via?: 'stream' | 'ask'): Promise<string>;
   driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
+  startParts(): Promise<string>;
+  revision(): Promise<string>;
+  editParts(): Promise<string>;
+  consent(viewer: string, consent: { server: string; root: Record<string, string>; tools: string[]; effects: boolean; revision: string }): Promise<void>;
+  decide(viewer: string, id: string, approve: boolean): Promise<boolean>;
+  dispatched(): Promise<string[]>;
+  runPart(viewer: string | null, part: string, args?: import('@kinu.run/core').JsonValue[], action?: { id: string; input: import('@kinu.run/core').JsonValue } | null): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
+  showPart(viewer: 'alice' | 'bob', revision: string, value: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
+  notesCall(method: string): Promise<ProbeAnswer>;
+  lateCall(): Promise<ProbeAnswer>;
+  workspaceHolds(text: string): Promise<string[]>;
 }
 
 
@@ -494,6 +506,7 @@ declare global {
     interface GlobalProps {
       mainModule: {
         SlateBinding: typeof SlateBinding;
+        PartBinding: typeof PartBinding;
         CodemodeEgress: typeof CodemodeEgress;
         CodemodeLauncher: typeof CodemodeLauncher;
         SlateChainProbe: typeof SlateChainProbe;

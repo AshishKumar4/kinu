@@ -11,6 +11,8 @@ export { EphemeralSlates, initEphemeralSlateTable } from './ephemeral';
 
 export { SlateUsageStore, initSlateUsageTable } from './usage';
 
+export { SlateConsentStore, type PartAiAnswer, type PartConnectionAnswer } from './consents';
+
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteSlateStateStore, slateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
 
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';
@@ -43,7 +45,7 @@ export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps
 
 export { GalleryIndex, initGalleryTables } from './gallery';
 
-export { codecAdmits, codecIsFree, CodecSchema, UNDECLARED, type Codec } from './codec';
+export { codecAdmits, CodecSchema, UNDECLARED, type Codec } from './codec';
 
 export {
   SHARE_MODES, GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,

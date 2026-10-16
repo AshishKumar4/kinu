@@ -1,10 +1,9 @@
 # Slate sharing: the security model
 
-Status: design for the owner's review, 2026-10-15. Nothing here is built; a spike measured the one open question
-(§9). The model is proved in `lean/Kinu/Sharing/` (requirements `PR-SHARE-001` to `PR-SHARE-007` in
-`lean/traceability.yaml`). Once built, it replaces invariants S1 to S8 in [SLATE-SHARING.md](./SLATE-SHARING.md).
-The wireframes are the sharing v7 design page (`packages/cf-backend/src/share-design/ShareDesign.tsx` on the UI lane's
-branch).
+Historical room/DIFC design, superseded on 2026-10-16 by [Sharing slates on Nimbus](./SLATE-SHARING-NIMBUS.md).
+The room implementation, proofs and refinement traces have been removed. Nothing below is a claim about the current
+Nimbus runtime. Current requirements are `PR-SHARE-NIMBUS-001` through `PR-SHARE-NIMBUS-008` in
+`lean/traceability.yaml`; their pure-policy refinement does not replace runtime isolation evidence.
 
 ## 1. The design on one page
 
@@ -24,8 +23,8 @@ branch).
    and switching it back on does not revive them.
 6. A fork carries no lend, grant, person or data, and listing a slate in the Gallery grants nothing.
 
-All of this is proved in Lean: 75 theorems, with the attack each of the ten safeguards exists for shown succeeding
-when that one safeguard is removed.
+These were the goals of the retired room design. Its former proof and attack corpus is not registered evidence
+for the Nimbus design.
 
 **What it does not cover.** How long things take (timing can leak hints). People passing on what they saw. A remote
 action already sent when you revoke. An AI model inside a slate being talked into misusing what it was lent; the
@@ -79,9 +78,8 @@ state it is given, never from what it read. That is why no guard ever reads a va
 noninterference theorem rather than a check on one path. Cloudflare OS's best idea is kept inside (b) as a **reader
 check**: for a connection kind that can answer it with the viewer's own grant (a GitHub repository's collaborators, a
 Google file's sharing), the check may record that the viewer reads the source directly, and they see the part without
-anyone being asked (`Friction.lean:a_reader_of_the_source_sees_it_unasked`). Access gained or lost is an event, and every
-release is checked against the readers recorded at that moment
-(`Origin.lean:what_reaches_q_carries_no_closed_source`). With no check for a kind, the answer is "no": a placeholder,
+anyone being asked. Access gained or lost is an event, and every
+release is checked against the readers recorded at that moment. With no check for a kind, the answer is "no": a placeholder,
 never a leak. A check must be coarse enough to be sound for what a value already holds: membership of a repository
 covers its history; a check of one file's current sharing does not cover a copy of a version deleted since.
 
@@ -92,7 +90,7 @@ because a complete provenance log is labels with more storage, and an incomplete
 
 Cloudflare OS runs a binding through its creator's account for everyone (`overseer.ts` 10692-10705). Kinu does not:
 a collaborator's connection is never exercised on another's behalf by default. Each person's parts use that person's
-own grant (`Confinement.lean:a_personal_grant_acts_only_in_its_holders_requests`), and a connection serves everyone only when its
+own grant, and a connection serves everyone only when its
 holder lends it to one function, with a contract. The consequence for lends: a lender need not be the owner (the
 model lets the owner and Edit collaborators lend their own connections), and data a lend reads carries the lender's
 tag, so only the lender can show it to others. The v7 interface offers lending to the owner only.
@@ -113,17 +111,15 @@ content. A call that needs a labelled source (a personal grant, a lend whose out
 everyone) runs as a **confined run**: a fresh isolate from that function's image, holding only its grants, whose one
 output is a cell allocated at admission with the run's label. The server stores and passes that cell as an opaque
 **handle**; the host renders it per viewer: content if the viewer may see it, a placeholder if not. Only a run with an
-empty label may post new shared state, so how much state exists never depends on what a run read
-(`Origin.lean:a_hidden_runs_choices_show_q_nothing`; without the guard, `Attacks.lean:a_labelled_run_posts_a_secret_without_the_post_guard`).
+empty label may post new shared state, so how much state exists never depends on what a run read.
 
 Every grant declares its **sink**: who besides its holder can observe what a call through it sends. A query to the
 holder's own account has none; an effect that mails or publishes to recipients the code picks reaches everyone. A tool
 call happens only if every observer may see the run's label, so a part holding Alice's repository and her own mail
-grant cannot mail her secret to Bob from her own request (`Attacks.lean:the_sink_check_keeps_a_secret_out_of_a_wide_effect`;
-without it, `Attacks.lean:a_persons_own_mail_publishes_their_secret_without_the_sink_check`). For the same reason a run
+grant cannot mail her secret to Bob from her own request. For the same reason a run
 that holds two people's grants cannot call either with the other's data in reach. A part over several people's
 sources is therefore one run per holder and a join with no tools, which needs no one's consent but the holders'
-"show" decisions for its readers (`Friction.lean:a_join_needs_no_cross_consent`).
+"show" decisions for its readers.
 
 Labelled content reaches a screen in a **sealed frame**: a frame on another origin with no scripts and no network,
 which the slate's own client code cannot read. Otherwise the slate's browser code could read Alice's data off Bob's
@@ -147,18 +143,16 @@ re-run when its inputs change. Private input works the other way: input meant fo
 
 Removing someone ends every session they hold on the slate, through membership and through the link: removal re-keys
 the link (other link visitors reopen without noticing), and a removed person cannot reopen it by the link until added
-back (`Revocation.lean:a_removed_persons_sessions_stay_ended`). Stopping the link leaves members' own sessions alone.
+back. Stopping the link leaves members' own sessions alone.
 
-Attribution: every change and every call is attributed to the signed-in account whose session made it
-(`Confinement.lean:every_admission_is_current_and_in_domain` records the requester's access). Signed-out visitors change nothing, so
+Attribution: every change and every call is attributed to the signed-in account whose session made it. Signed-out visitors change nothing, so
 there is nothing to attribute; they are counted in presence as "3 people viewing" without names.
 
 ### 2.6 Code edits
 
 Every grant and every function-scoped "show" decision is bound to the revision of that function's code (its image:
 every module it runs). An edit by the grant's holder re-binds the holder's own grants and decisions on that function;
-an edit by anyone else suspends them until the holder agrees again (`Attacks.lean:revision_binding_suspends_an_edited_lend`;
-without it, `Attacks.lean:an_editor_runs_the_owners_effect_without_revision_binding`). Ben, an editor, therefore cannot turn a
+an edit by anyone else suspends them until the holder agrees again. Ben, an editor, therefore cannot turn a
 function Sam lent, or Alice's personal part, into something else and have it run with their authority. A code edit
 that needs a new source needs a new grant from that source's holder. Edits to functions holding no one else's grant
 ask nobody anything.
@@ -173,73 +167,20 @@ what its usage graph names (`slate_usage`), without prompts while the owner is i
 lend or a personal need in the share sheet. One execution path, not one for private slates and another for shared
 ones. This is an architecture change the owner did not ask for, so it is decision 1 in §1.
 
-## 3. The model
+## 3. The retired model
 
-`lean/Kinu/Sharing/Model.lean` is a transition system. Principals are owners, people added with a role, and link
-visitors, signed in or not. State: slates (owner, per-function code revisions, members with generations, the link with
-its generation, the listing, the fork parent), grants (holder, kind, source, function, revision, domain, effect,
-generation, switch), declassifications (minter, tag, scope, audience), runs (requester and access, function,
-revision, argument, grants held with their generations, label, output cell), cells (label) and approvals. Events:
-`share`, `collaborate`, `remove`, `mint`, `setCap`, `declassify`, `undeclassify`, `admit`, `toolStep`, `approve`,
-`observe`, `write`, `post`, `release`, `render`, `finish`, `editCode`, `fork`, `publish`, `readerCheck`. Each event
-has one guard
-(`permits`), evaluated on the structure alone; values (`reads`, `val`) and what each person was shown (`log`) evolve
-beside it. The slate's code (`Env.code`, `Env.argOf`) is arbitrary, hostile included.
+The room transition system and its DIFC labels, reader checks, generation-bound grants and attack traces were removed
+with the room implementation. They do not refine Nimbus personal parts or the shared slate server.
 
-Premises, outside the model: references are unforgeable; the codec is sound; runs share nothing but the modelled
-channels, one run per isolate; labelled content renders in sealed frames; one caretaker evaluates each guard atomically
-with its step; a confined run cannot request an admission, mint, declassify, approve or edit code, so its own choices
-are only its tool steps, observations, writes and releases; reader checks are sound for what a value already holds;
-a grant's declared sink includes everyone its effect reaches.
+## 4. Current proof boundary
 
-## 4. Guarantees
-
-Each is a theorem about `Policy.full` (every guard on), cited by name.
-
-| Theorem | Statement |
-|---|---|
-| `Confinement.lean:every_run_holds_only_grants_of_its_own_slate_and_function` | In every reachable state each grant a run holds belongs to its slate and function, admits its argument, and is the requester's own personal grant or a lend to a signed-in requester or to the slate's own work |
-| `Confinement.lean:a_grant_is_minted_by_its_holder` | A grant enters the state only by its holder's `mint` |
-| `Confinement.lean:another_persons_run_reaches_the_owner_only_through_a_lend` | A run the owner did not request reaches the owner's authority only as a lend the owner minted to that slate and function |
-| `Confinement.lean:a_personal_grant_acts_only_in_its_holders_requests` | A tool step through a person's own connection happens only in that person's request: never another collaborator's, a link visitor's or the slate's own work |
-| `Confinement.lean:every_admission_is_current_and_in_domain` | An admitted call holds each grant live at its current generation, bound to the revision that runs, with the argument in the declared domain |
-| `Revocation.lean:a_revoked_grant_never_acts_again` | After a grant is switched off, no run holding it from before acts, observes, writes or releases, even after it is switched on again |
-| `Revocation.lean:a_removed_persons_sessions_stay_ended` | After someone is removed, no session they held before, through membership or the link, is current again: nothing is rendered or released to it and no run requested under it acts |
-| `Revocation.lean:a_stopped_links_sessions_stay_ended` | After the link is stopped, no link session from before is current again, even if the link is switched back on |
-| `Revocation.lean:an_approval_names_one_step` | An effect someone else's call asks for runs only on its holder's approval of that generation, argument and step |
-| `Revocation.lean:a_withdrawn_declassification_stays_withdrawn` | A withdrawn "show" decision is never live again, so stored state derived through it renders as a placeholder from then on |
-| `Confinement.lean:a_fork_starts_with_its_code_alone`; `Confinement.lean:a_listing_never_mints` | A fork holds no member, link, listing, grant, declassification, run or state; publishing changes only the listing |
-| `Confinement.lean:a_fork_never_reaches_its_parents_grants` | In every reachable state a fork's runs hold only the fork's own grants |
-| `Origin.lean:release_needs_every_contributing_tag_holder` | For any history in which nothing opens source `t` to a person (`t`'s holder showing it to them, or a reader check finding they read it), they are shown the same values and placeholders, in order, whatever `t` holds; nobody else's decision counts |
-| `Origin.lean:a_hidden_runs_choices_show_q_nothing` | Inserting anywhere an action of a run that read `t` (what its code chooses to do) changes nothing that person is shown |
-| `Origin.lean:what_reaches_q_carries_no_closed_source` | In any state where `t` is closed to a person, nothing carrying `t` may reach them: a lost reader or a withdrawn "show" takes effect at the next release |
-| `Origin.lean:only_a_tags_holder_declassifies_it` | Every "show" decision in any reachable state was made by the holder of the source it shows |
-
-"Shown" means every way a value reaches a person in the model: a response or push to their session (`release`),
-shared state rendered to them (`render`), and arguments a tool step sends to a grant's holder (`toolStep`). Persisted
-state is inside the theorem, not beside it.
-
-The history theorem fixes the sequence of events and varies only what a source holds. Who chooses events is a premise
-(§3): people and runs with an empty label. What a run that read `t` chooses is covered by the insertion theorem, and
-what a person who read `t` chooses to do is relaying (§5).
-
-**The attack behind each guard** (`Attacks.lean`): each of the ten guards a `Policy` switch removes, removed alone,
-with a trace evaluated by the kernel where the attack succeeds, then the full policy stopping the same trace. The
-other checks in `permits` are ordinary access checks (sessions, roles, liveness, domains, which state a run may
-observe); the confinement and revocation theorems cover them.
-
-| Guard removed | What happens |
-|---|---|
-| The per-tag holder check | Sam switches on "people can see it" for everything; Bob is shown Alice's private repository, and what Bob sees varies with what it holds. This is v6's rule "what a lent function returns is the owner's disclosure", refuted once the slate holds other people's data |
-| Labels on stored state | Alice's data passes through a shared cell without its label and reaches Bob |
-| The requester check on personal grants | Alice let everyone see what her part shows, driven by her own inputs; Bob drives her connection with an input of his own and reads an answer she never asked for |
-| Generations | Sam switches a lend off while Bob's call waits, then on again; the old call resumes and reaches Bob |
-| The tool-flow check | A function holding Alice's repository and Sam's Linear sends Alice's secret to Sam's Linear as an argument |
-| Revision binding | Ben edits a function Sam lent with an effect; Sam's next use runs the effect with the argument Ben's code computed, unasked |
-| Bare forks | Dana's fork keeps Sam's lend and still calls Sam's server after Sam stops sharing |
-| Only unlabelled runs post | A run that read Alice's repository posts shared state, and her secret reaches Bob |
-| The sink audience | Alice's part mails her own secret to Bob through her own mail grant, from her own request |
-| One approval, one effect | Sam approves one effect of Bob's call; the call repeats it |
+`lean/Kinu/SharingNimbus/Model.lean` models the pure share-policy decisions and a small host state machine.
+`lean/Kinu/SharingNimbus/Theorems.lean` proves server authority, current personal consent, exact-call approvals,
+code-only forks, revocation, fixed-history noninterference and delegated-egress disclosure. The latter assumes
+the remote server honors its read-only/closed-world declarations. The fixture
+`lean/fixtures/share-policy-cases.json` replays the pure decisions against the shipped TypeScript. Viewer-account
+routing, confined processes, sealed rendering, the show prompt and Workers/Nimbus isolation still need runtime
+checks and attack replays in workerd. See [Formal specification](./FORMAL-SPEC.md) and the traceability manifest.
 
 ## 5. Not claimed
 
@@ -264,22 +205,19 @@ observe); the confinement and revocation theorems cover them.
 
 ## 6. What it asks of people
 
-Proved in `Friction.lean`:
+The retired room design set the following interaction goals:
 
 - **Asked once.** A call once admitted stays admissible until one of its grants is switched off, its function's code
-  moves past the granted revision, or the requester's session ends (`Friction.lean:a_granted_call_stays_admissible`). A person is not
+  moves past the granted revision, or the requester's session ends. A person is not
   asked again for an item on a slate until it is revoked or its reach widens.
-- **Nothing unused.** A grant serves only the function it was granted for (`Friction.lean:a_grant_serves_only_its_function`); a
+- **Nothing unused.** A grant serves only the function it was granted for; a
   slate asks for a connection where a part that needs it is first used, never up front.
-- **No dead ends.** A placeholder asks exactly the holders of the sources the viewer cannot read
-  (`Friction.lean:a_placeholder_asks_exactly_the_holders_of_what_it_hides`); their yes to that part shows it
-  (`Friction.lean:the_holders_consent_shows_a_placeholder`) and no other part (`Friction.lean:a_parts_consent_shows_only_that_part`);
-  connecting admits a personal part (`Friction.lean:connecting_admits_a_personal_part`); being added lets a person in
-  (`Friction.lean:adding_someone_lets_them_in`). Every refusal names whom to ask. These cover admission and visibility; a
+- **No dead ends.** A placeholder asks exactly the holders of the sources the viewer cannot read; their yes to that part shows it
+   and no other part;
+  connecting admits a personal part; being added lets a person in. Every refusal names whom to ask. These cover admission and visibility; a
   tool call that would send one person's data to another's account asks the first person, and the design avoids that
   case by splitting runs per holder (§2.4).
-- **The owner decides only on widening or outflow.** An effect waits for its holder only on someone else's call
-  (`Friction.lean:an_effect_waits_only_for_another_persons_call`); a placeholder asks the owner only about the owner's own sources.
+- **The owner decides only on widening or outflow.** An effect waits for its holder only on someone else's call; a placeholder asks the owner only about the owner's own sources.
   Sharing, adding people and lending are the owner's own acts, made in the share sheet. One kind of decision repeats
   by design: an effect someone else's call asks for waits for its holder each time, bound to that step's argument
   and the grant's generation. The holder is shown the request only after the tool-flow check passes, since the
@@ -305,10 +243,9 @@ What each person sees, as the v7 wireframes must draw it:
 
 ## 7. Four scenarios against Cloudflare OS
 
-Prompts are questions put to a person; clicks are app actions, not typing or sign-in pages. Kinu's people counts are
-run in the model (`Friction.lean`, the scenario theorems). Cloudflare OS's are read from origin/main
-(`packages/workshop-frontend/src/ShareModal.tsx`, `ObserverConfigModal.tsx`, `BlueprintLandingPage.tsx`,
-`packages/workshop-backend/src/overseer.ts`).
+Historical comparison: prompts are questions put to a person; clicks are app actions, not typing or sign-in pages.
+These counts described the retired room scenarios, not an execution or proof of the current Nimbus implementation.
+The Cloudflare OS comparison was read from its then-current UI and overseer sources.
 
 | Scenario | Kinu | Cloudflare OS |
 |---|---|---|
@@ -368,18 +305,12 @@ Build step 3b (`/mnt/local/kinu/tmp/sharing/plan-3b.md`, on hold) is redone agai
   (`packages/core/src/slates/surface.ts`), `cutShareGrant`'s observe-by-default rule
   (`packages/core/src/slates/capability-graph.ts`), and the live-share tables (`packages/core/src/slates/live-shares.ts`)
   replaced by the room's.
-- **Refinement tests**, so the requirements move to `proved-and-refined`:
-  - `flows` and the label a run gets at admission, as a fixture generated from the model, run against the room's
-    label code (`PR-SHARE-005`);
-  - `permits` for `admit`, `toolStep`, `release` and `render` on generated states, against the caretaker
-    (`PR-SHARE-002`, `PR-SHARE-004`);
-  - generation sequences (revoke between admission and a queued approval, between two tool steps, before release)
-    as traces with their expected outcomes, in workerd (`PR-SHARE-004`);
-  - the eight attack traces and the four scenarios, replayed end to end against the built room, each attack red when
-    its guard is removed (`PR-SHARE-005`, `PR-SHARE-007`).
 
-**Built, 2026-10-15.**
-- **Model refinement.** `lean/fixtures/sharing-traces.json` holds 400 generated traces of model events. The traces cover a slate and its forks, signed-out visitors and approvals. `packages/core/tests/refinement-sharing.test.ts` replays every trace against the caretaker, one room per slate, and agrees on every step. It allows one documented exception: a person's own data, in their own request, waits for them as an outflow.
+The room-specific refinement plan below is historical and is not a current proof obligation or refinement claim.
+
+**Historical build evidence, 2026-10-15.**
+
+- **Retired model refinement.** The room's generated traces and caretaker replay test were removed with the room runtime. The current policy fixture checks different functions and makes no claim to replay these historical attacks.
 - **The ten guards' attacks, end to end.** `packages/cf-backend/tests/workerd/room-attacks.test.ts` runs each attack in workerd against a built room. Rooms, sockets, grants, sealed bindings and confined runs are real. Only the people's MCP servers are faked, at their own accounts, and every call that reaches an account is logged.
 - **Mutation evidence.** Each guard was removed one at a time, and each removal turned its attack red: `/mnt/local/kinu/tmp/sharing/mutations/` (README, diffs, logs). The exception is the bare-fork guard. A fork is a room of its own and holds none of its parent's grants, so there is no guard to remove.
 - **Defects found along the way, all fixed:**
@@ -389,7 +320,7 @@ Build step 3b (`/mnt/local/kinu/tmp/sharing/plan-3b.md`, on hold) is redone agai
   - a confined run's storage stub was refused for every call;
   - a holder could not decline a waiting step;
   - a revoked grant left its step waiting.
-- **The four scenarios.** These are the kernel-evaluated traces of `Friction.lean`. They are not yet replayed in workerd.
+- **The four scenarios.** These are the kernel-evaluated traces of the retired room scenario model. They are not yet replayed in workerd.
 - **Browsers (#10).** A confined run drives a browser only as its requester's own, in their own request:
   - The class's drive is authorized by the room without running (`authorize`). Its dial goes through the run's sealed `__browser` stub to the room, which connects only a browser one of the requester's workspaces opened.
   - The room proxies the socket and closes it when the run ends or its grant does.

@@ -1,7 +1,7 @@
 /**
  * The Gallery's index, in the control plane's own database: one listing per listed slate, written only through its
  * workspace's share ({@link GalleryListingSync}), with stars and reports. A listing is its share's address, the one way
- * in, so it grants nothing (`Confinement.lean`: `a_listing_never_mints`), and it goes the moment its share goes off.
+ * in, so it grants nothing, and it goes the moment its share goes off.
  *
  * The listings are a cache of the workspaces' shares, which each share's next sync writes again; stars and reports are
  * people's own, kept by their email and forgotten with their account.

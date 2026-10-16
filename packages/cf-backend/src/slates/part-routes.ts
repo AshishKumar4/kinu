@@ -5,7 +5,8 @@
  */
 import { Hono } from 'hono';
 import { err, ERROR_STATUS, json, safeJson } from '@kinu.run/core';
-import { PartRunRequestSchema, PartShowRequestSchema } from '@kinu.run/core/slates';
+import * as v from 'valibot';
+import { PartRunAnswerSchema, PartRunRequestSchema, PartShowRequestSchema } from '@kinu.run/core/slates';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { rawParam, type FamilyEnv } from '../api/context';
 import type { AuthIdentity } from '../auth/session';
@@ -37,7 +38,8 @@ partRoutes.post('/api/slates/:workspace/:slate/parts/:part/run', async (c) => {
   // Not shared with this person: the same answer as no slate at all.
   if (answer === null) return err(404, 'No such slate');
 
-  return json({ body: answer }, { headers: NO_STORE });
+  // Held to the answer's contract as the part frame parses it: a malformed one is the host's fault, never drawn.
+  return json({ body: v.parse(PartRunAnswerSchema, answer) }, { headers: NO_STORE });
 });
 
 partRoutes.post('/api/slates/:workspace/:slate/parts/:part/show', async (c) => {

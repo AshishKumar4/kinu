@@ -5,7 +5,7 @@
 
   Core: Types
   Safety: Credentials, DeviceView, DeviceToken
-  Sharing: Model, Facts, Confinement, Revocation, Origin, Attacks, Friction
+  SharingNimbus: Model, Theorems
   MCTS: StorageIsolation, Backpropagation, Uct
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
   Agent: Lifecycle, FiberDurability, TurnQueue
@@ -26,13 +26,8 @@ import Kinu.Safety.DeviceView
 import Kinu.Safety.DeviceToken
 
 -- Sharing proofs (the sharing design page, packages/cf-backend/src/share-design)
-import Kinu.Sharing.Model
-import Kinu.Sharing.Facts
-import Kinu.Sharing.Confinement
-import Kinu.Sharing.Revocation
-import Kinu.Sharing.Origin
-import Kinu.Sharing.Attacks
-import Kinu.Sharing.Friction
+-- Nimbus sharing policy and confined personal parts
+import Kinu.SharingNimbus
 
 -- MCTS proofs
 import Kinu.MCTS.StorageIsolation
