@@ -61,6 +61,7 @@ export async function sessionFixture(input: {
   initTerminalEffectTable(rt.storage.execRaw);
 
   const terminal = new TerminalTransitions({
+    standing: async () => 'live' as const,
     sql: rt.storage.sql, actor: actor.handle, effects: {}, now: Date.now, transaction,
     turnIsLive: () => actor.session.inFlight,
     scheduleRetry: async () => {}, settled: async () => {}, hold: (close) => close(),

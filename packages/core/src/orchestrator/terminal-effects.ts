@@ -2,9 +2,10 @@
  * One durable row per side effect a settled turn owes, all claimed before any runs, so an interruption
  * leaves a replayable suffix. Every effect must be idempotent or keyed. Rows carry a versioned key
  * (mismatch: blocked), the recorded input, and a disposition plus schedule; definitive failures end one unrun.
- * `TerminalTransitions.end` settles only when no row is owed.
+ * What an actor that no longer acts owed stands down, whatever it is. `TerminalTransitions.end` settles only when no
+ * row is owed.
  */
-import { Data, Result } from 'effect';
+import { Data, Exit, Result } from 'effect';
 import * as v from 'valibot';
 
 import { parseJsonValue, JsonValueSchema, type JsonValue } from '../utils/json';
@@ -14,6 +15,7 @@ import {
 } from './turn-lifecycle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
+import type { ActorStanding } from '../identity/workspace-actors';
 import { writeActivityLog } from '../identity/activity-log';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode, providerStatusOf } from '../providers/util';
 import { statedRetryAfterMs } from '../providers/fallback-cooldown';
@@ -29,7 +31,7 @@ import {
   branchHeadId, branchOutcomeFromJournal, settleBranchIntoTakes, settlePendingBranch,
   type BranchStatusEvent, type PendingBranch,
 } from '../steer-branch';
-import { diagnostics, toKinuError, type ErrorCode } from '../obs/index';
+import { attempt, diagnostics, hold, toKinuError, type ErrorCode } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
 import { TASK_TURN_ENDINGS } from '../subordinates/temporary';
@@ -577,6 +579,8 @@ export class TerminalEffectLedger {
     readonly scheduleRetry: (atMs: number) => Promise<void>;
     /** A Durable Object's held reads; absent, every read asks. */
     readonly holds?: Holds;
+    /** Whether the actor still acts, as the place that retires it answers; one retiring or retired owes nothing. */
+    readonly standing: () => Promise<ActorStanding>;
   }) {
     this.actorId = deps.actor.actorId;
     const holds = deps.holds ?? ASKED;
@@ -675,7 +679,9 @@ export class TerminalEffectLedger {
 
   /** `inFlight`: every sequence this process is running now, live; this one is counted in it either way. */
   async drive(sequenceId: string, inFlight: ReadonlySet<string> = new Set()): Promise<TerminalSequenceRun> {
-    const claimed = this.pending(sequenceId);
+    const owed = this.pending(sequenceId);
+    // An actor dismissed or retired before its effects ran owes them to no one: they stand down unrun.
+    const claimed = owed.length > 0 && await this.stoodDown(sequenceId, owed) ? [] : owed;
     // Armed before the first attempt: an eviction in the inline pass must still leave a wake. Deferred for every
     // sequence this process runs, so the live process is not woken into its own effects.
     await this.armWake(new Set([...inFlight, sequenceId]));
@@ -858,48 +864,7 @@ export class TerminalEffectLedger {
       // A real synchronous failure rolled back its body, not its right to back off.
       if (inline) this.recordAttempt(sequenceId, row, nextAttemptAt);
 
-      if (this.deferredForRateLimit(sequenceId, row, { cause: err }, nextAttemptAt)) return;
-
-      const failure = toKinuError({
-        doing: `running the ${name} effect a settled turn owed`,
-        cause: err,
-        otherwise: 'unavailable',
-      });
-
-      diagnostics.failure('turn.terminal_effect_failed', failure, { sequence: sequenceId, effect: row.key, attempts });
-      const refused = providerRefusalCode({ cause: err });
-      const code = refused ?? failure.code;
-
-      if (isDefinitiveTerminalFailure(code)) {
-        const status = providerStatusOf({ cause: err });
-        const detail = status === undefined ? failure.message : `the model provider answered HTTP ${String(status)}`;
-        diagnostics.event('turn.terminal_effect_abandoned', { sequence: sequenceId, effect: row.key, attempts, code });
-        writeActivityLog(() => ({ sql: this.deps.sql, actor: this.deps.actor }), {
-          event: 'terminal_effect_abandoned',
-          detail: `${EFFECT_ACTIVITY[name] ?? name} failed: ${detail}, so it is not retried`,
-          elapsedMs: 0, createdAt: this.deps.now(),
-        });
-        void this.deps.sql`DELETE FROM terminal_effects
-          WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key}`;
-
-        return;
-      }
-
-      if (refused !== null && OWNER_FIXABLE_REFUSALS.has(refused)) {
-        if (this.releases !== releases) {
-          this.due(sequenceId, row.key);
-          diagnostics.event('turn.terminal_effect_refusal_outdated', { sequence: sequenceId, effect: row.key, attempts, code: refused });
-
-          return;
-        }
-
-        this.record(sequenceId, row.key, 'parked');
-        diagnostics.event('turn.terminal_effect_parked', { sequence: sequenceId, effect: row.key, attempts, code: refused });
-
-        return;
-      }
-
-      this.record(sequenceId, row.key, 'pending');
+      await this.failed(sequenceId, row, { cause: err }, { name, attempts, nextAttemptAt, releases });
 
       return;
     }
@@ -923,6 +888,60 @@ export class TerminalEffectLedger {
       SET status = 'completed'
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${row.key} AND status != 'completed'`;
+  }
+
+  /** A run that threw, once its attempt is recorded: ended, owed later, abandoned, parked on the owner, or owed again. */
+  private async failed(
+    sequenceId: string, row: PendingRow, thrown: { readonly cause: unknown },
+    run: { readonly name: TerminalEffectName; readonly attempts: number; readonly nextAttemptAt: number; readonly releases: number },
+  ): Promise<void> {
+    const { name, attempts, nextAttemptAt, releases } = run;
+
+    // Refused because its actor was dismissed or retired while it ran: ended, never a failure.
+    if (await this.stoodDown(sequenceId, [row])) return;
+
+    if (this.deferredForRateLimit(sequenceId, row, thrown, nextAttemptAt)) return;
+
+    const failure = toKinuError({
+      doing: `running the ${name} effect a settled turn owed`,
+      cause: thrown.cause,
+      otherwise: 'unavailable',
+    });
+
+    diagnostics.failure('turn.terminal_effect_failed', failure, { sequence: sequenceId, effect: row.key, attempts });
+    const refused = providerRefusalCode(thrown);
+    const code = refused ?? failure.code;
+
+    if (isDefinitiveTerminalFailure(code)) {
+      const status = providerStatusOf(thrown);
+      const detail = status === undefined ? failure.message : `the model provider answered HTTP ${String(status)}`;
+      diagnostics.event('turn.terminal_effect_abandoned', { sequence: sequenceId, effect: row.key, attempts, code });
+      writeActivityLog(() => ({ sql: this.deps.sql, actor: this.deps.actor }), {
+        event: 'terminal_effect_abandoned',
+        detail: `${EFFECT_ACTIVITY[name] ?? name} failed: ${detail}, so it is not retried`,
+        elapsedMs: 0, createdAt: this.deps.now(),
+      });
+      void this.deps.sql`DELETE FROM terminal_effects
+        WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key}`;
+
+      return;
+    }
+
+    if (refused !== null && OWNER_FIXABLE_REFUSALS.has(refused)) {
+      if (this.releases !== releases) {
+        this.due(sequenceId, row.key);
+        diagnostics.event('turn.terminal_effect_refusal_outdated', { sequence: sequenceId, effect: row.key, attempts, code: refused });
+
+        return;
+      }
+
+      this.record(sequenceId, row.key, 'parked');
+      diagnostics.event('turn.terminal_effect_parked', { sequence: sequenceId, effect: row.key, attempts, code: refused });
+
+      return;
+    }
+
+    this.record(sequenceId, row.key, 'pending');
   }
 
   /** A real backend transaction also makes bun:sqlite safe against process death between the body and disposition. */
@@ -952,6 +971,27 @@ export class TerminalEffectLedger {
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key} AND status != 'completed'`;
     diagnostics.event('turn.terminal_effect_rate_limited', { sequence: sequenceId, effect: row.key, attempts: row.attempts + 1, dueInMs: dueAt - now });
     this.record(sequenceId, row.key, 'pending');
+
+    return true;
+  }
+
+  /**
+   * Whether `rows` stood down: their actor no longer acts, so each is ended and logged as ended, never as a failure. A
+   * standing that cannot be read is no sign the actor ended: the effects answer for themselves.
+   */
+  private async stoodDown(sequenceId: string, rows: readonly PendingRow[]): Promise<boolean> {
+    const read = await hold(attempt({ doing: 'reading whether the actor a settled turn owed effects still acts', otherwise: 'unavailable' },
+      async () => await this.deps.standing()));
+
+    const standing = Exit.isSuccess(read) ? read.value : 'live';
+
+    if (standing === 'live') return false;
+
+    for (const row of rows) {
+      diagnostics.event('turn.terminal_effect_ended', { sequence: sequenceId, effect: row.key, standing });
+      void this.deps.sql`DELETE FROM terminal_effects
+        WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key}`;
+    }
 
     return true;
   }

@@ -326,6 +326,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     initTerminalEffectTable(this.execRaw);
 
     const terminal = new TerminalTransitions({
+      standing: async () => 'live' as const,
       sql: this.executor, actor, effects: {}, now: () => Date.now(), transaction: (body) => this.ctx.storage.transactionSync(body),
       turnIsLive: () => false, scheduleRetry: async () => {}, settled: async () => {}, hold: (close) => close(),
     });

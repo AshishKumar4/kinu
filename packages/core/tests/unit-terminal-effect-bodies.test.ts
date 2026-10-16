@@ -84,6 +84,7 @@ describe('a held owed outcome', () => {
       sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), effects, now: () => now,
       transaction: (body) => db.transaction(body)(),
       scheduleRetry: async () => {},
+      standing: async () => 'live' as const,
     });
 
     const row = (key: string) => sql<{ attempts: number; next_attempt_at: number }>`
@@ -123,6 +124,7 @@ describe('an interrupted attempt keeps only committed work', () => {
         sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), now: () => 1_000,
         transaction,
         scheduleRetry: async () => {},
+        standing: async () => 'live' as const,
         fault: () => cutting ? (at: string) => {
           if (at === phase) throw new TerminalEffectInterrupt(phase, 'turn_record', '');
         } : null,
@@ -159,6 +161,7 @@ describe('an interrupted attempt keeps only committed work', () => {
       sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), now: () => now,
       transaction: <T>(body: () => T): T => db.transaction(body)(),
       scheduleRetry: async () => {},
+      standing: async () => 'live' as const,
       effects: { turn_record: terminalEffect({ input: v.object({}), runSync: () => {
         void sql`INSERT INTO effect_output (answer) VALUES ('partial')`;
         throw new Error('the recorder failed');
@@ -187,6 +190,7 @@ describe('an interrupted attempt keeps only committed work', () => {
       sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), now: () => 1_000,
       transaction: <T>(body: () => T): T => db.transaction(body)(),
       scheduleRetry: async () => {},
+      standing: async () => 'live' as const,
       effects: { auto_title: terminalEffect({ input: v.object({}), run: async () => {
         paused.resolve();
         await release.promise;

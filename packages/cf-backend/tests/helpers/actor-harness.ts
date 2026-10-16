@@ -850,6 +850,7 @@ export async function until(holds: () => boolean, what: string): Promise<void> {
  */
 export function ledgerOver(db: Database): TerminalTransitions {
   return new TerminalTransitions({
+    standing: async () => 'live' as const,
     actor: workspaceMainActor(db), sql: wrapDatabase(db).sql, effects: {}, now: () => Date.now(),
     scheduleRetry: async () => {}, transaction: (body) => body(), turnIsLive: () => false, settled: async () => {},
     hold: (close) => close(),

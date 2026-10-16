@@ -1046,6 +1046,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get terminal(): TerminalTransitions {
     this._terminalTransitions ??= new TerminalTransitions({
       actor: this.actorHandle(),
+      standing: async () => this.actorDirectoryStore().standing(this.actorHandle().actorId),
       sql: this.boundSql,
       holds: this.held,
       effects: this.terminalEffectTable(),

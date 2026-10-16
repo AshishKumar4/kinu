@@ -640,6 +640,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         },
         runSettled: (run) => host().runSettled(run),
         hireAdvisor: (advisor) => host().hireAdvisor(advisor),
+        standing: () => host().standing(),
         owes: async (seq, next, holds, report) => {
           const delayedEnd = report.runEnds.length > 0 ? delayedRunEnd : null;
 
