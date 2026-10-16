@@ -95,6 +95,30 @@ test("a socket's frames go on in the order they came, though the second's author
   expect(reached).toEqual(['stop', 'send']);
 });
 
+test("a frame whose handler takes steps to its place keeps it ahead of the shallower frame sent after it", async () => {
+  // As the Stop's RPC reaches the chat room through the Agent base's dispatch, a send's chat frame by fewer steps.
+  const steps = async (left: number): Promise<void> => {
+    if (left > 0) await steps(left - 1);
+  };
+
+  const placed: string[] = [];
+
+  const { handlers, socket, asked, bothAsked } = await gated(async (name) => {
+    if (name === 'stop') await steps(12);
+    placed.push(name);
+  });
+
+  const stop = handlers.onMessage(socket, frame('stop'));
+  const send = handlers.onMessage(socket, frame('send'));
+
+  await bothAsked;
+  asked[1]?.();
+  asked[0]?.();
+  await Promise.all([stop, send]);
+
+  expect(placed).toEqual(['stop', 'send']);
+});
+
 test("a frame whose handler waits on a long turn does not hold the next frame back", async () => {
   const { promise: turnEnds, resolve: endTurn } = Promise.withResolvers<void>();
 
