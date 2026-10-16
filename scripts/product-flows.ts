@@ -1257,6 +1257,21 @@ export interface LiveMemoryVerdict {
 const MEMORY_SECTION = `document.querySelector('#inspector [data-section="memory"]')?.textContent ?? ''`;
 
 /**
+ * The Agent tab shown with its memory section: its strip button pressed until the tab is the current one, as a press
+ * on a strip being redrawn is lost, and a tab drawn without the section fails at once, naming what it drew instead.
+ * Staging a907148d8 waited 366 s here in silence; the section was there on the same build a run later.
+ */
+const AGENT_MEMORY_SHOWN = `(() => {
+  const tab = document.querySelector('#inspector button[aria-label="Agent"]');
+  if (tab === null) throw new Error('no Agent tab in the inspector strip');
+  if (tab.getAttribute('aria-current') !== 'true') { tab.click(); return false; }
+  const sections = [...document.querySelectorAll('#inspector [data-section]')].map((section) => section.getAttribute('data-section'));
+  if (!sections.includes('agent-who')) return false;
+  if (!sections.includes('memory')) throw new Error('the Agent tab drew without its memory section; it drew ' + (sections.join(', ') || 'no section'));
+  return true;
+})()`;
+
+/**
  * One tab's turn saves a memory note while another holds the Agent tab open: the open pane shows the note without a
  * reload, from the write's own frame, and reads nothing more while the first tab works on.
  */
@@ -1269,8 +1284,7 @@ export async function openMemoryFollowsItsWriter(target: FlowTarget): Promise<Li
     const watcher = await openWorkspacePage(target, path);
 
     await openInspector(watcher);
-    await watcher.evaluate(stripTab('Agent'));
-    await until(watcher, "the Agent tab's memory section", `document.querySelector('#inspector [data-section="memory"]') !== null`);
+    await until(watcher, "the Agent tab's memory section", AGENT_MEMORY_SHOWN);
     const counter = await countRpc(watcher);
     const reads = () => counter.counts().sent.getMemoryContent ?? 0;
 
