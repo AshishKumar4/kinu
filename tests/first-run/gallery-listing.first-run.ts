@@ -40,25 +40,12 @@ const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.n
 
 const SLATE = 'gallerylisted';
 
-/** The workspace tells the Gallery in the background, so its index is read until it agrees or the budget is spent. */
-const READ_EVERY_MS = 500;
+/** The public index's listing whose line is `line`, if it holds one: the owner's listing and revoke each answer once the
+ *  Gallery has been told, so one read says. */
+async function indexed(origin: string, line: string): Promise<GalleryListing | null> {
+  const page = await fetch(`${origin}${galleryPath({ q: line, sort: 'new', category: null, page: 0 })}`);
 
-/** The public index's listing whose line is `line`, read until it is there (`want`) or gone, or the budget is spent. */
-async function indexed(origin: string, line: string, want: boolean, budget: AbortSignal): Promise<GalleryListing | null> {
-  const read = async () => {
-    const page = await fetch(`${origin}${galleryPath({ q: line, sort: 'new', category: null, page: 0 })}`);
-
-    return page.ok ? v.parse(GalleryPageSchema, await page.json()).listings.find((each) => each.line === line) ?? null : null;
-  };
-
-  let held = await read();
-
-  while (!budget.aborted && (held !== null) !== want) {
-    await new Promise<void>((resolve) => setTimeout(resolve, READ_EVERY_MS));
-    held = await read();
-  }
-
-  return held;
+  return page.ok ? v.parse(GalleryPageSchema, await page.json()).listings.find((each) => each.line === line) ?? null : null;
 }
 
 /** Its owner lists `share` in the Gallery with `line`, as their share sheet does: the share as it answers after. */
@@ -87,7 +74,7 @@ describe(SUITE, () => {
     await runFirstRunCase(PLAN, {
       id: CASE, defect: DEFECT, modelCalls: 'none', budgetMs: 5 * 60_000, genesis: false,
       purpose: 'Disposable live share listed in the Gallery and taken off it; no model task.',
-      async run({ session, plan, budget }) {
+      async run({ session, plan }) {
         const goals: EvalSubgoal[] = [];
         const server = `eval-gallery-${crypto.randomUUID().slice(0, 8)}`;
         const line = `First-run listing ${crypto.randomUUID()}`;
@@ -114,11 +101,11 @@ END`));
         const url = created?.success === true ? created.output.url : null;
 
         const listed = await listShare({ origin: plan.origin, headers: webHeaders(plan.identity), workspace: session.workspace, share: share?.id ?? '', line });
-        const found = await indexed(plan.origin, line, true, budget);
+        const found = await indexed(plan.origin, line);
         const page = await pageNeeds(plan.origin, session.workspace);
 
         await session.slateOp({ op: 'unshare', share: share?.id ?? '' });
-        const after = await indexed(plan.origin, line, false, budget);
+        const after = await indexed(plan.origin, line);
 
         goals.push({
           what: 'share-answers-as-listed',

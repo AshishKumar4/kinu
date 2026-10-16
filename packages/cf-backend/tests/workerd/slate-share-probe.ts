@@ -161,7 +161,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private lastCall: string | null = null;
   private readonly deferrals: DeferredApprovalQueue;
   /** Each live share whose listing the Gallery was told, in order, since this object started. */
-  private readonly relisted: string[] = [];
+  private readonly galleryTold: string[] = [];
   /** Each viewer's own account, as their parts reach it. */
   private readonly accounts = new FakeViewerAccounts();
   /** The run the last part call named, as its process's binding sent it. */
@@ -260,7 +260,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
         retire: (share) => { this.deferrals.retireSlateEffects(share); },
       },
-      listingChanged: (share) => { this.relisted.push(share.id); },
+      listingChanged: async (share) => { this.galleryTold.push(share.id); },
+      relisted: (shares) => { this.galleryTold.push(...shares.map((share) => share.id)); },
     });
   }
 
@@ -501,7 +502,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** The shares the Gallery was told of since the last ask, or since this object started. */
   told(): string[] {
-    return this.relisted.splice(0);
+    return this.galleryTold.splice(0);
   }
 
   /** The owner edits the board and it builds anew; its revision now. */

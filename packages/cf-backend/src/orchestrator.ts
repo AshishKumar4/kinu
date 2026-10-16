@@ -5776,11 +5776,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
         retire: (share) => { this.deferrals.retireSlateEffects(share); },
       },
-      // The Gallery's index is a copy of the shares listed here, told in the background: one it missed is told again at
-      // the next start of the slates.
-      listingChanged: (share) => {
-        this.detachOwned(logged('gallery.listing_sync_failed', { doing: "telling the Gallery a share's listing", otherwise: 'unavailable' },
-          () => this.syncListing(share), { workspace: this.name, share: share.id }));
+      // The Gallery's index is a copy of the shares listed here: told as the owner lists, unlists or revokes, and again in
+      // the background at each start of the slates, which mends one it missed.
+      listingChanged: async (share) => settleLogged('gallery.listing_sync_failed', { doing: "telling the Gallery a share's listing", otherwise: 'unavailable' },
+        async () => this.syncListing(share), { workspace: this.name, share: share.id }),
+      relisted: (shares) => {
+        this.detachOwned(logged('gallery.listing_sync_failed', { doing: "telling the Gallery this workspace's listings again", otherwise: 'unavailable' },
+          async () => { await Promise.all(shares.map(async (share) => this.syncListing(share))); }, { workspace: this.name }));
       },
       // Each viewer's own account answers their parts' calls, with their consents and connections: never this workspace.
       partConnections: {

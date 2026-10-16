@@ -103,8 +103,11 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   shareChanged?(slate: string): Promise<void>;
   /** Where `owner` shares' effects wait for the owner, and how a share's open ones retire with it. */
   readonly ownerEffects?: OwnerEffects & { retire(share: string): void };
-  /** The Gallery's copy of a live share's listing is behind it: the host tells the Gallery, in the background. */
-  listingChanged?(share: LiveShareRecord): void;
+  /** The Gallery's copy of a live share's listing is behind it, where its owner waits on the change: told now. The host
+   *  logs its own failure, which the next start's {@link SlateController.relist} mends. */
+  listingChanged?(share: LiveShareRecord): Promise<void>;
+  /** The Gallery told again of these listed shares, in the background: its index refills from them. */
+  relisted?(shares: readonly LiveShareRecord[]): void;
   previewed?(slate: string): void;
 }
 
@@ -479,7 +482,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     this.ports.ownerEffects?.retire(revoked.id);
 
     // Off the Gallery with its address: a revoked share is listed nowhere.
-    if (held.gallery !== null) this.ports.listingChanged?.(revoked);
+    if (held.gallery !== null) await this.ports.listingChanged?.(revoked);
 
     await this.processes.stopWhere((running) => running.caller.share === revoked.id);
     await this.ports.shareChanged?.(revoked.slate);
@@ -542,7 +545,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       this.live.setListing(held.id, input.listed ? { line: input.line, category: input.category } : null);
       const listed = this.live.get(held.id) ?? held;
 
-      this.ports.listingChanged?.(listed);
+      yield* Effect.promise(async () => this.ports.listingChanged?.(listed));
 
       return listed;
     })));
@@ -562,9 +565,9 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
   /** The Gallery told again of every listed live share, or of `slate`'s alone: its index refills from these. */
   relist(slate?: string): void {
-    for (const share of this.live.list()) {
-      if (share.gallery !== null && (slate === undefined || share.slate === slate)) this.ports.listingChanged?.(share);
-    }
+    const listed = this.live.list().filter((share) => share.gallery !== null && (slate === undefined || share.slate === slate));
+
+    if (listed.length > 0) this.ports.relisted?.(listed);
   }
 
   /**
