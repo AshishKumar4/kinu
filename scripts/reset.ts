@@ -684,8 +684,9 @@ function publishTables(environment: InfraEnvironment, recordFile: string): numbe
 async function walkTables(environment: InfraEnvironment, recordFile: string): Promise<number> {
   const { config } = plan(environment);
   const started = v.parse(ResetSchema, JSON.parse(readFileSync(recordFile, 'utf8')));
-  const { reached, listed } = await walk(tablesTarget(environment, config));
-  const { lines, failed } = walkLines(reached, listed);
+  const walked = await walk(tablesTarget(environment, config));
+  const { reached } = walked;
+  const { lines, failed } = walkLines(walked);
 
   for (const line of lines) console.log(`tables: ${line}`);
   writeLines(`${recordFile}.census.tsv`, censusLines(reached));
