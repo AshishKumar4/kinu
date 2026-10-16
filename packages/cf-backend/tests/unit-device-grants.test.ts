@@ -56,6 +56,21 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     await harness.closeDeviceHarness();
   });
 
+  test("an agent's parked call keeps the surface of the turn it was made in: the owner's answer wakes its re-issue on it", async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'once';
+
+    await harness.deviceCall(harness.workspace, 'exec', ['make deploy'], { agentName: WORKSPACE, actorId: 'agent-1', surface: 'interactive' });
+    await harness.deviceCall(harness.workspace, 'exec', ['make test'], { agentName: WORKSPACE, actorId: 'agent-1', surface: 'one-shot' });
+
+    expect(harness.consentWakes.map(({ actorId, surface }) => ({ actorId, surface }))).toEqual([
+      { actorId: 'agent-1', surface: 'interactive' },
+      { actorId: 'agent-1', surface: 'one-shot' },
+    ]);
+    expect(harness.deviceFrames.filter((f) => f.method === 'exec').map((f) => f.params[0])).toEqual(['make deploy', 'make test']);
+    await harness.closeDeviceHarness();
+  });
+
   test('once the owner grants the workspace, calls run without asking again', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'always';

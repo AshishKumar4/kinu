@@ -826,8 +826,12 @@ describe("deploy gate", () => {
       const run = await runDeploy({ failingGate: phase });
 
       expect(run.status, `${phase} did not fail the deploy`).toBe(1);
-      expect(besideTheBuild(run.events, armadaBuild("staging")), `${phase} failed and a later step ran\n${run.stdout}`)
-        .toEqual({ events: STOPS.slice(0, index + 1), started: phase === phaseRun("upload") });
+      expect(besideTheBuild(run.events, armadaBuild("staging")).events, `${phase} failed and a later step ran\n${run.stdout}`)
+        .toEqual(STOPS.slice(0, index + 1));
+      // The build is begun beside the upload gates and cancelled when they are red. Whether its first line ran before
+      // the cancel is the scheduler's (5514baf29, ea103fdd1), so the deploy's own word that it cancelled one is read.
+      expect(run.stdout.includes("The build on armada was cancelled"), `${phase} failed\n${run.stdout}`)
+        .toBe(phase === phaseRun("upload"));
       expect(run.report.slice(-2)).toEqual(["mark end", "render"]);
     }
   });

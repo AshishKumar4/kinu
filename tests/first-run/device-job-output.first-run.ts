@@ -144,7 +144,8 @@ describe(SUITE, () => {
             const machine = await attachMachine({ account, name: MACHINE, home: scratchDir('first-run-devjob') });
             held.machine = machine;
 
-            // The machine's first call raises the card; answered once, the command runs.
+            // The machine's first call raises the card. Answered once, it is re-issued in the turn the answer wakes, on
+            // the window of the chat turn it was parked from, so it still outlasts that window into a job.
             const raised = socket.broadcast(CONSENT_REQUESTED);
             const turn = session.prompt(ASK);
             const cardShown = await Promise.race([raised, turn.then(() => false)]);

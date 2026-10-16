@@ -7,6 +7,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
  */
 
 import type { DynamicApproval } from '../types/dynamic-context';
+import { InvocationSurfaceSchema, type InvocationSurface } from '../types/jobs';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { AgentSignal } from '../types/signals';
 import { diagnostics, renderThrownChain, settle, type ErrorCode, type KinuError } from '../obs/index';
@@ -87,10 +88,13 @@ export interface DeviceConsentRequest {
   /** The hub's grant epoch the call is made under, which every revocation advances: an approval given under an
    *  earlier one answers none of the calls made under a later one. */
   readonly epoch: number;
+  /** The surface of the turn the call was made in, which set its background policy: the re-issue an answer wakes for
+   *  is the same call, and runs under it. Absent for a caller with no turn. */
+  readonly surface?: InvocationSurface;
 }
 
 /** Carries the id the answer addresses, so a reloaded client can re-render its cards. */
-export interface PendingDeviceConsent extends Omit<DeviceConsentRequest, 'actorId' | 'epoch'> {
+export interface PendingDeviceConsent extends Omit<DeviceConsentRequest, 'actorId' | 'epoch' | 'surface'> {
   readonly consentId: string;
   readonly createdAt: number;
 }
@@ -131,12 +135,17 @@ export interface DeviceConsentRegistryDeps {
 /** The `kinuEvent` kind an answer wakes its asker under. */
 const DEVICE_CONSENT_SIGNAL = 'device_consent';
 
+/** The turn-metadata key under which a wake that resumes parked calls carries the surface they were made on: the turn
+ *  it opens re-issues them, under the background policy of the turn they were parked from. */
+export const RESUMED_SURFACE = 'kinuSurface';
+
 type DeviceConsentStatus = 'queued' | DeviceConsentAnswer;
 
 /** One ask: the card while it waits, then the owner's answer until the call it answers spends it. */
 export interface DeviceConsentAsk extends PendingDeviceConsent {
   readonly actorId?: string;
   readonly epoch: number;
+  readonly surface?: InvocationSurface;
   readonly status: DeviceConsentStatus;
   readonly decidedAt: number | null;
 }
@@ -153,7 +162,8 @@ export function initDeviceConsentAsksTable(execRaw: RawSqlExec): void {
     created_at      INTEGER NOT NULL,
     epoch           INTEGER NOT NULL,
     status          TEXT NOT NULL DEFAULT 'queued',
-    decided_at      INTEGER
+    decided_at      INTEGER,
+    surface         TEXT
   )`);
 }
 
@@ -169,6 +179,7 @@ interface AskRow {
   epoch: number;
   status: string;
   decided_at: number | null;
+  surface: string | null;
 }
 
 const StatusSchema = v.picklist(['queued', 'once', 'always', 'deny']);
@@ -186,12 +197,13 @@ function toAsk(r: AskRow): DeviceConsentAsk {
     decidedAt: r.decided_at,
     ...(r.workspace_name !== null && { workspaceName: r.workspace_name }),
     ...(r.actor_id !== null && { actorId: r.actor_id }),
+    ...(r.surface !== null && { surface: v.parse(InvocationSurfaceSchema, r.surface) }),
   };
 }
 
 /** The card a client renders: the ask without its answer. */
 function pendingOf(ask: DeviceConsentAsk): PendingDeviceConsent {
-  const { status: _status, decidedAt: _decidedAt, actorId: _actorId, epoch: _epoch, ...pending } = ask;
+  const { status: _status, decidedAt: _decidedAt, actorId: _actorId, epoch: _epoch, surface: _surface, ...pending } = ask;
 
   return pending;
 }
@@ -225,9 +237,9 @@ export class DeviceConsentStore {
 
   insert(ask: DeviceConsentAsk): void {
     void this.sql`INSERT INTO device_consent_asks
-      (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at, epoch, status, decided_at)
+      (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at, epoch, status, decided_at, surface)
       VALUES (${ask.consentId}, ${ask.actorId ?? null}, ${ask.deviceId}, ${ask.deviceLabel}, ${ask.method},
-        ${ask.command}, ${ask.workspaceName ?? null}, ${ask.createdAt}, ${ask.epoch}, ${ask.status}, ${ask.decidedAt})`;
+        ${ask.command}, ${ask.workspaceName ?? null}, ${ask.createdAt}, ${ask.epoch}, ${ask.status}, ${ask.decidedAt}, ${ask.surface ?? null})`;
     markStoreChanged(this.sql);
   }
 
@@ -273,6 +285,19 @@ function answerWakeMessage(answered: readonly DeviceConsentAsk[]): string {
   section('Device use DENIED: do not re-issue:', answered.filter((ask) => ask.status === 'deny'));
 
   return lines.join('\n');
+}
+
+/**
+ * The surface the turn re-issuing `approved` runs under: the one they were made on. Calls parked from both surfaces are
+ * re-issued as interactive ones, since a call detached at its window still ends, as a job that wakes its agent, while
+ * one held past its own holds a turn a person watches. Null when none recorded one.
+ */
+function resumedSurface(approved: readonly DeviceConsentAsk[]): InvocationSurface | null {
+  const surfaces = new Set(approved.flatMap((ask) => ask.surface ?? []));
+
+  if (surfaces.size === 0) return null;
+
+  return surfaces.has('interactive') ? 'interactive' : 'one-shot';
 }
 
 /** The asks parked on the owner for a workspace's device calls, and the answers waiting on the calls they answer. */
@@ -340,11 +365,12 @@ export class DeviceConsentRegistry {
 
     return Effect.forEach(askers, (actorId) => {
       const own = answered.filter((ask) => ask.actorId === actorId);
+      const surface = resumedSurface(own.filter((ask) => ask.status !== 'deny'));
 
       return Effect.result(this.deps.wake(actorId, {
         kind: DEVICE_CONSENT_SIGNAL,
         text: answerWakeMessage(own),
-        metadata: { ids: own.map((ask) => ask.consentId) },
+        metadata: { ids: own.map((ask) => ask.consentId), ...(surface !== null && { [RESUMED_SURFACE]: surface }) },
       }));
     });
   }

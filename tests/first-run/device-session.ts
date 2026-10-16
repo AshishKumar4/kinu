@@ -30,13 +30,14 @@ import { homedir, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
 
-import { parseJsonValue, type JsonValue } from '../../packages/core/src/index';
+import { parseJsonValue, type JsonValue, type RunEvent } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { infraBoundary } from '@kinu.run/test-utils';
 import { AGENT_HOME } from '../../packages/cli/src/config';
 import { DAEMON_LOG_PATH, DEVICE_CONFIG_PATH } from '../../packages/cli/src/device-connect';
-import { ExecutorCommandSchema, type PublicExecutorResult, type PublicSessionResolution } from '../../evals/src/session';
+import { ExecutorCommandSchema, type KinuPublicSession, type PublicExecutorResult, type PublicSessionResolution } from '../../evals/src/session';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
+import type { PublicSocket } from './public-socket';
 
 /** How much of a deployment's answer a finding carries. Enough to name the SQL
  *  error and the route that raised it, short enough to read in a test failure. */
@@ -241,6 +242,45 @@ function pause(ms: number): Promise<void> {
 
 /** The words a device call answers while its consent waits on the owner (`deviceConsentQueued`): NOT RUN, parked. */
 export const CONSENT_PARKED = /NOT RUN: using .* waits on the owner's consent/;
+
+/** The cause the run an owner's consent answer opens is stamped with (device-consent.ts `DEVICE_CONSENT_SIGNAL`). */
+const CONSENT_WAKE = 'device_consent';
+
+/**
+ * Whether the run an owner's consent answer woke has ended, which is when the call that answer let through has been
+ * re-issued and its result is in the ledger. The wake opens that run once the answer lands, so the ledger is read again
+ * at each turn `room` sees close, from `closed`, the room's wait registered before the answer; the run, once there, is
+ * followed to its end. Waited on, never sent into: a send would land in that run and be the ask it answers. False when
+ * the room or the case budget ends first.
+ */
+export async function consentWakeEnded(
+  session: Pick<KinuPublicSession, 'runEvents' | 'followRun'>, room: PublicSocket, closed: Promise<boolean>,
+): Promise<boolean> {
+  let next = closed;
+
+  for (;;) {
+    const events = await session.runEvents();
+    const woken = events.find((event) => event.type === 'run_start' && event.caused_by === CONSENT_WAKE)?.runId;
+
+    if (woken !== undefined) return await runEnded(session, woken, events);
+
+    if (!(await next)) return false;
+    next = room.turnClosed();
+  }
+}
+
+/** Whether `runId` reached its `run_end`: in `events` already, or on its own stream from the last of them. */
+async function runEnded(session: Pick<KinuPublicSession, 'followRun'>, runId: string, events: readonly RunEvent[]): Promise<boolean> {
+  const own = events.filter((event) => event.runId === runId);
+
+  if (own.some((event) => event.type === 'run_end')) return true;
+
+  for await (const event of session.followRun(runId, Math.max(...own.map((seen) => seen.eventIndex)))) {
+    if (event.type === 'run_end') return true;
+  }
+
+  return false;
+}
 
 /**
  * Bind a workspace to a machine, by driving the consent flow the product runs.

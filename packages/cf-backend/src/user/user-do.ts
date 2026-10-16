@@ -40,7 +40,7 @@ import { UserTerminals } from './terminals';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall, type McpToolSurface } from './mcp-servers';
 import { UserAccountMemory } from './account-memory';
-import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, SqlValue } from '@kinu.run/core';
+import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, InvocationSurface, SqlValue } from '@kinu.run/core';
 import {
   UserSessions, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
@@ -665,7 +665,7 @@ export class UserDO extends Agent<Env> {
 
   deviceRpc(caller: UserCaller, method: string, params: JsonValue[], opts?: {
       deviceId?: string; agentName?: string; actorId?: string; checkpoint?: DeviceCheckpointHint;
-      timeoutMs?: number; requestId?: string; backgroundJobId?: string;
+      timeoutMs?: number; requestId?: string; backgroundJobId?: string; surface?: InvocationSurface;
       onOutput?: (output: DeviceExecOutput) => void | Promise<void>;
     }): Promise<string | undefined> {
     return this.devices.deviceRpc(caller, method, params, opts);
