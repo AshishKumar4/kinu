@@ -97,6 +97,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
+  /** A live share of `slate` started or stopped: its server's authority changed, so its running app ends. */
+  shareChanged?(slate: string): Promise<void>;
   previewed?(slate: string): void;
 }
 
@@ -405,6 +407,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
               fork: operation.fork, url: (handle) => this.ports.shareUrl(handle),
             });
 
+            await this.ports.shareChanged?.(operation.id);
+
             return await this.changedShares(answered({ value: created }));
           }
 
@@ -422,6 +426,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     const revoked = this.live.revoke(share);
 
     await this.processes.stopWhere((running) => running.caller.share === revoked.id);
+    await this.ports.shareChanged?.(revoked.slate);
 
     return projectJsonValue({ value: revoked });
   }
