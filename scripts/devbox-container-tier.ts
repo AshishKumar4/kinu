@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
-import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
+import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
 import { containerApplicationsNamed, deleteContainerApplication, r2, requireCloudflareAccountId } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
@@ -290,10 +290,9 @@ function prepareLedger() {
   return { ledger, accessKeyId, secretAccessKey };
 }
 
+/** Each abandoned run's teardown, replayed by this script's own `--cleanup-report` in a directory of its own. */
 async function recoverContracts(ledger: ContractLedger, scratch: string): Promise<Step[]> {
-  const recovered: Step[] = [];
-
-  for (const abandoned of await ledger.pending()) {
+  return recoverAbandoned(await ledger.pending(), async (abandoned) => {
     const directory = join(scratch, abandoned.run);
 
     mkdirSync(directory, { recursive: true });
@@ -303,14 +302,9 @@ async function recoverContracts(ledger: ContractLedger, scratch: string): Promis
     const replay = Bun.spawn([process.execPath, import.meta.path, '--cleanup-report', recovery], { cwd: REPO, env: process.env, stdout: 'inherit', stderr: 'inherit' });
 
     try {
-      if (await replay.exited !== 0) throw new Error(`unfinished contract teardown ${abandoned.run} failed; no new fixture was created`);
-      const { job, index, attempt, vessel } = abandoned.owner;
-
-      recovered.push({ contract: 'recovered-teardown', ms: 0, detail: { run: abandoned.run, owner: { job, index, attempt, vessel } } });
+      if (await replay.exited !== 0) throw new Error(`its replay exited ${String(replay.exitCode)}`);
     } finally { rmSync(recovery, { force: true }); }
-  }
-
-  return recovered;
+  });
 }
 
 async function main(): Promise<void> {
