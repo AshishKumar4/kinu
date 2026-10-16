@@ -7,7 +7,7 @@ import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, t
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
 import { SingleUseTickets } from './single-use-tickets';
-import { DEVICE_JOIN_TICKET_PREFIX } from '@kinu.run/core';
+import { DEVICE_JOIN_TICKET_PREFIX, type InvocationSurface } from '@kinu.run/core';
 
 interface DeviceConsentCheck {
   agentName: string;
@@ -19,6 +19,8 @@ interface DeviceConsentCheck {
   workspaceName?: string | undefined;
   /** The agent that made the call, whom the owner's answer wakes; absent for the owner's own. */
   actorId?: string | undefined;
+  /** The surface of the turn the call was made in, which its re-issue keeps. */
+  surface?: InvocationSurface | undefined;
 }
 
 /** Measured from the last rotation (every accepted connect), so a copy of `device.json`
@@ -678,11 +680,13 @@ export class UserDevices {
     params: JsonValue[],
     opts?: {
       deviceId?: string; agentName?: string; actorId?: string; checkpoint?: DeviceCheckpointHint;
-      timeoutMs?: number; requestId?: string; backgroundJobId?: string;
+      timeoutMs?: number; requestId?: string; backgroundJobId?: string; surface?: InvocationSurface;
       onOutput?: (output: DeviceExecOutput) => void | Promise<void>;
     },
   ): Promise<string | undefined> {
     const resolved = await this.host.requireTier(caller, 'device.rpc');
+    // The agent whose call this is, and the surface of the turn it made it in: what a consent ask it raises records.
+    const { actorId, surface } = opts ?? {};
 
     return settle(Effect.gen({ self: this }, function* () {
       const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
@@ -708,7 +712,8 @@ export class UserDevices {
         const consent = yield* this.checkDeviceConsent({
           agentName: consentAgent, deviceId, method, params,
           workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
-          actorId: opts?.actorId,
+          actorId,
+          surface,
         });
 
         if (!consent.allowed) return yield* Effect.fail(new KinuError(consent.code, consent.reason));
@@ -1077,13 +1082,14 @@ export class UserDevices {
   /** Is this workspace bound to this device? Core's rule decides (`deviceConsentOutcome`): a standing binding, else the
    *  workspace's ask, which an unreachable workspace leaves unanswered rather than refused. */
   private checkDeviceConsent(check: DeviceConsentCheck): Effect.Effect<DeviceConsentOutcome, KinuError> {
-    const { agentName, deviceId, method, params, workspaceName, actorId } = check;
+    const { agentName, deviceId, method, params, workspaceName, actorId, surface } = check;
     const action = summarizeDeviceAction(method, params);
     const deviceLabel = this.deviceLabel(deviceId);
 
     const request: DeviceConsentRequest = {
       deviceId, deviceLabel, method: action.method, command: action.command, epoch: this.consentEpoch(),
       ...(workspaceName !== undefined && { workspaceName }), ...(actorId !== undefined && { actorId }),
+      ...(surface !== undefined && { surface }),
     };
 
     return deviceConsentOutcome({

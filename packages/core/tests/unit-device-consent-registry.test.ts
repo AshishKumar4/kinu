@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Effect } from 'effect';
 import {
-  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, DENIAL_STANDING_MS,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, DENIAL_STANDING_MS, RESUMED_SURFACE,
   type AgentSignal, type DeviceConsentNotice, type DeviceConsentRequest,
 } from '../src/index';
 import { KinuError } from '../src/obs/index';
@@ -164,6 +164,38 @@ describe('an ask parks on the owner, as a deferred approval does', () => {
     retire(hire);
 
     expect(reg.list().map((pending) => pending.command)).toEqual(['ls']);
+  });
+});
+
+describe('the re-issue an answer wakes for runs under the surface its call was parked from', () => {
+  test('the wake opens its turn on the surface the call was made on, which the card does not show', async () => {
+    const { reg, woken, req } = registry();
+
+    reg.ask(req({ surface: 'interactive' }));
+    expect(reg.list()[0]).not.toHaveProperty('surface');
+    await reg.resolve('cons-1', 'once');
+    reg.ask(req({ command: 'ls', surface: 'one-shot' }));
+    await reg.resolve('cons-2', 'once');
+
+    expect(woken.map(({ signal }) => signal.metadata?.[RESUMED_SURFACE])).toEqual(['interactive', 'one-shot']);
+  });
+
+  test('calls parked from both surfaces are re-issued as interactive; a denial, or a call made in no turn, names none', async () => {
+    const { reg, woken, req } = registry();
+
+    reg.ask(req({ workspaceName: 'ws', surface: 'one-shot' }));
+    reg.ask(req({ workspaceName: 'ws', command: 'ls', surface: 'interactive' }));
+    await reg.resolve('cons-1', 'always');
+    reg.ask(req({ command: 'pwd', surface: 'interactive' }));
+    await reg.resolve('cons-3', 'deny');
+    reg.ask(req({ command: 'whoami' }));
+    await reg.resolve('cons-4', 'once');
+
+    expect(woken.map(({ signal }) => [signal.metadata?.ids, signal.metadata?.[RESUMED_SURFACE] ?? null])).toEqual([
+      [['cons-1', 'cons-2'], 'interactive'],
+      [['cons-3'], null],
+      [['cons-4'], null],
+    ]);
   });
 });
 

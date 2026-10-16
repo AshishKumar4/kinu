@@ -13,18 +13,14 @@
  * travel on the case's one socket, where arrival order is the room's send order. A read over the session's own
  * socket would race this one, and "before the settle" would mean nothing.
  *
- * CONSENT FIRST. The machine is granted `always` before the ask, as two-machines and approve-clears grant it: a call
- * the owner's answer lets through is re-issued in the turn that answer wakes, and a woken turn's foreground window
- * outlasts the command, so no job would form. The ask runs it in a chat turn of its own, once that wake has ended.
- *
- * NO CLOCK. The wake is awaited on its own end, the turn on its own done frame, and the job's settle on the
- * workspace's own `reads_changed`.
+ * NO CLOCK. The card is awaited on the broadcast the chat renders it from, the turn on its own done frame, and the
+ * job's settle on the workspace's own `reads_changed`.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { JOB_OUTPUT_EVENT, JobOutputFrameSchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT } from '../../packages/core/src/index';
-import { consentWakeEnded, grantDeviceConsent, type DeviceAccount } from './device-session';
+import type { DeviceAccount } from './device-session';
 import { attachMachine, detachMachine, type AttachedMachine } from './daemon';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { openPublicSocket, type HeardBroadcast, type PublicSocket } from './public-socket';
@@ -48,6 +44,9 @@ const DEFECT: FirstRunDefect = {
 };
 
 const MACHINE = 'kinu-first-run-devjob';
+
+/** The broadcast the chat renders a consent card from (the orchestrator's `consents` announce). */
+const CONSENT_REQUESTED = 'device_consent';
 
 /** The jobs read the Work tab lists from, and the one its `reads_changed` names. */
 const JOBS_READ = 'listBackgroundJobs';
@@ -145,16 +144,21 @@ describe(SUITE, () => {
             const machine = await attachMachine({ account, name: MACHINE, home: scratchDir('first-run-devjob') });
             held.machine = machine;
 
-            const closed = socket.turnClosed();
-            await grantDeviceConsent(account, machine.deviceId, session.workspace);
+            // The machine's first call raises the card. Answered once, it is re-issued in the turn the answer wakes, on
+            // the window of the chat turn it was parked from, so it still outlasts that window into a job.
+            const raised = socket.broadcast(CONSENT_REQUESTED);
+            const turn = session.prompt(ASK);
+            const cardShown = await Promise.race([raised, turn.then(() => false)]);
+            const card = cardShown ? (await session.pendingConsents()).find((pending) => pending.deviceId === machine.deviceId) : undefined;
+            const decided = card === undefined ? null : await session.resolveConsent(card.consentId, 'once');
+            await turn;
 
-            if (!(await consentWakeEnded(session, socket, closed))) {
-              subgoals.push({ what: 'job-detached', reached: false, detail: 'the socket or the budget ended before the run the grant woke ended' });
+            subgoals.push({
+              what: 'consent-answered',
+              reached: decided?.ok === true,
+              detail: card === undefined ? 'the turn raised no consent card for the machine' : `card ${card.consentId} answered once`,
+            });
 
-              return subgoals;
-            }
-
-            await session.prompt(ASK);
             const settled = await settledJob(socket);
 
             subgoals.push({

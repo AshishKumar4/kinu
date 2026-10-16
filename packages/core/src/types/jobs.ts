@@ -1,3 +1,4 @@
+import * as v from 'valibot';
 import type { WorkMode } from './turn';
 
 /** `serving` is reported, never stored (`listBackgroundJobs`). */
@@ -30,7 +31,11 @@ export interface BackgroundJob {
   serves: number | null;
 }
 
-export type InvocationSurface = 'interactive' | 'one-shot';
+/** Where a call is made, which decides its {@link BACKGROUND_POLICY}: a chat turn a person watches, or a turn an event, a
+ *  timer or a job opened. */
+export const InvocationSurfaceSchema = v.picklist(['interactive', 'one-shot']);
+
+export type InvocationSurface = v.InferOutput<typeof InvocationSurfaceSchema>;
 
 export interface BackgroundPolicy {
   readonly detachAfterMs: number;
