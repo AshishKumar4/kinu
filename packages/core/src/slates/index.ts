@@ -60,6 +60,8 @@ export {
   type PartShowRequest,
 } from './personal-parts';
 
+export { sealedPartDocument } from './part-content';
+
 export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams } from './slate-ai';
 
 export { answer as slateAnswer } from './controller';

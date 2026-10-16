@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  codecAdmits, PartOutputSchema, ROOT_SLATE_CALLER, slateAnswer, slateRevision, UNDECLARED,
+  codecAdmits, PartOutputSchema, ROOT_SLATE_CALLER, sealedPartDocument, slateAnswer, slateRevision, UNDECLARED,
   type PartAiAnswer, type PartConnectionAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateAppCall, type SlateController,
 } from '@kinu.run/core/slates';
 import {
@@ -14,7 +14,6 @@ import { attempt, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs
 import type { ResidentSlateProcess, ResidentSlateProcesses } from './resident';
 import type { SlateSource } from './sources';
 import { slateBatchStub } from './rpc-transport';
-import { sealedPartDocument } from './part-content';
 
 /** Who a personal part runs for: the signed-in person the app's route names, never anything the request says. */
 export interface PartViewer {
