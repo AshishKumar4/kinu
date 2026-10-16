@@ -10,6 +10,7 @@ import { attempt, diagnostics, hold, renderThrownChain, toKinuError } from '../o
 import type { SqlExecutor } from '../types/primitives';
 import { ASKED, type Holds } from '../utils/held-reads';
 import type { ActorHandle } from '../identity/actor-handle';
+import type { ActorStanding } from '../identity/workspace-actors';
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS,
   TerminalEffectLedger,
@@ -53,6 +54,8 @@ export interface TerminalTransitionDeps {
   readonly hold: (close: () => Promise<void>) => Promise<void>;
   /** A Durable Object's held reads; absent, every read asks. */
   readonly holds?: Holds;
+  /** Whether the actor still acts, as the place that retires it answers; one retiring or retired owes nothing. */
+  readonly standing: () => Promise<ActorStanding>;
 }
 
 /** Owns the ordering: claim before the first effect, disposition before release, close only on an empty owed set, prune after close. */

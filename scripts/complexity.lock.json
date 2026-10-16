@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-15",
-  "files": 3338,
-  "functions": 87390,
+  "measuredAt": "2026-10-16",
+  "files": 3350,
+  "functions": 87733,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -335,10 +335,6 @@
     },
     {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 26
-    },
-    {
-      "key": "packages/core/src/orchestrator/terminal-effects.ts#TerminalEffectLedger.attempt",
       "complexity": 26
     },
     {

@@ -222,6 +222,13 @@ export class WorkspaceActorDirectory {
     return actor;
   }
 
+  /** Whether the actor still acts: one whose row is gone, or that is retiring or retired, does not. */
+  standing(actorId: string): ActorStanding {
+    const row = this.retained(actorId);
+
+    return row === null ? 'retired' : actorStanding(row);
+  }
+
   /** Rows another writer replaced: each is read again at its next need. */
   forget(actorIds: readonly string[]): void {
     for (const actorId of actorIds) this.rows?.delete(actorId);

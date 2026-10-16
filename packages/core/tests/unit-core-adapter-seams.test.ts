@@ -352,6 +352,7 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
     });
 
     const terminal = new TerminalTransitions({
+      standing: async () => 'live' as const,
       sql, actor, now: () => 1, transaction: (body) => db.transaction(body)(),
       turnIsLive: () => false, scheduleRetry: async () => {}, settled: async () => {}, hold: (close) => close(),
       effects: {

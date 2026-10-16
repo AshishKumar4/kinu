@@ -976,20 +976,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     for (const { event, detail } of lines) this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`);
   }
 
-  /**
-   * Whether an effect `actorId`'s settled turn owed of its own name or its advisor stands down: the agent was dismissed or
-   * retired before the effect ran, so neither is anyone's concern. An ended effect, logged as one, never as a failure.
-   */
-  private effectEnded(actorId: string, effect: 'auto_title' | 'advisor_review'): boolean {
-    const record = this.actorHost().describe(actorId);
-    const standing = record === null ? 'retired' : actorStanding(record);
-
-    if (standing === 'live') return false;
-    diagnostics.event('turn.terminal_effect_ended', { actor: actorId, effect, standing });
-
-    return true;
-  }
-
   agentWorkspace(actorId: string): AgentWorkspaceHost {
     if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
     this.agentKey(actorId);
@@ -1086,8 +1072,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         });
       },
       parentReport: (report) => hostedParentReport(this.hostedSeams(), this.agentBound(actorId), report),
-      // An ended agent's name is no one's concern: nothing to title.
-      autoTitle: async (subject, title) => this.effectEnded(actorId, 'auto_title') ? null : await hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject, title),
+      autoTitle: async (subject, title) => await hostedAutoTitle(this.hostedSeams(), this.agentBound(actorId), subject, title),
       turnSettled: async (settled) => {
         if (!actorPolicy(this.agentOf(actorId)).workspaceAgent) {
           return settleSync(Effect.fail(new KinuError('denied', "Only the workspace's own agent hands its turns to the workspace.")));
@@ -1097,10 +1082,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.mainTurnSettled(settled);
       },
       runSettled: async (run) => { this.runSettled(actorId, run); },
-      hireAdvisor: async (advisor) => {
-        if (this.effectEnded(actorId, 'advisor_review')) return;
-        await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor);
-      },
+      hireAdvisor: async (advisor) => { await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor); },
+      standing: async () => this.workspaceActors().standing(actorId),
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
       birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({

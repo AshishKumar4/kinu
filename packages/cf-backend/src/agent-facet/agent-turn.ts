@@ -17,7 +17,7 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, CacheWarmArm, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
+import type { ActorStanding, AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, CacheWarmArm, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
 
 /** The answer's metadata, unless the workspace reads the turn's narration before it can say it. One shape, not a union:
  *  a stub's promise of a union is a union of promises. */
@@ -90,6 +90,8 @@ export interface AgentWorkspace {
   /** Any other agent's run settled: the workspace drops the receipts its tools kept under it. Repeatable. */
   runSettled(run: SettledRun): Promise<void>;
   hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
+  /** Whether the agent still acts in the workspace, which dismisses and retires it. */
+  standing(): Promise<ActorStanding>;
   /** `report`: its standing and its delivered runs' ends not yet told, each told again until a report reached. */
   owes(seq: number, next: number | null, holds: boolean, report: AgentReport): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;

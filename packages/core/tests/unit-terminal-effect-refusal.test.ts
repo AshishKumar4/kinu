@@ -81,6 +81,7 @@ function ledgerOver(status: number, run = answering(status)) {
   const wakes: number[] = [];
 
   const ledger = new TerminalEffectLedger({
+    standing: async () => 'live' as const,
     sql, actor, now: () => NOW,
     transaction: (body) => db.transaction(body)(),
     effects: { sleep_time: terminalEffect({ input: v.object({}), run }) },
@@ -216,6 +217,7 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
   };
 
   const transitions = new TerminalTransitions({
+    standing: async () => 'live' as const,
     sql, actor, now: () => NOW, effects,
     scheduleRetry: async (at) => { wakes.push(at); },
     transaction: <T>(body: () => T): T => db.transaction(body)(),
@@ -295,6 +297,7 @@ test.each([
   const wakes: number[] = [];
 
   const transitions = new TerminalTransitions({
+    standing: async () => 'live' as const,
     sql, actor, now: () => NOW,
     effects: {
       auto_title: terminalEffect({ input: v.object({ subject: v.string() }), run: wrapped(gatedGateway([status], answer.promise, calls)) }),
@@ -345,6 +348,7 @@ test('while this process runs a sequence, its backstop wake is armed but not due
   };
 
   const ledger = new TerminalEffectLedger({
+    standing: async () => 'live' as const,
     sql, actor, now: () => NOW,
     transaction: (body) => db.transaction(body)(),
     effects: { sleep_time: terminalEffect({ input: v.object({}), run: hold }) },
@@ -379,6 +383,7 @@ test('a second sequence driven while the first still runs arms no wake into the 
   };
 
   const ledger = new TerminalEffectLedger({
+    standing: async () => 'live' as const,
     sql, actor, now: () => NOW,
     transaction: (body) => db.transaction(body)(),
     effects: {
