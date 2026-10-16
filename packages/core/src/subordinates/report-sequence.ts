@@ -62,7 +62,7 @@ const StoredStandingSchema = v.object({
     provider: v.nullable(MeasureRowSchema),
     gate: v.nullable(v.object({ tokens: v.nullable(v.number()), at: v.string(), seq: v.number(), contextWindow: v.nullable(v.number()) })),
   }),
-  latestRun: v.nullable(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })),
+  latestRun: v.nullable(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()), run: v.optional(v.nullable(v.string()), null) })),
   plans: v.object({ pending: v.boolean(), revision: v.number() }),
   questions: v.number(),
 });

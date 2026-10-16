@@ -534,7 +534,7 @@ export class FacetChat {
       seq: this.deps.database.nextInSequence(), next: at === undefined ? owed : Math.min(at, owed ?? Infinity),
       holds: owed !== null || this.owedWork().length > 0 || runEnds.length > 0,
       report: {
-        standing: upcoming === null ? standing : { ...standing, latestRun: { status: null, userMessage: upcoming } },
+        standing: upcoming === null ? standing : { ...standing, latestRun: { status: null, userMessage: upcoming, run: null } },
         runEnds, working: this.session.turnOwed,
       },
     };

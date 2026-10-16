@@ -84,12 +84,15 @@ describe('buildWorkspaceOverview', () => {
   test('the task preview is trimmed to one card line; the summary stays the wire shape', () => {
     const overview = buildWorkspaceOverview({
       ...EMPTY,
-      latestRun: { status: 'aborted', task: 'x'.repeat(400) },
+      latestRun: { status: 'aborted', task: 'x'.repeat(400), run: 'run-1' },
     });
 
     expect(v.is(WorkspaceOverviewSchema, overview)).toBe(true);
     expect(overview.latestRun?.task?.length).toBe(240);
     expect(overview.latestRun?.status).toBe('aborted');
+    // Owner alerts tell one run from the next by it (owner-alerts.ts); a tile stored before it parses with none.
+    expect(overview.latestRun?.run).toBe('run-1');
+    expect(v.parse(WorkspaceOverviewSchema, { ...overview, latestRun: { status: 'aborted', task: 'x' } }).latestRun?.run).toBeNull();
   });
 });
 
@@ -103,12 +106,12 @@ describe('rosterHeadline', () => {
   });
 
   test('live work outranks a failed run', () => {
-    expect(headline(buildWorkspaceOverview({ ...EMPTY, working: true, latestRun: { status: 'error', task: null } })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, working: true, latestRun: { status: 'error', task: null, run: 'run-1' } })))
       .toEqual({ label: 'Working', status: 'working' });
   });
 
   test('a sealed error outranks durable leftovers', () => {
-    expect(headline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, latestRun: { status: 'error', task: null } })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, latestRun: { status: 'error', task: null, run: 'run-1' } })))
       .toEqual({ label: 'Last run failed', status: 'failed' });
   });
 
@@ -129,7 +132,7 @@ describe('rosterHeadline', () => {
 
   test('nothing to say is "Idle", never a run word', () => {
     expect(headline(buildWorkspaceOverview(EMPTY))).toEqual({ label: 'Idle', status: 'idle' });
-    expect(headline(buildWorkspaceOverview({ ...EMPTY, latestRun: { status: 'completed', task: null } })))
+    expect(headline(buildWorkspaceOverview({ ...EMPTY, latestRun: { status: 'completed', task: null, run: 'run-1' } })))
       .toEqual({ label: 'Idle', status: 'idle' });
   });
 });

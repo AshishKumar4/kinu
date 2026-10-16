@@ -700,7 +700,7 @@ describe('RunEventRecorder.latestRunHeader', () => {
     // Written last so a newest-row read missing the exclusion would lead with it.
     recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'judge' });
 
-    expect(recorder.latestRunHeader()).toEqual({ status: 'error', userMessage: 'newest task' });
+    expect(recorder.latestRunHeader()).toEqual({ status: 'error', userMessage: 'newest task', run: 'run-newest' });
   });
 
   test('an unsealed run reports no status rather than a guessed one', () => {
@@ -708,7 +708,7 @@ describe('RunEventRecorder.latestRunHeader', () => {
 
     recorder.emit('run-open', asked('still going'));
 
-    expect(recorder.latestRunHeader()).toEqual({ status: null, userMessage: 'still going' });
+    expect(recorder.latestRunHeader()).toEqual({ status: null, userMessage: 'still going', run: 'run-open' });
   });
 
   test('an empty log has no header, and a run with no start has no task', () => {
@@ -718,7 +718,7 @@ describe('RunEventRecorder.latestRunHeader', () => {
 
     recorder.emit('run-bare', { type: 'run_end', reason: 'completed' });
 
-    expect(recorder.latestRunHeader()).toEqual({ status: 'completed', userMessage: null });
+    expect(recorder.latestRunHeader()).toEqual({ status: 'completed', userMessage: null, run: 'run-bare' });
   });
 
   test("a run the harness opened, or one recorded without a turn, never gives the person's words", () => {
@@ -737,7 +737,7 @@ describe('RunEventRecorder.latestRunHeader', () => {
     recorder.emit('run-genesis', { type: 'run_end', reason: 'error' });
     recorder.emit('run-side', { type: 'run_start', agentId: 'a', userMessage: 'a side lane' });
 
-    expect(recorder.latestRunHeader()).toEqual({ status: null, userMessage: 'Sort the receipts' });
+    expect(recorder.latestRunHeader()).toEqual({ status: null, userMessage: 'Sort the receipts', run: 'run-side' });
   });
 
   test("the person's words outlast any run of automation after them", () => {

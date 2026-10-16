@@ -14,7 +14,7 @@ import * as v from "valibot";
 import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
 import { detach } from "@kinu.run/core/obs";
-import { ownerAlertOf, ownerIsAway, workspaceDisplayTitle, type OwnerAlert, type RosterEntry } from "@kinu.run/core";
+import { ownerIsAway, watchFrame, workspaceDisplayTitle, type AlertWatch, type OwnerAlert, type RosterEntry } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 
 const SOUND_KEY = "alert-sound";
@@ -174,8 +174,10 @@ function useBrowserTabs(looking: boolean) {
 
 const SAYS: Record<OwnerAlert, string> = { finished: "Finished", "needs-you": "Waiting on you" };
 
-/** A turn that ended with work still owed, as a failed one does: it stopped, and says so. */
-const saysOf = (alert: OwnerAlert, tile: RosterEntry) => (alert === "finished" && tile.overview?.activity === "unfinished" ? "Stopped before it finished" : SAYS[alert]);
+/** A run that failed, or ended with work still owed: it stopped, and says so. */
+const saysOf = (alert: OwnerAlert, tile: RosterEntry) => (alert === "finished" && (tile.overview?.latestRun?.status === "error" || tile.overview?.activity === "unfinished")
+  ? "Stopped before it finished"
+  : SAYS[alert]);
 
 /** Mounted once, in the app's shell. */
 function useOwnerAlerts(): void {
@@ -188,8 +190,8 @@ function useOwnerAlerts(): void {
   const tabs = useBrowserTabs(looking);
   // Read when a frame lands: what the browser's tabs and the account's pages last said.
   const away = useRef<() => boolean>(() => false);
-  // Each workspace's tile as the last frame left it; a workspace not here yet is read from the loaded roster.
-  const seen = useRef(new Map<string, RosterEntry>());
+  // Each workspace as the last frame left it; a workspace not here yet is read from the loaded roster.
+  const watches = useRef(new Map<string, AlertWatch>());
   const proposals = useRef<ReadonlySet<string> | null>(null);
 
   soundOn.current = sound;
@@ -218,11 +220,12 @@ function useOwnerAlerts(): void {
   }, [notify]);
 
   useEffect(() => subscribe((frame) => {
-    const before = seen.current.get(frame.name) ?? listed.current.find((entry) => entry.name === frame.name) ?? null;
-    const said = ownerAlertOf(before, frame.entry);
+    const loaded = listed.current.find((entry) => entry.name === frame.name);
+    const before = watches.current.get(frame.name) ?? (loaded === undefined ? null : watchFrame(null, loaded).watch);
+    const { alert: said, watch } = watchFrame(before, frame.entry);
 
-    if (frame.entry === null) seen.current.delete(frame.name);
-    else seen.current.set(frame.name, frame.entry);
+    if (watch === null) watches.current.delete(frame.name);
+    else watches.current.set(frame.name, watch);
 
     if (said !== null && frame.entry !== null) alert(workspaceDisplayTitle(frame.entry), saysOf(said, frame.entry), `/workspace/${encodeURIComponent(frame.name)}`);
   }), [subscribe, alert]);

@@ -3,7 +3,9 @@
  * I'm not on the tab, or something needs my attention"). A turn of ten tool calls makes no sound and no notification
  * while the owner looks at the page; the same turn with the tab hidden makes one of each, at its end; a parked command's
  * approval makes one of each. Away is away from Kinu: with a second tab of it in front, nothing; both tabs hidden, one
- * alert for the browser; another device looking, nothing; both devices away, one alert each. Every sound a page can
+ * alert for the browser; another device looking, nothing; both devices away, one alert each. Between those turns tabs
+ * open and close, which works the workspace's tile a moment with no run (owed deliveries, the terminal): nothing is
+ * heard outside the turns. Every sound a page can
  * make is counted, so the desktop client's old bell, or any other, would show as a sound too. The roster's frames are
  * read as the page's own listener finishes each one. */
 import { afterAll, expect, test } from 'bun:test';
@@ -160,7 +162,11 @@ interface AlertsVerdict {
   /** Two devices: one looking, then both away. */
   readonly deviceLooking: Heard;
   readonly devicesAway: Heard;
+  /** Heard by any tab over its life and in no turn above: a tab opening or closing, a tile's moment of work. */
+  readonly outside: Heard;
 }
+
+const add = (a: Heard, b: Heard): Heard => ({ sounds: a.sounds + b.sounds, notices: a.notices + b.notices });
 
 let verdict: AlertsVerdict | null = null;
 
@@ -202,6 +208,8 @@ test('silent while the owner looks at Kinu anywhere; once at a turn\'s end or an
       await runTurn(page, TEN_ASK, { tabs, workspace, decisions: 0 });
       const tabsAway = since(before, await total(tabs));
 
+      const secondHeard = await counts(second);
+
       await second.close();
 
       // Another device: a browser of its own, signed in to the same account.
@@ -221,6 +229,8 @@ test('silent while the owner looks at Kinu anywhere; once at a turn\'s end or an
       await runTurn(page, TEN_ASK, { tabs: devices, workspace, decisions: 0 });
       const devicesAway = since(before, await total(devices));
 
+      const phoneHeard = await counts(phone);
+
       await phone.close();
       await device.close();
 
@@ -229,7 +239,10 @@ test('silent while the owner looks at Kinu anywhere; once at a turn\'s end or an
       await runTurn(page, PARK_ASK, { tabs: [page], workspace, decisions: 1 });
       const approval = since(before, await total([page]));
 
-      verdict = { looking, away, approval, tabFront, tabsAway, deviceLooking, devicesAway };
+      const phases = [looking, away, approval, tabFront, tabsAway, deviceLooking, devicesAway].reduce(add);
+      const heard = [await counts(page), secondHeard, phoneHeard].reduce(add);
+
+      verdict = { looking, away, approval, tabFront, tabsAway, deviceLooking, devicesAway, outside: since(phases, heard) };
     });
   } finally {
     await model.stop();
@@ -238,6 +251,6 @@ test('silent while the owner looks at Kinu anywhere; once at a turn\'s end or an
   expect(verdict).toEqual({
     looking: { sounds: 0, notices: 0 }, away: { sounds: 1, notices: 1 }, approval: { sounds: 1, notices: 1 },
     tabFront: { sounds: 0, notices: 0 }, tabsAway: { sounds: 1, notices: 1 },
-    deviceLooking: { sounds: 0, notices: 0 }, devicesAway: { sounds: 2, notices: 2 },
+    deviceLooking: { sounds: 0, notices: 0 }, devicesAway: { sounds: 2, notices: 2 }, outside: { sounds: 0, notices: 0 },
   });
 });

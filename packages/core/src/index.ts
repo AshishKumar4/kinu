@@ -1988,7 +1988,7 @@ export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks 
 
 export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export { ownerAlertOf, ownerIsAway, type OwnerAlert } from './read-models/owner-alerts';
+export { ownerIsAway, watchFrame, type AlertWatch, type OwnerAlert } from './read-models/owner-alerts';
 
 export { OverviewPush, type OverviewPushHost } from './read-models/overview-push';
 
