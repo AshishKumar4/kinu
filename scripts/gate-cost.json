@@ -1084,13 +1084,13 @@
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
     "bun test --timeout=0 tests/browser/live-app-alerts.test.ts": {
-      "wallSeconds": 109,
-      "cpuSeconds": 215.56,
-      "peakRssMb": 4285.5,
-      "peakRunnable": 13,
-      "peakCpuThreads": 3.82,
-      "meanThreads": 1.98,
-      "samples": 402,
+      "wallSeconds": 150.18,
+      "cpuSeconds": 312.46,
+      "peakRssMb": 4989.66,
+      "peakRunnable": 12,
+      "peakCpuThreads": 3.81,
+      "meanThreads": 2.08,
+      "samples": 535,
       "loadAtStart": 0.23,
       "exit": 0,
       "machine": "linux x64, AMD EPYC (4 threads)"

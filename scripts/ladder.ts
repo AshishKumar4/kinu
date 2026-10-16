@@ -2312,12 +2312,15 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test --timeout=0 tests/browser/live-app-alerts.test.ts',
     label: 'Live app in a browser: the owner hears a turn end, or a decision, only while away',
     tier: 'ci',
-    // Measured 2026-10-16 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at d01f7713e: 109.0 s wall,
-    // 216 CPU seconds, 4.2 GiB peak (scripts/gate-cost.json); three turns beside the dev server's boot.
-    seconds: 110,
+    // Measured 2026-10-16 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at cc34fdbe0: 150.2 s wall,
+    // 313 CPU seconds, 4.9 GiB peak (scripts/gate-cost.json); seven turns, two tabs and two devices beside the dev
+    // server's boot.
+    seconds: 150,
     catches: 'a sound or a notification while the owner looks at Kinu, or none while they are away, through the real dev '
       + 'stack and Chrome: a turn of ten tool calls is silent while the page is shown and focused, makes one chime and one '
-      + 'notification at its end with the tab hidden, and a parked command\'s approval makes one of each. Every sound a '
+      + 'notification at its end with the tab hidden, and a parked command\'s approval makes one of each. A second tab in '
+      + 'front keeps a hidden one quiet, and two hidden tabs alert once; another device looking keeps this one quiet, and '
+      + 'two devices away alert once each. Every sound a '
       + 'page can make is counted (any media play, every oscillator), so a chime per tool call from anywhere, as the '
       + 'desktop client\'s bell made one per screenshot (2026-10-15), is red here.',
     blind: 'a hidden tab is emulated (headless Chrome never hides one), and a real browser\'s autoplay and notification '
