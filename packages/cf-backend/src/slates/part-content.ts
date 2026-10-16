@@ -16,8 +16,11 @@ const KEPT = new Set([
 /** Elements dropped with everything inside them. */
 const GONE = 'script, style, template, noscript, iframe, object, embed, svg, math, link, meta, base, form, input, button, textarea, select, img, video, audio, source, picture, canvas';
 
-/** Attributes kept on a kept element: none that styles or names anything; the page's own style is the part's look. */
-const ATTRIBUTES = new Set(['colspan', 'rowspan']);
+/** Attributes kept on a kept element, and then only as a small number: none that styles, names or links anything. */
+const SPANS = ['colspan', 'rowspan'] as const;
+
+/** Kept elements that take no end tag. */
+const VOID = new Set(['br', 'hr']);
 
 const PAGE_STYLE = '<style>body{margin:0;font:14px/1.5 system-ui,sans-serif;color:#1f2937;background:transparent}pre{white-space:pre-wrap}</style>';
 
@@ -33,19 +36,23 @@ export async function sealedPartDocument(html: string): Promise<string> {
   const cut = new HTMLRewriter()
     .on(GONE, { element: (element) => { element.remove(); } })
     .on('*', {
+      // A kept element is written anew, its tag and its spans only: none of the author's attributes is ever copied.
       element(element) {
-        if (!KEPT.has(element.tagName)) {
-          element.removeAndKeepContent();
+        const tag = element.tagName;
 
-          return;
+        if (KEPT.has(tag)) {
+          const spans = SPANS.flatMap((name) => {
+            const value = element.getAttribute(name);
+
+            return value !== null && /^\d{1,3}$/u.test(value) ? [` ${name}="${value}"`] : [];
+          }).join('');
+
+          element.before(`<${tag}${spans}>`, { html: true });
+
+          if (!VOID.has(tag)) element.after(`</${tag}>`, { html: true });
         }
 
-        // Named first: workerd refuses an attribute removed while its attributes are being walked.
-        const names = [...element.attributes].map(([name]) => name);
-
-        for (const name of names) {
-          if (!ATTRIBUTES.has(name)) element.removeAttribute(name);
-        }
+        element.removeAndKeepContent();
       },
     })
     .transform(new Response(html));
