@@ -2,9 +2,9 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
-import { CaretDownIcon, CaretRightIcon, GlobeIcon, UsersIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CaretRightIcon, GlobeIcon, IdentificationCardIcon, UserCircleIcon, UsersIcon, WarningIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { LiveShareRecordSchema, SlateCapabilityGraphSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember } from "@kinu.run/core";
+import { LiveShareRecordSchema, SlateCapabilityGraphSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -37,6 +37,47 @@ const ACCESS: readonly AccessOption<LiveShareVisibility>[] = [
   { id: "users", icon: <UsersIcon size={15} />, label: "Only people you add", detail: "Anyone else who gets the link sees nothing." },
   { id: "public", icon: <GlobeIcon size={15} />, label: "Anyone with the link", detail: "No sign-in needed. It still runs as you." },
 ];
+
+/**
+ * Whose access the shared slate's server acts with (docs/SLATE-SHARING-NIMBUS.md §2). Their own: none of the owner's,
+ * each person's own parts on their own connections, and it can be listed. Mine: the owner's connections within the
+ * reach listed, each change waiting for the owner, never listed in the Gallery.
+ */
+const MODES: readonly { id: ShareMode; icon: ReactNode; label: string; detail: string }[] = [
+  { id: "own", icon: <UserCircleIcon size={16} />, label: "Their own access", detail: "Each person sees their own data, on their own connections. Nothing of yours is used." },
+  { id: "owner", icon: <IdentificationCardIcon size={16} />, label: "My access", detail: "It acts with your connections, within the reach below. Each change waits for you." },
+];
+
+/** The choice of mode, both shown, as it decides what the slate can do with whose data. */
+function ModeChoice({ value, onChange, disabled }: { value: ShareMode; onChange: (mode: ShareMode) => void; disabled: boolean }) {
+  return (
+    <div role="radiogroup" aria-label="It runs with" className="p-group">
+      {MODES.map((mode) => (
+        <button key={mode.id} type="button" role="radio" aria-checked={value === mode.id} data-share-mode={mode.id} disabled={disabled} onClick={() => onChange(mode.id)}
+          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)] ${value === mode.id ? "bg-[var(--c-elevated)]" : ""}`}>
+          <span className={`mt-0.5 flex shrink-0 ${value === mode.id ? "p-accent" : "p-text-3"}`}>{mode.icon}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block p-row-text font-medium p-text">{mode.label}</span>
+            <span className="block p-meta p-text-3">{mode.detail}</span>
+          </span>
+          <span className={`mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border ${value === mode.id ? "border-[var(--c-accent)]" : "border-[var(--c-border-strong)]"}`}>
+            {value === mode.id && <span className="size-2 rounded-full bg-[var(--c-accent)]" />}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** What "My access" lets the people it is shared with do, said before it is chosen; it is never listed. */
+function OwnerWarning() {
+  return (
+    <p data-share-owner-warning className="flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-meta p-text">
+      <WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" />
+      <span>Everyone you share it with acts as you, within this reach: what it reads of yours, they see. Any change it makes waits for you to approve it, and a change to its code stops it until you approve the new reach. It can't be listed in the Gallery.</span>
+    </p>
+  );
+}
 
 /** Who a share lets in, as the share records them. */
 function whoCanOpen(share: LiveShareRecord): string {
@@ -199,6 +240,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   const [graph, setGraph] = useState<SlateCapabilityGraph | null>(fixture?.graph ?? null);
   const [shares, setShares] = useState<LiveShareRecord[]>(fixture?.liveShares ?? []);
   const [visibility, setVisibility] = useState<LiveShareVisibility>("users");
+  const [mode, setMode] = useState<ShareMode>("own");
   const [emails, setEmails] = useState("");
   const [approved, setApproved] = useState<ReadonlySet<string>>(new Set());
   const [fork, setFork] = useState(true);
@@ -245,7 +287,11 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
       const approvals = [...approved].map((key) => v.parse(v.tuple([v.string(), v.string(), v.string()]), JSON.parse(key)))
         .map(([slateId, namespace, member]) => ({ slate: slateId, namespace, member }));
 
-      const result = yield* Effect.promise(async () => shareLive({ workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, approved: approvals, fork }));
+      // Their own access acts with nothing of the owner's: no change is allowed, whatever was ticked before switching.
+      const result = yield* Effect.promise(async () => shareLive({
+        workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, mode, approved: mode === "owner" ? approvals : [], fork,
+      }));
+
       setCreated(result);
       setShares((previous) => [result.share, ...previous]);
 
@@ -253,7 +299,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     }), showing(setErr)), Effect.sync(() => {
       setBusy(false);
     }));
-  })), [canShare, approved, workspace, slate, visibility, emailList, fork, setBusy, onListingPending]);
+  })), [canShare, approved, workspace, slate, visibility, emailList, mode, fork, setBusy, onListingPending]);
 
   const revoke = useCallback((shareId: string) => detach(Effect.gen(function* () {
     setErr(null);
@@ -297,7 +343,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   return (
     <>
       <div className="space-y-4">
-        <Lead>People open your slate and use it. It runs in your workspace, as you.</Lead>
+        <Lead>People open your slate and use it, in your workspace.</Lead>
         {visibility === "users" && <EmailsField value={emails} onChange={setEmails} disabled={busy} placeholder="Add people by email" />}
         <AccessPicker options={ACCESS} value={visibility} onChange={setVisibility} disabled={busy} />
         <label className="flex items-start gap-3">
@@ -309,8 +355,10 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
             <span className="block p-meta p-text-3">A fork is their own copy, on their own connections.</span>
           </span>
         </label>
-        {graph === null && err === null && <div className="flex justify-center py-2"><Loader size="sm" /></div>}
-        {graph !== null && reaches && <Reach graph={graph} visibility={visibility} approved={approved} onToggle={toggle} disabled={busy} />}
+        <ModeChoice value={mode} onChange={setMode} disabled={busy} />
+        {mode === "owner" && graph === null && err === null && <div className="flex justify-center py-2"><Loader size="sm" /></div>}
+        {mode === "owner" && graph !== null && reaches && <Reach graph={graph} visibility={visibility} approved={approved} onToggle={toggle} disabled={busy} />}
+        {mode === "owner" && <OwnerWarning />}
         {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limits}</p>}
         {shares.length > 0 && <SharedNow shares={shares} onStop={(id) => revoke(id)} disabled={busy} />}
         <Failure message={err} />

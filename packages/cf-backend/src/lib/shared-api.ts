@@ -2,7 +2,7 @@
 import { Effect } from 'effect';
 import {
   BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema,
-  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareVisibility,
+  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareVisibility, type ShareMode,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -73,8 +73,10 @@ export function signedInEmail(): Promise<string | null> {
 }
 
 /** Answers the row and its URL (null where this deployment cannot sign one). */
+/** `mode`: whose access the shared server acts with (docs/SLATE-SHARING-NIMBUS.md §2); `approved` counts only for 'owner'. */
 export function shareLive(input: {
   workspace: string; slate: string; visibility: LiveShareVisibility; emails?: string[];
+  mode: ShareMode;
   approved: { slate: string; namespace: string; member: string }[];
   fork?: boolean;
 }): Promise<LiveShareCreated & { listing?: 'pending' }> {

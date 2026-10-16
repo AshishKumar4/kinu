@@ -323,7 +323,7 @@ export {
   type ConsentAsk, type EffectAsk, type PartAction, type PartRunAnswer, type PartRunRequest, type PartShowRequest,
 } from './slates/personal-parts';
 
-export { SlateConsentSchema, type SlateConsent } from './slates/share-modes';
+export { SHARE_MODES, ShareModeSchema, SlateConsentSchema, type ShareMode, type SlateConsent } from './slates/share-modes';
 
 export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 

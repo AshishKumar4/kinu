@@ -83,10 +83,12 @@ describe('slate sharing surfaces', () => {
           const live = await freshPage(gallery, 'sharedialog', theme, viewport);
 
           try {
-            // One sentence, who can open it, the fork choice, and the reach folded behind one row.
-            const lead = await live.$eval('[role="dialog"]', (element) => element.textContent ?? '');
-            expect(lead).toContain('It runs in your workspace, as you.');
+            // Who can open it, the fork choice, and whose access it runs with: their own unless the owner picks theirs
+            // (docs/SLATE-SHARING-NIMBUS.md §2), with no reach of the owner's to list until then.
             expect(await live.$eval('[data-share-access]', (element) => element.getAttribute('data-share-access'))).toBe('users');
+            expect(await live.$eval('[data-share-mode][aria-checked="true"]', (element) => element.getAttribute('data-share-mode'))).toBe('own');
+            expect(await live.$('[data-share-reach]')).toBeNull();
+            expect(await live.$('[data-share-owner-warning]')).toBeNull();
             expect(await live.$eval('[data-share-fork]', (box) => box instanceof HTMLInputElement && box.checked)).toBe(true);
             // docs/SLATE-SHARING.md S5, independent of the constants used to render these bounds.
             const limits = await live.$eval('[data-share-limits]', (element) => element.textContent ?? '');
@@ -99,6 +101,9 @@ describe('slate sharing surfaces', () => {
 
             expect({ requests, dollars }).toEqual({ requests: [120], dollars: [2] });
             
+            // My access lists the reach the people it is shared with act within, and says what that means first.
+            await live.click('[data-share-mode="owner"]');
+            await live.waitForSelector('[data-share-owner-warning]');
             // Folded, the reach names what the slate reaches (a server by its title), not the slate's own keys.
             const reach = await live.$eval('[data-share-reach]', (element) => element.textContent ?? '');
             expect(reach).toContain('GitHub');
