@@ -5655,7 +5655,7 @@ const LIVE_SHARE: LiveShareRecord = {
     { slate: "issue-triage", namespace: "slates.digest", member: "summary", impact: "observe" },
     { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
   ] },
-  createdAt: NOW - 864e5, revokedAt: null, users: [],
+  createdAt: NOW - 864e5, revokedAt: null, users: [], mode: "owner", grantRevision: "r2",
 };
 
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
