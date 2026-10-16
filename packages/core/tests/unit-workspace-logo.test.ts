@@ -1,7 +1,7 @@
 // Defends: a logo a model wrote reaching the page with anything that runs or reaches out, a logo lost to a
 // recoverable slip in its markup, and a new workspace that never asks for its logo.
 import { describe, expect, test } from 'bun:test';
-import { declareTerminalRoster, sanitizeWorkspaceLogoSvg, WORKSPACE_CREATED_EVENT } from '../src/index';
+import { declareTerminalRoster, drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_CREATED_EVENT } from '../src/index';
 
 const svg = (body: string) => `<svg viewBox="0 0 64 64" width="64" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
 
@@ -72,5 +72,48 @@ describe('the logo a new workspace owes', () => {
       .toEqual({ subject: 'Keep the shop fast' });
     expect(declareTerminalRoster(facts(true), { ...genesis('Run the storefront'), role: { kind: 'workspace', mission: 'Run the storefront', event: null } })
       .some((effect) => effect.name === 'workspace_logo')).toBe(false);
+  });
+});
+
+describe("a workspace's own look", () => {
+  /** What workspace `name`'s logo for `subject` asks the model. */
+  const asked = async (subject: string, name: string): Promise<string> => {
+    const prompts: string[] = [];
+
+    await drawWorkspaceLogo(async (_system, prompt) => {
+      prompts.push(prompt);
+
+      return '';
+    }, { subject, name });
+
+    return prompts.join('');
+  };
+
+  /** The hue family and outline a prompt asks for. */
+  const lookOf = (prompt: string) => ({
+    hues: /led by (.+?) hues/u.exec(prompt)?.[1],
+    silhouette: /whose outline as a whole is (.+?)\. /u.exec(prompt)?.[1],
+  });
+
+  // Production, 2026-10-16: these workspaces' "Test Workspace" missions drew near-identical marks.
+  test('two workspaces made for the same purpose are asked for different looks; the purpose still names the object', async () => {
+    const prompts = await Promise.all(['seasoned-stone-c51b3224', 'timber-walnut-b8d7e388'].map(async (name) => await asked('Test workspace', name)));
+
+    expect(new Set(prompts.map((prompt) => JSON.stringify(lookOf(prompt)))).size).toBe(2);
+
+    for (const prompt of prompts) expect(prompt).toContain('Workspace:\nTest workspace');
+  });
+
+  test('a workspace keeps its look on every drawing, so Regenerate redraws it in the same colours and outline', async () => {
+    const prompt = await asked('Demo sandbox', 'handwrought-birch-686b3643');
+
+    expect(await asked('Demo sandbox', 'handwrought-birch-686b3643')).toBe(prompt);
+    expect(Object.values(lookOf(prompt)).every((said) => said !== undefined && said.length > 0)).toBe(true);
+  });
+
+  test('every hue family and every outline is reached across names', async () => {
+    const looks = await Promise.all(Array.from({ length: 400 }, async (_, at) => lookOf(await asked('Test workspace', `workspace-${String(at)}`))));
+
+    expect([new Set(looks.map((look) => look.hues)).size, new Set(looks.map((look) => look.silhouette)).size]).toEqual([12, 6]);
   });
 });

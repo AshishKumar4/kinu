@@ -1,6 +1,7 @@
 /** Model-written SVG is untrusted: rebuilt from an allowlist, shown only as an image. */
 
 import { decodeEntities, XML_ENTITIES } from '../utils/text';
+import { fnv1a32Hex } from '../utils/fnv1a';
 
 const WORKSPACE_LOGO_MAX_BYTES = 8_192;
 
@@ -168,15 +169,44 @@ export function sanitizeWorkspaceLogoSvg(written: string): string | null {
 
 export const WORKSPACE_LOGO_SYSTEM_PROMPT = 'You draw small, calm, animated SVG logos for software workspaces.';
 
-function workspaceLogoPrompt(subject: string): string {
+/**
+ * The colours a workspace's logo leads with and the outline it takes, drawn from the workspace's name: its purpose picks
+ * the object, and two workspaces made for the same purpose still look apart (production 2026-10-16: five "test
+ * workspace" missions drew five near-identical marks).
+ */
+const LOGO_HUES = [
+  'amber and honey', 'coral and rose', 'crimson and plum', 'violet and lilac', 'indigo and periwinkle', 'cobalt and sky',
+  'teal and aqua', 'emerald and mint', 'olive and lime', 'copper and terracotta', 'slate and steel blue', 'magenta and orchid',
+] as const;
+
+const LOGO_SILHOUETTES = [
+  'round and full', 'tall and narrow', 'wide and low', 'stacked in layers', 'leaning on a diagonal', 'two balanced halves',
+] as const;
+
+interface WorkspaceLogoLook {
+  readonly hues: (typeof LOGO_HUES)[number];
+  readonly silhouette: (typeof LOGO_SILHOUETTES)[number];
+}
+
+/** The look of workspace `name`'s logo: the same for every drawing of it, Regenerate's too. */
+function workspaceLogoLook(name: string): WorkspaceLogoLook {
+  const hash = Number.parseInt(fnv1a32Hex(name), 16);
+
+  return {
+    hues: LOGO_HUES[hash % LOGO_HUES.length],
+    silhouette: LOGO_SILHOUETTES[Math.floor(hash / LOGO_HUES.length) % LOGO_SILHOUETTES.length],
+  };
+}
+
+function workspaceLogoPrompt(subject: string, look: WorkspaceLogoLook): string {
   return [
     'Design the logo of a Kinu workspace: a small, living mark for what it was created for.',
     '',
-    "Pick one object from the workspace's own world (a thing it makes, moves, measures or tends) and abstract it to two to five bold, filled shapes, the way a good app icon does. Never a face, a figure, a person or a character. Not a stock icon (no padlock, gear, shopping bag, cart, checkmark, lightbulb, rocket, envelope, speech bubble, ring around a dot) and no letters or text.",
+    `Pick one object from the workspace's own world (a thing it makes, moves, measures or tends) and abstract it to two to five bold, filled shapes, the way a good app icon does, whose outline as a whole is ${look.silhouette}. Never a face, a figure, a person or a character. Not a stock icon (no padlock, gear, shopping bag, cart, checkmark, lightbulb, rocket, envelope, speech bubble, ring around a dot) and no letters or text.`,
     '',
     'Return only one <svg> element, nothing before or after it:',
     '- viewBox="0 0 64 64", no width or height. It is seen at 16 pixels in a sidebar and 44 pixels in a page header, on light and dark pages alike, so the silhouette must read at 16 pixels: fill the square edge to edge within a 2-unit margin, no thin details.',
-    '- Two or three colours chosen for this subject (any hue family), with soft gradients and enough contrast on both a light and a dark page. No background rectangle.',
+    `- Two or three colours led by ${look.hues} hues, the rest chosen for this subject, with soft gradients and enough contrast on both a light and a dark page. No background rectangle.`,
     '- Alive: one or two gentle looping animations of 3 to 6 seconds that act out the object (it turns, rises, flows, fills, breathes or orbits), with SMIL (<animate>, <animateTransform>) or a <style> block with @keyframes. The motion must be visible at 44 pixels, and calm: never flashing, never a jump.',
     '- Under 4000 characters. No scripts, images, links, text, external references or foreignObject.',
     '',
@@ -184,10 +214,10 @@ function workspaceLogoPrompt(subject: string): string {
   ].join('\n');
 }
 
-/** Model errors propagate; a refused drawing is null, and the monogram stays. */
+/** Workspace `name`'s logo for `subject`; model errors propagate, a refused drawing is null, and the monogram stays. */
 export async function drawWorkspaceLogo(
   complete: (system: string, prompt: string) => Promise<string>,
-  subject: string,
+  logo: { readonly subject: string; readonly name: string },
 ): Promise<string | null> {
-  return sanitizeWorkspaceLogoSvg(await complete(WORKSPACE_LOGO_SYSTEM_PROMPT, workspaceLogoPrompt(subject)));
+  return sanitizeWorkspaceLogoSvg(await complete(WORKSPACE_LOGO_SYSTEM_PROMPT, workspaceLogoPrompt(logo.subject, workspaceLogoLook(logo.name))));
 }
