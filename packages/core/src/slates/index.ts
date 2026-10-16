@@ -56,8 +56,8 @@ export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
 export { codecIsFree, CodecSchema, UNDECLARED, type Codec } from './codec';
 
 export {
-  SHARE_MODES, SHARED_STATES, GalleryListingSyncSchema, ShareModeSchema, SharedStateSchema, SlateConsentSchema,
-  type GalleryListingSync, type ShareMode, type SharedState, type SlateConsent, type SlateRevision,
+  SHARE_MODES, GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,
+  type GalleryListingSync, type ShareMode, type SlateConsent, type SlateRevision,
 } from './share-modes';
 
 export {

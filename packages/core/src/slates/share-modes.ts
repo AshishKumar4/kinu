@@ -17,18 +17,9 @@ export type ShareMode = (typeof SHARE_MODES)[number];
 export const ShareModeSchema = v.picklist(SHARE_MODES);
 
 /**
- * What a share's server serves, chosen when it is first shared: `slate`, the slate's own durable app as it is; `copy`,
- * a durable app of the share's own, started empty, while the owner's own keeps its state and its authority.
- */
-export const SHARED_STATES = ['slate', 'copy'] as const;
-
-export type SharedState = (typeof SHARED_STATES)[number];
-
-export const SharedStateSchema = v.picklist(SHARED_STATES);
-
-/**
  * A slate's revision: the digest of the application image its shared server runs. A viewer's consent and the owner's
- * `owner`-mode grant each name the revision they were given for; a different one asks again.
+ * `owner`-mode grant (`slate_live_shares.grant_revision`) each name the revision they were given for; a different one
+ * asks again.
  */
 export type SlateRevision = string;
 

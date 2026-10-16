@@ -26,18 +26,18 @@ Types: `packages/core/src/slates/share-modes.ts` and `packages/core/src/slates/p
 
 `slate_live_shares` is the base share row (next-rc), and it stays the one share record. Its grant (`grant_json`), viewers, audit (`slate_viewer_requests`) and re-read-per-call stop are kept.
 
-**Pending Main's schema review: no DDL lands before it.** The new columns:
+The new columns (schema review approved, 2026-10-16):
 
 ```sql
 mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner')),
-state TEXT NOT NULL DEFAULT 'slate' CHECK (state IN ('slate', 'copy')),
-grant_revision TEXT   -- mode owner: the revision whose reach the owner approved
+-- mode owner: the revision whose reach the owner approved; set exactly when mode is 'owner'
+grant_revision TEXT CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))
 ```
 
 **`own`, "their own access" (the default).**
 - The shared server runs with **no grant for any caller, the owner included**. Every server call is the slate's own: its storage, and the public network without credentials.
 - Personal data reaches a viewer only through their personal parts.
-- A slate whose server needs the owner's connections either uses `owner` mode, or is shared as a `copy` so the owner's own instance keeps its authority.
+- A slate whose server needs the owner's connections either uses `owner` mode, or is shared as a fork so the owner's own slate keeps its authority.
 
 **`owner`, "my access".** The shared server acts with the owner's share grant, which is the base `ShareGrant` members bounded to the slate's reach.
 - Its effects wait for the owner's approval, showing the payload.
@@ -46,17 +46,14 @@ grant_revision TEXT   -- mode owner: the revision whose reach the owner approved
 - When the served revision is not `grant_revision`, owner-grant calls are refused until the owner approves again. An edit by the owner moves `grant_revision`; an edit by any other editor does not.
 - It is off for Gallery listings unless the owner accepts the stronger warning.
 
-**`state` (H7), chosen at first share.**
-- `slate` shares the slate's durable app as it is.
-- `copy` gives the share a durable app of its own, started empty: its own facet SQLite and its own `slate_state` key.
+**Existing state (H7), chosen at first share.** "Share as-is" shares the slate's durable app as it is. "Start the shared copy empty" forks the slate into the same workspace (code only, empty state, the fork path) and shares the fork. It is one path: no column, and no second store per share.
 
-Viewer consents live in the viewer's `UserDO`. **Also pending review:**
+Viewer consents live in the viewer's `UserDO` (schema review approved):
 
 ```sql
 CREATE TABLE IF NOT EXISTS slate_consents (
   workspace TEXT NOT NULL, slate TEXT NOT NULL, server TEXT NOT NULL, root TEXT NOT NULL,
   tools TEXT NOT NULL, effects INTEGER NOT NULL CHECK (effects IN (0, 1)), revision TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
   PRIMARY KEY (workspace, slate, server, root)
 )
 ```
@@ -134,7 +131,7 @@ The shared page learns nothing from a part's size, because it fixes the size.
 | H4: edited code | Consents and `grant_revision` name a revision |
 | H5: network | Confined `globalOutbound: null`; content frame `default-src 'none'`; slate host CSP as today |
 | H6: no withdrawal | A shown payload is a copy into shared state. Said in the prompt. |
-| H7: existing state | `state` chosen at first share |
+| H7: existing state | Chosen at first share: as-is, or a fork in the same workspace |
 | H8: Gallery and `owner` | Listings for `own` only, unless the stronger warning is accepted |
 | H10: load | Measured before ship (§4) |
 | H11: owner's reach | Personal data never enters the shared app's storage, the owner's namespaces or the owner's records |
