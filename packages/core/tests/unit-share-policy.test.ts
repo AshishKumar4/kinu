@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { EffectApprovals, partCallVerdict, serverAuthority, type EffectCall, type LiveShareAuthority } from '../src/slates/share-policy';
+import { containedTool, EffectApprovals, partCallVerdict, serverAuthority, type EffectCall, type LiveShareAuthority } from '../src/slates/share-policy';
 import type { ShareGrant } from '../src/slates/sharing';
 import type { SlateConsent } from '../src/slates/share-modes';
 
@@ -38,7 +38,7 @@ describe("a personal part's call with its viewer's connection", () => {
     workspace: 'w', slate: 'board', server: 'mcp.GitHub', root: { owner: 'acme', repo: 'board' }, tools: ['list_issues'], effects: false, revision: 'r1',
   };
 
-  const read = { server: 'mcp.GitHub', root: { repo: 'board', owner: 'acme' }, tool: 'list_issues', effect: false };
+  const read = { server: 'mcp.GitHub', root: { repo: 'board', owner: 'acme' }, tool: 'list_issues', contained: true };
 
   test('runs under a consent for its tool, root and revision, whatever order the root was written in', () => {
     expect(partCallVerdict(consent, read, 'r1', false)).toEqual({ kind: 'run' });
@@ -51,12 +51,25 @@ describe("a personal part's call with its viewer's connection", () => {
     expect(partCallVerdict(null, read, 'r1', false)).toMatchObject({ kind: 'needs-consent', ask: { tools: ['list_issues'], effects: false } });
   });
 
-  test('acts only where effects were allowed, and then only once approved', () => {
-    const merge = { ...read, tool: 'merge', effect: true };
+  test('a call that is not contained asks only where they allowed it, and dispatches only once approved: a read as much as a send', () => {
+    const fetchUrl = { server: 'mcp.Fetch', root: {}, tool: 'get', contained: false };
+
+    expect(partCallVerdict({ ...consent, server: 'mcp.Fetch', root: {}, tools: ['get'] }, fetchUrl, 'r1', true)).toMatchObject({ kind: 'needs-consent', ask: { effects: true } });
+    expect(partCallVerdict({ ...consent, server: 'mcp.Fetch', root: {}, tools: ['get'], effects: true }, fetchUrl, 'r1', false)).toEqual({ kind: 'needs-approval' });
+
+    const merge = { ...read, tool: 'merge', contained: false };
 
     expect(partCallVerdict({ ...consent, tools: ['merge'] }, merge, 'r1', true)).toMatchObject({ kind: 'needs-consent', ask: { effects: true } });
     expect(partCallVerdict({ ...consent, tools: ['merge'], effects: true }, merge, 'r1', false)).toEqual({ kind: 'needs-approval' });
     expect(partCallVerdict({ ...consent, tools: ['merge'], effects: true }, merge, 'r1', true)).toEqual({ kind: 'run' });
+  });
+});
+
+describe('a contained tool', () => {
+  test('is read-only and closed-world by its own marks; either missing discloses', () => {
+    expect(containedTool({ readOnly: true, closedWorld: true })).toBe(true);
+    expect(containedTool({ readOnly: true })).toBe(false);
+    expect(containedTool({ closedWorld: true })).toBe(false);
   });
 });
 

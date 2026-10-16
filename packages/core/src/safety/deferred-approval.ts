@@ -25,7 +25,8 @@ import {
   type ShellApprovalOutcome,
   type ShellApprovalRequest,
 } from './approval-gate';
-import { boundWriteOf, type ApprovalContent, type BoundFileWrite } from './bound-write';
+import type { ApprovalContent, BoundFileWrite } from './bound-write';
+import { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './approval-kind';
 import { nanoid } from '../utils/nanoid';
 import { parseJsonValue } from '../utils/json';
 import { diagnostics, KinuError, settle, settleLoggedSync, toKinuError } from '../obs/index';
@@ -90,6 +91,12 @@ export type DeferredApprovalVerdict =
   | { readonly outcome: 'run'; readonly action: DeferredApproval; readonly spend: ApprovalSpend }
   | { readonly outcome: 'denied'; readonly action: DeferredApproval }
   | { readonly outcome: 'queued'; readonly action: DeferredApproval };
+
+/** A shared slate's effect, as its owner's queue answers it ({@link DeferredApprovalQueue.slateEffect}). */
+export type SlateEffectVerdict =
+  | { readonly outcome: 'run'; readonly spend: ApprovalSpend }
+  | { readonly outcome: 'asked'; readonly action: DeferredApproval }
+  | { readonly outcome: 'denied'; readonly action: DeferredApproval };
 
 /** A row another ask of the same command already ran on: the owner's one approval is used. */
 interface UsedApproval {
@@ -223,21 +230,38 @@ export class DeferredApprovalStore {
     return rows[0] ? toAction(rows[0]) : null;
   }
 
-  /** Delete expired denials (run on write paths); returns their commands. */
-  sweepDenials(now: number): string[] {
+  /** Delete expired denials (run on write paths); returns what each parked. */
+  sweepDenials(now: number): ApprovalKind[] {
     this.actor.assertCurrent();
 
-    const swept = this.sql<{ id: string; command: string }>`
+    const swept = this.sql<{ id: string; command: string; executor: string }>`
       DELETE FROM deferred_approvals
       WHERE actor_id = ${this.actorId} AND status = 'denied'
         AND decided_at <= ${now - DENIAL_STANDING_MS}
-      RETURNING id, command`;
+      RETURNING id, command, executor`;
 
     if (swept.length > 0) markStoreChanged(this.sql);
 
     for (const { id } of swept) this.dropHits(id);
 
-    return swept.map((row) => row.command);
+    return swept.map(approvalKindOf);
+  }
+
+  /** Every ask still open on `executor` (queued, or approved and not yet taken) retired: a share's effects, when the
+   *  share is revoked, leaves `owner` mode, or its slate is built anew. Their ids. */
+  retireOpen(executor: string): string[] {
+    this.actor.assertCurrent();
+
+    const retired = this.sql<{ id: string }>`
+      DELETE FROM deferred_approvals
+      WHERE actor_id = ${this.actorId} AND executor = ${executor} AND status IN ('queued', 'approved')
+      RETURNING id`;
+
+    if (retired.length > 0) markStoreChanged(this.sql);
+
+    for (const { id } of retired) this.dropHits(id);
+
+    return retired.map((row) => row.id);
   }
 
   create(action: Omit<DeferredApproval, 'actor' | 'status' | 'decidedAt'>, hits: readonly DeferredApprovalHit[]): DeferredApproval {
@@ -391,8 +415,9 @@ export interface ParkedWrites {
   perform(write: BoundFileWrite, bytes: Uint8Array): Promise<WriteOutcome>;
 }
 
-function boundBytes(commands: readonly string[]): string[] {
-  return commands.flatMap((command) => boundWriteOf(command)?.next ?? []);
+/** The parked bytes the writes among `parked` name. */
+function boundBytes(parked: readonly ApprovalKind[]): string[] {
+  return parked.flatMap((kind) => (kind.kind === 'write' ? [kind.write.next] : []));
 }
 
 /** The message on the turn a decision wakes: one for the whole batch. */
@@ -555,7 +580,8 @@ export class DeferredApprovalQueue {
    *  repeat detector sees a loop. A write's bytes are kept first, then held until its row names them. */
   async park(req: ShellApprovalRequest, actorId: string = this.deps.store.actorId): Promise<DeferredApprovalVerdict> {
     const { writes } = this.deps;
-    const digest = boundWriteOf(req.command)?.next;
+    const parked = approvalKindOf(req);
+    const digest = parked.kind === 'write' ? parked.write.next : undefined;
     const next = req.write?.next;
 
     if (writes === null || digest === undefined || next === undefined) return await this.parkNow(req, actorId);
@@ -640,7 +666,7 @@ export class DeferredApprovalQueue {
     if (outcome === 'spent' && action) {
       this.audit(action);
       // A re-issued write ran on its own bytes, so the parked copy goes.
-      await this.release(boundBytes([action.command]));
+      await this.release(boundBytes([approvalKindOf(action)]));
     }
 
     return true;
@@ -676,7 +702,7 @@ export class DeferredApprovalQueue {
   async decide(ids: readonly string[], answer: DeferredApprovalAnswer): Promise<DeferredApproval[]> {
     const now = this.now();
     const decided: DeferredApproval[] = [];
-    const swept: string[] = [];
+    const swept: ApprovalKind[] = [];
 
     // Deduped so one command is not reported as two decisions; an id two actors share answers neither.
     for (const id of new Set(ids)) {
@@ -705,13 +731,14 @@ export class DeferredApprovalQueue {
       this.awaiting.delete(action.id);
     }
 
-    await this.release(boundBytes([...swept, ...decided.filter((a) => a.status === 'denied').map((a) => a.command)]));
+    await this.release(boundBytes([...swept, ...decided.filter((a) => a.status === 'denied').map(approvalKindOf)]));
 
     if (decided.length === 0) return decided;
 
     const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
     this.notify({ kind: 'decided', actions: decided });
-    const told = decided.filter((a) => !blocked.includes(a));
+    // A shared slate's effect is taken by its own call's next run: no agent asked it, so none is woken for it.
+    const told = decided.filter((a) => !blocked.includes(a) && approvalKindOf(a).kind !== 'slate-effect');
 
     // Each asker once, every one tried: the decision is already durable, and one asker's failed wake (an agent
     // retired meanwhile) is no reason another goes untold. The failures are the answer's, after.
@@ -743,7 +770,8 @@ export class DeferredApprovalQueue {
     const store = this.storeOf(this.deps.store.actorId);
 
     for (const action of writes === null ? [] : decided) {
-      const write = action.status === 'approved' ? boundWriteOf(action.command) : null;
+      const parked = approvalKindOf(action);
+      const write = action.status === 'approved' && parked.kind === 'write' ? parked.write : null;
 
       if (write === null || writes === null) continue;
 
@@ -772,10 +800,48 @@ export class DeferredApprovalQueue {
     return written;
   }
 
+  /**
+   * A call a shared slate's server makes with its owner's access (approval-kind.ts `slate-effect`), named by `id`, its
+   * exact call: run on the owner's approval, which it takes, so one approval admits it once; else asked of the owner,
+   * or refused while their decline stands. Its run settles the spend it was handed ({@link settle}), so a crash before
+   * it ran gives the approval back and one after it never runs it twice.
+   */
+  slateEffect(id: string, effect: SlateEffect): SlateEffectVerdict {
+    const now = this.now();
+    const store = this.deps.store;
+    const held = store.get(id);
+
+    if (held?.status === 'approved') {
+      const spent = store.spend(id);
+
+      return spent === null ? { outcome: 'asked', action: held } : { outcome: 'run', spend: spent.spend };
+    }
+
+    if (held?.status === 'queued' || held?.status === 'spent') return { outcome: 'asked', action: held };
+
+    if (held?.status === 'denied' && held.decidedAt !== null && held.decidedAt > now - DENIAL_STANDING_MS) return { outcome: 'denied', action: held };
+    store.sweepDenials(now);
+
+    const action = store.create({
+      id, command: slateEffectText(effect), executor: slateEffectExecutor(effect.share), context: {}, requestedAt: now,
+      reason: `A shared slate's server, running with your access for ${effect.viewer}, asked to call ${effect.tool} on ${effect.server}`,
+    }, []);
+
+    this.notify({ kind: 'queued', action });
+
+    return { outcome: 'asked', action };
+  }
+
+  /** A share's open effects retired: it was revoked, left `owner` mode, or its slate was built anew. */
+  retireSlateEffects(share: string): string[] {
+    return this.deps.store.retireOpen(slateEffectExecutor(share));
+  }
+
   /** A queued write's change, whoever parked it. */
   async parkedWrite(id: string): Promise<{ readonly write: BoundFileWrite; readonly bytes: Uint8Array } | null> {
     const action = this.deps.store.owners(id).map((actorId) => this.storeOf(actorId).get(id)).find((row) => row?.status === 'queued');
-    const write = action === undefined || action === null ? null : boundWriteOf(action.command);
+    const parked = action === undefined || action === null ? null : approvalKindOf(action);
+    const write = parked?.kind === 'write' ? parked.write : null;
     const bytes = write === null ? null : await this.deps.writes?.content.read(write.next) ?? null;
 
     return write === null || bytes === null ? null : { write, bytes };
@@ -788,7 +854,8 @@ export class DeferredApprovalQueue {
 
   /** One actor's parked actions for its per-step dynamic-context block, re-telling the turn they have not run. */
   approvals(actorId: string = this.deps.store.actorId): DynamicApproval[] {
-    return this.storeOf(actorId).listQueued().map((action) => ({
+    // A shared slate's effect is the owner's to decide and its share's to run: it is no part of an agent's turn.
+    return this.storeOf(actorId).listQueued().filter((action) => approvalKindOf(action).kind !== 'slate-effect').map((action) => ({
       id: action.id,
       kind: 'queued command (NOT run)',
       detail: clip(withContext(action)),

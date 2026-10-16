@@ -103,7 +103,7 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
 }
 
 /** `body`'s value, or its failure as the refusal `doing` names: a slate answer never fails. */
-function answer<Value>(doing: string, body: Effect.Effect<Value, KinuError>): Effect.Effect<SlateAnswer<Value>> {
+export function answer<Value>(doing: string, body: Effect.Effect<Value, KinuError>): Effect.Effect<SlateAnswer<Value>> {
   return Effect.catchCause(
     Effect.map(body, (value): SlateAnswer<Value> => ({ ok: true, value })),
     (failed) => Effect.map(refusing(doing, 'io')(failed), (refusal): SlateAnswer<Value> => ({ ok: false, ...refusal })),

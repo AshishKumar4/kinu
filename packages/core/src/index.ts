@@ -297,7 +297,11 @@ export {
   type ShareGrantMember, type ShareGrant, type ShareCard,
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
+  SlateReachSchema, LiveShareBodySchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema,
+  type SlateReach, type LiveShareBody, type LiveShareModeBody, type LiveShareListingBody,
 } from './slates/sharing';
+
+export { SHARE_MODES, ShareModeSchema, type ShareMode } from './slates/share-modes';
 
 export {
   RoomViewSchema, RoomCallSchema, RoomClientFrameSchema, RoomServerFrameSchema,
@@ -1477,7 +1481,7 @@ export {
   DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,
   type DeferredApprovalAnswer,
-  type DeferredApprovalNotice, type ParkedWrites,
+  type DeferredApprovalNotice, type ParkedWrites, type SlateEffectVerdict,
 } from './safety/deferred-approval';
 
 export {
@@ -1524,8 +1528,10 @@ export {
 } from './safety/secret-scan';
 
 export {
-  boundWriteOf, performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
+  performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
+
+export { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,

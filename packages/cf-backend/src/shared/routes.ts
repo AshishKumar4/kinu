@@ -10,7 +10,7 @@ import {
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  LiveShareCreatedSchema,
+  LiveShareBodySchema, LiveShareCreatedSchema,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
@@ -239,22 +239,16 @@ async function blueprintBundle(env: Env, id: string) {
   return workspaceOwner(env, address.workspace).blueprintBundle(address.share);
 }
 
-const LiveShareBody = v.object({
-  workspace: v.string(),
-  slate: v.string(),
-  visibility: v.picklist(['users', 'public']),
-  emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
-  approved: v.optional(v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() }))),
-  fork: v.optional(v.boolean()),
-});
-
 const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
 
 /** `emails` names users on a `users` share; `approved` is the mutating grant the dialog checked. */
 async function shareLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
-  const body = await safeJson(request, LiveShareBody);
+  const body = await safeJson(request, LiveShareBodySchema);
 
-  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork? }');
+  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork?, mode?, revision? }');
+
+  // Not yet: a share on its owner's access lands with its reach approval (docs/SLATE-SHARING-NIMBUS.md §2).
+  if (body.mode === 'owner') return err(400, 'Sharing on your own access is not available yet: share it on each viewer\'s own access');
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);

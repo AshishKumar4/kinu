@@ -7,7 +7,8 @@ import type {
   BlueprintBundle, BlueprintFork, JsonValue, LiveShareRecord, OperationCaller, OperationListing, OperationResult, ShareViewerClaim, SlateAnswer,
   SlateCallRequest, SlateCallResult, SlateOperation, SlateShareRecord, SlateSurfaceResult,
 } from '@kinu.run/core';
-import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
+import type { BlueprintReading, PartRunAnswer, PartRunRequest, PartShowRequest, ShareUser } from '@kinu.run/core/slates';
+import type { PartViewer } from './slates/part-runs';
 import type { ObjectNamespace } from '@kinu.run/core';
 
 /** Slate operations made as a caller; the browser's `@callable slate` mints the root caller locally. */
@@ -16,6 +17,12 @@ export interface WorkspaceOwnerRpc {
   /** Whether a slate still builds, asked as a caller; a check, never a preview. */
   slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult>;
   slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult>;
+  /** A personal part's run of `slate`, for the signed-in `viewer` the route names (docs/SLATE-SHARING-NIMBUS.md §3). */
+  runSlatePart(viewer: PartViewer | null, slate: string, part: string, request: PartRunRequest): Promise<PartRunAnswer | null>;
+  /** One call of a running part's process, through its `PartBinding`. */
+  slatePartCall(slate: string, run: string, name: string, call: { readonly path: readonly string[]; readonly args: readonly JsonValue[] }): Promise<SlateSurfaceResult>;
+  /** What `viewer` confirmed in Kinu's prompt, to the slate's declared `show` method. */
+  showSlatePart(viewer: PartViewer, slate: string, part: string, request: PartShowRequest): Promise<SlateCallResult>;
   /** An actor's operation, by `ns.op`, as eval runs it; refused when the actor does not reach it now. */
   callOperation(caller: OperationCaller, id: string, input: JsonValue, call: { readonly callId: string }): Promise<OperationResult>;
   listOperations(caller: OperationCaller): Promise<readonly OperationListing[]>;

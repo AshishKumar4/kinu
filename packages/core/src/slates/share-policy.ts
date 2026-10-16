@@ -49,13 +49,36 @@ export function serverAuthority(shares: readonly LiveShareAuthority[], revision:
   return { kind: 'grant', grant: { slates: first?.slates ?? [], members, fork: false } };
 }
 
+/** The root a part's call is consented for: a GitHub call's repository, nothing for any other. */
+export function partCallRoot(server: string, args: JsonValue): Record<string, string> {
+  if (!server.startsWith('mcp.') || args === null || typeof args !== 'object' || Array.isArray(args)) return {};
+  const { owner, repo } = args;
+
+  return typeof owner === 'string' && typeof repo === 'string' ? { owner, repo } : {};
+}
+
+/** A root as the consent row keys it: its entries in key order. */
+export function canonicalRoot(root: Readonly<Record<string, string>>): string {
+  return JSON.stringify(Object.fromEntries(Object.entries(root).sort(([a], [b]) => a.localeCompare(b))));
+}
+
 /** One call a personal part's run makes with its viewer's connection. */
 export interface PartCall {
   readonly server: string;
   readonly root: Readonly<Record<string, string>>;
   readonly tool: string;
-  /** Whether the tool acts (no read-only mark): it runs only once its viewer approves this one call. */
-  readonly effect: boolean;
+  /**
+   * Whether the call stays where it was consented: a tool its server marks read-only and closed-world
+   * (`openWorldHint: false`), so what its arguments carry reaches that server alone. Anything else (a send, a URL
+   * fetch, any tool that may reach other destinations) discloses what it carries, and dispatches only once its viewer
+   * approves that exact payload.
+   */
+  readonly contained: boolean;
+}
+
+/** Whether a tool's call stays with its own server: read-only and closed-world by its server's own marks. */
+export function containedTool(descriptor: { readonly readOnly?: true; readonly closedWorld?: true }): boolean {
+  return descriptor.readOnly === true && descriptor.closedWorld === true;
 }
 
 export type PartCallVerdict =
@@ -64,27 +87,27 @@ export type PartCallVerdict =
   | { readonly kind: 'needs-approval' };
 
 function sameRoot(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
-  return stableStringify(a) === stableStringify(b);
+  return canonicalRoot(a) === canonicalRoot(b);
 }
 
 /**
  * Whether the viewer's consent for this slate lets this call run at this revision: the tool among those they allowed,
- * on that root, for this very revision (an edit asks again), an effect only where they allowed effects, and then only
- * once they approve it.
+ * on that root, for this very revision (an edit asks again). A call that is not contained needs their consent to ask
+ * (`effects`), and then runs only once they approve it, its payload and destination shown: a read as much as a send.
  */
 export function partCallVerdict(consent: SlateConsent | null, call: PartCall, revision: string, approved: boolean): PartCallVerdict {
   const held = consent !== null && consent.server === call.server && sameRoot(consent.root, call.root) && consent.revision === revision;
 
-  if (!held || !consent.tools.includes(call.tool) || (call.effect && !consent.effects)) {
+  if (!held || !consent.tools.includes(call.tool) || (!call.contained && !consent.effects)) {
     const tools = held ? [...new Set([...consent.tools, call.tool])] : [call.tool];
 
-    return { kind: 'needs-consent', ask: { server: call.server, root: call.root, tools, effects: call.effect || (held && consent.effects), revision } };
+    return { kind: 'needs-consent', ask: { server: call.server, root: call.root, tools, effects: !call.contained || (held && consent.effects), revision } };
   }
 
-  return call.effect && !approved ? { kind: 'needs-approval' } : { kind: 'run' };
+  return !call.contained && !approved ? { kind: 'needs-approval' } : { kind: 'run' };
 }
 
-/** An effect call as its approval names it: the slate, its revision, the tool and its exact payload. */
+/** A disclosing call as its approval names it: the slate, its revision, its destination (server, tool, root) and its exact payload. */
 export interface EffectCall {
   readonly workspace: string;
   readonly slate: string;

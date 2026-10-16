@@ -30,6 +30,8 @@ const SerializableToolDescriptorSchema = v.object({
   /** JSON Schema (not Zod) so it survives RPC serialization. */
   inputSchema: v.optional(JsonObjectSchema),
   readOnly: v.optional(v.literal(true)),
+  /** Its server says its domain is closed (`openWorldHint: false`): it reaches nothing beyond the service itself. */
+  closedWorld: v.optional(v.literal(true)),
   /** The catalog entry the server was added from, so a seam can know its server by what it is, not by its name. */
   presetId: v.optional(v.string()),
 });
@@ -46,7 +48,7 @@ export interface RemoteMcpTool {
   name: string;
   description?: string;
   title?: string;
-  annotations?: { title?: string; readOnlyHint?: boolean };
+  annotations?: { title?: string; readOnlyHint?: boolean; openWorldHint?: boolean };
   inputSchema: unknown;
 }
 
@@ -68,7 +70,7 @@ const ListedToolSchema = v.looseObject({
   name: v.string(),
   description: v.optional(v.string()),
   title: v.optional(v.string()),
-  annotations: v.optional(v.looseObject({ title: v.optional(v.string()), readOnlyHint: v.optional(v.boolean()) })),
+  annotations: v.optional(v.looseObject({ title: v.optional(v.string()), readOnlyHint: v.optional(v.boolean()), openWorldHint: v.optional(v.boolean()) })),
   inputSchema: v.optional(v.unknown()),
 });
 
@@ -143,6 +145,8 @@ export function describeMcpTool(
   if (title !== undefined) descriptor.title = title;
 
   if (remote.annotations?.readOnlyHint === true) descriptor.readOnly = true;
+
+  if (remote.annotations?.openWorldHint === false) descriptor.closedWorld = true;
 
   return { admitted: descriptor };
 }

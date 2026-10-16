@@ -1,6 +1,10 @@
 /** Owner side of sharing a running slate: the one place a grant is cut. Reads go to the store, so a revoked share stops answering everywhere. */
+import { Effect } from 'effect';
+import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { cutShareGrant } from './capability-graph';
-import type { SlateLiveShareStore } from './live-shares';
+import type { ShareAuthority, SlateLiveShareStore } from './live-shares';
+import type { ShareMode } from './share-modes';
 import type { LiveShareCreated, LiveShareVisibility, SlateCapabilityGraph } from './sharing';
 import { nanoid } from '../utils/nanoid';
 
@@ -18,9 +22,43 @@ export async function shareLiveSlate(input: {
   readonly fork?: boolean;
   readonly url: (handle: string) => Promise<string | null>;
 }): Promise<LiveShareCreated> {
+  // Every share starts in `own` mode: only its owner turns on `owner`, over the share sheet's reach ({@link setShareMode}).
   const grant = { ...cutShareGrant(input.graph, input.approved), fork: input.fork ?? true };
   const handle = shareHandle();
   const share = input.shares.add({ id: nanoid(), slate: input.graph.slate, visibility: input.visibility, handle, grant });
 
   return { share, url: await input.url(handle) };
+}
+
+/**
+ * A live share's mode set by its owner: `owner`, its reach approved again over the slate's graph now (its observing
+ * members, and the acting ones they approve) at the slate's revision now, which re-arms a share an edit suspended;
+ * `own`, its server acting with no one's access. A share keeps whether it forks.
+ */
+export function setShareMode(input: {
+  readonly shares: SlateLiveShareStore;
+  readonly share: string;
+  readonly graph: SlateCapabilityGraph;
+  readonly mode: ShareMode;
+  readonly approved: readonly { slate: string; namespace: string; member: string }[];
+  readonly revision: string | null;
+}): void {
+  return settleSync(Effect.gen(function* () {
+    const held = input.shares.get(input.share);
+
+    if (held === undefined || held.revokedAt !== null || held.slate !== input.graph.slate) return yield* new KinuError('missing', 'No such share');
+    const authority = yield* authorityAt(input.mode, input.revision);
+    const grant = { ...cutShareGrant(input.graph, input.mode === 'owner' ? input.approved : []), fork: held.grant.fork ?? true };
+
+    input.shares.setAuthority(input.share, authority, grant);
+  }));
+}
+
+/** `mode` as it is stored: `owner` names the revision its reach was approved at, and a slate never built has none. */
+function authorityAt(mode: ShareMode, revision: string | null): Effect.Effect<ShareAuthority, KinuError> {
+  if (mode === 'own') return Effect.succeed({ mode: 'own', grantRevision: null });
+
+  if (revision === null) return Effect.fail(new KinuError('bad_input', 'This slate has not built yet, so there is no version of it to approve its reach for: build it first'));
+
+  return Effect.succeed({ mode: 'owner', grantRevision: revision });
 }
