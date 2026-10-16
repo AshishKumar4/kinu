@@ -13,6 +13,20 @@ export function isSystemManaged(name: string): boolean {
   return SYSTEM_MANAGED_DIRECTORIES.has(name);
 }
 
+/** A Linux machine's own top-level directories (FHS 3.0, ch. 3, with the /lib variants); `home` is the people's. */
+const MACHINE_DIRECTORIES: ReadonlySet<string> = new Set([
+  'bin', 'boot', 'dev', 'etc', 'lib', 'lib32', 'lib64', 'libx32', 'media', 'mnt', 'opt', 'proc', 'root', 'run', 'sbin', 'srv',
+  'sys', 'tmp', 'usr', 'var',
+]);
+
+/**
+ * What a file browser hides until asked, as a desktop's does: a dotfile anywhere, and a machine's own directories at its
+ * root (`atMachineRoot`), where a workspace's places sit beside them. Below a root, a project's `bin` or `tmp` is its own.
+ */
+export function isHiddenEntry(name: string, atMachineRoot: boolean): boolean {
+  return name.startsWith('.') || (atMachineRoot && MACHINE_DIRECTORIES.has(name));
+}
+
 /** Relative, with no empty, `.` or `..` segment. */
 export function isTreeRelativePath(path: string): boolean {
   return path !== '' && !path.startsWith('/') && path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
