@@ -90,7 +90,7 @@ import {
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory, ownerAsks,
-  FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubordinateInspectionRequestSchema,
+  DEFAULT_FILES_VIEW, FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubordinateInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
@@ -319,7 +319,7 @@ const STORED_CONFIG = new Map<string, StoredConfig>([
     const params = new URLSearchParams(location.search);
 
     return params.has("layout") || params.has("hidden")
-      ? JSON.stringify({ layout: params.get("layout") === "tiles" ? "tiles" : "list", hidden: params.get("hidden") === "1" })
+      ? JSON.stringify({ layout: params.get("layout") === "list" ? "list" : DEFAULT_FILES_VIEW.layout, hidden: params.get("hidden") === "1" })
       : null;
   } }],
 ]);
@@ -5977,6 +5977,7 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       name: `run-${String(at).padStart(4, "0")}.log`, type: "file" as const, size: 2_048 + at, mtimeMs: NOW - at * 60e3,
     }))],
     ["/home/main/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
+    ["/home/main/.cache", []],
     ["/computer", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
     ["/computer/workspace", [
       { name: "build.log", type: "file", size: 18_211, mtimeMs: NOW - 31 * 60e3 },

@@ -97,6 +97,39 @@ function beside(label: string, folder: string): string | null {
   return label.toLowerCase() === folder.toLowerCase() ? null : label;
 }
 
+/** The arrow keys among tiles, by where the grid draws them. */
+const TILE_KEYS = new Map<string, "left" | "right" | "up" | "down">([["ArrowLeft", "left"], ["ArrowRight", "right"], ["ArrowUp", "up"], ["ArrowDown", "down"]]);
+
+/**
+ * The entry an arrow moves to among tiles, by where they stand: beside it in reading order, or in the row above or
+ * below, the one nearest its column, as a desktop's icon view moves. An offline machine's tile is passed over. Not an
+ * arrow, undefined; an arrow with nowhere to go, null.
+ */
+function tileStep(list: HTMLElement | null, from: string | undefined, key: string): string | null | undefined {
+  const way = TILE_KEYS.get(key);
+
+  if (way === undefined) return undefined;
+  const tiles = [...(list?.querySelectorAll<HTMLElement>("[data-files-entry]") ?? [])];
+  const at = tiles.find((tile) => tile.title === from);
+
+  if (at === undefined) return tiles[0]?.title ?? null;
+
+  if (way === "left" || way === "right") return tiles[tiles.indexOf(at) + (way === "right" ? 1 : -1)]?.title ?? null;
+
+  const box = at.getBoundingClientRect();
+  const centre = box.left + box.width / 2;
+
+  const row = tiles.map((tile) => ({ tile, box: tile.getBoundingClientRect() }))
+    .filter((other) => (way === "down" ? other.box.top >= box.bottom - 1 : other.box.bottom <= box.top + 1));
+
+  const edge = way === "down" ? Math.min(...row.map((other) => other.box.top)) : Math.max(...row.map((other) => other.box.top));
+
+  const nearest = row.filter((other) => Math.abs(other.box.top - edge) < 2)
+    .sort((a, b) => Math.abs(a.box.left + a.box.width / 2 - centre) - Math.abs(b.box.left + b.box.width / 2 - centre))[0];
+
+  return nearest?.tile.title ?? null;
+}
+
 /** The bytes as a download whatever the route answers: `download` keeps an error page from replacing the app. */
 function saveAs(href: string): void {
   const link = document.createElement("a");
@@ -407,8 +440,14 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const onKeyDown = useCallback((e: ReactKeyboardEvent) => {
     if (renaming) return;
     const current = filtered[selected];
+    const tiled = view.layout === "tiles" ? tileStep(listRef.current, current?.name, e.key) : undefined;
 
-    if (e.key === "ArrowDown") { e.preventDefault(); setSelected((i) => Math.min(i + 1, filtered.length - 1)); }
+    if (tiled !== undefined) {
+      e.preventDefault();
+
+      if (tiled !== null) setSelected(filtered.findIndex((entry) => entry.name === tiled));
+    }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setSelected((i) => Math.min(i + 1, filtered.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setSelected((i) => Math.max(i - 1, 0)); }
     else if (e.key === "Enter" && current) { e.preventDefault(); open(current); }
     else if (e.key === "Backspace" && !atRoot) { e.preventDefault(); setPath(parentDir(path)); }
@@ -421,7 +460,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
       else if (preview) setPreview(null);
       else if (filter) setFilter("");
     }
-  }, [atRoot, confirmDelete, filter, filtered, open, path, preview, renaming, selected]);
+  }, [atRoot, confirmDelete, filter, filtered, open, path, preview, renaming, selected, view.layout]);
 
   useEffect(() => {
     listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
@@ -595,7 +634,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             {!loading && filtered.length > 0 && (
               <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta border-t p-border mt-1">
                 {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount, folder.next !== undefined)}
-                <span className="ml-2 hidden @[44rem]:inline p-text-4">↑↓ move · Enter open · Backspace up · F2 rename · Del delete</span>
+                <span className="ml-2 hidden @[44rem]:inline p-text-4">{LAYOUTS[view.layout].moves} move · Enter open · Backspace up · F2 rename · Del delete</span>
               </div>
             )}
           </div>
@@ -944,9 +983,11 @@ interface Layout {
   readonly Away: (props: { row: OfflineRow }) => ReactNode;
   readonly grid: string;
   readonly columns: ReactNode;
+  /** The keys that move the selection, as the footer names them. */
+  readonly moves: string;
 }
 
 const LAYOUTS: Readonly<Record<FilesView["layout"], Layout>> = {
-  list: { Entry: EntryRow, Away: OfflineMountRow, grid: "contents", columns: COLUMN_HEADS },
-  tiles: { Entry: EntryTile, Away: OfflineMountTile, grid: TILE_GRID, columns: null },
+  list: { Entry: EntryRow, Away: OfflineMountRow, grid: "contents", columns: COLUMN_HEADS, moves: "↑↓" },
+  tiles: { Entry: EntryTile, Away: OfflineMountTile, grid: TILE_GRID, columns: null, moves: "Arrows" },
 };

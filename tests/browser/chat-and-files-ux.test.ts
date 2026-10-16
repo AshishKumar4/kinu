@@ -2313,12 +2313,12 @@ describe('Files at every width it is drawn', () => {
     return { left: Math.round(box.left), top: Math.round(box.top) };
   }));
 
-  test('a folder is a list, one entry under another, in the inspector and beside the tree', async () => {
+  test('as a list, a folder is one entry under another, in the inspector and beside the tree', async () => {
     await withGallery(async ({ newPage, origin }) => {
       for (const width of ['inspector=340', 'inspector=480', 'wide=1']) {
         const page = await newPage();
         await page.setViewport({ width: 1440, height: 900 });
-        await page.goto(`${origin}/gallery.html?frame=files&offline=device&${width}`, { waitUntil: 'networkidle0' });
+        await page.goto(`${origin}/gallery.html?frame=files&offline=device&layout=list&${width}`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[data-files-offline-mount]');
 
         // The owner's report was a grid of tiles in a narrow column; the machine that is away is a row of the same list.
@@ -2350,7 +2350,7 @@ describe('Files at every width it is drawn', () => {
     });
   });
 
-  test("the view menu shows hidden items and draws tiles, and the account's choice holds when Files opens again", async () => {
+  test("an account that has not chosen sees tiles; the view menu shows hidden items and a list, and the choice holds", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       const listed = () => page.$$eval('[data-files-entry]', (rows) => rows.map((row) => row.getAttribute('title') ?? ''));
@@ -2364,24 +2364,54 @@ describe('Files at every width it is drawn', () => {
       await page.goto(`${origin}/gallery.html?frame=files&inspector=480`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-files-entry][title="home"]');
 
+      const tops = () => page.$$eval('[data-files-entry]', (rows) => rows.slice(0, 2).map((row) => Math.round(row.getBoundingClientRect().top)));
+
+      // Tiles, unchosen: they stand side by side, the first two on one line.
+      await page.waitForSelector('[data-files-layout="tiles"]');
+      expect(new Set(await tops()).size).toBe(1);
       // A machine's own directories sit beside the workspace's places at its root, out of sight until asked for.
       expect(await listed()).not.toContain('usr');
       await pick('data-files-view-hidden');
       await page.waitForSelector('[data-files-entry][title="usr"]');
-      await pick('data-files-view-tiles');
-      await page.waitForSelector('[data-files-layout="tiles"]');
-
-      // Tiles stand side by side: the first two share a line.
-      const tops = await page.$$eval('[data-files-entry]', (rows) => rows.slice(0, 2).map((row) => Math.round(row.getBoundingClientRect().top)));
-
-      expect(new Set(tops).size).toBe(1);
+      await pick('data-files-view-list');
+      await page.waitForSelector('[data-files-layout="list"]');
+      expect(new Set(await tops()).size).toBe(2);
 
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-files-layout="tiles"] [data-files-entry][title="usr"]');
+      await page.waitForSelector('[data-files-layout="list"] [data-files-entry][title="usr"]');
       await page.click('[aria-label="View options"]');
       const checked = await page.$$eval('[role="menu"] [aria-checked="true"]', (items) => items.map((item) => (item.textContent ?? '').trim()));
 
-      expect(checked.sort()).toEqual(['Show hidden items', 'Tiles']);
+      expect(checked.sort()).toEqual(['List', 'Show hidden items']);
+      await page.close();
+    });
+  });
+
+  test('arrows move among tiles as the grid stands: beside in reading order, and up or down a row in the same column', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const chosen = () => page.$eval('[data-files-entry][aria-selected="true"]', (tile) => tile.getAttribute('title'));
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=files&inspector=480`, { waitUntil: 'networkidle0' });
+
+      for (const folder of ['home', 'main']) {
+        await page.waitForSelector(`[data-files-entry][title="${folder}"]`);
+        await page.click(`[data-files-entry][title="${folder}"]`);
+      }
+
+      await page.waitForSelector('[data-files-layout="tiles"] [data-files-entry][title="notes.md"]');
+      await page.focus('[data-files-list]');
+      // The grid as it stands: four to a row, so what is under the second tile is the sixth.
+      const tiles = await page.$$eval('[data-files-entry]', (drawn) => drawn.map((tile) => tile.getAttribute('title') ?? ''));
+      const perRow = await page.$$eval('[data-files-entry]', (drawn) => drawn.filter((tile) => tile.getBoundingClientRect().top === drawn[0]?.getBoundingClientRect().top).length);
+      const walked: (string | null)[] = [];
+
+      for (const key of ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'] as const) {
+        await page.keyboard.press(key);
+        walked.push(await chosen());
+      }
+
+      expect(walked).toEqual([tiles[1], tiles[1 + perRow], tiles[perRow], tiles[0]]);
       await page.close();
     });
   });

@@ -14,7 +14,7 @@ const StoredFilesViewSchema = v.pipe(v.string(), v.parseJson(), FilesViewSchema)
 
 export type FilesView = v.InferOutput<typeof FilesViewSchema>;
 
-export const DEFAULT_FILES_VIEW: FilesView = { layout: 'list', hidden: false };
+export const DEFAULT_FILES_VIEW: FilesView = { layout: 'tiles', hidden: false };
 
 /** A stored or sent view the schema holds; null for any other. */
 export function filesViewNamed(value: string | null | undefined): FilesView | null {
