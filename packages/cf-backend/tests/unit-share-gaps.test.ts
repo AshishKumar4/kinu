@@ -751,7 +751,7 @@ test("a slate's first share can start empty: a copy made now, code only, named a
   const made = await jsonBody(present(await share({}), 'the share answer'), LiveShareCreatedSchema);
   const copy = made.share.slate;
 
-  expect({ copy: copy === 'issues', mode: made.share.mode, slates: (await slates()).toSorted() }).toEqual({ copy: false, mode: 'own', slates: [copy, 'issues'].toSorted() });
+  expect({ copy: copy === 'issues', mode: made.share.mode, slates: [...await slates()].sort() }).toEqual({ copy: false, mode: 'own', slates: [copy, 'issues'].sort() });
   expect(JSON.parse(await readText(files, `/slates/${copy}/package.json`))).toMatchObject({ slate: { title: 'Issue triage (shared copy)' }, description: 'Triage the open issues' });
   expect(await readText(files, `/slates/${copy}/src/server.ts`)).toBe(await readText(files, '/slates/issues/src/server.ts'));
 });
