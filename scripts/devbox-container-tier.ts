@@ -25,7 +25,7 @@ import { shellQuote } from '../packages/core/src/utils/shell';
 import { endedNearSilence } from './row-verdicts';
 import { withTestChrome } from './test-chrome';
 import { contextSignedInAt } from '../evals/src/browser';
-import { BOX_CHROMIUM_POLICY, DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
+import { BOX_CHROMIUM_POLICY, CHROMIUM_PROFILES, DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, RING_PY, SCROLL, SITE_TRUST_PY, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 import { REPO_ROOT as REPO } from './repo-root';
 
@@ -722,7 +722,8 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
         requireEqual(await shell(`python3 -c ${shellQuote(policyNamesCa)}`, name), 'exact');
         await shell(`rm -rf /tmp/kinu-trust && (DISPLAY=:0 setsid chromium --remote-debugging-port=${String(port)} --user-data-dir=/tmp/kinu-trust --disable-quic --new-window about:blank `
-          + `>/tmp/kinu-trust.log 2>&1 </dev/null &) && timeout 60 sh -c 'until curl -sf http://127.0.0.1:${String(port)}/json/version >/dev/null; do sleep 0.2; done'`, name);
+          + `>/tmp/kinu-trust.log 2>&1 </dev/null &) && timeout 60 sh -c 'until curl -sf http://127.0.0.1:${String(port)}/json/version >/dev/null; do sleep 0.2; done' `
+          + `|| { tail -n 20 /tmp/kinu-trust.log; ps -eo pid,etimes,args | grep -c '[c]hromium'; exit 1; } >&2`, name);
         // The pattern's bracket keeps pkill from matching the shell that runs it, whose command line names the port too.
         const read = await shell(`PORT=${String(port)} timeout 150 python3 -c ${shellQuote(SITE_TRUST_PY)} ${TRUSTED_SITES.map(([url]) => url).join(' ')}; pkill -f 'remote-debugging-por[t]=${String(port)}'; true`, name);
         const seen = read.split('\n').map((line) => v.parse(Seen, JSON.parse(line)));
@@ -745,7 +746,14 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
       requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
       // An agent's look opens the desktop again on the new start, as the person's first open would.
-      await call('/agent-desktop', AgentAnswer, { driver: 'trust', member: 'screenshot', args: '[]' }, name);
+      const looked = await call('/agent-desktop', AgentAnswer, { driver: 'trust', member: 'screenshot', args: '[]' }, name);
+
+      if (typeof looked !== 'string') throw new Error(`an agent's look did not open the second start's desktop: ${JSON.stringify(looked)}`);
+      // The stop ended the person's browser with the container; the start marked its exit clean, so it reopens with no
+      // "Restore pages?" (the second start's shots show its window).
+      const exited = `import json; print(json.load(open('${CHROMIUM_PROFILES}/Default/Preferences'))['profile']['exit_type'])`;
+
+      requireEqual(await shell(`python3 -c ${shellQuote(exited)}`, name), 'Normal');
       const second = await judged('second');
 
       if (second.ca === first.ca) throw new Error(`the restart kept its CA ${first.ca}: the second start proves nothing`);

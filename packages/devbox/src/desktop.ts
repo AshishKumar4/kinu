@@ -39,6 +39,9 @@ export const CHROMIUM_POLICIES = '/etc/chromium/policies/managed';
  */
 export const BOX_CHROMIUM_POLICY = `${CHROMIUM_POLICIES}/kinu-box.json`;
 
+/** The desktop's Chromium profiles: the browser runs as root, in its default user data directory. */
+export const CHROMIUM_PROFILES = '/root/.config/chromium';
+
 export const DESKTOP_PANEL = { height: 36, launchers: { terminal: 21, browser: 51 } } as const;
 
 const launcher = (name: string, exec: string, icon: string) => ['[Desktop Entry]', 'Type=Application', `Name=${name}`, `Exec=${exec}`, `Icon=${icon}`]
@@ -205,6 +208,9 @@ ${WALLPAPER_PY}
 WALLPAPER
   printf '%s' "\${1-}" > ${SESSION}/mark.svg
   sed '/<theme>/,/<\\/theme>/ s#<name>[^<]*</name>#<name>Kinu</name>#' /etc/xdg/openbox/rc.xml > ${SESSION}/rc.xml
+  # No X runs, so a display 0 lock is the last start's: a stop ends X with the container and its disk keeps /tmp, and X
+  # refused every later start, "Server is already active for display 0" (the container tier's restart, 2026-10-16).
+  rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
   setsid Xkasmvnc :0 -geometry ${String(DESKTOP_SIZE.width)}x${String(DESKTOP_SIZE.height)} -depth 24 -interface 0.0.0.0 -websocketPort ${String(DESKTOP_PORT)} \\
     -DisableBasicAuth 1 -sslOnly 0 -SecurityTypes None -AlwaysShared -publicIP 127.0.0.1 >${LOG} 2>&1 </dev/null &
   server=$!

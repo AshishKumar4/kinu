@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
-import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES } from './desktop';
+import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, CHROMIUM_PROFILES } from './desktop';
 import { INSTALL_SESSION_FILES, READS_TERMINAL, SAVED_SESSIONS, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE } from './sessions';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
@@ -20,10 +20,26 @@ export const CONTAINER_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE:
 const CA_DER = String.raw`awk '/-----BEGIN/{der="";next} /-----END/{printf "%s\"%s\"", sep, der; sep=",";next} {der=der $0}' ${CA_PATH}`;
 
 /**
- * The SDK docs' trust step, which keeps no earlier container's CA: the system bundle, and Chromium's policy. The
- * desktop's earlier policy file, `devbox.json`, is folded into the box's own.
+ * Each Chromium profile's last exit, marked clean: a box's stop ends the browser with the container, and a box restarts
+ * as a matter of course, so Chromium's "Restore pages? Chromium didn't shut down correctly" was noise at every start.
+ * A person who wants their tabs back sets Chromium's own "Continue where you left off", which a clean exit honours. A
+ * profile that does not read as JSON is left as it is, and the start goes on.
  */
-export const TRUST = ['/bin/sh', '-c', `[ -e ${SYSTEM_BUNDLE} ] || { cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}; }
+const CLEAN_EXIT = String.raw`for prefs in ${CHROMIUM_PROFILES}/*/Preferences; do
+  [ -f "$prefs" ] && python3 -c 'import json, sys
+path = sys.argv[1]
+prefs = json.load(open(path))
+prefs.setdefault("profile", {}).update(exit_type="Normal", exited_cleanly=True)
+json.dump(prefs, open(path + ".tmp", "w"))' "$prefs" 2>/dev/null && mv "$prefs.tmp" "$prefs"
+done`;
+
+/**
+ * The SDK docs' trust step, which keeps no earlier container's CA: the system bundle, and Chromium's policy. The
+ * desktop's earlier policy file, `devbox.json`, is folded into the box's own. It is the start's step for the desktop's
+ * browser too, before any browser runs: its last exit is marked clean first, which no failure of it stops.
+ */
+export const TRUST = ['/bin/sh', '-c', `${CLEAN_EXIT}
+[ -e ${SYSTEM_BUNDLE} ] || { cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}; }
 timeout 10 sh -c 'until [ -s ${CA_PATH} ]; do sleep 0.1; done' && cat ${SYSTEM_BUNDLE} ${CA_PATH} >${BUNDLE}.tmp && mv ${BUNDLE}.tmp ${BUNDLE} \\
   && mkdir -p ${CHROMIUM_POLICIES} && rm -f ${CHROMIUM_POLICIES}/devbox.json \\
   && printf '{"CACertificates":[%s],"CommandLineFlagSecurityWarningsEnabled":false}\\n' "$(${CA_DER})" >${BOX_CHROMIUM_POLICY}.tmp \\
