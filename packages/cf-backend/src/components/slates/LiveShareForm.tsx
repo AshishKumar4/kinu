@@ -2,9 +2,9 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
-import { CaretDownIcon, CaretRightIcon, GlobeIcon, IdentificationCardIcon, UserCircleIcon, UsersIcon, WarningIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, UserCircleIcon, UsersIcon, WarningIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
+import { LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -49,34 +49,84 @@ const ACCESS: readonly AccessOption<LiveShareVisibility>[] = [
  * each person's own parts on their own connections, and it can be listed. Mine: the owner's connections within the
  * reach listed, each change waiting for the owner, never listed in the Gallery.
  */
-const MODES: readonly { id: ShareMode; icon: ReactNode; label: string; detail: string }[] = [
+const MODES: readonly CardOption<ShareMode>[] = [
   { id: "own", icon: <UserCircleIcon size={16} />, label: "Their own access", detail: "Each person sees their own data, on their own connections. Nothing of yours is used." },
   { id: "owner", icon: <IdentificationCardIcon size={16} />, label: "My access", detail: "It acts with your connections, within the reach below. Each change waits for you." },
 ];
 
-/**
- * The choice of mode, both shown, as it decides what the slate can do with whose data. `unbuilt`: the slate has no
- * version yet whose reach the owner could approve, so their access waits until it has been opened once.
- */
-function ModeChoice({ value, onChange, disabled, unbuilt }: { value: ShareMode; onChange: (mode: ShareMode) => void; disabled: boolean; unbuilt: boolean }) {
+/** One choice of a few, each with what it means, all shown at once. `marker` names its data attribute. */
+interface CardOption<T extends string> {
+  readonly id: T;
+  readonly icon: ReactNode;
+  readonly label: string;
+  readonly detail: string;
+  readonly disabled?: boolean;
+}
+
+function ChoiceCards<T extends string>({ label, marker, options, value, onChange, disabled }: {
+  label: string;
+  marker: `data-${string}`;
+  options: readonly CardOption<T>[];
+  value: T;
+  onChange: (id: T) => void;
+  disabled: boolean;
+}) {
   return (
-    <div role="radiogroup" aria-label="It runs with" className="p-group">
-      {MODES.map((mode) => (
-        <button key={mode.id} type="button" role="radio" aria-checked={value === mode.id} data-share-mode={mode.id} onClick={() => onChange(mode.id)}
-          disabled={disabled || (mode.id === "owner" && unbuilt)}
-          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)] ${value === mode.id ? "bg-[var(--c-elevated)]" : ""}`}>
-          <span className={`mt-0.5 flex shrink-0 ${value === mode.id ? "p-accent" : "p-text-3"}`}>{mode.icon}</span>
+    <div role="radiogroup" aria-label={label} className="p-group">
+      {options.map((option) => (
+        <button key={option.id} type="button" role="radio" aria-checked={value === option.id} {...{ [marker]: option.id }} onClick={() => onChange(option.id)}
+          disabled={disabled || option.disabled === true}
+          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)] ${value === option.id ? "bg-[var(--c-elevated)]" : ""}`}>
+          <span className={`mt-0.5 flex shrink-0 ${value === option.id ? "p-accent" : "p-text-3"}`}>{option.icon}</span>
           <span className="min-w-0 flex-1">
-            <span className="block p-row-text font-medium p-text">{mode.label}</span>
-            <span className="block p-meta p-text-3">{mode.id === "owner" && unbuilt ? "Open it once first, so there is a version of it to approve." : mode.detail}</span>
+            <span className="block p-row-text font-medium p-text">{option.label}</span>
+            <span className="block p-meta p-text-3">{option.detail}</span>
           </span>
-          <span className={`mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border ${value === mode.id ? "border-[var(--c-accent)]" : "border-[var(--c-border-strong)]"}`}>
-            {value === mode.id && <span className="size-2 rounded-full bg-[var(--c-accent)]" />}
+          <span className={`mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border ${value === option.id ? "border-[var(--c-accent)]" : "border-[var(--c-border-strong)]"}`}>
+            {value === option.id && <span className="size-2 rounded-full bg-[var(--c-accent)]" />}
           </span>
         </button>
       ))}
     </div>
   );
+}
+
+/**
+ * The choice of mode, both shown, as it decides what the slate can do with whose data. `unbuilt`: the slate has no
+ * version yet whose reach the owner could approve, so their access waits until it has been opened once.
+ */
+function ModeChoice({ value, onChange, disabled, unbuilt, emptyCopy }: {
+  value: ShareMode;
+  onChange: (mode: ShareMode) => void;
+  disabled: boolean;
+  unbuilt: boolean;
+  /** An empty copy runs on each person's own access: it has nothing of the owner's to act on. */
+  emptyCopy: boolean;
+}) {
+  const ownerAccess = (mode: CardOption<ShareMode>) => {
+    if (emptyCopy) return { ...mode, disabled: true, detail: "An empty copy runs on each person's own access." };
+
+    return unbuilt ? { ...mode, disabled: true, detail: "Open it once first, so there is a version of it to approve." } : mode;
+  };
+
+  const options = MODES.map((mode) => (mode.id === "owner" ? ownerAccess(mode) : mode));
+
+  return <ChoiceCards label="It runs with" marker="data-share-mode" options={options} value={value} onChange={onChange} disabled={disabled} />;
+}
+
+/**
+ * What the people it is first shared with start from (docs/SLATE-SHARING-NIMBUS.md, H7): the slate as it is, or a copy of
+ * its code with nothing in it, shared in its place, so what this slate already holds stays the owner's.
+ */
+type ShareStart = NonNullable<LiveShareBody["start"]>;
+
+const STARTS: readonly CardOption<ShareStart>[] = [
+  { id: "as-is", icon: <PackageIcon size={16} />, label: "As it is now", detail: "They see what it holds now, and what it holds next." },
+  { id: "empty", icon: <FileDashedIcon size={16} />, label: "An empty copy", detail: "A copy of its code, holding nothing yet, is shared instead. This one stays as it is." },
+];
+
+function StartChoice({ value, onChange, disabled }: { value: ShareStart; onChange: (start: ShareStart) => void; disabled: boolean }) {
+  return <ChoiceCards label="They start with" marker="data-share-start" options={STARTS} value={value} onChange={onChange} disabled={disabled} />;
 }
 
 /** What "My access" lets the people it is shared with do, said before it is chosen; it is never listed. */
@@ -320,6 +370,8 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   const [shares, setShares] = useState<LiveShareRecord[]>(fixture?.liveShares ?? []);
   const [visibility, setVisibility] = useState<LiveShareVisibility>("users");
   const [mode, setMode] = useState<ShareMode>("own");
+  // Asked at the slate's first share only: a later share shares what the first one did.
+  const [start, setStart] = useState<ShareStart>("as-is");
   // A stopped owner share whose new reach the form shows, for the owner to approve instead of making a share.
   const [reviewing, setReviewing] = useState<string | null>(null);
   const [emails, setEmails] = useState("");
@@ -369,7 +421,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       // Their own access acts with nothing of the owner's: no change is allowed, whatever was ticked before switching.
       const result = yield* Effect.promise(async () => shareLive({
-        workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, fork,
+        workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, fork, start,
         ...(mode === "owner" && revision !== null ? { mode, revision, approved: approvalsOf(approved) } : { mode: "own", approved: [] }),
       }));
 
@@ -380,7 +432,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     }), showing(setErr)), Effect.sync(() => {
       setBusy(false);
     }));
-  })), [canShare, approved, workspace, slate, visibility, emailList, mode, revision, fork, setBusy, onListingPending]);
+  })), [canShare, approved, workspace, slate, visibility, emailList, mode, revision, fork, start, setBusy, onListingPending]);
 
   // Lists a share in the Gallery, or takes it off.
   const list = useCallback((shareId: string, listing: Parameters<ListShare>[0]) => detach(Effect.catchCause(Effect.gen(function* () {
@@ -469,7 +521,12 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
             <span className="block p-meta p-text-3">A fork is their own copy, on their own connections.</span>
           </span>
         </label>
-        <ModeChoice value={mode} onChange={setMode} disabled={busy || reviewing !== null} unbuilt={graph !== null && revision === null} />
+        {shares.length === 0 && <StartChoice value={start} disabled={busy} onChange={(next) => {
+          setStart(next);
+
+          if (next === "empty") setMode("own");
+        }} />}
+        <ModeChoice value={mode} onChange={setMode} disabled={busy || reviewing !== null} unbuilt={graph !== null && revision === null} emptyCopy={start === "empty"} />
         {mode === "owner" && <OwnerReach graph={graph} failed={err !== null} visibility={visibility} approved={approved} onToggle={toggle} disabled={busy} />}
         {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limits}</p>}
         {shares.length > 0 && (
