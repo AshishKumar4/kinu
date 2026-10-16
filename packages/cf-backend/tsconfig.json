@@ -35,8 +35,8 @@
     "tests/workerd/plan-announce-probe.ts",
     "tests/workerd/slate-actor-probe.ts",
     "tests/workerd/slate-durability-probe.ts",
-    "tests/workerd/room-attacks.ts",
     "tests/workerd/device-user-probe.ts",
+    "tests/workerd/slate-share-probe.ts",
     "tests/workerd/account-reset-probe.ts",
     "tests/workerd/store-reset-probe.ts",
     "tests/workerd/addressed-name-probe.ts",
@@ -51,6 +51,7 @@
     "tests/workerd/delete-all-shapes.ts",
     "tests/workerd/agent-facet-probe-agent.ts",
     "tests/workerd/two-turn-probe-agent.ts",
-    "tests/workerd/heap-plant-agent.ts"
+    "tests/workerd/heap-plant-agent.ts",
+    "tests/workerd/slate-egress-probe.ts"
   ]
 }

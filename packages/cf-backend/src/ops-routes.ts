@@ -19,7 +19,7 @@ import { evalAccountEmail } from './auth/session';
 import { CONTROL_PLANE_SINGLETON, controlPlaneStub, hasControlPlane } from './control-plane/stub';
 
 /** The classes the walk reaches. */
-const OPS_CLASSES = ['UserDO', 'OrchestratorAgent', 'SlateRoom', 'ControlPlaneDO'] as const;
+const OPS_CLASSES = ['UserDO', 'OrchestratorAgent', 'ControlPlaneDO'] as const;
 
 type OpsClass = (typeof OPS_CLASSES)[number];
 
@@ -46,7 +46,6 @@ export interface OpsEnv extends SignInDeclarationEnv {
   DEV_USER_EMAIL?: string;
   UserDO: OpsNamespace;
   OrchestratorAgent: OpsNamespace;
-  SLATE_ROOM: OpsNamespace;
   ControlPlaneDO?: { idFromName(name: string): DurableObjectId; get(id: DurableObjectId): OpsControlPlane };
 }
 
@@ -73,7 +72,7 @@ export const opsRoutes = new Hono<FamilyEnv<OpsEnv, object>>();
 
 /** The namespace a class is bound as, where it is bound. */
 function namespaceOf(env: OpsEnv, className: OpsClass): OpsNamespace | undefined {
-  return { UserDO: env.UserDO, OrchestratorAgent: env.OrchestratorAgent, SlateRoom: env.SLATE_ROOM, ControlPlaneDO: env.ControlPlaneDO }[className];
+  return className === 'ControlPlaneDO' ? env.ControlPlaneDO : env[className];
 }
 
 /** Whether the request bears a pass the step wrote. */

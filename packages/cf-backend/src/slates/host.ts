@@ -1,22 +1,24 @@
+import { exports } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateController, slateAnswer, heldSlateKey, initEphemeralSlateTable, initSlateUsageTable, slateStorageCall, ROOT_SLATE_CALLER,
-  type Codec, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
+  SlateController, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateCallerKey, slateStorageCall,
+  type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
 } from '@kinu.run/core/slates';
 import {
-  slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
-  SlateCallRequestSchema, workModeRefusal, routeSlateCall, issuedSlateInvocation,
-  isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal,
+  ingressAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
+  SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
+  isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
+  escapeHtml, publicPage, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
-  type SlateSurfaceCatalog, type EphemeralSlateAddress, SharedSlateFilesSchema, type SharedSlateFiles, type SlateFileChange, type SlateOperation,
+  type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim, type MissionGovernor, type EphemeralSlateAddress,
 } from '@kinu.run/core';
-import { attempt, inItsWords, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
-import { secretSightings, sha256Hex, stableStringify, type SlateAnswer } from '@kinu.run/core';
-import type { RoomCallOutcome } from './room';
+import type { KvStore } from '@kinu.run/agent-utils';
+import { ERROR_CODES, KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
+import { slateBatchStub } from './rpc-transport';
+import { type SlateBinding, type SlateBindingProps } from './bindings';
+import { codemodeEgress } from '../codemode-egress';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 
 type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
@@ -25,7 +27,12 @@ type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
 export interface SlateDispatchContext {
   /** Check that the call may run, and run nothing: the class runs it, where its browser socket lives. */
   readonly authorizeOnly?: true;
-  /** Each member a call reaches inside itself, as a crafted tool's program does, before it runs: recorded for its slate. */
+  /** A share's viewer: what runs for it reaches no browser of the owner's, as a viewer's slate process does not. */
+  readonly viewer?: true;
+  /**
+   * Each member a call reaches inside itself, as a crafted tool's program does, before it runs: recorded for its
+   * owner's slate, held to the grant and the share's life for a viewer. It throws to refuse.
+   */
   readonly nested: (namespace: string, member: string) => void;
 }
 
@@ -36,39 +43,56 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   readonly builds: SlateBuilds;
   /** Runs as the caller: its own providers, role reach, read models and gates. */
   dispatch(caller: SlateCaller, route: SlateCapabilityRoute, context: SlateDispatchContext): Promise<SlateSurfaceValue>;
-  /** The actor whose browser sessions the caller's slate drives, as that actor's eval programs do. */
+  /** The actor whose browser sessions the caller's slate drives, as that actor's eval programs do; null for a share's
+   *  viewer, whose grant no CDP socket passes through. */
   browserActor(caller: SlateCaller): Promise<string | null>;
   readonly apps: SlateApps;
   catalog(): Promise<SlateSurfaceCatalog>;
+  shareUrl(handle: string): Promise<string | null>;
+  /** The app's page a `users` share is entered through, or null where this deployment names no app origin. */
+  shareEntry(share: string): string | null;
+  /** Absent means no per-viewer rate bound, as at the edge. */
+  kv?: KvStore;
+  /** Debits the per-share per-day spend label; absent means no spend bound. */
+  budget?(): MissionGovernor;
+  ownerTitle?(): Promise<string>;
+  ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
-  forgetRoom?(slate: string): Promise<void>;
+  sharesChanged?(): Promise<'current' | 'pending'>;
   previewed?(slate: string): void;
   /** The block an ephemeral slate's id names, and the author whose authority its page runs with; refused when no stored
    *  answer holds it. */
   messageBlock?(address: EphemeralSlateAddress): Promise<MessageBlock>;
-  /** The slate's room, made on its first need by `owner`: every slate runs in its room (docs/SLATE-SHARING-SECURITY.md §2.7). */
-  slateRoom(id: string, title: string, owner: string): Promise<SlateRoomStub>;
-  /** The workspace owner's email, as rooms name people; null where the workspace has no owner with one. */
-  ownerEmail(): Promise<string | null>;
-  /** A slate another workspace's owner shared with this one's to edit, read or changed through its room (`SlateRoom.editorFiles`). */
-  shared?(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateAnswer<SharedSlateFiles | readonly string[]>>;
-}
-
-/** What the host asks of a slate's room. */
-export interface SlateRoomStub {
-  publish(input: {
-    readonly author: string; readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string;
-    readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null;
-    /** The version of the slate's files the image was built from, which a fork of it gets; null for an answer's page. */
-    readonly source: string | null;
-    /** Each function's input contract, as the slate's package.json declares it. */
-    readonly contracts: Readonly<Record<string, Codec>>;
-  }): Promise<{ readonly methods: readonly string[] }>;
-  callAs(email: string | null, fn: string, args: JsonValue[]): Promise<SlateAnswer<RoomCallOutcome>>;
 }
 
 
+/** The one surface every slate is given, as its process sees it. */
+const SLATE_SURFACE = 'workspace';
 
+/** A viewer let in: the caller its calls run as, and the invocation its request carries. */
+interface ViewerAdmitted {
+  readonly caller: SlateCaller;
+  readonly invocation: string;
+  readonly share: LiveShareRecord;
+  readonly viewer: SlateViewer;
+  readonly settle: (outcome: string) => void;
+}
+
+/** A guest refusal crosses Cap'n Web as a plain Error with message `reason: error`. */
+const SLATE_REFUSAL_MESSAGE = new RegExp(`^(${ERROR_CODES.join('|')}): ([\\s\\S]*)$`);
+
+function shareOutcome(response: Response): 'ok' | 'refused' | 'error' {
+  if (response.ok) return 'ok';
+
+  return response.status < 500 ? 'refused' : 'error';
+}
+
+function refusalFromThrown(input: { cause: unknown }): Refusal | null {
+  const match = input.cause instanceof Error ? SLATE_REFUSAL_MESSAGE.exec(input.cause.message) : null;
+  const reason = match === null ? undefined : v.safeParse(v.picklist(ERROR_CODES), match[1]);
+
+  return reason?.success === true && match !== null ? refusalOf(new KinuError(reason.output, match[2])) : null;
+}
 
 /**
  * One process per authored tree per caller, and one durable application per slate. The application's port and capability
@@ -81,7 +105,9 @@ export class SlateHost {
 
   constructor(private readonly deps: SlateHostDeps) {
     const sql = deps.ctx.storage.sql;
+    const kv = deps.kv;
 
+    initSlateLiveShareTables((ddl) => { sql.exec(ddl); });
     initEphemeralSlateTable((ddl) => { sql.exec(ddl); });
     initSlateUsageTable((ddl) => { sql.exec(ddl); });
     this.controller = new SlateController({
@@ -91,7 +117,6 @@ export class SlateHost {
       digest: (cred, id, source) => this.slateSources.digest(cred, id, source),
       build: async (caller, id, source) => this.resident.build({
         owner: id, root: source.root, project: source.project, read: await this.slateSources.reader(caller.cred, source), cred: caller.cred,
-        ...(this.editing.has(id) && { scope: 'tree' as const }),
       }),
       launch: (launch) => this.launch(launch),
       // A socket-held invocation dies with the process that held it.
@@ -101,12 +126,15 @@ export class SlateHost {
         }
       },
       call: (request) => this.call(request),
-      room: async (id) => { await this.ownerRoom(id); },
       catalog: () => deps.catalog(),
+      shareUrl: (handle) => deps.shareUrl(handle),
+      shareEntry: (share) => deps.shareEntry(share),
+      ...(kv !== undefined && { admitted: async (key: string, perMinute: number) => ingressAdmitted(kv, 'slate-share', key, perMinute) }),
+      ...(deps.budget !== undefined && { budget: deps.budget.bind(deps) }),
+      ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
-      ...(deps.forgetRoom !== undefined && { forgetRoom: deps.forgetRoom.bind(deps) }),
+      ...(deps.sharesChanged !== undefined && { sharesChanged: deps.sharesChanged.bind(deps) }),
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
-      ...(deps.shared !== undefined && { shared: async (_caller: SlateCaller, operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>) => this.shared(operation) }),
     });
     this.resident = new ResidentSlateProcesses({
       session: deps.session, facetManager: deps.facetManager, bundler: deps.bundler, retained: () => this.controller.builds.retained(),
@@ -114,6 +142,95 @@ export class SlateHost {
     this.slateSources = new SlateSources({
       project: (cred, id) => this.controller.project(cred, id), trees: (cred) => this.controller.slates(cred), host: deps,
     });
+  }
+
+  /** The core's admission, answered over HTTP: refusals as their statuses, the consent page, or the viewer let in. */
+  async admitViewerRequest(input: {
+    readonly handle: string;
+    readonly claim: ShareViewerClaim;
+    readonly pathname: string;
+  }): Promise<ViewerAdmitted | Response> {
+    const admission = await this.controller.viewers.admit(input);
+    const headers = { 'cache-control': 'no-store' };
+
+    switch (admission.kind) {
+      case 'missing': return new Response('Not found', { status: 404, headers });
+      case 'sign-in': return new Response(null, { status: 303, headers: { location: admission.entry, ...headers } });
+      case 'too-many': return new Response('Too many requests', { status: 429, headers });
+      case 'consent': return await this.consentPage(admission.share, admission.namespaces);
+      case 'admitted': {
+        const { caller, share, viewer } = admission;
+        const invocation = crypto.randomUUID();
+
+        this.invocations.set(invocation, { id: share.slate, chain: [], viewer });
+
+        return { caller, invocation, share, viewer, settle: (outcome) => { this.controller.live.settleRequest(viewer.request, outcome); } };
+      }
+    }
+  }
+
+  /** What the grant reaches of the owner's, disclosed before anything of theirs runs. */
+  private async consentPage(share: LiveShareRecord, namespaces: readonly string[]): Promise<Response> {
+    const project = await this.controller.project(CRED_SESSION_USER, share.slate);
+    const owner = (await this.deps.ownerTitle?.()) ?? this.deps.workspace;
+    const title = slateTitle(project, share.slate);
+    const reached = namespaces.map((namespace) => `<li>${escapeHtml(namespace)}</li>`).join('');
+
+    const html = publicPage({
+      title: `${owner} shared ${title}`,
+      body: `<main><section class="section">
+<h1>${escapeHtml(owner)} shared ${escapeHtml(title)}</h1>
+<p class="dim">This slate runs in ${escapeHtml(owner)}'s workspace and calls these connections with their credentials:</p>
+<ul>${reached}</ul>
+<p class="dim">What you do here runs as ${escapeHtml(owner)} and is logged for them.</p>
+<a class="btn solid" href="${VIEWER_EXCHANGE_PATH}?consent=1">Continue</a>
+</section></main>`,
+    });
+
+    return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+  }
+
+  async routeShare(
+    handle: string,
+    claim: ShareViewerClaim,
+    request: Request,
+    pathname: string,
+  ): Promise<Response> {
+    const admission = await this.admitViewerRequest({ handle, claim, pathname });
+
+    if (admission instanceof Response) return admission;
+
+    try {
+      const process = await this.ensure(admission.caller, admission.share.slate);
+      const headers = new Headers(request.headers);
+      headers.set('x-slate-call', admission.invocation);
+      // A share's process is private and portless, so the request goes to its handle.
+      const target = new URL(request.url);
+      target.pathname = pathname;
+      const forwarded = reoriginateRequest(request, target.toString(), { headers, redirect: request.redirect });
+      const response = headers.get('upgrade')?.toLowerCase() === 'websocket' ? await process.connect(forwarded) : await process.request(forwarded);
+
+      if (response.status === 101) {
+        this.invocations.set(admission.invocation, {
+          id: admission.share.slate, chain: [], viewer: admission.viewer,
+          held: `${slateCallerKey(admission.caller)}#${admission.share.slate}`,
+        });
+      } else {
+        this.invocations.delete(admission.invocation);
+        admission.settle(shareOutcome(response));
+      }
+
+      return response;
+    } catch (cause) {
+      this.invocations.delete(admission.invocation);
+      const error = toKinuError({ doing: `slate share ${handle}`, cause, otherwise: 'io' });
+      admission.settle('error');
+
+      return new Response(error.message, {
+        status: error.code === 'denied' || error.code === 'missing' ? 404 : 500,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
   }
 
   private readonly invocations = new Map<string, SlateInvocation & { readonly held?: string }>();
@@ -148,6 +265,8 @@ export class SlateHost {
 
     this.invocations.delete(target);
 
+    if (issued.viewer !== undefined) this.controller.live.settleRequest(issued.viewer.request, 'closed');
+
     return { ok: true, value: null };
   }
 
@@ -164,6 +283,14 @@ export class SlateHost {
       if (name === SLATE_STORAGE_BINDING) return slateStorageCall(this.controller.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
       const issued = issuedSlateInvocation({ invocations: this.invocations, id, invocation: parsed.output.invocation });
       const chain = issued?.chain ?? [];
+
+      // The share row is re-read now, so a revoked share refuses mid-flight.
+      if (caller.share !== undefined) {
+        return await this.controller.viewers.call({
+          share: caller.share, id, request: parsed.output, chain, issued,
+          run: (route, nested) => this.run(caller, route, { nested, ...(parsed.output.authorize && { authorizeOnly: true }) }, issued?.viewer),
+        });
+      }
 
       const source = await this.slateSources.resolve(caller.cred, id);
 
@@ -187,7 +314,7 @@ export class SlateHost {
     }
   }
 
-  private async run(caller: SlateCaller, route: SlateRoute, context: SlateDispatchContext): Promise<SlateSurfaceResult> {
+  private async run(caller: SlateCaller, route: SlateRoute, context: SlateDispatchContext, viewer?: SlateViewer): Promise<SlateSurfaceResult> {
     switch (route.kind) {
       case 'namespace': {
         const value = await this.deps.dispatch(caller, route, context);
@@ -203,186 +330,75 @@ export class SlateHost {
       case 'tool':
       case 'agent':
       case 'ai': return { ok: true, value: await this.deps.dispatch(caller, route, context) };
-      // The hop keeps the caller's authority, never the author's.
-      case 'app': return this.call({ caller, id: route.id, method: route.method, args: [...route.args], chain: route.chain });
+      // The hop keeps the caller's authority, never the author's; the viewer follows the chain.
+      case 'app': return this.call({ caller, id: route.id, method: route.method, args: [...route.args], chain: route.chain, viewer });
     }
   }
 
-  /**
-   * A method of a slate, called by the workspace's own work (an agent's hop): in the slate's room, for the workspace's
-   * owner, as the room admits it. What a call needed and the owner has not allowed is the room's part, not an answer.
-   */
-  call(request: SlateAppCall): Promise<SlateCallResult> {
-    const { caller, id, method, args } = request;
+  /** One Cap'n Web HTTP-batch RPC; the invocation id lives exactly as long as the call. */
+  async call(request: SlateAppCall): Promise<SlateCallResult> {
+    const { caller, id, method, args, chain = [], viewer } = request;
+    const invocation = crypto.randomUUID();
+    this.invocations.set(invocation, viewer === undefined ? { id, chain } : { id, chain, viewer });
 
-    return settle(slateAnswer(`slate ${id}.${method}`, Effect.gen({ self: this }, function* () {
-      const planned = workModeRefusal(caller.workMode, false, 'Calling authored slate code');
+    try {
+      requireWorkModePermission(caller.workMode, false, 'Calling authored slate code');
 
-      if (planned !== null) return yield* new KinuError(planned.reason, planned.error);
-
-      if (!isSlateMethodName(method)) return yield* new KinuError('bad_input', `"${method}" is not an app method name`);
+      if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
       const parsed = v.safeParse(v.array(JsonValueSchema), args);
 
-      if (!parsed.success) return yield* new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
+      if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
+      const process = await this.ensure(caller, id);
 
-      // The room needs the slate built and published first.
-      yield* attempt({ doing: `slate ${id}`, otherwise: 'io' }, async () => this.ensure(caller, id));
-      const email = yield* this.owner();
-      const room = yield* this.room(id, email);
-      const answered = yield* attempt({ doing: `slate ${id}.${method}`, otherwise: 'io' }, async () => room.callAs(email, method, parsed.output));
-
-      if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
-
-      if (!('value' in answered.value)) {
-        return yield* new KinuError('denied', `${method} reads what only a part shows: open the slate to see it, or allow what it asks there`);
+      if (!process.methods.includes(method)) {
+        throw new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`);
       }
 
-      return answered.value.value;
-    })));
-  }
+      const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(process, invocation);
 
-  /** The modules of one of a slate's images, by content digest, as its room loads them; refused when one was swept. */
-  imageModules(slate: string, digests: readonly string[]): Promise<SlateAnswer<Readonly<Record<string, string>>>> {
-    return settle(slateAnswer(`reading slate ${slate}'s image`, Effect.gen({ self: this }, function* () {
-      const session = yield* attempt({ doing: 'opening the workspace', otherwise: 'unavailable' }, async () => this.deps.session());
-      const vfs = session.vfs.as(CRED_KERNEL);
-      const texts: Record<string, string> = {};
+      try {
+        const raw: unknown = await stub[method](...parsed.output);
+        const value = v.safeParse(JsonValueSchema, raw === undefined ? null : raw);
 
-      for (const digest of digests) texts[digest] = yield* inItsWords('missing', Effect.sync(() => vfs.readFileString(facetImagePath(digest))));
+        if (!value.success) throw new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) });
 
-      return texts;
-    })));
-  }
-
-  /** The slate's page in its room, entered as the workspace's owner: what a preview shows. */
-  /** The slate's room, made for the workspace's owner if it is not yet. */
-  ownerRoom(id: string): Promise<void> {
-    return settle(Effect.asVoid(Effect.gen({ self: this }, function* () {
-      return yield* this.room(id, yield* this.owner());
-    })));
-  }
-
-  private owner(): Effect.Effect<string, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const owner = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.deps.ownerEmail());
-
-      return owner ?? (yield* new KinuError('unavailable', 'This workspace has no owner to run its slates for'));
-    });
-  }
-
-  private room(id: string, owner: string): Effect.Effect<SlateRoomStub, KinuError> {
-    return attempt({ doing: `slate ${id}'s room`, otherwise: 'unavailable' }, async () => {
-      const source = await this.slateSources.resolve(CRED_SESSION_USER, id);
-
-      return await this.deps.slateRoom(id, slateTitle(source.project, id), owner);
-    });
-  }
-
-  /** The editor of a slate whose build is being published now, while an edit of theirs builds: its room's image author. */
-  private readonly editing = new Map<string, string>();
-
-  /**
-   * An editor's change to one of this workspace's slates, by way of its room, which said they may edit it: the files
-   * written, then built and published to the room as the editor's, so only the editor's own grants follow the new image.
-   */
-  editAs(id: string, editor: string, files: SlateFileChange): Promise<SlateAnswer<readonly string[]>> {
-    return settle(slateAnswer(`${editor}'s edit of slate ${id}`, Effect.gen({ self: this }, function* () {
-      const written = yield* Effect.promise(async () => this.controller.writeShared(id, files));
-
-      if (!written.ok) return yield* new KinuError(written.reason, written.error);
-      this.editing.set(id, editor);
-
-      // Built from the slate's own tree alone (`SlateBuildInput.scope`); a change that does not build is taken back whole,
-      // so no later build of the owner's ever compiles what the editor's could not.
-      // A tree that does not build leaves the last image that did running, and says why: the edit did not take.
-      const built = yield* Effect.result(Effect.ensuring(
-        Effect.flatMap(
-          attempt({ doing: `building slate ${id}`, otherwise: 'io' }, async () => this.controller.processes.booted(ROOT_SLATE_CALLER, id)),
-          (running) => (running.broken === null ? Effect.void : Effect.fail(new KinuError('bad_input', running.broken))),
-        ),
-        Effect.sync(() => { this.editing.delete(id); }),
-      ));
-
-      if (built._tag === 'Failure') {
-        const undone = yield* Effect.promise(async () => this.controller.writeShared(id, written.value.before));
-
-        if (!undone.ok) return yield* new KinuError(undone.reason, `${built.failure.message}; taking the change back failed too: ${undone.error}`);
-
-        return yield* Effect.fail(built.failure);
+        return { ok: true, value: value.output };
+      } finally {
+        // Dispose here, not at transport end, or workerd reports the read-loop rejection as unhandled.
+        stub[Symbol.dispose]();
       }
+    } catch (cause) {
+      const refusal = refusalFromThrown({ cause });
 
-      return written.value.paths;
-    })));
-  }
+      if (refusal !== null) return { ok: false, ...refusal };
 
-  /** This workspace's owner reading or changing a slate shared with them: answered as a slate operation answers. */
-  shared(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateCallResult> {
-    return settle(slateAnswer(`slate ${operation.workspace}/${operation.slate}`, Effect.gen({ self: this }, function* () {
-      const answered = yield* attempt({ doing: 'asking the slate\'s room', otherwise: 'unavailable' }, async () => this.deps.shared?.(operation) ?? null);
-
-      if (answered === null) return yield* new KinuError('unsupported', 'This workspace edits no shared slate');
-
-      if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
-
-      // Its files cross from another workspace's object: held to their shape as every reader of them holds them.
-      return operation.op === 'sharedFiles' ? v.parse(SharedSlateFilesSchema, answered.value) : v.parse(v.array(v.string()), answered.value);
-    })));
+      return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id}.${method}`, cause, otherwise: 'io' })) };
+    } finally {
+      this.invocations.delete(invocation);
+    }
   }
 
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
     return (await this.controller.processes.booted(caller, id)).process;
   }
 
-  /**
-   * `launch` publishes: the slate's good build becomes its room's image, written by the workspace's owner, whose own
-   * agent wrote it. The room runs it; nothing of the workspace's does.
-   */
-  launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
-    const { id, source, image } = launch;
+  /** A process for `launch`: the slate's bindings as its caller, and its outbound mediated as that caller's eval is. */
+  private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
+    const { id, caller, source, image, app } = launch;
+    const actor = await this.deps.browserActor(caller);
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: caller.share === undefined });
 
-    return settle(Effect.gen({ self: this }, function* () {
-      const owner = yield* this.owner();
-      const room = yield* this.room(id, owner);
-      const secret = yield* attempt({ doing: `scanning slate ${id} for secrets`, otherwise: 'io' }, async () => this.secretIn(source));
-      // A slate of files is published at the version its files are now, which a fork of it gets; an answer's page has none.
-      const version = source.kind === 'files' ? yield* Effect.promise(async () => this.controller.currentSource(id)) : null;
-
-      if (version !== null && !version.ok) return yield* new KinuError(version.reason, version.error);
-
-      const { methods } = yield* attempt({ doing: `publishing slate ${id}`, otherwise: 'unavailable' }, async () => room.publish({
-        author: this.editing.get(id) ?? owner, image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title: slateTitle(source.project, id), secret,
-        source: version?.value ?? null, contracts: Object.fromEntries(Object.entries(source.project.slate.functions ?? {}).map(([fn, declared]) => [fn, declared.input])),
-      }));
-
-      // Nothing of the workspace's serves the slate: its URL and its socket are its room's.
-      const elsewhere = async (): Promise<Response> => new Response(`Slate ${id} runs in its room`, { status: 501 });
-
-      return { id: `room:${id}`, port: null, methods: [...methods], request: elsewhere, connect: elsewhere, isRunning: async () => true, stop: async () => {} };
-    }));
-  }
-
-  /** The first secret-shaped text in the slate's files: while one is there, its room keeps its link off. */
-  private async secretIn(source: SlateSource): Promise<{ readonly file: string; readonly line: number; readonly kind: string } | null> {
-    if (source.kind !== 'files') return null;
-    const vfs = (await this.deps.session()).vfs.as(CRED_SESSION_USER);
-    const pending = [source.root];
-
-    for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
-      for (const entry of vfs.readdir(dir)) {
-        const path = `${dir}/${entry.name}`;
-
-        if (entry.type === 'directory' && entry.name !== 'node_modules' && !entry.name.startsWith('.')) pending.push(path);
-
-        if (entry.type !== 'file') continue;
-        const bytes = vfs.readFile(path);
-
-        if (bytes.includes(0)) continue;
-        const [found] = secretSightings(path.slice(source.root.length + 1), new TextDecoder('utf8', { fatal: false }).decode(bytes));
-
-        if (found !== undefined) return { file: found.path, line: found.line, kind: found.message };
-      }
+    if (caller.workMode === 'build' && globalOutbound === null) {
+      throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
     }
 
-    return null;
+    const bindings: Record<string, Fetcher<SlateBinding>> = {};
+
+    for (const name of [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
+      const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller };
+      bindings[name] = exports.SlateBinding({ props });
+    }
+
+    return await this.resident.launch({ owner: id, root: source.root, bindings, globalOutbound, app: app === null ? null : { port: app.port } }, image);
   }
 }

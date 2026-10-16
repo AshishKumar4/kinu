@@ -94,6 +94,7 @@ export interface HostedWorkspaceDeps<Id> {
      *  must outlive the routed 101 response. */
   slateInvocation?(port: number, socket: boolean): { readonly value: string; release: () => void } | null;
   pictures?: {
+    captures(port: number, handle: string): boolean;
     rendered(slate: string, port: number): void;
   };
 }
@@ -198,7 +199,7 @@ type PreviewGates =
   | { readonly routed: false; readonly refused: PreviewGateRefusal }
   | {
     readonly routed: true; readonly capability: string; readonly refused: PreviewGateRefusal | null;
-    readonly slate: string | null;
+    readonly slate: string | null; readonly capture: boolean;
   };
 
 function routeCheck(gates: PreviewGates): PreviewRouteCheck {
@@ -316,8 +317,9 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     const { owner } = exposure;
     const slate = owner !== null && exposure.kind === 'explicit' ? owner : null;
     const matches = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) === handle;
+    const capture = !matches && slate !== null && deps.pictures?.captures(port, handle) === true;
 
-    if (!matches) {
+    if (!matches && !capture) {
       return { routed: false, refused: { gate: 'handle-mismatch', owner, detail: `the URL names another exposure of port ${port}` } };
     }
 
@@ -332,19 +334,19 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     const listener = portRegistry.get(port);
 
     if (listener === undefined) {
-      return { routed: true, capability, slate, refused: { gate: 'no-listener', owner, detail: `nothing is listening on port ${port}` } };
+      return { routed: true, capability, slate, capture, refused: { gate: 'no-listener', owner, detail: `nothing is listening on port ${port}` } };
     }
 
     if (listener.capability !== capability) {
       const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
 
       return {
-        routed: true, capability, slate,
+        routed: true, capability, slate, capture,
         refused: { gate: 'capability-mismatch', owner, detail: `pid=${String(listener.pid)} state=${state}` },
       };
     }
 
-    return { routed: true, capability, slate, refused: null };
+    return { routed: true, capability, slate, capture, refused: null };
   };
 
   return {
@@ -446,7 +448,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         // A 101 only opens the socket: the process's close listener releases the invocation.
         if (response.status !== 101) invocation?.release();
 
-        if (gates.slate !== null && isRender(request, response)) deps.pictures?.rendered(gates.slate, port);
+        if (gates.slate !== null && !gates.capture && isRender(request, response)) deps.pictures?.rendered(gates.slate, port);
 
         return response;
       } catch (cause) {

@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { expect, test } from 'vitest';
 import { Effect } from 'effect';
+import { endedStandingOf } from '@kinu.run/core';
 import { authoredRefusal, classifyErrorCode, KinuError, settle } from '@kinu.run/core/obs';
 import { createWorkersTracer } from '../../src/obs/cf-tracer';
 import { DevboxError, devboxFailure } from '../../../devbox/src/errors';
@@ -18,6 +19,23 @@ test('RPC preserves classification and cause without preserving the subclass', a
     expect(classifyErrorCode({ cause })).toBe('unavailable');
     expect(authoredRefusal({ doing: 'calling the peer', cause })).toMatchObject({ code: 'unavailable', message: 'upstream refused' });
   }
+});
+
+// Review of 66938aa25: an agent's isolate stands its owed work down on the workspace's refusal for it, read by the
+// refusal's fields as they cross, never by its words.
+test("an ended agent's refusal crosses RPC saying whose standing ended, raised or wrapped; its words alone say nothing", async () => {
+  const probe = env.EFFECT_ATOMICITY_PROBE.get(env.EFFECT_ATOMICITY_PROBE.idFromName('ended-refusal'));
+  const read: Array<readonly [string, string | null, string | null]> = [];
+  expect.assertions(1);
+
+  for (const form of ['raised', 'wrapped', 'quoted'] as const) {
+    try { await probe.endedRefusal(form); }
+    catch (cause) {
+      read.push([form, endedStandingOf({ cause }, 'agent-1'), endedStandingOf({ cause }, 'agent-2')]);
+    }
+  }
+
+  expect(read).toEqual([['raised', 'retired', null], ['wrapped', 'retired', null], ['quoted', null, null]]);
 });
 
 test('the standalone library code and file errno survive RPC without its prototype', async () => {

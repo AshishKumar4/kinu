@@ -33,8 +33,8 @@ import { pcRoutes } from "./pc-routes";
 import { opsRoutes } from "./ops-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
+import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
-import { handleSlateRoomHostRequest } from "./slates/room-routes";
 import {
   crossSiteRejection, sessionGate,
   type AuthIdentity,
@@ -66,6 +66,7 @@ export { CodemodeEgress } from "./codemode-egress";
 
 export { CodemodeLauncher } from "./codemode-sandbox";
 
+export { SlateBinding } from "./slates/bindings";
 
 export { DevboxGateway } from '@kinu.run/devbox';
 
@@ -105,11 +106,6 @@ export { UserDO as MossaicUserDO, ShardDO as MossaicShardDO } from "@mossaic/sdk
 export { MonitorDO } from "./monitor/monitor-do";
 
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
-
-export { SlateRoom } from "./slates/room";
-
-
-export { RoomBinding } from "./slates/room-bindings";
 
 export { DeployRunDO } from "./deploy/deploy-do";
 
@@ -281,9 +277,9 @@ previewHost.get(`${SLATE_FONTS_PATH}:file`, async (c, next) => {
 });
 
 previewHost.use('*', async (c, next) => {
-  const room = await handleSlateRoomHostRequest(c.req.raw, c.env);
+  const share = await handleSlateShareHostRequest(c.req.raw, c.env);
 
-  return room === null ? await next() : containPreviewResponse(room);
+  return share === null ? await next() : containPreviewResponse(share);
 });
 
 previewHost.use('*', async (c, next) => {
@@ -374,8 +370,8 @@ worker.all('/client-node-stubs.ts', viteDevAsset);
 
 worker.all(`${AGENT_BUNDLE_DIRECTORY}/*`, () => new Response('Not found', { status: 404 }));
 
-// Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority. The Gallery and a
-// shared slate's live page are only their shell: the Gallery's and the room's own routes decide what a visitor reads.
+// Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority.
+// The Gallery and a shared slate's part frames are only their shell: their own routes decide what a visitor reads.
 for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH, '/gallery']) worker.all(path, appShell);
 
 for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));

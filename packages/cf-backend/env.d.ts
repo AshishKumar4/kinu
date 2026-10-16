@@ -2,8 +2,6 @@
 import type { OrchestratorAgent } from "./src/orchestrator";
 import type { KinuDevbox } from "./src/kinu-devbox";
 import type { UserDO } from "./src/user/user-do";
-import type { SlateRoom } from "./src/slates/room";
-import type { BrowserSessionSockets } from "./src/codemode-egress";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
@@ -11,7 +9,7 @@ import type { CodemodeEgress } from "./src/codemode-egress";
 import type { CodemodeLauncher } from "./src/codemode-sandbox";
 import type { KinuEgress } from "./src/server";
 import type { AgentIsolateTail, AgentWorkspaceRPC } from "./src/agent-facets";
-import type { RoomBinding } from "./src/slates/room-bindings";
+import type { SlateBinding } from "./src/slates/bindings";
 import type { MossaicShardDO, MossaicUserDO } from "./src/server";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 import type { PictureBucket } from "./src/slates/pictures";
@@ -39,8 +37,6 @@ declare global {
     /** Singleton admin control-plane index and audit log; reachable only via a capability derived from
      *  CREDENTIAL_ENCRYPTION_KEY (control-plane/admin-caller.ts). */
     ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
-    /** One per slate: the caretaker of who may do what with it (docs/SLATE-SHARING-SECURITY.md). */
-    SLATE_ROOM: DurableObjectNamespace<SlateRoom>;
     /** Native workspace container owner. */
     KinuDevbox: DurableObjectNamespace<KinuDevbox>;
     /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare door). */
@@ -62,7 +58,7 @@ declare global {
     /** Slate pictures; absent, a tile keeps its placeholder. */
     SLATE_PICTURES?: PictureBucket;
     /** Browser Run: the `web` tool's rendered fetches and screenshots, agents' browser sessions, and slate pictures. */
-    BROWSER: BrowserRun & BrowserSessionSockets;
+    BROWSER: BrowserRun;
     /** Analytics Engine datasets, optional; user-authored names are digested before indexing. */
     readonly AGENT_METRICS?: AnalyticsEngineDataset;
     readonly FEEDBACK_MARKERS?: AnalyticsEngineDataset;
@@ -152,7 +148,7 @@ declare global {
         CodemodeEgress: typeof CodemodeEgress;
         CodemodeLauncher: typeof CodemodeLauncher;
         KinuEgress: typeof KinuEgress;
-        RoomBinding: typeof RoomBinding;
+        SlateBinding: typeof SlateBinding;
         default: ExportedHandler<Env>;
       };
     }

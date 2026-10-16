@@ -11,7 +11,7 @@ import { labelSigner, parseWorkspacePreviewLabel, previewHostSuffix, type LabelS
 export const previewSigner = labelSigner('kinu.workspace-preview.salt', 'kinu.workspace-preview.v4');
 
 /** Diverged from the share signer so a ticket, cookie or source hash never verifies as a share token. */
-const viewerSigner = labelSigner('kinu.slate-viewer.salt', 'kinu.slate-viewer.v1');
+export const viewerSigner = labelSigner('kinu.slate-viewer.salt', 'kinu.slate-viewer.v1');
 
 /** A guest host's visitor identity, set by its ticket exchange and scoped to that host: a live share's viewer, a preview's owner. */
 export const VIEWER_COOKIE_NAME = '__Host-kinu_viewer';

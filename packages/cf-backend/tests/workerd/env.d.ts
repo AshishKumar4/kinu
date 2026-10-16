@@ -29,15 +29,15 @@ import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { CodemodeLauncher } from '../../src/codemode-sandbox';
-import type { RoomBinding } from '../../src/slates/room-bindings';
+import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork, AgentSlateUi, AnswerPageModes, AnswerPageRoom, TerminalState, AlienEffect,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork, AgentSlateUi, AnswerPageModes, TerminalState, AlienEffect,
   HeldClose, HeldCloseRecovered, KillJourney,
 } from './two-turn-shapes';
 import type {
-  PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
+  DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
 } from './slate-durability-shapes';
 import type { JsonValue, SlateSurfaceResult } from '@kinu.run/core';
 
@@ -73,6 +73,11 @@ interface UserSocketProbeRpc extends Rpc.DurableObjectBranded {
   deliverBareFrame(): Promise<'handled' | { readonly threw: string }>;
 }
 
+interface SlateEgressRpc extends Rpc.DurableObjectBranded {
+  request(mode: 'plan' | 'build', target: string, redirect?: RequestRedirect): Promise<string>;
+  publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
+  unmediatedThenMediated(): Promise<{ unmediated: string; mediated: string; reused: string }>;
+}
 
 interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   signalProbe(): Promise<{ signalKind: string } | { threw: string }>;
@@ -102,7 +107,6 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   agentHeldWork(): Promise<AgentHeldWork>;
   agentSlateUi(): Promise<AgentSlateUi>;
   answerPageModesIn(): Promise<AnswerPageModes>;
-  answerPageRoomIn(): Promise<AnswerPageRoom>;
   cutRecordingWorkspace(phase: 'before' | 'after'): Promise<{ readonly workspace: string; readonly cut: TerminalState }>;
   recoverRecording(workspace: string, cut?: { readonly name: 'turn_record'; readonly phase: 'before' | 'after' }): Promise<TerminalState>;
   alienEffectIn(): Promise<AlienEffect>;
@@ -297,45 +301,29 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   serveSlate(input: {
     workspace: string; owner: string; id: string; body: string; preferredPort?: number;
   }): Promise<ServedSlate>;
+  portReservations(workspace: string): Promise<DurabilityReservation[]>;
   previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }>;
   slateBuild(input: { workspace: string; owner: string; phase: 'good' | 'broken' | 'served' | 'fixed' }): Promise<{ wrote: string | null; preview: string; serves: string | null; told: string[] }>;
   programOnWhiteboard(input: { workspace: string; owner: string; program: string }): Promise<string>;
-  rebuildSlate(input: { workspace: string; id: string; body: string }): Promise<void>;
   slateImport(input: { workspace: string; owner: string; word: string; first: boolean }): Promise<string>;
   slateExports(input: { workspace: string; owner: string; entry: 'a.js' | 'b.js'; first: boolean }): Promise<string>;
   slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<{ before: string; after: string; says: string }>;
-  craftedToolInSlate(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[] }>;
-  egressSlate(input: { workspace: string; owner: string; calls: readonly { method: 'shared' | 'confined'; target: string; redirect?: RequestRedirect }[] }): Promise<string[]>;
-  planCall(input: { workspace: string; owner: string }): Promise<{ ok: boolean; reason: string | null }>;
+  craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }>;
+  forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
-  drivePreview(url: string, path?: string): Promise<PreviewAnswer>;
+  drivePreview(url: string): Promise<PreviewAnswer>;
   visitPreview(url: string, headers: Record<string, string>): Promise<PreviewAnswer & { location: string | null }>;
   visitPreviewAs(url: string, userId: string): Promise<PreviewAnswer & { entry: number }>;
   visitPreviewWithCookieOf(url: string, userId: string): Promise<PreviewAnswer>;
+  refusalText(slate: boolean): Promise<{ text: string; html: string }>;
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
+  holdPreview(url: string): Promise<RpcAnswer>;
+  callHeldPreview(method: string): Promise<RpcAnswer>;
+  closeHeldPreview(): Promise<{ code: number }>;
+  advanceClock(ms: number): Promise<void>;
+  restoreClock(): Promise<void>;
   wakeOnce(workspace: string): Promise<void>;
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;
-  deleteWorkspace(workspace: string, owner: string): Promise<void>;
-  isolatedRuns(input: { workspace: string; owner: string }): Promise<string[]>;
-  sealed(value: JsonValue | null): Promise<{ csp: string | null; type: string | null; body: string }>;
-  attackHolder(): Promise<{ alice: string; bobFirst: string; afterSamShows: string; afterAliceShows: string }>;
-  scenarioBoard(): Promise<{ alice: string; bob: string; visitor: string; asked: { sam: number; alice: number; bob: number } }>;
-  roomWrites(): Promise<{ visitorNote: string; visitorPut: string; bobNote: string; notes: string; stamps: string; stampedTwice: string }>;
-  browserDrives(): Promise<{ asked: string; own: string[]; afterRemoval: string; others: string; othersLog: string[]; raw: string; forged: number[]; lent: string; samLog: string[] }>;
-  ownAi(): Promise<{ alice: string; aliceCalls: number; samCalls: number }>;
-  attackStaleImage(): Promise<{ first: string; edited: string; held: string; fromB: number }>;
-  attackRequester(): Promise<{ alice: string; bob: string; aliceCallsForBob: number }>;
-  attackToolFlow(): Promise<{ samOwn: string; alice: string; samMailsForAlice: number }>;
-  attackSink(): Promise<{ asked: string; mailedBeforeDeciding: number; mailedAfter: number; alice: string }>;
-  attackApprovals(): Promise<{ bobApproves: string; week2BeforeApproval: number; week2AfterOne: number; secondAsked: boolean; week3: number; bob3: string }>;
-  attackRevision(): Promise<{ edited: string; bob: string; sam: string; deploysAfterEdit: number }>;
-  attackPost(): Promise<{ alice: string; bobBoard: string }>;
-  attackFork(): Promise<{ forked: string; dana: string; samDeploysForDana: number }>;
-  draftRoom(workspace: string, id: string): Promise<boolean>;
-  roomExists(workspace: string, id: string): Promise<boolean>;
-  editorEdits(input: { workspace: string; id: string; editorWorkspace: string; editor: string; server: string }): Promise<{
-    before: string; files: string[]; edited: string; page: string | null; author: string | null; reaching: string; restored: boolean; pageAfter: string | null; afterRemoval: string;
-  }>;
   putPicture(workspace: string, slate: string, digest: string): Promise<void>;
   pictureKeys(workspace: string): Promise<string[]>;
   openWorkspace(workspace: string, owner: string): Promise<void>;
@@ -357,6 +345,30 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
 /** Spelled flat: the recursive `JsonValue` makes the stub's serializability check exceed the instantiation budget. */
 type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; error?: string };
 
+interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
+  start(): Promise<void>;
+  authorTriage(): Promise<void>;
+  operationAs(as: 'root' | 'plan' | 'hire', input: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
+  unnamedShareCall(share: string): Promise<ProbeAnswer>;
+  previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
+  share(approved?: readonly { namespace: string; member: string }[]): Promise<ProbeAnswer>;
+  liveShares(): Promise<ProbeAnswer>;
+  importBlueprint(): Promise<{ fork: string; running: number }>;
+  viewerHop(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<string>;
+  viewerSocketAcross(
+    handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string, change: 'revoke' | 'spend',
+  ): Promise<{ before: string | null; after: string; late: string }>;
+  viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ status: number; body: string }>;
+  viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
+  viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
+  replay(share: string): Promise<ProbeAnswer>;
+  requests(share: string): Promise<ProbeAnswer>;
+  revoke(share: string): Promise<ProbeAnswer>;
+  stopped(): Promise<boolean>;
+  drive(session: string): Promise<string>;
+  typed(say: string, via?: 'stream' | 'ask'): Promise<string>;
+  driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
+}
 
 
 /** Declared, not imported: the probe compiles under the production project. */
@@ -424,6 +436,7 @@ declare global {
     interface Env {
       RELAY_LIFETIME: Fetcher;
       RELAY_HOST: Fetcher;
+      SLATE_EGRESS_PROBE: DurableObjectNamespace<SlateEgressRpc>;
       RETENTION: DurableObjectNamespace<RetentionDO>;
       NEIGHBOUR: DurableObjectNamespace<NeighbourDO>;
       GATED: DurableObjectNamespace<GatedDO>;
@@ -447,6 +460,7 @@ declare global {
       EFFECT_ATOMICITY_PROBE: DurableObjectNamespace<EffectAtomicityProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeRpc>;
+      SLATE_SHARE_PROBE: DurableObjectNamespace<SlateShareProbeRpc>;
       SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
@@ -479,7 +493,7 @@ declare global {
     /** `exports.CodemodeEgress` is a loopback stub here as in production. */
     interface GlobalProps {
       mainModule: {
-        RoomBinding: typeof RoomBinding;
+        SlateBinding: typeof SlateBinding;
         CodemodeEgress: typeof CodemodeEgress;
         CodemodeLauncher: typeof CodemodeLauncher;
         SlateChainProbe: typeof SlateChainProbe;

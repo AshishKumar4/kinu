@@ -55,6 +55,8 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
+  'slateAi',
+  'slateAiSpend',
   'accountMemory_decide',
   'accountMemory_facts',
   'accountMemory_forget',
@@ -173,8 +175,6 @@ const USER_DO_METHODS = [
   'transferDeviceRequestToBackgroundJob',
   'userMcp_add',
   'userMcp_callTool',
-  'slateAi',
-  'slateAiSpend',
   'userMcp_cancelCall',
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',
@@ -260,14 +260,9 @@ const ORCHESTRATOR_METHODS = [
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',
-  // A slate's room, and the room reading its image back: DO-to-DO only.
-  'ensureSlateRoom',
-  'slateImageModules',
-  'slateForkBundle',
-  'slateFilesFor',
-  'holdsBrowserSession',
-  'editSlateAs',
-  'editShared',
+  'blueprintBundle',
+  'readBlueprint',
+  'shareBlueprintWith',
   'acceptEmailDelivery',
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',
@@ -320,6 +315,13 @@ const ORCHESTRATOR_METHODS = [
   'callOperation',
   'listOperations',
   'cancelOperation',
+  // Reachable by a DO stub in this Worker, never a browser; none is `@callable`.
+  'routeSlateShare',
+  'readLiveShare',
+  'shareLiveWith',
+  'liveShareBundle',
+  'liveShareUrl',
+  'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',
   'ownsBrowserSession',

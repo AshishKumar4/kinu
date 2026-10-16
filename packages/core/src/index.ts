@@ -285,8 +285,18 @@ export { parseSlateProject, slateTitle, type SlateProject } from './slates/proje
 export { slateAuthority } from './slates/authority';
 
 export {
-  SHARE_VIEWER_REQUESTS_PER_MINUTE, VIEWER_EXCHANGE_PATH, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH, BlueprintBundleSchema, ShareCardSchema,
-  type LiveShareVisibility, type BlueprintFork, type BlueprintBundle, type SlateCapabilityGraph, type ShareCard, type SlateShareCard,
+  SHARE_VIEWER_REQUESTS_PER_MINUTE, SHARE_SPEND_CAP_USD_PER_DAY, shareSpendLabel, VIEWER_EXCHANGE_PATH, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
+  formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
+  BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
+  SharedLibrarySchema, SlateShareRecordSchema,
+  ShareGrantSchema, SlateCapabilityGraphSchema, ShareCardSchema,
+  LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
+  type ShareKind, type LiveShareVisibility, type BlueprintInspection, type BlueprintView,
+  type BlueprintFork, type BlueprintBundle,
+  type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,
+  type ShareGrantMember, type ShareGrant, type ShareCard,
+  type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
+  type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
 } from './slates/sharing';
 
 export {
@@ -309,12 +319,12 @@ export {
 export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 
 export {
-  slateCapabilityGraph, type SlateSurfaceCatalog, type SlateUsage,
+  slateCapabilityGraph, cutShareGrant, grantAdmits, type SlateSurfaceCatalog, type SlateUsage,
 } from './slates/capability-graph';
 
 export {
-  SlateCallRequestSchema, SLATE_DRIVEN_MEMBERS, routeSlateCall, issuedSlateInvocation, slateCallAddress,
-  type SlateCallRequest, type SlateRoute, type SlateInvocation,
+  SlateCallRequestSchema, SLATE_DRIVEN_MEMBERS, routeSlateCall, issuedSlateInvocation, routeViewerCall, admitNestedViewerCall, slateCallAddress,
+  type SlateCallRequest, type SlateRoute, type SlateInvocation, type SlateViewer,
 } from './slates/surface';
 
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
@@ -323,7 +333,7 @@ export type { SlateProcess } from './slates/process';
 
 export {
   isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, isJsonAnswer,
-  type SlateSummary, type SlateProblem, SharedSlateFilesSchema, type SharedSlateFiles, type SlateFileChange,
+  type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateStorageCall } from './slates/state';
@@ -556,7 +566,7 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
@@ -2140,7 +2150,6 @@ export {
   buildSlateShareHost, parseSlateShareLabel,
 } from './preview/slate-share-host';
 
-export { hostTokenHolds, slateHostOrigin } from './preview/slate-room-host';
 
 export {
   PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,

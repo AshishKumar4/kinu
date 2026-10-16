@@ -32,7 +32,6 @@ const FIRST_TABLE = {
   workspace: 'workspace_capability',
   agent: 'workspace_actors',
   local: 'workspace_identity',
-  room: 'room',
   control: 'cp_users',
 } as const satisfies Record<SchemaClass, string>;
 

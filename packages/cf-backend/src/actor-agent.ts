@@ -2439,13 +2439,14 @@ export abstract class ActorAgent extends Agent<Env> {
 
       switch (route.kind) {
         case 'namespace': {
-          // The root's own path: the owner's own slate, which holds `agents`.
-          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode, true)));
-          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode, true));
+          // The root's own path: a share's viewer comes here too, and never holds `agents`.
+          const owner = context.viewer !== true;
+          const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode, owner)));
+          const providers = providersInWorkMode(authority.mode, this.slateNamespaces(mode, owner));
 
           // The owner's own slate hires under the owner's role as of now, as a program in a turn does.
-          return yield* Effect.promise(async () => runOperationProfile(authority.operation ?? null, async () => slateMember(
-            slateToolReach(authority.reach, true).narrowProviders(providers), route, context,
+          return yield* Effect.promise(async () => runOperationProfile(owner ? authority.operation ?? null : null, async () => slateMember(
+            slateToolReach(authority.reach, owner).narrowProviders(providers), route, context,
           )));
         }
 
@@ -2453,7 +2454,7 @@ export abstract class ActorAgent extends Agent<Env> {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
 
           return yield* Effect.promise(async () => this.callSlateTool({
-            rt: this.rt, actor: this.surfaceActor(mode), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
+            rt: this.rt, actor: this.surfaceActor(mode, context.viewer ? 'viewer' : 'owner'), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
         }
 
@@ -2498,7 +2499,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (route.data !== undefined) metadata.data = route.data;
 
-          const said = `Slate ${route.slate}: ${route.text}`;
+          if (route.viewer !== undefined) metadata.viewer = route.viewer;
+
+          const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
 
           if (route.ask !== true) return { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
 
@@ -2581,12 +2584,12 @@ export abstract class ActorAgent extends Agent<Env> {
     reach: ToolSurfaceNarrowing; route: Extract<SlateRoute, { kind: 'tool' }>; mode: WorkMode; context: SlateDispatchContext;
   }): Promise<JsonValue> {
     const { rt, actor, reach, route, mode, context } = input;
-    const launch = rt.actor.actorId;
-    const policy = SURFACE_POLICY.slateTool;
+    const launch = context.viewer ? null : rt.actor.actorId;
+    const policy = context.viewer ? SURFACE_POLICY.slateToolForViewer : SURFACE_POLICY.slateTool;
     let factory = this._slateToolFactories.get(launch);
 
     if (factory === undefined) {
-      factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(launch, 'owner'), workspace: this.workspaceName() });
+      factory = createCodemodeToolFactory({ launch: this.codemodeLaunch(launch, context.viewer ? 'viewer' : 'owner'), workspace: this.workspaceName() });
       this._slateToolFactories.set(launch, factory);
     }
 

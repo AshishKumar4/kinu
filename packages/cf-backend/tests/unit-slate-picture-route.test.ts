@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { UserCaller } from '@kinu.run/core';
-import { pictureKey, readSlatePicture } from '../src/slates/pictures';
+import { pictureKey } from '../src/slates/pictures';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import { serveFamily } from './helpers/api';
@@ -78,16 +78,5 @@ describe("a slate's picture", () => {
     expect((await get(`notes/board/${DIGEST}`)).status).toBe(404);
     expect((await get(`ledger/board/${'b'.repeat(64)}`)).status).toBe(404);
     expect((await get('ledger/board/not-a-digest')).status).toBe(404);
-  });
-
-  // The Gallery's route reads the same bytes once it has admitted a listed slate, and lets any cache keep them.
-  test('is read through one reader whatever admitted it; only who may cache it differs', async () => {
-    const bucket = memoryBucket();
-    await bucket.put(pictureKey('ledger', 'board', DIGEST), WEBP, { httpMetadata: { contentType: 'image/webp' } });
-
-    const shown = await readSlatePicture(bucket, pictureKey('ledger', 'board', DIGEST), 'public');
-    expect(shown?.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
-    expect(new Uint8Array(await shown?.arrayBuffer() ?? new ArrayBuffer(0))).toEqual(WEBP);
-    expect(await readSlatePicture(bucket, pictureKey('ledger', 'board', 'b'.repeat(64)), 'public')).toBeNull();
   });
 });

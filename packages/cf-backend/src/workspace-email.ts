@@ -46,8 +46,8 @@ export class WorkspaceEmail {
   }
 
   /** Null means unclaimed or no profile email. A failed lookup must throw, not read as null
-   * and silently refuse the owner's own mail. Every room of the workspace's names its owner by it too. */
-  async ownerEmail(): Promise<string | null> {
+   * and silently refuse the owner's own mail. */
+  private async ownerEmail(): Promise<string | null> {
     if (!this.host.owned()) return null;
     const { stub, caller } = await this.host.hub();
 

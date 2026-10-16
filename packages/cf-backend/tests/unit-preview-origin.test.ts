@@ -1171,38 +1171,11 @@ const PUBLIC_API = [
   '/api/health', // the build stamp
   '/api/shared/blueprint/', // a signed blueprint id
   '/api/workspaces/:name/webhook/', // a signed delivery URL
-  '/api/rooms/', // a slate room's link key, or the session its route reads itself
   '/api/gallery', // read by anyone; a star or report reads its session itself
 ];
 
 describe('worker wiring', () => {
   const ZONE = { PREVIEW_HOST_SUFFIX: SUFFIX };
-
-  test('a room\'s and the Gallery\'s writes and sockets refuse another origin carrying the session, a sibling slate\'s too, before any room wakes', async () => {
-    const { env, ctx, cookie } = await appProbe();
-    const sibling = `https://${PREVIEW_HOST}`;
-    const writes = api.routes.filter(({ path, method }) => (path.startsWith('/api/rooms/') || path.startsWith('/api/gallery')) && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method));
-
-    expect(writes.length).toBeGreaterThan(2);
-
-    for (const route of writes) {
-      const url = `${PROBE_ORIGIN}${concretePath(route.path)}`;
-
-      for (const origin of ['https://evil.example', sibling]) {
-        const forged = await api.fetch(new Request(url, { method: route.method, headers: { cookie, origin } }), env, ctx);
-
-        expect([forged.status, v.parse(v.object({ code: v.string() }), await forged.json()).code], `${route.method} ${route.path} from ${origin}`).toEqual([403, 'CROSS_SITE']);
-      }
-    }
-
-    // The room's socket is a GET: refused from elsewhere all the same, and a read anyone may make stays open.
-    const socket = await api.fetch(new Request(`${PROBE_ORIGIN}${concretePath('/api/rooms/:workspace/:slate')}`, { headers: { cookie, origin: sibling, upgrade: 'websocket' } }), env, ctx);
-
-    expect(socket.status).toBe(403);
-    const gallery = await api.fetch(new Request(`${PROBE_ORIGIN}/api/gallery`, { headers: { cookie, origin: 'https://evil.example' } }), env, ctx);
-
-    expect(gallery.status).not.toBe(403);
-  });
 
   test('the CSRF gate runs before any authenticated route', async () => {
     // Every write route outside the listed public prefixes refuses an anonymous request, and a

@@ -12,10 +12,18 @@ export interface SlateCaller {
   readonly path: readonly SlateCallerHop[];
   readonly cred: VfsCred;
   readonly workMode: WorkMode;
+  /** Share callers only: the id travels on the reference, never on the wire. */
+  readonly share?: string;
+}
+
+/** Dispatches as the owner (S2); the share id keeps the process key distinct from the owner's own. */
+export function shareCaller(share: string): SlateCaller {
+  return { ...ROOT_SLATE_CALLER, share };
 }
 
 export const ROOT_SLATE_CALLER: SlateCaller = { path: [], cred: CRED_SESSION_USER, workMode: 'build' };
 
+/** The share is in the key so a share's process never coalesces with the owner's private preview. */
 export function slateCallerKey(caller: SlateCaller): string {
-  return JSON.stringify([slateAuthority(caller.cred), caller.path, caller.workMode]);
+  return JSON.stringify([slateAuthority(caller.cred), caller.path, caller.workMode, caller.share ?? null]);
 }

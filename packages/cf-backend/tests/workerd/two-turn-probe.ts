@@ -22,8 +22,7 @@ import {
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
-import { ROOT_SLATE_CALLER, roomHandle, roomObjectName } from '@kinu.run/core/slates';
-import { ROOM_HOST_HEADER } from '../../src/slates/room';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { meterInPlace, type MeteredTurn, type SqlMeter, type TurnCrossings } from './sql-meter';
@@ -42,7 +41,6 @@ import type {
   AgentHeldWork,
   AgentSlateUi,
   AnswerPageModes,
-  AnswerPageRoom,
   TerminalState,
   AlienEffect,
   StrandedWork,
@@ -225,13 +223,12 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'strandedWork');
     Reflect.deleteProperty(this, 'answerSlates');
     Reflect.deleteProperty(this, 'answerPageModes');
-    Reflect.deleteProperty(this, 'answerPageRoom');
     Reflect.deleteProperty(this, 'cutTerminal');
     Reflect.deleteProperty(this, 'liveTerminal');
     Reflect.deleteProperty(this, 'mainQuiet');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'answerPageRoom', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -408,43 +405,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    * An answer with a page, then the page's write through `workspace` as the owner's turns stand: in Auto, and again
    * once the owner's next ask is a Plan one. The page's process is the same; its author's mode is read at the call.
    */
-  async answerPageRoom(): Promise<AnswerPageRoom> {
-    const forkSaid = (fork: SlateAnswer<unknown> | null): string => {
-      if (fork === null) return 'none';
-
-      return fork.ok ? 'forked' : fork.error;
-    };
-
-    await this.seedMainChat([
-      { id: 'u-room', origin: 'input', role: 'user', content: 'Draw the card here.' },
-      { id: 'a-room', origin: 'output', role: 'assistant', content: 'Here:\n<slate-ui name="card">\n<!doctype html><p>answer-card-7c2e</p>\n</slate-ui>' },
-    ]);
-    const id = 'a-room/card';
-    // As the chat opens it: the workspace's own preview of the block's page.
-    const preview = await this.previewSlate(id);
-    const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, id))));
-    const owner = await room.author();
-
-    const host = (path: string, init: RequestInit = {}) => room.fetch(new Request(`https://slate.host${path}`, {
-      ...init, headers: { [ROOM_HOST_HEADER]: JSON.stringify(owner === null ? null : { email: owner, access: { kind: 'owner' } }), 'content-type': 'application/json' },
-    }));
-
-    const page = await (await host('/')).text();
-    const fork = owner === null ? null : await room.forkBundle({ email: owner, name: 'owner' }, null);
-
-    const posted = await host('/__kinu/workspace', {
-      method: 'POST', body: JSON.stringify({ path: ['writeFile'], args: ['/home/main/answer-room.txt', 'written by the page in its room'] }),
-    });
-
-    const write = v.safeParse(v.object({ ok: v.boolean(), error: v.optional(v.string()) }), JSON.parse(await posted.text()));
-    const written = await this.slateCallAs(ROOT_SLATE_CALLER, id, 'workspace', { path: ['readFile'], args: ['/home/main/answer-room.txt'], invocation: null });
-
-    return {
-      preview: preview.ok ? 'ok' : `${preview.reason}: ${preview.error}`, published: owner !== null, page: page.includes('answer-card-7c2e') ? 'served' : page.slice(0, 120),
-      fork: forkSaid(fork), write: write.success && write.output.ok ? 'ok' : JSON.stringify(write.success ? write.output : 'unparsed'), written: written.ok ? JSON.stringify(written.value) : written.reason,
-    };
-  }
-
   async answerPageModes(): Promise<AnswerPageModes> {
     const write = async () => {
       const result = await this.slateCallAs(ROOT_SLATE_CALLER, 'a-page/card', 'workspace', {
@@ -927,7 +887,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'answerPageRoom' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'plantCrossings' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -1237,7 +1197,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Only the remote model response is held; peer ingress queues a durable event-drain
    * submission while both socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'page-room' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill'>): Promise<QueuedConversation> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill'>): Promise<QueuedConversation> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -1748,15 +1708,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const { target } = await this.claimQueueWorkspace('terminal-cut');
 
     return await target.alienEffect();
-  }
-
-  async answerPageRoomIn(): Promise<AnswerPageRoom> {
-    const { target, owner } = await this.claimQueueWorkspace('page-room');
-
-    // A room names people by email: the workspace's owner has one, as a signed-in owner's profile does.
-    await this.env.UserDO.get(this.env.UserDO.idFromName(owner)).ensureProfile(await ownerCaller(this.env), `${owner}@probe.local`);
-
-    return await target.answerPageRoom();
   }
 
   async answerPageModesIn(): Promise<AnswerPageModes> {

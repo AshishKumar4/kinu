@@ -99,7 +99,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
 
     return {
       name: CONTROL_PLANE_SINGLETON, census: censusOf(this.store), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
-      workspaces: [], accounts: [], agents: [], rooms: [],
+      workspaces: [], accounts: [], agents: [],
     };
   }
 

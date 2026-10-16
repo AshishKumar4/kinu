@@ -102,8 +102,8 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       },
       browserActor: async () => null,
       catalog: async () => ({ mcp: [], slates: [] }),
-      slateRoom: async () => { throw new Error('this probe runs no slate room'); },
-      ownerEmail: async () => 'owner@kinu.test',
+      shareUrl: async () => null,
+      shareEntry: () => null,
     });
 
     const call = (mode: WorkMode) => host.surfaceCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'workspace', { path: ['tools', 'calculate'], args: [{ n: 21 }], invocation: null });

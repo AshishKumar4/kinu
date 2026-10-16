@@ -1,10 +1,5 @@
 [
   "device_consent_requests",
-  "slate_live_share_users",
-  "slate_live_shares",
-  "slate_share_users",
-  "slate_shares",
-  "slate_viewer_requests",
   "user_peer_grants",
   "user_schema_meta"
 ]

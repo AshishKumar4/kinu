@@ -1,7 +1,6 @@
 /**
- * Every slate runs in its room (src/slates/room.ts): its page is the room's, entered through the app's frame route, and
- * its server is a facet of the room whose storage outlives each activation and each build. Workerd-only: `ctx.facets`,
- * `ctx.storage`, the loader.
+ * A slate's preview URL is minted from a reservation in DO storage; after `abortAllDurableObjects()`
+ * a request re-drives the process rather than 404ing. Workerd-only: `ctx.facets`, `ctx.storage`.
  */
 import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
@@ -9,7 +8,7 @@ import { expect, it } from 'vitest';
 import * as v from 'valibot';
 import { REGISTRY_ENTRY, REGISTRY_HOST, REGISTRY_MANIFEST, REGISTRY_PKG } from '../npm-registry-fake';
 
-it('a slate survives eviction on its own page', async () => {
+it('a slate survives eviction on its own URL', async () => {
   // A stub held across the reset is broken by it; the id survives, so re-acquire.
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('survives'));
 
@@ -17,53 +16,63 @@ it('a slate survives eviction on its own page', async () => {
     workspace: 'durability-keep', owner: 'durability-owner', id: 'keeper', body: 'keeper-body',
   });
 
-  // Answers before the eviction too: the later 200 is the room starting it again, not a cold-only slate.
+  // Answers before the eviction too: the later 200 is the re-drive, not a cold-only slate.
   expect(await subject().drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+  expect(boot.reservations).toEqual([
+    { port: boot.port, owner: 'keeper', capability: boot.capability },
+  ]);
 
   await abortAllDurableObjects();
 
-  expect(await subject().drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+  // Same URL, same reservation row (port and capability).
+  expect(await subject().portReservations('durability-keep')).toEqual([
+    { port: boot.port, owner: 'keeper', capability: boot.capability },
+  ]);
 });
 
-// The exposure review (2026-10-14): an unshared slate's preview URL served anyone who held it, its calls running as the
-// owner. The page's address names no one; the slate's own host serves only a session its room let in.
-it("a slate's host serves no one who holds only its address: a page load and a script are both refused", async () => {
+// The exposure review (2026-10-14): an unshared slate's preview URL served anyone who held it, its calls running as the owner.
+it("a slate's preview serves no one whom its URL alone reaches: a page load is sent to sign in, a script is refused", async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('stranger'));
   const boot = await subject.serveSlate({ workspace: 'durability-stranger', owner: 'd'.repeat(32), id: 'ledger', body: 'ledger-body' });
   const page = await subject.visitPreview(boot.url, { 'sec-fetch-mode': 'navigate', accept: 'text/html' });
   const script = await subject.visitPreview(boot.url, { 'sec-fetch-mode': 'cors', accept: '*/*' });
+  const entry = new URL(page.location ?? 'https://unset.test/');
 
-  expect(new URL(boot.url).pathname).toBe('/api/rooms/durability-stranger/ledger/frame');
-  expect([page.status, page.body.includes('ledger-body')]).toEqual([403, false]);
+  expect([page.status, page.body.includes('ledger-body'), entry.origin + entry.pathname, entry.searchParams.get('to')])
+    .toEqual([303, false, 'https://app.test/__kinu/preview', boot.url]);
   expect([script.status, script.body.includes('ledger-body')]).toEqual([403, false]);
 });
 
-it("a slate's page opens for its owner; anyone else is told it isn't shared with them, a forged session too", async () => {
+it("a slate's preview opens for its signed-in owner and the workspace itself; anyone else is told it isn't shared with them", async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('owner-only'));
   const owner = 'e'.repeat(32);
   const stranger = 'f'.repeat(32);
   const boot = await subject.serveSlate({ workspace: 'durability-owner-only', owner, id: 'ledger', body: 'ledger-body' });
+  const socket = await subject.visitPreview(`${boot.url}__rpc`, { upgrade: 'websocket' });
 
-  // The owner goes through the app's frame route and the host's exchange.
+  // The owner goes through the app's entry and the host's exchange; the workspace's own reads carry its own pass.
   expect(await subject.visitPreviewAs(boot.url, owner)).toEqual({ entry: 303, status: 200, body: 'ledger-body' });
   expect(await subject.drivePreview(boot.url)).toEqual({ status: 200, body: 'ledger-body' });
-  // The room refuses a stranger before any ticket; a well-signed cookie naming them is no session the room holds.
-  expect(await subject.visitPreviewAs(boot.url, stranger)).toEqual({ entry: 403, status: 403, body: '' });
-  expect((await subject.visitPreviewWithCookieOf(boot.url, stranger)).status).toBe(403);
+  // The entry refuses a stranger before any ticket; a cookie for someone who no longer owns the workspace names no one.
+  const refusal = await subject.refusalText(true);
+
+  expect(await subject.visitPreviewAs(boot.url, stranger)).toMatchObject({ entry: 403, status: 403, body: expect.stringContaining(refusal.html) });
+  expect(await subject.visitPreviewWithCookieOf(boot.url, stranger)).toEqual({ status: 403, body: refusal.text });
+  expect([socket.status, socket.body]).toEqual([403, refusal.text]);
 });
 
 it('a slate is listed once in the work surface, under its title, in this activation and the next', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('titled'));
-
-  await subject().serveSlate({ workspace: 'durability-titled', owner: 'durability-owner', id: 'tally', body: 'tally-body' });
+  const boot = await subject().serveSlate({ workspace: 'durability-titled', owner: 'durability-owner', id: 'tally', body: 'tally-body' });
   const tabs = await subject().previewTabs('durability-titled');
 
-  // It holds no port of the workspace's: it runs in its room, so the strip draws it once, as itself.
-  expect(tabs.ports.filter((port) => port.name === 'tally')).toEqual([]);
-  expect(tabs.slates).toEqual([{ id: 'tally', title: 'tally', port: null }]);
+  // Its port is named for it, and the listing says it holds that port, so the strip draws one tab for it.
+  expect(tabs.ports.filter((port) => port.port === boot.port)).toEqual([{ port: boot.port, name: 'tally' }]);
+  expect(tabs.slates).toEqual([{ id: 'tally', title: 'tally', port: boot.port }]);
 
+  // An activation that never booted it still knows the port is its: the reservation says so, not a memory of the boot.
   await abortAllDurableObjects();
-  expect((await subject().previewTabs('durability-titled')).slates).toEqual([{ id: 'tally', title: 'tally', port: null }]);
+  expect((await subject().previewTabs('durability-titled')).slates).toEqual([{ id: 'tally', title: 'tally', port: boot.port }]);
 });
 
 it('an edit that breaks a slate\'s build ships nothing: the agent is told where, and the slate keeps its last working version across an eviction', async () => {
@@ -180,59 +189,26 @@ it('a slate that built through a second link out of its tree is built again once
   expect(seen).toEqual({ before: 'builds', after: 'builds', says: 'hop' });
 });
 
-it('a removed slate’s page is gone, and a new slate under its name is a new room', async () => {
+it('a removed slate’s URL is dead even when a new app claims its port', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('removed'));
 
   const boot = await subject.serveSlate({
     workspace: 'durability-remove', owner: 'durability-owner', id: 'keeper', body: 'keeper-body',
   });
 
-  expect(await subject.rpcPreview(boot.url, 'ping')).toEqual({ ok: true, value: '{"rows":1}' });
-  // It held no application of the workspace's: removal answers so, and ends its room.
-  expect(await subject.removeSlate('durability-remove', 'keeper')).toEqual({ ok: false, port: null });
-  // The room kept nothing: its page lets no one in, the owner included.
-  expect(await subject.drivePreview(boot.url)).toEqual({ status: 403, body: '' });
+  expect(await subject.removeSlate('durability-remove', 'keeper'))
+    .toEqual({ ok: true, port: boot.port });
 
-  // Made again under the same name, the slate starts with none of the removed one's state.
-  const again = await subject.serveSlate({
-    workspace: 'durability-remove', owner: 'durability-owner', id: 'keeper', body: 'again-body',
+  // The squatter's URL serves, so the old URL's 404 is the retired capability refusing.
+  const squatter = await subject.serveSlate({
+    workspace: 'durability-remove', owner: 'durability-owner', id: 'squatter',
+    body: 'squatter-body', preferredPort: boot.port,
   });
 
-  expect(await subject.drivePreview(again.url)).toEqual({ status: 200, body: 'again-body' });
-  expect(await subject.rpcPreview(again.url, 'ping')).toEqual({ ok: true, value: '{"rows":1}' });
-});
-
-it('a deleted workspace’s slates leave no page behind: their rooms go with it', async () => {
-  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('deleted'));
-  // `destroyAgent` takes the owner's user id, which is 32 hex.
-  const owner = 'd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0';
-
-  const boot = await subject.serveSlate({ workspace: 'durability-deleted', owner, id: 'keeper', body: 'keeper-body' });
-
-  expect(await subject.drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
-  // A slate never built still has a room once its owner opened it, and that room holds people, a link, a listing.
-  expect(await subject.draftRoom('durability-deleted', 'draft')).toBe(true);
-  await subject.deleteWorkspace('durability-deleted', owner);
-  // The room serves its own image, so only its retirement ends the page: the owner included, no one gets in.
-  expect(await subject.drivePreview(boot.url)).toEqual({ status: 403, body: '' });
-  expect({ keeper: await subject.roomExists('durability-deleted', 'keeper'), draft: await subject.roomExists('durability-deleted', 'draft') })
-    .toEqual({ keeper: false, draft: false });
-});
-
-it('someone added to edit a slate changes it from their own workspace: built in the owner’s, published as theirs', async () => {
-  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('edited'));
-
-  await subject.serveSlate({ workspace: 'durability-edited', owner: 'durability-owner', id: 'board', body: 'owner-body' });
-
-  expect(await subject.editorEdits({
-    workspace: 'durability-edited', id: 'board', editorWorkspace: 'durability-editor-ws', editor: 'durability-editor',
-    server: 'import { SlateObject } from "kinu:slate";\nexport class Slate extends SlateObject {\n  async fetch() { return new Response("editor-body"); }\n}\n',
-  })).toEqual({
-    // Not added yet, then added: the files read, the change built and published as theirs, then removed again.
-    before: 'denied', files: ['package.json', 'server.ts'], edited: 'ok', page: 'editor-body', author: 'durability-editor@probe.local',
-    // An import of the owner's file outside the slate does not build, and the change is taken back: the page is as it was.
-    reaching: 'bad_input', restored: true, pageAfter: 'editor-body', afterRemoval: 'denied',
-  });
+  expect(squatter.port).toBe(boot.port);
+  expect(squatter.url).not.toBe(boot.url);
+  expect(await subject.drivePreview(squatter.url)).toEqual({ status: 200, body: 'squatter-body' });
+  expect(await subject.drivePreview(boot.url)).toMatchObject({ status: 404 });
 });
 
 it('a removed slate’s picture goes with it, and its neighbour’s stays', async () => {
@@ -243,18 +219,18 @@ it('a removed slate’s picture goes with it, and its neighbour’s stays', asyn
   const [neighbour] = (await subject.pictureKeys('durability-pictures')).filter((key) => key.includes('/neighbour/'));
 
   expect(await subject.pictureKeys('durability-pictures')).toHaveLength(2);
-  expect(await subject.removeSlate('durability-pictures', 'keeper')).toEqual({ ok: false, port: null });
+  expect(await subject.removeSlate('durability-pictures', 'keeper')).toMatchObject({ ok: true });
   expect(await subject.pictureKeys('durability-pictures')).toEqual([neighbour]);
 });
 
-it("the slate's methods answer its page after eviction, and its storage is kept", async () => {
+it('the /__rpc surface answers over the durable URL after eviction', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('rpc'));
 
   const boot = await subject().serveSlate({
     workspace: 'durability-rpc', owner: 'durability-owner', id: 'keeper', body: 'keeper-body',
   });
 
-  // 2 means the room's server facet's this.sql survived.
+  // 2 means the retained facet's this.sql survived.
   expect(await subject().rpcPreview(boot.url, 'ping')).toEqual({ ok: true, value: '{"rows":1}' });
 
   await abortAllDurableObjects();
@@ -262,21 +238,21 @@ it("the slate's methods answer its page after eviction, and its storage is kept"
   expect(await subject().rpcPreview(boot.url, 'ping')).toEqual({ ok: true, value: '{"rows":2}' });
 });
 
-it("a slate's room starts its server once, for its build and for cold requests that arrive together", async () => {
+it('a slate URL starts its application once, for a spawn and for cold requests that arrive together', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('cold-once'));
 
   const boot = await subject().serveSlate({
     workspace: 'durability-cold', owner: 'durability-owner', id: 'keeper', body: 'keeper-body',
   });
 
-  // Its build started it; a request finds that same server, not a second one.
+  // Its spawn started it; a request finds that same application, not a second one.
   const spawned = await subject().rpcPreview(boot.url, 'evaluation');
 
   expect(spawned.ok).toBe(true);
   expect(await subject().rpcPreview(boot.url, 'evaluation')).toEqual(spawned);
   await abortAllDurableObjects();
 
-  // Cold: two calls and a page at once all reach one server.
+  // Cold: two RPC calls and a page at once all reach one application.
   const [first, second, page] = await Promise.all([
     subject().rpcPreview(boot.url, 'evaluation'), subject().rpcPreview(boot.url, 'evaluation'), subject().drivePreview(boot.url),
   ]);
@@ -286,9 +262,11 @@ it("a slate's room starts its server once, for its build and for cold requests t
   expect(page).toEqual({ status: 200, body: 'keeper-body' });
 });
 
-// #26, as the room has it: a build replaces the running server, not the storage under it. Each publish of a new image
-// ends the old server facet; the next call starts the new one on the same storage.
-it('a new build runs its own server, not the one before it, on the storage the one before it kept', async () => {
+// #26. The platform can end an activation and keep its facets. The next activation launches the
+// application again under the same facet name with a class of its own, and a running facet does not
+// take a new class: on the platform the object resets ("code was updated"), and here the old
+// facet answers.
+it('the next activation runs its own application, not the one an ended activation left running', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('next-activation'));
 
   const boot = await subject().serveSlate({
@@ -299,18 +277,17 @@ it('a new build runs its own server, not the one before it, on the storage the o
   const before = await subject().rpcPreview(boot.url, 'evaluation');
 
   expect(before.ok).toBe(true);
-  await subject().rebuildSlate({ workspace: 'durability-next', id: 'keeper', body: 'rebuilt-body' });
+  await subject().forgetActivation('durability-next');
 
   const after = await subject().rpcPreview(boot.url, 'evaluation');
 
   expect(after.ok).toBe(true);
   expect(after).not.toEqual(before);
-  expect(await subject().drivePreview(boot.url)).toEqual({ status: 200, body: 'rebuilt-body' });
-  // A new server, not new storage: the rows the first build's server wrote are still there.
+  // A restart, not a new application: the rows the first process wrote are still there.
   expect(await subject().rpcPreview(boot.url, 'ping')).toEqual({ ok: true, value: '{"rows":2}' });
 });
 
-it('a slate keeps answering its page while a workspace process runs beside it', async () => {
+it('a slate keeps answering its URL while a workspace process runs beside it', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('beside-a-process'));
 
   const boot = await subject().serveSlate({
