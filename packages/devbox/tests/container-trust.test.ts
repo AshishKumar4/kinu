@@ -9,6 +9,7 @@ import * as v from 'valibot';
 
 import { BOX_CHROMIUM_POLICY } from '../src/desktop';
 import { TRUST } from '../src/processes';
+import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
 import { harness } from './support/devbox-harness';
 
@@ -45,7 +46,7 @@ const PolicySchema = v.object({ CACertificates: v.array(v.string()), CommandLine
 // The desktop's Chromium reads none of the system bundle: every intercepted site showed ERR_CERT_AUTHORITY_INVALID
 // (staging, 2026-10-16, Chromium 154). Its managed policy names exactly this start's CA, and nothing else's.
 test("each start's trust names exactly its own CA to Chromium, and leaves a host's or an eval's policy alone", () => {
-  const root = mkdtempSync(join(tmpdir(), 'devbox-trust-'));
+  const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}trust-`));
   const policies = join(root, 'etc/chromium/policies/managed');
 
   try {
