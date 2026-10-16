@@ -79,8 +79,8 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
   if (answer === null) return <div className="flex h-dvh items-center justify-center">{failure === null ? <Loader size="sm" /> : <p role="alert" className="p-meta p-danger">{failure}</p>}</div>;
 
   return (
-    <div data-part-frame={answer.kind} className="flex h-dvh flex-col p-text">
-      <PartView answer={answer} slate={slate} controls={{ act: (action) => run(action, null), decide, signIn: () => bridge?.signIn(), retry: () => run(null, null) }} />
+    <div data-part-frame={answer.kind} className="flex h-dvh flex-col p-2 p-text">
+      <PartView answer={answer} slate={bridge?.title ?? slate} controls={{ act: (action) => run(action, null), decide, signIn: () => bridge?.signIn(), retry: () => run(null, null) }} />
       {failure !== null && <p role="alert" className="mt-1.5 p-meta p-danger">{failure}</p>}
     </div>
   );

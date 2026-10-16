@@ -68,6 +68,8 @@ type Reply = v.InferOutput<typeof ReplySchema>;
 export interface PartHost {
   readonly workspace: string;
   readonly slate: string;
+  /** The slate's title, which a part frame names it by: the frame knows only its id. */
+  readonly title: string;
   /** The window of the slate's frame: a part frame is answered only when it is that frame's child. */
   readonly slateWindow: () => Window | null;
   /** Runs the part as the signed-in viewer: its answer, or the refusal in the app's words. Never rejects. */
@@ -135,7 +137,7 @@ export function hostPartFrames(host: PartHost): () => void {
       detach(serve(port, address, last, request.output));
     });
     port.start();
-    source.postMessage({ kind: HELLO }, { targetOrigin: window.location.origin, transfer: [channel.port2] });
+    source.postMessage({ kind: HELLO, title: host.title }, { targetOrigin: window.location.origin, transfer: [channel.port2] });
   };
 
   window.addEventListener("message", hello);
@@ -150,6 +152,8 @@ export function hostPartFrames(host: PartHost): () => void {
 
 /** A part frame's side: its runs and decisions through the top. */
 export interface PartBridge {
+  /** The slate's title, as the top names it. */
+  readonly title: string;
   /** The part's answer, or the refusal in the app's words. Never rejects. */
   readonly run: (action: { id: string; input: JsonValue } | null, approval: string | null) => Promise<PartRunAnswer | string>;
   /** Asks the top to open a decision on the last answer; settles with what the viewer decided. */
@@ -174,7 +178,9 @@ export function connectPartBridge(address: PartAddress, onBridge: (bridge: PartB
   const decisions: ((decided: Decided) => void)[] = [];
 
   const answered = (event: MessageEvent) => {
-    if (event.origin !== window.location.origin || !v.is(v.object({ kind: v.literal(HELLO) }), event.data)) return;
+    const hello = v.safeParse(v.object({ kind: v.literal(HELLO), title: v.string() }), event.data);
+
+    if (event.origin !== window.location.origin || !hello.success) return;
 
     const given = event.ports[0];
 
@@ -199,6 +205,7 @@ export function connectPartBridge(address: PartAddress, onBridge: (bridge: PartB
     });
     given.start();
     onBridge({
+      title: hello.output.title,
       run: (action, approval) => new Promise((resolve) => {
         next += 1;
         runs.set(next, resolve);

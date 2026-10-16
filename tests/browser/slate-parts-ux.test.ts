@@ -60,8 +60,10 @@ describe("a slate's personal parts", () => {
           expect(await stateOf(team)).toBe('stub');
           expect(await team.$('[data-part-stub="no-part"]')).not.toBeNull();
 
-          // Allowed for an earlier revision: the code changed since, and the top says so.
+          // Allowed for an earlier revision: the code changed since, and the top says so. The part names its slate as the
+          // top gives it, not by the id in its own address.
           expect(await stateOf(standup)).toBe('needs-consent');
+          expect(await standup.$eval('[data-part-needs="consent"]', (node) => node.textContent ?? '')).toContain('Team board');
           await standup.click('[data-part-needs="consent"] button');
           await page.waitForSelector('[data-consent-allow]', SOON);
           expect(await page.$('[data-consent-changed]')).not.toBeNull();

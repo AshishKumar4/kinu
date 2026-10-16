@@ -210,9 +210,9 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
 
 /** What a share runs with, as its row says it; an owner share whose code changed is stopped until approved again. */
 function modeWords(row: LiveShareRecord): ReactNode {
-  if (row.mode === "own") return " · their own access";
+  if (row.mode === "own") return "Their own access";
 
-  return row.stale === true ? <span className="p-warning"> · stopped: its code changed since you approved its reach</span> : " · your access";
+  return row.stale === true ? <span className="p-warning">Stopped: its code changed since you approved its reach</span> : "Your access";
 }
 
 function SharedNow({ shares, onStop, onOwnAccess, disabled }: {
@@ -229,10 +229,12 @@ function SharedNow({ shares, onStop, onOwnAccess, disabled }: {
         {shares.map((row) => (
           <li key={row.id} data-live-share={row.id} className="flex items-center gap-3 px-3.5 py-2">
             <span className="flex shrink-0 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
-            <span className="min-w-0 flex-1 truncate p-meta p-text-2">
-              {row.visibility === "public" ? "Anyone with the link" : row.users.join(", ") || "People you added"}
-              <span data-live-share-mode={row.mode}>{modeWords(row)}</span>
-              {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate p-meta p-text-2">
+                {row.visibility === "public" ? "Anyone with the link" : row.users.join(", ") || "People you added"}
+                {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
+              </span>
+              <span data-live-share-mode={row.mode} className="block p-meta p-text-3">{modeWords(row)}</span>
             </span>
             {row.mode === "owner" && (
               <Button size="xs" variant="ghost" data-live-share-own={row.id} onClick={() => onOwnAccess(row.id)} disabled={disabled}>Use their own access</Button>

@@ -48,6 +48,7 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
   useEffect(() => workspace === null ? undefined : hostPartFrames({
     workspace,
     slate,
+    title,
     slateWindow: () => slateFrame.current?.contentWindow ?? null,
     run: (address, asked) => runPart(address.workspace, address.slate, address.part, asked),
     decide: (address, kind, answer) => {
@@ -62,7 +63,7 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
       return settle(Effect.flatMap(changedSince, (changed) => Effect.promise(() => new Promise<Decided>((decided) => setOpen({ address, kind, answer, changed, settle: decided })))));
     },
     signIn: () => signInAndReturn(),
-  }), [workspace, slate, slateFrame]);
+  }), [workspace, slate, title, slateFrame]);
 
   if (open === null) return failure === null ? null : <p role="alert" className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-lg p-overlay px-3 py-2 p-meta p-danger">{failure}</p>;
 
