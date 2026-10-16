@@ -58,7 +58,7 @@ async function main(): Promise<number> {
 
     if (await scrub.exited !== 0) throw new Error('trial evidence could not be scrubbed before upload');
 
-    const row = ciVerdictRow({ run: `${item.leg} ${item.task}: ${title}`, evidence: 'evals' },
+    const row = ciVerdictRow({ label: `${item.leg} ${item.task}: ${title}`, evidence: 'evals' },
       { exitCode, seconds: (performance.now() - started) / 1000, stdout: '', stderr: '' }, undefined,
       { dir, artifacts });
 

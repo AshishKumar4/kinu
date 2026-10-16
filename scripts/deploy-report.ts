@@ -36,7 +36,7 @@ const MetaSchema = v.object({ environment: v.string(), mode: v.string(), sha: v.
 
 const EntrySchema = v.variant('kind', [
   v.object({
-    kind: v.literal('red'), phase: v.string(), what: v.string(), command: v.string(), verdict: v.string(),
+    kind: v.literal('red'), phase: v.string(), what: v.string(), command: v.optional(v.string()), verdict: v.string(),
     finding: v.string(), reproduce: v.string(), log: v.string(), tail: v.array(v.string()),
   }),
   v.object({ kind: v.literal('step'), phase: v.string(), what: v.string(), finding: v.string() }),
@@ -44,7 +44,8 @@ const EntrySchema = v.variant('kind', [
   v.object({ kind: v.literal('skipped'), phase: v.string(), what: v.string(), why: v.string() }),
   v.object({ kind: v.literal('dispatched'), what: v.string(), url: v.string() }),
   v.object({ kind: v.literal('mark'), mark: v.string(), seconds: v.number() }),
-  v.object({ kind: v.literal('timing'), phase: v.string(), what: v.string(), command: v.string(), seconds: v.number(), silence: v.optional(v.number()) }),
+  // A row with no command of its own, such as armada's row for a CI task that ended before its verdict, is its name.
+  v.object({ kind: v.literal('timing'), phase: v.string(), what: v.string(), command: v.optional(v.string()), seconds: v.number(), silence: v.optional(v.number()) }),
   // The validator's reading of the Worker's startup as wrangler printed it: before a reset (`validated`, the version
   // uploaded and not deployed) and at the deploy (`deployed`).
   v.object({ kind: v.literal('startup'), at: v.picklist(['validated', 'deployed']), reading: v.union([v.number(), v.picklist(['refused', 'none'])]) }),
@@ -72,7 +73,7 @@ export type ReportSummary = v.InferOutput<typeof SummarySchema>;
 
 /** One red's identity across deploys: its phase and what it runs, so a red of the same row is the same red. */
 function identity(entry: ReportEntry): string | undefined {
-  if (entry.kind === 'red') return `${entry.phase}: ${entry.command}`;
+  if (entry.kind === 'red') return `${entry.phase}: ${entry.command ?? entry.what}`;
 
   if (entry.kind === 'step') return `${entry.phase}: ${entry.what}`;
 
@@ -114,7 +115,7 @@ export function openReport(environment: string, mode: string, sha: string, now =
 /** A red row of a ladder phase: its verdict, the command that reproduces it, its output's tail, and its whole output
  *  in a log of its own. */
 export function recordRed(dir: string, red: {
-  readonly phase: string; readonly what: string; readonly command: string; readonly verdict: string;
+  readonly phase: string; readonly what: string; readonly command: string | undefined; readonly verdict: string;
   readonly finding: string; readonly reproduce: string; readonly output: string;
 }): void {
   const logs = join(dir, 'logs');
@@ -122,8 +123,9 @@ export function recordRed(dir: string, red: {
   mkdirSync(logs, { recursive: true });
   // Each plan row runs once per deploy, so its command names its log; the hash keeps two long commands that share a
   // prefix apart.
-  const slug = red.command.replace(/[^\w.-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 80);
-  const log = join(logs, `${slug}-${createHash('sha256').update(red.command).digest('hex').slice(0, 12)}.log`);
+  const named = red.command ?? red.what;
+  const slug = named.replace(/[^\w.-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 80);
+  const log = join(logs, `${slug}-${createHash('sha256').update(named).digest('hex').slice(0, 12)}.log`);
 
   writeFileSync(log, red.output);
   append(dir, {
@@ -374,7 +376,7 @@ function redSections(reds: readonly ReportEntry[], isNew: (entry: ReportEntry) =
     for (const entry of reds) {
       if (entry.kind === 'red' && entry.phase === phase) {
         lines.push('', `### ${mark(entry)}: ${entry.what} (${entry.verdict})`, '', entry.finding, '',
-          `- command: \`${entry.command}\``, `- reproduce: \`${entry.reproduce}\``, `- whole output: ${entry.log}`, '',
+          ...entry.command === undefined ? [] : [`- command: \`${entry.command}\``], `- reproduce: \`${entry.reproduce}\``, `- whole output: ${entry.log}`, '',
           '```', ...entry.tail, '```');
       } else if (entry.kind === 'step' && entry.phase === phase) {
         lines.push('', `### ${mark(entry)}: ${entry.what}`, '', entry.finding);
@@ -397,10 +399,10 @@ export function renderReport(input: ReportInput): RenderedReport {
   const notices = entries.flatMap((entry) => (entry.kind === 'notice' ? [`- ${entry.phase}: ${entry.what}: ${entry.notice}`] : []));
   const dispatched = entries.flatMap((entry) => (entry.kind === 'dispatched' ? [`- ${entry.what}: ${entry.url}`] : []));
   const timings = [...marks].map(([name, seconds]) => `| ${name} | ${String(seconds)} |`);
-  const rows = new Map(entries.flatMap((entry) => entry.kind === 'timing' ? [[`${entry.phase}: ${entry.command}`, entry] as const] : []));
+  const rows = new Map(entries.flatMap((entry) => entry.kind === 'timing' ? [[`${entry.phase}: ${entry.command ?? entry.what}`, entry] as const] : []));
 
   const rowTimes = [...rows.values()].sort((a, b) => b.seconds - a.seconds).map((entry) =>
-    `| ${entry.phase}: ${entry.what} | ${entry.seconds.toFixed(1)} | ${entry.silence === undefined ? '—' : entry.silence.toFixed(1)} | \`${entry.command}\` |`);
+    `| ${entry.phase}: ${entry.what} | ${entry.seconds.toFixed(1)} | ${entry.silence === undefined ? '—' : entry.silence.toFixed(1)} | ${entry.command === undefined ? '—' : `\`${entry.command}\``} |`);
 
   const ended = marks.get('end');
   const startups = entries.flatMap((entry) => (entry.kind === 'startup' ? [entry] : []));

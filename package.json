@@ -169,7 +169,7 @@
     "@types/node": "^25.9.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.26.0",
-    "armada": "github:AshishKumar4/armada#651930f460682fce2a2dc73d505616c64ec698cb",
+    "armada": "github:AshishKumar4/armada#27159e07662134b8957307857bfce1a95c966ca4",
     "aws4fetch": "^1.0.20",
     "bun": "1.4.3",
     "chess.js": "^1.4.0",

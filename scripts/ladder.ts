@@ -3158,8 +3158,8 @@ export function ciUnits(costs: HostedCosts = readHostedCosts()): { readonly gate
     const weights = files.map((each) => each.reduce((sum, file) => sum + (costs.files[file] ?? 1), 0));
     const total = weights.reduce((sum, weight) => sum + weight, 0);
 
-    // A shard whose command no run has measured yet, as after a file moves between bins, is weighed by its files'
-    // own times (Bun's timings, in ms), which outlast the reshuffle; the row's share of its seconds is the last resort.
+    // A shard no run has measured yet, as when a suite gains a bin, is weighed by its files' own times (Bun's timings,
+    // in ms); the row's share of its seconds is the last resort.
     return split.map((part, index) => ({
       gate: part,
       seconds: costs.seconds[part.label]
@@ -3191,7 +3191,8 @@ interface CIMatrix {
 }
 
 /** CI's matrix on armada (`.armada.json`): one task per CI unit, each weighed by its measured seconds so the longest
- *  start first, naming the row it must report. */
+ *  start first, naming the row it must report by the unit's label: its command names files that change with every
+ *  change, and armada keeps a row's timing under its name for as long as the project lives. */
 function ciPlan(costs: HostedCosts): CIMatrix {
   const tracked = trackedTestFiles();
 
@@ -3200,7 +3201,7 @@ function ciPlan(costs: HostedCosts): CIMatrix {
       name: unit.gate.label.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 80),
       row: unit.gate.run,
       weight: Math.round(unit.seconds),
-      rows: [unit.gate.ciShards === undefined ? unit.gate.run : { name: unit.gate.run, files: claims(unit.gate.run, tracked) }],
+      rows: [unit.gate.ciShards === undefined ? unit.gate.label : { name: unit.gate.label, files: claims(unit.gate.run, tracked) }],
     })),
   };
 }
@@ -3227,7 +3228,7 @@ export function secretGroup(gate: Gate): string {
 function armadaPlan(phases: readonly DeployPhase[], origin: string | undefined, group: string): CIMatrix {
   return {
     include: armadaPhaseRows(phases).filter((gate) => secretGroup(gate) === group).flatMap(armadaUnits).map((gate) => {
-      const entry: CIMatrixEntry = { name: armadaTaskName(gate), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.run] };
+      const entry: CIMatrixEntry = { name: armadaTaskName(gate), row: gate.run, weight: Math.round(gate.seconds), rows: [gate.label] };
 
       if (readsDeployment(gate) && origin !== undefined) entry.origin = origin;
 
@@ -3907,7 +3908,7 @@ export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | 
   const reported = graded?.verdicts?.rows ?? [];
 
   return rows.flatMap(armadaUnits).map((gate) => {
-    const verdict = reported.find((row) => (row.name ?? row.run) === gate.run);
+    const verdict = reported.find((row) => row.name === gate.label);
     const problem = verdict?.problem ?? (graded?.graded === 'not graded' ? graded.problems.join('; ') : undefined);
 
     const found = graded === undefined ? '`armada run` wrote no report'
@@ -3917,27 +3918,26 @@ export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | 
   });
 }
 
-/** CI's exact-SHA rows stay visible in the deploy's report; a red is imported as red and never run until green. */
+/** CI's exact-SHA rows stay visible in the deploy's report, each by the name armada graded it by; a red is imported as
+ *  red and never run until green. A row armada wrote for a task that ended before its verdict names no command, and
+ *  its CI run is what reproduces it. */
 export function reportCIVerdicts(file: CIVerdictFile, url: string, report: string): boolean {
   let green = true;
-  const gates = [...ciUnits().map((unit) => unit.gate), ...LADDER];
 
   for (const row of file.rows) {
-    const gate = gates.find((candidate) => candidate.run === row.run);
-
-    if (report !== '') recordTiming(report, { phase: 'ci', what: gate?.label ?? row.run, command: row.run, seconds: row.seconds });
+    if (report !== '') recordTiming(report, { phase: 'ci', what: row.name, command: row.run, seconds: row.seconds });
 
     if (row.exitCode === 0) {
-      console.log('CI proved ' + row.run + ' on ' + file.sha + ' (' + url + ')');
+      console.log('CI proved ' + row.name + ' on ' + file.sha + ' (' + url + ')');
       continue;
     }
 
     green = false;
-    console.error('CI RED ' + row.run + ' — ' + url);
+    console.error('CI RED ' + row.name + ' — ' + url);
 
     if (report !== '') recordRed(report, {
-      phase: 'ci', what: gate?.label ?? row.run, command: row.run, verdict: 'CI exit ' + String(row.exitCode),
-      finding: 'CI proved this row red on ' + file.sha + ': ' + url, reproduce: row.run, output: row.output,
+      phase: 'ci', what: row.name, command: row.run, verdict: 'CI exit ' + String(row.exitCode),
+      finding: 'CI proved this row red on ' + file.sha + ': ' + url, reproduce: row.run ?? 'node_modules/.bin/armada run ' + file.sha, output: row.output,
     });
   }
 
@@ -3986,9 +3986,8 @@ type LadderArgs = ReturnType<typeof ladderArgs>;
  *  units. */
 function ciPlanCosts(measured: string | undefined): HostedCosts {
   const hosted = readHostedCosts();
-  const labels = new Map(ciUnits(hosted).map((unit) => [unit.gate.run, unit.gate.label]));
 
-  return measured === undefined ? hosted : withRunnerCosts(hosted, parseRunnerTimings(readFileSync(measured, 'utf8')), labels);
+  return measured === undefined ? hosted : withRunnerCosts(hosted, parseRunnerTimings(readFileSync(measured, 'utf8')));
 }
 
 async function ciCommand(cli: LadderArgs): Promise<number | undefined> {
@@ -4387,7 +4386,7 @@ if (import.meta.main) {
     if (plan?.kind === 'hit') {
       // A reused CI verdict names the revision that proved it, and carries the file walls that proof measured.
       if (verdictPath !== undefined) {
-        ciRows.push({ run: gate.run, exitCode: 0, seconds: plan.entry.seconds, output: '', timings: plan.entry.timings, cached: plan.entry.revision });
+        ciRows.push({ name: gate.label, run: gate.run, exitCode: 0, seconds: plan.entry.seconds, output: '', timings: plan.entry.timings, cached: plan.entry.revision });
         writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: ciRows });
       }
 

@@ -151,7 +151,7 @@ describe('parallel armada evaluations', () => {
     mkdirSync(join(dir, 'evals-chess-123/model/product/chess-trial-1'), { recursive: true });
     writeFileSync(join(dir, evidence), '{"type":"run_start"}\n');
     writeFileSync(join(dir, 'results.json'), '{"testResults":[]}');
-    const row = ciVerdictRow({ run: 'trial', evidence: 'evals' }, { exitCode: 0, seconds: 1, stdout: '', stderr: '' }, undefined, { dir, artifacts });
+    const row = ciVerdictRow({ label: 'trial', evidence: 'evals' }, { exitCode: 0, seconds: 1, stdout: '', stderr: '' }, undefined, { dir, artifacts });
 
     expect(row.artifacts).toContain(`evals/${evidence}`);
     expect(row.artifacts).toContain('evals/results.json');
