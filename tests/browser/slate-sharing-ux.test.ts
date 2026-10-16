@@ -129,8 +129,18 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-share-access-option="public"]');
             expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
 
-            // A share on the owner's access says so, and moves to each person's own in one press: nothing of theirs used.
+            // A share on the owner's access whose code changed is stopped; the owner sees its reach again, then approves it
+            // at the slate's revision now.
             expect(await live.$eval('[data-live-share-mode]', (element) => element.getAttribute('data-live-share-mode'))).toBe('owner');
+            await live.click('[data-live-share-review]');
+            await live.waitForSelector('[data-share-approve-reach]');
+            expect(await live.$('[data-share-reach]')).not.toBeNull();
+            expect(await live.$('[data-share-submit]')).toBeNull();
+            await live.click('[data-share-approve-reach]');
+            await live.waitForFunction(() => document.querySelector('[data-live-share-review]') === null);
+            expect(await live.$('[data-share-submit]')).not.toBeNull();
+
+            // And it moves to each person's own access in one press: nothing of the owner's is used.
             await live.click('[data-live-share-own]');
             await live.waitForSelector('[data-live-share-mode="own"]');
             expect(await live.$('[data-live-share-own]')).toBeNull();
