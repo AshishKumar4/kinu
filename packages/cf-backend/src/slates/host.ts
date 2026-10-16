@@ -21,6 +21,7 @@ import { slateBatchStub } from './rpc-transport';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
 import { codemodeEgress } from '../codemode-egress';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
+import { PersonalParts, type PartConnections } from './part-runs';
 
 type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
 
@@ -57,6 +58,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerTitle?(): Promise<string>;
+  /** Each viewer's own account, where their personal parts' calls run (`part-runs.ts`); absent, no part runs. */
+  readonly partConnections?: PartConnections;
   ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
@@ -103,6 +106,8 @@ export class SlateHost {
   readonly controller: SlateController<SlateSource, ResidentSlateProcess>;
   private readonly resident: ResidentSlateProcesses;
   private readonly slateSources: SlateSources;
+  /** Each viewer's own parts of the slates this workspace shares (docs/SLATE-SHARING-NIMBUS.md §3). */
+  readonly parts: PersonalParts;
 
   constructor(private readonly deps: SlateHostDeps) {
     const sql = deps.ctx.storage.sql;
@@ -143,6 +148,12 @@ export class SlateHost {
     });
     this.slateSources = new SlateSources({
       project: (cred, id) => this.controller.project(cred, id), trees: (cred) => this.controller.slates(cred), host: deps,
+    });
+    this.parts = new PersonalParts({
+      workspace: deps.workspace, controller: this.controller, resident: this.resident, call: (request) => this.call(request),
+      ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
+      ...(deps.ownerTitle !== undefined && { ownerTitle: deps.ownerTitle.bind(deps) }),
+      ...(deps.partConnections !== undefined && { connections: deps.partConnections }),
     });
   }
 
@@ -289,7 +300,7 @@ export class SlateHost {
       // The slate's own server, shared: it acts as its shares allow now, whoever called it (the owner too).
       const shared = caller.path.length === 0 && caller.share === undefined ? this.sharedAuthority(id) : ({ kind: 'owner' } satisfies ServerAuthority);
 
-      if (shared.kind === 'none') throw await this.ownAccessRefusal(id);
+      if (shared.kind === 'none') return { ok: false, ...refusalOf(await this.ownAccessRefusal(id)) };
 
       if (shared.kind === 'grant') {
         if (issued?.viewer !== undefined) {
@@ -304,7 +315,7 @@ export class SlateHost {
         const bounded = routeSlateCall({ id, request: parsed.output, chain, hosted: false });
 
         if (grantAdmits(shared.grant, id, bounded.address.namespace, bounded.address.member) === null) {
-          throw new KinuError('denied', `Slate ${id} is shared with the owner's access, which does not reach ${bounded.address.namespace}.${bounded.address.member}`);
+          return { ok: false, ...refusalOf(new KinuError('denied', `Slate ${id} is shared with the owner's access, which does not reach ${bounded.address.namespace}.${bounded.address.member}`)) };
         }
       }
 

@@ -311,6 +311,10 @@ const ORCHESTRATOR_METHODS = [
   'slateAs',
   'slateBuildAs',
   'slateCallAs',
+  // A personal part's run, its process's calls, and what its viewer showed: DO-to-DO only, from the app's routes and PartBinding.
+  'runSlatePart',
+  'slatePartCall',
+  'showSlatePart',
   // An isolate running an actor's turn, or a slate, calls the actor's operations here.
   'callOperation',
   'listOperations',

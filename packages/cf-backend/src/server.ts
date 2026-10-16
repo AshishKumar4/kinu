@@ -68,6 +68,8 @@ export { CodemodeLauncher } from "./codemode-sandbox";
 
 export { SlateBinding } from "./slates/bindings";
 
+export { PartBinding } from "./slates/part-binding";
+
 export { DevboxGateway } from '@kinu.run/devbox';
 
 /** The sandbox container's outbound HTTP, and a Nimbus workspace's egress (`NimbusWorkspaceOptions.egress`). */
