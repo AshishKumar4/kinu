@@ -25,8 +25,8 @@ import { shellQuote } from '../packages/core/src/utils/shell';
 import { endedNearSilence } from './row-verdicts';
 import { withTestChrome } from './test-chrome';
 import { contextSignedInAt } from '../evals/src/browser';
-import { DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
-import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, RING_PY, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
+import { BOX_CHROMIUM_POLICY, DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
+import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, RING_PY, SCROLL, SITE_TRUST_PY, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 import { REPO_ROOT as REPO } from './repo-root';
 
 
@@ -42,6 +42,9 @@ const ASK_AGAIN_MS = 5_000;
 
 /** The name the fixture's boxes answer to (its `hostname`, set through the Worker's vars). */
 const BOX_NAME = 'contract-box';
+
+/** Sites the desktop's browser opens over HTTPS, and a word of each one's title. */
+const TRUSTED_SITES = [['https://example.com/', 'Example Domain'], ['https://github.com/', 'GitHub'], ['https://en.wikipedia.org/wiki/Main_Page', 'Wikipedia']] as const;
 
 /** The port the name step's server binds; no other step listens on it. */
 const NAME_HTTP_PORT = 8799;
@@ -686,6 +689,63 @@ async function main(): Promise<void> {
   };
 
   /**
+   * The desktop's Chromium trusts the intercept CA of the start it runs in, and only that one: every HTTPS site through
+   * the gateway showed `ERR_CERT_AUTHORITY_INVALID` (staging, 2026-10-16), as Debian's Chromium reads none of the bundle
+   * the trust step builds. Read on two starts of one box, each with its own CA, in a browser held to TCP, where the
+   * intercept sits (QUIC leaves past it, D82); and the person's own browser, as they open each site, shot on the box.
+   */
+  const browserTrust = async () => {
+    await step('browser-trust', async () => {
+      const name = names[4] ?? '';
+      const shots = join(scratch, 'browser-trust');
+      const intercept = '/etc/cloudflare/certs/cloudflare-containers-ca.crt';
+
+      const policyNamesCa = `import json
+der = ''.join(line.strip() for line in open('${intercept}') if line.strip() and not line.startswith('-----'))
+print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == [der] else 'other')`;
+
+      const port = 9333;
+
+      const Seen = v.object({ url: v.string(), state: v.nullable(v.string()), issuer: v.nullable(v.string()), error: v.nullable(v.string()), title: v.nullable(v.string()) });
+
+      mkdirSync(shots, { recursive: true });
+
+      const judged = async (start: string) => {
+        const ca = await shell(`openssl x509 -in ${intercept} -noout -fingerprint -sha256 | cut -d= -f2`, name);
+        const issuer = await shell(`openssl x509 -in ${intercept} -noout -subject -nameopt sep_multiline,utf8 | sed -n 's/^ *CN=//p'`, name);
+
+        requireEqual(await shell(`python3 -c ${shellQuote(policyNamesCa)}`, name), 'exact');
+        await shell(`rm -rf /tmp/kinu-trust && (DISPLAY=:0 setsid chromium --remote-debugging-port=${String(port)} --user-data-dir=/tmp/kinu-trust --disable-quic --new-window about:blank `
+          + `>/tmp/kinu-trust.log 2>&1 </dev/null &) && timeout 60 sh -c 'until curl -sf http://127.0.0.1:${String(port)}/json/version >/dev/null; do sleep 0.2; done'`, name);
+        const read = await shell(`PORT=${String(port)} timeout 150 python3 -c ${shellQuote(SITE_TRUST_PY)} ${TRUSTED_SITES.map(([url]) => url).join(' ')}; pkill -f remote-debugging-port=${String(port)}; true`, name);
+        const seen = read.split('\n').map((line) => v.parse(Seen, JSON.parse(line)));
+
+        for (const [at, [url, title]] of TRUSTED_SITES.entries()) {
+          requireEqual(seen[at], { url, state: 'secure', issuer, error: null, title: seen[at]?.title ?? null });
+
+          if (!(seen[at]?.title ?? '').includes(title)) throw new Error(`${url} read ${JSON.stringify(seen[at]?.title)} on the ${start} start`);
+          // The person's own browser, its profile and QUIC as they are: the site's title in its window, and a shot of it.
+          await shell(`(DISPLAY=:0 setsid chromium ${url} >/dev/null 2>&1 </dev/null &) && timeout 60 sh -c 'until DISPLAY=:0 xdotool search --onlyvisible --name ${shellQuote(title)} >/dev/null; do sleep 0.3; done' && sleep 2`, name);
+          writeFileSync(join(shots, `${start}-${new URL(url).hostname}.png`), Buffer.from(await shell('DISPLAY=:0 scrot -z -o /tmp/kinu-trust.png && base64 -w0 /tmp/kinu-trust.png', name), 'base64'));
+        }
+
+        return { ca, sites: seen.map((each) => `${each.url} ${String(each.state)} ${String(each.title)}`) };
+      };
+
+      const first = await judged('first');
+
+      requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
+      // An agent's look opens the desktop again on the new start, as the person's first open would.
+      await call('/agent-desktop', AgentAnswer, { driver: 'trust', member: 'screenshot', args: '[]' }, name);
+      const second = await judged('second');
+
+      if (second.ca === first.ca) throw new Error(`the restart kept its CA ${first.ca}: the second start proves nothing`);
+
+      return { first, second, shots };
+    });
+  };
+
+  /**
    * An agent's desktop on a fresh box (D89), through the product's own `computer.*` members and adapter: it looks at the
    * screen the owner watches, at its own size; its clicks, keys, text, wheel and drags land where its screenshot put
    * them; nothing stays pressed after a call; a program a shell starts opens there; and a second agent waits its turn.
@@ -1011,7 +1071,11 @@ async function main(): Promise<void> {
       return seen;
     });
 
-    if (!process.argv.includes('--headless')) await desktopClient();
+    if (!process.argv.includes('--headless')) {
+      await desktopClient();
+      await browserTrust();
+    }
+
     await desktopAgent();
 
     await step('disk-chain', async () => {
