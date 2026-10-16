@@ -14,7 +14,8 @@ it("a slate's room binding call hands back its answer without the disposer it re
   const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('relayed-slate-answer'));
   const seen = await probe.slateBindingAnswer('relayed-slate-answer-workspace');
 
-  expect(seen.answer).toEqual({ ok: true, value: { value: 'kept' } });
+  expect(seen.answer).toEqual({ ok: true, value: null });
+  expect(seen.refused).toBe('denied');
   expect(seen.carriesDisposer).toBe(false);
 });
 

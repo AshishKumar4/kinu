@@ -57,3 +57,11 @@ it('the slate changes only for someone signed in, and a call that changed it is 
   // It changed the slate once: the room asked Bob instead of running it again.
   expect(answered.stampedTwice).toBe('value 1');
 });
+
+it('6. a run runs the image it was admitted at: an editor\'s publish before its worker is made never runs under its grants', async () => {
+  expect(await probe().attackStaleImage()).toEqual({ first: 'value "image-A"', edited: 'ok', held: 'value "image-A"', fromB: 0 });
+});
+
+it('a listing the Gallery lost comes back from the deploy\'s walk, which reaches its room', async () => {
+  expect(await probe().listingRefill()).toEqual({ listed: true, lost: true, refilled: true });
+});

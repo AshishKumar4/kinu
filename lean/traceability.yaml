@@ -972,7 +972,7 @@ requirements:
       - Kinu.Sharing.Confinement.exec_core
       - Kinu.Sharing.Confinement.every_reachable_state_is_fresh_and_anchored
     tsRefs:
-      - packages/core/src/slates/room/caretaker.ts#initSlateRoomTables
+      - packages/core/src/slates/room/schema.ts#initSlateRoomTables
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.mint
       - packages/core/src/slates/room/caretaker.ts#RoomCaretaker.admit
     remainingEvidence:

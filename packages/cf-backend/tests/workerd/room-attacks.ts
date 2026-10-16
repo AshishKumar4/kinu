@@ -70,6 +70,13 @@ export class UserDO extends ProductionUserDO {
     const faked = personas.get(this.name);
 
     if (faked === undefined) return await super.userMcp_toolDescriptors(caller);
+    const hold = descriptorReads.get(faked.email);
+
+    if (hold !== undefined) {
+      descriptorReads.delete(faked.email);
+      hold.reached.resolve(undefined);
+      await hold.release.promise;
+    }
 
     return {
       unavailable: [],
@@ -88,6 +95,22 @@ export class UserDO extends ProductionUserDO {
 
     return JSON.stringify(answer(call.name, call.args));
   }
+}
+
+/** A person's next read of their own connections, held until the test lets it go. */
+const descriptorReads = new Map<string, { readonly reached: ReturnType<typeof Promise.withResolvers<undefined>>; readonly release: ReturnType<typeof Promise.withResolvers<undefined>> }>();
+
+/**
+ * Holds `email`'s next read of their connections. A room reads them as it draws a part that asks that person for one,
+ * on every broadcast: one held there is the seam between a run's admission and its worker's creation, so a test can put
+ * an editor's publish between them, deterministically.
+ */
+export function holdNextConnectionsRead(email: string) {
+  const hold = { reached: Promise.withResolvers<undefined>(), release: Promise.withResolvers<undefined>() };
+
+  descriptorReads.set(email, hold);
+
+  return { reached: hold.reached.promise, release: () => { hold.release.resolve(undefined); } };
 }
 
 /** A person's socket on a room: their calls answered in turn, and the latest view the room pushed them. */
@@ -160,6 +183,8 @@ export async function personSocket(env: { SLATE_ROOM: DurableObjectNamespace<Sla
 export const ATTACK_SLATE = [
   'import { SlateObject } from "kinu:slate";',
   'const prs = (env, repo) => env.workspace.mcp.GitHub.list_pull_requests({ owner: "acme", repo });',
+  // Each image of the slate says which it is: an editor's change says "image-B".
+  'const MARK = "image-A";',
   'export class Slate extends SlateObject {',
   '  async prs(repo) { return await prs(this.env, repo); }',
   // Reads a repository, then mails what it read to whoever the code picks.
@@ -167,6 +192,8 @@ export const ATTACK_SLATE = [
   // Reads a repository into the room's public state (`this.storage`, the room's cells), which everyone reads.
   '  async copy(repo) { const read = await prs(this.env, repo); await this.storage.put("board", read); return "copied"; }',
   '  async board() { return (await this.storage.get("board")) ?? null; }',
+  // Which image's code ran: each image says its own, and reads GitHub saying it too.
+  '  async which() { await this.env.workspace.mcp.GitHub.list_pull_requests({ owner: "acme", repo: "board", note: MARK }); return MARK; }',
   // The slate's own SQL: a note written, and the notes counted. The table is the class's schema, made as it starts.
   '  constructor(ctx, env) { super(ctx, env); this.sql.exec("CREATE TABLE IF NOT EXISTS notes (text TEXT)"); }',
   '  async note(text) { this.sql.exec("INSERT INTO notes (text) VALUES (?)", text); return this.sql.exec("SELECT COUNT(*) AS n FROM notes").one().n; }',

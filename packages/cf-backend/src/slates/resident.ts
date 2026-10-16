@@ -105,7 +105,8 @@ const CLASS_BOOT: readonly string[] = [
   '    constructing = true;',
   '    try {',
   '      slate = new Slate({',
-  '        storage: { sql: guardedSql(this.ctx.storage.sql) },',
+  // A room's image holds its own SQL to the room's word on each call; a process the workspace runs itself does not.
+  '        storage: this.env.__writes === "room" ? { sql: guardedSql(this.ctx.storage.sql) } : this.ctx.storage,',
   '        kv: storageProxy(this.env.__storage),',
   '        waitUntil: (work) => this.ctx.waitUntil(work),',
   '      }, Object.freeze({ workspace: workspaceSurface(this.env.workspace) }));',

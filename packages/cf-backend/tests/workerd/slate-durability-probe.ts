@@ -15,7 +15,7 @@ import { cookieForTicket, frameTicket, readPass, roomHandle, roomObjectName, ROO
 import { handleSlateRoomHostRequest } from '../../src/slates/room-routes';
 import { sealedPart } from '../../src/slates/room-parts';
 import type { RoomCallOutcome } from '../../src/slates/room';
-import { ATTACK_SLATE, GITHUB, MAIL, OPS, persona, personSocket, reachedCalls, type PersonSocket } from './room-attacks';
+import { ATTACK_SLATE, GITHUB, holdNextConnectionsRead, MAIL, OPS, persona, personSocket, reachedCalls, type PersonSocket } from './room-attacks';
 import { ROOM_HOST_HEADER, ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
 import { GALLERY_OBJECT } from '../../src/gallery/gallery-do';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
@@ -26,7 +26,7 @@ import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
-import { SharedSlateFilesSchema, type JsonObject, type JsonValue, type RoomView, type SlateAnswer, type SlateCallResult } from '@kinu.run/core';
+import { opsCaller, SharedSlateFilesSchema, type JsonObject, type JsonValue, type RoomView, type SlateAnswer, type SlateCallResult } from '@kinu.run/core';
 import type {
   DurabilityReservation,
   PreviewAnswer,
@@ -658,6 +658,59 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const stamps = await asOwner('stamps', []);
 
     return { visitorNote, visitorPut, bobNote, notes, stamps: stamped, stampedTwice: stamps };
+  }
+
+  /**
+   * A listed slate whose listing the Gallery lost (its tables made anew) is listed again by the deploy's walk, which
+   * reaches the room: before the walk the Gallery holds nothing of it, after it the listing with its link.
+   */
+  async listingRefill(): Promise<{ listed: boolean; lost: boolean; refilled: boolean }> {
+    const { at, room, owner } = await this.stage('refill');
+    const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
+    const listed = async (): Promise<boolean> => (await gallery.slate(at.workspace, at.slate, null)) !== null;
+
+    await owner.call({ op: 'setAudience', audience: 'anyone' });
+    await owner.call({ op: 'list', line: 'A refilled slate', category: 'fun' });
+    const before = await listed();
+
+    await gallery.unlist(at.workspace, at.slate);
+    const lost = !(await listed());
+
+    await room.opsTables(await opsCaller(this.env));
+
+    return { listed: before, lost, refilled: await listed() };
+  }
+
+  /**
+   * Attack 6's other half, revision binding at the worker: Sam's own call is admitted at image A, and before its worker is
+   * made Ben publishes image B. The run runs the code it was admitted at, under the grants admitted with it; B's code never
+   * runs under them.
+   */
+  async attackStaleImage(): Promise<{ first: string; edited: string; held: string; fromB: number }> {
+    const { at, people, room, asOwner } = await this.stage('stale');
+    const first = await asOwner('which', []);
+    // Bob's part asks for his own GitHub, so every broadcast reads his connections: the seam this test holds.
+    const bob = await personSocket(this.env, at, people.bob);
+    const asked = SlateDurabilityProbeRoot.said(await room.callAs(people.bob, 'prs', ['secret'])).part ?? '';
+
+    const since = bob.mark();
+
+    await bob.call({ op: 'open', part: asked });
+    // The open's own broadcast reads Bob's connections as it draws his view: done once that view arrives.
+    await bob.view((view) => view.parts[asked] !== undefined, since);
+    const hold = holdNextConnectionsRead(people.bob);
+    // Admitted at image A; its run broadcasts before its worker is made, and that broadcast is held.
+    const held = asOwner('which', []);
+
+    await hold.reached;
+    const edited = await room.editorEdit(people.ben, { 'server.ts': ATTACK_SLATE.replace('"image-A"', '"image-B"') });
+
+    hold.release();
+
+    return {
+      first, edited: edited?.ok === true ? 'ok' : JSON.stringify(edited), held: await held,
+      fromB: SlateDurabilityProbeRoot.count(people.sam, 'list_pull_requests', (args) => args.note === 'image-B'),
+    };
   }
 
   /** Attack 3, the requester check: Alice's own GitHub, allowed for her part, never runs for Bob's request. */

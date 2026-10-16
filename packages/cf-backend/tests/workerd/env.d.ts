@@ -33,7 +33,7 @@ import type { RoomBinding } from '../../src/slates/room-bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork, AgentSlateUi, AnswerPageModes, TerminalState, AlienEffect,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork, AgentSlateUi, AnswerPageModes, AnswerPageRoom, TerminalState, AlienEffect,
   HeldClose, HeldCloseRecovered, KillJourney,
 } from './two-turn-shapes';
 import type {
@@ -102,6 +102,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   agentHeldWork(): Promise<AgentHeldWork>;
   agentSlateUi(): Promise<AgentSlateUi>;
   answerPageModesIn(): Promise<AnswerPageModes>;
+  answerPageRoomIn(): Promise<AnswerPageRoom>;
   cutRecordingWorkspace(phase: 'before' | 'after'): Promise<{ readonly workspace: string; readonly cut: TerminalState }>;
   recoverRecording(workspace: string, cut?: { readonly name: 'turn_record'; readonly phase: 'before' | 'after' }): Promise<TerminalState>;
   alienEffectIn(): Promise<AlienEffect>;
@@ -320,6 +321,8 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   attackHolder(): Promise<{ alice: string; bobFirst: string; afterSamShows: string; afterAliceShows: string }>;
   scenarioBoard(): Promise<{ alice: string; bob: string; visitor: string; asked: { sam: number; alice: number; bob: number } }>;
   roomWrites(): Promise<{ visitorNote: string; visitorPut: string; bobNote: string; notes: string; stamps: string; stampedTwice: string }>;
+  listingRefill(): Promise<{ listed: boolean; lost: boolean; refilled: boolean }>;
+  attackStaleImage(): Promise<{ first: string; edited: string; held: string; fromB: number }>;
   attackRequester(): Promise<{ alice: string; bob: string; aliceCallsForBob: number }>;
   attackToolFlow(): Promise<{ samOwn: string; alice: string; samMailsForAlice: number }>;
   attackSink(): Promise<{ asked: string; mailedBeforeDeciding: number; mailedAfter: number; alice: string }>;

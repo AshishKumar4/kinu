@@ -347,10 +347,11 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
     const props: RoomBindingProps = { room: name, binding: '__storage', run: null };
     const binding = new RoomBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
 
-    await binding.call(['put'], ['seen', 'kept'], null);
+    // Outside any call the slate changes nothing (the room refuses it); its answer, a refusal, crosses as one.
+    const refused = await binding.call(['put'], ['seen', 'kept'], null);
     const answer = await binding.call(['get'], ['seen'], null);
 
-    return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer };
+    return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer || Symbol.dispose in refused, refused: refused.ok ? 'kept' : refused.reason };
   }
 
   /** What the binding hands a slate for `ai.stream` and `agent.ask`, the room answering each with a stream here. */

@@ -365,7 +365,8 @@ export class SlateRoom extends DurableObject<Env> {
         ...workerCompatibility,
         mainModule: RUNNER_MODULE,
         modules: texts,
-        env: { workspace: this.binding('workspace', run), __storage: this.binding('__storage', run), __host: this.binding('__host', run) },
+        // `__writes`: the runner holds the slate's own SQL to the room's word on each call (`x-slate-writes`).
+        env: { workspace: this.binding('workspace', run), __storage: this.binding('__storage', run), __host: this.binding('__host', run), __writes: 'room' },
         globalOutbound,
       }));
     });
@@ -1149,8 +1150,29 @@ export class SlateRoom extends DurableObject<Env> {
     });
   }
 
-  /** A page's own `workspace` call: a run of no method of the slate's, for its session, released to it before it ends. */
+  /**
+   * A page's own `workspace` call: a run of no method of the slate's, for its session, released to it before it ends.
+   * One that reaches a connection its person does not hold stops before it reaches anything; when the page is code wholly
+   * theirs, the connection is granted (their own code is their consent) and the call is made once more, now holding it.
+   */
   private pageCall(session: Session, path: readonly string[], args: readonly JsonValue[]): Effect.Effect<RoomCallOutcome, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const asked = partKey(PAGE_CALL, args, session.email);
+      const first = yield* Effect.result(this.pageCallOnce(session, path, args));
+
+      if (first._tag === 'Success') return first.success;
+      const need = this.needs.get(asked);
+      const email = session.email;
+
+      if (need === undefined || email === null || !this.caretaker.ownCode(email)) return yield* Effect.fail(first.failure);
+      yield* this.personalGrant(email, need);
+      this.needs.delete(asked);
+
+      return yield* this.pageCallOnce(session, path, args);
+    });
+  }
+
+  private pageCallOnce(session: Session, path: readonly string[], args: readonly JsonValue[]): Effect.Effect<RoomCallOutcome, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const grants = this.caretaker.grantsFor(session, PAGE_CALL, [...args]);
       const run = yield* care(() => this.caretaker.admit({ requester: session, fn: PAGE_CALL, input: [...args], grants: grants.map((grant) => grant.id), inputs: [], out: null }));
