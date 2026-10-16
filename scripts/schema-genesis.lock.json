@@ -1329,8 +1329,6 @@
     "PRIMARY KEY (workspace, share_id, recipient_user_id)"
   ],
   "slate_ai_spend@packages/core/src/state/user-schema.ts": [
-    "at INTEGER NOT NULL",
-    "workspace TEXT NOT NULL",
     "spend TEXT NOT NULL"
   ],
   "slate_build_inputs@packages/core/src/slates/builds.ts": [

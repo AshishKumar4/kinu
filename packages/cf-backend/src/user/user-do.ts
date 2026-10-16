@@ -214,7 +214,7 @@ export class UserDO extends Agent<Env> {
 
     return accountSlateAi({
       env: this.env, accountId: this.name, catalog: (asker) => this.profile.getProfileCatalog(asker), credentialsRevision: (asker) => this.credentials.getCredentialsRevision(asker),
-      spent: (workspace, spend) => { this.sqlx('INSERT INTO slate_ai_spend (at, workspace, spend) VALUES (?, ?, ?)', Date.now(), workspace, JSON.stringify(spend)); },
+      spent: (spend) => { this.sqlx('INSERT INTO slate_ai_spend (spend) VALUES (?)', JSON.stringify(spend)); },
     }, caller, request);
   }
 

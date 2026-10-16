@@ -388,12 +388,11 @@ export function initUserTables(sql: SqlExec): void {
   `);
 
   // This account's own model calls made in other people's slates (its own AI grant in their rooms): one row per call,
-  // its spend as one call's `AccountSpend`, counted with every workspace's in the account's usage.
+  // its spend as one call's `AccountSpend`, counted with every workspace's in the account's usage. Its only record: no
+  // workspace holds it (the slate's is someone else's) and the room keeps no per-call row.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS slate_ai_spend (
-      at        INTEGER NOT NULL,
-      workspace TEXT NOT NULL,
-      spend     TEXT NOT NULL
+      spend TEXT NOT NULL
     )
   `);
 }

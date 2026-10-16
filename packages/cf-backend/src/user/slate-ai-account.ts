@@ -18,7 +18,7 @@ export interface AccountSlateAiHost<Id> {
   readonly catalog: (caller: UserCaller) => Promise<ProfileCatalogEnvelope>;
   readonly credentialsRevision: (caller: UserCaller) => Promise<number>;
   /** Keeps one call's spend where the account's usage reads it (`slate_ai_spend`). */
-  readonly spent: (workspace: string, spend: AccountSpend) => void;
+  readonly spent: (spend: AccountSpend) => void;
 }
 
 /** The account's model services for one call: its own registry, keyed to the room's workspace for prompt caching. */
@@ -46,7 +46,7 @@ function recordSlateAi<Id>(host: AccountSlateAiHost<Id>, workspace: string, repo
   const spec = report.spec ?? '';
   const cut = spec.indexOf('/');
 
-  host.spent(workspace, accountSpendOfCall(event));
+  host.spent(accountSpendOfCall(event));
   recordModelRow(host.env, {
     workspace, agentKind: '', provider: cut < 0 ? spec : spec.slice(0, cut), model: report.modelId ?? (cut < 0 ? '' : spec.slice(cut + 1)),
     source: report.source, usage: report.usage, usd: event.usd,
