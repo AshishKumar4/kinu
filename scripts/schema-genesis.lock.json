@@ -1257,6 +1257,16 @@
     "missing INTEGER NOT NULL",
     "PRIMARY KEY (slate, authority, path)"
   ],
+  "slate_consents@packages/core/src/state/user-schema.ts": [
+    "workspace TEXT NOT NULL",
+    "slate TEXT NOT NULL",
+    "server TEXT NOT NULL",
+    "root TEXT NOT NULL",
+    "tools TEXT NOT NULL",
+    "effects INTEGER NOT NULL CHECK (effects IN (0, 1))",
+    "revision TEXT NOT NULL",
+    "PRIMARY KEY (workspace, slate, server, root)"
+  ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",
     "path TEXT NOT NULL",

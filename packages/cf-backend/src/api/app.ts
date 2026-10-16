@@ -16,6 +16,7 @@ import { cliRoutes } from '../cli/routes';
 import { aiProxyRoutes } from '../user/ai-proxy';
 import { providerProxyRoutes } from '../user/provider-proxy';
 import { accountRoutes } from '../user/account-routes';
+import { consentRoutes } from '../slates/consent-routes';
 import { userRoutes } from '../user/routes';
 import { deployRoutes } from '../deploy/routes';
 import { updatesRoutes } from '../updates/routes';
@@ -88,6 +89,8 @@ mount(controlRoutes);
 
 // Ahead of userRoutes: owner_only account methods.
 mount(accountRoutes);
+
+mount(consentRoutes);
 
 mount(builtinAccountRoutes);
 

@@ -30,11 +30,6 @@ export const CodecSchema: v.GenericSchema<Codec> = v.variant('kind', [
 /** What a function that declares no contract takes. */
 export const UNDECLARED: Codec = { kind: 'any' };
 
-/** Takes free input: what someone types reaches the service. */
-export function codecIsFree(codec: Codec): boolean {
-  return codec.kind === 'text' || codec.kind === 'json' || codec.kind === 'any';
-}
-
 /** The model's `dom.contains arg`. */
 export function codecAdmits(codec: Codec, input: JsonValue): boolean {
   switch (codec.kind) {

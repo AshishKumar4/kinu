@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   codecAdmits, PartOutputSchema, ROOT_SLATE_CALLER, slateAnswer, slateRevision, UNDECLARED,
-  type ConsentAsk, type EffectAsk, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateAppCall, type SlateController,
+  type PartAiAnswer, type PartConnectionAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateAppCall, type SlateController,
 } from '@kinu.run/core/slates';
 import {
   JsonValueSchema, routeSlateCall, slateAuthority, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateTitle,
@@ -23,21 +23,14 @@ export interface PartViewer {
   readonly name: string;
 }
 
-/** One call of a part's run with its viewer's own connection, as their account answers it. */
-export type PartConnectionAnswer =
-  | { readonly kind: 'ran'; readonly value: JsonValue }
-  | { readonly kind: 'needs-consent'; readonly ask: ConsentAsk }
-  | { readonly kind: 'needs-approval'; readonly ask: EffectAsk }
-  | { readonly kind: 'missing'; readonly message: string };
-
 /** The viewer's own account, where every call of their part runs: their consents, connections and AI. */
 export interface PartConnections {
   tool(viewer: PartViewer, call: {
     readonly workspace: string; readonly slate: string; readonly revision: string; readonly server: string; readonly tool: string; readonly args: JsonValue[];
-  }): Promise<PartConnectionAnswer>;
+  }): Promise<PartConnectionAnswer<JsonValue>>;
   ai(viewer: PartViewer, call: {
     readonly workspace: string; readonly slate: string; readonly revision: string; readonly route: Extract<SlateRoute, { kind: 'ai' }>;
-  }): Promise<PartConnectionAnswer>;
+  }): Promise<PartAiAnswer>;
 }
 
 export interface PersonalPartsDeps {

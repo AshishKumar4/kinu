@@ -57,6 +57,12 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 const USER_DO_METHODS = [
   'slateAi',
   'slateAiSpend',
+  'slateConsents',
+  'consentSlate',
+  'withdrawSlateConsent',
+  'slatePartTool',
+  'slatePartAi',
+  'decideSlateEffect',
   'accountMemory_decide',
   'accountMemory_facts',
   'accountMemory_forget',

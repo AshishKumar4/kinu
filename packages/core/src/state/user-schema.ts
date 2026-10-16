@@ -409,4 +409,13 @@ export function initUserTables(sql: SqlExec): void {
       PRIMARY KEY (provider, account)
     )
   `);
+
+  // A viewer's grants for personal parts belong to this account, never the slate owner's workspace.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS slate_consents (
+      workspace TEXT NOT NULL, slate TEXT NOT NULL, server TEXT NOT NULL, root TEXT NOT NULL,
+      tools TEXT NOT NULL, effects INTEGER NOT NULL CHECK (effects IN (0, 1)), revision TEXT NOT NULL,
+      PRIMARY KEY (workspace, slate, server, root)
+    )
+  `);
 }

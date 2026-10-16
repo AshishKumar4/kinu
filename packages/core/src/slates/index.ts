@@ -11,6 +11,8 @@ export { EphemeralSlates, initEphemeralSlateTable } from './ephemeral';
 
 export { SlateUsageStore, initSlateUsageTable } from './usage';
 
+export { SlateConsentStore, type PartAiAnswer, type PartConnectionAnswer } from './consents';
+
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteSlateStateStore, slateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
 
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';
@@ -43,15 +45,15 @@ export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps
 
 export { GalleryIndex, initGalleryTables } from './gallery';
 
-export { codecAdmits, codecIsFree, CodecSchema, UNDECLARED, type Codec } from './codec';
+export { codecAdmits, CodecSchema, UNDECLARED, type Codec } from './codec';
 
 export {
-  SHARE_MODES, GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,
+  GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,
   type GalleryCard, type GalleryListingSync, type ShareMode, type SlateConsent, type SlateRevision,
 } from './share-modes';
 
 export {
-  ConsentAskSchema, EffectAskSchema, EffectDecisionSchema, PartActionSchema, PartDeclarationSchema, PartOutputSchema, PartRunAnswerSchema,
+  EffectDecisionSchema, PartDeclarationSchema, PartOutputSchema, PartRunAnswerSchema,
   PartRunRequestSchema, PartShowRequestSchema, SlateConsentsAnswerSchema, type SlateConsentsAnswer,
   slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartRunPath, slatePartShowPath,
   type ConsentAsk, type EffectAsk, type PartAction, type PartDeclaration, type PartOutput, type PartRunAnswer, type PartRunRequest,

@@ -24,7 +24,7 @@ export const PartDeclarationSchema = v.strictObject({
 export type PartDeclaration = v.InferOutput<typeof PartDeclarationSchema>;
 
 /** A Kinu-owned control under a part: pressing it runs the part again with `{ id, input }`; no slate script runs. */
-export const PartActionSchema = v.object({
+const PartActionSchema = v.object({
   id: Name,
   label: v.string(),
   /** What the control asks the viewer for; absent, it is a button. */
@@ -59,13 +59,16 @@ export type PartRunRequest = v.InferOutput<typeof PartRunRequestSchema>;
 
 const RootSchema = v.record(v.string(), v.string());
 
+/** What a person sees a connection and its tool called, where their account knows it; absent, the ids stand. */
+const Titles = { serverTitle: v.optional(Name), toolTitle: v.optional(Name) };
+
 /** What the viewer is asked to let this slate use of theirs, for this revision. */
-export const ConsentAskSchema = v.object({ server: Name, root: RootSchema, tools: v.array(Name), effects: v.boolean(), revision: Name });
+const ConsentAskSchema = v.object({ server: Name, root: RootSchema, tools: v.array(Name), effects: v.boolean(), revision: Name, ...Titles });
 
 export type ConsentAsk = v.InferOutput<typeof ConsentAskSchema>;
 
 /** An effect the part's run reached with the viewer's grant, waiting for them: the tool and the exact payload. */
-export const EffectAskSchema = v.object({ id: Name, server: Name, tool: Name, root: RootSchema, payload: JsonValueSchema });
+const EffectAskSchema = v.object({ id: Name, server: Name, tool: Name, root: RootSchema, payload: JsonValueSchema, ...Titles });
 
 export type EffectAsk = v.InferOutput<typeof EffectAskSchema>;
 
