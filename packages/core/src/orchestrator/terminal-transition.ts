@@ -54,8 +54,9 @@ export interface TerminalTransitionDeps {
   readonly hold: (close: () => Promise<void>) => Promise<void>;
   /** A Durable Object's held reads; absent, every read asks. */
   readonly holds?: Holds;
-  /** Whether the actor still acts, as the place that retires it answers; one retiring or retired owes nothing. */
-  readonly standing: () => Promise<ActorStanding>;
+  /** Whether the actor still acts, asked of an effect that failed, with its failure: one retiring or retired owes
+   *  nothing (`TerminalEffectLedger`). */
+  readonly standing: (failure: { readonly cause: unknown }) => Promise<ActorStanding>;
 }
 
 /** Owns the ordering: claim before the first effect, disposition before release, close only on an empty owed set, prune after close. */

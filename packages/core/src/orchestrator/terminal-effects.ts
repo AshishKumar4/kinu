@@ -579,8 +579,10 @@ export class TerminalEffectLedger {
     readonly scheduleRetry: (atMs: number) => Promise<void>;
     /** A Durable Object's held reads; absent, every read asks. */
     readonly holds?: Holds;
-    /** Whether the actor still acts, as the place that retires it answers; one retiring or retired owes nothing. */
-    readonly standing: () => Promise<ActorStanding>;
+    /** Whether the actor still acts, asked of an effect that failed, with its failure: one retiring or retired owes
+     *  nothing. Where the place that retires it is across a crossing, the failure's own refusal says (`endedStandingOf`),
+     *  so no call is made to ask. */
+    readonly standing: (failure: { readonly cause: unknown }) => Promise<ActorStanding>;
   }) {
     this.actorId = deps.actor.actorId;
     const holds = deps.holds ?? ASKED;
@@ -679,9 +681,7 @@ export class TerminalEffectLedger {
 
   /** `inFlight`: every sequence this process is running now, live; this one is counted in it either way. */
   async drive(sequenceId: string, inFlight: ReadonlySet<string> = new Set()): Promise<TerminalSequenceRun> {
-    const owed = this.pending(sequenceId);
-    // An actor dismissed or retired before its effects ran owes them to no one: they stand down unrun.
-    const claimed = owed.length > 0 && await this.stoodDown(sequenceId, owed) ? [] : owed;
+    const claimed = this.pending(sequenceId);
     // Armed before the first attempt: an eviction in the inline pass must still leave a wake. Deferred for every
     // sequence this process runs, so the live process is not woken into its own effects.
     await this.armWake(new Set([...inFlight, sequenceId]));
@@ -898,7 +898,7 @@ export class TerminalEffectLedger {
     const { name, attempts, nextAttemptAt, releases } = run;
 
     // Refused because its actor was dismissed or retired while it ran: ended, never a failure.
-    if (await this.stoodDown(sequenceId, [row])) return;
+    if (await this.stoodDown(sequenceId, row, thrown)) return;
 
     if (this.deferredForRateLimit(sequenceId, row, thrown, nextAttemptAt)) return;
 
@@ -976,22 +976,19 @@ export class TerminalEffectLedger {
   }
 
   /**
-   * Whether `rows` stood down: their actor no longer acts, so each is ended and logged as ended, never as a failure. A
-   * standing that cannot be read is no sign the actor ended: the effects answer for themselves.
+   * Whether `row`, which failed with `thrown`, stood down: its actor no longer acts, so it is ended and logged as ended,
+   * never as a failure. A standing that cannot be read is no sign the actor ended: the effect answers for itself.
    */
-  private async stoodDown(sequenceId: string, rows: readonly PendingRow[]): Promise<boolean> {
+  private async stoodDown(sequenceId: string, row: PendingRow, thrown: { readonly cause: unknown }): Promise<boolean> {
     const read = await hold(attempt({ doing: 'reading whether the actor a settled turn owed effects still acts', otherwise: 'unavailable' },
-      async () => await this.deps.standing()));
+      async () => await this.deps.standing(thrown)));
 
     const standing = Exit.isSuccess(read) ? read.value : 'live';
 
     if (standing === 'live') return false;
-
-    for (const row of rows) {
-      diagnostics.event('turn.terminal_effect_ended', { sequence: sequenceId, effect: row.key, standing });
-      void this.deps.sql`DELETE FROM terminal_effects
-        WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key}`;
-    }
+    diagnostics.event('turn.terminal_effect_ended', { sequence: sequenceId, effect: row.key, standing });
+    void this.deps.sql`DELETE FROM terminal_effects
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key}`;
 
     return true;
   }
