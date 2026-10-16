@@ -2,7 +2,7 @@ import './helpers/ui-module-globals';
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
-import { canonicalRoot, EffectAskSchema, slateApprovalPath, slateConsentsPath, SlateConsentSchema, SlateConsentsAnswerSchema, type SlateConsent } from '@kinu.run/core/slates';
+import { canonicalRoot, slateApprovalPath, slateConsentsPath, SlateConsentSchema, SlateConsentsAnswerSchema, type SlateConsent } from '@kinu.run/core/slates';
 import { consentRoutes, type ConsentRoutesEnv } from '../src/slates/consent-routes';
 import { serveFamily } from './helpers/api';
 import { appProbe, PROBE_ORIGIN } from './helpers/app-probe';
@@ -142,7 +142,7 @@ describe('the viewer\'s slate consent routes', () => {
     const effect = { ...CONSENT, tool: 'create_issue', args: [{ ...CONSENT.root, title: 'one effect' }] };
     const answer = await viewer.userDO.slatePartTool(caller, effect);
     expect(answer.kind).toBe('needs-approval');
-    const ask = v.parse(EffectAskSchema, 'ask' in answer ? answer.ask : null);
+    const ask = v.parse(v.object({ id: v.string() }), 'ask' in answer ? answer.ask : null);
     const path = slateApprovalPath(CONSENT.workspace, CONSENT.slate, ask.id);
     const approved = await serve(request(path, 'POST', { decision: 'approve' }), env);
 

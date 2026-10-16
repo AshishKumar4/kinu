@@ -301,16 +301,11 @@ export {
   type SlateReach, type LiveShareBody, type LiveShareModeBody, type LiveShareListingBody,
 } from './slates/sharing';
 
-export { SHARE_MODES, ShareModeSchema, type ShareMode } from './slates/share-modes';
+export { ShareModeSchema, type ShareMode } from './slates/share-modes';
 
 export {
-  RoomViewSchema, RoomCallSchema, RoomClientFrameSchema, RoomServerFrameSchema,
   DriveLibrarySchema, ForkPreviewSchema, ForkedSchema,
-  roomPagePath, roomSocketPath, roomPartPath, roomFramePath, roomEntryPath, roomForkPath, RoomEntrySchema, type RoomEntry,
-  type RoomPerson, type RoomRole, type RoomAccess, type RoomAudience, type RoomService, type RoomTool, type RoomSource,
-  type RoomReach, type SheetLend, type SheetLendUse, type SheetMember, type SheetView,
-  type RoomSession, type RoomPresence, type RoomAsk, type RoomEnded, type PartView, type RoomView, type ShowScope,
-  type RoomCall, type RoomClientFrame, type RoomServerFrame,
+  type RoomPerson, type RoomRole, type RoomAccess, type RoomAudience, type RoomService, type RoomTool, type RoomSource, type RoomReach,
   type DriveRoomCard, type DriveSlate, type DriveLibrary, type ForkPreview, type Forked,
 } from './slates/room-api';
 
@@ -322,7 +317,7 @@ export {
 
 // The part and consent contracts the client parses: `./slates` pulls the server's runtime, so the browser reads them here.
 export {
-  ConsentAskSchema, EffectAskSchema, PartActionSchema, PartRunAnswerSchema, PartRunRequestSchema, SlateConsentsAnswerSchema,
+  PartRunAnswerSchema, PartRunRequestSchema, SlateConsentsAnswerSchema,
   slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartRunPath, slatePartShowPath,
   type ConsentAsk, type EffectAsk, type PartAction, type PartRunAnswer, type PartRunRequest, type PartShowRequest,
 } from './slates/personal-parts';
