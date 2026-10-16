@@ -81,14 +81,17 @@ class ClientSocketGate {
 
   /**
    * A frame from a socket whose authority still holds goes on; one whose authority ended is refused and closed. Its
-   * authority is asked at once, but it goes on only after the socket's frame before it: those answers come back in any
-   * order, and a Continue let in ahead of the Stop sent before it was handed back by that Stop (staging rc12). A frame
-   * whose handler waits (a send until it lands, an RPC on I/O) holds the next only until it has taken its place in its
-   * handler's own order, which it does before that first wait.
+   * authority is asked at once, but it goes on only after the socket's frame before it has taken its place: those
+   * answers come back in any order, and a Continue let in ahead of the Stop RPC sent before it was handed back by that
+   * Stop (staging rc12). A chat frame takes its place in the room's order by the path every chat frame takes, so the
+   * next follows at once; any other frame (an RPC: the Stop's is one) may reach the room by a longer one, which it has
+   * walked by the next task turn, before its first wait on I/O. Waiting for a frame's whole handling instead would
+   * hold a Stop behind the send it stops.
    */
   message(connection: Connection, message: WSMessage, base: ClientHandlers): Promise<void> {
     const before = this.lines.get(connection.id) ?? Promise.resolve();
     const { promise: placed, resolve: place } = Promise.withResolvers<void>();
+    const roomFrame = typeof message === 'string' && parseProtocolMessage(message) !== null;
 
     this.lines.set(connection.id, placed);
 
@@ -96,7 +99,11 @@ class ClientSocketGate {
 
     const goneOn = Effect.flatMap(checked, ([refused]) => (refused
       ? Effect.sync(place)
-      : Effect.promise(async () => { await Promise.all([this.admittedMessage(connection, message, base), nextTask().then(place)]); })));
+      : Effect.promise(async () => {
+        const handled = this.admittedMessage(connection, message, base);
+
+        await Promise.all([handled, (roomFrame ? Promise.resolve() : nextTask()).then(place)]);
+      })));
 
     return settle(Effect.ensuring(goneOn, Effect.sync(() => {
       if (this.lines.get(connection.id) === placed) this.lines.delete(connection.id);
