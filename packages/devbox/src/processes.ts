@@ -218,8 +218,11 @@ export class Processes {
 
   incarnation(): Promise<string> {
     return settle(Effect.gen({ self: this }, function* () {
+      this.trace('incarnation.exec.enter', {});
       const read = yield* attempt('process', () => this.container.exec([...KERNEL_READ]));
+      this.trace('incarnation.exec.exit', {});
       const output = yield* attempt('process', () => read.output());
+      this.trace('incarnation.output.exit', { exitCode: output.exitCode });
       const kernel = new TextDecoder().decode(output.stdout).trim();
 
       if (output.exitCode !== 0 || kernel === '') return yield* Effect.fail(new DevboxError('process', 'native kernel identity could not be read'));
