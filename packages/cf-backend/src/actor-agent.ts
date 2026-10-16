@@ -106,7 +106,7 @@ import {
   BackgroundJobRunner, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
-  resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
+  resumeBackgroundJob, resumableBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   cancelCurrentWork, getStoredModelSpec,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
@@ -1956,7 +1956,7 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
       // decline and fall back to the eviction failure.
-      resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal),
+      resume: { resumes: resumableBackgroundJob, redrive: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal) },
       // Same predicate as `resume`: a kind that cannot be re-driven has no harvestable partial.
       harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
         { sql: this.boundSql, actor: this.actorHandle(), ledger: this.mctsSearchStore }, kind, input,

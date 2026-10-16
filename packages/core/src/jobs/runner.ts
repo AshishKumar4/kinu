@@ -14,14 +14,23 @@ import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../types/turn';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { classify, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
+import { attempt as attempted, classify, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
 import { silenceBoundMs } from '../platform-catalog';
 import { fmtSpan } from '../utils/format';
 import { executorLabel } from '../read-models/executors';
-import { Effect } from 'effect';
+import { programIntent } from '../tools/tool-call-summary';
+import { raceAbort } from '@kinu.run/agent-utils';
+import { Effect, Exit } from 'effect';
 
-/** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice. */
-const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
+/** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice, so a job a new activation finds
+ *  running was cut off by the restart, whatever the platform's reason. */
+const EVICTION_INTERRUPT_ERROR = 'the workspace restarted before it finished';
+
+/** Why a job its resumer cannot re-drive ends where it was cut off. */
+const NOT_RESUMABLE = 'this kind of work cannot pick up where it left off';
+
+/** What an attempt stopped by a cancel or a recovery is told; whoever stopped it decides the job. */
+const ATTEMPT_STOPPED = 'the job was stopped before its work ended';
 
 /** How long a detached job's context may go unheard before its work is given up as lost. */
 const JOB_SILENCE_MS = silenceBoundMs('job.context_silence_ms');
@@ -50,13 +59,13 @@ export class JobNotResumable extends Error {
   }
 }
 
-/** Re-drives an evicted job from its checkpoint; throw `JobNotResumable` to fall back to failing. */
-export type JobResumer = (
-  kind: string,
-  input: JsonValue,
-  mode: WorkMode,
-  signal: AbortSignal,
-) => Promise<JsonValue | undefined>;
+/** Re-drives an evicted job from its checkpoint. */
+export interface JobResumer {
+  /** Asked before anything is claimed: a job it cannot re-drive ends at once, with what it had produced. */
+  resumes(kind: string, input: JsonValue): boolean;
+  /** Throw `JobNotResumable` when the re-drive finds it cannot run after all: the job ends as one it cannot re-drive. */
+  redrive(kind: string, input: JsonValue, mode: WorkMode, signal: AbortSignal): Promise<JsonValue | undefined>;
+}
 
 /** Partial results for a job that will not be driven again; null for side-effecting kinds. */
 export type JobHarvester = (
@@ -173,10 +182,11 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
     }
   }
 
+  // A program is named by the intent its first line declares (the eval tool asks for one), never by its code.
   if (kind === 'eval') {
     const parsed = v.safeParse(ExecuteJobInputSchema, input);
 
-    if (parsed.success) return parsed.output.code.trim().slice(0, 80);
+    if (parsed.success) return programIntent(parsed.output.code) || 'A tool program';
   }
 
   return undefined;
@@ -538,16 +548,23 @@ export class BackgroundJobRunner {
       | { readonly kind: 'bounded'; readonly why: string };
 
     let outcome: Recorded;
+    const stopped = attempt.controller?.signal;
 
-    try { outcome = { kind: 'settled', result: await runWorkModeInvocation(job.workMode, exec) }; }
+    // Raced against its stop: a cancel or a recovery ends the attempt's hold on the job (its fiber, which keeps the
+    // object awake) whether or not its work ever answers, as a program awaiting what never settles does not.
+    try { outcome = { kind: 'settled', result: await runWorkModeInvocation(job.workMode, () => raceAbort(exec, stopped, ATTEMPT_STOPPED)) }; }
     catch (err) {
       outcome = err instanceof JobNotResumable
-        ? { kind: 'bounded', why: 'this kind cannot be re-driven from a durable checkpoint' }
+        ? { kind: 'bounded', why: NOT_RESUMABLE }
         : { kind: 'failed', error: renderThrownChain({ cause: err }) };
     }
 
     // Only its own: a re-drive that took the job over holds the controller now.
     if (attempt.controller !== null && this.controllers.get(jobId) === attempt.controller) this.release(jobId);
+
+    // Stopped by a cancel or a recovery before its work answered: whoever stopped it decides the job, and this attempt
+    // owes it no word.
+    if (outcome.kind !== 'settled' && stopped?.aborted === true) return;
 
     // Already cancelled: do not relabel the abort as a failure.
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
@@ -603,8 +620,7 @@ export class BackgroundJobRunner {
         + `what it had produced failed: ${harvested.error}`, now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable: ${why}`);
     } else if (harvested.value === null) {
-      settled = this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and it had `
-        + 'produced no partial result to hand back', now);
+      settled = this.deps.store.fail(jobId, epoch, `${interrupted}: ${why}, and it had produced nothing to keep`, now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty: ${why}`);
     } else {
       settled = this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
@@ -842,7 +858,10 @@ export class BackgroundJobRunner {
 
     if (this.deps.holder?.heldElsewhere(jobId) === true) return { state: 'held', job };
 
-    if (this.deps.resume) {
+    const resume = this.deps.resume;
+
+    // Asked before any claim, so a job that cannot be re-driven is never counted as re-driven: it ends now, at once.
+    if (resume !== undefined && await this.redrivable(resume, job)) {
       const now = Date.now();
 
       if (job.resumeAfter !== null && job.resumeAfter > now) {
@@ -858,14 +877,22 @@ export class BackgroundJobRunner {
       // Armed before the drive: an eviction during it cannot write the wait afterwards.
       this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.epoch - 1));
       this.deps.logActivity?.('bg_job_resume', `${job.kind} -> ${jobId} (attempt ${claim.epoch})`);
-      this.driveResume(job, this.deps.resume);
+      this.driveResume(job, resume);
 
       return { state: 'redriven', job };
     }
 
-    await this.settleBounded(jobId, job.epoch, 'its executor was lost and this kind cannot be re-driven');
+    await this.settleBounded(jobId, job.epoch, NOT_RESUMABLE);
 
     return { state: 'none' };
+  }
+
+  /** Whether `resume` re-drives `job`. One whose input cannot be read is tried, so its attempt fails with that read's
+   *  own error, as every unreadable row does. */
+  private async redrivable(resume: JobResumer, job: BackgroundJob): Promise<boolean> {
+    const input = await hold(attempted({ doing: "reading a background job's stored input", otherwise: 'io' }, async () => this.storedInput(job.id)));
+
+    return Exit.isFailure(input) || resume.resumes(job.kind, input.value);
   }
 
   /** Re-arm the wake on every sweep (the schedule row can be lost) and announce the deferral. */
@@ -888,7 +915,7 @@ export class BackgroundJobRunner {
   private driveResume(job: BackgroundJob, resume: JobResumer): void {
     const controller = new AbortController();
     this.drive(job.id, controller);
-    this.runToSettlement(job.id, job.kind, () => resume(job.kind, this.storedInput(job.id), job.workMode, controller.signal));
+    this.runToSettlement(job.id, job.kind, () => resume.redrive(job.kind, this.storedInput(job.id), job.workMode, controller.signal));
   }
 
   private storedInput(jobId: string): JsonValue {

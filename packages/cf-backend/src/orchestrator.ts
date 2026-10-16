@@ -36,7 +36,7 @@ import {
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
   type LoopOrigin, type NodeHomeHost,
   type TeamToolDeps, type WorkspaceActor, type WriteObserver,
-  actorStanding, isSubordinateOrigin,
+  actorEnded, actorStanding, isSubordinateOrigin,
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
@@ -725,7 +725,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (actorStanding(agent) !== 'retired') return agent;
 
-    return settleSync(Effect.fail(new KinuError('denied', `Agent ${agent.name} is retired and no longer acts in this workspace.`)));
+    return settleSync(Effect.fail(actorEnded('denied', 'retired', `Agent ${agent.name} is retired and no longer acts in this workspace.`)));
   }
 
   async agentCred(record: WorkspaceActor): Promise<VfsCred> {
@@ -1093,7 +1093,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       runSettled: async (run) => { this.runSettled(actorId, run); },
       hireAdvisor: async (advisor) => { await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor); },
-      standing: async () => this.workspaceActors().standing(actorId),
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
       birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({

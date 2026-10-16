@@ -59,7 +59,7 @@ const ADVISOR_REPLY = JSON.stringify({
 });
 
 describe('a background job whose executor died', () => {
-  test('the next activation re-drives it from its lane row, and takes the row', async () => {
+  test('the next activation takes its lane row, and ends at once a kind it cannot re-drive, never claiming it', async () => {
     const harness = orchestratorHarness();
     await harness.started;
     jobsOver(harness.db).create({
@@ -72,7 +72,7 @@ describe('a background job whose executor died', () => {
     await joinHarnessFibers();
 
     expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
-    expect(jobsOver(harness.db).get('bgjob-evicted')?.epoch).toBe(1);
+    expect(jobsOver(harness.db).get('bgjob-evicted')).toMatchObject({ status: 'failed', epoch: 0 });
   });
 
   /** A settled job's lane row is the only record that its wake never landed; the wake resolves when its turn ends. */

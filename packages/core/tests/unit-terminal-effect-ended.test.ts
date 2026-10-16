@@ -11,17 +11,20 @@ import { createRecordingLogger, createTestActors } from '@kinu.run/test-utils';
 import {
   initTerminalEffectTable, terminalEffect, TerminalEffectLedger, type OwedEffect, type TerminalEffectName,
 } from '../src/orchestrator/terminal-effects';
-import type { ActorStanding } from '../src/identity/workspace-actors';
+import { actorEnded, endedStandingOf, type ActorStanding } from '../src/identity/workspace-actors';
 import { initActorDdl } from '../src/identity/schema';
-import { KinuError, setDiagnosticsSink } from '../src/obs/index';
+import { KinuError, setDiagnosticsSink, toKinuError } from '../src/obs/index';
 import { makeExecRaw, makeSql } from './helpers';
 
 const NOW = 1_700_000_000_000;
 
-/** What the workspace answers a call it refuses for a retired agent, per effect. */
+/** What the workspace answers a call it refuses for a retired agent, per effect, as the effect's body passes it on. */
 const REFUSED: Readonly<Record<'turn_report' | 'auto_title', KinuError>> = {
-  turn_report: new KinuError('denied', 'Agent stand-one-question is retired and no longer acts in this workspace.'),
-  auto_title: new KinuError('missing', 'The actor identity is no longer present.'),
+  turn_report: toKinuError({
+    doing: 'relaying the turn report', otherwise: 'unavailable',
+    cause: actorEnded('denied', 'retired', 'Agent stand-one-question is retired and no longer acts in this workspace.'),
+  }),
+  auto_title: actorEnded('missing', 'retired', 'The actor identity is no longer present.'),
 };
 
 const OWED: readonly OwedEffect[] = [
@@ -33,7 +36,7 @@ const OWED: readonly OwedEffect[] = [
  * A ledger owing `turn_report` and `auto_title`, whose actor's standing is `standing()`. Each body runs `during` and
  * then throws the workspace's refusal for a retired agent.
  */
-function owing(standing: () => Promise<ActorStanding>, during: () => void = () => {}) {
+function owing(standing: (failure: { readonly cause: unknown }) => Promise<ActorStanding>, during: () => void = () => {}) {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
@@ -96,12 +99,21 @@ test('an agent retired while its effects ran: each refused effect stands down, e
   expect(rows()).toEqual([]);
 });
 
-test('an agent dismissed before its effects ran owes them to no one: none runs, each ends', async () => {
-  const { ledger, ran, rows } = owing(async () => 'retiring');
+test('an agent dismissed before its effects ran owes them to no one: each the workspace refuses ends, unfailed', async () => {
+  const asked: ActorStanding[] = [];
+
+  const { ledger, ran, rows } = owing(async () => {
+    asked.push('retiring');
+
+    return 'retiring';
+  });
+
   const { ended, failed } = await settled(ledger);
 
-  expect(ran).toEqual([]);
+  expect(ran.sort()).toEqual(['auto_title', 'turn_report']);
   expect(failed).toEqual([]);
+  // Asked of each refusal, never before the pass: a settled turn's close crosses to it for no effect that ran.
+  expect(asked).toHaveLength(2);
   expect(ended.map((fields) => [fields.effect, fields.standing])).toEqual([['v1:auto_title:m-1', 'retiring'], ['v1:turn_report', 'retiring']]);
   expect(rows()).toEqual([]);
 });
@@ -124,4 +136,16 @@ test('a standing that cannot be read is no sign the agent ended: its effects ans
   expect(ran.sort()).toEqual(['auto_title', 'turn_report']);
   expect(ended).toEqual([]);
   expect(failed).toHaveLength(2);
+});
+
+test("an agent's isolate reads the standing off the workspace's refusal, with no call to ask", async () => {
+  // As agent-chat's ledger reads it: the refusal says the agent ended, however the effect's body wrapped it.
+  const { ledger, ran, rows } = owing(async (failure) => endedStandingOf(failure) ?? 'live');
+  const { ended, failed } = await settled(ledger);
+
+  expect(ran.sort()).toEqual(['auto_title', 'turn_report']);
+  expect(failed).toEqual([]);
+  expect(ended.map((fields) => [fields.effect, fields.standing])).toEqual([['v1:auto_title:m-1', 'retired'], ['v1:turn_report', 'retired']]);
+  expect(rows()).toEqual([]);
+  expect(endedStandingOf({ cause: new KinuError('denied', 'Agent stand-one-question is not the hirer.') })).toBeNull();
 });

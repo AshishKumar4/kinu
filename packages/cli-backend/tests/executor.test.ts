@@ -106,6 +106,14 @@ sys.exit(0)
     expect(calls).toBe(1);
   });
 
+  // Production crafted-harbor-37f29697, 2026-10-16: `await agents` called `agents.then` as a member and never ended.
+  test('a program that awaits a namespace gets the namespace, never a wait on a member called `then`', async () => {
+    const agents = { name: 'agents', fns: { list: async () => ['helper'] } };
+
+    expect(await createSandboxedExecutor().execute('return await agents ? "awaited" : "never";', [agents])).toEqual({ result: 'awaited' });
+    expect(await createSandboxedExecutor().execute('const ns = await agents; return await ns.list();', [agents])).toEqual({ result: ['helper'] });
+  });
+
   test('refuses module metadata in the in-process function context before side effects', async () => {
     let calls = 0;
 

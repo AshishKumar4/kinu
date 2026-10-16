@@ -9,7 +9,7 @@ import {
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
-  refusedRun, turnAttemptOf,
+  refusedRun, turnAttemptOf, endedStandingOf,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
@@ -408,8 +408,9 @@ export class FacetChat {
       sql: actor.runtime.storage.sql,
       holds: this.deps.database.held,
       actor: actor.handle,
-      // Its identity is the workspace's: dismissed or retired there, what its turns owed stands down here.
-      standing: () => workspace.standing(),
+      // Its identity is the workspace's, which refuses what an ended agent's effects ask saying so: read off the
+      // refusal, with no call to ask (a settled turn's close crosses into the workspace a measured number of times).
+      standing: async (failure) => endedStandingOf(failure) ?? 'live',
       effects: {
         ...chatTerminalEffects({ chat: () => this.session, orchestrator: () => actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),
         ...actorTerminalEffects({

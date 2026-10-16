@@ -186,7 +186,10 @@ async function executeInProcess(
 
   for (const p of providers) {
     context[p.name] = new Proxy<ExecutorNamespace>({}, {
-      get: (_target, toolName: string) => {
+      get: (_target, toolName) => {
+        // Never a thenable: `await agents` would call `then` as a member and wait on an answer nothing gives.
+        if (typeof toolName !== 'string' || toolName === 'then') return undefined;
+
         // Forward every argument: host bridge calls are multi-arg.
         return async (...args: JsonValue[]) => {
           const fn = p.fns[toolName];
