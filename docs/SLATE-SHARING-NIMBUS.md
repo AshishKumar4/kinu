@@ -40,13 +40,27 @@ grant_revision TEXT CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))
 - A slate whose server needs the owner's connections either uses `owner` mode, or is shared as a fork so the owner's own slate keeps its authority.
 
 **`owner`, "my access".** The shared server acts with the owner's share grant, which is the base `ShareGrant` members bounded to the slate's reach.
-- Its effects wait for the owner's approval, showing the payload.
+- Its effects wait for the owner's approval, showing the payload. Each acting call by anyone but the owner parks on the owner's decision stack as that exact call (a `slate-effect` row in the workspace's deferred approvals, keyed by the call's text) and runs once on approval. A browser member the class runs is asked at its authorize call.
 - Every call is audited and the share stops at once.
-- The sheet lists the reach.
-- When the served revision is not `grant_revision`, owner-grant calls are refused until the owner approves again. An edit by the owner moves `grant_revision`; an edit by any other editor does not.
-- It is off for Gallery listings unless the owner accepts the stronger warning.
+- The sheet lists the reach: the `graph` op answers `SlateReach`, the graph plus the slate's `revision`.
+- When the served revision is not `grant_revision`, owner-grant calls are refused until the owner approves again. A build as the workspace root (the owner's edit) moves `grant_revision` and retires the effects asked at the old one; a build as anyone else does not.
+- It is set only from the owner's share sheet: `POST /api/shared/live/mode`, or `mode: 'owner'` with the reviewed `revision` on `POST /api/shared/live`. No slate op an agent makes turns it on.
+- It is never listed in the Gallery.
 
-**Existing state (H7), chosen at first share.** "Share as-is" shares the slate's durable app as it is. "Start the shared copy empty" forks the slate into the same workspace (code only, empty state, the fork path) and shares the fork. It is one path: no column, and no second store per share.
+**Gallery listing.** Only an `own` share is listed. The listing is the share's own row (schema review approved, 2026-10-16); the control plane's `gallery_listings` is its regenerable copy, refilled from these rows at each start of the workspace's slates:
+
+```sql
+listing_line TEXT,
+listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun')),
+CHECK ((listing_line IS NULL) = (listing_category IS NULL)),
+CHECK (listing_line IS NULL OR mode = 'own')
+```
+
+- Writer: `POST /api/shared/live/listing`, the owner's. Listing one share of a slate takes its others off.
+- Readers: `LiveShareRecord.gallery`, and the workspace's `GalleryListingSync` on list, unlist, revoke, each root build and each start.
+- A listed slate's Gallery page reads `needs` from its share when opened: the MCP servers and the model its slate reaches, which a visitor's own parts would ask them to connect.
+
+**Existing state (H7), chosen at first share.** "Share as-is" shares the slate's durable app as it is. "Start the shared copy empty" (`start: 'empty'` on `POST /api/shared/live`) commits and forks the slate into the same workspace (code only, empty state, the fork path), titles it "(shared copy)" and shares the fork. It is one path: no column, and no second store per share. A copy has run nothing, so it is shared on each viewer's own access with nothing approved.
 
 Viewer consents live in the viewer's `UserDO` (schema review approved):
 
@@ -133,7 +147,7 @@ The shared page learns nothing from a part's size, because it fixes the size.
 | H5: network | Confined `globalOutbound: null`; content frame `default-src 'none'`; slate host CSP as today |
 | H6: no withdrawal | A shown payload is a copy into shared state. Said in the prompt. |
 | H7: existing state | Chosen at first share: as-is, or a fork in the same workspace |
-| H8: Gallery and `owner` | Listings for `own` only, unless the stronger warning is accepted |
+| H8: Gallery and `owner` | Listings for `own` only, held by the share row's own CHECK |
 | H10: load | Measured before ship (§4) |
 | H11: owner's reach | Personal data never enters the shared app's storage, the owner's namespaces or the owner's records |
 | H12: attribution | Only `show(value, from)` carries a viewer, and Kinu sets it |
