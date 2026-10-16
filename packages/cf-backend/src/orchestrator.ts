@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
-import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -73,6 +73,7 @@ import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } f
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
+import type { PartViewer } from "./slates/part-runs";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
@@ -5804,6 +5805,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult> {
     return (await this.slates()).surfaceCall(caller, id, name, request);
+  }
+
+  async runSlatePart(viewer: PartViewer | null, slate: string, part: string, request: PartRunRequest): Promise<PartRunAnswer | null> {
+    return (await this.slates()).parts.run(viewer, slate, part, request);
+  }
+
+  async slatePartCall(slate: string, run: string, name: string, call: { readonly path: readonly string[]; readonly args: readonly JsonValue[] }): Promise<SlateSurfaceResult> {
+    return (await this.slates()).parts.call(slate, run, name, call);
+  }
+
+  async showSlatePart(viewer: PartViewer, slate: string, part: string, request: PartShowRequest): Promise<SlateCallResult> {
+    return (await this.slates()).parts.show(viewer, slate, part, request);
   }
 
   async callOperation(caller: OperationCaller, id: string, input: JsonValue, call: { readonly callId: string }): Promise<OperationResult> {

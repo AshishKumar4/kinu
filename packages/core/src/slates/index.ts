@@ -43,7 +43,7 @@ export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps
 
 export { GalleryIndex, initGalleryTables } from './gallery';
 
-export { codecIsFree, CodecSchema, UNDECLARED, type Codec } from './codec';
+export { codecAdmits, codecIsFree, CodecSchema, UNDECLARED, type Codec } from './codec';
 
 export {
   SHARE_MODES, GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,
@@ -51,7 +51,8 @@ export {
 } from './share-modes';
 
 export {
-  EffectDecisionSchema, PartActionSchema, PartDeclarationSchema, PartOutputSchema, PartRunRequestSchema, PartShowRequestSchema,
+  ConsentAskSchema, EffectAskSchema, EffectDecisionSchema, PartActionSchema, PartDeclarationSchema, PartOutputSchema, PartRunAnswerSchema,
+  PartRunRequestSchema, PartShowRequestSchema, SlateConsentsAnswerSchema, type SlateConsentsAnswer,
   slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartRunPath, slatePartShowPath,
   type ConsentAsk, type EffectAsk, type PartAction, type PartDeclaration, type PartOutput, type PartRunAnswer, type PartRunRequest,
   type PartShowRequest,
@@ -59,7 +60,9 @@ export {
 
 export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams } from './slate-ai';
 
+export { answer as slateAnswer } from './controller';
+
 export {
-  EffectApprovals, partCallVerdict, serverAuthority, slateRevision,
+  EffectApprovals, canonicalRoot, containedTool, partCallRoot, partCallVerdict, serverAuthority, slateRevision,
   type EffectCall, type LiveShareAuthority, type PartCall, type PartCallVerdict, type ServerAuthority,
 } from './share-policy';

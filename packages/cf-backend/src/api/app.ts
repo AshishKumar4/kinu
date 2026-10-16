@@ -21,6 +21,7 @@ import { deployRoutes } from '../deploy/routes';
 import { updatesRoutes } from '../updates/routes';
 import { sharedPublicRoutes, sharedRoutes } from '../shared/routes';
 import { galleryRoutes } from '../gallery/routes';
+import { partRoutes } from '../slates/part-routes';
 import { driveRoutes } from '../drive/routes';
 import { feedbackRoutes } from '../feedback/routes';
 import { clientErrorRoutes } from '../client-error/route';
@@ -93,6 +94,8 @@ mount(builtinAccountRoutes);
 mount(userRoutes);
 
 mount(sharedRoutes);
+
+mount(partRoutes);
 
 mount(driveRoutes);
 

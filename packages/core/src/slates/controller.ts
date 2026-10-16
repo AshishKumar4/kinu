@@ -97,11 +97,13 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
+  /** A live share of `slate` started or stopped: its server's authority changed, so its running app ends. */
+  shareChanged?(slate: string): Promise<void>;
   previewed?(slate: string): void;
 }
 
 /** `body`'s value, or its failure as the refusal `doing` names: a slate answer never fails. */
-function answer<Value>(doing: string, body: Effect.Effect<Value, KinuError>): Effect.Effect<SlateAnswer<Value>> {
+export function answer<Value>(doing: string, body: Effect.Effect<Value, KinuError>): Effect.Effect<SlateAnswer<Value>> {
   return Effect.catchCause(
     Effect.map(body, (value): SlateAnswer<Value> => ({ ok: true, value })),
     (failed) => Effect.map(refusing(doing, 'io')(failed), (refusal): SlateAnswer<Value> => ({ ok: false, ...refusal })),
@@ -405,6 +407,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
               fork: operation.fork, url: (handle) => this.ports.shareUrl(handle),
             });
 
+            await this.ports.shareChanged?.(operation.id);
+
             return await this.changedShares(answered({ value: created }));
           }
 
@@ -422,6 +426,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     const revoked = this.live.revoke(share);
 
     await this.processes.stopWhere((running) => running.caller.share === revoked.id);
+    await this.ports.shareChanged?.(revoked.slate);
 
     return projectJsonValue({ value: revoked });
   }

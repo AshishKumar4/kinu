@@ -2,12 +2,13 @@ import { exports } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateController, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateCallerKey, slateStorageCall,
-  type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
+  SlateController, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
+  ROOT_SLATE_CALLER, serverAuthority, shareCaller, slateRevision,
+  type LiveShareAuthority, type ServerAuthority, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
 } from '@kinu.run/core/slates';
 import {
   ingressAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
-  SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation,
+  SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, grantAdmits,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, publicPage, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
@@ -20,6 +21,7 @@ import { slateBatchStub } from './rpc-transport';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
 import { codemodeEgress } from '../codemode-egress';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
+import { PersonalParts, type PartConnections } from './part-runs';
 
 type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
 
@@ -56,6 +58,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerTitle?(): Promise<string>;
+  /** Each viewer's own account, where their personal parts' calls run (`part-runs.ts`); absent, no part runs. */
+  readonly partConnections?: PartConnections;
   ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
@@ -102,6 +106,8 @@ export class SlateHost {
   readonly controller: SlateController<SlateSource, ResidentSlateProcess>;
   private readonly resident: ResidentSlateProcesses;
   private readonly slateSources: SlateSources;
+  /** Each viewer's own parts of the slates this workspace shares (docs/SLATE-SHARING-NIMBUS.md §3). */
+  readonly parts: PersonalParts;
 
   constructor(private readonly deps: SlateHostDeps) {
     const sql = deps.ctx.storage.sql;
@@ -134,6 +140,7 @@ export class SlateHost {
       ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.sharesChanged !== undefined && { sharesChanged: deps.sharesChanged.bind(deps) }),
+      shareChanged: async (slate) => { await this.shareChanged(slate); },
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
     });
     this.resident = new ResidentSlateProcesses({
@@ -141,6 +148,12 @@ export class SlateHost {
     });
     this.slateSources = new SlateSources({
       project: (cred, id) => this.controller.project(cred, id), trees: (cred) => this.controller.slates(cred), host: deps,
+    });
+    this.parts = new PersonalParts({
+      workspace: deps.workspace, controller: this.controller, resident: this.resident, call: (request) => this.call(request),
+      ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
+      ...(deps.ownerTitle !== undefined && { ownerTitle: deps.ownerTitle.bind(deps) }),
+      ...(deps.partConnections !== undefined && { connections: deps.partConnections }),
     });
   }
 
@@ -201,10 +214,11 @@ export class SlateHost {
     if (admission instanceof Response) return admission;
 
     try {
-      const process = await this.ensure(admission.caller, admission.share.slate);
+      // A share's viewers use the slate itself: its durable app and its storage are the state everyone shares. What its
+      // calls may reach is the shares' to say (`sharedAuthority`), for every caller alike.
+      const process = await this.ensure(ROOT_SLATE_CALLER, admission.share.slate);
       const headers = new Headers(request.headers);
       headers.set('x-slate-call', admission.invocation);
-      // A share's process is private and portless, so the request goes to its handle.
       const target = new URL(request.url);
       target.pathname = pathname;
       const forwarded = reoriginateRequest(request, target.toString(), { headers, redirect: request.redirect });
@@ -213,7 +227,7 @@ export class SlateHost {
       if (response.status === 101) {
         this.invocations.set(admission.invocation, {
           id: admission.share.slate, chain: [], viewer: admission.viewer,
-          held: `${slateCallerKey(admission.caller)}#${admission.share.slate}`,
+          held: heldSlateKey(ROOT_SLATE_CALLER, admission.share.slate),
         });
       } else {
         this.invocations.delete(admission.invocation);
@@ -283,6 +297,27 @@ export class SlateHost {
       if (name === SLATE_STORAGE_BINDING) return slateStorageCall(this.controller.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
       const issued = issuedSlateInvocation({ invocations: this.invocations, id, invocation: parsed.output.invocation });
       const chain = issued?.chain ?? [];
+      // The slate's own server, shared: it acts as its shares allow now, whoever called it (the owner too).
+      const shared = caller.path.length === 0 && caller.share === undefined ? this.sharedAuthority(id) : ({ kind: 'owner' } satisfies ServerAuthority);
+
+      if (shared.kind === 'none') return { ok: false, ...refusalOf(await this.ownAccessRefusal(id)) };
+
+      if (shared.kind === 'grant') {
+        if (issued?.viewer !== undefined) {
+          const { viewer } = issued;
+
+          return await this.controller.viewers.call({
+            share: viewer.share, id, request: parsed.output, chain, issued,
+            run: (route, nested) => this.run(shareCaller(viewer.share), route, { nested, ...(parsed.output.authorize && { authorizeOnly: true }) }, viewer),
+          });
+        }
+
+        const bounded = routeSlateCall({ id, request: parsed.output, chain, hosted: false });
+
+        if (grantAdmits(shared.grant, id, bounded.address.namespace, bounded.address.member) === null) {
+          return { ok: false, ...refusalOf(new KinuError('denied', `Slate ${id} is shared with the owner's access, which does not reach ${bounded.address.namespace}.${bounded.address.member}`)) };
+        }
+      }
 
       // The share row is re-read now, so a revoked share refuses mid-flight.
       if (caller.share !== undefined) {
@@ -378,6 +413,38 @@ export class SlateHost {
     }
   }
 
+  /** What the slate's server acts with now (`serverAuthority`): its live shares, at its current revision. */
+  private sharedAuthority(id: string): ServerAuthority {
+    return serverAuthority(this.liveAuthorities(id), slateRevision(this.controller.builds, id) ?? '');
+  }
+
+  /**
+   * The slate's live shares as its server's authority reads them. Until the share row carries its mode, each acts as the
+   * base share path always did: with its owner's approved grant, at whatever revision runs.
+   */
+  private liveAuthorities(id: string): LiveShareAuthority[] {
+    const revision = slateRevision(this.controller.builds, id);
+
+    return this.controller.live.list().filter((share) => share.slate === id && share.revokedAt === null)
+      .map((share) => ({ mode: 'owner', grant: share.grant, grantRevision: revision }));
+  }
+
+  /** Why a call of a slate shared for each person's own access is refused, and what its owner can do about it. */
+  private async ownAccessRefusal(id: string): Promise<KinuError> {
+    const owner = (await this.deps.ownerTitle?.()) ?? 'Its owner';
+
+    return new KinuError('denied', `Slate ${id} is shared for each person's own access, so its server uses no one's connections. `
+      + `${owner} can turn on My access in its share sheet; each person's own data shows in their own parts.`);
+  }
+
+  /**
+   * A share of `id` started, stopped or changed mode: its durable app ends, and boots again on its next call with the
+   * network its shares now allow.
+   */
+  async shareChanged(id: string): Promise<void> {
+    await this.controller.processes.stopWhere((running) => running.id === id && running.caller.share === undefined && running.caller.path.length === 0);
+  }
+
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
     return (await this.controller.processes.booted(caller, id)).process;
   }
@@ -385,8 +452,11 @@ export class SlateHost {
   /** A process for `launch`: the slate's bindings as its caller, and its outbound mediated as that caller's eval is. */
   private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
     const { id, caller, source, image, app } = launch;
-    const actor = await this.deps.browserActor(caller);
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: caller.share === undefined });
+    // Shared, the slate's server drives no browser of the owner's: only one its own call opened (Kitesurf).
+    const unshared = caller.share === undefined && this.sharedAuthority(id).kind === 'owner';
+    const actor = unshared ? await this.deps.browserActor(caller) : null;
+    // Shared, it reaches the network as no one: its own preview hosts too.
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: unshared });
 
     if (caller.workMode === 'build' && globalOutbound === null) {
       throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
