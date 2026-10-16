@@ -7,7 +7,7 @@ import type { KinuPublicSession } from './session';
 import { ARMS, openWorkspace } from './target';
 import { prepareTrialAccount } from './slot';
 import { type EvalTarget } from './workspace-roster';
-import { taskTurns, type EvalTask, type EvalTurn } from './task';
+import { graded, taskTurns, type EvalTask, type EvalTurn } from './task';
 import { TrialTimeline } from './timeline';
 import { measure } from './transcript';
 
@@ -32,7 +32,7 @@ export async function runSegment(session: KinuPublicSession, task: EvalTask, rng
 
     for (let attempt = 0; ; attempt++) {
       const result = await runTurn(session, ask, timeline, hooks);
-      const failed = result.outcome.status === 'completed' ? result.checks.filter((check) => !check.pass).map((check) => check.id) : [result.outcome.status];
+      const failed = result.outcome.status === 'completed' ? result.checks.filter((check) => graded(check) && !check.pass).map((check) => check.id) : [result.outcome.status];
       replies += 1;
 
       if (rng.next() < THUMB_RATE) thumbs += await thumb(session, failed.length === 0);

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { failureRationale, type EvalRunOutput } from './task';
+import { createHash } from 'node:crypto';
+import { failureRationale, taskVersion, type EvalRunOutput, type EvalTask } from './task';
 
 const metrics = { modelTurns: 3, toolCalls: 2, toolErrors: 0, badInputCalls: 0, unknownToolCalls: 0, providerWaits: 0, providerWaitMs: 0 };
 
@@ -21,4 +22,18 @@ test('a run that stopped on a turn that did not complete names the turn and why,
   expect(failureRationale(run({ status: 'refused', message: 'could not read the chat history: 500' })))
     .toBe('failed: turn 2 refused: could not read the chat history: 500');
   expect(failureRationale(run({ status: 'completed' }, [{ id: 'board-reads-ledger', pass: false }]))).toBe('failed: board-reads-ledger');
+});
+
+test('a recorded check is never why a run failed', () => {
+  expect(failureRationale(run({ status: 'completed' }, [{ id: 'tower-in-frame', pass: false, graded: false }, { id: 'tower-of-five', pass: false }])))
+    .toBe('failed: tower-of-five');
+});
+
+test('a task\'s version counts the commands that prepared its executors, and a task with none keeps the version it had', () => {
+  const task: EvalTask = { id: 'versioned', mission: 'A workspace.', parts: [{ id: 'one', objectives: ['Answer.'], turns: [{ prompt: 'Answer.' }] }] };
+  const prepared = (command: string): EvalTask => ({ ...task, parts: [{ ...task.parts[0], turns: [{ prompt: 'Answer.', prepare: [{ executor: 'computer', command }] }] }] });
+
+  // The hash this task had before turns could prepare an executor: a task without one is not re-versioned.
+  expect(taskVersion(task)).toBe(createHash('sha256').update(JSON.stringify({ mission: 'A workspace.', turns: [{ seed: [], prompt: 'Answer.' }] })).digest('hex'));
+  expect(new Set([taskVersion(task), taskVersion(prepared('true')), taskVersion(prepared('false'))]).size).toBe(3);
 });

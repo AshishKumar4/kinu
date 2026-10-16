@@ -7,6 +7,7 @@ import { redactJson } from './redact';
 import type { Assertion, HarnessRun } from './results';
 import type { TimelineEntry } from './timeline';
 import { TimelineEntrySchema } from './timing';
+import { graded } from './task';
 
 export const EVIDENCE_FILES = ['ledger.jsonl', 'timeline.jsonl', 'transcript.md', 'results.json'] as const;
 
@@ -482,7 +483,7 @@ function recordStreamDrops(timeline: readonly Located<TimelineEntry>[], add: Rec
 
 function recordFailures(run: HarnessRun, lines: readonly string[], transcript: readonly string[], add: RecordFact): void {
   const outputAt = lines.findIndex((line) => line.trim() === '"output": {');
-  const first = run.output.turns.flatMap((turn) => turn.checks.filter((check) => !check.pass).map((check) => ({ turn: turn.turn, check }))).at(0);
+  const first = run.output.turns.flatMap((turn) => turn.checks.filter((check) => graded(check) && !check.pass).map((check) => ({ turn: turn.turn, check }))).at(0);
 
   if (first !== undefined) {
     const at = lineOf(lines, 'id', first.check.id, outputAt);

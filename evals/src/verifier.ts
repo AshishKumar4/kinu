@@ -263,6 +263,7 @@ export class EvalVerifier {
   readonly #startedAt: number;
   readonly #settled: () => Promise<void>;
   readonly #checks: EvalCheck[] = [];
+  readonly #recorded = new Set<string>();
   readonly #pending: Promise<void>[] = [];
 
   /** `settled` waits until the workspace has nothing left to do, as the harness waits out a turn. */
@@ -515,6 +516,12 @@ export class EvalVerifier {
     return { status: response.status, body: await response.text() };
   }
 
+  /** A check recorded with the trial that grades nothing: what its reader weighs beside the verdict. */
+  async record(id: string, body: () => Promise<EvalCheckOutcome>): Promise<void> {
+    this.#recorded.add(id);
+    await this.check(id, body);
+  }
+
   async collect(verify: (verifier: EvalVerifier) => Promise<void>): Promise<EvalCheck[]> {
     try {
       await verify(this);
@@ -528,7 +535,7 @@ export class EvalVerifier {
 
     await Promise.all(this.#pending);
 
-    return this.#checks.map((check) => ({ ...check }));
+    return this.#checks.map((check) => (this.#recorded.has(check.id) ? { ...check, graded: false } : { ...check }));
   }
 
   async #run(index: number, id: string, body: () => Promise<EvalCheckOutcome>): Promise<void> {

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
+import { graded } from './task';
 import { EvalVerifier, finishedWork, matchesReference, type SlateClient, type VerifierSession } from './verifier';
 
 const CallSchema = v.object({ method: v.string(), args: v.array(JsonValueSchema) });
@@ -306,4 +307,17 @@ describe('matchesReference', () => {
       pass: false, evidence: { call: 3, of: 3, method: 'total', input: null, answered: { total: 4 }, expected: { total: 6 } },
     });
   });
+});
+
+test('a recorded check keeps its outcome and evidence beside the graded ones, and grades nothing', async () => {
+  const checks = await new EvalVerifier(session({}), [], 0, settledAtOnce).collect(async (verifier) => {
+    await verifier.check('tower-of-five', () => Promise.resolve({ pass: true }));
+    await verifier.record('tower-in-frame', () => Promise.resolve({ pass: false, evidence: { verdict: false } }));
+  });
+
+  expect(checks).toEqual([
+    { id: 'tower-of-five', pass: true },
+    { id: 'tower-in-frame', pass: false, evidence: { verdict: false }, graded: false },
+  ]);
+  expect(checks.filter(graded).map((check) => check.id)).toEqual(['tower-of-five']);
 });
