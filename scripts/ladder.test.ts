@@ -432,6 +432,7 @@ describe('the ladder measures something', () => {
       'Live app in a browser: a slate that serves its own page, in its answer',
       'Live app in a browser: a wait on the provider',
       'Live app in a browser: the inspector column\'s layout',
+      'Live app in a browser: the owner hears a turn end, or a decision, only while away',
       'Live app in a browser: the root answers under the dev stack',
       'Product flows in a browser, on the deployment',
       'Production deploy contract',

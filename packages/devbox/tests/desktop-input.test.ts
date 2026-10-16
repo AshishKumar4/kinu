@@ -164,6 +164,20 @@ describe("an agent's desktop action on the box", () => {
     expect([input(), letUps()]).toEqual([['xdotool keydown w sleep 0.8 keyup w'], 1]);
   });
 
+  // scrot rings X's bell on every capture unless told not to, and the owner's desktop client plays each ring: an agent
+  // looking at the screen was a chime per look in the owner's tab (staging, 2026-10-15).
+  test('a look and every frame of a watch are captured silently, ringing no bell on the desktop', async () => {
+    const { box, runs } = await desktopBox();
+
+    await box.desktop(look('main'));
+    await box.desktop({ driver: 'main', action: { kind: 'watch', seconds: 1, frames: 2 } });
+
+    const captures = runs.filter((run) => run.argv[3] === 'devbox-screenshot' || run.argv[3] === 'devbox-watch').map((run) => run.argv[2] ?? '');
+
+    expect(captures).toHaveLength(2);
+    expect(captures.filter((program) => /scrot['", ]+-z/u.test(program))).toEqual(captures);
+  });
+
   test('a screenshot is the PNG the box captured, byte for byte, with the size its header names', async () => {
     const { box } = await desktopBox();
 

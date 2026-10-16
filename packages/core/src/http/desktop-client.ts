@@ -2,7 +2,8 @@
 export const DESKTOP_CLIENT_ROOT = '/kasmvnc/';
 
 /** The client, opening its socket on the gated desktop route of the page's origin. The query outranks any
- *  setting the client has stored. */
+ *  setting the client has stored. Its bell is off: a ring on the desktop plays nothing in the owner's tab, where
+ *  Kinu's own alerts are the only sounds (use-owner-alerts.ts). */
 export function desktopClientUrl(at: Pick<URL, 'protocol' | 'hostname' | 'port'>, workspace: string): string {
   const secure = at.protocol === 'https:';
 
@@ -14,6 +15,7 @@ export function desktopClientUrl(at: Pick<URL, 'protocol' | 'hostname' | 'port'>
     autoconnect: '1',
     resize: 'scale',
     enable_webrtc: '0',
+    bell: 'off',
   });
 
   return `${DESKTOP_CLIENT_ROOT}vnc.html?${query.toString()}`;

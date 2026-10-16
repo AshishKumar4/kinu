@@ -58,6 +58,15 @@ w, h = image.width // cols, image.height // rows
 print(len({image.crop((c * w, r * h, (c + 1) * w, (r + 1) * h)).tobytes() for r in range(rows) for c in range(cols)}))
 `;
 
+/** On the box, a ring of X's bell, as a program on the desktop rings it (an xterm's BEL, a capture by scrot without
+ *  -z), waited on until the server has it. */
+export const RING_PY = `import ctypes
+x = ctypes.cdll.LoadLibrary('libX11.so.6')
+x.XOpenDisplay.restype = ctypes.c_void_p
+display = ctypes.c_void_p(x.XOpenDisplay(b':0'))
+x.XBell(display, 0)
+x.XSync(display, 0)`;
+
 /** On the box, the X server's own answer to what is down: its keys' keycodes (XQueryKeymap) and its pointer's buttons
  *  (XQueryPointer's mask), as `keys … buttons …`; read only. */
 export const DOWN_PY = `import ctypes

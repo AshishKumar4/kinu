@@ -1,14 +1,17 @@
 /**
  * Settings → Appearance: the account's theme, which the server names on every page it serves this account, and this
- * device's mode. Each theme is offered as a swatch drawn in its own tokens, in the mode the page is in. The section's
- * own header titles it, so the card carries no header of its own.
+ * device's mode and alerts (use-owner-alerts.ts). Each theme is offered as a swatch drawn in its own tokens, in the mode
+ * the page is in. The section's own header titles it, so the card carries no header of its own.
  */
 import { useState } from "react";
+import { Button } from "@cloudflare/kumo";
 import { Effect } from "effect";
 import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import { Field } from "@/components/ui/form";
+import { Switch } from "@/components/ui/Switch";
+import { setAlertSound, useAlertSound } from "@/hooks/use-owner-alerts";
 import { setMode, useTheme, wearTheme, type ThemeMode } from "@/hooks/use-theme";
 import { setAccountTheme } from "../../lib/user-api";
 
@@ -40,6 +43,37 @@ function Swatch({ theme, mode }: { theme: ThemeName; mode: ThemeMode }) {
         </span>
       </span>
     </span>
+  );
+}
+
+/** The browser's word on notifications for this site, asked for once the owner presses Allow. */
+function NotificationsField() {
+  const [permission, setPermission] = useState(() => ("Notification" in window ? Notification.permission : null));
+
+  if (permission === null) return null;
+
+  const hint = { default: "Shown at the same moments, once this browser allows them.", granted: "On in this browser.", denied: "Blocked in this browser's settings for this site." }[permission];
+
+  return (
+    <Field label="Notifications" hint={hint} inline>
+      {permission === "default" && (
+        <Button size="sm" variant="secondary" data-alerts-allow
+          onClick={() => detach(Effect.map(Effect.promise(() => Notification.requestPermission()), setPermission))}>Allow</Button>
+      )}
+    </Field>
+  );
+}
+
+function AlertFields() {
+  const sound = useAlertSound();
+
+  return (
+    <>
+      <Field label="Sound" hint="A soft chime when a turn finishes or something waits on you, while Kinu is in the background. On this device." inline>
+        <Switch on={sound} onChange={setAlertSound} label="Sound" data-alerts-sound />
+      </Field>
+      <NotificationsField />
+    </>
   );
 }
 
@@ -91,6 +125,7 @@ export function AppearanceCard() {
             ))}
           </div>
         </Field>
+        <AlertFields />
       </div>
     </section>
   );

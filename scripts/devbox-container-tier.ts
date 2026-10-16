@@ -26,7 +26,7 @@ import { endedNearSilence } from './row-verdicts';
 import { withTestChrome } from './test-chrome';
 import { contextSignedInAt } from '../evals/src/browser';
 import { DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
-import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
+import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, RING_PY, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 import { REPO_ROOT as REPO } from './repo-root';
 
 
@@ -138,6 +138,9 @@ const RESURRECT_READ_MS = 500;
 
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
+
+/** The ground a bell's ring is followed by: no colour the desktop draws, so seeing it is seeing what came after. */
+const RUNG = '#ff00ff';
 
 const Json = v.looseObject({ error: v.optional(v.string()) });
 
@@ -623,6 +626,27 @@ async function main(): Promise<void> {
                 + `and the panel ${DESKTOP_COLOURS.panel}`);
             }
 
+            // A ring of the desktop's bell plays nothing in the owner's tab: Kinu's own alerts are its only sounds
+            // (use-owner-alerts.ts), and the client chimed on every ring, an agent's every look among them (staging,
+            // 2026-10-15). The ground repainted after the ring is the client's proof it has the ring: RFB keeps the
+            // server's messages in order, and the client plays its bell (its own `noVNC_bell`) as it reads one.
+            waiting = 'a ring of the desktop\'s bell, then the ground it was followed by';
+            await frame.evaluate(() => {
+              const bell = document.getElementById('noVNC_bell');
+
+              if (!(bell instanceof HTMLMediaElement)) throw new Error('the desktop client has no bell element to count');
+              bell.dataset.rings = '0';
+              bell.play = async () => { bell.dataset.rings = String(Number(bell.dataset.rings) + 1); };
+            });
+            await shell(`DISPLAY=:0 python3 -c ${shellQuote(RING_PY)} && DISPLAY=:0 xsetroot -solid '${RUNG}'`, fresh);
+
+            for (let rung = await screen(); !near(rung?.desktop, RUNG); rung = await screen()) {
+              reading = JSON.stringify(rung);
+              await delay(250);
+            }
+
+            requireEqual(await frame.evaluate(() => document.getElementById('noVNC_bell')?.dataset.rings), '0');
+
             const rect = seen.rect;
 
             const opened = async (launcher: keyof typeof DESKTOP_PANEL.launchers, windowClass: string) => {
@@ -644,7 +668,7 @@ async function main(): Promise<void> {
 
             requireEqual(elsewhere, 'connect-src');
 
-            return 'a fresh box\'s desktop opened on its background and panel; the panel\'s clicks opened a terminal and a browser; foreign sockets refused';
+            return 'a fresh box\'s desktop opened on its background and panel; a ring of its bell played nothing; the panel\'s clicks opened a terminal and a browser; foreign sockets refused';
           })();
 
           return endedNearSilence(watched, async () => { await browser.disconnect(); },
