@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { parseSync, type Argument, type ArrayExpressionElement, type CallExpression, type Directive, type Expression, type Statement } from 'oxc-parser';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
-import { DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
+import { CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
 import type { EvalCheck, EvalPart, PrepareCommand } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 
@@ -19,7 +19,8 @@ const PROFILE = `${EVAL}/minecraft`;
 
 const BASE = `${EVAL}/baseline`;
 
-const POLICY = '/etc/chromium/policies/managed/eval-minecraft.json';
+/** The benchmark's own policy file, beside the box's (`BOX_CHROMIUM_POLICY`, the trust); no key is in both. */
+const POLICY = `${CHROMIUM_POLICIES}/eval-minecraft.json`;
 
 /** The keys the game reads (its bindings: walk, jump, crouch, a block by its number, the block menu, render distance,
  *  respawn, inventory, the pointer's release, chat), each as the desktop spells it. Nothing else reaches the box. */
@@ -31,7 +32,7 @@ const KEY_ALIASES = new Map([['esc', 'escape'], ['enter', 'return'], ['shift_l',
 /** The desktop's own members: looking, the pointer, the keys and the wheel. `type` is one, and is refused here. */
 const DESKTOP_MEMBERS = ['screenshot', 'watch', 'click', 'type', 'key', 'scroll', 'move', 'drag'] as const;
 
-/** The policy the game's browser starts under, beside the box's own file there (it holds the trust; no key is shared). */
+/** The policy the game's browser starts under. */
 const BROWSER_POLICY = {
   DeveloperToolsAvailability: 2,
   RemoteDebuggingAllowed: false,
@@ -117,7 +118,7 @@ const LOCKDOWN = `set -eu
 export DISPLAY=:0
 rc=$(tr '\\0' '\\n' < /proc/$(pgrep -o -x openbox)/cmdline | sed -n '/^--config-file$/{n;p}')
 panel=$(tr '\\0' '\\n' < /proc/$(pgrep -o -x tint2)/cmdline | sed -n '/^-c$/{n;p}')
-mkdir -p ${PROFILE} ${BASE}
+mkdir -p ${PROFILE} ${BASE} ${CHROMIUM_POLICIES}
 chmod 700 ${EVAL}
 cat > ${POLICY} <<'JSON'
 ${JSON.stringify(BROWSER_POLICY, null, 2)}
@@ -144,7 +145,7 @@ browser=$(pgrep -o -x chromium)
 ps -eo comm= | sort -u > ${BASE}/comms
 echo "$browser" > ${BASE}/browser-pid
 tr '\\0' ' ' < /proc/$browser/cmdline > ${BASE}/browser-cmdline
-sha256sum /etc/chromium/policies/managed/*.json "$rc" "$panel" /etc/chromium.d/devbox /usr/bin/xdotool > ${BASE}/lockdown.sha256
+sha256sum ${CHROMIUM_POLICIES}/*.json "$rc" "$panel" /etc/chromium.d/devbox /usr/bin/xdotool > ${BASE}/lockdown.sha256
 stat -c '%a %n' /usr/bin/xterm > ${BASE}/modes
 touch ${BASE}/marker
 `;
@@ -155,8 +156,14 @@ export const MINECRAFT_PREPARE: readonly PrepareCommand[] = [
   { executor: 'computer', command: LOCKDOWN },
 ];
 
-/** Files the box itself writes as it serves the desktop: its log, its disk tracking, and the trust bundle it renews. */
-const BOX_WRITES = [DESKTOP_LOG, '/var/tmp/devbox/', '/etc/ssl/certs/ca-certificates.crt', '/root/.config/chromium/Crash Reports/'];
+/** Files the box itself writes as it serves the desktop: its log, its disk tracking and the tool cache that tracking runs
+ *  from (an honest staging trial's, 2026-10-16), the trust bundle it renews, and Chromium's crash reports. */
+const BOX_WRITES = [
+  DESKTOP_LOG, '/var/tmp/devbox/', '/root/.bun/install/cache/', '/etc/ssl/certs/ca-certificates.crt', '/root/.config/chromium/Crash Reports/',
+];
+
+/** The box's own daemons, which it starts when it first needs them: the mounts its sandbox serves files through. */
+const BOX_DAEMONS = ['s3fs', 'devbox-squashfuse', 'squashfuse', 'fuse-overlayfs'];
 
 /** What ran and changed on the box since it was locked down, read while the game still runs. */
 const AUDIT_LIVE = String.raw`import hashlib, json, os, subprocess
@@ -193,7 +200,7 @@ found = processes()
 # A session the box itself execs has no parent in the container (its parent is 0, and it is not init): the platform's
 # checkpoints, the product's desktop actions, this audit. What the desktop starts descends from init or the desktop.
 exec_sessions = {pid for pid, row in found.items() if row['ppid'] == 0 and pid != 1}
-known = set(open(f'{BASE}/comms').read().split())
+known = set(open(f'{BASE}/comms').read().split()) | set(${JSON.stringify(BOX_DAEMONS)})
 browser = int(open(f'{BASE}/browser-pid').read())
 foreign = [
     {'pid': pid, **row} for pid, row in sorted(found.items())
