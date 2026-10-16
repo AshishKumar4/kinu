@@ -717,7 +717,8 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
         requireEqual(await shell(`python3 -c ${shellQuote(policyNamesCa)}`, name), 'exact');
         await shell(`rm -rf /tmp/kinu-trust && (DISPLAY=:0 setsid chromium --remote-debugging-port=${String(port)} --user-data-dir=/tmp/kinu-trust --disable-quic --new-window about:blank `
           + `>/tmp/kinu-trust.log 2>&1 </dev/null &) && timeout 60 sh -c 'until curl -sf http://127.0.0.1:${String(port)}/json/version >/dev/null; do sleep 0.2; done'`, name);
-        const read = await shell(`PORT=${String(port)} timeout 150 python3 -c ${shellQuote(SITE_TRUST_PY)} ${TRUSTED_SITES.map(([url]) => url).join(' ')}; pkill -f remote-debugging-port=${String(port)}; true`, name);
+        // The pattern's bracket keeps pkill from matching the shell that runs it, whose command line names the port too.
+        const read = await shell(`PORT=${String(port)} timeout 150 python3 -c ${shellQuote(SITE_TRUST_PY)} ${TRUSTED_SITES.map(([url]) => url).join(' ')}; pkill -f 'remote-debugging-por[t]=${String(port)}'; true`, name);
         const seen = read.split('\n').map((line) => v.parse(Seen, JSON.parse(line)));
 
         for (const [at, [url, title]] of TRUSTED_SITES.entries()) {
