@@ -1171,6 +1171,7 @@ const PUBLIC_API = [
   '/api/health', // the build stamp
   '/api/shared/blueprint/', // a signed blueprint id
   '/api/workspaces/:name/webhook/', // a signed delivery URL
+  '/api/gallery', // read by anyone; a star or report reads its session itself
 ];
 
 describe('worker wiring', () => {
