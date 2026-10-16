@@ -1256,20 +1256,48 @@ export interface LiveMemoryVerdict {
 
 const MEMORY_SECTION = `document.querySelector('#inspector [data-section="memory"]')?.textContent ?? ''`;
 
+/** The inspector's tools strip as it stands: the current tool, and the Agent button the page holds now. */
+const TOOLS_NOW = `[...document.querySelectorAll('#inspector nav[aria-label="Workspace"] button[aria-current="true"]')].map((tool) => tool.getAttribute('aria-label'))`;
+
 /**
- * The Agent tab shown with its memory section: its strip button pressed until the tab is the current one, as a press
- * on a strip being redrawn is lost, and a tab drawn without the section fails at once, naming what it drew instead.
- * Staging a907148d8 waited 366 s here in silence; the section was there on the same build a run later.
+ * One press on the Agent tab, as a person gives it, read back once it has rendered (two frames): whether the tab took
+ * it, the tools current then, and whether the button pressed is still the strip's or was replaced by a redraw.
  */
-const AGENT_MEMORY_SHOWN = `(() => {
+const PRESS_AGENT = `(async () => {
   const tab = document.querySelector('#inspector button[aria-label="Agent"]');
   if (tab === null) throw new Error('no Agent tab in the inspector strip');
-  if (tab.getAttribute('aria-current') !== 'true') { tab.click(); return false; }
+  tab.click();
+  await new Promise((done) => { requestAnimationFrame(() => { requestAnimationFrame(done); }); });
+  const now = document.querySelector('#inspector button[aria-label="Agent"]');
+  return { took: now?.getAttribute('aria-current') === 'true', current: ${TOOLS_NOW}, replaced: now !== tab };
+})()`;
+
+const PressSchema = v.object({ took: v.boolean(), current: v.array(v.nullable(v.string())), replaced: v.boolean() });
+
+/**
+ * The memory section on the Agent tab, failing at once, named, if the tab draws without it or stops being current.
+ * Staging a907148d8 waited 366 s here in silence; on the same build a run later the section drew at once.
+ */
+const AGENT_MEMORY_SHOWN = `(() => {
+  const current = ${TOOLS_NOW};
+  if (!current.includes('Agent')) throw new Error('the Agent tab stopped being current; current: ' + (current.join(', ') || 'none'));
   const sections = [...document.querySelectorAll('#inspector [data-section]')].map((section) => section.getAttribute('data-section'));
   if (!sections.includes('agent-who')) return false;
   if (!sections.includes('memory')) throw new Error('the Agent tab drew without its memory section; it drew ' + (sections.join(', ') || 'no section'));
   return true;
 })()`;
+
+/** The Agent tab pressed once, as a person presses it: a press the strip drops fails here, named, and is not retried. */
+async function openAgentTab(page: Page): Promise<void> {
+  // A page behind another gets no frames, and the press is read back after two.
+  await page.bringToFront();
+  const press = v.parse(PressSchema, await page.evaluate(PRESS_AGENT));
+
+  if (!press.took) {
+    throw new Error(`the Agent tab did not take its press: current ${JSON.stringify(press.current)}, `
+      + `${press.replaced ? 'the button pressed was replaced by a redraw' : 'the button pressed is still the strip\'s'}`);
+  }
+}
 
 /**
  * One tab's turn saves a memory note while another holds the Agent tab open: the open pane shows the note without a
@@ -1284,6 +1312,7 @@ export async function openMemoryFollowsItsWriter(target: FlowTarget): Promise<Li
     const watcher = await openWorkspacePage(target, path);
 
     await openInspector(watcher);
+    await openAgentTab(watcher);
     await until(watcher, "the Agent tab's memory section", AGENT_MEMORY_SHOWN);
     const counter = await countRpc(watcher);
     const reads = () => counter.counts().sent.getMemoryContent ?? 0;
