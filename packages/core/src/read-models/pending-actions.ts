@@ -183,7 +183,8 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       id: 'change-approvals',
       kind: 'change_approval',
       title: approvals === 1 ? 'A skill the agent wrote waits for your approval' : `${String(approvals)} skills the agent wrote wait for your approval`,
-      detail: 'Approve or decline in the Agent tab.',
+      // Where it is decided is the row's own link, so it says no more.
+      detail: null,
       at: latestAt,
     });
   }

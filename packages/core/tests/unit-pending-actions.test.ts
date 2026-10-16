@@ -180,7 +180,7 @@ describe('what the inspector opens for on its own', () => {
 
     const note: PendingAction = {
       id: 'change-approvals', kind: 'change_approval', title: 'A skill the agent wrote waits for your approval',
-      detail: 'Approve or decline in the Agent tab.', at: 1790199280964,
+      detail: null, at: 1790199280964,
     };
 
     for (const kind of ['change_approval', 'scaffold_version'] as const) {

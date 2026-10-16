@@ -5569,7 +5569,7 @@ const PENDING_ACTIONS: PendingAction[] = [
   {
     id: "change-approvals", kind: "change_approval", at: NOW - 10e5,
     title: "A skill the agent wrote waits for your approval",
-    detail: "Approve or decline in the Agent tab.",
+    detail: null,
   },
 ];
 
