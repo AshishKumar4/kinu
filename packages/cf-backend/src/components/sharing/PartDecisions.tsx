@@ -41,7 +41,7 @@ export function ConsentDecision({ slate, ask, changed, onAllow, onClose }: {
   onAllow: () => void;
   onClose: () => void;
 }) {
-  const server = serverWords(ask.server);
+  const server = serverWords(ask);
 
   return (
     <Modal title={changed ? `${slate} changed since you allowed it` : `Let ${slate} use your ${server}?`} icon={<PlugIcon size={18} className="p-accent" />} onClose={onClose}
@@ -70,9 +70,9 @@ export function ApprovalDecision({ slate, ask, onApprove, onDecline }: {
   onDecline: () => void;
 }) {
   return (
-    <Modal title={`${slate} wants to ${ask.tool}`} icon={<WarningCircleIcon size={18} className="p-warning" />} onClose={onDecline}
+    <Modal title={`${slate} wants to make a change`} icon={<WarningCircleIcon size={18} className="p-warning" />} onClose={onDecline}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="secondary" data-approval-decline onClick={onDecline}>Decline</Button><FilledButton data-approval-approve onClick={onApprove}>Approve once</FilledButton></div>}>
-      <p className="p-row-text p-text-2">On your {serverWords(ask.server)}, within {rootWords(ask.root)}, with:</p>
+      <p className="p-row-text p-text-2"><strong data-approval-tool className="font-medium p-text">{ask.toolTitle ?? ask.tool}</strong> on your {serverWords(ask)}, within {rootWords(ask.root)}, with:</p>
       <Payload data-approval-payload value={ask.payload} />
       <p className="p-meta p-text-3">Only this change, with exactly this. It asks again for any other.</p>
     </Modal>

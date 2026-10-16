@@ -28,8 +28,8 @@ const { workspace: WORKSPACE, slate: SLATE, title: TITLE, revision: REVISION } =
 
 /** What each part asks of the viewer's grants, at this revision. */
 const ASKS = {
-  github: { server: "mcp.github", root: { org: "acme" }, tools: ["list_pull_requests"], effects: false, revision: REVISION },
-  vercel: { server: "mcp.vercel", root: { project: "site" }, tools: ["deploy"], effects: true, revision: REVISION },
+  github: { server: "mcp.github", serverTitle: "GitHub", root: { org: "acme" }, tools: ["list_pull_requests"], effects: false, revision: REVISION },
+  vercel: { server: "mcp.vercel", serverTitle: "Vercel", root: { project: "site" }, tools: ["deploy"], effects: true, revision: REVISION },
 };
 
 const { github: GITHUB, vercel: VERCEL } = ASKS;
@@ -74,7 +74,7 @@ export function installPartsFixture(frame: string): void {
 
       if (approval !== null && approved.has(approval)) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed site to production.</p>`, actions: [], show: null };
 
-      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, tool: "deploy", root: VERCEL.root, payload: { project: "site", target: "production", ref: "main" } } };
+      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref: "main" } } };
     }
 
     return { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." };
@@ -175,7 +175,7 @@ export function partFrameEntry(search: URLSearchParams): string {
 const STATES: readonly { name: string; answer: PartRunAnswer }[] = [
   { name: "Asks to use a connection", answer: { kind: "needs-consent", ask: GITHUB } },
   { name: "Shown, with its own controls", answer: { kind: "shown", revision: REVISION, html: STANDUP.html, actions: [{ id: "refresh", label: "Refresh" }], show: STANDUP.show } },
-  { name: "An effect waits for approval", answer: { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, tool: "deploy", root: VERCEL.root, payload: { project: "site", target: "production" } } } },
+  { name: "An effect waits for approval", answer: { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production" } } } },
   { name: "Signed out", answer: { kind: "stub", reason: "signed-out", message: "Sign in to see your own part of Team board." } },
   { name: "Not shared with this person", answer: { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." } },
   { name: "Its run failed", answer: { kind: "failed", message: "GitHub didn't answer in time. Your token is fine; try again." } },

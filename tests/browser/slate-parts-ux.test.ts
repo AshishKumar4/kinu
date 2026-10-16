@@ -64,6 +64,8 @@ describe("a slate's personal parts", () => {
           // top gives it, not by the id in its own address.
           expect(await stateOf(standup)).toBe('needs-consent');
           expect(await standup.$eval('[data-part-needs="consent"]', (node) => node.textContent ?? '')).toContain('Team board');
+          // The connection by the title the viewer's account gives it.
+          expect(await standup.$eval('[data-part-needs="consent"]', (node) => node.textContent ?? '')).toContain('GitHub connection');
           await standup.click('[data-part-needs="consent"] button');
           await page.waitForSelector('[data-consent-allow]', SOON);
           expect(await page.$('[data-consent-changed]')).not.toBeNull();
@@ -97,6 +99,7 @@ describe("a slate's personal parts", () => {
           await deploy.click('[data-part-needs="approval"] button');
           await page.waitForSelector('[data-approval-approve]', SOON);
           expect(JSON.parse(await page.$eval('[data-approval-payload]', (node) => node.textContent ?? 'null'))).toEqual({ project: 'site', target: 'production', ref: 'main' });
+          expect(await page.$eval('[data-approval-tool]', (node) => node.textContent)).toBe('Create deployment');
           await noDecisionIn(deploy);
           await page.click('[data-approval-approve]');
           await reaches(deploy, 'shown');
