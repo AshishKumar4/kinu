@@ -1,6 +1,6 @@
 /**
  * The Gallery's index: one listing per listed slate, written only by that slate's room, with stars and reports. A
- * listing is its slate's link, the one way in, so it grants nothing (`Confinement.lean`: `a_listing_never_mints`), and
+ * listing is its slate's link, the one way in, so it grants nothing, and
  * the room takes it down the moment its link goes off.
  */
 import * as v from 'valibot';

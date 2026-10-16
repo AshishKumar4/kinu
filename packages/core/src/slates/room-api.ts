@@ -1,13 +1,11 @@
 /**
- * A slate room's client API: what the live page, the share sheet, a part frame, the Drive and the Gallery read and call.
+ * Client contracts used by the live page, share sheet, part frame, Drive and Gallery.
  * Client-safe: valibot and nothing of the runtime.
  *
- * Every slate runs in its room (`SlateRoom`, one per slate), which is the one caretaker of who may do what with it
- * (docs/SLATE-SHARING-SECURITY.md; the model is `lean/Kinu/Sharing/Model.lean`). A person's page holds one socket to the
- * room. The room pushes that session's whole {@link RoomView} after every change that touches it; a call answers only
- * whether it was done, and the next view carries its effect. Nothing polls.
+ * Slates run as Nimbus apps in their owner's workspace (docs/SLATE-SHARING-NIMBUS.md). The policy model is
+ * `lean/Kinu/SharingNimbus/Model.lean`; these presentation contracts are not evidence about host isolation or routing.
  *
- * Words: the room gives facts (a service's title, a tool's title, a scope, whether a call changes anything); the UI writes
+ * Words: the host gives facts (a service's title, a tool's title, a scope, whether a call changes anything); the UI writes
  * the sentences around them.
  */
 import * as v from 'valibot';
