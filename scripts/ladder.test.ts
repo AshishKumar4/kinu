@@ -1408,6 +1408,23 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(reportCIVerdicts({ sha, part: 'all', rows }, 'armada verdict', '')).toBe(false);
   });
 
+  // A part's command names the files its run's timings cut it, which the deploy's own cut need not repeat.
+  test('the deploy reports a CI row by the name armada graded it by, and its command as the command', () => {
+    const report = scratchDir('ci-verdict-names');
+    const unit = ciUnits().find((each) => each.gate.phase === 'hammer')?.gate;
+
+    if (unit === undefined) throw new Error('the hammer has no CI unit');
+    const run = `${unit.run.split(' ').slice(0, 3).join(' ')} a-file-this-cut-names.test.ts`;
+
+    reportCIVerdicts({ sha, part: 'all', rows: [{ name: unit.label, run, exitCode: 1, seconds: 2, output: 'a real failure' }] }, 'armada verdict', report);
+
+    const entries = readFileSync(join(report, 'entries.jsonl'), 'utf8').split('\n').filter((line) => line !== '')
+      .map((line) => v.parse(v.looseObject({ kind: v.string(), what: v.string(), command: v.optional(v.string()) }), JSON.parse(line)));
+
+    expect(entries.filter((entry) => entry.kind !== 'notice').map(({ kind, what, command }) => ({ kind, what, command })))
+      .toEqual([{ kind: 'timing', what: unit.label, command: run }, { kind: 'red', what: unit.label, command: run }]);
+  });
+
   test('CI runs the hammer six times, each run in parts that cover the suite once, and leaves no CI source work in the deploy', () => {
     const hammer = ciUnits().filter((unit) => unit.gate.phase === 'hammer').map((unit) => unit.gate.run.split(' '));
     const suite = claims(LADDER.find((gate) => gate.label === HAMMER_ROW_LABEL)?.run ?? '', tracked);
