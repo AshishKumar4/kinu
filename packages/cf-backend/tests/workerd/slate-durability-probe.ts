@@ -713,6 +713,17 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     };
   }
 
+  /** A collaborator's own AI: Alice's call reaches her account's model, never Sam's, once she allows it. */
+  async ownAi(): Promise<{ alice: string; aliceCalls: number; samCalls: number }> {
+    const { at, people, room } = await this.stage('own-ai');
+    const alice = await personSocket(this.env, at, people.alice);
+    const saw = await this.allowed(room, alice, { email: people.alice, fn: 'ask', args: ['what changed?'] });
+
+    return {
+      alice: saw, aliceCalls: SlateDurabilityProbeRoot.count(people.alice, 'ai.run'), samCalls: SlateDurabilityProbeRoot.count(people.sam, 'ai.run'),
+    };
+  }
+
   /** Attack 3, the requester check: Alice's own GitHub, allowed for her part, never runs for Bob's request. */
   async attackRequester(): Promise<{ alice: string; bob: string; aliceCallsForBob: number }> {
     const { at, people, room } = await this.stage('requester');

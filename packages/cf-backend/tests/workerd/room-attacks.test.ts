@@ -65,3 +65,8 @@ it('6. a run runs the image it was admitted at: an editor\'s publish before its 
 it('a listing the Gallery lost comes back from the deploy\'s walk, which reaches its room', async () => {
   expect(await probe().listingRefill()).toEqual({ listed: true, lost: true, refilled: true });
 });
+
+it('a collaborator\'s own AI answers their call, in their own account: the owner\'s model is never asked', async () => {
+  // Twice in Alice's account: the room runs her call once she allows her AI, and she asks again to read its answer.
+  expect(await probe().ownAi()).toEqual({ alice: 'value "alice-own-ai@probe.local\'s own model"', aliceCalls: 2, samCalls: 0 });
+});

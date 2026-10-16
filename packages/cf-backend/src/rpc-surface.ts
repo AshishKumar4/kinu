@@ -173,6 +173,7 @@ const USER_DO_METHODS = [
   'transferDeviceRequestToBackgroundJob',
   'userMcp_add',
   'userMcp_callTool',
+  'slateAi',
   'userMcp_cancelCall',
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',

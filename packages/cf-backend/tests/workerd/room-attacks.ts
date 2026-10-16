@@ -5,7 +5,8 @@
  * logged, so each attack is judged by what reached whose account, and what each person was shown.
  */
 import * as v from 'valibot';
-import { RoomServerFrameSchema, type JsonObject, type JsonValue, type RoomView, type UserCaller } from '@kinu.run/core';
+import { RoomServerFrameSchema, type JsonObject, type JsonValue, type RoomView, type SlateSurfaceValue, type UserCaller } from '@kinu.run/core';
+import type { SlateAiRoute } from '@kinu.run/core/slates';
 import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
 import { UserDO as ProductionUserDO } from '../../src/user/user-do';
 import type { McpToolCall, McpToolSurface } from '../../src/user/mcp-servers';
@@ -85,6 +86,16 @@ export class UserDO extends ProductionUserDO {
         ...(tool.readOnly && { readOnly: true as const }), ...(tool.preset !== undefined && { presetId: tool.preset }),
       })),
     };
+  }
+
+  /** A faked person's own AI: the call is logged against their account, and answered as their model would. */
+  override async slateAi(caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
+    const faked = personas.get(this.name);
+
+    if (faked === undefined) return await super.slateAi(caller, request);
+    reached.push({ account: faked.email, tool: 'ai.run', args: { prompt: request.route.prompt } });
+
+    return { text: `${faked.email}'s own model`, model: 'fake/own', tier: 'fast', usage: {} };
   }
 
   override async userMcp_callTool(caller: UserCaller, call: McpToolCall): Promise<string> {
@@ -192,6 +203,8 @@ export const ATTACK_SLATE = [
   // Reads a repository into the room's public state (`this.storage`, the room's cells), which everyone reads.
   '  async copy(repo) { const read = await prs(this.env, repo); await this.storage.put("board", read); return "copied"; }',
   '  async board() { return (await this.storage.get("board")) ?? null; }',
+  // A model call: whose AI answers it is the room's to say.
+  '  async ask(prompt) { return (await this.env.workspace.ai.run({ prompt })).text; }',
   // Which image's code ran: each image says its own, and reads GitHub saying it too.
   '  async which() { await this.env.workspace.mcp.GitHub.list_pull_requests({ owner: "acme", repo: "board", note: MARK }); return MARK; }',
   // The slate's own SQL: a note written, and the notes counted. The table is the class's schema, made as it starts.

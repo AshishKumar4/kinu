@@ -91,8 +91,7 @@ import {
   type RunEventRecorder,
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
-  normalizeUsage, priceCall, type Usage,
-  generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
+  priceCall, type Usage,
   WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
@@ -178,6 +177,7 @@ import { BROWSER_PRELUDE } from './browser-prelude';
 import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
+import { slateAiAnswer } from '@kinu.run/core/slates';
 import { OwnedModelServices } from "./owned-model-services";
 import { AgentStoreBroker } from "./agent-facets";
 import type { AgentFacetCalls } from "./agent-facet/agent-facet";
@@ -2555,43 +2555,8 @@ export abstract class ActorAgent extends Agent<Env> {
       throw cause;
     }
 
-    const spec = profile.tier.model;
-    const model = this.ownedModelServices.resolveModel(spec);
-    const input: GenerateRequest = { model, prompt: route.prompt };
-
-    if (route.system !== undefined) input.system = route.system;
-
-    if (route.stream === true) return this.slateAiStream({ model, prompt: route.prompt, ...(route.system !== undefined && { system: route.system }) }, spec);
-
-    const answer = await generateReported(input, {
-      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-      spec,
-    });
-
-    const usage = normalizeUsage(answer.usage);
-
-    return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
-  }
-
-  /**
-   * `ai.stream`: the answer's text as UTF-8 bytes, each written as the model writes it, which the slate's class reads as
-   * text. Its spend is filed once the stream drains, as any streamed call's is; a reader that stops early ends the call.
-   */
-  private slateAiStream(request: StreamRequest, spec: string): ReadableStream<Uint8Array> {
-    const chunks = streamTextReported(request, {
-      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations }, spec,
-    });
-
-    const encoder = new TextEncoder();
-
-    return new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const next = await chunks.next();
-
-        if (next.done === true) controller.close();
-        else controller.enqueue(encoder.encode(next.value));
-      },
-      async cancel() { await chunks.return(undefined); },
+    return slateAiAnswer(route, { spec: profile.tier.model, tier: profile.tier.id }, {
+      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.reportModelCall(report); }, operations: this.modelOperations,
     });
   }
 

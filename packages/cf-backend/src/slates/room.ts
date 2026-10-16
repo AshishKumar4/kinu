@@ -17,7 +17,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
   censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
-  JsonValueSchema, McpToolSurfaceSchema, ownerCaller, roomFramePath, roomPagePath, roomPartPath, sha256Hex, slateCallAddress,
+  JsonValueSchema, McpToolSurfaceSchema, ownerCaller, roomFramePath, roomPagePath, roomPartPath, routeSlateCall, sha256Hex, slateCallAddress,
   RoomClientFrameSchema,
   type JsonValue, type OpsCaller, type PartView, type Repair, type RoomAccess, type RoomAudience, type RoomCall,
   type RoomPerson, type RoomServerFrame, type RoomView, type SheetView,
@@ -1379,7 +1379,21 @@ export class SlateRoom extends DurableObject<Env> {
         });
       }
 
-      if (!grant.server.startsWith('mcp.')) return yield* refuse('unsupported', `Only the slate's owner lends ${grant.server}; a person's own connections in a room are MCP servers`);
+      // A collaborator's own AI: their account answers it, with their tier, their key and their spend.
+      if (grant.server === 'ai') {
+        const call = yield* attempt({ doing: 'reading the AI call', otherwise: 'bad_input' },
+          async () => routeSlateCall({ id: room.slate, request: { path: [...path], args: [...args], invocation: null }, chain: [] }));
+
+        if (call.route.kind !== 'ai') return yield* refuse('bad_input', `${path.join('.')} is not an AI call`);
+        const { route } = call;
+        const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, grant.holder));
+        const caller = yield* attempt({ doing: 'reaching the account', otherwise: 'unavailable' }, async () => ownerCaller(this.env));
+        const stub = this.userObject(account);
+
+        return attempt({ doing: `${grant.holder}'s own AI for the slate`, otherwise: 'unavailable' }, async () => stub.slateAi(caller, { workspace: room.workspace, route }));
+      }
+
+      if (!grant.server.startsWith('mcp.')) return yield* refuse('unsupported', `Only the slate's owner lends ${grant.server}; a person's own connections in a room are MCP servers or AI`);
       const tool = path.at(-1) ?? '';
       const descriptor = (yield* this.mcpDescriptor(grant.holder, grant.server, tool)) ?? (yield* refuse('missing', `${grant.holder}'s ${grant.server.slice(4)} offers no ${tool}`));
       const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, grant.holder));

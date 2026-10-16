@@ -55,6 +55,8 @@ export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
 
 export { codecIsFree, CodecSchema, UNDECLARED, type Codec } from './room/codec';
 
+export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams } from './slate-ai';
+
 export { toolTerms, joinTerms, type GrantTerms } from './room/terms';
 
 export { partKey, partFn, rootOf, callArgument, type Need } from './room/calls';

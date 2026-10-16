@@ -48,6 +48,9 @@ import {
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
+import { accountSlateAi } from './slate-ai-account';
+import type { SlateAiRoute } from '@kinu.run/core/slates';
+import type { SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
@@ -200,6 +203,18 @@ export class UserDO extends Agent<Env> {
 
   getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
     return this.profile.getProfileCatalog(caller);
+  }
+
+  /**
+   * A slate's `workspace.ai` call for this account's own AI grant in a room it was added to: run with this account's
+   * own catalog, credentials and spend (`slate-ai-account.ts`), never the slate owner's.
+   */
+  async slateAi(caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
+    await this.requireTier(caller, 'credentials.model');
+
+    return accountSlateAi({
+      env: this.env, accountId: this.name, catalog: (asker) => this.profile.getProfileCatalog(asker), credentialsRevision: (asker) => this.credentials.getCredentialsRevision(asker),
+    }, caller, request);
   }
 
   getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
