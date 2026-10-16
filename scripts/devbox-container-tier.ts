@@ -732,7 +732,9 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
           if (!(seen[at]?.title ?? '').includes(title)) throw new Error(`${url} read ${JSON.stringify(seen[at]?.title)} on the ${start} start`);
           // The person's own browser, its profile and QUIC as they are: the site's title in its window, and a shot of it.
-          await shell(`(DISPLAY=:0 setsid chromium ${url} >/dev/null 2>&1 </dev/null &) && timeout 60 sh -c 'until DISPLAY=:0 xdotool search --onlyvisible --name ${shellQuote(title)} >/dev/null; do sleep 0.3; done' && sleep 2`, name);
+          const titled = `until DISPLAY=:0 xdotool search --onlyvisible --name ${shellQuote(title)} >/dev/null; do sleep 0.3; done`;
+
+          await shell(`(DISPLAY=:0 setsid chromium ${url} >/dev/null 2>&1 </dev/null &) && timeout 60 sh -c ${shellQuote(titled)} && sleep 2`, name);
           writeFileSync(join(shots, `${start}-${new URL(url).hostname}.png`), Buffer.from(await shell('DISPLAY=:0 scrot -z -o /tmp/kinu-trust.png && base64 -w0 /tmp/kinu-trust.png', name), 'base64'));
         }
 
