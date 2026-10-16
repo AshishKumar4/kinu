@@ -7,8 +7,8 @@ import * as v from "valibot";
 import Sidebar from "@/components/Sidebar";
 import {
   addSkill, APP_ROUTES, deleteDriveEntry, listDrive, makeDriveFolder, markAsSkill, mossaicVfs, packDriveFolder, receiveDriveUpload,
-  renameDriveEntry, SKILL_FOLDER_FILE, type DriveLibrary, type DriveUploadTarget,
-  type MossaicVfs,
+  renameDriveEntry, SKILL_FOLDER_FILE, type DriveUploadTarget,
+  type MossaicVfs, type SharedLibrary,
 } from "@kinu.run/core";
 import { Effect } from "effect";
 import { detach, KinuError, renderThrownChain, showing, type ErrorCode } from "@kinu.run/core/obs";
@@ -173,6 +173,7 @@ async function serveDrive(drive: MossaicVfs, request: Request): Promise<Response
 
 const NOW = Date.now();
 
+const DESCRIPTION = "Reads the open issues of a repository, groups them by area, and writes a triage note every morning.";
 
 /** A capture's digest; the gallery serves no pictures, so a browser test answers these. */
 const SLATE_PICTURES = {
@@ -180,31 +181,23 @@ const SLATE_PICTURES = {
   lighthouse: "a9b8c7d6e5f4031928374655647382910abcdef0123456789abcdef012345678",
 } as const;
 
-const SAM = { email: "sam@example.com", name: "Sam Rivera" };
-
-const LIBRARY: DriveLibrary = {
+const LIBRARY: SharedLibrary = {
   slates: [
-    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", audience: "anyone", picture: SLATE_PICTURES["issue-triage"] },
-    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", audience: "people", picture: SLATE_PICTURES.lighthouse },
-    { id: "standup", title: "Standup notes", workspace: "email-triage", audience: "only-you" },
+    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", visibility: "public", picture: SLATE_PICTURES["issue-triage"] },
+    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", picture: SLATE_PICTURES.lighthouse },
+    { id: "standup", title: "Standup notes", workspace: "email-triage" },
   ],
-  // Oldest first, as the account's rows arrive: the Drive shows the newest first.
-  shared: [
-    { workspace: "sam-mail", slate: "deploy-board", title: "Deploy status board", owner: SAM, relation: "shared", role: "edit", at: NOW - 864e5, url: "/s/sam-mail/deploy-board" },
-    { workspace: "sam-mail", slate: "inbox-digest", title: "Inbox digest", owner: SAM, relation: "shared", role: "use", at: NOW - 2 * 3600e3, unseen: true, url: "/s/sam-mail/inbox-digest" },
+  mine: [
+    { id: "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha", kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 3 * 864e5, workspace: "checkout-fixes", users: ["pat@example.com"] },
+    { id: "live-board-1", kind: "live", share: "live-board-1", slate: "issue-triage", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, visibility: "users", workspace: "checkout-fixes", users: ["sam@example.com", "lee@example.com"], fork: true },
   ],
-  used: [
-    { workspace: "lee-ops", slate: "on-call", title: "On-call rota", owner: { email: "lee@example.com", name: "Lee Park" }, relation: "used", at: NOW - 3 * 864e5, url: "/s/lee-ops/on-call?k=r7t2" },
-  ],
-  starred: [
-    {
-      workspace: "ana-home", slate: "recipe-scaler", title: "Recipe scaler", line: "Scale any recipe, in grams.", category: "home", owner: { name: "Ana Souza" },
-      stars: 412, starred: true, listedAt: NOW - 9 * 864e5, needs: [], featured: false, url: "/s/ana-home/recipe-scaler?k=g3w8",
-    },
+  received: [
+    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true, unseen: true },
+    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 864e5, workspace: "sam-mail", owner: "sam@example.com" },
   ],
 };
 
-const EMPTY_LIBRARY: DriveLibrary = { slates: [], shared: [], used: [], starred: [] };
+const EMPTY_LIBRARY: SharedLibrary = { slates: [], mine: [], received: [] };
 
 const FIXTURES = {
   drive: { seeded: true, library: LIBRARY },
@@ -213,8 +206,8 @@ const FIXTURES = {
   app: { seeded: true, library: LIBRARY },
   "drive-empty": { seeded: false, library: EMPTY_LIBRARY },
   "drive-wide": { seeded: "wide", library: LIBRARY },
-  "drive-recipient": { seeded: false, library: { ...EMPTY_LIBRARY, shared: LIBRARY.shared } },
-} satisfies Record<string, { seeded: boolean | "wide"; library: DriveLibrary }>;
+  "drive-recipient": { seeded: false, library: { ...EMPTY_LIBRARY, received: LIBRARY.received } },
+} satisfies Record<string, { seeded: boolean | "wide"; library: SharedLibrary }>;
 
 /**
  * An upload as the page sends it, through XMLHttpRequest for its progress, answered by the page's own fetch as every
@@ -264,10 +257,8 @@ export function installDriveFixture(frame: string): void {
   const held = new URLSearchParams(location.search).get("libraryHold") === "1" ? Promise.withResolvers<void>() : null;
 
   Object.assign(window, { __releaseLibrary: () => held?.resolve() });
-  // Opening Shared sees what it holds, as the account's stamp does; leaving takes a slate off it.
+  // Opening Shared sees what it holds, as the account's stamp does.
   let seen = false;
-  const left = new Set<string>();
-  const kept = <Row extends { workspace: string; slate: string }>(rows: readonly Row[]) => rows.filter((row) => !left.has(`${row.workspace}/${row.slate}`));
 
   window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -276,19 +267,9 @@ export function installDriveFixture(frame: string): void {
     if (path === "/api/drive" || path.startsWith("/api/drive/")) return drive.then((tenant) => serveDrive(tenant, request));
 
     if (path === "/api/shared" && request.method === "GET") {
-      const shared = kept(seen ? fixture.library.shared.map(({ unseen: _, ...row }) => row) : fixture.library.shared);
+      const received = seen ? fixture.library.received.map(({ unseen: _, ...row }) => row) : fixture.library.received;
 
-      return (held?.promise ?? Promise.resolve()).then(() => Response.json({ ...fixture.library, shared, used: kept(fixture.library.used) }));
-    }
-
-    if (path === "/api/shared/leave" && request.method === "POST") {
-      return request.json().then((body) => {
-        const room = v.parse(v.object({ workspace: v.string(), slate: v.string() }), body);
-
-        left.add(`${room.workspace}/${room.slate}`);
-
-        return Response.json({ left: true });
-      });
+      return (held?.promise ?? Promise.resolve()).then(() => Response.json({ ...fixture.library, received }));
     }
 
     if (path === "/api/shared/seen" && request.method === "POST") {

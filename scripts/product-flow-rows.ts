@@ -4,7 +4,7 @@ import * as v from 'valibot';
 const ProductFlowRow = v.picklist([
   'welcome', 'first-answer', 'agent-return', 'agent-plan', 'workspace-proposal', 'account-memory', 'stack-memory',
   'splice', 'approval-stack', 'hire-approval', 'panel', 'stamped', 'written-file', 'changes-storm', 'live-memory',
-  'slate-preview', 'drive', 'drive-opens', 'slate-opens', 'pin', 'titled-chat', 'hire-home',
+  'slate-preview', 'drive', 'drive-opens', 'slate-opens', 'slate-share', 'pin', 'titled-chat', 'hire-home',
   'slate-reach', 'plan-comment', 'desktop-resize', 'desktop-switch', 'reopen', 'computer-sessions', 'agent-job',
 ]);
 

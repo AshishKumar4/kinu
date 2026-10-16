@@ -17,7 +17,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
-import { hereForking, signInAndReturn } from "@/hooks/use-room-frames";
+import { hereForking, signInAndReturn } from "@/lib/sign-in";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { readGallery, readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
 import { linkKeyOf } from "@/lib/room-client";
