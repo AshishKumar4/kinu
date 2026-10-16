@@ -49,6 +49,19 @@ export function serverAuthority(shares: readonly LiveShareAuthority[], revision:
   return { kind: 'grant', grant: { slates: first?.slates ?? [], members, fork: false } };
 }
 
+/** The root a part's call is consented for: a GitHub call's repository, nothing for any other. */
+export function partCallRoot(server: string, args: JsonValue): Record<string, string> {
+  if (!server.startsWith('mcp.') || args === null || typeof args !== 'object' || Array.isArray(args)) return {};
+  const { owner, repo } = args;
+
+  return typeof owner === 'string' && typeof repo === 'string' ? { owner, repo } : {};
+}
+
+/** A root as the consent row keys it: its entries in key order. */
+export function canonicalRoot(root: Readonly<Record<string, string>>): string {
+  return JSON.stringify(Object.fromEntries(Object.entries(root).sort(([a], [b]) => a.localeCompare(b))));
+}
+
 /** One call a personal part's run makes with its viewer's connection. */
 export interface PartCall {
   readonly server: string;
@@ -64,7 +77,7 @@ export type PartCallVerdict =
   | { readonly kind: 'needs-approval' };
 
 function sameRoot(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
-  return stableStringify(a) === stableStringify(b);
+  return canonicalRoot(a) === canonicalRoot(b);
 }
 
 /**
