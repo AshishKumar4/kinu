@@ -3902,27 +3902,26 @@ export function armadaRowVerdicts(rows: readonly Gate[], graded: ArmadaReport | 
   });
 }
 
-/** CI's exact-SHA rows stay visible in the deploy's report, each by the name armada graded it by (`rowName`); a red is
- *  imported as red and never run until green. */
+/** CI's exact-SHA rows stay visible in the deploy's report, each by the name armada graded it by; a red is imported as
+ *  red and never run until green. A row armada wrote for a task that ended before its verdict names no command, and
+ *  its CI run is what reproduces it. */
 export function reportCIVerdicts(file: CIVerdictFile, url: string, report: string): boolean {
   let green = true;
 
   for (const row of file.rows) {
-    const what = row.name ?? row.run;
-
-    if (report !== '') recordTiming(report, { phase: 'ci', what, command: row.run, seconds: row.seconds });
+    if (report !== '') recordTiming(report, { phase: 'ci', what: row.name, command: row.run, seconds: row.seconds });
 
     if (row.exitCode === 0) {
-      console.log('CI proved ' + row.run + ' on ' + file.sha + ' (' + url + ')');
+      console.log('CI proved ' + row.name + ' on ' + file.sha + ' (' + url + ')');
       continue;
     }
 
     green = false;
-    console.error('CI RED ' + row.run + ' — ' + url);
+    console.error('CI RED ' + row.name + ' — ' + url);
 
     if (report !== '') recordRed(report, {
-      phase: 'ci', what, command: row.run, verdict: 'CI exit ' + String(row.exitCode),
-      finding: 'CI proved this row red on ' + file.sha + ': ' + url, reproduce: row.run, output: row.output,
+      phase: 'ci', what: row.name, command: row.run, verdict: 'CI exit ' + String(row.exitCode),
+      finding: 'CI proved this row red on ' + file.sha + ': ' + url, reproduce: row.run ?? 'node_modules/.bin/armada run ' + file.sha, output: row.output,
     });
   }
 
@@ -4505,7 +4504,7 @@ if (import.meta.main) {
     const { seconds } = outcome;
 
     if (verdictPath !== undefined) {
-      ciRows.push({ name: gate.label, ...ciVerdictRow(gate, { ...outcome, seconds }, readFileTimings(timingPath), evidence) });
+      ciRows.push(ciVerdictRow(gate, { ...outcome, seconds }, readFileTimings(timingPath), evidence));
       writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: ciRows });
     }
 

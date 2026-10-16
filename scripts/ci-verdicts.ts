@@ -12,10 +12,10 @@ import * as v from 'valibot';
 const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/u));
 
 const RowSchema = v.object({
-  /** The name armada grades and times the row by (its `rowName`, else the command): a ladder row's label, which outlasts
-   *  the files its command names. */
-  name: v.optional(v.string()),
-  run: v.string(), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
+  /** The name armada grades and times the row by: a ladder row's label, which outlasts the files its command names. */
+  name: v.string(),
+  /** The row's command, which armada's own row for a task that ended before its verdict does not know. */
+  run: v.optional(v.string()), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
   timings: v.optional(v.record(v.string(), v.number())),
   /** The revision whose run this unchanged row reuses. */
   cached: v.optional(v.string()),
@@ -32,9 +32,9 @@ export interface Evidence {
 }
 
 /** One copier for deploy rows and eval trials: the exact files copied are the row's declared artifacts. */
-export function ciVerdictRow(gate: { readonly run: string; readonly evidence?: string }, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
+export function ciVerdictRow(gate: { readonly label: string; readonly run?: string; readonly evidence?: string }, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
   const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
-  const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
+  const row: CIVerdict = { name: gate.label, run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
 
   if (evidence === undefined || gate.evidence === undefined || !existsSync(evidence.dir)) return row;
   const into = join(evidence.artifacts, gate.evidence);

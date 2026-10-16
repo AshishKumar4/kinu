@@ -1378,8 +1378,8 @@ describe('a tier runs its gates as a wave', () => {
 
 describe('CI verdicts belong to the exact pushed revision and the complete row plan', () => {
   const sha = 'a'.repeat(40);
-  const first = { run: 'bun test a.test.ts', exitCode: 0, seconds: 1, output: '' };
-  const second = { run: 'bun test b.test.ts', exitCode: 1, seconds: 2, output: 'a real failure' };
+  const first = { name: 'a', run: 'bun test a.test.ts', exitCode: 0, seconds: 1, output: '' };
+  const second = { name: 'b', run: 'bun test b.test.ts', exitCode: 1, seconds: 2, output: 'a real failure' };
   const rows = [first, second];
 
   // armada graded the plan's every row before it stored the verdict; the ladder reads it through Kinu's pinned armada.
@@ -1402,7 +1402,7 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
   test('a missing or red hammer run never verifies the revision', () => {
     const hammer = ciUnits().find((unit) => unit.gate.phase === 'hammer')?.gate.run ?? '';
-    const proved = ciUnits().map((unit) => ({ run: unit.gate.run, exitCode: unit.gate.run === hammer ? 1 : 0, seconds: 1, output: '' }));
+    const proved = ciUnits().map((unit) => ({ name: unit.gate.label, run: unit.gate.run, exitCode: unit.gate.run === hammer ? 1 : 0, seconds: 1, output: '' }));
 
     expect(reportCIVerdicts({ sha, part: 'all', rows: proved }, 'armada verdict', '')).toBe(false);
     expect(reportCIVerdicts({ sha, part: 'all', rows }, 'armada verdict', '')).toBe(false);
@@ -1423,6 +1423,29 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
     expect(entries.filter((entry) => entry.kind !== 'notice').map(({ kind, what, command }) => ({ kind, what, command })))
       .toEqual([{ kind: 'timing', what: unit.label, command: run }, { kind: 'red', what: unit.label, command: run }]);
+  });
+
+  // armada's own row for a task that ended before its verdict (`underExit`) has the planned name and no command.
+  test('a CI row armada wrote for a task that ended before its verdict is read, and reported red by its name', () => {
+    const directory = scratchDir('armada-verdict-unreported');
+    const bin = join(directory, 'node_modules', '.bin');
+    const label = ciUnits()[0]?.gate.label ?? '';
+    const said = { sha, part: 'all', rows: [{ name: label, exitCode: 124, seconds: 1800, output: 'the task exited 124 and reported no row' }] };
+
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'armada'), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(said)}'\nexit 1\n`, { mode: 0o755 });
+    const file = armadaVerdict(directory, sha);
+
+    if (file === null) throw new Error('armada answered no verdict');
+    const report = scratchDir('ci-verdict-unreported');
+    const green = reportCIVerdicts(file, 'armada verdict', report);
+
+    const red = readFileSync(join(report, 'entries.jsonl'), 'utf8').split('\n').filter((line) => line !== '')
+      .map((line) => v.parse(v.looseObject({ kind: v.string(), what: v.string(), command: v.optional(v.string()), reproduce: v.optional(v.string()) }), JSON.parse(line)))
+      .find((entry) => entry.kind === 'red');
+
+    expect({ green, red: red === undefined ? undefined : { what: red.what, command: red.command, reproduce: red.reproduce } })
+      .toEqual({ green: false, red: { what: label, command: undefined, reproduce: `node_modules/.bin/armada run ${sha}` } });
   });
 
   test('CI runs the hammer six times, each run in parts that cover the suite once, and leaves no CI source work in the deploy', () => {
@@ -1460,7 +1483,7 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
     expect(live?.row.rssMb).toBe(2048);
     expect(live?.row.threads).toBe(1);
-    expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'armada verdict', '')).toBe(false);
+    expect(reportCIVerdicts({ sha, part: 'all', rows: [{ name: 'Product flows', run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'armada verdict', '')).toBe(false);
   });
 
   // 2026-10-16: armada keeps a row's timing under the name the plan gives it. Named by their commands, each change's
