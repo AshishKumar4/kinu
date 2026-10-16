@@ -61,14 +61,14 @@ describe('parallel armada evaluations', () => {
     const items = evalItems(files, full, ORIGINS, false);
     const queues = evalWidthQueues(items, tasks);
 
-    expect(items).toHaveLength(70);
+    expect(items).toHaveLength(80);
     expect(queues.map(({ calls, pool }) => ({ calls, pool }))).toEqual([
       { calls: 1, pool: 9 }, { calls: 2, pool: 1 }, { calls: 3, pool: 1 }, { calls: 6, pool: 1 },
     ]);
     expect(queues.reduce((sum, queue) => sum + queue.pool, 0)).toBe(12);
     expect(queues.reduce((sum, queue) => sum + queue.pool * queue.calls, 0)).toBeLessThanOrEqual(MUSE_CALLS_AT_ONCE);
     expect(queues.flatMap(({ cells }) => cells.map(({ index }) => index)).sort((a, b) => a - b))
-      .toEqual(Array.from({ length: 70 }, (_, index) => index));
+      .toEqual(Array.from({ length: 80 }, (_, index) => index));
 
     for (const queue of queues) {
       expect(new Set(queue.cells.map(({ item }) => item.leg))).toEqual(new Set(['candidate', 'baseline']));
