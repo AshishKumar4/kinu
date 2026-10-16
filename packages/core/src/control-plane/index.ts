@@ -82,3 +82,8 @@ export {
   settleFleet,
   type FleetEnv,
 } from './fleet-alerts';
+
+// The Gallery's index lives in the control plane's database: its object imports it here, not through the slates barrel.
+export { GalleryIndex } from '../slates/gallery';
+
+export { GalleryListingSyncSchema, type GalleryListingSync } from '../slates/share-modes';

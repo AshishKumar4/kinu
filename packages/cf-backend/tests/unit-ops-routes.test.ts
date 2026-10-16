@@ -100,9 +100,39 @@ test('the walk starts from the builtin directory and the eval service\'s account
   const roots = (authorization: string) => opsRoutes.fetch(new Request('https://kinu.test/ops/roots', { method: 'POST', headers: { authorization } }), env);
 
   expect((await roots(`Bearer ${'q'.repeat(43)}`)).status).toBe(401);
-  const { accounts } = v.parse(v.object({ accounts: v.array(v.string()) }), await (await roots(`Bearer ${PASS}`)).json());
+  const { accounts, control } = v.parse(v.object({ accounts: v.array(v.string()), control: v.array(v.string()) }), await (await roots(`Bearer ${PASS}`)).json());
+
+  // This deployment binds no control plane, so the walk is led to none.
+  expect(control).toEqual([]);
 
   // The service, `devices` and `scripted`, each by the id the deployment's sign-in derives.
   expect(accounts).toHaveLength(4);
   expect(accounts[0]).toBe(BUILTIN_ACCOUNTS_OBJECT);
+});
+
+test('a bound control plane is a root of the walk, opened by its one name', async () => {
+  const { env } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
+  const opened: string[] = [];
+
+  const ControlPlaneDO: NonNullable<OpsEnv['ControlPlaneDO']> = {
+    idFromName: (named) => ({ toString: () => sha256Hex(named), equals: () => false, name: named }),
+    get: (id) => ({
+      opsUsers: async () => [],
+      opsTables: async (): Promise<TablesAnswer> => {
+        opened.push(id.name ?? '');
+
+        return { name: id.name ?? null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [] };
+      },
+    }),
+  };
+
+  const ask = (path: string, init: RequestInit) => opsRoutes.fetch(new Request(`https://kinu.test/ops/${path}`, {
+    ...init, method: 'POST', headers: { authorization: `Bearer ${PASS}` },
+  }), { ...env, ControlPlaneDO });
+
+  const { control } = v.parse(v.object({ control: v.array(v.string()) }), await (await ask('roots', {})).json());
+
+  expect(control).toEqual(['site']);
+  expect((await ask('tables', { body: JSON.stringify({ class: 'ControlPlaneDO', names: control }) })).status).toBe(200);
+  expect(opened).toEqual(['site']);
 });

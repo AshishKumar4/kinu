@@ -1,30 +1,28 @@
 /**
- * The Gallery's index: one listing per listed slate, written only by that slate's room, with stars and reports. A
- * listing is its slate's link, the one way in, so it grants nothing (`Confinement.lean`: `a_listing_never_mints`), and
- * the room takes it down the moment its link goes off.
+ * The Gallery's index, in the control plane's own database: one listing per listed slate, written only through its
+ * workspace's share ({@link GalleryListingSync}), with stars and reports. A listing is its share's address, the one way
+ * in, so it grants nothing (`Confinement.lean`: `a_listing_never_mints`), and it goes the moment its share goes off.
+ *
+ * The listings are a cache of the workspaces' shares, which each share's next sync writes again; stars and reports are
+ * people's own, kept by their email and forgotten with their account.
  */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
-import {
-  GALLERY_CATEGORIES, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort,
-  type RoomService,
-} from './room-api';
+import { GALLERY_CATEGORIES, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort } from './gallery-api';
+import type { GalleryListingSync } from './share-modes';
 
 export function initGalleryTables(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS gallery_listings (
+  execRaw(`CREATE TABLE IF NOT EXISTS gallery_listings ( /* regenerable cache, refilled by the workspace's share sync */
     workspace TEXT NOT NULL,
     slate TEXT NOT NULL,
+    share TEXT NOT NULL,
     title TEXT NOT NULL,
     line TEXT NOT NULL,
     category TEXT NOT NULL,
     owner_name TEXT NOT NULL,
     url TEXT NOT NULL,
-    needs TEXT NOT NULL,
-    files TEXT NOT NULL,
-    reads_author INTEGER NOT NULL,
     picture TEXT,
     listed_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
     PRIMARY KEY (workspace, slate)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS gallery_stars (
@@ -34,7 +32,10 @@ export function initGalleryTables(execRaw: RawSqlExec): void {
     at INTEGER NOT NULL,
     PRIMARY KEY (workspace, slate, email)
   )`);
-  // One report per person per listing, its latest reason: reporting again replaces it.
+  execRaw('CREATE INDEX IF NOT EXISTS gallery_stars_email ON gallery_stars (email)');
+  execRaw('CREATE INDEX IF NOT EXISTS gallery_stars_at ON gallery_stars (at)');
+  // One report per person per listing, its latest reason: reporting again replaces it. Kept past an unlist, for the
+  // operators.
   execRaw(`CREATE TABLE IF NOT EXISTS gallery_reports (
     workspace TEXT NOT NULL,
     slate TEXT NOT NULL,
@@ -43,22 +44,7 @@ export function initGalleryTables(execRaw: RawSqlExec): void {
     at INTEGER NOT NULL,
     PRIMARY KEY (workspace, slate, email)
   )`);
-}
-
-/** What a room says of its slate when it lists it, and again when a new image is published while it is listed. */
-export interface GalleryEntry {
-  readonly workspace: string;
-  readonly slate: string;
-  readonly title: string;
-  readonly line: string;
-  readonly category: GalleryCategory;
-  readonly ownerName: string;
-  readonly url: string;
-  readonly needs: readonly RoomService[];
-  readonly files: readonly string[];
-  readonly readsAuthor: boolean;
-  /** The picture its workspace last took of its page, if any. */
-  readonly picture: string | null;
+  execRaw('CREATE INDEX IF NOT EXISTS gallery_reports_email ON gallery_reports (email)');
 }
 
 /** One page of listings. */
@@ -68,47 +54,47 @@ const GALLERY_PAGE_SIZE = 24;
 const TRENDING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const ListingRow = v.object({
-  workspace: v.string(), slate: v.string(), title: v.string(), line: v.string(), category: v.picklist(GALLERY_CATEGORIES),
-  owner_name: v.string(), url: v.string(), needs: v.string(), files: v.string(), reads_author: v.number(),
-  picture: v.nullable(v.string()), listed_at: v.number(), updated_at: v.number(),
+  workspace: v.string(), slate: v.string(), share: v.string(), title: v.string(), line: v.string(), category: v.picklist(GALLERY_CATEGORIES),
+  owner_name: v.string(), url: v.string(), picture: v.nullable(v.string()), listed_at: v.number(),
   stars: v.number(), recent: v.number(), starred: v.number(),
 });
 
 type Row = v.InferOutput<typeof ListingRow>;
 
-const ServicesSchema = v.array(v.object({ title: v.string(), kind: v.picklist(['github', 'mcp', 'ai', 'workspace'] as const) }));
-
 export class GalleryIndex {
   constructor(private readonly db: SqlExec) {}
 
-  /** Lists `entry`'s slate, or says it again: its stars and its listing time stay. */
-  list(entry: GalleryEntry, now: number): void {
-    this.db.exec(
-      `INSERT INTO gallery_listings (workspace, slate, title, line, category, owner_name, url, needs, files, reads_author, picture, listed_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (workspace, slate) DO UPDATE SET title = excluded.title, line = excluded.line, category = excluded.category,
-         owner_name = excluded.owner_name, url = excluded.url, needs = excluded.needs, files = excluded.files,
-         reads_author = excluded.reads_author, picture = COALESCE(excluded.picture, picture), updated_at = excluded.updated_at`,
-      entry.workspace, entry.slate, entry.title, entry.line, entry.category, entry.ownerName, entry.url,
-      JSON.stringify(entry.needs), JSON.stringify(entry.files), entry.readsAuthor ? 1 : 0, entry.picture, now, now,
-    );
-  }
+  /** What a workspace says of one share: listed, its slate's listing written again (its stars and its listing time
+   *  stay); unlisted, the listing that share made taken down with its stars. A word about a share other than the one a
+   *  slate is listed under touches nothing of it, so an old share's late unlisting never takes down a new one's. */
+  sync(sync: GalleryListingSync, now: number): void {
+    const { workspace, slate, share } = sync;
 
-  /** Takes the listing down; its stars go with it. */
-  unlist(workspace: string, slate: string): void {
-    this.db.exec('DELETE FROM gallery_listings WHERE workspace = ? AND slate = ?', workspace, slate);
-    this.db.exec('DELETE FROM gallery_stars WHERE workspace = ? AND slate = ?', workspace, slate);
+    if (!sync.listed) {
+      const held = this.db.exec('SELECT 1 FROM gallery_listings WHERE workspace = ? AND slate = ? AND share = ?', workspace, slate, share).toArray();
+
+      if (held.length === 0) return;
+      this.db.exec('DELETE FROM gallery_listings WHERE workspace = ? AND slate = ?', workspace, slate);
+      this.db.exec('DELETE FROM gallery_stars WHERE workspace = ? AND slate = ?', workspace, slate);
+
+      return;
+    }
+
+    const { card } = sync;
+
+    this.db.exec(
+      `INSERT INTO gallery_listings (workspace, slate, share, title, line, category, owner_name, url, picture, listed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (workspace, slate) DO UPDATE SET share = excluded.share, title = excluded.title, line = excluded.line,
+         category = excluded.category, owner_name = excluded.owner_name, url = excluded.url, picture = excluded.picture`,
+      workspace, slate, share, card.title, card.line, card.category, card.ownerName, sync.url, card.picture, now,
+    );
   }
 
   /** A deleted account's stars and reports: its email is kept nowhere here after it. */
   forget(email: string): void {
     this.db.exec('DELETE FROM gallery_stars WHERE email = ?', email);
     this.db.exec('DELETE FROM gallery_reports WHERE email = ?', email);
-  }
-
-  /** The picture a listing shows, as its room took it from its own page. */
-  pictured(workspace: string, slate: string, digest: string): void {
-    this.db.exec('UPDATE gallery_listings SET picture = ? WHERE workspace = ? AND slate = ?', digest, workspace, slate);
   }
 
   /** One page, newest first, most starred, or most starred this week; `viewer` sees their own stars. */
@@ -149,10 +135,7 @@ export class GalleryIndex {
 
     if (row === undefined) return null;
 
-    return {
-      listing: listingOf(row, this.featured(now)), files: v.parse(v.array(v.string()), JSON.parse(row.files)),
-      updatedAt: row.updated_at, readsAuthor: row.reads_author === 1,
-    };
+    return { listing: listingOf(row, this.featured(now)) };
   }
 
   /** Whether `workspace`'s slate is listed, and its picture's digest if so. */
@@ -222,9 +205,9 @@ export class GalleryIndex {
 
 function listingOf(row: Row, featured: ReadonlySet<string>): GalleryListing {
   return {
-    workspace: row.workspace, slate: row.slate, title: row.title, line: row.line, category: row.category,
+    workspace: row.workspace, slate: row.slate, share: row.share, title: row.title, line: row.line, category: row.category,
     owner: { name: row.owner_name }, stars: row.stars, starred: row.starred > 0, listedAt: row.listed_at,
-    needs: v.parse(ServicesSchema, JSON.parse(row.needs)), featured: featured.has(`${row.workspace}/${row.slate}`), url: row.url,
+    featured: featured.has(`${row.workspace}/${row.slate}`), url: row.url,
     ...(row.picture !== null && { picture: row.picture }),
   };
 }

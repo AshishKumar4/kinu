@@ -1,7 +1,7 @@
 /** A Gallery listing as a card: its picture, whose it is, its stars, and what a fork asks of you. */
 import { Link } from "react-router-dom";
-import { GithubLogoIcon, PlugIcon, SparkleIcon, StarIcon } from "@phosphor-icons/react";
-import { galleryPicturePath, type GalleryListing, type RoomService } from "@kinu.run/core";
+import { StarIcon } from "@phosphor-icons/react";
+import { galleryPicturePath, type GalleryListing } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
 import { Cover, Tile } from "@/components/drive/DriveTiles";
 import { SlatePicture } from "@/components/slates/SlatePicture";
@@ -24,21 +24,6 @@ function Stars({ count, on = false }: { count: number; on?: boolean }) {
   );
 }
 
-export function ServiceIcon({ service, size }: { service: RoomService; size: number }) {
-  if (service.kind === "github") return <GithubLogoIcon size={size} />;
-
-  return service.kind === "ai" ? <SparkleIcon size={size} /> : <PlugIcon size={size} />;
-}
-
-/** What a fork asks its forker to connect: their own of each. */
-function NeedChips({ needs }: { needs: readonly RoomService[] }) {
-  const chip = "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium";
-
-  if (needs.length === 0) return <span className={`p-badge-success ${chip}`}>Needs nothing</span>;
-
-  return <>{needs.map((need) => <span key={need.title} className={`p-badge-neutral ${chip}`}><ServiceIcon service={need} size={10} />{need.title}</span>)}</>;
-}
-
 export function ListingTile({ listing }: { listing: GalleryListing }) {
   return (
     <Tile title={listing.title} icon={<Avatar name={listing.owner.name} size={18} />} picture={<ListingPicture listing={listing} />}
@@ -48,7 +33,7 @@ export function ListingTile({ listing }: { listing: GalleryListing }) {
   );
 }
 
-/** One of this week's top two, wide: its line and what it needs beside its picture. */
+/** One of this week's top two, wide: its line beside its picture. */
 export function FeaturedListing({ listing }: { listing: GalleryListing }) {
   return (
     <Link to={gallerySlateHref(listing.workspace, listing.slate)} data-gallery-featured={listing.slate}
@@ -58,7 +43,6 @@ export function FeaturedListing({ listing }: { listing: GalleryListing }) {
         <span className="p-eyebrow p-accent">Featured</span>
         <span className="p-heading text-[17px] p-text">{listing.title}</span>
         <span className="line-clamp-2 p-meta p-text-3">{listing.line}</span>
-        <span className="flex flex-wrap gap-1.5"><NeedChips needs={listing.needs} /></span>
         <span className="mt-auto flex flex-wrap items-center gap-2 p-meta p-text-3">
           <Avatar name={listing.owner.name} size={18} />{listing.owner.name}<span className="ml-1"><Stars count={listing.stars} on={listing.starred} /></span>
         </span>

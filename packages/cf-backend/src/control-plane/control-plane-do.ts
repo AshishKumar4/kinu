@@ -4,19 +4,25 @@
  * Not an `Agent`: its surface is exactly these methods, each gated before touching storage.
  */
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { DurableObject } from 'cloudflare:workers';
 import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
-import { requireOps, type OpsCaller, type Page, type PageRequest } from '@kinu.run/core';
+import {
+  censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
+  type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort,
+  type OpsCaller, type Page, type PageRequest, type Repair, type TablesAnswer,
+} from '@kinu.run/core';
 import type { FeedbackRecord } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 // Core's capability gate, never `./admin-caller`: the latter pulls `auth/session` and the browser-session
 // store into this DO's isolate; the workerd fixture asserts their absence.
 import {
-  requireControl,
-  type ControlCapability, type ControlGrade, type PresentedCaller,
+  GalleryIndex, GalleryListingSyncSchema, requireControl,
+  type ControlCapability, type ControlGrade, type GalleryListingSync, type PresentedCaller,
 } from '@kinu.run/core/control-plane';
 import * as cpStore from '@kinu.run/core/control-plane/store';
+import { CONTROL_PLANE_SINGLETON } from './stub';
 import type {
   AuditDraft, AuditOutcome, AuditSettlement, ControlAuditRow, ControlOverview,
   ControlUserRow, ControlWorkspaceRow, ControlPlaneSql,
@@ -31,25 +37,70 @@ export type {
   ControlUserRow, ControlWorkspaceRow, RosterWorkspace, UserObservation, WorkspaceObservation,
 };
 
+/** What a signed-in person does to a listing. */
+export type GalleryMark =
+  | { readonly kind: 'star'; readonly workspace: string; readonly slate: string; readonly on: boolean }
+  | { readonly kind: 'report'; readonly workspace: string; readonly slate: string; readonly reason: string };
+
+/** One page of the Gallery, as its routes ask it. */
+export interface GalleryQuery {
+  readonly q: string;
+  readonly sort: GallerySort;
+  readonly category: GalleryCategory | null;
+  readonly page: number;
+}
+
 export class ControlPlaneDO extends DurableObject<Env> {
   private readonly store: ControlPlaneSql;
+
+  private readonly gallery: GalleryIndex;
+
+  /** What this activation's repair did, for the deploy's walk; null where the storage was at this build. */
+  private readonly schemaRepair: Repair | null;
+
+  /** Why the index may not be read: its repair could not bring it to this build. */
+  private readonly storageRefusal: StoragePredatesReleaseError | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = ctx.storage.sql;
     // Not inside `blockConcurrencyWhile`: `sql.exec` does not yield, and awaited init stalls every
-    // request (`tests/workerd/do-init-gate.test.ts`).
-    cpStore.initControlPlaneSchema(this.store);
+    // request (`tests/workerd/do-init-gate.test.ts`). Storage a release left behind is repaired first, before any
+    // method reads it (core state/schema-repair.ts), as every class's is.
+    const stamps = durableStamps(ctx.storage.kv);
+    const unmade = readStamp(stamps, ctx.storage.sql, 'control') === 'unmade';
+    const init = (): void => { cpStore.initControlPlaneSchema(this.store); };
+
+    this.schemaRepair = repairSchema(ctx.storage.sql, {
+      schema: 'control', tables: SCHEMA_TABLES.control, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init,
+    }, 'control plane');
+
+    if (this.schemaRepair?.refused != null) this.storageRefusal = new StoragePredatesReleaseError('control', this.schemaRepair.refused);
+    else if (this.schemaRepair === null) init();
+
+    if (unmade && this.storageRefusal === undefined) writeStamp(stamps, 'control');
+    this.gallery = new GalleryIndex(ctx.storage.sql);
     // A DO is a different isolate from the Worker, so `server.ts`'s sink is not installed here. Memoised per isolate.
     installAnalyticsDiagnostics(env);
   }
 
+  /** The caller's grade, once it holds `capability` and the index is this build's. */
   private gate(caller: PresentedCaller, capability: ControlCapability): Promise<ControlGrade> {
     // The Analytics budget is per invocation (analytics/limits.ts MAX_WRITES_PER_INVOCATION); reopen it
     // on every RPC, not once per activation.
     openAnalyticsWindow(this.env);
 
-    return requireControl(this.env, caller, capability);
+    return requireControl(this.env, caller, capability, this.storageRefusal);
+  }
+
+  /** The deploy's walk: the index's tables and their rows, and what its repair did. */
+  async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
+    await requireOps(this.env, caller);
+
+    return {
+      name: CONTROL_PLANE_SINGLETON, census: censusOf(this.store), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
+      workspaces: [], accounts: [], agents: [],
+    };
   }
 
   async observeUser(caller: PresentedCaller, observation: UserObservation): Promise<void> {
@@ -81,6 +132,55 @@ export class ControlPlaneDO extends DurableObject<Env> {
     return store.recordFeedback(this.store, row);
   }
 
+  // ── The Gallery (core slates/gallery.ts): its index lives here, beside the fleet's, so it is an object that
+  // already exists on every deployment, never a new one.
+
+  /** What a workspace says of one share: its listing written, or taken down. */
+  async gallerySync(caller: PresentedCaller, sync: GalleryListingSync): Promise<void> {
+    await this.gate(caller, 'gallery.list');
+    this.gallery.sync(v.parse(GalleryListingSyncSchema, sync), Date.now());
+  }
+
+  async galleryPage(caller: PresentedCaller, query: GalleryQuery, viewer: string | null): Promise<GalleryPage> {
+    await this.gate(caller, 'gallery.read');
+
+    return this.gallery.page(query, viewer, Date.now());
+  }
+
+  async gallerySlate(caller: PresentedCaller, workspace: string, slate: string, viewer: string | null): Promise<GallerySlate | null> {
+    await this.gate(caller, 'gallery.read');
+
+    return this.gallery.slate(workspace, slate, viewer, Date.now());
+  }
+
+  /** Whether `workspace`'s slate is listed, and its picture's digest if so. */
+  async galleryListed(caller: PresentedCaller, workspace: string, slate: string): Promise<{ readonly picture: string | null } | null> {
+    await this.gate(caller, 'gallery.read');
+
+    return this.gallery.listed(workspace, slate);
+  }
+
+  /** The listings `email` starred. */
+  async galleryStarred(caller: PresentedCaller, email: string): Promise<GalleryListing[]> {
+    await this.gate(caller, 'gallery.read');
+
+    return this.gallery.starred(email, Date.now());
+  }
+
+  /** A signed-in person's star, its withdrawal, or their report; false when the slate is not listed. */
+  async galleryMark(caller: PresentedCaller, email: string, mark: GalleryMark): Promise<boolean> {
+    await this.gate(caller, 'gallery.mark');
+    const at = { email, workspace: mark.workspace, slate: mark.slate };
+
+    return mark.kind === 'star' ? this.gallery.star({ ...at, on: mark.on }, Date.now()) : this.gallery.report({ ...at, reason: mark.reason }, Date.now());
+  }
+
+  /** A deleted account's stars and reports. */
+  async galleryForget(caller: PresentedCaller, email: string): Promise<void> {
+    await this.gate(caller, 'gallery.forget');
+    this.gallery.forget(email);
+  }
+
   /** One account's rows. The roster fan-out stays in the Worker route, where subrequests are counted. */
   async replaceUserWorkspaces(
     caller: PresentedCaller, userId: string, live: readonly RosterWorkspace[],
@@ -98,9 +198,15 @@ export class ControlPlaneDO extends DurableObject<Env> {
 
   /** Every user the index has seen, by id: the deploy's walk opens each one's account (`/ops/tables`). */
   async opsUsers(caller: OpsCaller): Promise<string[]> {
-    await requireOps(this.env, caller);
+    const refused = this.storageRefusal;
 
-    return cpStore.userIds(this.store);
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => requireOps(this.env, caller));
+
+      if (refused !== undefined) return yield* refused;
+
+      return cpStore.userIds(this.store);
+    }));
   }
 
   async listUsers(caller: PresentedCaller, request: PageRequest = {}): Promise<Page<ControlUserRow>> {

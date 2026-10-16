@@ -74,6 +74,10 @@
       "complexity": 34
     },
     {
+      "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
+      "complexity": 34
+    },
+    {
       "key": "scripts/wired.ts#findEntrypoints>walk#2",
       "complexity": 33
     },

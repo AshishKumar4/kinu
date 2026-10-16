@@ -41,13 +41,13 @@ export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, ty
 
 export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
 
-export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
+export { GalleryIndex, initGalleryTables } from './gallery';
 
 export { codecIsFree, CodecSchema, UNDECLARED, type Codec } from './codec';
 
 export {
   SHARE_MODES, GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,
-  type GalleryListingSync, type ShareMode, type SlateConsent, type SlateRevision,
+  type GalleryCard, type GalleryListingSync, type ShareMode, type SlateConsent, type SlateRevision,
 } from './share-modes';
 
 export {

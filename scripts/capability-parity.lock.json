@@ -17,7 +17,6 @@
   "movable packages/cf-backend/src/egress/model-relay-route.ts",
   "movable packages/cf-backend/src/lib/room-bridge.ts",
   "movable packages/cf-backend/src/slates/room-parts.ts",
-  "movable packages/cf-backend/src/slates/room-registry.ts",
   "movable packages/cf-backend/src/slates/sources.ts",
   "movable packages/cf-backend/src/user/binding-completions.ts",
   "movable packages/cf-backend/src/user/workspace-fork.ts",
