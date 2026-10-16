@@ -227,9 +227,10 @@ function SharedNow({ shares, onStop, onOwnAccess, disabled }: {
       <p className="p-meta font-medium p-text-3">Shared now</p>
       <ul className="p-group">
         {shares.map((row) => (
-          <li key={row.id} data-live-share={row.id} className="flex items-center gap-3 px-3.5 py-2">
+          <li key={row.id} data-live-share={row.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3.5 py-2">
             <span className="flex shrink-0 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
-            <span className="min-w-0 flex-1">
+            {/* Wide enough to read: on a phone the actions wrap under it. */}
+            <span className="min-w-48 flex-1">
               <span className="block truncate p-meta p-text-2">
                 {row.visibility === "public" ? "Anyone with the link" : row.users.join(", ") || "People you added"}
                 {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
