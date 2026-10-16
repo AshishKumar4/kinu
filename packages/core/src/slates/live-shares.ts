@@ -7,15 +7,21 @@ import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { ShareStore, type ShareTable } from './shares';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
+import { ShareModeSchema } from './share-modes';
+import type { LiveShareAuthority } from './share-policy';
 import {
   ShareGrantSchema, ViewerCallSchema, ViewerRequestRecordSchema,
   type LiveShareRecord, type ShareGrant, type ViewerCall, type ViewerRequestRecord,
 } from './sharing';
 
 export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
+  // `mode` is whose access a viewer's calls act with (docs/SLATE-SHARING-NIMBUS.md §2): `own`, their own, which is
+  // every share made before the column; `owner`, the owner's, approved for the one revision `grant_revision` names.
   execRaw(`CREATE TABLE IF NOT EXISTS slate_live_shares (
     id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, visibility TEXT NOT NULL CHECK (visibility IN ('users', 'public')),
-    handle TEXT NOT NULL UNIQUE, grant_json TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER
+    handle TEXT NOT NULL UNIQUE, grant_json TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER,
+    mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner')), grant_revision TEXT,
+    CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_live_share_users (
     share_id TEXT NOT NULL, user_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL,
@@ -30,7 +36,10 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
 const LiveShareRow = v.object({
   id: v.string(), slate_id: v.string(), visibility: LiveShareVisibilitySchema,
   handle: v.string(), grant_json: v.string(), created_at: v.number(), revoked_at: v.nullable(v.number()),
+  mode: ShareModeSchema, grant_revision: v.nullable(v.string()),
 });
+
+const AuthorityRow = v.object({ mode: ShareModeSchema, grant_json: v.string(), grant_revision: v.nullable(v.string()) });
 
 /** A stored request decodes straight into the record: `calls` is the one column stored as JSON text. */
 const RequestRow = v.object({ ...ViewerRequestRecordSchema.entries, calls: v.pipe(v.string(), v.parseJson(), v.array(ViewerCallSchema)) });
@@ -65,6 +74,14 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,
       grant: share.grant, createdAt, revokedAt: null, users: [],
     };
+  }
+
+  /** What each of `slate`'s live shares lets its server act with: the server's authority is read from all of them
+   *  together on every call (share-policy.ts `serverAuthority`). A revoked share lends nothing. */
+  authoritiesOf(slate: string): LiveShareAuthority[] {
+    return this.db.exec('SELECT mode, grant_json, grant_revision FROM slate_live_shares WHERE slate_id = ? AND revoked_at IS NULL', slate).toArray()
+      .map((row) => v.parse(AuthorityRow, row))
+      .map((row) => ({ mode: row.mode, grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)), grantRevision: row.grant_revision }));
   }
 
   /** A revoked share has no address. */

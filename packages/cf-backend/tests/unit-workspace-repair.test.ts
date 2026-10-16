@@ -23,3 +23,20 @@ test('a workspace holding the webhook secrets as production made them repairs th
   expect(db.query('SELECT secret_id, secret FROM webhook_secrets').all()).toEqual([{ secret_id: 's-1', secret: 'hush' }]);
   db.exec("INSERT INTO webhook_secrets (secret_id, trigger_id, secret) VALUES ('s-2', 't-1', 'also')");
 });
+
+test('a workspace\'s live shares made before share modes repair to their viewers\' own access, no owner grant implied', () => {
+  const db = new Database(':memory:');
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+  db.exec(`DROP TABLE slate_live_shares; CREATE TABLE slate_live_shares (
+    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, visibility TEXT NOT NULL CHECK (visibility IN ('users', 'public')),
+    handle TEXT NOT NULL UNIQUE, grant_json TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER
+  ); INSERT INTO slate_live_shares VALUES ('s-1', 'board', 'users', '0123456789', '{"slates":["board"],"members":[]}', 1, NULL)`);
+  kvOf(db).set('kinu.schema_stamp', 1);
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+
+  expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.workspace);
+  expect(db.query('SELECT id, handle, mode, grant_revision FROM slate_live_shares').all())
+    .toEqual([{ id: 's-1', handle: '0123456789', mode: 'own', grant_revision: null }]);
+});
