@@ -22,7 +22,7 @@ export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  censusOf, durableStamps, ERROR_STATUS, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
+  censusOf, durableStamps, ERROR_STATUS, mcpPresetById, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
   type OpsCaller, type Repair, type TablesAnswer,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
@@ -283,13 +283,15 @@ export class UserDO extends Agent<Env> {
 
       const root = partCallRoot(server, payload);
       const verdict = partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, false);
+      // What its asks call the connection and the tool: the catalog's own name for a preset server, else the person's.
+      const titles = { serverTitle: mcpPresetById(descriptor.presetId ?? '')?.title ?? descriptor.serverName, toolTitle: descriptor.title ?? descriptor.name };
 
-      if (verdict.kind === 'needs-consent') return verdict;
+      if (verdict.kind === 'needs-consent') return { ...verdict, ask: { ...verdict.ask, ...titles } };
 
       if (verdict.kind === 'needs-approval') {
         const call = { workspace, slate, revision, server, tool, root, payload };
 
-        if (!this.effectApprovals.take(call)) return { kind: 'needs-approval' as const, ask: this.effectApprovals.ask(call) };
+        if (!this.effectApprovals.take(call)) return { kind: 'needs-approval' as const, ask: { ...this.effectApprovals.ask(call), ...titles } };
       }
 
       const text = yield* Effect.promise(() => this.userMcp_callTool(caller, { serverId: descriptor.serverId, name: tool, args: payload, id: crypto.randomUUID() }));

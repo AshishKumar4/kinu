@@ -8,7 +8,8 @@ import {
   type EffectCall, type SlateConsent,
 } from '@kinu.run/core/slates';
 import type { JsonValue } from '@kinu.run/core';
-import type { PartConnectionAnswer, PartConnections, PartViewer } from '../../src/slates/part-runs';
+import type { PartAiAnswer, PartConnectionAnswer } from '@kinu.run/core/slates';
+import type { PartConnections, PartViewer } from '../../src/slates/part-runs';
 
 /** Each server's tools by their own marks: GitHub's read is read-only and closed-world; Fetch's get may reach anywhere. */
 interface ToolMarks {
@@ -47,7 +48,7 @@ export class FakeViewerAccounts implements PartConnections {
     return this.book(email).decide(id, approve);
   }
 
-  tool(viewer: PartViewer, call: Parameters<PartConnections['tool']>[1]): Promise<PartConnectionAnswer> {
+  tool(viewer: PartViewer, call: Parameters<PartConnections['tool']>[1]): Promise<PartConnectionAnswer<JsonValue>> {
     const descriptor = TOOLS.get(call.server)?.get(call.tool);
 
     if (descriptor === undefined) return Promise.resolve({ kind: 'missing', message: `${viewer.email}'s ${call.server} offers no ${call.tool}` });
@@ -68,7 +69,7 @@ export class FakeViewerAccounts implements PartConnections {
     return Promise.resolve({ kind: 'ran', value: call.tool === 'read_issue' ? { secret: privateIssue(viewer.email) } : `${call.tool} done` });
   }
 
-  ai(): Promise<PartConnectionAnswer> {
-    return Promise.resolve({ kind: 'missing', message: 'No AI in this probe' });
+  ai(viewer: PartViewer): Promise<PartAiAnswer> {
+    return Promise.resolve({ kind: 'ran', value: `${viewer.email}'s own model` });
   }
 }

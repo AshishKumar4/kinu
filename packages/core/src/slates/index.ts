@@ -45,7 +45,7 @@ export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps
 
 export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
 
-export { codecAdmits, codecIsFree, CodecSchema, UNDECLARED, type Codec } from './codec';
+export { codecAdmits, CodecSchema, UNDECLARED, type Codec } from './codec';
 
 export {
   SHARE_MODES, GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,

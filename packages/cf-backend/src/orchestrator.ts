@@ -1,5 +1,5 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
-import { objectNamed, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
+import { objectNamed, ownerCaller, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
@@ -5764,6 +5764,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),
       ownerUserId: () => this.getOwnerUserId(),
+      // Each viewer's own account answers their parts' calls, with their consents and connections: never this workspace.
+      partConnections: {
+        tool: async (viewer, call) => objectNamed(this.env.UserDO, viewer.userId).slatePartTool(await ownerCaller(this.env), call),
+        ai: async (viewer, call) => objectNamed(this.env.UserDO, viewer.userId).slatePartAi(await ownerCaller(this.env), call),
+      },
       forgetPicture: async (slate) => {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
         this.armDurableWake();

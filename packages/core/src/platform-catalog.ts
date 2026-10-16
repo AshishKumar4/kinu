@@ -2136,21 +2136,6 @@ export const PLATFORM_CATALOG = {
       'Kitesurf takes no keep_alive at all ("Options not supported with browser=kitesurf: keep_alive"): its session '
       + 'is created on connect and ends with the connection, so web/browser-sessions.ts records Chrome sessions only.',
   },
-
-  'slate_room.reader_check.lifetime': {
-    subject: 'How long a reader check that found someone reads a GitHub repository keeps opening another person\'s part of it to them',
-    limit: { value: 60 * 60 * 1000, unit: 'ms' },
-    origin: 'self-imposed',
-    bounds: 'duration',
-    evidence: 'proven-by-source',
-    provenance: 'docs/SLATE-SHARING-SECURITY.md §5',
-    date: '2026-10-15',
-    trigger: 'someone lost read access to the repository on GitHub after a check found they read it',
-    onBreach: 'once the check is older than this, the part shows them a placeholder until a check with their own GitHub connection finds they read it again',
-    observable: [],
-    firstPartySignal: false,
-    notes: 'A policy: the longest a lost GitHub permission still opens a part. GitHub tells no one when access is lost, and a check at each release would ask GitHub once per person, part and view.',
-  },
 } as const satisfies Readonly<Record<string, PlatformFact>>;
 
 export type PlatformFactId = keyof typeof PLATFORM_CATALOG;

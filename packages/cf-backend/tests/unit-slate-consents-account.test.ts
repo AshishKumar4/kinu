@@ -48,7 +48,12 @@ async function connection() {
 describe('personal part calls on the viewer\'s own account', () => {
   test('no consent and a consent for another revision both ask, without calling the MCP server', async () => {
     const { user, caller, read } = await connection();
-    const ask = { kind: 'needs-consent' as const, ask: { server: CONSENT.server, root: ROOT, tools: ['list_issues'], effects: false, revision: ADDRESS.revision } };
+
+    // Named as the person knows the connection and the tool: their own server name, the tool's.
+    const ask = {
+      kind: 'needs-consent' as const,
+      ask: { server: CONSENT.server, root: ROOT, tools: ['list_issues'], effects: false, revision: ADDRESS.revision, serverTitle: 'github', toolTitle: 'list_issues' },
+    };
 
     expect(await user.userDO.slatePartTool(caller, read)).toEqual(ask);
     await user.userDO.consentSlate(caller, { ...CONSENT, revision: 'older-revision' });
