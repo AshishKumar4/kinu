@@ -58,7 +58,7 @@ const LIVE_SHARES: ShareTable<v.InferOutput<typeof LiveShareRow>, LiveShareRecor
   record: (row, users) => ({
     id: row.id, slate: row.slate_id, visibility: row.visibility, handle: row.handle,
     grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)),
-    createdAt: row.created_at, revokedAt: row.revoked_at, users,
+    createdAt: row.created_at, revokedAt: row.revoked_at, users, mode: row.mode, grantRevision: row.grant_revision,
   }),
 };
 
@@ -80,7 +80,7 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
 
     return {
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,
-      grant: share.grant, createdAt, revokedAt: null, users: [],
+      grant: share.grant, createdAt, revokedAt: null, users: [], mode: authority.mode, grantRevision: authority.grantRevision,
     };
   }
 

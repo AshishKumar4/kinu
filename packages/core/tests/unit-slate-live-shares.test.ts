@@ -33,7 +33,7 @@ test('a live share round-trips its grant and refuses viewers once revoked', () =
     const added = shares.add(liveShare());
     expect(added).toEqual({
       id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789',
-      grant, createdAt: 1_000, revokedAt: null, users: [],
+      grant, createdAt: 1_000, revokedAt: null, users: [], mode: 'own', grantRevision: null,
     });
 
     expect(shares.get('s1')).toMatchObject({ id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789', grant });
