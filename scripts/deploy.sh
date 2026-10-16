@@ -5,6 +5,9 @@
 #   bun run deploy              staging: the upload gates, the upload, then every tier
 #                               and every local gate to its end, and the record
 #   bun run deploy --promote    production: HEAD's build, as staging verified it
+#   bun run deploy --promote --override "<owner's words>"
+#                               production: HEAD's build as staging served it, which
+#                               staging did not verify, kept as an UNVERIFIED override
 #   bun run deploy --rollback   production: back to the build it took before
 #
 # Deploying any other way is how production once shipped without the CLI
@@ -46,8 +49,8 @@
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
 # Usage:
-#   bun run deploy [--promote | --rollback] [--reset | --reset-tables] [--evals]
-#   bash scripts/deploy.sh [--promote] [--reset | --reset-tables] [--bootstrap] [--gates-only] [--evals]
+#   bun run deploy [--promote [--override "<owner's words>"] | --rollback] [--reset | --reset-tables] [--evals]
+#   bash scripts/deploy.sh [--promote [--override "<owner's words>"]] [--reset | --reset-tables] [--bootstrap] [--gates-only] [--evals]
 #   bash scripts/deploy.sh --rollback
 #
 # `--evals` runs the real-model evals a deploy can start: on staging, the
@@ -67,6 +70,15 @@
 # resources, and so does everything after the upload. A staging deploy
 # withdraws HEAD's record before it builds, so a promotion never takes what a
 # staging deploy under way, or red, left there.
+#
+# `--override "<owner's words>"`, with `--promote` only, is the owner's call to
+# promote a build staging did not verify. It never writes a verified record: it
+# writes overrides/<sha>.json, HEAD's build as staging served it (the record
+# staging's deploy writes once it serves a build, whatever goes red after),
+# marked UNVERIFIED with the words and the reds staging's deploy left open. The
+# promotion adopts that record with every digest and download check, the
+# production table plan and its typed confirmation stay, and the report and
+# production's history say "owner override, unverified".
 #
 # `--rollback` returns production to the newest build it took before the one it
 # serves, a build a rollback left never again, and proves production then serves
@@ -150,9 +162,18 @@ KINU_ROLLBACK=0
 KINU_RESET=0
 KINU_RESET_TABLES=0
 KINU_EVALS=0
+KINU_OVERRIDE=""
+KINU_OVERRIDE_GIVEN=0
+KINU_OVERRIDE_WORDS=0
 for option in "$@"; do
+  if [ "$KINU_OVERRIDE_WORDS" = "1" ]; then
+    KINU_OVERRIDE="$option"
+    KINU_OVERRIDE_WORDS=0
+    continue
+  fi
   case "$option" in
     --promote) KINU_PROMOTE=1 ;;
+    --override) KINU_OVERRIDE_GIVEN=1; KINU_OVERRIDE_WORDS=1 ;;
     --rollback) KINU_ROLLBACK=1 ;;
     --bootstrap) KINU_BOOTSTRAP=1 ;;
     --gates-only) KINU_GATES_ONLY=1 ;;
@@ -161,11 +182,19 @@ for option in "$@"; do
     --evals) KINU_EVALS=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--promote] [--reset | --reset-tables] [--bootstrap] [--gates-only] [--evals] | --rollback"
+      echo "Usage: scripts/deploy.sh [--promote [--override \"<owner's words>\"]] [--reset | --reset-tables] [--bootstrap] [--gates-only] [--evals] | --rollback"
       exit 2
       ;;
   esac
 done
+if [ "$KINU_OVERRIDE_GIVEN" = "1" ] && [ -z "${KINU_OVERRIDE//[[:space:]]/}" ]; then
+  echo -e "${RED}--override takes the owner's words: --override \"<why production takes a build staging did not verify>\".${NC}"
+  exit 2
+fi
+if [ "$KINU_OVERRIDE_GIVEN" = "1" ] && [ "$KINU_PROMOTE" != "1" ]; then
+  echo -e "${RED}--override overrides a promotion's record, so it goes with --promote only.${NC}"
+  exit 2
+fi
 unset CLOUDFLARE_ENV
 if [ "$KINU_ROLLBACK" = "1" ]; then
   if [ "$#" -ne 1 ]; then
@@ -528,8 +557,15 @@ if [ "$KINU_PROMOTE" = "1" ]; then
   # THE RECORD IS THE SOURCE GATE. Staging's deploy of HEAD wrote it after every
   # phase there passed, the plan's every gate and every tier, and staging must
   # still be serving that build. Without both, nothing is built.
-  bun "$KINU_ROOT/scripts/promote.ts" check \
-    || { step_red promote "staging's record" "staging has not verified $KINU_SHA with every phase green; deploy it to staging first."; finish; }
+  if [ -n "$KINU_OVERRIDE" ]; then
+    # THE OWNER'S WORD IN PLACE OF STAGING'S, and said so: never a verified record.
+    bun "$KINU_ROOT/scripts/promote.ts" override "$KINU_OVERRIDE" \
+      || { step_red promote "the owner override" "staging never served $KINU_SHA, or its reds are unknown here, so not even an override can name the build."; finish; }
+    report notice promote "owner override, unverified" "$KINU_OVERRIDE"
+  else
+    bun "$KINU_ROOT/scripts/promote.ts" check \
+      || { step_red promote "staging's record" "staging has not verified $KINU_SHA with every phase green; deploy it to staging first."; finish; }
+  fi
 fi
 
 # THE BUILD, started beside the upload gates and awaited by `publish_build`: it runs on armada and writes only
@@ -644,7 +680,7 @@ if [ "$KINU_PROMOTE" = "1" ]; then
   # each checked against the stamp, and copies the worker release tarball into
   # production's bucket: what a user downloads is what staging's tiers ran.
   echo "Adopting staging's downloads and worker release artifact"
-  bun "$KINU_ROOT/scripts/promote.ts" adopt \
+  bun "$KINU_ROOT/scripts/promote.ts" adopt ${KINU_OVERRIDE:+override} \
     || { publish_red "this build is not the one staging verified, or its downloads did not check out"; return 1; }
 fi
 
@@ -1000,6 +1036,11 @@ KINU_SERVING=0
 if publish_build; then
   KINU_SERVING=1
   mark live
+  # Staging's build as it serves it, whatever goes red after: what an owner's override names, never a verdict.
+  if [ "$KINU_PROMOTE" != "1" ]; then
+    bun "$KINU_ROOT/scripts/promote.ts" built "${KINU_VERSION:-unknown}" "${KINU_RECORD_ARGS[@]}" \
+      || step_red record "the built record" "staging serves $KINU_SHA, and its built record was not written, so no override could name it"
+  fi
 else
   KINU_REDS=1
   report note publish "build, upload and smoke" "$KINU_PUBLISH_FINDING"
@@ -1260,7 +1301,7 @@ elif [ "$KINU_ENV" = "staging" ]; then
   echo -e "${BOLD}Step 6: Recording $KINU_SHA as verified on staging${NC}"
   bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" "${KINU_RECORD_ARGS[@]}" \
     || { step_red record "the record" "the record was not written, so this build cannot be promoted"; finish; }
-elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted "${KINU_VERSION:-}" "${KINU_RECORD_ARGS[@]}"; then
+elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted ${KINU_OVERRIDE:+--override} "${KINU_VERSION:-}" "${KINU_RECORD_ARGS[@]}"; then
   step_red record "production's history" "production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it"
   finish
 fi
