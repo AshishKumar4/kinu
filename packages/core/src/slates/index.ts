@@ -58,3 +58,8 @@ export {
 } from './personal-parts';
 
 export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams } from './slate-ai';
+
+export {
+  EffectApprovals, partCallVerdict, serverAuthority,
+  type EffectCall, type LiveShareAuthority, type PartCall, type PartCallVerdict, type ServerAuthority,
+} from './share-policy';
