@@ -352,7 +352,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   operationAs(as: 'root' | 'plan' | 'hire', input: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
   unnamedShareCall(share: string): Promise<ProbeAnswer>;
   previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
-  share(approved?: readonly { namespace: string; member: string }[]): Promise<ProbeAnswer>;
+  share(approved?: readonly { namespace: string; member: string }[], mode?: 'own' | 'owner'): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;
   importBlueprint(): Promise<{ fork: string; running: number }>;
   viewerHop(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<string>;
@@ -361,6 +361,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   ): Promise<{ before: string | null; after: string; late: string }>;
   viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ status: number; body: string }>;
   viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
+  viewerRefusals(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string; mutate: string }>;
   viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
   replay(share: string): Promise<ProbeAnswer>;
   requests(share: string): Promise<ProbeAnswer>;

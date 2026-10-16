@@ -162,6 +162,17 @@ it('a shared slate still serves after the object that ran it is evicted', async 
   expect(await probe().viewerFetch(created.share.handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
 });
 
+it("shared on each viewer's own access, the slate's server uses no one's connections, and says who can change that", async () => {
+  const probe = subject('own-access-share');
+  await probe.start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share([], 'own')).value);
+  const refused = await probe.viewerRefusals(created.share.handle, CLAIM);
+
+  // The owner's file is the owner's: the server refuses to read or write it for anyone, and names the way to "My access".
+  expect(refused.probe).toContain('can turn on My access');
+  expect(refused.mutate).toContain('can turn on My access');
+});
+
 it('a mutating member is granted by approval only', async () => {
   const probe = subject('live-approved');
   await probe.start();
