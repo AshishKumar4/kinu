@@ -61,10 +61,18 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'previewTabs');
     Reflect.deleteProperty(this, 'failingSlates');
     Reflect.deleteProperty(this, 'wakeOnce');
+    Reflect.deleteProperty(this, 'approveWaitingEffects');
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
-      'failingSlates', 'wakeOnce',
+      'failingSlates', 'wakeOnce', 'approveWaitingEffects',
     ]);
+  }
+
+  /** The owner, on the stack: approves every action waiting there, as the asks' Approve does. Answers what it approved. */
+  async approveWaitingEffects(): Promise<string[]> {
+    const waiting = (await this.listDeferredApprovals()).filter((action) => action.status === 'queued').map((action) => action.id);
+
+    return (await this.decideDeferredApprovals(waiting, 'approved')).decided;
   }
 
   /** The platform's alarm delivery, which runs whichever of Nimbus's tasks are due. */
@@ -194,7 +202,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
   'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'
-  | 'wakeOnce'>;
+  | 'wakeOnce' | 'approveWaitingEffects'> & Pick<ProductionOrchestrator, 'setLiveShareMode'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -263,7 +271,7 @@ const RUNNER = [
   '}',
 ].join('\n');
 
-const SharedValueSchema = v.object({ share: v.object({ handle: v.string() }) });
+const SharedValueSchema = v.object({ share: v.object({ id: v.string(), handle: v.string() }) });
 
 const LILT_GOOD = 'export default function App() { return <p data-words>lilt-good</p>; }';
 
@@ -289,6 +297,8 @@ interface SlateBuildSeen {
 
 const GraphValueSchema = v.object({
   namespaces: v.array(v.object({ namespace: v.string(), members: v.array(v.object({ member: v.string(), impact: v.string() })) })),
+  /** The revision the reach is read at, which "my access" is approved for. */
+  revision: v.nullable(v.string()),
 });
 
 /** Every call names the workspace, so nothing the test holds pins this object across
@@ -405,7 +415,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
    * The owner's program makes the crafted tool `helper`, then runs it through the `runner` slate's class; the slate is
    * shared granting the tool alone, and a consented viewer opens its page, which runs the tool too.
    */
-  async craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }> {
+  async craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; waited: string; approved: string[]; viewer: string }> {
     const target = await this.workspaceTarget(input.workspace);
 
     await this.claimWorkspace(target, input.workspace, input.owner);
@@ -418,18 +428,23 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     if (!graph.ok) throw new Error(`slate graph refused: ${graph.reason}: ${graph.error}`);
 
-    const reached = v.parse(GraphValueSchema, graph.value).namespaces
-      .flatMap((row) => row.members.map((member) => `${row.namespace}.${member.member}:${member.impact}`));
-
-    const shared = await owned.slateAs(ROOT_SLATE_CALLER, {
-      op: 'share', id: 'runner', visibility: 'public', approved: [{ slate: 'runner', namespace: 'tools', member: 'helper' }],
-    });
+    const reach = v.parse(GraphValueSchema, graph.value);
+    const reached = reach.namespaces.flatMap((row) => row.members.map((member) => `${row.namespace}.${member.member}:${member.impact}`));
+    const members = [{ slate: 'runner', namespace: 'tools', member: 'helper' }];
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'runner', visibility: 'public', approved: members });
 
     if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
-    const { handle } = v.parse(SharedValueSchema, shared.value).share;
-    const page = await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/');
+    const { id, handle } = v.parse(SharedValueSchema, shared.value).share;
+    // On "my access": the owner approves the helper's reach at the revision the runner runs.
+    const mode = await target.setLiveShareMode({ workspace: input.workspace, share: id, mode: 'owner', revision: reach.revision ?? '', approved: members });
 
-    return { owner, reached, viewer: await page.text() };
+    if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
+    const page = async () => (await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/')).text();
+    // The viewer's run of the helper acts on the owner's access: it waits for the owner, who approves it on the stack.
+    const waited = await page();
+    const approved = await target.approveWaitingEffects();
+
+    return { owner, reached, waited, approved, viewer: await page() };
   }
 
   async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {

@@ -2,8 +2,8 @@
  * A personal part's content (docs/SLATE-SHARING-NIMBUS.md §3): what its confined run returned, as the one document its
  * viewer's part frame draws in a frame that runs no script (`sandbox` with no tokens) and reaches no network. What a run
  * returns is the slate author's markup, so it is cut down to a fixed set of elements with no links, no media and no
- * resources (`HTMLRewriter`), and the document's own policy forbids what the cut might miss. It stays in the cf closure:
- * it is written against workerd's `HTMLRewriter`, whose element attributes Bun's declaration types differently.
+ * resources (`HTMLRewriter`, which workerd and Bun both provide), and the document's own policy forbids what the cut
+ * might miss.
  */
 
 /** Elements kept; any other is dropped, keeping its text. `script`, `style`, `template` and their kind go with their contents. */
