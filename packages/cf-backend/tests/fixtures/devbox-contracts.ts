@@ -277,7 +277,9 @@ export class ContractBox extends Devbox<Env> {
     return program !== undefined;
   }
 
-  async clear(): Promise<void> {
+  /** Everything a run made of this box goes: its store, container and snapshots, then its storage and alarm, as the
+   *  namespace outlasts the run (`scripts/fixtures/devbox-e2e/fixture.ts`). It answers what is left. */
+  async clear(): Promise<{ readonly running: boolean; readonly keys: number; readonly tables: number; readonly alarm: number | null }> {
     const snapshots = this.snapshots();
     await this.discardState();
     await this.destroy();
@@ -287,6 +289,12 @@ export class ContractBox extends Devbox<Env> {
 
       if (outcome === undefined || outcome.kind === 'refused') throw new Error(`snapshot ${id}: ${outcome?.kind === 'refused' ? outcome.reason : 'no registry authority'}`);
     }
+
+    // At this Worker's compatibility date it takes the alarm too.
+    await this.ctx.storage.deleteAll();
+    const tables = this.ctx.storage.sql.exec<{ count: number }>(String.raw`SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\_cf\_%' ESCAPE '\' AND name NOT LIKE 'sqlite\_%' ESCAPE '\'`).one().count;
+
+    return { running: this.ctx.container?.running === true, keys: [...this.ctx.storage.kv.list()].length, tables, alarm: await this.ctx.storage.getAlarm() };
   }
 }
 
@@ -364,9 +372,7 @@ async function lifecycleRoute(url: URL, box: DurableObjectStub<ContractBox>): Pr
     case '/stop': return Response.json(await box.quiesce());
     case '/lose-snapshot': return Response.json({ ok: await box.loseSnapshot() });
     case '/snapshots': return Response.json(await box.snapshots());
-    case '/cleanup': await box.clear();
-
-      return Response.json({ ok: true });
+    case '/cleanup': return Response.json(await box.clear());
     default: return null;
   }
 }

@@ -1,11 +1,15 @@
 import { AwsClient } from 'aws4fetch';
 import * as v from 'valibot';
 import { r2ResiduePlane } from '../../bench-devbox-fixture';
+import type { LeaseStore } from './fixture';
 
 /** A permanent, fixture-only bucket: an armada checkout or its release worktree is not durable state. */
 export const CONTRACT_TEARDOWN_BUCKET = 'kinu-devbox-contracts-teardown';
 
 const PREFIX = 'devbox-contracts/';
+
+/** Outside PREFIX, which lists only teardowns. */
+const LEASE_PREFIX = 'devbox-contracts-lease/';
 
 const Run = v.pipe(v.string(), v.regex(/^dc\d{14}[a-f0-9]{5}$/u));
 
@@ -44,8 +48,10 @@ export function contractOwner(env: Readonly<Record<string, string | undefined>>)
   return parsed.output;
 }
 
+/** @3: the Worker and application are the lasting fixture's, and a run's teardown leaves them (`fixture.ts`). A record of
+ *  an earlier schema names a Worker and application of its own, which only the code that wrote it deletes. */
 export const ContractTeardownSchema = v.object({
-  schema: v.literal('devbox-contracts/teardown@2'),
+  schema: v.literal('devbox-contracts/teardown@3'),
   run: Run,
   worker: v.string(),
   app: v.string(),
@@ -64,6 +70,8 @@ export interface ContractLedger {
   put(manifest: ContractTeardown): Promise<void>;
   remove(run: string): Promise<void>;
   pending(): Promise<readonly ContractTeardown[]>;
+  /** The lease on the fixture `worker` (`takeLease`). */
+  lease(worker: string): LeaseStore;
 }
 
 /**
@@ -145,6 +153,38 @@ export function contractLedger(deps: {
       }
 
       return manifests;
+    },
+    // R2 honours If-None-Match and If-Match on a PUT, answering 412 when it does not hold; it deletes whatever the
+    // If-Match on a DELETE says (measured 2026-10-16), so the remove is unconditional.
+    lease: (worker) => {
+      const url = `${origin}/${encodeURIComponent(`${LEASE_PREFIX}${worker}.json`)}`;
+
+      return {
+        read: async () => {
+          const response = await client.fetch(url);
+
+          if (response.status === 404) return null;
+
+          if (!response.ok) throw new Error(`the fixture lease GET answered ${String(response.status)}`);
+
+          return { lease: await response.json(), version: response.headers.get('etag') ?? '' };
+        },
+        write: async (lease, version) => {
+          const headers: Record<string, string> = version === null ? { 'if-none-match': '*' } : { 'if-match': version };
+          const response = await client.fetch(url, { method: 'PUT', body: JSON.stringify(lease), headers: { ...headers, 'content-type': 'application/json' } });
+
+          if (response.status === 412) return false;
+
+          if (!response.ok) throw new Error(`the fixture lease PUT answered ${String(response.status)}`);
+
+          return true;
+        },
+        remove: async () => {
+          const response = await client.fetch(url, { method: 'DELETE' });
+
+          if (!response.ok && response.status !== 404) throw new Error(`the fixture lease DELETE answered ${String(response.status)}`);
+        },
+      };
     },
   };
 }

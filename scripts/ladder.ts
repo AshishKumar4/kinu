@@ -2558,8 +2558,8 @@ export const LADDER: readonly Gate[] = [
     // the container's own Chrome. The staging identity whatever the deployment: production is never its authority.
     secrets: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'KINU_EVAL_STAGING_WEB_IDENTITY'],
     shared: 'browser',
-    // A source row: it drives no deployment, the staging eval identity's own throwaway Worker, application, bucket and
-    // boxes instead, so the deploy's traffic, and the telemetry window that ends with it, does not wait for it, and a
+    // A source row: it drives no deployment, the staging eval identity's own lasting fixture Worker and its run's own
+    // bucket and boxes instead, so the deploy's traffic, and the telemetry window that ends with it, does not wait for it, and a
     // promotion does not run it again on the sha staging proved. The browser lane owns its desktop client.
     tier: 'deploy',
     // 2026-10-06, dc20261006045352da6d8: 17 contracts and verified cleanup, 370 s whole run (D72).
