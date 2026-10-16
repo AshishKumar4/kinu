@@ -78,7 +78,7 @@ import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
-import { installPartsFixture, installShareModeFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame } from "@/gallery-parts";
+import { installPartsFixture, installShareModeFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame, SHARED_LIVE_ENTRY, SharedLiveFrame } from "@/gallery-parts";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
@@ -7689,6 +7689,7 @@ async function mount() {
     // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
     ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
     ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
+    ["shared-live", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
     ["part-frame", { node: <PartFrameFrame />, entries: [partFrameEntry(new URLSearchParams(location.search))] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],

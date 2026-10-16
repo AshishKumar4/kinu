@@ -8,17 +8,21 @@
  * - `deploy` shows a deploy button whose run asks the viewer to approve one effect, with its payload, then shows done.
  * - `team` is a part the slate does not declare for this share: a stub that says what to do.
  *
+ * `shared-live` is the same slate entered as a share: the share's page opens it (`/api/shared/live/open`) and frames it
+ * under Kinu's bar, hosting its parts as the visitor.
+ *
  * What the page asked is on the root for a test to read; the slate's page is drawn here, as its own author would.
  */
 import { useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
-  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
+  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
   type PartRunAnswer, type SlateConsent,
 } from "@kinu.run/core";
 import { PartView } from "@/components/sharing/PartView";
 import { usePartHost } from "@/hooks/use-part-host";
+import LiveSharePage from "@/pages/LiveSharePage";
 import PartFramePage from "@/pages/PartFramePage";
 
 /** The slate's address and the revision of its code now. */
@@ -55,7 +59,7 @@ function slatePage(gallery: string): string {
 
 /** The part routes, answered at the top as the server answers its one viewer. */
 export function installPartsFixture(frame: string): void {
-  if (frame !== "part-host") return;
+  if (frame !== "part-host" && frame !== "shared-live") return;
 
   const next = window.fetch.bind(window);
   const consents: SlateConsent[] = [{ workspace: WORKSPACE, slate: SLATE, ...GITHUB, revision: "r1" }];
@@ -84,6 +88,13 @@ export function installPartsFixture(frame: string): void {
     const request = new Request(input, init);
     const url = new URL(request.url);
     const [, api, area, workspace, slate, kind, part, verb] = url.pathname.split("/");
+
+    // The share's entry: the slate's page as its host serves it, at an address of the page's own origin.
+    if (url.pathname === LIVE_SHARE_OPEN_PATH) {
+      const page = URL.createObjectURL(new Blob([slatePage(location.origin + location.pathname)], { type: "text/html" }));
+
+      return Response.json({ url: page, slate: SLATE, title: TITLE });
+    }
 
     if (api !== "api" || area !== "slates" || workspace !== WORKSPACE || decodeURIComponent(slate ?? "") !== SLATE) return next(input, init);
 
@@ -170,6 +181,17 @@ export function PartHostFrame() {
     </div>
   );
 }
+
+/** The share's page, at the share's address. */
+export function SharedLiveFrame() {
+  return (
+    <Routes>
+      <Route path={APP_ROUTES.sharedLive} element={<LiveSharePage />} />
+    </Routes>
+  );
+}
+
+export const SHARED_LIVE_ENTRY = `/shared/live/${WORKSPACE}/share-1`;
 
 /** One part frame, at its route as the slate's page addresses it. */
 export function PartFrameFrame() {

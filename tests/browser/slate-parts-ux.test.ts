@@ -116,6 +116,30 @@ describe("a slate's personal parts", () => {
     });
   });
 
+  test("a share's page frames the slate under Kinu's bar and hosts its parts for the visitor", async () => {
+    await withGallery(async (gallery) => {
+      for (const [theme, viewport] of [['light', 'desktop'], ['dark', 'mobile']] as const) {
+        const page = await freshPage(gallery, 'shared-live', theme, viewport);
+
+        try {
+          await page.waitForSelector('[data-shared-slate="team-board"]', SOON);
+          expect(await page.$eval('[data-shared-title]', (node) => node.textContent)).toBe('Team board');
+
+          // The visitor allows their own GitHub at the share's page, and sees their part.
+          const standup = await partFrame(page, 'standup');
+
+          await standup.click('[data-part-needs="consent"] button');
+          await page.waitForSelector('[data-consent-allow]', SOON);
+          await noDecisionIn(standup);
+          await page.click('[data-consent-allow]');
+          await reaches(standup, 'shown');
+        } finally {
+          await page.close();
+        }
+      }
+    });
+  });
+
   test('a part frame opened on its own, with no app page above it, runs nothing and shows nothing of a viewer', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'part-frame&part=standup', 'light', 'desktop');
