@@ -22,6 +22,6 @@ export function ownerAlertOf(before: RosterEntry | null, after: RosterEntry | nu
 }
 
 /** Away is anything but a page shown and focused: a hidden tab, or another window in front of this one. */
-export function ownerIsAway(page: { readonly visibility: DocumentVisibilityState; readonly focused: boolean }): boolean {
+export function ownerIsAway(page: { readonly visibility: 'hidden' | 'visible'; readonly focused: boolean }): boolean {
   return page.visibility !== 'visible' || !page.focused;
 }

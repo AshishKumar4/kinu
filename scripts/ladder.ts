@@ -2309,6 +2309,21 @@ export const LADDER: readonly Gate[] = [
     inputs: LIVE_APP_INPUTS,
   },
   {
+    run: 'bun test --timeout=0 tests/browser/live-app-alerts.test.ts',
+    label: 'Live app in a browser: the owner hears a turn end, or a decision, only while away',
+    tier: 'ci',
+    // Measured 2026-10-16 locally: 63.8 s wall, three turns beside the dev server's boot.
+    seconds: 65,
+    catches: 'a sound or a notification while the owner looks at Kinu, or none while they are away, through the real dev '
+      + 'stack and Chrome: a turn of ten tool calls is silent while the page is shown and focused, makes one chime and one '
+      + 'notification at its end with the tab hidden, and a parked command\'s approval makes one of each. Every sound a '
+      + 'page can make is counted (any media play, every oscillator), so a chime per tool call from anywhere, as the '
+      + 'desktop client\'s bell made one per screenshot (2026-10-15), is red here.',
+    blind: 'a hidden tab is emulated (headless Chrome never hides one), and a real browser\'s autoplay and notification '
+      + 'prompts are not shown: the sound is counted as played, the permission granted up front. One local scripted model.',
+    inputs: LIVE_APP_INPUTS,
+  },
+  {
     run: 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
     label: 'Live app in a browser: a running turn',
     ciExempt: LIVE_APP_AT_CI,
