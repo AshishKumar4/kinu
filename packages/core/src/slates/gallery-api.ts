@@ -12,7 +12,7 @@ export const GalleryCategorySchema = v.picklist(GALLERY_CATEGORIES);
 
 export type GalleryCategory = v.InferOutput<typeof GalleryCategorySchema>;
 
-export const GalleryListingSchema = v.object({
+const GalleryListingSchema = v.object({
   workspace: v.string(),
   slate: v.string(),
   /** The live share it opens: `slate_live_shares.id`. */

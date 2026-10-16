@@ -2,6 +2,7 @@
 import { Effect } from 'effect';
 import {
   BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema, LIVE_SHARE_MODE_PATH,
+  LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
   type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareModeBody, type LiveShareRecord,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
@@ -83,9 +84,9 @@ export async function revokeShare(input: { workspace: string; share: string }): 
   return settle(api(v.object({ listing: Listing }), 'POST', '/api/shared/revoke', input));
 }
 
-/** Share origin for a public share; a ticket-bearing entry for one that names people. */
-export function openLiveShare(input: { workspace: string; share: string }): Promise<{ url: string }> {
-  return settle(api(v.object({ url: v.string() }), 'POST', '/api/shared/live/open', input));
+/** Share origin for a public share; a ticket-bearing entry for one that names people; with the slate and its title. */
+export function openLiveShare(input: { workspace: string; share: string }): Promise<LiveShareOpen> {
+  return settle(api(LiveShareOpenSchema, 'POST', LIVE_SHARE_OPEN_PATH, input));
 }
 
 /** Switches a share's mode, or approves the reach again at the slate's new revision: the share as it now is. */

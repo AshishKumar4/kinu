@@ -223,7 +223,7 @@ import { Hono } from 'hono';
 import { beneath, rawPath, rethrow } from './api/context';
 import { experienceLibraryOver } from './user/experience-library';
 import { ownedByAnotherAccount } from './user/workspace-ownership';
-import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
+import type { LiveShareReading, WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
   EVOLUTION_LANE_FIBER,
@@ -5895,9 +5895,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return viewerEntryUrl(this.env, this.name, handle, userId);
   }
 
-  /** The share row re-read through the S6 gate, plus title and description from the slate's package.json. */
-  async readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
-    return (await this.slates()).controller.readLiveShareRecord(share);
+  /** The share row re-read through the S6 gate, plus title and description from the slate's package.json, and whether
+   *  its address admits `reader`: anyone to a public share, else its owner and the people it names, as the host does. */
+  async readLiveShare(share: string, reader: string): Promise<SlateAnswer<LiveShareReading>> {
+    const { controller } = await this.slates();
+    const read = await controller.readLiveShareRecord(share);
+
+    if (!read.ok) return read;
+    const admits = read.value.record.visibility === 'public' || reader === this.getOwnerUserId() || controller.live.hasUser(share, reader);
+
+    return { ...read, value: { ...read.value, admits } };
   }
 
   /** A live share's tree, for a user forking it, held to the share's admission and grant. */

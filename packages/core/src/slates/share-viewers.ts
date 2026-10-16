@@ -22,7 +22,7 @@ import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel,
   type LiveShareRecord, type ShareViewerClaim, type ViewerCall,
 } from './sharing';
-import { admitNestedViewerCall, routeViewerCall, slateCallAddress, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
+import { admitNestedViewerCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
 
 export interface SlateShareViewersDeps {
   readonly live: SlateLiveShareStore;
@@ -138,7 +138,10 @@ export class SlateShareViewers {
 
         const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
         row = { slate: id, ...call.address, impact: call.impact, ok: false };
-        const approval = yield* this.ownerApproval({ share, slate: id, call, args: request.args, viewer: viewer.subject });
+        // A browser member the class runs acts there once the host authorizes it, so that ask is what waits on the owner;
+        // its host member only ever reports the class's refusal (web-operations.ts), which acts on nothing.
+        const reportOnly = request.authorize !== true && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
+        const approval = reportOnly ? null : yield* this.ownerApproval({ share, slate: id, call, args: request.args, viewer: viewer.subject });
 
         // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
         const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.deps.live.live(input.share).grant, id, { namespace, member }); };
