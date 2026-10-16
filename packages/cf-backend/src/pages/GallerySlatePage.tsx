@@ -66,8 +66,8 @@ const SERVICE_ICON: Record<RoomService["kind"], typeof PlugIcon> = { github: Git
  */
 function UsesYours({ needs, author }: { needs: readonly RoomService[]; author: string }) {
   return (
-    <div data-gallery-needs>
-      <h2 className="mb-3 p-heading text-[15px] p-text">Uses your own</h2>
+    <div data-gallery-needs className="pt-2">
+      <h2 className="mb-2 p-meta font-medium p-text-2">Uses your own</h2>
       {needs.length === 0 ? (
         <p className="p-row-text p-text-2">Nothing of yours.</p>
       ) : (
@@ -166,10 +166,10 @@ export default function GallerySlatePage() {
                 ? <span data-gallery-reported className="ml-auto inline-flex items-center gap-1"><FlagIcon size={12} />Reported</span>
                 : <button type="button" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())} className="ml-auto inline-flex items-center gap-1 hover:underline"><FlagIcon size={12} />Report</button>}
             </p>
+            {read.needs !== undefined && <UsesYours needs={read.needs} author={listing.owner.name.split(" ")[0] ?? listing.owner.name} />}
           </div>
         </div>
         <div className="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          {read.needs !== undefined && <div className="lg:col-start-2 lg:row-start-1"><UsesYours needs={read.needs} author={listing.owner.name.split(" ")[0] ?? listing.owner.name} /></div>}
           {like.length > 0 && (
             <div data-gallery-like>
               <h2 className="mb-3 p-heading text-[15px] p-text">More like it</h2>
