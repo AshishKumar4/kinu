@@ -1363,8 +1363,8 @@ export const PLATFORM_CATALOG = {
       + 'easier than production. Five labelled workerd reasons are known but none is delivered '
       + 'to the object. This repo already handles it the only way available: a job row still '
       + 'marked `running` when nothing in the isolate owns it IS an orphan, whatever became of '
-      + 'its fiber, and stamps its own message ("interrupted by Durable Object eviction '
-      + 'before completion") because the platform supplies none.',
+      + 'its fiber, and stamps its own message ("the workspace restarted before it '
+      + 'finished") because the platform supplies none.',
     conflictsWith: ['worker.subrequests'],
   },
 

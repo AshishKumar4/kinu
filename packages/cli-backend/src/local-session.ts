@@ -40,7 +40,7 @@ import { ActorSession, type ActorTurnLease,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubordinateTask, AgentDeliveries, assignmentDelivery, type AgentSignal,
-  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
+  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, resumableBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
   EventLog,
@@ -592,7 +592,7 @@ export class LocalAgentSession {
         this.emit({ type: 'background', event: 'background_job_notice', message: notice.body });
       },
       // Process exit is the local analogue of a DO eviction: resume from the durable checkpoint.
-      resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, { value: input }, mode, signal),
+      resume: { resumes: resumableBackgroundJob, redrive: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, { value: input }, mode, signal) },
       // Same predicate as `resume`: a search keeps what it measured; side-effecting kinds have nothing partial.
       harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
         { sql: this.rt.storage.sql, ledger: this.mctsSearchStore, actor: this.rt.actor }, kind, input,

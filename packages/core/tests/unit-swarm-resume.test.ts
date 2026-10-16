@@ -18,7 +18,7 @@ import { initSearchTables } from '../src/mcts/schemas';
 import { HeadJournal } from '../src/heads/journal';
 import type { AgentsToolDeps } from '../src/delegation/agents-tool';
 import { createAgentsTool } from '../src/delegation/agents-operations';
-import { resumeBackgroundJob } from '../src/orchestrator/background-tools';
+import { resumableBackgroundJob, resumeBackgroundJob } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { ForkNotices, forkNoticeDeliveries, initForkNoticeTable } from '../src/heads/fork-notices';
@@ -774,8 +774,10 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       store: jobs,
       fiber,
       inbox: agent.inbox,
-      resume: (kind, input, mode, signal) =>
-        resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
+      resume: {
+        resumes: resumableBackgroundJob,
+        redrive: (kind, input, mode, signal) => resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
+      },
       onSettled: (job) => notified.push(job.status),
     });
 
@@ -924,8 +926,10 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
       store: jobs,
       fiber,
       inbox: agent.inbox,
-      resume: (kind, input, mode, signal) =>
-        resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
+      resume: {
+        resumes: resumableBackgroundJob,
+        redrive: (kind, input, mode, signal) => resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
+      },
     });
 
     const jobId = 'bgjob-flat-swarm';
@@ -1037,8 +1041,10 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       store: jobs,
       fiber,
       inbox: agent.inbox,
-      resume: (kind, input, mode, signal) =>
-        resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
+      resume: {
+        resumes: resumableBackgroundJob,
+        redrive: (kind, input, mode, signal) => resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
+      },
     });
 
     jobs.create({

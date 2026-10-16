@@ -1707,7 +1707,7 @@ export { tierRefusals } from './profiles/tier-refusals';
 export type { TierRefusals } from './types/refusals';
 
 export {
-  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
+  BACKGROUNDABLE_TOOLS, resumeBackgroundJob, resumableBackgroundJob, harvestBackgroundJob,
 } from './orchestrator/background-tools';
 
 export {

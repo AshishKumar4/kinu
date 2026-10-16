@@ -67,11 +67,11 @@ function firstCodeLine(code: string): string {
   return "";
 }
 
-/** The first nonblank line is the model's user-facing codemode intent. */
-function codemodeIntent(code: string): string {
+/** The first nonblank line is the model's user-facing codemode intent; "" when it declares none. */
+export function programIntent(code: string): string {
   const first = code.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
 
-  return first.startsWith("//") ? clip(first.slice(2), 72) : "";
+  return first.startsWith("//") ? redactSecrets(clip(first.slice(2), 72)) : "";
 }
 
 /** The delegation tool, by the operation its call names. */
@@ -294,7 +294,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   memory: (input) => MEMORY_VERBS.get(str(input, "op")) ?? "",
   tasks: (input) => TASK_VERBS.get(str(input, "op")) ?? "",
   web: describeWeb,
-  eval: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
+  eval: (input) => programIntent(str(input, "code")) || "Ran a tool program",
   report: (input) => (str(input, "status") ? `Reported ${str(input, "status")}` : "Reported back"),
 } satisfies Record<string, ToolDescriber>));
 

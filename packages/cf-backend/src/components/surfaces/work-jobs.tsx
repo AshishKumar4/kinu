@@ -29,12 +29,15 @@ function statusMeta(status: BackgroundJob["status"]) {
   }
 }
 
-/** The durable resume count, in the owner's words (the operator's drilldown keeps its own terse count). Null when there
- *  is nothing to say. */
+/**
+ * The durable resume count of a job still running, in the owner's words (the operator's drilldown keeps its own terse
+ * count). Null when there is nothing to say: a settled job speaks only through its one recorded outcome, its result or
+ * its error, which says whether the work was lost.
+ */
 function interruptionNote(job: BackgroundJob, now: number): string | null {
   const attempts = job.epoch;
 
-  if (attempts === 0) return null;
+  if (attempts === 0 || job.status !== "running") return null;
   const times = attempts === 1 ? "once" : `${attempts} times`;
 
   const waiting = job.resumeAfter != null && job.resumeAfter > now
