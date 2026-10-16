@@ -108,7 +108,6 @@ export { ControlPlaneDO } from "./control-plane/control-plane-do";
 
 export { SlateRoom } from "./slates/room";
 
-export { GalleryDO } from "./gallery/gallery-do";
 
 export { RoomBinding } from "./slates/room-bindings";
 

@@ -321,7 +321,6 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   attackHolder(): Promise<{ alice: string; bobFirst: string; afterSamShows: string; afterAliceShows: string }>;
   scenarioBoard(): Promise<{ alice: string; bob: string; visitor: string; asked: { sam: number; alice: number; bob: number } }>;
   roomWrites(): Promise<{ visitorNote: string; visitorPut: string; bobNote: string; notes: string; stamps: string; stampedTwice: string }>;
-  listingRefill(): Promise<{ listed: boolean; lost: boolean; refilled: boolean }>;
   browserDrives(): Promise<{ asked: string; own: string[]; afterRemoval: string; others: string; othersLog: string[]; raw: string; forged: number[]; lent: string; samLog: string[] }>;
   ownAi(): Promise<{ alice: string; aliceCalls: number; samCalls: number }>;
   attackStaleImage(): Promise<{ first: string; edited: string; held: string; fromB: number }>;
@@ -334,7 +333,6 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   attackFork(): Promise<{ forked: string; dana: string; samDeploysForDana: number }>;
   draftRoom(workspace: string, id: string): Promise<boolean>;
   roomExists(workspace: string, id: string): Promise<boolean>;
-  rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }>;
   editorEdits(input: { workspace: string; id: string; editorWorkspace: string; editor: string; server: string }): Promise<{
     before: string; files: string[]; edited: string; page: string | null; author: string | null; reaching: string; restored: boolean; pageAfter: string | null; afterRemoval: string;
   }>;

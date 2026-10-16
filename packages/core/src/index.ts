@@ -290,17 +290,21 @@ export {
 } from './slates/sharing';
 
 export {
-  GALLERY_CATEGORIES, RoomViewSchema, RoomCallSchema, RoomClientFrameSchema, RoomServerFrameSchema,
+  RoomViewSchema, RoomCallSchema, RoomClientFrameSchema, RoomServerFrameSchema,
   DriveLibrarySchema, ForkPreviewSchema, ForkedSchema,
-  GALLERY_SORTS, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH, GALLERY_REPORT_PATH,
-  type GalleryPage, type GallerySlate, type GalleryStar, type GalleryReport,
   roomPagePath, roomSocketPath, roomPartPath, roomFramePath, roomEntryPath, roomForkPath, RoomEntrySchema, type RoomEntry,
   type RoomPerson, type RoomRole, type RoomAccess, type RoomAudience, type RoomService, type RoomTool, type RoomSource,
-  type RoomReach, type GalleryCategory, type SheetLend, type SheetLendUse, type SheetMember, type SheetView,
+  type RoomReach, type SheetLend, type SheetLendUse, type SheetMember, type SheetView,
   type RoomSession, type RoomPresence, type RoomAsk, type RoomEnded, type PartView, type RoomView, type ShowScope,
   type RoomCall, type RoomClientFrame, type RoomServerFrame,
-  type DriveRoomCard, type DriveSlate, type DriveLibrary, type GalleryListing, type GallerySort, type ForkPreview, type Forked,
+  type DriveRoomCard, type DriveSlate, type DriveLibrary, type ForkPreview, type Forked,
 } from './slates/room-api';
+
+export {
+  GALLERY_CATEGORIES, GALLERY_SORTS, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
+  type GalleryReport,
+} from './slates/gallery-api';
 
 export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 

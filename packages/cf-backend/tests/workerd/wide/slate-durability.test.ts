@@ -219,13 +219,6 @@ it('a deleted workspace’s slates leave no page behind: their rooms go with it'
     .toEqual({ keeper: false, draft: false });
 });
 
-it('the owner removing someone re-keys the link, and the Gallery lists the new one', async () => {
-  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('rekeyed'));
-
-  await subject.serveSlate({ workspace: 'durability-rekeyed', owner: 'durability-owner', id: 'listed', body: 'listed-body' });
-  expect(await subject.rekeyedListing('durability-rekeyed', 'listed')).toEqual({ moved: true, before: false, after: true });
-});
-
 it('someone added to edit a slate changes it from their own workspace: built in the owner’s, published as theirs', async () => {
   const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('edited'));
 

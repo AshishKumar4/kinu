@@ -5,7 +5,8 @@
 import { Hono } from 'hono';
 import * as v from 'valibot';
 import { err, json, objectNamed, safeJson, type DriveLibrary, type DriveRoomCard, type DriveSlate, type UserCaller } from '@kinu.run/core';
-import { GALLERY_OBJECT } from '../gallery/gallery-do';
+import { internalCaller } from '@kinu.run/core/control-plane';
+import { controlPlaneStub } from '../control-plane/stub';
 import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
 import type { AuthIdentity } from '../auth/session';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
@@ -62,7 +63,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     at: held.receivedAt, ...(held.receivedAt > seenAt && { unseen: true as const }), url: held.card.url,
   }]);
 
-  const starred = await env.GALLERY.get(env.GALLERY.idFromName(GALLERY_OBJECT)).starred(identity.email.trim().toLowerCase());
+  const starred = await controlPlaneStub(env).galleryStarred(await internalCaller(env), identity.email.trim().toLowerCase());
 
   return { slates, shared: cards.filter((card) => card.relation === 'shared'), used: cards.filter((card) => card.relation === 'used'), starred };
 }

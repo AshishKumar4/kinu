@@ -35,7 +35,6 @@ function world(written: readonly string[]) {
     UserDO: namespace('UserDO'),
     OrchestratorAgent: namespace('OrchestratorAgent'),
     SLATE_ROOM: namespace('SlateRoom'),
-    GALLERY: namespace('GalleryDO'),
   };
 
   return { env, asked };
@@ -113,7 +112,7 @@ test('the walk starts from the builtin directory and the eval service\'s account
 });
 
 // A room by the name its workspace gives it; the Gallery by its one name, as the walk names it.
-for (const [className, name] of [['SlateRoom', 'jarvis/0123456789'], ['GalleryDO', 'gallery']] as const) {
+for (const [className, name] of [['SlateRoom', 'jarvis/0123456789']] as const) {
   test(`a ${className} batch reaches its namespace, by name`, async () => {
     const { env, asked } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
 

@@ -1,16 +1,15 @@
 /**
- * A listed slate's own page (sharing v7 `gallery-slate`): Open by its link, Fork with its key, Star; what it uses of
- * yours and of its author's, the files a fork gets, and Report.
+ * A listed slate's own page (sharing v7 `gallery-slate`): Open by its link, Fork with its key, Star, and Report.
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Button, Loader } from "@cloudflare/kumo";
-import { FlagIcon, GitForkIcon, LockSimpleIcon, PlayIcon, StarIcon, UsersThreeIcon } from "@phosphor-icons/react";
-import type { GalleryListing, GallerySlate, RoomService } from "@kinu.run/core";
+import { FlagIcon, GitForkIcon, PlayIcon, StarIcon } from "@phosphor-icons/react";
+import type { GalleryListing, GallerySlate } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { useGallerySignedIn } from "@/components/gallery/GalleryShell";
-import { ListingPicture, ListingTile, ServiceIcon } from "@/components/gallery/GalleryTiles";
+import { ListingPicture, ListingTile } from "@/components/gallery/GalleryTiles";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { Avatar } from "@/components/ui/Avatar";
@@ -21,49 +20,6 @@ import { hereForking, signInAndReturn } from "@/hooks/use-room-frames";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { readGallery, readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
 import { linkKeyOf } from "@/lib/room-client";
-
-const UPDATED = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
-
-function GroupHead({ children }: { children: string }) {
-  return <div className="px-3.5 pb-1 pt-2.5 p-meta font-medium p-text-3">{children}</div>;
-}
-
-function ReachRow({ icon, name, detail }: { icon: ReactNode; name: string; detail: string }) {
-  return (
-    <div className="flex items-center gap-3 px-3.5 py-1.5">
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-full p-fill p-text-2">{icon}</span>
-      <span className="min-w-0 flex-1">
-        <span className="block p-row-text font-medium p-text">{name}</span>
-        <span className="block p-meta p-text-3">{detail}</span>
-      </span>
-    </div>
-  );
-}
-
-const needDetail = (need: RoomService) => (need.kind === "ai" ? "Your default model, unless you choose another" : "You connect yours the first time you use it");
-
-/** What it uses of yours, and of its author's. */
-function Reach({ slate }: { slate: GallerySlate }) {
-  const author = slate.listing.owner.name.split(" ")[0] ?? slate.listing.owner.name;
-
-  return (
-    <div className="p-group">
-      <div>
-        <GroupHead>Uses your own</GroupHead>
-        {slate.listing.needs.length === 0 && <ReachRow icon={<LockSimpleIcon size={14} />} name="Nothing" detail="It needs none of your connections" />}
-        {slate.listing.needs.map((need) => (
-          <div key={need.title} data-gallery-need={need.kind}><ReachRow icon={<ServiceIcon service={need} size={14} />} name={need.title} detail={needDetail(need)} /></div>
-        ))}
-      </div>
-      <div data-gallery-reads-author={slate.readsAuthor}>
-        <GroupHead>{`${author} lends`}</GroupHead>
-        {slate.readsAuthor
-          ? <ReachRow icon={<UsersThreeIcon size={14} />} name="What they lend" detail={`Some parts run with ${author}'s own access; you see what they return`} />
-          : <ReachRow icon={<LockSimpleIcon size={14} />} name="Nothing" detail="It reads none of its author's data" />}
-      </div>
-    </div>
-  );
-}
 
 function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; onClose: () => void; onSent: () => void }) {
   const [reason, setReason] = useState("");
@@ -179,11 +135,9 @@ export default function GallerySlatePage() {
               </Button>
             </div>
             {starFailure !== null && <p role="alert" className="p-meta p-danger">{starFailure}</p>}
-            <Reach slate={read} />
             <p className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
               {read.people !== undefined && <span data-gallery-people>Used by about {read.people.toLocaleString("en-US")} people this week</span>}
               {read.forks !== undefined && <span data-gallery-forks>{read.forks === 1 ? "1 fork" : `${read.forks.toLocaleString("en-US")} forks`}</span>}
-              <span>Updated {UPDATED.format(read.updatedAt)}</span>
               {reported
                 ? <span data-gallery-reported className="ml-auto inline-flex items-center gap-1"><FlagIcon size={12} />Reported</span>
                 : <button type="button" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())} className="ml-auto inline-flex items-center gap-1 hover:underline"><FlagIcon size={12} />Report</button>}
@@ -191,12 +145,6 @@ export default function GallerySlatePage() {
           </div>
         </div>
         <div className="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          <div>
-            <h2 className="mb-3 p-heading text-[15px] p-text">Files a fork gets</h2>
-            <div className="p-group font-mono text-xs">
-              {read.files.map((file) => <div key={file} data-gallery-file className="px-3.5 py-2 p-text-2">{file}</div>)}
-            </div>
-          </div>
           {like.length > 0 && (
             <div data-gallery-like>
               <h2 className="mb-3 p-heading text-[15px] p-text">More like it</h2>

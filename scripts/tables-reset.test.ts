@@ -201,11 +201,10 @@ test('the walk reaches every object by name, from the roots, and only reads Clou
     'UserDO u-builtin',
     'OrchestratorAgent u-seen-ws,u-builtin-ws',
     'SlateRoom u-seen-ws/0123456789,u-builtin-ws/0123456789',
-    'GalleryDO gallery',
   ]);
   expect(asked.every((body) => !('ids' in body))).toBe(true);
   // Listed by Cloudflare and named by no root: counted, never opened. `u-seen` was named, so it is not among them.
-  expect({ reached: reached.length, unnamed: unnamed.length }).toEqual({ reached: 9, unnamed: 60 });
+  expect({ reached: reached.length, unnamed: unnamed.length }).toEqual({ reached: 8, unnamed: 60 });
   expect(unnamed).not.toContain(sha256Hex('u-seen'));
   expect(forgotten).toEqual(admitted);
 });

@@ -84,7 +84,6 @@ const SCHEMA_RETIRED = `${root}scripts/schema-retired.json`;
 const SchemaClassesSchema = v.object({
   account: v.array(v.string()), workspace: v.array(v.string()), agent: v.array(v.string()), local: v.array(v.string()),
   room: v.array(v.string()),
-  gallery: v.array(v.string()),
   control: v.array(v.string()),
 });
 

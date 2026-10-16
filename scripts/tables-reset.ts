@@ -34,7 +34,7 @@ import { restCall } from './cloudflare-rest';
 import type { GenesisLock } from './schema-drift';
 
 /** The classes the walk reaches, as `/ops/tables` names them. */
-export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent', 'SlateRoom', 'GalleryDO', 'ControlPlaneDO'] as const;
+export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent', 'SlateRoom', 'ControlPlaneDO'] as const;
 
 export type ResetClass = (typeof RESET_CLASSES)[number];
 
@@ -314,7 +314,7 @@ export interface OpsBody {
 }
 
 const RepairSchema = v.object({
-  schema: v.picklist(['account', 'workspace', 'agent', 'local', 'room', 'gallery']),
+  schema: v.picklist(['account', 'workspace', 'agent', 'local', 'room', 'control']),
   rebuilt: v.array(v.string()),
   refilled: v.array(v.string()),
   retired: v.array(v.string()),
@@ -437,7 +437,6 @@ export async function walk(target: TablesTarget): Promise<Walked> {
 
     const listed = {
       UserDO: await target.objects('UserDO'), OrchestratorAgent: await target.objects('OrchestratorAgent'), SlateRoom: await target.objects('SlateRoom'),
-      GalleryDO: await target.objects('GalleryDO'),
     };
 
     const roots = await askAdmitted(target, pass, { path: 'roots', body: null, schema: RootsSchema });
@@ -454,13 +453,12 @@ export async function walk(target: TablesTarget): Promise<Walked> {
     }
 
     await reachEach(walking, 'OrchestratorAgent', answers().flatMap((answer) => answer.workspaces));
-    // Each workspace names its slates' rooms; the Gallery is one object, by its one name.
+    // Each workspace names its slates' rooms.
     await reachEach(walking, 'SlateRoom', answers().flatMap((answer) => answer.rooms));
-    await reachEach(walking, 'GalleryDO', ['gallery']);
 
     return {
       reached: [...reached.values()],
-      unnamed: [...listed.UserDO, ...listed.OrchestratorAgent, ...listed.SlateRoom, ...listed.GalleryDO].filter((id) => !reached.has(id)),
+      unnamed: [...listed.UserDO, ...listed.OrchestratorAgent, ...listed.SlateRoom].filter((id) => !reached.has(id)),
     };
   } finally {
     target.forget(digest);

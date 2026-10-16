@@ -33,7 +33,6 @@ const FIRST_TABLE = {
   agent: 'workspace_actors',
   local: 'workspace_identity',
   room: 'room',
-  gallery: 'gallery_listings',
   control: 'cp_users',
 } as const satisfies Record<SchemaClass, string>;
 

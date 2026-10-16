@@ -11,7 +11,7 @@ import * as v from 'valibot';
 import { createWebhookSecretStore } from '@kinu.run/core';
 import { initControlPlaneSchema } from '@kinu.run/core/control-plane/store';
 import { initBuiltinAccounts } from '@kinu.run/core/identity';
-import { initGalleryTables, initSlateRoomTables } from '@kinu.run/core/slates';
+import { initSlateRoomTables } from '@kinu.run/core/slates';
 import { Database as SqliteDatabase } from 'bun:sqlite';
 import { makeSqlExec } from '../../core/tests/helpers';
 import { orchestratorHarness } from './helpers/actor-harness';
@@ -40,17 +40,15 @@ test('each Durable Object class makes the tables scripts/schema-classes.json nam
   initBuiltinAccounts(<T,>(query: TemplateStringsArray, ...values: (string | number | null)[]) => account.db.query<T, (string | number | null)[]>(query.join('?')).all(...values));
   createWebhookSecretStore(makeSqlExec(workspace.db));
   const room = new SqliteDatabase(':memory:');
-  const gallery = new SqliteDatabase(':memory:');
 
   initSlateRoomTables((ddl) => { room.run(ddl); });
-  initGalleryTables((ddl) => { gallery.run(ddl); });
   const control = new SqliteDatabase(':memory:');
 
   initControlPlaneSchema(makeSqlExec(control));
 
   const measured = {
     account: madeTables(account.db), workspace: madeTables(workspace.db), agent: madeTables(agentDatabase(workspace.db, 'schema-classes')),
-    room: madeTables(room), gallery: madeTables(gallery), control: madeTables(control),
+    room: madeTables(room), control: madeTables(control),
   };
 
   const held = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(readFileSync(CLASSES, 'utf8')));
@@ -59,6 +57,5 @@ test('each Durable Object class makes the tables scripts/schema-classes.json nam
 
   if (process.env.KINU_SCHEMA_CLASSES === 'write') writeFileSync(CLASSES, `${JSON.stringify({ ...held, ...measured }, null, 2)}\n`);
   room.close();
-  gallery.close();
-  expect({ account: held.account, workspace: held.workspace, agent: held.agent, room: held.room, gallery: held.gallery, control: held.control }).toEqual(measured);
+  expect({ account: held.account, workspace: held.workspace, agent: held.agent, room: held.room, control: held.control }).toEqual(measured);
 });

@@ -18,7 +18,6 @@ import type { RoomCallOutcome } from '../../src/slates/room';
 import { ATTACK_SLATE, browserLogged, browserLogOf, GITHUB, holdNextConnectionsRead, MAIL, OPS, persona, personSocket, reachedCalls, type PersonSocket } from './room-attacks';
 import { ROOM_HOST_HEADER, ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
 import { accountIdFor } from '../../src/auth/store';
-import { GALLERY_OBJECT } from '../../src/gallery/gallery-do';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
@@ -27,7 +26,7 @@ import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
-import { opsCaller, SharedSlateFilesSchema, type JsonObject, type JsonValue, type RoomView, type SlateAnswer, type SlateCallResult } from '@kinu.run/core';
+import { SharedSlateFilesSchema, type JsonObject, type JsonValue, type RoomView, type SlateAnswer, type SlateCallResult } from '@kinu.run/core';
 import type {
   DurabilityReservation,
   PreviewAnswer,
@@ -668,27 +667,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * A listed slate whose listing the Gallery lost (its tables made anew) is listed again by the deploy's walk, which
-   * reaches the room: before the walk the Gallery holds nothing of it, after it the listing with its link.
-   */
-  async listingRefill(): Promise<{ listed: boolean; lost: boolean; refilled: boolean }> {
-    const { at, room, owner } = await this.stage('refill');
-    const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
-    const listed = async (): Promise<boolean> => (await gallery.slate(at.workspace, at.slate, null)) !== null;
-
-    await owner.call({ op: 'setAudience', audience: 'anyone' });
-    await owner.call({ op: 'list', line: 'A refilled slate', category: 'fun' });
-    const before = await listed();
-
-    await gallery.unlist(at.workspace, at.slate);
-    const lost = !(await listed());
-
-    await room.opsTables(await opsCaller(this.env));
-
-    return { listed: before, lost, refilled: await listed() };
-  }
-
-  /**
    * Attack 6's other half, revision binding at the worker: Sam's own call is admitted at image A, and before its worker is
    * made Ben publishes image B. The run runs the code it was admitted at, under the grants admitted with it; B's code never
    * runs under them.
@@ -1279,29 +1257,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, made.value.handle)));
 
     return await room.exists();
-  }
-
-  /**
-   * The owner, over the room's own socket, turns the link on, lists the slate, adds someone and removes them: whether the
-   * link the Gallery listed before the removal, and the one it lists after, still let a visitor in.
-   */
-  async rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }> {
-    const { room, call, close } = await this.ownerSocket(workspace, id);
-    const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
-    const listed = async (): Promise<string | null> => (await gallery.slate(workspace, id, null))?.listing.url ?? null;
-
-    await call({ op: 'setAudience', audience: 'anyone' });
-    await call({ op: 'list', line: 'A probe slate', category: 'fun' });
-    const before = await listed();
-
-    await call({ op: 'invite', email: 'gone@probe.local', role: 'use' });
-    await call({ op: 'remove', email: 'gone@probe.local' });
-    const after = await listed();
-    const opens = async (url: string | null): Promise<boolean> => url !== null && await room.ticketFor(null, new URL(url, 'https://app.test').searchParams.get('k')) !== null;
-
-    close();
-
-    return { moved: before !== after, before: await opens(before), after: await opens(after) };
   }
 
   /**

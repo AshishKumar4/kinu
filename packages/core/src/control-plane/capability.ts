@@ -21,6 +21,12 @@ const CONTROL_PLANE_CAPABILITIES = {
   'index.workspace': 'ingest',
   'index.forget': 'ingest',
   'feedback.write': 'ingest',
+  // The Gallery: read by anyone, signed in or not; marked by a signed-in person, whose email the Worker's route names;
+  // listed by a workspace's share; forgotten with an account. The Worker holds the grade on each one's behalf.
+  'gallery.read': 'ingest',
+  'gallery.mark': 'ingest',
+  'gallery.list': 'ingest',
+  'gallery.forget': 'ingest',
   'overview.read': 'admin',
   'users.read': 'admin',
   'workspaces.read': 'admin',

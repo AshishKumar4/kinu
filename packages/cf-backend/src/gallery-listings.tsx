@@ -8,7 +8,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
-import { APP_ROUTES, type ForkPreview, type GalleryListing, type GallerySlate } from "@kinu.run/core";
+import { APP_ROUTES, type ForkPreview, type GalleryListing, type GallerySlate, type RoomService } from "@kinu.run/core";
 import GalleryShell from "@/components/gallery/GalleryShell";
 
 const GalleryPage = lazy(() => import("@/pages/GalleryPage"));
@@ -20,8 +20,8 @@ const NOW = Date.now();
 const DAY = 864e5;
 
 const listing = (
-  workspace: string, slate: string, key: string, rest: Omit<GalleryListing, "workspace" | "slate" | "url" | "starred" | "featured"> & { featured?: boolean },
-): GalleryListing => ({ workspace, slate, url: `/s/${workspace}/${slate}?k=${key}`, starred: false, ...rest, featured: rest.featured ?? false });
+  workspace: string, slate: string, key: string, rest: Omit<GalleryListing, "workspace" | "slate" | "share" | "url" | "starred" | "featured"> & { featured?: boolean },
+): GalleryListing => ({ workspace, slate, share: `share-${key}`, url: `/s/${workspace}/${slate}?k=${key}`, starred: false, ...rest, featured: rest.featured ?? false });
 
 /** A picture's digest: any 64 hex characters name one version. */
 const PICTURES = {
@@ -36,48 +36,50 @@ const MODEL = { title: "Model", kind: "ai" } as const;
 const LISTINGS: readonly GalleryListing[] = [
   listing("ravi", "pr-board", "p8x2", {
     title: "PR review board", line: "Every pull request waiting on you, across your repositories, sorted by how long it has waited.",
-    category: "developer", owner: { name: "Ravi Menon" }, stars: 412, listedAt: NOW - 20 * DAY, needs: [GITHUB], featured: true, picture: PICTURES["pr-board"],
+    category: "developer", owner: { name: "Ravi Menon" }, stars: 412, listedAt: NOW - 20 * DAY, featured: true, picture: PICTURES["pr-board"],
   }),
   listing("ana", "trip", "t5c1", {
     title: "Trip budget splitter", line: "Log what each person paid; it says who owes whom, in as few payments as possible.",
-    category: "money", owner: { name: "Ana Souza" }, stars: 287, listedAt: NOW - 3 * DAY, needs: [], featured: true, picture: PICTURES.trip,
+    category: "money", owner: { name: "Ana Souza" }, stars: 287, listedAt: NOW - 3 * DAY, featured: true, picture: PICTURES.trip,
   }),
   listing("alice", "habits", "h2b6", {
     title: "Habit tracker", line: "A week of habits on one screen. Tap a day to mark it.", category: "home", owner: { name: "Alice Chen" }, stars: 233,
-    listedAt: NOW - 12 * DAY, needs: [], picture: PICTURES.habits,
+    listedAt: NOW - 12 * DAY, picture: PICTURES.habits,
   }),
   listing("jules", "digest", "d9e4", {
     title: "Morning reading", line: "Five things worth reading today on the topics you choose, summarised by your model.", category: "work",
-    owner: { name: "Jules Martin" }, stars: 198, listedAt: NOW - DAY, needs: [MODEL], picture: PICTURES.digest,
+    owner: { name: "Jules Martin" }, stars: 198, listedAt: NOW - DAY, picture: PICTURES.digest,
   }),
   listing("priya", "standup", "s3f7", {
     title: "Standup notes", line: "Turns yesterday's commits and calendar into a three-line standup.", category: "work", owner: { name: "Priya Shah" },
-    stars: 164, listedAt: NOW - 6 * DAY, needs: [MODEL, GITHUB], picture: PICTURES.standup,
+    stars: 164, listedAt: NOW - 6 * DAY, picture: PICTURES.standup,
   }),
   listing("tom", "recipe", "r1a8", {
     title: "Recipe scaler", line: "Paste a recipe and scale it to any number of people, in grams.", category: "home", owner: { name: "Tom Okafor" },
-    stars: 121, listedAt: NOW - 9 * DAY, needs: [], picture: PICTURES.recipe,
+    stars: 121, listedAt: NOW - 9 * DAY, picture: PICTURES.recipe,
   }),
   listing("mei", "poll", "l6q0", {
     title: "Team lunch poll", line: "One question, a few options, results live for everyone voting.", category: "fun", owner: { name: "Mei Lin" },
-    stars: 96, listedAt: NOW - 2 * DAY, needs: [],
+    stars: 96, listedAt: NOW - 2 * DAY,
   }),
 ];
 
-/** Each listed slate's own page; Morning reading runs with its author's lend and has no counts yet. */
+/** Each listed slate's own page; Morning reading has no counts yet. */
 const PAGES = {
-  "pr-board": { files: ["package.json", "server.ts", "board.tsx", "github.ts", "README.md"], updatedAt: NOW - 3 * DAY, readsAuthor: false, forks: 86, people: 1200 },
-  digest: { files: ["package.json", "server.ts", "reading.tsx"], updatedAt: NOW - DAY, readsAuthor: true },
+  "pr-board": { forks: 86, people: 1200 },
 } satisfies Record<string, Omit<GallerySlate, "listing">>;
 
-const pageOf = (slate: string): Omit<GallerySlate, "listing"> => (slate === "pr-board" || slate === "digest" ? PAGES[slate] : { files: ["package.json"], updatedAt: NOW, readsAuthor: false });
+const pageOf = (slate: string): Omit<GallerySlate, "listing"> => (slate === "pr-board" ? PAGES[slate] : {});
+
+/** What a fork of each asks its forker to connect. */
+const NEEDS = new Map<string, readonly RoomService[]>([["pr-board", [GITHUB]], ["digest", [MODEL]], ["standup", [MODEL, GITHUB]]]);
 
 const PAGE_SIZE = 6;
 
 const FORK_PREVIEW = (found: GalleryListing): ForkPreview => ({
   title: found.title,
   owner: { email: `${found.workspace}@example.com`, name: found.owner.name },
-  parts: found.needs.map((need, at) => ({ fn: `part${String(at)}`, lent: false, needs: need })),
+  parts: (NEEDS.get(found.slate) ?? []).map((need, at) => ({ fn: `part${String(at)}`, lent: false, needs: need })),
 });
 
 const ORDER = {

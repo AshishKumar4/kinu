@@ -1,6 +1,7 @@
 /**
  * `/api/gallery/*`: the Gallery, before the session gate. Anyone may read it; starring and reporting take a signed-in
- * person. A listing's picture is served only while it is listed, and only the digest it lists.
+ * person. A listing's picture is served only while it is listed, and only the digest it lists. Its index is the
+ * control plane's (core slates/gallery.ts), asked with the Worker's own capability on each person's behalf.
  */
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
@@ -8,7 +9,9 @@ import { err, json, safeJson, GALLERY_CATEGORIES, GALLERY_SORTS } from '@kinu.ru
 import { crossSiteRejection, requestIdentity } from '../auth/session';
 import { rawParam, type FamilyEnv } from '../api/context';
 import { pictureKey, readSlatePicture } from '../slates/pictures';
-import { GALLERY_OBJECT, type GalleryDO, type GalleryMark } from './gallery-do';
+import { internalCaller } from '@kinu.run/core/control-plane';
+import { controlPlaneStub } from '../control-plane/stub';
+import type { ControlPlaneDO, GalleryMark } from '../control-plane/control-plane-do';
 
 export const galleryRoutes = new Hono<FamilyEnv<Env, object>>();
 
@@ -29,8 +32,9 @@ const MarkBody = v.object({
   workspace: v.string(), slate: v.string(), on: v.optional(v.boolean()), reason: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(2000))),
 });
 
-function gallery(env: Env): DurableObjectStub<GalleryDO> {
-  return env.GALLERY.get(env.GALLERY.idFromName(GALLERY_OBJECT));
+/** The control plane's Gallery, and the capability it is asked with. */
+async function gallery(env: Env): Promise<{ readonly plane: DurableObjectStub<ControlPlaneDO>; readonly caller: Awaited<ReturnType<typeof internalCaller>> }> {
+  return { plane: controlPlaneStub(env), caller: await internalCaller(env) };
 }
 
 async function viewerOf(c: Context<FamilyEnv<Env, object>>): Promise<string | null> {
@@ -43,7 +47,9 @@ galleryRoutes.get('/api/gallery', async (c) => {
   if (!query.success) return err(400, 'The Gallery is asked by sort, page, category and words');
   const { q, sort, category, page } = query.output;
 
-  return json({ body: await gallery(c.env).page({ q, sort, category: category ?? null, page }, await viewerOf(c)) }, { headers: NO_STORE });
+  const { plane, caller } = await gallery(c.env);
+
+  return json({ body: await plane.galleryPage(caller, { q, sort, category: category ?? null, page }, await viewerOf(c)) }, { headers: NO_STORE });
 });
 
 /** A signed-in person's mark on a listing: 204, or 404 when the slate is not listed. */
@@ -56,7 +62,9 @@ async function marked(c: Context<FamilyEnv<Env, object>>, mark: (body: v.InferOu
 
   if (made === null) return err(400, 'Body must name the slate, and say on, or the reason');
 
-  return await gallery(c.env).mark(viewer, made) ? new Response(null, { status: 204 }) : err(404, 'No such listing');
+  const { plane, caller } = await gallery(c.env);
+
+  return await plane.galleryMark(caller, viewer, made) ? new Response(null, { status: 204 }) : err(404, 'No such listing');
 }
 
 galleryRoutes.post('/api/gallery/star', async (c) => marked(c, (body) => (body.on === undefined ? null : { kind: 'star', workspace: body.workspace, slate: body.slate, on: body.on })));
@@ -67,7 +75,8 @@ galleryRoutes.get('/api/gallery/:workspace/:slate/picture/:digest', async (c) =>
   const workspace = decodeURIComponent(rawParam(c, 'workspace'));
   const slate = decodeURIComponent(rawParam(c, 'slate'));
   const digest = rawParam(c, 'digest');
-  const listed = await gallery(c.env).listed(workspace, slate);
+  const { plane, caller } = await gallery(c.env);
+  const listed = await plane.galleryListed(caller, workspace, slate);
   const bucket = c.env.SLATE_PICTURES;
 
   if (listed === null || listed.picture !== digest || bucket === undefined) return new Response('Not found', { status: 404, headers: NO_STORE });
@@ -76,7 +85,8 @@ galleryRoutes.get('/api/gallery/:workspace/:slate/picture/:digest', async (c) =>
 });
 
 galleryRoutes.get('/api/gallery/:workspace/:slate', async (c) => {
-  const listed = await gallery(c.env).slate(decodeURIComponent(rawParam(c, 'workspace')), decodeURIComponent(rawParam(c, 'slate')), await viewerOf(c));
+  const { plane, caller } = await gallery(c.env);
+  const listed = await plane.gallerySlate(caller, decodeURIComponent(rawParam(c, 'workspace')), decodeURIComponent(rawParam(c, 'slate')), await viewerOf(c));
 
   return listed === null ? err(404, 'No such listing') : json({ body: listed }, { headers: NO_STORE });
 });

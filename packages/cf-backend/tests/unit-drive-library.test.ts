@@ -51,8 +51,8 @@ async function ownerWorld(): Promise<{ env: Env; user: TestUserDO; agent: ActorH
 
  return agent.agent; } },
     UserDO: { idFromName: (name: string) => name, get: () => user.userDO },
-    // The Gallery holds no star of theirs.
-    GALLERY: { idFromName: (name: string) => name, get: () => ({ starred: async () => [] }) },
+    // The control plane's Gallery holds no star of theirs.
+    ControlPlaneDO: { idFromName: (name: string) => name, get: () => ({ galleryStarred: async () => [] }) },
   });
 
   // SAFETY: constructed above is every member the shared routes read: the account namespace whose tiles and cards the

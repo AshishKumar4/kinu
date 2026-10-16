@@ -4,6 +4,7 @@
  * viewer's consent rows in their own account, and the one call that keeps a Gallery listing in step with its share.
  */
 import * as v from 'valibot';
+import { GalleryCategorySchema } from './gallery-api';
 
 /**
  * `own`, "their own access", the default: the shared server holds no one's grant, the owner's included, and each
@@ -46,19 +47,35 @@ export const SlateConsentSchema = v.object({
 
 export type SlateConsent = v.InferOutput<typeof SlateConsentSchema>;
 
+/** What a listing's card shows, as its owner set it on the share sheet: what the Gallery's index finds and sorts by. */
+const GalleryCardSchema = v.object({
+  title: Name,
+  line: v.string(),
+  category: GalleryCategorySchema,
+  ownerName: v.string(),
+  /** The digest of the picture the workspace last took of the shared page, once there is one. */
+  picture: v.nullable(v.string()),
+});
+
+export type GalleryCard = v.InferOutput<typeof GalleryCardSchema>;
+
+const SharedAs = { share: Name, workspace: Name, slate: Name, handle: Name };
+
 /**
  * The workspace's word to the Gallery about one share: sent on listing on/off, revoke, re-key, mode change and each
- * new published revision, and again for every live share when the Gallery refills. `listed` is true only for a live
- * share in `own` mode that its owner listed.
+ * new published revision, and again for every live share when the Gallery refills. Listed only for a live share in
+ * `own` mode that its owner listed (the Gallery lists nothing else: §2), with its card and its address, the share's
+ * `shareUrl(handle)`; unlisted, the share alone.
  */
-export const GalleryListingSyncSchema = v.object({
-  /** `slate_live_shares.id`. */
-  share: Name,
-  workspace: Name,
-  slate: Name,
-  /** `slate_live_shares.handle`: the listing's address is the share's `shareUrl(handle)`. */
-  handle: Name,
-  listed: v.boolean(),
-});
+export const GalleryListingSyncSchema = v.variant('listed', [
+  v.object({
+    /** `slate_live_shares.id`. */
+    ...SharedAs,
+    listed: v.literal(true),
+    url: v.pipe(v.string(), v.minLength(1)),
+    card: GalleryCardSchema,
+  }),
+  v.object({ ...SharedAs, listed: v.literal(false) }),
+]);
 
 export type GalleryListingSync = v.InferOutput<typeof GalleryListingSyncSchema>;

@@ -29,7 +29,7 @@ import {
   canonicalRoot, frameTicket, linkKeyHolds, linkUrl, ROOM_ENTER_PATH, type FrameClaim,
   RoomCaretaker, flows, initSlateRoomTables, slateAnswer, ROOT_SLATE_CALLER, planReaderCheck, searchFindsRepository,
   UNDECLARED, accessName, callArgument, joinTerms, partDecision, partFn, partKey, personOf, reachOf, rootOf, roomAsks, serviceOf, sheetView, toolTerms,
-  type Access, type Audience, type Codec, type Elem, type Grant, type GrantTerms, type Need, type Run, type Session, type Tag,
+  type Access, type Audience, type Codec, type Elem, type GalleryCard, type Grant, type GrantTerms, type Need, type Run, type Session, type Tag,
 } from '@kinu.run/core/slates';
 import { attempt, diagnostics, inItsWords, KinuError, renderCauseChain, settle, settleSync, type ErrorCode } from '@kinu.run/core/obs';
 import { workspaceOwner } from '../workspace-owner-rpc';
@@ -39,7 +39,8 @@ import { codemodeEgress } from '../codemode-egress';
 import { slateBatchStub } from './rpc-transport';
 import { ROOM_BROWSER_HEADER, type RoomBindingName, type RoomBindingProps } from './room-bindings';
 import { sealedPart } from './room-parts';
-import { GALLERY_OBJECT } from '../gallery/gallery-do';
+import { internalCaller } from '@kinu.run/core/control-plane';
+import { controlPlaneStub } from '../control-plane/stub';
 import { browserCamera, pictureKey } from './pictures';
 import type { UserDO } from '../user/user-do';
 
@@ -235,11 +236,8 @@ export class SlateRoom extends DurableObject<Env> {
   retire(): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       if (this.exists()) {
-        const room = this.caretaker.room();
-
         if (this.caretaker.listing() !== null) {
-          yield* attempt({ doing: 'unlisting the slate', otherwise: 'unavailable' },
-            async () => this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT)).unlist(room.workspace, room.slate));
+          yield* attempt({ doing: 'unlisting the slate', otherwise: 'unavailable' }, async () => this.toGallery({ listed: false }));
         }
 
         for (const member of this.caretaker.members()) {
@@ -285,6 +283,14 @@ export class SlateRoom extends DurableObject<Env> {
     const room = this.caretaker.room();
 
     return `${room.workspace}/${this.handle()}`;
+  }
+
+  /** The room's word to the Gallery, in the control plane: its slate's listing, or none, under its own handle. */
+  private async toGallery(word: { readonly listed: false } | { readonly listed: true; readonly url: string; readonly card: GalleryCard }): Promise<void> {
+    const room = this.caretaker.room();
+    const shared = { share: this.handle(), workspace: room.workspace, slate: room.slate, handle: this.handle() };
+
+    await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), { ...shared, ...word });
   }
 
   private handle(): string {
@@ -639,24 +645,22 @@ export class SlateRoom extends DurableObject<Env> {
     return Effect.gen({ self: this }, function* () {
       const room = this.caretaker.room();
       const listing = this.sheetListing();
-      const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
       const url = listing === null ? null : yield* Effect.promise(async () => linkUrl(this.env, room));
 
       if (listing === null || url === null) {
-        yield* attempt({ doing: 'unlisting the slate', otherwise: 'unavailable' }, async () => gallery.unlist(room.workspace, room.slate));
+        yield* attempt({ doing: 'unlisting the slate', otherwise: 'unavailable' }, async () => this.toGallery({ listed: false }));
 
         return;
       }
 
       const owner = this.caretaker.members().find((member) => member.role === 'owner');
-      const grants = this.caretaker.grants();
-      const needs = new Map(grants.map((grant) => [serviceOf(grant.server).title, serviceOf(grant.server)]));
 
-      yield* attempt({ doing: 'listing the slate', otherwise: 'unavailable' }, async () => gallery.list({
-        workspace: room.workspace, slate: room.slate, title: room.title, line: listing.line, category: listing.category,
-        ownerName: owner?.name ?? owner?.email.slice(0, owner.email.indexOf('@')) ?? '', url: new URL(url).pathname + new URL(url).search,
-        needs: [...needs.values()], files: Object.keys(room.modules ?? {}).filter((name) => name !== RUNNER_MODULE).sort(),
-        readsAuthor: grants.some((grant) => !grant.personal), picture: this.caretaker.listing()?.picture ?? null,
+      yield* attempt({ doing: 'listing the slate', otherwise: 'unavailable' }, async () => this.toGallery({
+        listed: true, url: new URL(url).pathname + new URL(url).search,
+        card: {
+          title: room.title, line: listing.line, category: listing.category,
+          ownerName: owner?.name ?? owner?.email.slice(0, owner.email.indexOf('@')) ?? '', picture: this.caretaker.listing()?.picture ?? null,
+        },
       }));
       // Taken past this call: a browser takes seconds, and the listing is right without it.
       yield* Effect.promise(async () => this.ctx.storage.setAlarm(Date.now()));
@@ -695,10 +699,7 @@ export class SlateRoom extends DurableObject<Env> {
       yield* attempt({ doing: 'storing the Gallery picture', otherwise: 'unavailable' },
         async () => bucket.put(pictureKey(room.workspace, room.slate, digest), shot, { httpMetadata: { contentType: 'image/webp' } }));
 
-      if (this.caretaker.pictured(digest)) {
-        yield* attempt({ doing: 'showing the picture in the Gallery', otherwise: 'unavailable' },
-          async () => this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT)).pictured(room.workspace, room.slate, digest));
-      }
+      if (this.caretaker.pictured(digest)) yield* this.syncGallery();
 
       if (previous !== null) yield* attempt({ doing: 'dropping the last Gallery picture', otherwise: 'unavailable' }, async () => bucket.delete(pictureKey(room.workspace, room.slate, previous)));
     }));
