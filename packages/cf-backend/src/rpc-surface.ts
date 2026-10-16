@@ -318,10 +318,6 @@ const ORCHESTRATOR_METHODS = [
   'slateBuildAs',
   'slateCallAs',
   // A personal part's run, its process's calls, and what its viewer showed: DO-to-DO only, from the app's routes and PartBinding.
-  // A share's mode and Gallery listing, set from the owner's routes, and what a listed share's parts ask of visitors.
-  'setLiveShareMode',
-  'setLiveShareListing',
-  'galleryNeeds',
   'runSlatePart',
   'slatePartCall',
   'showSlatePart',
