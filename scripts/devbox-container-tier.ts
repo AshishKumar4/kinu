@@ -746,7 +746,9 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
       requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
       // An agent's look opens the desktop again on the new start, as the person's first open would.
-      await call('/agent-desktop', AgentAnswer, { driver: 'trust', member: 'screenshot', args: '[]' }, name);
+      const looked = await call('/agent-desktop', AgentAnswer, { driver: 'trust', member: 'screenshot', args: '[]' }, name);
+
+      if (typeof looked !== 'string') throw new Error(`an agent's look did not open the second start's desktop: ${JSON.stringify(looked)}`);
       // The stop ended the person's browser with the container; the start marked its exit clean, so it reopens with no
       // "Restore pages?" (the second start's shots show its window).
       const exited = `import json; print(json.load(open('${CHROMIUM_PROFILES}/Default/Preferences'))['profile']['exit_type'])`;
