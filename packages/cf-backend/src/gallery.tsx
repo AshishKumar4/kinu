@@ -78,11 +78,11 @@ import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
-import { installPartsFixture, installShareModeFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame } from "@/gallery-parts";
+import { installPartsFixture, installShareModeFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame, SHARED_LIVE_ENTRY, SharedLiveFrame } from "@/gallery-parts";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
-import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateCapabilityGraph } from "@kinu.run/core";
+import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateReach } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
@@ -5617,7 +5617,8 @@ const RISK = (body: string) => ({ public: `${body} Anyone who opens this share c
 
 const NO_RISK = { public: "", users: "" };
 
-const SHARE_GRAPH: SlateCapabilityGraph = {
+const SHARE_GRAPH: SlateReach = {
+  revision: "r2",
   slate: "issue-triage",
   slates: ["issue-triage", "digest"],
   namespaces: [
@@ -5657,7 +5658,8 @@ const LIVE_SHARE: LiveShareRecord = {
     { slate: "issue-triage", namespace: "slates.digest", member: "summary", impact: "observe" },
     { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
   ] },
-  createdAt: NOW - 864e5, revokedAt: null, users: [], mode: "owner", grantRevision: "r2", gallery: null,
+  // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
+  createdAt: NOW - 864e5, revokedAt: null, users: [], mode: "owner", grantRevision: "r1", stale: true, gallery: null,
 };
 
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
@@ -7687,6 +7689,7 @@ async function mount() {
     // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
     ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
     ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
+    ["shared-live", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
     ["part-frame", { node: <PartFrameFrame />, entries: [partFrameEntry(new URLSearchParams(location.search))] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],

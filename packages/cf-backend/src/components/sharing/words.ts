@@ -6,13 +6,16 @@ import type { GalleryCategory } from "@kinu.run/core";
 
 export const CATEGORY_WORDS: Record<GalleryCategory, string> = { work: "Work", money: "Money", home: "Home", developer: "Developer", fun: "Fun" };
 
-/** A grant's server as a sentence names it (`mcp.<server>`, `ai` or `web`): "github connection", "AI", "web access". */
-export function serverWords(server: string): string {
-  if (server === "ai") return "AI";
+/**
+ * A grant's server as a sentence names it: "GitHub connection" by the title the viewer's account gives it, else by its
+ * id (`mcp.<server>`, `ai` or `web`): "github connection", "AI", "web access".
+ */
+export function serverWords(ask: { readonly server: string; readonly serverTitle?: string }): string {
+  if (ask.server === "ai") return "AI";
 
-  if (server === "web") return "web access";
+  if (ask.server === "web") return "web access";
 
-  return `${server.replace(/^mcp\./u, "")} connection`;
+  return `${ask.serverTitle ?? ask.server.replace(/^mcp\./u, "")} connection`;
 }
 
 /** A grant's root, as "repo acme/site, branch main", or "everything" when it names none. */
