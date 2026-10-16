@@ -46,10 +46,11 @@ describe('a page whose socket drops mid-turn keeps its answer in order', () => {
   });
 
   test('so does a page that only watched the turn, asleep from part-way through its final text', () => {
-    const { truth, after, stopAfter } = verdictOf(observed.watchedSlept, 'watched-slept');
+    const { truth, after, stopAfter, probeHeld } = verdictOf(observed.watchedSlept, 'watched-slept');
 
     expect(truth.at(-1)).toBe('P:Done.');
-    expect({ after, stopAfter }).toEqual({ after: truth, stopAfter: false });
+    // The hook's probe was held until the transcript answered: the order the row is about, not one it hopes for.
+    expect({ after, stopAfter, probeHeld }).toEqual({ after: truth, stopAfter: false, probeHeld: true });
   });
 });
 

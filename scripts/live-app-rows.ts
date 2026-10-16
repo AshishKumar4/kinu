@@ -116,6 +116,11 @@ interface SleptVerdict {
   readonly stopAfter: boolean;
 }
 
+/** Row 14's verdict, and whether its page's probe was held for the transcript, as the row means it to be. */
+interface WatchedSleptVerdict extends SleptVerdict {
+  readonly probeHeld: boolean;
+}
+
 /** A turn's answer on one page: while it waits after its steps, once it ends, and after a reload. */
 interface AnsweredThroughVerdict {
   readonly live: readonly string[];
@@ -165,7 +170,7 @@ export interface TierVerdicts {
   observedReconnect: ReconnectVerdict | null;
   unansweredProbe: UnansweredProbeVerdict | null;
   slept: SleptVerdict | null;
-  watchedSlept: SleptVerdict | null;
+  watchedSlept: WatchedSleptVerdict | null;
   answered: AnsweredVerdict | null;
   unsentAnswer: AnsweredThroughVerdict | null;
   controls: ControlsVerdict | null;
@@ -1029,18 +1034,23 @@ async function measureUnansweredProbe(newPage: LiveApp['newPage'], origin: strin
  * standing after the turn (#30). A page with one resume path, the hook's, sends no probeless request.
  */
 const PROBE_ANSWERED_LAST = `(() => {
-  const send = WebSocket.prototype.send;
+  // A recorded socket's own prototype, as HOLD_PROBE_ANSWER reads it: patched on \`WebSocket\`, the recorder's subclass,
+  // the hold never met a socket, every one a plain WebSocket built through the dead-end recorder's proxy.
+  const prototype = Object.getPrototypeOf(window.__sockets[0]);
+  const send = prototype.send;
   let held = null;
+  window.__probeHeld = false;
   window.__releaseProbe = () => {
     if (held === null) return;
     const [socket, data] = held;
     held = null;
     send.call(socket, data);
   };
-  WebSocket.prototype.send = function (data) {
+  prototype.send = function (data) {
     if (typeof data !== 'string' || !data.includes('"type":"cf_agent_stream_resume_request"')) return send.call(this, data);
     if (data.includes('"probeId"')) {
       held = [this, data];
+      window.__probeHeld = true;
       return;
     }
     send.call(this, data);
@@ -1051,7 +1061,7 @@ const PROBE_ANSWERED_LAST = `(() => {
 /** Row 14 (#30): a page that only watched a turn, asleep from part-way through its final text until the turn ended,
  *  wakes to the finished answer: the copy it was building had as many parts as the answer, and must not win. Its
  *  hook's probe is answered last ({@link PROBE_ANSWERED_LAST}). */
-async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<SleptVerdict> {
+async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<WatchedSleptVerdict> {
   const workspace = await createWorkspace(
     origin, LOOPBACK_IDENTITY, { name: `live-row-watched-slept-${RUN_ID}`, purpose: 'watched slept probe', model: SCRIPTED_MODEL_SPEC });
 
@@ -1076,8 +1086,9 @@ async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, 
     const truth = await answerOf(sender);
 
     await watcher.evaluate(PROBE_ANSWERED_LAST);
+    const woke = await wakeAndRead(watcher, heard, 'reconnect-watched-slept');
 
-    return { truth, ...await wakeAndRead(watcher, heard, 'reconnect-watched-slept') };
+    return { truth, ...woke, probeHeld: v.parse(v.boolean(), await watcher.evaluate('window.__probeHeld')) };
   } finally {
     held.release();
     await sender.close();
