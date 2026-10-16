@@ -6,6 +6,7 @@ export const SCHEMA_STAMPS = {
   local: 0x7d9048e,
   room: 0xe155cd9,
   gallery: 0xda6261a,
+  control: 0x5aecf9d,
 } as const;
 
 /** The tables each class's init makes, which a repair brings to this build (state/schema-repair.ts). */
@@ -16,6 +17,7 @@ export const SCHEMA_TABLES: Readonly<Record<keyof typeof SCHEMA_STAMPS, readonly
   local: ["activity_log","actor_config","actor_context_selection","actor_contexts","actor_executions","actor_profile_inputs","actor_program_state","actor_requests","actor_subordinates","actor_turn_claims","actor_turn_cuts","actor_turn_fence","agent_data_tables","agent_deliveries","agent_fact_history","agent_facts","agent_figure_folds","agent_figures","agent_log","agent_open_turns","agent_report_steers","agent_reports","agent_sequence","agent_stops","agent_tasks","agent_turn_reports","alternate_takes","artifact_trials","artifact_versions","background_job_holders","background_job_serves","background_jobs","cache_warm","compaction_archive","compaction_state","context_memberships","context_proposal_entries","context_proposals","context_revisions","conversation_entries","conversation_entry_parts","crafted_tools","deferred_approval_hits","deferred_approvals","device_consent_asks","driver_lease","effect_tombstones","ephemeral_slates","evolution_events","evolution_helpers","executor_output","exploration_objectives","exploration_records","exploration_seals","fibers","fork_lineage","fork_staged_files","fork_transfer","fork_transfer_counts","gepa_candidates","gepa_runs","github_items","github_nodes","github_repos","head_journal","head_merge_results","head_runs","head_steps","imported_experience","instruction_approvals","lessons","mcts_search_runs","memory_note_chunks","memory_note_files","memory_projection_updates","open_turns","owner_questions","pattern_extractions","plan_reviews","proposed_tasks","refinement_lane_holds","refinement_requests","reply_channels","request_renders","run_events","scaffold_versions","search_nodes","session_messages","slate_file_manifest","slate_publications","slate_state","slate_versions","slates","stream_parts","swarm_node_records","tool_effect_claims","tool_lessons","trial_turns","triggers","turn_ratings","turn_struggles","workspace_actors","workspace_identity","workspace_proposals"],
   room: ["room","room_asks","room_cells","room_grants","room_images","room_lend_uses","room_listing","room_members","room_outputs","room_readers","room_shows"],
   gallery: ["gallery_listings","gallery_reports","gallery_stars"],
+  control: ["cp_audit","cp_feedback","cp_users","cp_workspaces"],
 };
 
 /** Every table a build declared once and no longer does, which a repair drops. */

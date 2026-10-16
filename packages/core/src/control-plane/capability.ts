@@ -6,6 +6,7 @@
  */
 import { Data, Effect } from 'effect';
 import { settle } from '../obs/effect';
+import type { KinuError } from '../obs/error';
 import { hmacSha256Hex } from '../utils/crypto';
 import * as v from 'valibot';
 
@@ -94,6 +95,7 @@ export function requireControl(
   env: ControlSecretEnv,
   caller: PresentedCaller,
   capability: ControlCapability,
+  refused?: KinuError,
 ): Promise<ControlGrade> {
   return settle(Effect.gen(function* () {
     const grade = yield* resolveGrade(env, caller);
@@ -105,6 +107,9 @@ export function requireControl(
         + `This caller ${grade === null ? 'presented no recognized capability' : `holds only ${grade}`}.`,
       ));
     }
+
+    // Asked after the capability, so a caller without it learns nothing of the store.
+    if (refused !== undefined) return yield* refused;
 
     return grade;
   }));

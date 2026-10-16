@@ -398,5 +398,11 @@
     "gallery_listings",
     "gallery_reports",
     "gallery_stars"
+  ],
+  "control": [
+    "cp_audit",
+    "cp_feedback",
+    "cp_users",
+    "cp_workspaces"
   ]
 }

@@ -8,7 +8,7 @@ import type { ControlPlaneDO } from './control-plane-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 
 /** The only place the name is spelled; a second literal addresses a different object. */
-const CONTROL_PLANE_SINGLETON = 'site';
+export const CONTROL_PLANE_SINGLETON = 'site';
 
 /** Structural bindings so a module can type its env without editing the generated `Env`. */
 export interface ControlPlaneEnv<Id = DurableObjectId, Stub = DurableObjectStub<ControlPlaneDO>> {

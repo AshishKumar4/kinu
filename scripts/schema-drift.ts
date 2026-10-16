@@ -85,6 +85,7 @@ const SchemaClassesSchema = v.object({
   account: v.array(v.string()), workspace: v.array(v.string()), agent: v.array(v.string()), local: v.array(v.string()),
   room: v.array(v.string()),
   gallery: v.array(v.string()),
+  control: v.array(v.string()),
 });
 
 /** A class's stamp: seven hex digits of the digest of the genesis of its tables, which SQLite's `user_version`

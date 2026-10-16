@@ -6,7 +6,10 @@
 import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
-import { requireOps, type OpsCaller, type Page, type PageRequest } from '@kinu.run/core';
+import {
+  censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
+  type OpsCaller, type Page, type PageRequest, type Repair, type TablesAnswer,
+} from '@kinu.run/core';
 import type { FeedbackRecord } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
@@ -17,6 +20,7 @@ import {
   type ControlCapability, type ControlGrade, type PresentedCaller,
 } from '@kinu.run/core/control-plane';
 import * as cpStore from '@kinu.run/core/control-plane/store';
+import { CONTROL_PLANE_SINGLETON } from './stub';
 import type {
   AuditDraft, AuditOutcome, AuditSettlement, ControlAuditRow, ControlOverview,
   ControlUserRow, ControlWorkspaceRow, ControlPlaneSql,
@@ -34,22 +38,51 @@ export type {
 export class ControlPlaneDO extends DurableObject<Env> {
   private readonly store: ControlPlaneSql;
 
+  /** What this activation's repair did, for the deploy's walk; null where the storage was at this build. */
+  private readonly schemaRepair: Repair | null;
+
+  /** Why the index may not be read: its repair could not bring it to this build. */
+  private readonly storageRefusal: StoragePredatesReleaseError | undefined;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = ctx.storage.sql;
     // Not inside `blockConcurrencyWhile`: `sql.exec` does not yield, and awaited init stalls every
-    // request (`tests/workerd/do-init-gate.test.ts`).
-    cpStore.initControlPlaneSchema(this.store);
+    // request (`tests/workerd/do-init-gate.test.ts`). Storage a release left behind is repaired first, before any
+    // method reads it (core state/schema-repair.ts), as every class's is.
+    const stamps = durableStamps(ctx.storage.kv);
+    const unmade = readStamp(stamps, ctx.storage.sql, 'control') === 'unmade';
+    const init = (): void => { cpStore.initControlPlaneSchema(this.store); };
+
+    this.schemaRepair = repairSchema(ctx.storage.sql, {
+      schema: 'control', tables: SCHEMA_TABLES.control, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init,
+    }, 'control plane');
+
+    if (this.schemaRepair?.refused != null) this.storageRefusal = new StoragePredatesReleaseError('control', this.schemaRepair.refused);
+    else if (this.schemaRepair === null) init();
+
+    if (unmade && this.storageRefusal === undefined) writeStamp(stamps, 'control');
     // A DO is a different isolate from the Worker, so `server.ts`'s sink is not installed here. Memoised per isolate.
     installAnalyticsDiagnostics(env);
   }
 
+  /** The caller's grade, once it holds `capability` and the index is this build's. */
   private gate(caller: PresentedCaller, capability: ControlCapability): Promise<ControlGrade> {
     // The Analytics budget is per invocation (analytics/limits.ts MAX_WRITES_PER_INVOCATION); reopen it
     // on every RPC, not once per activation.
     openAnalyticsWindow(this.env);
 
-    return requireControl(this.env, caller, capability);
+    return requireControl(this.env, caller, capability, this.storageRefusal);
+  }
+
+  /** The deploy's walk: the index's tables and their rows, and what its repair did. */
+  async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
+    await requireOps(this.env, caller);
+
+    return {
+      name: CONTROL_PLANE_SINGLETON, census: censusOf(this.store), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
+      workspaces: [], accounts: [], agents: [], rooms: [],
+    };
   }
 
   async observeUser(caller: PresentedCaller, observation: UserObservation): Promise<void> {
@@ -98,9 +131,15 @@ export class ControlPlaneDO extends DurableObject<Env> {
 
   /** Every user the index has seen, by id: the deploy's walk opens each one's account (`/ops/tables`). */
   async opsUsers(caller: OpsCaller): Promise<string[]> {
-    await requireOps(this.env, caller);
+    const refused = this.storageRefusal;
 
-    return cpStore.userIds(this.store);
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => requireOps(this.env, caller));
+
+      if (refused !== undefined) return yield* refused;
+
+      return cpStore.userIds(this.store);
+    }));
   }
 
   async listUsers(caller: PresentedCaller, request: PageRequest = {}): Promise<Page<ControlUserRow>> {
