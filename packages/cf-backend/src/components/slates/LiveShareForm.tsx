@@ -8,7 +8,7 @@ import { LiveShareRecordSchema, SlateCapabilityGraphSchema, SHARE_SPEND_CAP_USD_
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { revokeShare, shareLive } from "@/lib/shared-api";
+import { revokeShare, setShareMode, shareLive } from "@/lib/shared-api";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, StopButton, type AccessOption } from "./ShareParts";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -208,7 +208,20 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   );
 }
 
-function SharedNow({ shares, onStop, disabled }: { shares: readonly LiveShareRecord[]; onStop: (id: string) => void; disabled: boolean }) {
+/** What a share runs with, as its row says it; an owner share whose code changed is stopped until approved again. */
+function modeWords(row: LiveShareRecord): ReactNode {
+  if (row.mode === "own") return " · their own access";
+
+  return row.stale === true ? <span className="p-warning"> · stopped: its code changed since you approved its reach</span> : " · your access";
+}
+
+function SharedNow({ shares, onStop, onOwnAccess, disabled }: {
+  shares: readonly LiveShareRecord[];
+  onStop: (id: string) => void;
+  /** Moves an owner share to each person's own access: nothing of the owner's is used from then on. */
+  onOwnAccess: (id: string) => void;
+  disabled: boolean;
+}) {
   return (
     <div className="space-y-1.5">
       <p className="p-meta font-medium p-text-3">Shared now</p>
@@ -218,8 +231,12 @@ function SharedNow({ shares, onStop, disabled }: { shares: readonly LiveShareRec
             <span className="flex shrink-0 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
             <span className="min-w-0 flex-1 truncate p-meta p-text-2">
               {row.visibility === "public" ? "Anyone with the link" : row.users.join(", ") || "People you added"}
+              <span data-live-share-mode={row.mode}>{modeWords(row)}</span>
               {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
             </span>
+            {row.mode === "owner" && (
+              <Button size="xs" variant="ghost" data-live-share-own={row.id} onClick={() => onOwnAccess(row.id)} disabled={disabled}>Use their own access</Button>
+            )}
             <StopButton onStop={() => onStop(row.id)} disabled={disabled} />
           </li>
         ))}
@@ -312,6 +329,16 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     }), showing(setErr));
   })), [workspace, onListingPending]);
 
+  const ownAccess = useCallback((shareId: string) => detach(Effect.gen(function* () {
+    setErr(null);
+
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const updated = yield* Effect.promise(async () => setShareMode({ workspace, share: shareId, mode: "own" }));
+
+      setShares((previous) => previous.map((row) => (row.id === updated.id ? updated : row)));
+    }), showing(setErr));
+  })), [workspace]);
+
   if (created !== null) {
     return (
       <>
@@ -360,7 +387,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
         {mode === "owner" && graph !== null && reaches && <Reach graph={graph} visibility={visibility} approved={approved} onToggle={toggle} disabled={busy} />}
         {mode === "owner" && <OwnerWarning />}
         {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limits}</p>}
-        {shares.length > 0 && <SharedNow shares={shares} onStop={(id) => revoke(id)} disabled={busy} />}
+        {shares.length > 0 && <SharedNow shares={shares} onStop={(id) => revoke(id)} onOwnAccess={ownAccess} disabled={busy} />}
         <Failure message={err} />
       </div>
       <div className="flex justify-end gap-2 border-t p-border pt-4">

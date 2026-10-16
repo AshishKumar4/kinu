@@ -78,7 +78,7 @@ import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
-import { installPartsFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame } from "@/gallery-parts";
+import { installPartsFixture, installShareModeFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame } from "@/gallery-parts";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
@@ -1276,6 +1276,8 @@ installDriveFixture(frame);
 installGalleryFixture(frame);
 
 installPartsFixture(frame);
+
+installShareModeFixture(frame, () => LIVE_SHARE);
 
 
 // Stands in for the runtime's terminal facet (core execution/workspace-terminal.ts): echoes input, runs a line at CR,

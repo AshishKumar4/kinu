@@ -14,7 +14,8 @@ import { useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
-  APP_ROUTES, PartRunRequestSchema, slatePartFramePath, type PartRunAnswer, type SlateConsent,
+  APP_ROUTES, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
+  type PartRunAnswer, type SlateConsent,
 } from "@kinu.run/core";
 import { PartView } from "@/components/sharing/PartView";
 import { usePartHost } from "@/hooks/use-part-host";
@@ -117,6 +118,29 @@ export function installPartsFixture(frame: string): void {
     if (kind === "parts" && verb === "show") return new Response(null, { status: 204 });
 
     return Response.json({ error: "No such route." }, { status: 404 });
+  }, { preconnect: window.fetch.preconnect });
+}
+
+/**
+ * The share dialog's mode switch (`sharedialog`): a share moved to each person's own access answers as the route does,
+ * the record with that mode and no grant revision, the share the dialog last showed otherwise as it was. `shown` is read
+ * at the call, as the gallery defines its share further down.
+ */
+export function installShareModeFixture(frame: string, shown: () => LiveShareRecord): void {
+  if (frame !== "sharedialog") return;
+
+  const next = window.fetch.bind(window);
+
+  window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+
+    if (new URL(request.url).pathname !== LIVE_SHARE_MODE_PATH) return next(input, init);
+
+    const body = v.parse(LiveShareModeBodySchema, await request.json());
+
+    const share = shown();
+
+    return Response.json(body.mode === "own" ? { ...share, id: body.share, mode: "own", grantRevision: null, stale: false } : { ...share, id: body.share, mode: "owner", grantRevision: body.revision, stale: false });
   }, { preconnect: window.fetch.preconnect });
 }
 

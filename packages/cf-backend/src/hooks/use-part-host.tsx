@@ -6,7 +6,7 @@
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { useParams } from "react-router-dom";
 import { Effect } from "effect";
-import { detach, renderThrownChain } from "@kinu.run/core/obs";
+import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";
 import type { PartRunAnswer } from "@kinu.run/core";
 import { ApprovalDecision, ConsentDecision, ShowDecision } from "@/components/sharing/PartDecisions";
 import { hostPartFrames, type Decided, type DecisionKind, type PartAddress } from "@/lib/part-bridge";
@@ -50,20 +50,17 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
     slate,
     slateWindow: () => slateFrame.current?.contentWindow ?? null,
     run: (address, asked) => runPart(address.workspace, address.slate, address.part, asked),
-    decide: (address, kind, answer) => new Promise<Decided>((settle) => {
-      if (!asks(kind, answer)) {
-        settle({ kind: "declined" });
-
-        return;
-      }
+    decide: (address, kind, answer) => {
+      if (!asks(kind, answer)) return Promise.resolve<Decided>({ kind: "declined" });
 
       // A re-consent says so: the viewer allowed this grant for an earlier revision of the slate's code.
       const changedSince = answer.kind === "needs-consent"
         ? Effect.map(Effect.promise(() => readConsents(address.workspace, address.slate)), (consents) => consents.some((given) => given.server === answer.ask.server && given.revision !== answer.ask.revision))
         : Effect.succeed(false);
 
-      detach(Effect.map(changedSince, (changed) => setOpen({ address, kind, answer, changed, settle })));
-    }),
+      // Settles when the viewer decides, in the dialog it opens.
+      return settle(Effect.flatMap(changedSince, (changed) => Effect.promise(() => new Promise<Decided>((decided) => setOpen({ address, kind, answer, changed, settle: decided })))));
+    },
     signIn: () => signInAndReturn(),
   }), [workspace, slate, slateFrame]);
 
@@ -75,13 +72,10 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
   };
 
   // Each decision's call, then its settling; a refusal is said at the top, and the frame hears it declined.
-  const after = (call: () => Promise<void>, decided: Decided) => {
-    setFailure(null);
-    detach(Effect.match(Effect.tryPromise(call), {
-      onSuccess: () => close(decided),
-      onFailure: (refused) => { setFailure(renderThrownChain({ cause: refused })); close({ kind: "declined" }); },
-    }));
-  };
+  const after = (call: () => Promise<void>, decided: Decided) => Effect.match(Effect.tryPromise(call), {
+    onSuccess: () => close(decided),
+    onFailure: (refused) => { setFailure(renderThrownChain({ cause: refused })); close({ kind: "declined" }); },
+  });
 
   const { address, answer } = open;
 
@@ -90,7 +84,7 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
 
     return (
       <ConsentDecision slate={title} ask={ask} changed={open.changed} onClose={() => close({ kind: "declined" })}
-        onAllow={() => after(() => giveConsent({ workspace: address.workspace, slate: address.slate, ...ask }), { kind: "consented" })} />
+        onAllow={() => detach(after(() => giveConsent({ workspace: address.workspace, slate: address.slate, ...ask }), { kind: "consented" }))} />
     );
   }
 
@@ -99,8 +93,8 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
 
     return (
       <ApprovalDecision slate={title} ask={ask}
-        onApprove={() => after(() => decideEffect(address.workspace, address.slate, ask.id, "approve"), { kind: "approved", approval: ask.id })}
-        onDecline={() => after(() => decideEffect(address.workspace, address.slate, ask.id, "decline"), { kind: "declined" })} />
+        onApprove={() => detach(after(() => decideEffect(address.workspace, address.slate, ask.id, "approve"), { kind: "approved", approval: ask.id }))}
+        onDecline={() => detach(after(() => decideEffect(address.workspace, address.slate, ask.id, "decline"), { kind: "declined" }))} />
     );
   }
 
@@ -109,7 +103,7 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
 
     return (
       <ShowDecision label={show.label} value={show.value} onClose={() => close({ kind: "declined" })}
-        onShow={() => after(() => showPart(address.workspace, address.slate, address.part, { revision, label: show.label, value: show.value }), { kind: "shown" })} />
+        onShow={() => detach(after(() => showPart(address.workspace, address.slate, address.part, { revision, label: show.label, value: show.value }), { kind: "shown" }))} />
     );
   }
 

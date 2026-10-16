@@ -128,7 +128,12 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-share-access]');
             await live.click('[data-share-access-option="public"]');
             expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
-            
+
+            // A share on the owner's access says so, and moves to each person's own in one press: nothing of theirs used.
+            expect(await live.$eval('[data-live-share-mode]', (element) => element.getAttribute('data-live-share-mode'))).toBe('owner');
+            await live.click('[data-live-share-own]');
+            await live.waitForSelector('[data-live-share-mode="own"]');
+            expect(await live.$('[data-live-share-own]')).toBeNull();
           } finally {
             await live.close();
           }

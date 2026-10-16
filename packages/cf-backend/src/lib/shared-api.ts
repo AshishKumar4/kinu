@@ -1,8 +1,8 @@
 /** Typed client for `/api/shared/*` and the public blueprint read; the session rides the HttpOnly cookie. */
 import { Effect } from 'effect';
 import {
-  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema,
-  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareVisibility, type ShareMode,
+  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema, LIVE_SHARE_MODE_PATH,
+  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareModeBody, type LiveShareRecord,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -74,12 +74,7 @@ export function signedInEmail(): Promise<string | null> {
 
 /** Answers the row and its URL (null where this deployment cannot sign one). */
 /** `mode`: whose access the shared server acts with (docs/SLATE-SHARING-NIMBUS.md §2); `approved` counts only for 'owner'. */
-export function shareLive(input: {
-  workspace: string; slate: string; visibility: LiveShareVisibility; emails?: string[];
-  mode: ShareMode;
-  approved: { slate: string; namespace: string; member: string }[];
-  fork?: boolean;
-}): Promise<LiveShareCreated & { listing?: 'pending' }> {
+export function shareLive(input: LiveShareBody): Promise<LiveShareCreated & { listing?: 'pending' }> {
   return settle(api(v.object({ ...LiveShareCreatedSchema.entries, listing: Listing }), 'POST', '/api/shared/live', input));
 }
 
@@ -91,4 +86,9 @@ export async function revokeShare(input: { workspace: string; share: string }): 
 /** Share origin for a public share; a ticket-bearing entry for one that names people. */
 export function openLiveShare(input: { workspace: string; share: string }): Promise<{ url: string }> {
   return settle(api(v.object({ url: v.string() }), 'POST', '/api/shared/live/open', input));
+}
+
+/** Switches a share's mode, or approves the reach again at the slate's new revision: the share as it now is. */
+export function setShareMode(body: LiveShareModeBody): Promise<LiveShareRecord> {
+  return settle(api(LiveShareRecordSchema, 'POST', LIVE_SHARE_MODE_PATH, body));
 }
