@@ -418,15 +418,9 @@ export class SlateHost {
     return serverAuthority(this.liveAuthorities(id), slateRevision(this.controller.builds, id) ?? '');
   }
 
-  /**
-   * The slate's live shares as its server's authority reads them. Until the share row carries its mode, each acts as the
-   * base share path always did: with its owner's approved grant, at whatever revision runs.
-   */
+  /** The slate's live shares as its server's authority reads them: each one's mode, grant and approved revision. */
   private liveAuthorities(id: string): LiveShareAuthority[] {
-    const revision = slateRevision(this.controller.builds, id);
-
-    return this.controller.live.list().filter((share) => share.slate === id && share.revokedAt === null)
-      .map((share) => ({ mode: 'owner', grant: share.grant, grantRevision: revision }));
+    return this.controller.live.authoritiesOf(id);
   }
 
   /** Why a call of a slate shared for each person's own access is refused, and what its owner can do about it. */

@@ -297,20 +297,28 @@ export {
   type ShareGrantMember, type ShareGrant, type ShareCard,
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
+  SlateReachSchema, LiveShareBodySchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema,
+  type SlateReach, type LiveShareBody, type LiveShareModeBody, type LiveShareListingBody,
 } from './slates/sharing';
 
+export { SHARE_MODES, ShareModeSchema, type ShareMode } from './slates/share-modes';
+
 export {
-  GALLERY_CATEGORIES, RoomViewSchema, RoomCallSchema, RoomClientFrameSchema, RoomServerFrameSchema,
+  RoomViewSchema, RoomCallSchema, RoomClientFrameSchema, RoomServerFrameSchema,
   DriveLibrarySchema, ForkPreviewSchema, ForkedSchema,
-  GALLERY_SORTS, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH, GALLERY_REPORT_PATH,
-  type GalleryPage, type GallerySlate, type GalleryStar, type GalleryReport,
   roomPagePath, roomSocketPath, roomPartPath, roomFramePath, roomEntryPath, roomForkPath, RoomEntrySchema, type RoomEntry,
   type RoomPerson, type RoomRole, type RoomAccess, type RoomAudience, type RoomService, type RoomTool, type RoomSource,
-  type RoomReach, type GalleryCategory, type SheetLend, type SheetLendUse, type SheetMember, type SheetView,
+  type RoomReach, type SheetLend, type SheetLendUse, type SheetMember, type SheetView,
   type RoomSession, type RoomPresence, type RoomAsk, type RoomEnded, type PartView, type RoomView, type ShowScope,
   type RoomCall, type RoomClientFrame, type RoomServerFrame,
-  type DriveRoomCard, type DriveSlate, type DriveLibrary, type GalleryListing, type GallerySort, type ForkPreview, type Forked,
+  type DriveRoomCard, type DriveSlate, type DriveLibrary, type ForkPreview, type Forked,
 } from './slates/room-api';
+
+export {
+  GALLERY_CATEGORIES, GALLERY_SORTS, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
+  type GalleryReport,
+} from './slates/gallery-api';
 
 export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 
@@ -1464,7 +1472,7 @@ export {
   DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,
   type DeferredApprovalAnswer,
-  type DeferredApprovalNotice, type ParkedWrites,
+  type DeferredApprovalNotice, type ParkedWrites, type SlateEffectVerdict,
 } from './safety/deferred-approval';
 
 export {
@@ -1511,8 +1519,10 @@ export {
 } from './safety/secret-scan';
 
 export {
-  boundWriteOf, performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
+  performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
+
+export { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,

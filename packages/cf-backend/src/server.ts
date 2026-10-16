@@ -107,8 +107,6 @@ export { UserDO as MossaicUserDO, ShardDO as MossaicShardDO } from "@mossaic/sdk
 
 export { MonitorDO } from "./monitor/monitor-do";
 
-export { GalleryDO } from "./gallery/gallery-do";
-
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
 
 export { DeployRunDO } from "./deploy/deploy-do";

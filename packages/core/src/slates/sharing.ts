@@ -5,6 +5,8 @@
 import * as v from 'valibot';
 import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
+import { ShareModeSchema } from './share-modes';
+import { GalleryCategorySchema } from './gallery-api';
 
 
 const SHARE_KINDS = ['blueprint', 'live'] as const;
@@ -64,6 +66,13 @@ export const SlateCapabilityGraphSchema = v.object({
 
 export type SlateCapabilityGraph = v.InferOutput<typeof SlateCapabilityGraphSchema>;
 
+/** What a share's server can reach, as the share sheet lists it before the owner turns on `owner` mode: the graph,
+ *  and the revision of the slate it was read at, which approving names (null: the slate never built, so no reach can
+ *  be approved). */
+export const SlateReachSchema = v.object({ ...SlateCapabilityGraphSchema.entries, revision: v.nullable(v.string()) });
+
+export type SlateReach = v.InferOutput<typeof SlateReachSchema>;
+
 export const LiveShareRecordSchema = v.object({
   id: v.string(),
   slate: v.string(),
@@ -73,11 +82,59 @@ export const LiveShareRecordSchema = v.object({
   createdAt: v.number(),
   revokedAt: v.nullable(v.number()),
   users: v.array(v.string()),
+  /** Whose access its server acts with (docs/SLATE-SHARING-NIMBUS.md §2). */
+  mode: ShareModeSchema,
+  /** `owner` mode: the revision whose reach the owner approved; null in `own` mode. */
+  grantRevision: v.nullable(v.string()),
   /** Computed where the row is answered, never stored. */
   paused: v.optional(v.boolean()),
+  /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner
+   *  approves again. Computed where the row is answered. */
+  stale: v.optional(v.boolean()),
 });
 
 export type LiveShareRecord = v.InferOutput<typeof LiveShareRecordSchema>;
+
+const ApprovedMembersSchema = v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() }));
+
+/** `POST /api/shared/live`, its owner's: a slate shared live, in `own` mode unless they turn on `owner` over the reach
+ *  they read at `revision` (its `SlateReach`). */
+export const LiveShareBodySchema = v.object({
+  workspace: v.string(),
+  slate: v.string(),
+  visibility: v.picklist(['users', 'public']),
+  emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
+  approved: v.optional(ApprovedMembersSchema),
+  fork: v.optional(v.boolean()),
+  mode: v.optional(ShareModeSchema),
+  revision: v.optional(v.string()),
+});
+
+export type LiveShareBody = v.InferOutput<typeof LiveShareBodySchema>;
+
+/** `POST`, its owner's: a live share's mode set, or its reach approved again at the slate's revision now. */
+export const LIVE_SHARE_MODE_PATH = '/api/shared/live/mode';
+
+/** Its body: `owner` names the acting members approved and the revision the reach was read at. */
+export const LiveShareModeBodySchema = v.variant('mode', [
+  v.object({ workspace: v.string(), share: v.string(), mode: v.literal('own') }),
+  v.object({
+    workspace: v.string(), share: v.string(), mode: v.literal('owner'), revision: v.string(), approved: ApprovedMembersSchema,
+  }),
+]);
+
+export type LiveShareModeBody = v.InferOutput<typeof LiveShareModeBodySchema>;
+
+/** `POST`, its owner's: a live share listed in the Gallery with its card's words, or taken off it. Only an `own` share is
+ *  listed (§2): one on its owner's access reaches what its owner reaches, which no listing may offer anyone. */
+export const LIVE_SHARE_LISTING_PATH = '/api/shared/live/listing';
+
+export const LiveShareListingBodySchema = v.variant('listed', [
+  v.object({ workspace: v.string(), share: v.string(), listed: v.literal(true), line: v.pipe(v.string(), v.maxLength(140)), category: GalleryCategorySchema }),
+  v.object({ workspace: v.string(), share: v.string(), listed: v.literal(false) }),
+]);
+
+export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySchema>;
 
 export const LiveShareCreatedSchema = v.object({
   share: LiveShareRecordSchema,

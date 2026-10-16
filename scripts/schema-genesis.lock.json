@@ -800,17 +800,14 @@
   "gallery_listings@packages/core/src/slates/gallery.ts": [
     "workspace TEXT NOT NULL",
     "slate TEXT NOT NULL",
+    "share TEXT NOT NULL",
     "title TEXT NOT NULL",
     "line TEXT NOT NULL",
     "category TEXT NOT NULL",
     "owner_name TEXT NOT NULL",
     "url TEXT NOT NULL",
-    "needs TEXT NOT NULL",
-    "files TEXT NOT NULL",
-    "reads_author INTEGER NOT NULL",
     "picture TEXT",
     "listed_at INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (workspace, slate)"
   ],
   "gallery_reports@packages/core/src/slates/gallery.ts": [
@@ -1304,7 +1301,10 @@
     "handle TEXT NOT NULL UNIQUE",
     "grant_json TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
-    "revoked_at INTEGER"
+    "revoked_at INTEGER",
+    "mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner'))",
+    "grant_revision TEXT",
+    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))"
   ],
   "slate_pictures@packages/cf-backend/src/slates/pictures.ts": [
     "slate TEXT PRIMARY KEY",

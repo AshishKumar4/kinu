@@ -34,7 +34,7 @@ import { restCall } from './cloudflare-rest';
 import type { GenesisLock } from './schema-drift';
 
 /** The classes the walk reaches, as `/ops/tables` names them. */
-export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent'] as const;
+export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent', 'ControlPlaneDO'] as const;
 
 export type ResetClass = (typeof RESET_CLASSES)[number];
 
@@ -314,7 +314,7 @@ export interface OpsBody {
 }
 
 const RepairSchema = v.object({
-  schema: v.picklist(['account', 'workspace', 'agent', 'local']),
+  schema: v.picklist(['account', 'workspace', 'agent', 'local', 'control']),
   rebuilt: v.array(v.string()),
   refilled: v.array(v.string()),
   retired: v.array(v.string()),
@@ -344,7 +344,7 @@ const OpsAnswerSchema = v.object({
   })),
 });
 
-const RootsSchema = v.object({ accounts: v.array(v.string()) });
+const RootsSchema = v.object({ accounts: v.array(v.string()), control: v.array(v.string()) });
 
 /** One call, asked again while the pass has not reached the edge that answers, and while a version other than the
  *  candidate answers (the build before has no `/ops`, so it answers 404). */
@@ -434,7 +434,10 @@ export async function walk(target: TablesTarget): Promise<Walked> {
     const walking: Walking = { target, pass, reached };
     const answers = () => [...reached.values()].flatMap((object) => (object.answer === undefined ? [] : [object.answer]));
     const listed = { UserDO: await target.objects('UserDO'), OrchestratorAgent: await target.objects('OrchestratorAgent') };
-    let accounts = (await askAdmitted(target, pass, { path: 'roots', body: null, schema: RootsSchema })).accounts;
+    const roots = await askAdmitted(target, pass, { path: 'roots', body: null, schema: RootsSchema });
+    let { accounts } = roots;
+
+    await reachEach(walking, 'ControlPlaneDO', roots.control);
 
     // The builtin directory names accounts no other root may: asked until no answer names a new one.
     while (accounts.length > 0) {

@@ -396,7 +396,11 @@
     "workspace_identity",
     "workspace_proposals"
   ],
-  "gallery": [
+  "control": [
+    "cp_audit",
+    "cp_feedback",
+    "cp_users",
+    "cp_workspaces",
     "gallery_listings",
     "gallery_reports",
     "gallery_stars"

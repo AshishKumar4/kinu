@@ -9,6 +9,7 @@
  * the sentences around them.
  */
 import * as v from 'valibot';
+import { GalleryCategorySchema, GalleryListingSchema } from './gallery-api';
 
 /** Who someone is to a room. People are named by email: an account id is derived from it (`accountIdFor`). */
 const RoomPersonSchema = v.object({
@@ -81,12 +82,6 @@ const RoomReachSchema = v.object({
 export type RoomReach = v.InferOutput<typeof RoomReachSchema>;
 
 // ── The share sheet (the owner's) ───────────────────────────────────────────────────────────────────────────────
-
-export const GALLERY_CATEGORIES = ['work', 'money', 'home', 'developer', 'fun'] as const;
-
-const GalleryCategorySchema = v.picklist(GALLERY_CATEGORIES);
-
-export type GalleryCategory = v.InferOutput<typeof GalleryCategorySchema>;
 
 /** A function the owner lends: anyone using the slate calls it, and it runs with the owner's grant in a run of its own. */
 const SheetLendSchema = v.object({
@@ -393,91 +388,6 @@ const DriveRoomCardSchema = v.object({
 });
 
 export type DriveRoomCard = v.InferOutput<typeof DriveRoomCardSchema>;
-
-const GalleryListingSchema = v.object({
-  workspace: v.string(),
-  slate: v.string(),
-  title: v.string(),
-  line: v.string(),
-  category: GalleryCategorySchema,
-  owner: v.object({ name: v.string() }),
-  stars: v.number(),
-  starred: v.boolean(),
-  listedAt: v.number(),
-  /** The services a fork asks its forker to connect, one per kind. */
-  needs: v.array(RoomServiceSchema),
-  /** Its picture's digest, taken from a fresh visit, once there is one: {@link galleryPicturePath}. */
-  picture: v.optional(v.string()),
-  /** One of this week's top two by trending. */
-  featured: v.boolean(),
-  /** Its link, the one way in: `/s/<ws>/<slate>?k=<key>`. Unlisted the moment the link goes off. */
-  url: v.string(),
-});
-
-export type GalleryListing = v.InferOutput<typeof GalleryListingSchema>;
-
-export const GALLERY_SORTS = ['trending', 'new', 'stars'] as const;
-
-export type GallerySort = (typeof GALLERY_SORTS)[number];
-
-/** One page of the Gallery: `next` is the page after it, null at the end. */
-export const GalleryPageSchema = v.object({ listings: v.array(GalleryListingSchema), next: v.nullable(v.number()) });
-
-export type GalleryPage = v.InferOutput<typeof GalleryPageSchema>;
-
-/** `GET`, public: one page of listings, matching `q` and in `category` when given. */
-export function galleryPath(query: { q: string; sort: GallerySort; category: GalleryCategory | null; page: number }): string {
-  const search = new URLSearchParams({ sort: query.sort, page: String(query.page) });
-
-  if (query.q !== '') search.set('q', query.q);
-
-  if (query.category !== null) search.set('category', query.category);
-
-  return `/api/gallery?${search.toString()}`;
-}
-
-/** A listed slate's own page: what a fork gets, and whether any part runs with its author's own lend. */
-export const GallerySlateSchema = v.object({
-  listing: GalleryListingSchema,
-  /** The files a fork gets. */
-  files: v.array(v.string()),
-  /** When the version its link opens was published. */
-  updatedAt: v.number(),
-  readsAuthor: v.boolean(),
-  forks: v.optional(v.number()),
-  /** People who used it this week. */
-  people: v.optional(v.number()),
-});
-
-export type GallerySlate = v.InferOutput<typeof GallerySlateSchema>;
-
-/** `GET`, public: a listed slate's {@link GallerySlate}. */
-export function gallerySlatePath(workspace: string, slate: string): string {
-  return `/api/gallery/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
-}
-
-/** `GET`, public: a listed slate's picture by its digest. */
-export function galleryPicturePath(workspace: string, slate: string, picture: string): string {
-  return `${gallerySlatePath(workspace, slate)}/picture/${encodeURIComponent(picture)}`;
-}
-
-/** `POST` {@link GalleryStar}, signed in: stars a listed slate, or takes the star back. */
-export const GALLERY_STAR_PATH = '/api/gallery/star';
-
-export interface GalleryStar {
-  readonly workspace: string;
-  readonly slate: string;
-  readonly on: boolean;
-}
-
-/** `POST` {@link GalleryReport}, signed in: reports a listed slate to the operators. */
-export const GALLERY_REPORT_PATH = '/api/gallery/report';
-
-export interface GalleryReport {
-  readonly workspace: string;
-  readonly slate: string;
-  readonly reason: string;
-}
 
 /** A slate of this person's own, as the Drive lists it: its audience once its room has one. */
 const DriveSlateSchema = v.object({

@@ -7,12 +7,9 @@ import type { CheckpointFiles } from '../types/primitives';
 import { FileRefusalError } from '../types/file-edits';
 import { writeConditionally, type ObservedFile } from '../vfs/conditional-write';
 import { sha256Hex } from './argument-digest';
+import { boundWriteText, type BoundFileWrite } from './approval-kind';
 
-export interface BoundFileWrite {
-  readonly path: string;
-  readonly next: string;
-  readonly current: string;
-}
+export type { BoundFileWrite } from './approval-kind';
 
 /** A write as its ask shows it: the file now (null: none there) and the bytes it would become. */
 export interface WriteSubject {
@@ -28,17 +25,9 @@ export interface ApprovalContent {
   delete(sha256: string): Promise<void>;
 }
 
-const BOUND_WRITE = /^file write (.+) sha256:([0-9a-f]{64}) over sha256:([0-9a-f]{64})$/su;
-
 /** The text an unanswered write parks under: it names the bytes, so an approval answers this write and no other. */
 export function boundWriteCommand(write: WriteSubject): string {
-  return `file write ${write.path} sha256:${sha256Hex(write.next)} over sha256:${sha256Hex(write.current ?? new Uint8Array())}`;
-}
-
-export function boundWriteOf(command: string): BoundFileWrite | null {
-  const [, path, next, current] = BOUND_WRITE.exec(command) ?? [];
-
-  return path === undefined || next === undefined || current === undefined ? null : { path, next, current };
+  return boundWriteText({ path: write.path, next: sha256Hex(write.next), current: sha256Hex(write.current ?? new Uint8Array()) });
 }
 
 export const asBytes = (data: string | Uint8Array): Uint8Array => (v.is(v.string(), data) ? new TextEncoder().encode(data) : data);

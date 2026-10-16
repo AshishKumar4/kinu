@@ -33,7 +33,7 @@ test('a live share round-trips its grant and refuses viewers once revoked', () =
     const added = shares.add(liveShare());
     expect(added).toEqual({
       id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789',
-      grant, createdAt: 1_000, revokedAt: null, users: [],
+      grant, createdAt: 1_000, revokedAt: null, users: [], mode: 'own', grantRevision: null,
     });
 
     expect(shares.get('s1')).toMatchObject({ id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789', grant });
@@ -164,6 +164,41 @@ test('sharing a live slate cuts the grant the dialog approved and opens at the h
     shares.revoke(created.share.id);
     expect(() => shares.live(created.share.id)).toThrow();
     expect(shares.byHandle(created.share.handle)).toBeUndefined();
+  } finally {
+    db.close();
+  }
+});
+
+test('a slate\'s live shares say what its server acts with, a revoked one nothing', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    shares.add(liveShare());
+    shares.add({ ...liveShare(), id: 's2', handle: '1123456789' });
+    db.exec("UPDATE slate_live_shares SET mode = 'owner', grant_revision = 'rev-1' WHERE id = 's2'");
+    shares.add({ ...liveShare(), id: 's3', handle: '2123456789' });
+    shares.revoke('s3');
+    shares.add({ ...liveShare(), id: 'other', slate: 'other', handle: '3123456789' });
+
+    expect(shares.authoritiesOf('issues')).toEqual([
+      { mode: 'own', grant, grantRevision: null },
+      { mode: 'owner', grant, grantRevision: 'rev-1' },
+    ]);
+    expect(shares.authoritiesOf('nothing')).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
+test('an owner share names the revision its reach was approved for, and an own share names none', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    shares.add(liveShare());
+
+    expect(() => db.exec("UPDATE slate_live_shares SET mode = 'owner' WHERE id = 's1'")).toThrow('CHECK constraint failed');
+    expect(() => db.exec("UPDATE slate_live_shares SET grant_revision = 'rev-1' WHERE id = 's1'")).toThrow('CHECK constraint failed');
+    expect(() => db.exec("UPDATE slate_live_shares SET mode = 'all' WHERE id = 's1'")).toThrow('CHECK constraint failed');
   } finally {
     db.close();
   }

@@ -199,7 +199,7 @@ const LIBRARY: DriveLibrary = {
   starred: [
     {
       workspace: "ana-home", slate: "recipe-scaler", title: "Recipe scaler", line: "Scale any recipe, in grams.", category: "home", owner: { name: "Ana Souza" },
-      stars: 412, starred: true, listedAt: NOW - 9 * 864e5, needs: [], featured: false, url: "/s/ana-home/recipe-scaler?k=g3w8",
+      share: "share-g3w8", stars: 412, starred: true, listedAt: NOW - 9 * 864e5, featured: false, url: "/s/ana-home/recipe-scaler?k=g3w8",
     },
   ],
 };
