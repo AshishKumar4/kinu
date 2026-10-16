@@ -5,8 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Button, Loader } from "@cloudflare/kumo";
-import { FlagIcon, GitForkIcon, PlayIcon, StarIcon } from "@phosphor-icons/react";
-import type { GalleryListing, GallerySlate } from "@kinu.run/core";
+import { FlagIcon, FolderIcon, GitForkIcon, GithubLogoIcon, PlayIcon, PlugIcon, SparkleIcon, StarIcon } from "@phosphor-icons/react";
+import type { GalleryListing, GallerySlate, RoomService } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { useGallerySignedIn } from "@/components/gallery/GalleryShell";
 import { ListingPicture, ListingTile } from "@/components/gallery/GalleryTiles";
@@ -55,6 +55,32 @@ function ForkListing({ listing, onClose }: { listing: GalleryListing; onClose: (
 
   return (
     <ForkDialog live={{ share: listing.share, workspace: listing.workspace }} title={listing.title} onClose={onClose} create={create} />
+  );
+}
+
+const SERVICE_ICON: Record<RoomService["kind"], typeof PlugIcon> = { github: GithubLogoIcon, mcp: PlugIcon, ai: SparkleIcon, workspace: FolderIcon };
+
+/**
+ * What a visitor's own connections it uses (docs/SLATE-SHARING-NIMBUS.md §4): a listed slate runs on each person's own
+ * access, so each of these asks them before it reads anything; nothing of its author's is used.
+ */
+function UsesYours({ needs, author }: { needs: readonly RoomService[]; author: string }) {
+  return (
+    <div data-gallery-needs>
+      <h2 className="mb-3 p-heading text-[15px] p-text">Uses your own</h2>
+      {needs.length === 0 ? (
+        <p className="p-row-text p-text-2">Nothing of yours.</p>
+      ) : (
+        <ul className="p-group">
+          {needs.map((need) => {
+            const Icon = SERVICE_ICON[need.kind];
+
+            return <li key={`${need.kind}:${need.title}`} data-gallery-need={need.kind} className="flex items-center gap-3 px-3.5 py-2.5 p-row-text p-text"><Icon size={16} className="shrink-0 p-text-3" />{need.title}</li>;
+          })}
+        </ul>
+      )}
+      <p className="mt-2 p-meta p-text-3">Each asks you before it reads anything of yours. Nothing of {author}&apos;s is used.</p>
+    </div>
   );
 }
 
@@ -143,6 +169,7 @@ export default function GallerySlatePage() {
           </div>
         </div>
         <div className="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+          {read.needs !== undefined && <div className="lg:col-start-2 lg:row-start-1"><UsesYours needs={read.needs} author={listing.owner.name.split(" ")[0] ?? listing.owner.name} /></div>}
           {like.length > 0 && (
             <div data-gallery-like>
               <h2 className="mb-3 p-heading text-[15px] p-text">More like it</h2>
