@@ -3,7 +3,8 @@
  * release approvals among its decisions; a filter or search pages the roster while the counts stay whole; and an
  * open page is told each change once, over its socket, and nothing for a push that changed nothing. On the same
  * socket it hears what account-memory proposals wait on the owner, as it opens and as each is filed or decided,
- * for as long as the browser session it was opened under stands.
+ * for as long as the browser session it was opened under stands; and how many of the account's pages, on any device,
+ * the owner is looking at, which each page reports on its own socket.
  */
 import * as v from 'valibot';
 import { describe, expect, setSystemTime, test } from 'bun:test';
@@ -33,12 +34,17 @@ const MemoryFrameSchema = v.object({
   pending: v.array(v.object({ id: v.string(), proposal: v.object({ kind: v.string() }) })),
 });
 
-type Frame = v.InferOutput<typeof FrameSchema> | v.InferOutput<typeof MemoryFrameSchema>;
+const ForegroundFrameSchema = v.object({ type: v.literal('account_foreground'), looking: v.number() });
 
-/** The owner's page, listening: every frame the object sends it, by kind, and whether its socket is still open. */
+type Frame = v.InferOutput<typeof FrameSchema> | v.InferOutput<typeof MemoryFrameSchema> | v.InferOutput<typeof ForegroundFrameSchema>;
+
+/** The owner's page, listening: every frame the object sends it, by kind, and whether its socket is still open. It says
+ *  whether its owner is looking at it, and goes away as a closed tab's socket does. */
 interface Page {
   frames(): Frame[];
   open(): boolean;
+  looking(looking: boolean): Promise<void>;
+  gone(): Promise<void>;
 }
 
 /** Opens the page's roster socket. `session`: the hash the edge writes into the upgrade of a signed-in browser; none,
@@ -56,8 +62,13 @@ async function listen(harness: TestUserDO, session?: string): Promise<Page> {
   if (socket === undefined) throw new Error('the object accepted no roster socket');
 
   return {
-    frames: () => socket.sent.map((text) => v.parse(v.variant('type', [FrameSchema, MemoryFrameSchema]), JSON.parse(text))),
+    frames: () => socket.sent.map((text) => v.parse(v.variant('type', [FrameSchema, MemoryFrameSchema, ForegroundFrameSchema]), JSON.parse(text))),
     open: () => socket.ws.readyState === WS_OPEN,
+    looking: async (looking) => { await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: 'foreground', looking })); },
+    gone: async () => {
+      socket.drop();
+      await harness.userDO.webSocketClose(socket.ws, 1001, 'gone', true);
+    },
   };
 }
 
@@ -389,6 +400,44 @@ describe("the owner's page hears what account memory waits on them", () => {
     await harness.userDO.accountMemory_decide(owner, id, 'accept');
 
     expect(pendings(page)).toEqual([[], [id], []]);
+    harness.close();
+  });
+});
+
+/** What each foreground frame told a page: how many of the account's pages the owner was looking at. */
+const lookingAt = (page: Page): number[] => page.frames().flatMap((frame) => (frame.type === 'account_foreground' ? [frame.looking] : []));
+
+describe("every page hears how many of the account's pages the owner is looking at", () => {
+  test('as it opens, as any page says it is looked at or left, and as a looked-at page goes away', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const laptop = await listen(harness);
+    const phone = await listen(harness);
+
+    await laptop.looking(true);
+    await phone.looking(true);
+    // A page saying again what it said changes nothing, and is not told again.
+    await phone.looking(true);
+    await laptop.looking(false);
+    await phone.gone();
+
+    const tablet = await listen(harness);
+
+    expect(lookingAt(laptop)).toEqual([0, 1, 2, 1, 0]);
+    expect(lookingAt(phone)).toEqual([0, 1, 2, 1]);
+    expect(lookingAt(tablet)).toEqual([0]);
+    harness.close();
+  });
+
+  test('a page whose session ended counts for nothing, and a report that is not one is ignored', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const page = await listen(harness);
+    const socket = harness.acceptedSockets.at(-1);
+
+    if (socket === undefined) throw new Error('no roster socket');
+    await harness.userDO.webSocketMessage(socket.ws, 'not json');
+    await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: 'foreground', looking: 'yes' }));
+
+    expect(lookingAt(page)).toEqual([0]);
     harness.close();
   });
 });

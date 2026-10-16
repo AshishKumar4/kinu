@@ -3,8 +3,14 @@
  * or something new waits on the owner, while they are away from Kinu (`ownerAlertOf`, `ownerIsAway`). Read off the
  * roster's socket, so every workspace counts, the open one among them. The sound is this device's to turn off; a
  * notification shows once the browser allows them, which the owner grants from Settings → Appearance.
+ *
+ * Away is away from Kinu, not from one tab. A browser's tabs tell each other whether they are looked at over a
+ * BroadcastChannel, and one of them, the holder of a Web Lock the next tab takes when it closes, alerts for the browser.
+ * Each page also tells the account's roster socket, which counts the pages looked at on every device: while the owner
+ * reads Kinu on their phone, the laptop stays quiet. Away from all of them, each device alerts once.
  */
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import * as v from "valibot";
 import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
 import { detach } from "@kinu.run/core/obs";
@@ -60,6 +66,112 @@ function chime(): Effect.Effect<void> {
   return context.state === "suspended" ? Effect.promise(() => context.resume()) : Effect.void;
 }
 
+/** Whether the owner is looking at this page: shown, and its window focused. */
+function useLooking(): boolean {
+  const read = () => document.visibilityState === "visible" && document.hasFocus();
+  const [looking, setLooking] = useState(read);
+
+  useEffect(() => {
+    const stop = new AbortController();
+    const follow = () => setLooking(read());
+
+    document.addEventListener("visibilitychange", follow, { signal: stop.signal });
+    window.addEventListener("focus", follow, { signal: stop.signal });
+    window.addEventListener("blur", follow, { signal: stop.signal });
+
+    return () => stop.abort();
+  }, []);
+
+  return looking;
+}
+
+const TABS = "kinu-owner-alerts";
+
+/** What a tab tells the browser's other tabs: whether it is looked at, as it changes and when a new tab asks. */
+const TabSaysSchema = v.variant("kind", [
+  v.object({ kind: v.literal("looking"), tab: v.string(), looking: v.boolean() }),
+  v.object({ kind: v.literal("asking"), tab: v.string() }),
+]);
+
+/**
+ * This browser's other tabs of Kinu and whether each is looked at; and whether this tab alerts for them all. Each tab
+ * holds a lock named for it while it lives, so another tab hears it close when it is granted that lock; the leader's lock
+ * passes to a waiting tab the same way.
+ */
+function useBrowserTabs(looking: boolean) {
+  const [leader, setLeader] = useState(false);
+  const others = useRef(new Map<string, boolean>());
+  const tell = useRef<((looking: boolean) => void) | null>(null);
+  const said = useRef(looking);
+
+  said.current = looking;
+
+  useEffect(() => {
+    const tab = crypto.randomUUID();
+    const stop = new AbortController();
+    // Held until the tab's page leaves.
+    const held = () => new Promise<void>((release) => stop.signal.addEventListener("abort", () => release(), { once: true }));
+
+    // A lock asked for and never granted is given up as the page leaves: that refusal is the leaving; any other is a defect.
+    const left = (asked: Promise<void>) => Effect.orDie(Effect.catchIf(Effect.tryPromise({ try: () => asked, catch: (cause) => cause }),
+      (cause) => cause instanceof DOMException && cause.name === "AbortError", () => Effect.void));
+
+    // Granted only once that tab has closed: then it no longer counts.
+    const gone = (other: string) => left(navigator.locks.request(`${TABS}:${other}`, { signal: stop.signal }, () => { others.current.delete(other); }));
+    let channel: BroadcastChannel | null = null;
+
+    // Told once the lock is the tab's own, so no other tab can take it for this tab's close before it is held.
+    const owned = navigator.locks.request(`${TABS}:${tab}`, { signal: stop.signal }, () => {
+      const opened = new BroadcastChannel(TABS);
+      const say = (now: boolean) => opened.postMessage({ kind: "looking", tab, looking: now });
+
+      channel = opened;
+      tell.current = say;
+      opened.addEventListener("message", (event: MessageEvent) => {
+        const heard = v.safeParse(TabSaysSchema, event.data);
+
+        if (!heard.success || heard.output.tab === tab) return;
+
+        if (heard.output.kind === "asking") {
+          say(said.current);
+
+          return;
+        }
+
+        const other = heard.output.tab;
+        const first = !others.current.has(other);
+
+        others.current.set(other, heard.output.looking);
+        detach(first ? gone(other) : Effect.void);
+      });
+      opened.postMessage({ kind: "asking", tab });
+      say(said.current);
+
+      return held();
+    });
+
+    const led = navigator.locks.request(TABS, { signal: stop.signal }, () => {
+      setLeader(true);
+
+      return held();
+    });
+
+    detach(Effect.all([left(owned), left(led)], { discard: true }));
+
+    return () => {
+      stop.abort();
+      channel?.close();
+      tell.current = null;
+    };
+  }, []);
+
+  useEffect(() => { tell.current?.(looking); }, [looking]);
+
+  const othersLooking = useCallback(() => [...others.current.values()].filter(Boolean).length, []);
+
+  return { leader, others: othersLooking };
+}
+
 const SAYS: Record<OwnerAlert, string> = { finished: "Finished", "needs-you": "Waiting on you" };
 
 /** A turn that ended with work still owed, as a failed one does: it stopped, and says so. */
@@ -67,17 +179,24 @@ const saysOf = (alert: OwnerAlert, tile: RosterEntry) => (alert === "finished" &
 
 /** Mounted once, in the app's shell. */
 function useOwnerAlerts(): void {
-  const { subscribe, entries, accountProposals } = useWorkspaceRoster();
+  const { subscribe, entries, accountProposals, accountLooking, reportForeground } = useWorkspaceRoster();
   const navigate = useNavigate();
   const sound = useAlertSound();
   const soundOn = useRef(sound);
   const listed = useRef(entries);
+  const looking = useLooking();
+  const tabs = useBrowserTabs(looking);
+  // Read when a frame lands: what the browser's tabs and the account's pages last said.
+  const away = useRef<() => boolean>(() => false);
   // Each workspace's tile as the last frame left it; a workspace not here yet is read from the loaded roster.
   const seen = useRef(new Map<string, RosterEntry>());
   const proposals = useRef<ReadonlySet<string> | null>(null);
 
   soundOn.current = sound;
   listed.current = entries;
+  away.current = () => tabs.leader && ownerIsAway({ here: looking, otherTabs: tabs.others(), account: accountLooking });
+
+  useEffect(() => { reportForeground(looking); }, [looking, reportForeground]);
 
   const notify = useCallback((title: string, body: string, opens: string) => {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -91,7 +210,7 @@ function useOwnerAlerts(): void {
   }, [navigate]);
 
   const alert = useCallback((title: string, body: string, opens: string) => {
-    if (!ownerIsAway({ visibility: document.visibilityState, focused: document.hasFocus() })) return;
+    if (!away.current()) return;
     notify(title, body, opens);
 
     if (!soundOn.current) return;

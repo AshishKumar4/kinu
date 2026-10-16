@@ -1,7 +1,7 @@
 /**
  * What earns the owner a sound and a notification (owner, 2026-10-15): a workspace's turn finishing, or something new
  * waiting on them, read off their roster as each workspace's tile changes. Never a tool call or progress, and never
- * while they are looking at Kinu.
+ * while they are looking at Kinu: at any of its pages, in any tab, on any device.
  */
 import type { RosterEntry } from './account-wire';
 
@@ -21,7 +21,11 @@ export function ownerAlertOf(before: RosterEntry | null, after: RosterEntry | nu
   return before.overview?.activity === 'working' && after.overview.activity !== 'working' && after.decisions === 0 ? 'finished' : null;
 }
 
-/** Away is anything but a page shown and focused: a hidden tab, or another window in front of this one. */
-export function ownerIsAway(page: { readonly visibility: 'hidden' | 'visible'; readonly focused: boolean }): boolean {
-  return page.visibility !== 'visible' || !page.focused;
+/**
+ * Away is away from Kinu, not from one tab: no page of it shown and focused here, in another tab of this browser
+ * (`otherTabs`, told across the browser's tabs), or anywhere on the account (`account`, every device's pages as the
+ * roster's socket counts them, this one's among them).
+ */
+export function ownerIsAway(looking: { readonly here: boolean; readonly otherTabs: number; readonly account: number }): boolean {
+  return !looking.here && looking.otherTabs === 0 && looking.account === 0;
 }

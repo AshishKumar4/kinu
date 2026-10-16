@@ -52,10 +52,12 @@ describe("a roster frame's alert", () => {
 });
 
 describe('when the owner is away', () => {
-  test('only a page they are looking at, shown and focused, keeps quiet', () => {
-    expect(ownerIsAway({ visibility: 'visible', focused: true })).toBe(false);
-    expect(ownerIsAway({ visibility: 'visible', focused: false })).toBe(true);
-    expect(ownerIsAway({ visibility: 'hidden', focused: false })).toBe(true);
-    expect(ownerIsAway({ visibility: 'hidden', focused: true })).toBe(true);
+  test('away is away from Kinu: no page of it looked at here, in another tab of this browser, or on another device', () => {
+    expect(ownerIsAway({ here: false, otherTabs: 0, account: 0 })).toBe(true);
+    expect(ownerIsAway({ here: true, otherTabs: 0, account: 1 })).toBe(false);
+    // The owner reading another tab of Kinu: this one stays quiet.
+    expect(ownerIsAway({ here: false, otherTabs: 1, account: 0 })).toBe(false);
+    // Or Kinu on their phone: this browser stays quiet.
+    expect(ownerIsAway({ here: false, otherTabs: 0, account: 1 })).toBe(false);
   });
 });

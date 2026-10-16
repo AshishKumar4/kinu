@@ -31,7 +31,9 @@ import { tenantDrive } from '../drive/tenant';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
 import type { McpPresetAvailability, McpServerSummary } from '@kinu.run/core';
-import { acceptRosterSocket, isRosterSocket, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterQuery } from './roster';
+import {
+  acceptRosterSocket, isRosterSocket, rosterForeground, rosterGone, rosterSockets, sendForeground, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterQuery,
+} from './roster';
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
@@ -879,7 +881,10 @@ export class UserDO extends Agent<Env> {
     .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
     .all(DEVICE_TERMINAL_PATH, async (c) => this.terminals.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
     // Frames a socket missed while it was down are not replayed, so a new one starts from what waits on the owner now.
-    .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw, (socket) => { this.accountMemory.pendingMoved([socket]); }))
+    .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw, (socket) => {
+      this.accountMemory.pendingMoved([socket]);
+      sendForeground([socket], rosterSockets(this.ctx), this.sessions.sessionStands);
+    }))
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
 
@@ -893,7 +898,7 @@ export class UserDO extends Agent<Env> {
   /* These hibernation handlers are declared here, so `Lifecycle.installHandlers` skips them and there
    * is no `super`; foreign sockets are delegated to the lifecycle directly, as `Agent.fetch` does. */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
-    if (isRosterSocket(ws)) return;
+    if (isRosterSocket(ws)) return rosterForeground(ws, message, rosterSockets(this.ctx), this.sessions.sessionStands);
     // Pane bytes are raw keystrokes; decoding them as text would corrupt them.
     const terminal = terminalFromSocket(ws);
 
@@ -990,7 +995,7 @@ export class UserDO extends Agent<Env> {
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
-    if (isRosterSocket(ws)) return;
+    if (isRosterSocket(ws)) return rosterGone(ws, rosterSockets(this.ctx), this.sessions.sessionStands);
     // A pane's socket closing hangs up the shell rather than leaving it running with no window.
     const terminal = terminalFromSocket(ws);
 

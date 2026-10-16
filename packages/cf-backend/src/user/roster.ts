@@ -3,8 +3,8 @@ import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
 import {
-  rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type AccountMemoryFrame, type RosterBucket, type RosterCounts, type RosterEntry,
-  type RosterFrame, type RosterPage, type SqlExec, type WorkspaceOverview, type WorkspaceEntry,
+  ForegroundReportSchema, rosterMatches, safeJsonParse, WorkspaceOverviewSchema, WS_OPEN, type AccountForegroundFrame, type AccountMemoryFrame, type RosterBucket,
+  type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type SqlExec, type WorkspaceOverview, type WorkspaceEntry,
 } from '@kinu.run/core';
 import {
   SESSION_AUTHORITY_REVOKED, SESSION_BEARER_HEADER, WEBSOCKET_POLICY_CLOSE, sessionBearerConnectionTag, sessionBearerFromTags,
@@ -205,8 +205,8 @@ export function rosterRow(sql: SqlExec, name: string): RosterEntry | null {
 }
 
 /** `tags`: the session tag a workspace's connection keeps for the same upgrade (`getConnectionTags`), so one reader serves
- *  both; empty when the upgrade named no session. */
-const RosterAttachmentSchema = v.object({ roster: v.literal(true), tags: v.array(v.string()) });
+ *  both; empty when the upgrade named no session. `looking`: the page's last word on whether its owner is looking at it. */
+const RosterAttachmentSchema = v.object({ roster: v.literal(true), tags: v.array(v.string()), looking: v.optional(v.boolean()) });
 
 export function isRosterSocket(ws: WebSocket): boolean {
   return v.is(RosterAttachmentSchema, ws.deserializeAttachment());
@@ -255,11 +255,47 @@ export function closeEndedRosterSockets(sockets: readonly WebSocket[], stands: S
 
 /** A frame never goes to a socket whose session has ended; that socket is closed instead, which is how a lapsed session,
  *  which nothing announces, is met. */
-export function sendRosterFrame(sockets: readonly WebSocket[], frame: RosterFrame | AccountMemoryFrame, stands: SessionStands): void {
+export function sendRosterFrame(sockets: readonly WebSocket[], frame: RosterFrame | AccountMemoryFrame | AccountForegroundFrame, stands: SessionStands): void {
   closeEndedRosterSockets(sockets, stands);
   const text = JSON.stringify(frame);
 
   for (const socket of sockets) {
     if (socket.readyState === WS_OPEN) socket.send(text);
   }
+}
+
+/** The account's pages, open and still on a standing session, that their owner is looking at. */
+function lookingPages(sockets: readonly WebSocket[], stands: SessionStands): number {
+  return sockets.filter((socket) => {
+    const attachment = v.safeParse(RosterAttachmentSchema, socket.deserializeAttachment());
+
+    return socket.readyState === WS_OPEN && attachment.success && attachment.output.looking === true && mayHear(socket, stands);
+  }).length;
+}
+
+/** Tells `to` how many of the account's pages the owner is looking at: every page as the count moves, a new page as it opens. */
+export function sendForeground(to: readonly WebSocket[], sockets: readonly WebSocket[], stands: SessionStands): void {
+  sendRosterFrame(to, { type: 'account_foreground', looking: lookingPages(sockets, stands) }, stands);
+}
+
+/**
+ * A page's report that its owner is, or is no longer, looking at it: kept on its socket, which hibernation keeps, and
+ * every page told the account's new count. A report that changes nothing tells nobody; one that is not a report is
+ * ignored, as the roster socket answers nothing else a page sends.
+ */
+export function rosterForeground(socket: WebSocket, message: string | ArrayBuffer | ArrayBufferView, sockets: readonly WebSocket[], stands: SessionStands): void {
+  if (typeof message !== 'string') return;
+  const report = v.safeParse(ForegroundReportSchema, safeJsonParse(message));
+  const attachment = v.safeParse(RosterAttachmentSchema, socket.deserializeAttachment());
+
+  if (!report.success || !attachment.success || (attachment.output.looking ?? false) === report.output.looking) return;
+  socket.serializeAttachment({ ...attachment.output, looking: report.output.looking });
+  sendForeground(sockets, sockets, stands);
+}
+
+/** A page that went away while looked at leaves the count; the pages left are told. */
+export function rosterGone(socket: WebSocket, sockets: readonly WebSocket[], stands: SessionStands): void {
+  const attachment = v.safeParse(RosterAttachmentSchema, socket.deserializeAttachment());
+
+  if (attachment.success && attachment.output.looking === true) sendForeground(sockets.filter((other) => other !== socket), sockets, stands);
 }

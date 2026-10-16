@@ -1993,9 +1993,9 @@ export { ownerAlertOf, ownerIsAway, type OwnerAlert } from './read-models/owner-
 export { OverviewPush, type OverviewPushHost } from './read-models/overview-push';
 
 export {
-  AccountMemoryFrameSchema, CredentialSummarySchema, ModelMenuResponseSchema, ProviderCatalogEntrySchema,
-  RosterFrameSchema, RosterPageSchema, UserProfileSchema, WorkspaceEntrySchema,
-  type AccountMemoryFrame, type CredentialSummary, type ModelMenuEntry, type ModelMenuResponse, type ProviderCatalogEntry,
+  AccountForegroundFrameSchema, AccountMemoryFrameSchema, CredentialSummarySchema, ForegroundReportSchema, ModelMenuResponseSchema,
+  ProviderCatalogEntrySchema, RosterFrameSchema, RosterPageSchema, UserProfileSchema, WorkspaceEntrySchema,
+  type AccountForegroundFrame, type AccountMemoryFrame, type CredentialSummary, type ForegroundReport, type ModelMenuEntry, type ModelMenuResponse, type ProviderCatalogEntry,
   type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type UserProfile, type WorkspaceEntry,
 } from './read-models/account-wire';
 
