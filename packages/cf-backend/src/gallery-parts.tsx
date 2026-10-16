@@ -14,7 +14,7 @@ import { useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
-  APP_ROUTES, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
+  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
   type PartRunAnswer, type SlateConsent,
 } from "@kinu.run/core";
 import { PartView } from "@/components/sharing/PartView";
@@ -122,25 +122,39 @@ export function installPartsFixture(frame: string): void {
 }
 
 /**
- * The share dialog's mode switch (`sharedialog`): a share moved to each person's own access answers as the route does,
- * the record with that mode and no grant revision, the share the dialog last showed otherwise as it was. `shown` is read
- * at the call, as the gallery defines its share further down.
+ * The share dialog's mode switch and Gallery listing (`sharedialog`), answered as the routes do: each answers the share as
+ * it now is, and a share on the owner's access is refused a listing. `shown` is read at the first call, as the gallery
+ * defines its share further down.
  */
 export function installShareModeFixture(frame: string, shown: () => LiveShareRecord): void {
   if (frame !== "sharedialog") return;
 
   const next = window.fetch.bind(window);
+  let share: LiveShareRecord | null = null;
 
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
+    const path = new URL(request.url).pathname;
 
-    if (new URL(request.url).pathname !== LIVE_SHARE_MODE_PATH) return next(input, init);
+    if (path !== LIVE_SHARE_MODE_PATH && path !== LIVE_SHARE_LISTING_PATH) return next(input, init);
 
-    const body = v.parse(LiveShareModeBodySchema, await request.json());
+    const was = share ?? shown();
 
-    const share = shown();
+    if (path === LIVE_SHARE_MODE_PATH) {
+      const body = v.parse(LiveShareModeBodySchema, await request.json());
 
-    return Response.json(body.mode === "own" ? { ...share, id: body.share, mode: "own", grantRevision: null, stale: false } : { ...share, id: body.share, mode: "owner", grantRevision: body.revision, stale: false });
+      share = body.mode === "own" ? { ...was, mode: "own", grantRevision: null, stale: false } : { ...was, mode: "owner", grantRevision: body.revision, stale: false };
+
+      return Response.json(share);
+    }
+
+    const body = v.parse(LiveShareListingBodySchema, await request.json());
+
+    if (body.listed && was.mode === "owner") return Response.json({ error: "A share on your access is never listed in the Gallery" }, { status: 400 });
+
+    share = { ...was, gallery: body.listed ? { line: body.line, category: body.category } : null };
+
+    return Response.json(share);
   }, { preconnect: window.fetch.preconnect });
 }
 

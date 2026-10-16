@@ -8,7 +8,8 @@ import { LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, S
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { revokeShare, setShareMode, shareLive } from "@/lib/shared-api";
+import { listShare, revokeShare, setShareMode, shareLive } from "@/lib/shared-api";
+import { ShareListing, type ListShare } from "./ShareListing";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, StopButton, type AccessOption } from "./ShareParts";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -261,13 +262,14 @@ function modeWords(row: LiveShareRecord): ReactNode {
   return row.stale === true ? <span className="p-warning">Stopped: its code changed since you approved its reach</span> : "Your access";
 }
 
-function SharedNow({ shares, onStop, onOwnAccess, onReview, disabled }: {
+function SharedNow({ shares, onStop, onOwnAccess, onReview, onList, disabled }: {
   shares: readonly LiveShareRecord[];
   onStop: (id: string) => void;
   /** Moves an owner share to each person's own access: nothing of the owner's is used from then on. */
   onOwnAccess: (id: string) => void;
   /** Shows a stopped owner share's new reach, for the owner to approve at the slate's new revision. */
   onReview: (id: string) => void;
+  onList: (id: string, listing: Parameters<ListShare>[0]) => void;
   disabled: boolean;
 }) {
   return (
@@ -292,6 +294,8 @@ function SharedNow({ shares, onStop, onOwnAccess, onReview, disabled }: {
               <Button size="xs" variant="ghost" data-live-share-own={row.id} onClick={() => onOwnAccess(row.id)} disabled={disabled}>Use their own access</Button>
             )}
             <StopButton onStop={() => onStop(row.id)} disabled={disabled} />
+            {/* Anyone can open it from a Gallery card only through its link. */}
+            {row.visibility === "public" && <div className="basis-full"><ShareListing share={row} onList={(listing) => onList(row.id, listing)} disabled={disabled} /></div>}
           </li>
         ))}
       </ul>
@@ -373,6 +377,15 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
       setBusy(false);
     }));
   })), [canShare, approved, workspace, slate, visibility, emailList, mode, revision, fork, setBusy, onListingPending]);
+
+  // Lists a share in the Gallery, or takes it off.
+  const list = useCallback((shareId: string, listing: Parameters<ListShare>[0]) => detach(Effect.catchCause(Effect.gen(function* () {
+    setErr(null);
+
+    const updated = yield* Effect.promise(async () => listShare(listing === null ? { workspace, share: shareId, listed: false } : { workspace, share: shareId, listed: true, ...listing }));
+
+    setShares((previous) => previous.map((row) => (row.id === updated.id ? updated : row)));
+  }), showing(setErr))), [workspace]);
 
   // Approves a stopped owner share's reach again, at the revision the form read it at.
   const approveReach = useCallback(() => detach(Effect.gen(function* () {
@@ -456,7 +469,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
         {mode === "owner" && <OwnerReach graph={graph} failed={err !== null} visibility={visibility} approved={approved} onToggle={toggle} disabled={busy} />}
         {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limits}</p>}
         {shares.length > 0 && (
-          <SharedNow shares={shares} onStop={(id) => revoke(id)} onOwnAccess={ownAccess} disabled={busy}
+          <SharedNow shares={shares} onStop={(id) => revoke(id)} onOwnAccess={ownAccess} onList={list} disabled={busy}
             onReview={(id) => { setMode("owner"); setReviewing(id); }} />
         )}
         <Failure message={err} />

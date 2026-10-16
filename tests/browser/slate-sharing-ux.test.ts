@@ -140,10 +140,24 @@ describe('slate sharing surfaces', () => {
             await live.waitForFunction(() => document.querySelector('[data-live-share-review]') === null);
             expect(await live.$('[data-share-submit]')).not.toBeNull();
 
+            // On the owner's access it is never listed, and the row says why.
+            expect(await live.$('[data-share-gallery-owner]')).not.toBeNull();
+            expect(await live.$('[data-share-gallery]')).toBeNull();
+
             // And it moves to each person's own access in one press: nothing of the owner's is used.
             await live.click('[data-live-share-own]');
             await live.waitForSelector('[data-live-share-mode="own"]');
             expect(await live.$('[data-live-share-own]')).toBeNull();
+
+            // Then it can be listed, by a line and a category asked for first.
+            await live.click('[data-share-gallery]');
+            await live.type('[data-share-gallery-line]', 'Triage issues by label');
+            await live.click('[data-share-gallery-category="developer"]');
+            await live.click('[data-share-gallery-list]');
+            await live.waitForFunction(() => (document.querySelector('[data-share-gallery-for]')?.textContent ?? '').includes('Triage issues by label'));
+            // And taken off again.
+            await live.click('[data-share-gallery]');
+            await live.waitForFunction(() => !(document.querySelector('[data-share-gallery-for]')?.textContent ?? '').includes('Triage issues by label'));
           } finally {
             await live.close();
           }
