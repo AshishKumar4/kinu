@@ -151,6 +151,9 @@ describe('the Gallery', () => {
           await page.click('[data-gallery-star]');
           await page.waitForSelector(`[data-gallery-star][aria-pressed="false"][data-gallery-stars="${String(stars)}"]`, SOON);
 
+          // What of a visitor's own it uses, each asking before it reads.
+          expect(await page.$$eval('[data-gallery-need]', (rows) => rows.map((row) => row.getAttribute('data-gallery-need')))).toEqual(['github', 'ai']);
+
           // Fork picks a workspace for the copy of its code.
           await page.click('[data-gallery-fork]');
           await page.waitForSelector('input[name="fork-target"]', SOON);
@@ -183,6 +186,9 @@ describe('the Gallery', () => {
       try {
         await lent.waitForSelector('[data-gallery-slate="digest"]', SOON);
         expect(await lent.$('[data-gallery-people]')).toBeNull();
+        // One that uses nothing of a visitor's says so.
+        expect(await lent.$('[data-gallery-needs]')).not.toBeNull();
+        expect(await lent.$('[data-gallery-need]')).toBeNull();
         expect(await lent.$('[data-gallery-forks]')).toBeNull();
       } finally {
         await lent.close();

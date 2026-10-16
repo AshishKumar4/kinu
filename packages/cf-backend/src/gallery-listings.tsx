@@ -61,11 +61,13 @@ const LISTINGS: readonly GalleryListing[] = [
 ];
 
 /** Each listed slate's own page; Morning reading has no counts yet. */
+/** What each slate's page says beside its listing: its counts, and what of a visitor's own it uses. */
 const PAGES = {
-  "pr-board": { forks: 86, people: 1200 },
+  "pr-board": { forks: 86, people: 1200, needs: [{ kind: "github", title: "GitHub" }, { kind: "ai", title: "AI" }] },
+  digest: { needs: [] },
 } satisfies Record<string, Omit<GallerySlate, "listing">>;
 
-const pageOf = (slate: string): Omit<GallerySlate, "listing"> => (slate === "pr-board" ? PAGES[slate] : {});
+const pageOf = (slate: string): Omit<GallerySlate, "listing"> => (slate === "pr-board" || slate === "digest" ? PAGES[slate] : {});
 
 const PAGE_SIZE = 6;
 

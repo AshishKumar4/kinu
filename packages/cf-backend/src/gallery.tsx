@@ -5663,14 +5663,15 @@ const LIVE_SHARE: LiveShareRecord = {
 };
 
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
-function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
+/** `first`: the slate's first share, before anyone has it, which asks what they start with. */
+function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint"; first?: boolean }) {
 
   return (
     <div className="h-screen p-bg p-text">
       <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
         fixture={{
           mode,
-          live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
+          live: { graph: SHARE_GRAPH, liveShares: first ? [] : [LIVE_SHARE] },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
             { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },
@@ -7694,6 +7695,7 @@ async function mount() {
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
+    ["sharedialog-first", { node: <ShareDialogFrame mode="live" first />, entries: ["/"] }],
     ["fork-reach", {
       node: (
         <div className="h-screen w-[720px] p-sidebar p-text">

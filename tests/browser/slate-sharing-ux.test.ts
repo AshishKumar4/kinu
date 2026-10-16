@@ -162,6 +162,33 @@ describe('slate sharing surfaces', () => {
             await live.close();
           }
 
+          // A slate's first share asks what they start with; an empty copy shares a fork of its code in its place.
+          const first = await freshPage(gallery, 'sharedialog-first', theme, viewport);
+
+          try {
+            expect(await first.$eval('[data-share-start][aria-checked="true"]', (element) => element.getAttribute('data-share-start'))).toBe('as-is');
+            await first.click('[data-share-start="empty"]');
+            await first.click('[data-share-access]');
+            await first.click('[data-share-access-option="public"]');
+            await first.click('[data-share-submit]');
+            await first.waitForSelector('[data-share-created]');
+            const sent = JSON.parse(await first.$eval('html', (root) => root.getAttribute('data-gallery-shared')) ?? '{}');
+
+            expect([sent.slate, sent.start]).toEqual(['issue-triage', 'empty']);
+          } finally {
+            await first.close();
+          }
+
+          // A slate already shared asks nothing of it: its later shares share what the first one did.
+          const again = await freshPage(gallery, 'sharedialog', theme, viewport);
+
+          try {
+            await again.waitForSelector('[data-share-mode]');
+            expect(await again.$('[data-share-start]')).toBeNull();
+          } finally {
+            await again.close();
+          }
+
           const dialog = await freshPage(gallery, 'sharedialog-blueprint', theme, viewport);
 
           try {

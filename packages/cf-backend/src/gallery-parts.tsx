@@ -17,7 +17,7 @@ import { useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
-  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
+  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareBodySchema, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
   type PartRunAnswer, type SlateConsent,
 } from "@kinu.run/core";
 import { PartView } from "@/components/sharing/PartView";
@@ -138,7 +138,7 @@ export function installPartsFixture(frame: string): void {
  * defines its share further down.
  */
 export function installShareModeFixture(frame: string, shown: () => LiveShareRecord): void {
-  if (frame !== "sharedialog") return;
+  if (frame !== "sharedialog" && frame !== "sharedialog-first") return;
 
   const next = window.fetch.bind(window);
   let share: LiveShareRecord | null = null;
@@ -146,6 +146,17 @@ export function installShareModeFixture(frame: string, shown: () => LiveShareRec
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const path = new URL(request.url).pathname;
+
+    // A new share: what the sheet sent is on the root for a test to read, and an empty copy is shared as the fork.
+    if (path === "/api/shared/live" && request.method === "POST") {
+      const body = v.parse(LiveShareBodySchema, await request.json());
+
+      document.documentElement.setAttribute("data-gallery-shared", JSON.stringify(body));
+
+      const made: LiveShareRecord = { ...shown(), id: "live-new", slate: body.start === "empty" ? `${body.slate}-copy` : body.slate, mode: body.mode ?? "own", grantRevision: body.revision ?? null, stale: false, gallery: null };
+
+      return Response.json({ share: made, url: `https://${made.slate}.example.kinu.run/` });
+    }
 
     if (path !== LIVE_SHARE_MODE_PATH && path !== LIVE_SHARE_LISTING_PATH) return next(input, init);
 
