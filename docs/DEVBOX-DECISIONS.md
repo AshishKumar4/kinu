@@ -4934,6 +4934,11 @@ where it is in the document, since an iframe moved in the document reloads, and 
 `container-type` ancestor makes no containing block for it (Chrome 129, Safari 18.4; measured in the tier's Chrome
 151). The product-flow row `desktop-switch` reads both on each deployment, with the switch times.
 
+Measured 2026-10-16 by the container tier's `browser-trust` step: after a box's stop, the next start could not open the
+desktop at all. The stop ends X with the container, its disk keeps `/tmp`, and X refused the new start with "Server is
+already active for display 0 … remove /tmp/.X0-lock" (job `20261016192110-a744df85` on `af60ca442`). The desktop's start removes the
+display's lock and socket when no X runs, so its lock can only be the last start's.
+
 D100. The desktop's Chromium trusts the intercept CA of the start it runs in, and only it, through a managed policy the
 trust step writes (2026-10-16, the owner: most sites in the computer's browser said "Not secure"). Debian's Chromium 154
 reads none of the bundle the trust step builds (the image has no NSS roots module that would), so every site that reached
