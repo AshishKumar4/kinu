@@ -322,7 +322,7 @@ export {
 
 // The part and consent contracts the client parses: `./slates` pulls the server's runtime, so the browser reads them here.
 export {
-  ConsentAskSchema, EffectAskSchema, PartActionSchema, PartRunAnswerSchema, PartRunRequestSchema, SlateConsentsAnswerSchema,
+  PartRunAnswerSchema, PartRunRequestSchema, SlateConsentsAnswerSchema,
   slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartRunPath, slatePartShowPath,
   type ConsentAsk, type EffectAsk, type PartAction, type PartRunAnswer, type PartRunRequest, type PartShowRequest,
 } from './slates/personal-parts';
