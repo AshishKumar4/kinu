@@ -68,13 +68,39 @@ export function gatedClientHandlers(host: ClientSocketGateHost, base: ClientHand
   };
 }
 
+/** One turn of the event loop: whatever a frame's handler does before its first wait on I/O has run by then. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, 0); });
+}
+
 class ClientSocketGate {
   constructor(private readonly host: ClientSocketGateHost) {}
 
-  /** A frame from a socket whose authority still holds goes on; one whose authority ended is refused and closed. */
+  /** Per socket, its newest frame's place: settled once that frame has gone on, so the frame after it may. */
+  private readonly lines = new Map<string, Promise<void>>();
+
+  /**
+   * A frame from a socket whose authority still holds goes on; one whose authority ended is refused and closed. Its
+   * authority is asked at once, but it goes on only after the socket's frame before it: those answers come back in any
+   * order, and a Continue let in ahead of the Stop sent before it was handed back by that Stop (staging rc12). A frame
+   * whose handler waits (a send until it lands, an RPC on I/O) holds the next only until it has taken its place in its
+   * handler's own order, which it does before that first wait.
+   */
   message(connection: Connection, message: WSMessage, base: ClientHandlers): Promise<void> {
-    return settle(Effect.flatMap(this.refuseRevokedAuthority(connection, message),
-      (refused) => (refused ? Effect.void : Effect.promise(async () => { await this.admittedMessage(connection, message, base); }))));
+    const before = this.lines.get(connection.id) ?? Promise.resolve();
+    const { promise: placed, resolve: place } = Promise.withResolvers<void>();
+
+    this.lines.set(connection.id, placed);
+
+    const checked = Effect.all([this.refuseRevokedAuthority(connection, message), Effect.promise(() => before)], { concurrency: 'unbounded' });
+
+    const goneOn = Effect.flatMap(checked, ([refused]) => (refused
+      ? Effect.sync(place)
+      : Effect.promise(async () => { await Promise.all([this.admittedMessage(connection, message, base), nextTask().then(place)]); })));
+
+    return settle(Effect.ensuring(goneOn, Effect.sync(() => {
+      if (this.lines.get(connection.id) === placed) this.lines.delete(connection.id);
+    })));
   }
 
   private async admittedMessage(connection: Connection, message: WSMessage, base: ClientHandlers): Promise<void> {
@@ -176,6 +202,8 @@ class ClientSocketGate {
 
   async close(connection: Connection, closed: { code: number; reason: string; wasClean: boolean }, base: ClientHandlers): Promise<void> {
     const { code, reason, wasClean } = closed;
+
+    this.lines.delete(connection.id);
 
     if (this.host.storageRefusal() !== undefined) {
       await base.onClose(connection, code, reason, wasClean);
