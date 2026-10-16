@@ -8,6 +8,17 @@ import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import type { ShareGrant } from './sharing';
 import type { ShareMode, SlateConsent } from './share-modes';
 import type { ConsentAsk, EffectAsk } from './personal-parts';
+import type { SlateBuilds } from './builds';
+import { slateAuthority } from './authority';
+import { ROOT_SLATE_CALLER } from './caller';
+
+/**
+ * A slate's revision: the source digest its durable app's image was last built from as the workspace root, which
+ * every edit changes. Consents and an `owner` share's approval name it; null before the slate ever built.
+ */
+export function slateRevision(builds: Pick<SlateBuilds, 'good'>, slate: string): string | null {
+  return builds.good(slate, slateAuthority(ROOT_SLATE_CALLER.cred))?.key ?? null;
+}
 
 /** One live share of the slate, as the server's authority reads it. */
 export interface LiveShareAuthority {

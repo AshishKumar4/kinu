@@ -60,6 +60,6 @@ export {
 export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams } from './slate-ai';
 
 export {
-  EffectApprovals, partCallVerdict, serverAuthority,
+  EffectApprovals, partCallVerdict, serverAuthority, slateRevision,
   type EffectCall, type LiveShareAuthority, type PartCall, type PartCallVerdict, type ServerAuthority,
 } from './share-policy';
