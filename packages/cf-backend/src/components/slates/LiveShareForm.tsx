@@ -277,25 +277,29 @@ function SharedNow({ shares, onStop, onOwnAccess, onReview, onList, disabled }: 
       <p className="p-meta font-medium p-text-3">Shared now</p>
       <ul className="p-group">
         {shares.map((row) => (
-          <li key={row.id} data-live-share={row.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3.5 py-2">
-            <span className="flex shrink-0 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
-            {/* Wide enough to read: on a phone the actions wrap under it. */}
-            <span className="min-w-48 flex-1">
-              <span className="block truncate p-meta p-text-2">
-                {row.visibility === "public" ? "Anyone with the link" : row.users.join(", ") || "People you added"}
-                {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
+          <li key={row.id} data-live-share={row.id} className="space-y-1.5 px-3.5 py-2">
+            {/* Who and on whose access, then what the owner can do with it, then its place in the Gallery: one line each. */}
+            <div className="flex items-start gap-3">
+              <span className="flex shrink-0 pt-0.5 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate p-meta p-text-2">
+                  {row.visibility === "public" ? "Anyone with the link" : row.users.join(", ") || "People you added"}
+                  {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
+                </span>
+                <span data-live-share-mode={row.mode} className="block p-meta p-text-3">{modeWords(row)}</span>
               </span>
-              <span data-live-share-mode={row.mode} className="block p-meta p-text-3">{modeWords(row)}</span>
-            </span>
-            {row.mode === "owner" && row.stale === true && (
-              <Button size="xs" variant="secondary" data-live-share-review={row.id} onClick={() => onReview(row.id)} disabled={disabled}>Review the new reach</Button>
-            )}
-            {row.mode === "owner" && (
-              <Button size="xs" variant="ghost" data-live-share-own={row.id} onClick={() => onOwnAccess(row.id)} disabled={disabled}>Use their own access</Button>
-            )}
-            <StopButton onStop={() => onStop(row.id)} disabled={disabled} />
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 pl-[26px]">
+              {row.mode === "owner" && row.stale === true && (
+                <Button size="xs" variant="secondary" data-live-share-review={row.id} onClick={() => onReview(row.id)} disabled={disabled}>Review the new reach</Button>
+              )}
+              {row.mode === "owner" && (
+                <Button size="xs" variant="ghost" data-live-share-own={row.id} onClick={() => onOwnAccess(row.id)} disabled={disabled}>Use their own access</Button>
+              )}
+              <StopButton onStop={() => onStop(row.id)} disabled={disabled} />
+            </div>
             {/* Anyone can open it from a Gallery card only through its link. */}
-            {row.visibility === "public" && <div className="basis-full"><ShareListing share={row} onList={(listing) => onList(row.id, listing)} disabled={disabled} /></div>}
+            {row.visibility === "public" && <div className="pl-[26px]"><ShareListing share={row} onList={(listing) => onList(row.id, listing)} disabled={disabled} /></div>}
           </li>
         ))}
       </ul>
