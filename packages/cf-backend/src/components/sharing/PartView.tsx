@@ -6,7 +6,7 @@
  */
 import { useState, type ReactNode } from "react";
 import { EyeIcon, LockSimpleIcon, PlugIcon, SignInIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import type { PartAction, PartRunAnswer } from "@kinu.run/core/slates";
+import type { PartAction, PartRunAnswer } from "@kinu.run/core";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { serverWords } from "./words";
 

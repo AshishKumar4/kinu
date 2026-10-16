@@ -21,10 +21,3 @@ export function rootWords(root: Readonly<Record<string, string>>): string {
 
   return parts.length === 0 ? "everything it can reach" : parts.join(", ");
 }
-
-/** People named in a sentence: "Sam", "Sam and Ana", "Sam, Ana and Lee". */
-export function names(people: readonly string[]): string {
-  if (people.length <= 1) return people[0] ?? "";
-
-  return `${people.slice(0, -1).join(", ")} and ${people.at(-1) ?? ""}`;
-}

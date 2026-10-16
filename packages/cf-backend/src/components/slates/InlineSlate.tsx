@@ -15,8 +15,7 @@ import { SlateInlineContext, SlatePreviews } from "./context";
 import { Effect } from "effect";
 import { detach, showing } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
-import { useParams } from "react-router-dom";
-import { usePartHost } from "@/hooks/use-part-host";
+import { WorkspacePartHost } from "@/hooks/use-part-host";
 
 
 /** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
@@ -348,8 +347,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
 
   const notice = preview?.broken === undefined ? null : <BrokenNotice title={preview.title ?? id} />;
   // The owner's own preview runs its personal parts as the owner, the decisions they lead to opening here.
-  const { agentId = null } = useParams();
-  const decision = usePartHost({ workspace: agentId, slate: id, title: preview?.title ?? id, slateFrame: frame });
+  const decision = <WorkspacePartHost slate={id} titled={preview} slateFrame={frame} />;
   let content: ReactNode = null;
 
   if (src !== null) {

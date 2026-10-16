@@ -4,9 +4,10 @@
  * at the top, where the slate's script cannot cover them.
  */
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import { useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
-import type { PartRunAnswer } from "@kinu.run/core/slates";
+import type { PartRunAnswer } from "@kinu.run/core";
 import { ApprovalDecision, ConsentDecision, ShowDecision } from "@/components/sharing/PartDecisions";
 import { hostPartFrames, type Decided, type DecisionKind, type PartAddress } from "@/lib/part-bridge";
 import { decideEffect, giveConsent, readConsents, runPart, showPart } from "@/lib/parts-api";
@@ -114,4 +115,16 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
 
   // Unreachable: a decision opens only on an answer that asks it (`asks`).
   return null;
+}
+
+/** The parts of a slate the owner's own workspace page shows in `slateFrame`: its workspace is the page's own. */
+export function WorkspacePartHost({ slate, titled, slateFrame }: {
+  slate: string;
+  /** The slate's preview once read, which names its title. */
+  titled: { readonly title?: string } | null;
+  slateFrame: RefObject<HTMLIFrameElement | null>;
+}) {
+  const { agentId = null } = useParams();
+
+  return usePartHost({ workspace: agentId, slate, title: titled?.title ?? slate, slateFrame });
 }

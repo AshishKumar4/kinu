@@ -11,8 +11,9 @@
 import { Effect } from "effect";
 import * as v from "valibot";
 import { detach } from "@kinu.run/core/obs";
-import { JsonValueSchema, type JsonValue } from "@kinu.run/core";
-import { PartRunAnswerSchema, type PartRunAnswer, type PartRunRequest } from "@kinu.run/core/slates";
+import {
+  JsonValueSchema, PartRunAnswerSchema, type JsonValue, type PartRunAnswer, type PartRunRequest,
+} from "@kinu.run/core";
 
 /** One part as its frame's address names it: whose slate, which part, and the page's public input to it. */
 export interface PartAddress {

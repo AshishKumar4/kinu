@@ -4,13 +4,11 @@
  * effect. Never called from a part's frame, whose requests carry no session (lib/part-bridge.ts).
  */
 import { Effect } from "effect";
-import type { JsonValue } from "@kinu.run/core";
 import {
-  PartRunAnswerSchema, SlateConsentsAnswerSchema, slateApprovalPath, slateConsentsPath, slatePartRunPath, slatePartShowPath,
-  type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateConsent,
-} from "@kinu.run/core/slates";
+  PartRunAnswerSchema, slateApprovalPath, SlateConsentsAnswerSchema, slateConsentsPath, slatePartRunPath, slatePartShowPath, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateConsent,
+} from "@kinu.run/core";
 import { renderThrownChain, settle } from "@kinu.run/core/obs";
-import { refusal, request, respond } from "./http";
+import { posted, request } from "./http";
 
 /** The run's answer, or why it was refused, in the app's words. */
 export function runPart(workspace: string, slate: string, part: string, asked: PartRunRequest): Promise<PartRunAnswer | string> {
@@ -20,17 +18,8 @@ export function runPart(workspace: string, slate: string, part: string, asked: P
   ));
 }
 
-/** A POST whose answer carries nothing past its status. */
-function sent(path: string, json: JsonValue): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const answer = yield* respond(path, { method: "POST", json });
-
-    if (!answer.ok) return yield* Effect.die(yield* refusal(answer, "POST", path));
-  });
-}
-
 export function showPart(workspace: string, slate: string, part: string, shown: PartShowRequest): Promise<void> {
-  return settle(sent(slatePartShowPath(workspace, slate, part), shown));
+  return settle(posted(slatePartShowPath(workspace, slate, part), shown));
 }
 
 export function readConsents(workspace: string, slate: string): Promise<readonly SlateConsent[]> {
@@ -38,9 +27,9 @@ export function readConsents(workspace: string, slate: string): Promise<readonly
 }
 
 export function giveConsent(consent: SlateConsent): Promise<void> {
-  return settle(sent(slateConsentsPath(consent.workspace, consent.slate), { ...consent, root: { ...consent.root }, tools: [...consent.tools] }));
+  return settle(posted(slateConsentsPath(consent.workspace, consent.slate), { ...consent, root: { ...consent.root }, tools: [...consent.tools] }));
 }
 
 export function decideEffect(workspace: string, slate: string, approval: string, decision: "approve" | "decline"): Promise<void> {
-  return settle(sent(slateApprovalPath(workspace, slate, approval), { decision }));
+  return settle(posted(slateApprovalPath(workspace, slate, approval), { decision }));
 }

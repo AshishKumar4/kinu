@@ -7,7 +7,7 @@ import { Cover, Tile } from "@/components/drive/DriveTiles";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 
 /** A listed slate's own page in the app. */
-export const gallerySlateHref = (workspace: string, slate: string) => `/gallery/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
+const gallerySlateHref = (workspace: string, slate: string) => `/gallery/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
 
 export function ListingPicture({ listing }: { listing: GalleryListing }) {
   return (

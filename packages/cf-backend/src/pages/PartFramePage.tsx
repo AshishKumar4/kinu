@@ -8,8 +8,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
-import { JsonValueSchema, safeJsonParse } from "@kinu.run/core";
-import type { PartRunAnswer } from "@kinu.run/core/slates";
+import { JsonValueSchema, safeJsonParse, type PartRunAnswer } from "@kinu.run/core";
 import { detach } from "@kinu.run/core/obs";
 import { PartOutsideItsSlate, PartView } from "@/components/sharing/PartView";
 import { connectPartBridge, type PartBridge } from "@/lib/part-bridge";
@@ -18,7 +17,7 @@ import { connectPartBridge, type PartBridge } from "@/lib/part-bridge";
  * A part's frame sits inside the slate's own page: it shows that page through it, not the app's background, and takes
  * `?scheme=light|dark` when the slate's page says which suits it.
  */
-export function useSlateScheme(scheme: string | null): void {
+function useSlateScheme(scheme: string | null): void {
   useEffect(() => {
     const root = document.documentElement;
 
@@ -39,7 +38,7 @@ const argsOf = (raw: string | null) => {
   return args.success ? args.output : [];
 };
 
-export function PartFrame({ workspace, slate, part, args }: { workspace: string; slate: string; part: string; args: readonly v.InferOutput<typeof JsonValueSchema>[] }) {
+function PartFrame({ workspace, slate, part, args }: { workspace: string; slate: string; part: string; args: readonly v.InferOutput<typeof JsonValueSchema>[] }) {
   const [bridge, setBridge] = useState<PartBridge | null>(null);
   const [outside, setOutside] = useState(false);
   const [answer, setAnswer] = useState<PartRunAnswer | null>(null);

@@ -92,3 +92,12 @@ export function request<Schema extends v.GenericSchema>(schema: Schema, url: str
     return v.parse(schema, yield* Effect.promise(() => response.json()));
   });
 }
+
+/** A POST whose answer carries nothing past its status: done, or the refusal as a defect `settle` turns into the rejection. */
+export function posted(url: string, json: HttpRequest['json']): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const answer = yield* respond(url, { method: 'POST', json });
+
+    if (!answer.ok) return yield* Effect.die(yield* refusal(answer, 'POST', url));
+  });
+}

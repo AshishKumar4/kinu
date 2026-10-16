@@ -7,8 +7,7 @@
 import type { ReactNode } from "react";
 import { CheckIcon, EyeIcon, PlugIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
-import type { JsonValue } from "@kinu.run/core";
-import type { ConsentAsk, EffectAsk } from "@kinu.run/core/slates";
+import { type ConsentAsk, type EffectAsk, type JsonValue } from "@kinu.run/core";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { rootWords, serverWords } from "./words";

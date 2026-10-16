@@ -1,7 +1,10 @@
-/** Signing in from a page a visitor can reach signed out, and landing back on it. */
+/**
+ * Signing in from a page a visitor can reach signed out, and landing back on it. Hosted only, so locked in
+ * `capability-parity.lock.json`: the local CLI has no sign-in page.
+ */
 
 /** Back to this page after signing in, or after connecting a service. */
-export const returnHere = () => window.location.pathname + window.location.search;
+const returnHere = () => window.location.pathname + window.location.search;
 
 /** `back`: where to land once signed in, this page by default. */
 export function signInAndReturn(back = returnHere()): void {
