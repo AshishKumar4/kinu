@@ -449,9 +449,15 @@ async function main(): Promise<void> {
       await writeReport();
       recorded = true;
 
+      // A box's clear lists the store to discard it. When an earlier teardown deleted the bucket and then failed to delete
+      // the Worker (a 504, 2026-10-16), every replay's clear failed on the missing bucket and the run was never recovered,
+      // which refused every later run. There is nothing left to discard: the application's deletion ends the containers.
+      const storeGone = r2(bucket).state === 'absent';
+
       if (origin !== undefined && 'status' in health && health.status !== 404) for (const name of names) {
         await finish(`snapshots ${name}`, () => collectSnapshots(name));
-        await finish(`cleanup ${name}`, () => call('/cleanup', Json, {}, name));
+
+        if (!storeGone) await finish(`cleanup ${name}`, () => call('/cleanup', Json, {}, name));
       }
 
     for (const id of snapshots) await finish(`snapshot ${id}`, async () => {
