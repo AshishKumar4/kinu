@@ -15,14 +15,13 @@ function world(written: readonly string[]) {
   const asked: string[] = [];
 
   const namespace = (name: string): OpsEnv['UserDO'] => ({
-    idFromString: (id) => ({ toString: () => id, equals: () => false, name: undefined }),
     idFromName: (named) => ({ toString: () => sha256Hex(named), equals: () => false, name: named }),
     get: (id) => ({
       opsTables: async (caller: OpsCaller): Promise<TablesAnswer> => {
         await requireOps({ CREDENTIAL_ENCRYPTION_KEY: KEY }, caller);
         asked.push(`${name}:${id.toString()}`);
 
-        if (id.toString().startsWith('f')) throw new Error('reached by id before any named start');
+        if (id.name === 'failing') throw new Error('the object failed to start');
 
         return { name: id.name ?? null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [] };
       },
@@ -40,17 +39,17 @@ function world(written: readonly string[]) {
   return { env, asked };
 }
 
-const body = (ids: readonly string[], names: readonly string[] = []) => JSON.stringify({ class: 'OrchestratorAgent', ids, names });
+const body = (names: readonly string[]) => JSON.stringify({ class: 'OrchestratorAgent', names });
 
-const post = (authorization: string | null, ids: readonly string[] = ['a'.repeat(64)]) => new Request('https://kinu.test/ops/tables', {
-  method: 'POST', body: body(ids), headers: authorization === null ? {} : { authorization },
+const post = (authorization: string | null, names: readonly string[] = ['jarvis']) => new Request('https://kinu.test/ops/tables', {
+  method: 'POST', body: body(names), headers: authorization === null ? {} : { authorization },
 });
 
 test('no pass, a pass never written, or a session reaches no object', async () => {
   const { env, asked } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
 
   for (const request of [post(null), post(`Bearer ${'q'.repeat(43)}`), post('Bearer short'), new Request('https://kinu.test/ops/tables', {
-    method: 'POST', body: body(['a'.repeat(64)]), headers: { cookie: 'kinu_session=s' },
+    method: 'POST', body: body(['jarvis']), headers: { cookie: 'kinu_session=s' },
   })]) {
     expect((await opsRoutes.fetch(request, env)).status).toBe(401);
   }
@@ -60,20 +59,26 @@ test('no pass, a pass never written, or a session reaches no object', async () =
 
 test('the written pass reaches each named object, and one that cannot answer is named with why', async () => {
   const { env, asked } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
-  const answer = await opsRoutes.fetch(post(`Bearer ${PASS}`, ['a'.repeat(64), 'f'.repeat(64)]), env);
+  const answer = await opsRoutes.fetch(post(`Bearer ${PASS}`, ['jarvis', 'failing']), env);
   const objects = v.parse(v.object({ objects: v.array(v.looseObject({ id: v.string(), error: v.optional(v.string()) })) }), await answer.json()).objects;
 
   expect(answer.status).toBe(200);
   // Asked side by side, so in no fixed order.
-  expect([...asked].sort()).toEqual([`OrchestratorAgent:${'a'.repeat(64)}`, `OrchestratorAgent:${'f'.repeat(64)}`]);
-  expect(objects[1]?.error).toContain('reached by id before any named start');
+  expect([...asked].sort()).toEqual([`OrchestratorAgent:${sha256Hex('failing')}`, `OrchestratorAgent:${sha256Hex('jarvis')}`]);
+  expect(objects[1]?.error).toContain('the object failed to start');
 });
 
-test('a body that names no class or too many objects is refused before any object is asked', async () => {
+test('a body that names too many objects, or any by id, is refused before any object is asked', async () => {
   const { env, asked } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
-  const tooMany = Array.from({ length: 51 }, (_, at) => at.toString(16).padStart(64, '0'));
+  const tooMany = Array.from({ length: 51 }, (_, at) => `workspace-${String(at)}`);
+
+  const byId = new Request('https://kinu.test/ops/tables', {
+    method: 'POST', body: JSON.stringify({ class: 'OrchestratorAgent', names: [], ids: ['a'.repeat(64)] }), headers: { authorization: `Bearer ${PASS}` },
+  });
 
   expect((await opsRoutes.fetch(post(`Bearer ${PASS}`, tooMany), env)).status).toBe(400);
+  // Staging rc12, 2026-10-16: a workspace opened by an id it never recorded a name under threw as it constructed.
+  expect((await opsRoutes.fetch(byId, env)).status).toBe(400);
   expect(asked).toEqual([]);
 });
 
@@ -81,7 +86,7 @@ test('an object named is reached by the id its name makes, and answers under tha
   const { env, asked } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
 
   const answer = await opsRoutes.fetch(new Request('https://kinu.test/ops/tables', {
-    method: 'POST', body: body([], ['wiped-workspace']), headers: { authorization: `Bearer ${PASS}` },
+    method: 'POST', body: body(['wiped-workspace']), headers: { authorization: `Bearer ${PASS}` },
   }), env);
 
   const objects = v.parse(v.object({ objects: v.array(v.looseObject({ id: v.string(), name: v.string() })) }), await answer.json()).objects;
