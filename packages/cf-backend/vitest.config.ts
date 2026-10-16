@@ -260,11 +260,32 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           modules: probeModules('plan-announce-probe.ts', { ...probeRuntime, keepNames: true }),
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
             USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', useSQLite: true },
           },
         })],
+['slate-egress-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('slate-egress-probe.ts', probeRuntime), serviceBindings: { ASSETS: nimbusAssets }, durableObjects: { SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', useSQLite: true } },
+        // Final transport only: the actual CodemodeEgress policy and resident
+        // global fetch run above this mock. No unmatched request reaches a network.
+        outboundService: async (request) => {
+          const url = new URL(request.url);
+        
+          if (url.origin === 'http://169.254.169.254') {
+            forbiddenEgressHits += 1;
+        
+            return new Response('forbidden transport reached');
+          }
+        
+          if (url.origin === 'https://example.com') {
+            if (url.pathname === '/control') return new Response('public control');
+        
+            if (url.pathname === '/redirect') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/forbidden' } });
+        
+            if (url.pathname === '/seen') return Response.json({ forbiddenEgressHits });
+          }
+        
+          throw new Error('Unmatched test egress is disabled: ' + request.url);
+        }, })],
 ["two-turn-probe", async () => ({
           // `env.AI` is the installed binding, forwarded to Wrangler's remote Workers AI session.
           ...workerCompatibility,
@@ -281,7 +302,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -300,7 +320,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             HIRE_PROBE: { className: 'HireProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -318,17 +337,24 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
             DEV_USER_EMAIL: 'probe@local',
             CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=',
           },
-          // The registry for npm, and the egress policy's targets for a slate's own fetch (slate-egress.test.ts).
-          outboundService: slateOutbound,
-          // A git network facet imports its bundle from ASSETS, as the deployed Worker serves it; a workspace's deletion
-          // stops main, whose isolate loads the agent bundle from the same ASSETS.
-          serviceBindings: { ASSETS: durabilityAssets },
+          outboundService: registryOutbound,
+          // A git network facet imports its bundle from ASSETS, as the deployed Worker serves it.
+          serviceBindings: { ASSETS: nimbusAssets },
           durableObjects: {
             SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
-            GALLERY: { className: 'GalleryDO', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
+          },
+        })],
+["slate-share-probe", async () => ({
+          // `SlateBinding` resolves `env.OrchestratorAgent`, so the probe class is bound under that name too.
+           ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: probeModules('slate-share-probe.ts', probeRuntime),
+          // The egress gate's Browser Run: a session answers where its CDP socket would.
+          serviceBindings: { ASSETS: nimbusAssets, BROWSER: { name: 'slate-share-probe', entrypoint: 'FakeBrowserRun' } },
+          durableObjects: {
+            SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', useSQLite: true },
+            OrchestratorAgent: { className: 'SlateShareProbeDO', useSQLite: true },
           },
         })],
 ['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('delete-all-probe.ts'),
@@ -342,7 +368,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           // The probe is this script's account object, so its workspaces reach it as `env.UserDO`.
           UserDO: { className: 'UserDO', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
         }, })],
 ['account-reset-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-reset-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
         // Main's conversation is its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
@@ -353,7 +378,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         durableObjects: {
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
 ["store-reset-probe", async () => ({
@@ -369,7 +393,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           durableObjects: {
             STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -382,7 +405,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         durableObjects: {
           ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
 ['agent-facet-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('agent-facet-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
@@ -392,7 +414,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         durableObjects: {
           AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
 ['attribution-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('attribution-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YXR0cmlidXRpb24tcHJvYmUtY3JlZC1rZXktMzJieXQ=' },
@@ -400,7 +421,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         durableObjects: {
           ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-          SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
         }, })],
 ["public-surface-probe", async () => ({
@@ -420,7 +440,6 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           outboundService: probeOutbound,
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            SLATE_ROOM: { className: 'SlateRoom', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
@@ -515,9 +534,11 @@ const runnerOptions = {
           EFFECT_ATOMICITY_PROBE: { className: 'EffectAtomicityProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
+          SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', scriptName: 'slate-share-probe', useSQLite: true },
           SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', scriptName: 'slate-actor-probe', useSQLite: true },
           PLAN_ANNOUNCE_ROOT: { className: 'OrchestratorAgent', scriptName: 'plan-announce-probe', useSQLite: true },
           USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', scriptName: 'plan-announce-probe', useSQLite: true },
+          SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
           DEVICE_OUTPUT_HUB_PROBE: { className: 'DeviceOutputHubProbeDO', useSQLite: true },
           DEVICE_OUTPUT_WORKSPACE_PROBE: { className: 'DeviceOutputWorkspaceProbeDO', useSQLite: true },
@@ -631,35 +652,6 @@ const sharedTestOptions = {
       if (error.message.includes('probe: the object died mid-plan')) return false;
     },
 } satisfies NonNullable<UserConfig['test']>;
-
-/** The durability probe's assets: the agent bundle main's isolate loads, and the git network facet's bundle. */
-async function durabilityAssets(request: Request): Promise<Response> {
-  return new URL(request.url).pathname.startsWith('/_agent/') ? await agentAssets()(request) : nimbusAssets(request);
-}
-
-/** The durability probe's egress: the policy's fake targets for a slate's own fetch, else the npm registry. */
-async function slateOutbound(request: Request): Promise<Response> {
-  return egressFake(request) ?? await registryOutbound(request);
-}
-
-/** The far side of a slate's fetch: a public page, a redirect to the metadata address, and what reached that address. */
-function egressFake(request: Request): Response | null {
-  const url = new URL(request.url);
-
-  if (url.origin === 'http://169.254.169.254') {
-    forbiddenEgressHits += 1;
-
-    return new Response('forbidden transport reached');
-  }
-
-  if (url.origin !== 'https://example.com') return null;
-
-  if (url.pathname === '/control') return new Response('public control');
-
-  if (url.pathname === '/redirect') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/forbidden' } });
-
-  return url.pathname === '/seen' ? Response.json({ forbiddenEgressHits }) : null;
-}
 
 export default defineConfig({
   plugins: [promptText(), slateVendor(), standardDecorators(), {

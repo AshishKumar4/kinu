@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
-import { ROOT_SLATE_CALLER, roomHandle, roomObjectName, slateAnswer, type SlateCaller } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -40,7 +40,7 @@ import {
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
-import { censusOf, requireOps, slateTitle, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
+import { censusOf, requireOps, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -60,6 +60,7 @@ import { callOperation, listOperations, type OperationCaller, type OperationList
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
+import { ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
   AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
 } from '@kinu.run/core';
@@ -68,16 +69,16 @@ import {
 import { agentArtifactDirectory, agentHome, agentNameOfUid, MAIN_AGENT } from '@kinu.run/core';
 import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
+import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
-import type { SlateRoom } from "./slates/room";
-import { initSlateRoomRegistry, SlateRoomRegistry } from "./slates/room-registry";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
-import { holdsBrowserSession, initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
+import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
+import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
 import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type CFSeat, type WorkspaceHostSeams,
@@ -123,7 +124,8 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SharedSlateFiles, type SlateFileChange,
+  type LiveShareRecord,
+  type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
@@ -596,6 +598,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slateInvocation: (port, socket) => this.slateHosting.loaded?.slateInvocation(port, socket) ?? null,
       ...(this.pictureCapture() !== null && {
         pictures: {
+          captures: (port, handle) => this.pictures.captures(port, handle, Date.now()),
           rendered: (slate, port) => {
             this.pictures.rendered(slate, port, Date.now());
             this.armDurableWake();
@@ -608,14 +611,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private _pictures: SlatePictures | undefined;
-
-  private _slateRooms: SlateRoomRegistry | undefined;
-
-  private get slateRooms(): SlateRoomRegistry {
-    this._slateRooms ??= new SlateRoomRegistry(this.ctx.storage.sql);
-
-    return this._slateRooms;
-  }
 
   private get pictures(): SlatePictures {
     this._pictures ??= new SlatePictures(this.ctx.storage.sql);
@@ -630,12 +625,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return {
       workspace: this.name, bucket,
-      url: async (slate) => {
-        const owner = await this.email.ownerEmail();
-
-        return owner === null ? null : await this.slateRoom(slate)
-          .ticketFor({ email: owner.toLowerCase(), name: owner }, null);
-      },
+      url: async (port, token) => (await nimbusPreviewUrl(this.env, this.name, port, token)).url ?? null,
       slates: async () => {
         const listing = await (await this.slates()).controller.list(ROOT_SLATE_CALLER);
 
@@ -1988,12 +1978,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Reached by RPC, or via `fetch` for a WebSocket upgrade, which cannot cross RPC as a 101. A preview opens only for
-   * the workspace's owner and its own browsers and fetches ({@link PREVIEW_SELF}); this is decided before anything
-   * the preview serves starts.
+   * the workspace's owner, its own browsers and fetches ({@link PREVIEW_SELF}) and a slate picture's capture, so a
+   * slate's calls, which run as the owner, run for no one else; this is decided before anything of the slate starts.
    */
   async routeWorkspacePreview({ port, handle, pathname, viewer }: PreviewVisit, request: Request): Promise<Response> {
     const owner = this.getOwnerUserId();
-    const admitted = viewer === PREVIEW_SELF || (owner !== null && viewer === owner);
+    const admitted = viewer === PREVIEW_SELF || (owner !== null && viewer === owner) || this.pictures.captures(port, handle, Date.now());
 
     if (admitted) return await this.hostedWorkspace().routePreview(port, handle, request, pathname);
     diagnostics.event('preview.route.refused', { port, handle, reason: viewer === null ? 'no-viewer' : 'not-owner', owner: '', detail: '' });
@@ -2028,6 +2018,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const visit = { port: parsed, handle, pathname: `/${rest.join('/')}`, viewer: viewer === '' ? null : decodeURIComponent(viewer) };
 
       return await this.routeWorkspacePreview(visit, c.req.raw);
+    }))
+    .all(`${SLATE_SHARE_PATH}/*`, beneath(SLATE_SHARE_PATH, async (c) => {
+      const [handle, claimText, ...rest] = c.req.path.slice(SLATE_SHARE_PATH.length + 1).split('/');
+
+      // The claim segment is JSON the edge wrote; a parse failure yields the same 404 as a bad shape.
+      const claim = v.safeParse(
+        v.pipe(v.string(), v.parseJson(), ShareViewerClaimSchema),
+        claimText ? decodeURIComponent(claimText) : '',
+      );
+
+      if (!handle || !claim.success) {
+        return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+      }
+
+      return await this.routeSlateShare(handle, claim.output, c.req.raw, `/${rest.join('/')}`);
     }))
     .notFound(async (c) => super.fetch(c.req.raw))
     .onError(rethrow);
@@ -4162,17 +4167,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const reached = !this.nimbusSibling && this.storageRefusal === undefined && this.workspaceBorn() ? this.keptAgents() : [];
     const agents = await Promise.all(reached.map(async ({ name, placement }) => ({ name, ...await (await agentFacet(this.ctx, this.env, placement)).opsTables() })));
 
-    // Every slate's room, by name: a room is made on its slate's first run, and one never made answers an empty census.
-    // A Nimbus sibling holds no slates.
-    const slates = !this.nimbusSibling && this.storageRefusal === undefined
-      ? [...new Set([...this.ctx.storage.sql.exec('SELECT DISTINCT id FROM slates').toArray().map((row) => v.parse(v.object({ id: v.string() }), row).id), ...this.slateRooms.slates()])]
-      : [];
-
-    const workspace = this.addressedName;
-
     return {
-      name: workspace, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
-      workspaces: [], accounts: [], agents, rooms: slates.map((slate) => roomObjectName(workspace, roomHandle(workspace, slate))),
+      name: this.addressedName, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
+      workspaces: [], accounts: [], agents,
     };
   }
 
@@ -4184,7 +4181,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
     initChangeNotesTable(execRaw);
     initSlatePictureTable(execRaw);
-    initSlateRoomRegistry(execRaw);
     initSlateBuildTable(execRaw);
     initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
@@ -4559,7 +4555,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const changed = yield* Effect.promise(() => this.pictures.captureDue(capture, now));
         span.setAttribute('kinu.pictures_changed', changed);
 
-        // The owner's own view stays theirs: a listed slate's Gallery picture is taken by its room, as a visitor sees it.
         if (changed) this.overviewChanged();
       }), phaseFailed(span, { doing: 'photographing the slates due a picture', otherwise: 'unavailable' }, (failure) => {
         diagnostics.failure('slate.pictures_failed', failure);
@@ -5291,20 +5286,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** The room of one of this workspace's slates, by the name every caller reaches it by. */
-  private slateRoom(slate: string): DurableObjectStub<SlateRoom> {
-    return this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(this.name, roomHandle(this.name, slate))));
-  }
-
   private async releaseOutsideState(): Promise<void> {
-    // A room serves its own image and holds its own people, link and listing: one left behind would keep them open.
-    // Every room made here is in the registry, built or not; every slate built was published to one.
-    if (this.storageRefusal === undefined) {
-      const rooms = new Set([...this.slateRooms.slates(), ...this.slateHosting.builds.slates()]);
-
-      await Promise.all([...rooms].map(async (slate) => { await this.slateRoom(slate).retire(); }));
-    }
-
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
@@ -5765,8 +5747,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       session: () => this.hostedWorkspace().bundle.session(),
       facetManager: () => this.hostedWorkspace().facetManager(),
       bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
-      dispatch: (caller, route, context) => this.slateCallDispatch(caller.path, route, caller.workMode, context),
-      browserActor: async (caller) => this.slateCallerActorId(caller.path),
+      // A share's caller carries its viewer through, so what the call reaches inside itself is held to the grant.
+      dispatch: (caller, route, context) => this.slateCallDispatch(caller.path, route, caller.workMode, { ...context, ...(caller.share !== undefined && { viewer: true }) }),
+      browserActor: async (caller) => (caller.share === undefined ? this.slateCallerActorId(caller.path) : null),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
@@ -5774,33 +5757,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         owners: async () => new Map([...await listPortReservations(this.ctx)].flatMap(([port, held]) => (held.owner === null ? [] : [[port, held.owner] as const]))),
       },
       ownerMcpSurface: async () => await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
+      shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
+      shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
+      kv: this.env.AUTH_KV,
+      budget: () => this.budget,
+      ownerTitle: async () => this.safeDisplayName(),
+      ownerUserId: () => this.getOwnerUserId(),
       forgetPicture: async (slate) => {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
         this.armDurableWake();
       },
-      previewed: (slate) => {
-        this.noteTurnSlates('shown', [slate]);
-
-        // Its room serves it now: its picture is taken from its page there, once it settles.
-        if (this.pictureCapture() !== null) {
-          this.pictures.rendered(slate, 0, Date.now());
-          this.armDurableWake();
-        }
-      },
+      previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
       messageBlock: (address) => this.answerBlock(address),
-      slateRoom: async (slate, title, owner) => {
-        const room = this.slateRoom(slate);
+      sharesChanged: async () => {
+        this.overviewChanged(true);
 
-        await room.create({ workspace: this.name, slate, title, owner, parent: this.slateRooms.making(slate) });
-
-        return room;
-      },
-      ownerEmail: async () => (await this.email.ownerEmail())?.toLowerCase() ?? null,
-      // This workspace's owner editing a slate shared with them: its room, which knows who may edit it, decides.
-      shared: (operation) => this.editShared(operation),
-      forgetRoom: async (slate) => {
-        await this.slateRoom(slate).retire();
-        this.slateRooms.forget(slate);
+        return await this.overview.settled() === null ? 'current' : 'pending';
       },
     });
 
@@ -5866,77 +5838,65 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return actorReferenceOf(this.actingAgentOf(actorId));
   }
 
-  /** DO-only: a slate's room reads its image's modules from the workspace that built them. */
-  async slateImageModules(slate: string, digests: readonly string[]): Promise<SlateAnswer<Readonly<Record<string, string>>>> {
-    return (await this.slates()).imageModules(slate, digests);
+  /** The share route has already verified the request; admission and routing live on the slate host,
+   * never in this method. */
+  async routeSlateShare(
+    handle: string,
+    claim: ShareViewerClaim,
+    request: Request,
+    pathname: string,
+  ): Promise<Response> {
+    return (await this.slates()).routeShare(handle, claim, request, pathname);
   }
 
-  /** DO-only: the app's room route asks for it after proving the caller owns this workspace. */
-  async ensureSlateRoom(slate: string): Promise<SlateAnswer<{ readonly handle: string }>> {
-    return settle(slateAnswer(`making slate ${slate}'s room`, Effect.gen({ self: this }, function* () {
-      const owner = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.email.ownerEmail());
+  /** The URL a live share answers at, or null where this deployment cannot mint one. */
+  liveShareUrl(handle: string): Promise<string | null> {
+    return slateShareUrl(this.env, this.name, handle);
+  }
 
-      if (owner === null) return yield* new KinuError('unavailable', 'This workspace has no owner to make a room for');
-      const project = yield* attempt({ doing: `slate ${slate}`, otherwise: 'missing' }, async () => (await this.slates()).controller.project(CRED_SESSION_USER, slate));
-      const handle = roomHandle(this.name, slate);
-      const room = this.slateRoom(slate);
-      const parent = this.slateRooms.making(slate);
+  /** Minted by the app host because only it knows the signed-in user; binds that user to this share. */
+  viewerEntryUrl(handle: string, userId: string): Promise<string | null> {
+    return viewerEntryUrl(this.env, this.name, handle, userId);
+  }
 
-      yield* attempt({ doing: `making slate ${slate}'s room`, otherwise: 'unavailable' }, async () => room.create({
-        workspace: this.name, slate, title: slateTitle(project, slate), owner: owner.toLowerCase(), parent,
-      }));
+  /** The share row re-read through the S6 gate, plus title and description from the slate's package.json. */
+  async readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
+    return (await this.slates()).controller.readLiveShareRecord(share);
+  }
 
-      return { handle };
-    })));
+  /** A live share's tree, for a user forking it, held to the share's admission and grant. */
+  async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return (await this.slates()).controller.liveShareBundle(share, userId);
+  }
+
+
+  /** DO-only, like the blueprint twin, for the same reason. */
+  async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
+    return (await this.slates()).controller.shareLiveWith(share, users);
   }
 
   @callable() async listSlates() {
     return (await this.slates()).controller.list(ROOT_SLATE_CALLER);
   }
 
-  /** DO-only: this workspace's owner reading or changing a slate shared with them to edit; its room, which knows who may, decides. */
-  editShared(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateAnswer<SharedSlateFiles | readonly string[]>> {
-    return settle(slateAnswer(`editing ${operation.workspace}/${operation.slate}`, Effect.gen({ self: this }, function* () {
-      const owner = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.email.ownerEmail());
+  // Blueprints cross workspaces, so these four are DO-only: the app host verifies viewer, address and
+  // forker ownership before calling, and no browser stub reaches them.
 
-      if (owner === null) return yield* new KinuError('denied', 'This workspace has no owner to edit as');
-      const editor = owner.toLowerCase();
-      const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(operation.workspace, roomHandle(operation.workspace, operation.slate))));
-
-      const answered = yield* attempt({ doing: 'asking the slate\'s room', otherwise: 'unavailable' },
-        async () => (operation.op === 'sharedFiles' ? room.editorFiles(editor) : room.editorEdit(editor, operation.files)));
-
-      if (answered === null) return yield* new KinuError('denied', `${operation.slate} is not shared with you to edit`);
-
-      if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
-
-      return answered.value;
-    })));
+  async readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
+    return (await this.slates()).controller.readBlueprint(share);
   }
 
-  /** DO-only: one of this workspace's slates' files, for an editor its room let in. */
-  async slateFilesFor(slate: string): Promise<SlateAnswer<SharedSlateFiles>> {
-    return (await this.slates()).controller.sharedFiles(slate);
+  async blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return (await this.slates()).controller.blueprintBundle(share);
   }
 
-  /** DO-only: an editor's change to one of this workspace's slates, which its room let in; built and published as theirs. */
-  async editSlateAs(slate: string, editor: string, files: SlateFileChange): Promise<SlateAnswer<readonly string[]>> {
-    return (await this.slates()).editAs(slate, editor.toLowerCase(), files);
-  }
-
-  /** DO-only: a fork's bundle of one of this workspace's slates, its code alone; its room has said who may fork it. */
-  async slateForkBundle(slate: string, source: string): Promise<SlateAnswer<BlueprintBundle>> {
-    return (await this.slates()).controller.forkBundle(slate, source);
+  async shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
+    return (await this.slates()).controller.shareBlueprintWith(share, users);
   }
 
   /** Admits into this workspace as a new slate that calls this workspace's own surface; nothing runs. */
-  async admitBlueprint(bundle: BlueprintBundle, parent: string): Promise<SlateAnswer<BlueprintFork>> {
-    const admitted = await (await this.slates()).controller.admitBlueprint(bundle);
-
-    // Its code is someone else's: its room, when made, says so, and nothing is granted for being its author.
-    if (admitted.ok) this.slateRooms.forked(admitted.value.slate, parent);
-
-    return admitted;
+  async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
+    return (await this.slates()).controller.admitBlueprint(bundle);
   }
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
@@ -6383,6 +6343,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ]);
 
     const pictures = this.pictures.digests();
+    const shares = await (await this.slates()).controller.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
 
     const inputs = {
       pendingActions: this.pendingActions(hostedPlans),
@@ -6392,7 +6353,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slates: listing.slates.map((slate) => ({
         id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null,
       })),
-      shares: [],
+      shares,
     };
 
     // A write during the awaits must be observed by this push, not only the next one.
@@ -6435,11 +6396,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Asked by `CodemodeEgress` before it pipes a program's socket to a browser session. Never `@callable`. */
   ownsBrowserSession(actorId: string, sessionId: string): boolean {
     return ownsBrowserSession(this.ctx.storage.sql, actorId, sessionId);
-  }
-
-  /** DO-only: whether a browser of this workspace's (any of its actors') is `sessionId`, for a slate room's dial. */
-  async holdsBrowserSession(sessionId: string): Promise<boolean> {
-    return holdsBrowserSession(this.ctx.storage.sql, sessionId);
   }
 
   /** The workspace's tile on its owner's roster (overview-push.ts). */

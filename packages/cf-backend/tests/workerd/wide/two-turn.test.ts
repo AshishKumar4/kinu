@@ -253,16 +253,6 @@ describe('two real turns over the HTTP model seam', () => {
     expect(alien).toEqual({ status: 'blocked', transition: 'resumed' });
   });
 
-  // An answer's `<slate-ui>` page opens as the chat opens it: published to its own room with no files to fork, its page
-  // served there, and its own workspace call run there as its author's, the owner's.
-  it("an answer's page opens in its room, is published with no files, and its calls run there", async () => {
-    const opened = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('page-room-driver')).answerPageRoomIn();
-
-    expect(opened).toEqual({
-      preview: 'ok', published: true, page: 'served', fork: 'forking the slate: This slate has no files to fork', write: 'ok', written: JSON.stringify('written by the page in its room'),
-    });
-  });
-
   // An answer's page calls as its author as of each call, with nothing restarted in between: its write lands while the
   // owner's turns are Auto, is refused after a Plan ask, lands again after an Auto one, and is refused once the
   // author's role is planner, which holds every call to Plan whatever the last ask asked for.

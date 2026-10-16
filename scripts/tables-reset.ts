@@ -34,7 +34,7 @@ import { restCall } from './cloudflare-rest';
 import type { GenesisLock } from './schema-drift';
 
 /** The classes the walk reaches, as `/ops/tables` names them. */
-export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent', 'SlateRoom', 'GalleryDO'] as const;
+export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent'] as const;
 
 export type ResetClass = (typeof RESET_CLASSES)[number];
 
@@ -314,7 +314,7 @@ export interface OpsBody {
 }
 
 const RepairSchema = v.object({
-  schema: v.picklist(['account', 'workspace', 'agent', 'local', 'room', 'gallery']),
+  schema: v.picklist(['account', 'workspace', 'agent', 'local']),
   rebuilt: v.array(v.string()),
   refilled: v.array(v.string()),
   retired: v.array(v.string()),
@@ -339,7 +339,6 @@ const OpsAnswerSchema = v.object({
       workspaces: v.array(v.string()),
       accounts: v.array(v.string()),
       agents: v.array(v.object({ name: v.string(), ...StoreEntries })),
-      rooms: v.array(v.string()),
     })),
     error: v.optional(v.string()),
   })),
@@ -434,12 +433,7 @@ export async function walk(target: TablesTarget): Promise<Walked> {
     const reached = new Map<string, Reached>();
     const walking: Walking = { target, pass, reached };
     const answers = () => [...reached.values()].flatMap((object) => (object.answer === undefined ? [] : [object.answer]));
-
-    const listed = {
-      UserDO: await target.objects('UserDO'), OrchestratorAgent: await target.objects('OrchestratorAgent'), SlateRoom: await target.objects('SlateRoom'),
-      GalleryDO: await target.objects('GalleryDO'),
-    };
-
+    const listed = { UserDO: await target.objects('UserDO'), OrchestratorAgent: await target.objects('OrchestratorAgent') };
     let accounts = (await askAdmitted(target, pass, { path: 'roots', body: null, schema: RootsSchema })).accounts;
 
     // The builtin directory names accounts no other root may: asked until no answer names a new one.
@@ -451,14 +445,8 @@ export async function walk(target: TablesTarget): Promise<Walked> {
     }
 
     await reachEach(walking, 'OrchestratorAgent', answers().flatMap((answer) => answer.workspaces));
-    // Each workspace names its slates' rooms; the Gallery is one object, by its one name.
-    await reachEach(walking, 'SlateRoom', answers().flatMap((answer) => answer.rooms));
-    await reachEach(walking, 'GalleryDO', ['gallery']);
 
-    return {
-      reached: [...reached.values()],
-      unnamed: [...listed.UserDO, ...listed.OrchestratorAgent, ...listed.SlateRoom, ...listed.GalleryDO].filter((id) => !reached.has(id)),
-    };
+    return { reached: [...reached.values()], unnamed: [...listed.UserDO, ...listed.OrchestratorAgent].filter((id) => !reached.has(id)) };
   } finally {
     target.forget(digest);
   }

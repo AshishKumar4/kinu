@@ -142,13 +142,6 @@ const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   ['anon', 'GET', '/assets/main.js', shell('/assets/main.js')],
   ['anon', 'GET', '/assets', door(401)],
   ['anon', 'GET', '/shared/blueprint/abc', shell('/shared/blueprint/abc')],
-  // The Gallery and a shared slate's live page load signed out; their own APIs decide what a visitor reads.
-  ['page', 'GET', '/gallery', shell('/gallery')],
-  ['page', 'GET', '/gallery/ravi/pr-board', shell('/gallery/ravi/pr-board')],
-  ['page', 'GET', '/s/acme/pr-board', shell('/s/acme/pr-board')],
-  ['page', 'GET', '/s/acme/pr-board/parts/notes', shell('/s/acme/pr-board/parts/notes')],
-  ['anon', 'GET', '/s', door(401)],
-  ['anon', 'GET', '/galleryx', door(401)],
 
   // Dev asset paths bypass the session only off a published host.
   ['anon', 'GET', '/src/main.tsx', door(401)],

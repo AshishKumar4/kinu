@@ -106,7 +106,7 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'page-room' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill';
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({
@@ -383,16 +383,6 @@ export interface AlienEffect {
 
 /** An answer's page writing a file through `workspace`: in Auto, after a Plan ask, after an Auto ask again, and
  *  once the author's role is planner. */
-/** An answer's page opened as the chat opens it: published to its room with no files, and its page and calls served there. */
-export interface AnswerPageRoom {
-  readonly preview: string;
-  readonly published: boolean;
-  readonly page: string;
-  readonly fork: string;
-  readonly write: string;
-  readonly written: string;
-}
-
 export interface AnswerPageModes {
   readonly auto: string;
   readonly plan: string;

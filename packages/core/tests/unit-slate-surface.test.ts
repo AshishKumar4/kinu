@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  issuedSlateInvocation, routeSlateCall, slateCallAddress, SlateCallRequestSchema, type SlateInvocation,
+  issuedSlateInvocation, routeSlateCall, routeViewerCall, slateCallAddress, SlateCallRequestSchema, type SlateInvocation, type SlateViewer,
 } from '../src/slates/surface';
+import type { ShareGrant } from '../src/slates/sharing';
 import type { JsonValue } from '../src/utils/json';
 import { isSlateMethodName } from '../src/slates/rpc';
 
@@ -74,11 +75,12 @@ test('agent.send routes one inbox message carrying its slate id', () => {
   }
 });
 
-test('agent.ask routes the same message, asking for the agent\'s own reply', () => {
+test('agent.ask routes the same message, asking for the agent\'s own reply; a share\'s viewer is never handed it', () => {
   expect(call(['agent', 'ask'], [{ text: 'hi', data: { n: 1 } }])).toMatchObject({
     route: { kind: 'agent', slate: 'notes', text: 'hi', data: { n: 1 }, ask: true }, address: { namespace: 'agent', member: 'ask' }, impact: 'externalSend',
   });
   expect(() => call(['agent', 'ask'], [{ text: '' }])).toThrow('agent.ask takes one { text, data? } object');
+  expect(() => viewerCall(['agent', 'ask'], [{ text: 'hi' }])).toThrow("agent.ask runs only in its owner's own slate, never for a share's viewer");
 });
 
 test('ai.run routes one model call, the tier the call names', () => {
@@ -104,11 +106,59 @@ test('what only the agent does is refused before it is routed', () => {
   expect(call(['web', 'browsers'])).toMatchObject({ impact: 'observe' });
 });
 
-test('issuedSlateInvocation returns the invocation the host recorded', () => {
+const viewer: SlateViewer = { share: 's1', subject: 'user:u7', request: 41 };
+
+const viewerGrant: ShareGrant = {
+  slates: ['issues', 'digest'],
+  members: [
+    { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe' },
+    { slate: 'issues', namespace: 'mcp.github', member: 'read_issue', impact: 'observe' },
+    { slate: 'issues', namespace: 'mcp.github', member: 'create_issue', impact: 'externalSend' },
+    { slate: 'issues', namespace: 'agent', member: 'send', impact: 'externalSend' },
+    { slate: 'digest', namespace: 'workspace', member: 'readFile', impact: 'observe' },
+  ],
+};
+
+const viewerCall = (path: string[], args: JsonValue[] = []) => routeViewerCall({
+  id: 'issues', request: { path, args, invocation: null }, chain: [], viewer, grant: viewerGrant,
+});
+
+test('a viewer call refuses what the owner call refuses, then what the grant does not name', () => {
+  expect(() => viewerCall(['agents', 'hire'])).toThrow("agents.hire runs only in its owner's own slate, never for a share's viewer");
+  expect(() => viewerCall(['agents', 'list'])).toThrow("agents.list runs only in its owner's own slate, never for a share's viewer");
+  expect(() => viewerCall(['writeFile'], ['/a', 'x'])).toThrow('Slate issues does not grant workspace.writeFile to viewers');
+});
+
+test('a granted member routes with the impact the grant admits', () => {
+  expect(viewerCall(['readFile'], ['/a'])).toEqual({
+    route: { kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/a'] },
+    address: { namespace: 'workspace', member: 'readFile' }, impact: 'observe',
+  });
+  // An observing MCP grant is held to tools its server marks read-only, by the actor that calls it.
+  expect(viewerCall(['mcp', 'github', 'read_issue'], [{ n: 1 }])).toMatchObject({
+    route: { kind: 'mcp', server: 'github', tool: 'read_issue', args: { n: 1 }, readOnly: true }, impact: 'observe',
+  });
+  expect(viewerCall(['mcp', 'github', 'create_issue'], [{}])).toMatchObject({ route: { kind: 'mcp', tool: 'create_issue' }, impact: 'externalSend' });
+  expect(viewerCall(['agent', 'send'], [{ text: 'hi' }])).toMatchObject({
+    route: { kind: 'agent', slate: 'issues', text: 'hi', viewer: 'user:u7' }, impact: 'externalSend',
+  });
+});
+
+test('a call into another slate admits only slates the grant walks', () => {
+  expect(viewerCall(['slates', 'digest', 'count'])).toMatchObject({
+    route: { kind: 'app', id: 'digest', method: 'count', args: [], chain: ['issues'] },
+  });
+  expect(() => viewerCall(['slates', 'elsewhere', 'count'])).toThrow('does not grant slates.elsewhere.count to viewers');
+});
+
+test('issuedSlateInvocation returns the viewer the host recorded', () => {
   const invocations = new Map<string, SlateInvocation>([
+    ['shared', { id: 'issues', chain: ['root'], viewer }],
     ['plain', { id: 'issues', chain: ['root'] }],
   ]);
 
+  expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'shared' }))
+    .toEqual({ id: 'issues', chain: ['root'], viewer });
   expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'plain' })).toEqual({ id: 'issues', chain: ['root'] });
   expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: null })).toBeNull();
 });

@@ -23,7 +23,7 @@ function world(written: readonly string[]) {
 
         if (id.name === 'failing') throw new Error('the object failed to start');
 
-        return { name: id.name ?? null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [], rooms: [] };
+        return { name: id.name ?? null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [] };
       },
     }),
   });
@@ -34,8 +34,6 @@ function world(written: readonly string[]) {
     DEV_USER_EMAIL: 'eval-service@kinu.run',
     UserDO: namespace('UserDO'),
     OrchestratorAgent: namespace('OrchestratorAgent'),
-    SLATE_ROOM: namespace('SlateRoom'),
-    GALLERY: namespace('GalleryDO'),
   };
 
   return { env, asked };
@@ -108,17 +106,3 @@ test('the walk starts from the builtin directory and the eval service\'s account
   expect(accounts).toHaveLength(4);
   expect(accounts[0]).toBe(BUILTIN_ACCOUNTS_OBJECT);
 });
-
-// A room by the name its workspace gives it; the Gallery by its one name, as the walk names it.
-for (const [className, name] of [['SlateRoom', 'jarvis/0123456789'], ['GalleryDO', 'gallery']] as const) {
-  test(`a ${className} batch reaches its namespace, by name`, async () => {
-    const { env, asked } = world([`${OPS_PASS_PREFIX}${sha256Hex(PASS)}`]);
-
-    const response = await opsRoutes.fetch(new Request('https://kinu.test/ops/tables', {
-      method: 'POST', body: JSON.stringify({ class: className, names: [name] }), headers: { authorization: `Bearer ${PASS}` },
-    }), env);
-
-    expect(response.status).toBe(200);
-    expect(asked).toEqual([`${className}:${sha256Hex(name)}`]);
-  });
-}

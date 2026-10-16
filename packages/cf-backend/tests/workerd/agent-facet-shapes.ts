@@ -29,8 +29,6 @@ export interface OnePlaneObservation {
 export interface RelayedAnswer<T> {
   readonly answer: T;
   readonly carriesDisposer: boolean;
-  /** For a slate's storage binding: what its write outside any call came to. */
-  readonly refused?: string;
 }
 
 /** A streamed answer a slate's binding handed on: `ai.stream`'s or `agent.ask`'s, whose stream it was, and its text. */

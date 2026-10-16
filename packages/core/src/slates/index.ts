@@ -21,35 +21,25 @@ export {
   SlateFrameMessageSchema, type SlateHostContext,
 } from './host-context';
 
-export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps } from './blueprints';
+export { SlateShareStore, initSlateShareTables, type NewSlateShare, type ShareUser } from './shares';
+
+export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps, type BlueprintReading } from './blueprints';
 
 export type { DurableAppIdentity, DurableApps } from './durable-app';
 
+export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
+
+export { shareLiveSlate } from './live-sharing';
+
 export { SlateBuilds, initSlateBuildTable, slateImage, type FailingSlateBuild, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from './builds';
 
-export { ROOT_SLATE_CALLER, slateCallerKey, type SlateCaller, type SlateCallerHop } from './caller';
+export { ROOT_SLATE_CALLER, shareCaller, slateCallerKey, type SlateCaller, type SlateCallerHop } from './caller';
 
 export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type SlateProcessPorts, type RunnableSlateSource } from './processes';
 
+export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, type ViewerRun } from './share-viewers';
+
 export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
-
-export { answer as slateAnswer } from './controller';
-
-export {
-  RoomCaretaker, initSlateRoomTables,
-  type Access, type Cell, type Grant, type Output, type PendingEffect, type RoomCaretakerDeps, type RoomMember, type RoomRecord,
-  type Run, type SecretSighting, type Session, type ToolVerdict,
-} from './room/caretaker';
-
-export {
-  audienceFlows, canonicalRoot, dedup, flows, hidden, observers, sameTag, within,
-  type Audience, type Elem, type LabelFacts, type Show, type Tag,
-} from './room/labels';
-
-export {
-  linkKeyHolds, linkUrl, roomHandle, roomObjectName, frameTicket, cookieForTicket, readPass, frameCookieHeader, frameCookieOf,
-  ROOM_ENTER_PATH, type FrameClaim,
-} from './room/passes';
 
 export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
 
@@ -68,11 +58,3 @@ export {
 } from './personal-parts';
 
 export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams } from './slate-ai';
-
-export { toolTerms, joinTerms, type GrantTerms } from './room/terms';
-
-export { partKey, partFn, rootOf, callArgument, type Need } from './room/calls';
-
-export { partDecision, roomAsks, sheetView, serviceOf, reachOf, personOf, accessName, type PartDecision } from './room/views';
-
-export { planReaderCheck, searchFindsRepository, READER_CHECK_LIFETIME_MS, type ConnectionTool, type ReaderCheckPlan } from './room/reader-check';

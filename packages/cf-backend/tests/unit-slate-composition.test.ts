@@ -307,6 +307,8 @@ test('a hired agent makes a slate where slates live, restores it with the main a
   expect(await parent.agent.slateAs(asChild, { op: 'list' })).toMatchObject({
     ok: true, value: { slates: [expect.objectContaining({ id: 'widgets', title: 'Widgets' })], problems: [] },
   });
+  expect(await parent.agent.slateAs(asChild, { op: 'share', id: 'widgets', visibility: 'public', approved: [], fork: false }))
+    .toMatchObject({ ok: false, reason: 'denied' });
 });
 
 test('a hosted actor cannot restore source that its own filesystem authority cannot write', async () => {

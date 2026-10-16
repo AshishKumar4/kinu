@@ -14,10 +14,10 @@ import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
-import { RoomBinding, type RoomBindingProps } from '../../src/slates/room-bindings';
-import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
+import { SlateBinding } from '../../src/slates/bindings';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
-import { isJsonAnswer, type SlateSurfaceResult } from '@kinu.run/core';
+import { isJsonAnswer, SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
 import type { CraftedFromNodeObservation, HandedStream, NodeJobObservation, OnePlaneObservation, ProbeContention, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
@@ -338,34 +338,28 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
 
   // Each relay is built here, in this isolate, so the answer read is the one it hands the platform.
   async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>> {
-    const name = roomObjectName(workspace, roomHandle(workspace, 'relay-probe'));
-
-    await this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(name)).create({
-      workspace, slate: 'relay-probe', title: 'Relay probe', owner: 'owner@probe.local', parent: null,
-    });
-    // The shared server's storage binding, as the room seals it.
-    const props: RoomBindingProps = { room: name, binding: '__storage', run: null };
-    const binding = new RoomBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
-
-    // Outside any call the slate changes nothing (the room refuses it); its answer, a refusal, crosses as one.
-    const refused = await binding.call(['put'], ['seen', 'kept'], null);
+    await this.target(workspace);
+    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER };
+    const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
+    await binding.call(['put'], ['seen', 'kept'], null);
     const answer = await binding.call(['get'], ['seen'], null);
 
-    return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer || Symbol.dispose in refused, refused: refused.ok ? 'kept' : refused.reason };
+    return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer };
   }
 
-  /** What the binding hands a slate for `ai.stream` and `agent.ask`, the room answering each with a stream here. */
+  /** What the binding hands a slate for `ai.stream` and `agent.ask`, the owner answering each with a stream here. */
   async slateBindingStreams(workspace: string): Promise<readonly HandedStream[]> {
-    const props: RoomBindingProps = { room: roomObjectName(workspace, roomHandle(workspace, 'relay-probe')), binding: 'workspace', run: null };
+    // `workspace` is the binding a slate's class calls its surface through.
+    const props = { workspace, id: 'relay-probe', name: 'workspace', caller: ROOT_SLATE_CALLER };
     const seen: HandedStream[] = [];
 
     for (const member of ['ai.stream', 'agent.ask'] as const) {
       const received = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(`${member} text`)); controller.close(); } });
       const answer: SlateSurfaceResult = { ok: true, value: member === 'ai.stream' ? received : { reply: received } };
-      const rooms = this.env.SLATE_ROOM;
-      // The room's stub answers `bindingCall` from here; nothing else of it is read.
-      const room = { idFromName: (name: string) => rooms.idFromName(name), get: (id: DurableObjectId) => new Proxy(rooms.get(id), { get: (_stub, key) => (key === 'bindingCall' ? async () => answer : undefined) }) };
-      const binding = new RoomBinding(Object.create(this.ctx, { props: { value: props } }), { ...this.env, SLATE_ROOM: room });
+      const owners = this.env.OrchestratorAgent;
+      // The owner's stub answers `slateCallAs` from here; nothing else of it is read.
+      const owner = { idFromName: (name: string) => owners.idFromName(name), get: (id: DurableObjectId) => new Proxy(owners.get(id), { get: (_stub, key) => (key === 'slateCallAs' ? async () => answer : undefined) }) };
+      const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), { ...this.env, OrchestratorAgent: owner });
       const handed = await binding.call(member.split('.'), [], null);
 
       if (!handed.ok || isJsonAnswer(handed.value)) throw new Error(`the binding answered ${member} with no stream`);

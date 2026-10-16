@@ -240,9 +240,7 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
     const slateModule = await subject.route('/__kinu/slate.js');
 
     expect(slateModule.status).toBe(200);
-    // The page's calls go through the slate's room, which admits each as the page's person (`room.ts`).
-    expect(slateModule.body).toContain('"/__kinu/call"');
-    expect(slateModule.body).not.toContain('newWebSocketRpcSession');
+    expect(slateModule.body).toContain('newWebSocketRpcSession');
     expect(await subject.call('ping', [])).toEqual({ ok: true, value: 'server-only-marker-1c9e' });
 
     expect(await subject.paths()).toEqual({ kinuInSlateRoot: false, entries: ['client.js', 'server.js'] });

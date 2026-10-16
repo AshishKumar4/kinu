@@ -43,7 +43,6 @@ import { ownerCaller } from '@kinu.run/core';
 import { noHead, ownerGate, rawParam, type FamilyEnv } from '../api/context';
 import { accountApi, type AccountApiVariables } from '../user/account-api';
 import { authenticateCli, type CliBearerVariables } from '../api/cli-bearer';
-import { roomFrame, roomFrameAddress, type RoomFrameEnv } from '../slates/room-routes';
 import * as v from 'valibot';
 import { authoredRefusal, classify, diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged, settle } from '@kinu.run/core/obs';
 
@@ -71,8 +70,6 @@ export interface CliRoutesEnv<Id>
   OrchestratorAgent: ObjectNamespace<Id, CliAgentTarget>;
   AI?: UserAIProxyEnv<Id>['AI'];
   CLI_APPROVAL_ORIGIN?: string;
-  /** A slate's page, entered as the bearer's person (`roomFrame`); the deployed Worker binds it. */
-  SLATE_ROOM?: RoomFrameEnv<Id>['SLATE_ROOM'];
 }
 
 type CliIdentity = CliTokenIdentity<CliRoutesAuthority>;
@@ -177,22 +174,8 @@ cliRoutes.use('/api/cli/*', ownerGate(), async (c, next) => {
   await next();
 });
 
-// A preview opens only for its owner (`nimbus-route.ts`): the CLI's way in, as the app's page is a browser's. A slate's
-// page is its room's, entered as the bearer's own person, as the frame route enters a browser's.
-cliRoutes.get(CLI_PREVIEW_ENTRY_PATH, async (c) => {
-  const cli = c.get('cli');
-  const to = new URL(c.req.url).searchParams.get('to');
-  const target = to !== null && URL.canParse(to) ? new URL(to) : null;
-  const room = target === null ? null : roomFrameAddress(target, new URL(c.req.url).origin);
-
-  if (room === null || target === null) return await previewEntry(c.req.raw, c.env, cli.userId);
-  const { SLATE_ROOM } = c.env;
-
-  if (SLATE_ROOM === undefined) return err(503, 'This deployment runs no slate rooms.');
-  const email = cli.email.trim().toLowerCase();
-
-  return await roomFrame({ SLATE_ROOM }, room, { email, name: cli.displayName ?? email.slice(0, email.indexOf('@')) }, target.searchParams.get('k'));
-});
+// A preview opens only for its owner (`nimbus-route.ts`): the CLI's way in, as the app's page is a browser's.
+cliRoutes.get(CLI_PREVIEW_ENTRY_PATH, async (c) => await previewEntry(c.req.raw, c.env, c.get('cli').userId));
 
 cliRoutes.get('/api/cli/me', async (c) => {
   const cli = c.get('cli');

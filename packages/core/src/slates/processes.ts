@@ -5,6 +5,9 @@
  * change or a removal ends are decided here.
  */
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { Effect } from 'effect';
+import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 import { ephemeralSlateAddress } from './ui-blocks';
 import { slateImage, type SlateBuildFailure, type SlateBuilds, type SlateImage } from './builds';
 import { slateAuthority } from './authority';
@@ -89,9 +92,15 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
     return await boot;
   }
 
-  /** The slate built and published to its room, as the workspace root. */
-  served(root: SlateCaller, id: string): Promise<RunningSlate<Source, Process>> {
-    return this.booted(root, id);
+  /** The slate's durable application, run as the workspace root. */
+  served(root: SlateCaller, id: string): Promise<RunningSlate<Source, Process> & { readonly app: DurableAppIdentity }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const running = yield* Effect.promise(async () => this.booted(root, id));
+
+      if (running.app === null) return yield* new KinuError('io', `Slate ${id} is running without its durable application`);
+
+      return { ...running, app: running.app };
+    }));
   }
 
   /** The process holding `port`, and the key it is held under. */
@@ -164,8 +173,11 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
 
       if (source.kind === 'message') await this.keepPage(id);
 
-      // Every slate runs in its room: no durable application of the workspace's serves it.
-      const app = null;
+      // Only the root's build process is the durable application; shares and Plan roots are private and must never
+      // attach to its facet. A block is only ever seen through its preview, so it always has one.
+      const app = source.kind === 'message' || (caller.share === undefined && caller.path.length === 0 && caller.workMode === 'build')
+        ? await this.ports.apps.ensure({ owner: id, preferredPort: source.project.slate.port })
+        : null;
 
       const process = await this.ports.launch({ key, id, caller, source, image, app });
 

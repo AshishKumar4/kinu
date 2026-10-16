@@ -1167,98 +1167,6 @@
     "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
     "FOREIGN KEY(actor_id,context_id,revision) REFERENCES context_revisions(actor_id,context_id,revision)"
   ],
-  "room_asks@packages/core/src/slates/room/schema.ts": [
-    "asker TEXT NOT NULL",
-    "holder TEXT NOT NULL",
-    "server TEXT NOT NULL",
-    "root TEXT NOT NULL",
-    "fn TEXT NOT NULL",
-    "PRIMARY KEY (asker, holder, server, root, fn)"
-  ],
-  "room_cells@packages/core/src/slates/room/schema.ts": [
-    "key TEXT PRIMARY KEY",
-    "value TEXT NOT NULL"
-  ],
-  "room_grants@packages/core/src/slates/room/schema.ts": [
-    "id INTEGER PRIMARY KEY",
-    "holder TEXT NOT NULL",
-    "personal INTEGER NOT NULL",
-    "server TEXT NOT NULL",
-    "root TEXT NOT NULL",
-    "tools TEXT NOT NULL",
-    "fn TEXT NOT NULL",
-    "image TEXT NOT NULL",
-    "domain TEXT NOT NULL",
-    "effect INTEGER NOT NULL",
-    "sink TEXT NOT NULL"
-  ],
-  "room_images@packages/core/src/slates/room/schema.ts": [
-    "image TEXT PRIMARY KEY",
-    "modules TEXT NOT NULL",
-    "contracts TEXT NOT NULL"
-  ],
-  "room_lend_uses@packages/core/src/slates/room/schema.ts": [
-    "fn TEXT NOT NULL",
-    "email TEXT NOT NULL",
-    "calls INTEGER NOT NULL",
-    "last_at INTEGER NOT NULL",
-    "PRIMARY KEY (fn, email)"
-  ],
-  "room_listing@packages/core/src/slates/room/schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "line TEXT NOT NULL",
-    "category TEXT NOT NULL",
-    "listed_at INTEGER NOT NULL",
-    "picture TEXT"
-  ],
-  "room_members@packages/core/src/slates/room/schema.ts": [
-    "email TEXT PRIMARY KEY",
-    "name TEXT",
-    "role TEXT NOT NULL CHECK (role IN ('owner', 'edit', 'use', 'removed'))",
-    "gen INTEGER NOT NULL"
-  ],
-  "room_outputs@packages/core/src/slates/room/schema.ts": [
-    "run INTEGER PRIMARY KEY",
-    "part TEXT NOT NULL",
-    "fn TEXT NOT NULL",
-    "input TEXT NOT NULL",
-    "requester TEXT",
-    "label TEXT NOT NULL",
-    "value TEXT",
-    "written INTEGER NOT NULL"
-  ],
-  "room_readers@packages/core/src/slates/room/schema.ts": [
-    "email TEXT NOT NULL",
-    "holder TEXT NOT NULL",
-    "server TEXT NOT NULL",
-    "root TEXT NOT NULL",
-    "checked_at INTEGER NOT NULL",
-    "PRIMARY KEY (email, holder, server, root)"
-  ],
-  "room_shows@packages/core/src/slates/room/schema.ts": [
-    "id INTEGER PRIMARY KEY",
-    "holder TEXT NOT NULL",
-    "server TEXT NOT NULL",
-    "root TEXT NOT NULL",
-    "fn TEXT",
-    "images TEXT",
-    "audience TEXT NOT NULL"
-  ],
-  "room@packages/core/src/slates/room/schema.ts": [
-    "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "workspace TEXT NOT NULL",
-    "slate TEXT NOT NULL",
-    "title TEXT NOT NULL",
-    "link INTEGER NOT NULL",
-    "link_gen INTEGER NOT NULL",
-    "image TEXT",
-    "image_author TEXT",
-    "secret TEXT",
-    "source TEXT",
-    "foreign_code INTEGER NOT NULL",
-    "parent TEXT",
-    "next INTEGER NOT NULL"
-  ],
   "run_events@packages/core/src/events/recorder.ts": [
     "actor_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
@@ -1402,10 +1310,6 @@
     "id TEXT PRIMARY KEY",
     "slate_id TEXT NOT NULL",
     "bytes BLOB NOT NULL"
-  ],
-  "slate_rooms@packages/cf-backend/src/slates/room-registry.ts": [
-    "slate TEXT PRIMARY KEY",
-    "parent TEXT"
   ],
   "slate_share_users@packages/core/src/slates/shares.ts": [
     "share_id TEXT NOT NULL REFERENCES slate_shares(id)",

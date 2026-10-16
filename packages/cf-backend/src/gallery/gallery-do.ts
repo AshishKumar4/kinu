@@ -63,7 +63,7 @@ export class GalleryDO extends DurableObject<Env> {
 
     return {
       name: GALLERY_OBJECT, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
-      workspaces: [], accounts: [], agents: [], rooms: [],
+      workspaces: [], accounts: [], agents: [],
     };
   }
 

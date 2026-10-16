@@ -4,21 +4,19 @@
  * trigger and the observation, and for the keep-alive its isolate's clock.
  */
 import { Agent, getAgentByName, type AgentContext } from 'agents';
+import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
+import { newWebSocketRpcSession, type RpcStub } from 'capnweb';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
+import { handleNimbusPreviewHostRequest, previewEntry, previewRefusalText } from '../../src/nimbus-route';
+import { previewViewerKey, selfPreviewPass, viewerCookieResponse } from '../../src/viewer-pass';
+import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH } from '@kinu.run/core';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { cookieForTicket, frameTicket, readPass, roomHandle, roomObjectName, ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
-import { handleSlateRoomHostRequest } from '../../src/slates/room-routes';
-import { sealedPart } from '../../src/slates/room-parts';
-import type { RoomCallOutcome } from '../../src/slates/room';
-import { ATTACK_SLATE, browserLogged, browserLogOf, GITHUB, holdNextConnectionsRead, MAIL, OPS, persona, personSocket, reachedCalls, type PersonSocket } from './room-attacks';
-import { ROOM_HOST_HEADER, ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
-import { accountIdFor } from '../../src/auth/store';
-import { GALLERY_OBJECT } from '../../src/gallery/gallery-do';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
@@ -27,7 +25,7 @@ import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
-import { opsCaller, SharedSlateFilesSchema, type JsonObject, type JsonValue, type RoomView, type SlateAnswer, type SlateCallResult } from '@kinu.run/core';
+import type { JsonValue } from '@kinu.run/core';
 import type {
   DurabilityReservation,
   PreviewAnswer,
@@ -40,11 +38,13 @@ import type {
 // probe that retargets the class measures its own fixture (as in slate-actor-probe.ts).
 export * from '../../src/server';
 
-// The production account object, its MCP servers faked for the people an attack names (room-attacks.ts).
-export { SlateRoom, UserDO } from './room-attacks';
+// A build-mode resident refuses to boot without a `globalOutbound`: `CodemodeEgress` is that
+// loopback.
 
-// The production `CodemodeEgress` (through `export *` above): a slate's shared server fetches through the real policy,
-// over this worker's fake far side (vitest.config.ts `egressFake`).
+
+export class CodemodeEgress extends WorkerEntrypoint {
+  override async fetch(): Promise<Response> { return new Response('network allowed'); }
+}
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
@@ -61,10 +61,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'previewTabs');
     Reflect.deleteProperty(this, 'failingSlates');
     Reflect.deleteProperty(this, 'wakeOnce');
-    Reflect.deleteProperty(this, 'recordBrowserSession');
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
-      'failingSlates', 'wakeOnce', 'recordBrowserSession',
+      'failingSlates', 'wakeOnce',
     ]);
   }
 
@@ -167,11 +166,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    * the running application. Neither is destroyed, since destroying would end the facets, which is not
    * what the platform does.
    */
-  /** A browser an actor of this workspace opened, as `web.openBrowser` records it. */
-  recordBrowserSession(actor: string, session: string): void {
-    this.ctx.storage.sql.exec('INSERT OR REPLACE INTO browser_sessions (session_id, actor_id) VALUES (?, ?)', session, actor);
-  }
-
   forgetActivation(): void {
     const ended = this.ctx;
 
@@ -198,9 +192,9 @@ export { ObservedOrchestrator as OrchestratorAgent };
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator,
+  'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
   'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'
-  | 'wakeOnce' | 'recordBrowserSession'>;
+  | 'wakeOnce'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -208,7 +202,33 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
   readonly OrchestratorAgent: DurableObjectNamespace<ObservedOrchestrator>;
 }
 
-const PreviewValueSchema = v.object({ url: v.string() });
+const PreviewValueSchema = v.object({ url: v.string(), port: v.number() });
+
+type PreviewRpc = Record<string, (...input: JsonValue[]) => Promise<JsonValue>>;
+
+/** A page's `/__rpc` socket through the preview edge, and the slate's methods over it. */
+interface PreviewSocket {
+  readonly socket: WebSocket;
+  readonly stub: RpcStub<PreviewRpc>;
+}
+
+async function calledOver(stub: RpcStub<PreviewRpc>, method: string, args: JsonValue[]): Promise<RpcAnswer> {
+  try {
+    const raw = await stub[method](...args);
+
+    return { ok: true, value: v.is(v.string(), raw) ? raw : JSON.stringify(raw) };
+  } catch (cause) {
+    return { ok: false, error: renderThrownChain({ cause }) };
+  }
+}
+
+/**
+ * The clock this isolate's objects read, as a test moves it: Nimbus's keep-alive reads `Date.now()` and is handed no clock,
+ * and the pool's fake timers reach only the runner's isolate.
+ */
+const platformNow = Date.now.bind(Date);
+
+let advancedMs = 0;
 
 /** The end of a shell prompt: its OSC 133;B semantic mark (FinalTerm), which the runtime shell writes after each. */
 const PROMPT_END_MARK = '\u001b]133;B\u0007';
@@ -243,6 +263,7 @@ const RUNNER = [
   '}',
 ].join('\n');
 
+const SharedValueSchema = v.object({ share: v.object({ handle: v.string() }) });
 
 const LILT_GOOD = 'export default function App() { return <p data-words>lilt-good</p>; }';
 
@@ -272,61 +293,6 @@ const GraphValueSchema = v.object({
 
 /** Every call names the workspace, so nothing the test holds pins this object across
  *  `abortAllDurableObjects()`. */
-/** Fetches what it is asked to; `confined` reads the owner's workspace first, so the room runs it confined. */
-const EGRESS_SLATE = [
-  'import { SlateObject } from "kinu:slate";',
-  'async function fetched(target, redirect) {',
-  '  try {',
-  '    const response = await fetch(target, { redirect });',
-  '    return { status: response.status, location: response.headers.get("location"), body: await response.text() };',
-  '  } catch (cause) { return { error: String(cause) }; }',
-  '}',
-  'export class Slate extends SlateObject {',
-  '  async shared(target, redirect) { return fetched(target, redirect); }',
-  '  async confined(target, redirect) {',
-  '    await this.env.workspace.readFile("/slates/network/package.json");',
-  '    return fetched(target, redirect);',
-  '  }',
-  '}',
-].join('\n');
-
-/**
- * Keeps what each run was given in its module scope, and reads the workspace through its env: the owner's own code, so
- * its first call grants that read and every call runs confined. A stub sealed for another run is refused by the room, so
- * a read that answers came through this run's own.
- */
-const ISOLATED_SLATE = [
-  'import { SlateObject } from "kinu:slate";',
-  'const seen = [];',
-  'export class Slate extends SlateObject {',
-  '  async probe(tag) {',
-  '    seen.push(tag);',
-  '    const read = await this.env.workspace.readFile("/slates/isolated/package.json");',
-  '    return { seen: [...seen], read: typeof read };',
-  '  }',
-  '}',
-].join('\n');
-
-/** What a person's call answered, as a word, and its part's key when it was a part. */
-interface Said {
-  readonly said: string;
-  readonly part: string | null;
-}
-
-/** A page's call answered through its room: a value, a part, or a refusal (`room.ts`). */
-const PageCallAnswer = v.union([
-  v.object({ ok: v.literal(true), value: v.union([v.object({ value: v.unknown() }), v.object({ part: v.unknown() })]) }),
-  v.object({ ok: v.literal(false), error: v.string() }),
-]);
-
-/** The host-only cookie a slate's host reads (`passes.ts`). */
-const ROOM_COOKIE = '__Host-kinu_room';
-
-/** A probe account's email, as its room names it. */
-function probeEmail(owner: string): string {
-  return `${owner}@probe.local`;
-}
-
 export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   private workspaceTarget(workspace: string): Promise<SlateTarget> {
     return getAgentByName<ProbeEnv, ObservedOrchestrator>(this.env.OrchestratorAgent, workspace);
@@ -339,9 +305,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
 
     await userDO.registerWorkspace(caller, workspace, 'Durability Probe');
-    // Every slate runs in its room, which names its owner by email.
-    await userDO.ensureProfile(caller, probeEmail(owner));
-    this.ctx.storage.kv.put(`owner:${workspace}`, probeEmail(owner));
     const claim = await target.claimOwner(owner);
 
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
@@ -398,19 +361,20 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: input.id });
 
     if (!preview.ok) throw new Error(`slate preview refused: ${preview.reason}: ${preview.error}`);
+    const value = v.parse(PreviewValueSchema, preview.value);
 
-    return { url: v.parse(PreviewValueSchema, preview.value).url };
-  }
+    const held = (await target.portReservations()).find((row) => row.owner === input.id);
 
-  /** The agent changes what a served slate's page says, reading its server first as an agent must; the next call builds it. */
-  async rebuildSlate(input: { workspace: string; id: string; body: string }): Promise<void> {
-    const path = `/slates/${input.id}/server.ts`;
+    if (held === undefined) throw new Error(`no port reservation for ${input.id}`);
 
-    await (await this.workspaceTarget(input.workspace)).runProgram([
-      `const source = await workspace.readFile(${JSON.stringify(path)});`,
-      `await workspace.writeFile(${JSON.stringify(path)}, source.replace(/new Response\\(.*\\)/u, ${JSON.stringify(`new Response(${JSON.stringify(input.body)})`)}));`,
-      'return null;',
-    ].join('\n'));
+    if (held.capability === null) throw new Error(`the reservation for ${input.id} holds no capability`);
+
+    return {
+      url: value.url,
+      port: value.port,
+      capability: held.capability,
+      reservations: await target.portReservations(),
+    };
   }
 
   /** Authors a whiteboard slate whose class stores strokes, then runs `program` through the workspace's `eval`. */
@@ -438,558 +402,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * A slate whose methods fetch: from its shared server as they are, and from a confined run once a call has read the
-   * owner's workspace. Each answer is what the slate's own fetch saw.
+   * The owner's program makes the crafted tool `helper`, then runs it through the `runner` slate's class; the slate is
+   * shared granting the tool alone, and a consented viewer opens its page, which runs the tool too.
    */
-  async egressSlate(input: { workspace: string; owner: string; calls: readonly { method: 'shared' | 'confined'; target: string; redirect?: RequestRedirect }[] }): Promise<string[]> {
-    const target = await this.workspaceTarget(input.workspace);
-
-    await this.claimWorkspace(target, input.workspace, input.owner);
-    await this.writeSlateFile(target, '/slates/network/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Network' } }));
-    await this.writeSlateFile(target, '/slates/network/server.ts', EGRESS_SLATE);
-    const owned = workspaceOwner(this.env, input.workspace);
-    const answers: string[] = [];
-
-    for (const call of input.calls) {
-      const answered = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'network', method: call.method, args: [call.target, call.redirect ?? 'follow'] });
-
-      answers.push(JSON.stringify(answered.ok ? answered.value : { error: answered.error }));
-    }
-
-    return answers;
-  }
-
-  /**
-   * Confined runs of one function, by one person, holding one grant: two in turn, then two at once, each with its own
-   * argument. What each saw of the module's state, and whether its read through its own stub answered.
-   */
-  async isolatedRuns(input: { workspace: string; owner: string }): Promise<string[]> {
-    const target = await this.workspaceTarget(input.workspace);
-
-    await this.claimWorkspace(target, input.workspace, input.owner);
-    await this.writeSlateFile(target, '/slates/isolated/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Isolated' } }));
-    await this.writeSlateFile(target, '/slates/isolated/server.ts', ISOLATED_SLATE);
-    const owned = workspaceOwner(this.env, input.workspace);
-
-    const probe = async (tag: string): Promise<string> => {
-      const answered = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'isolated', method: 'probe', args: [tag] });
-
-      return JSON.stringify(answered.ok ? answered.value : { error: answered.error });
-    };
-
-    const consecutive = [await probe('first'), await probe('second')];
-
-    return [...consecutive, ...await Promise.all([probe('third'), probe('fourth')])];
-  }
-
-  /** One attack's stage: Sam's slate, built and published, Alice and Ben added to edit it and Bob to use it. */
-  private async stage(tag: string): Promise<{
-    at: { workspace: string; slate: string }; people: { sam: string; alice: string; bob: string; ben: string };
-    room: DurableObjectStub<SlateRoom>; owner: PersonSocket; asOwner: (fn: string, args: JsonValue[]) => Promise<string>;
-  }> {
-    const workspace = `attack-${tag}`;
-    const target = await this.workspaceTarget(workspace);
-
-    await this.claimWorkspace(target, workspace, `sam-${tag}`);
-    const people = { sam: probeEmail(`sam-${tag}`), alice: `alice-${tag}@probe.local`, bob: `bob-${tag}@probe.local`, ben: `ben-${tag}@probe.local` };
-
-    await persona(this.env, people.sam, [...GITHUB, ...MAIL, ...OPS], `sam-${tag}`);
-    await persona(this.env, people.alice, [...GITHUB, ...MAIL]);
-    await persona(this.env, people.bob, GITHUB);
-    await this.writeSlateFile(target, '/slates/attack/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Attack' } }));
-    await this.writeSlateFile(target, '/slates/attack/server.ts', ATTACK_SLATE);
-    const owned = workspaceOwner(this.env, workspace);
-
-    const asOwner = async (fn: string, args: JsonValue[]): Promise<string> => {
-      const answered = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'attack', method: fn, args });
-
-      return answered.ok ? `value ${JSON.stringify(answered.value)}` : `refused ${answered.reason}: ${answered.error}`;
-    };
-
-    await asOwner('board', []);
-    const at = { workspace, slate: 'attack' };
-    const owner = await personSocket(this.env, at, people.sam);
-
-    await owner.call({ op: 'invite', email: people.alice, role: 'edit' });
-    await owner.call({ op: 'invite', email: people.ben, role: 'edit' });
-    await owner.call({ op: 'invite', email: people.bob, role: 'use' });
-
-    return { at, people, room: this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, roomHandle(workspace, 'attack')))), owner, asOwner };
-  }
-
-  /** What a person's call answered, as a word: a value, a part (and its key), or the refusal. */
-  private static said(answer: SlateAnswer<RoomCallOutcome>): Said {
-    if (!answer.ok) return { said: `refused ${answer.reason}: ${answer.error}`, part: null };
-
-    return 'part' in answer.value ? { said: 'part', part: answer.value.part.key } : { said: `value ${JSON.stringify(answer.value.value)}`, part: null };
-  }
-
-  /** A person's call that needs their own connection: they allow it on its part, and call again. */
-  /**
-   * A person's call that needs their own connection: they allow it on its part, and the room runs the call once more.
-   * What that run came to: a failure the part shows, or, once it holds what it needed, the call's answer now.
-   */
-  private async allowed(room: DurableObjectStub<SlateRoom>, socket: PersonSocket, call: { email: string; fn: string; args: JsonValue[] }): Promise<string> {
-    for (let tries = 0; tries < 3; tries++) {
-      const answer = SlateDurabilityProbeRoot.said(await room.callAs(call.email, call.fn, call.args));
-
-      if (answer.part === null) return answer.said;
-      const key = answer.part;
-
-      await socket.call({ op: 'open', part: key });
-      await socket.call({ op: 'allow', part: key });
-      const since = socket.mark();
-
-      await socket.call({ op: 'here', where: null, typing: null });
-      const part = (await socket.view(() => true, since)).parts[key];
-
-      if (part?.state === 'failed') return `stopped: ${part.message}`;
-    }
-
-    return 'still a part';
-  }
-
-  /**
-   * The ask a person is shown while a run waits for them, or null when the run ended first: a guard removed skips the
-   * wait, and the run's end is then what the test sees instead of an ask that never comes.
-   */
-  static async askedOrEnded(socket: PersonSocket, holds: (view: RoomView) => boolean, run: Promise<unknown>): Promise<RoomView | null> {
-    return await Promise.race([socket.view(holds), run.then(() => null)]);
-  }
-
-  static count(account: string, tool: string, args?: (args: JsonObject) => boolean): number {
-    return reachedCalls().filter((call) => call.account === account && call.tool === tool && (args === undefined || args(call.args))).length;
-  }
-
-  /**
-   * Attacks 1 and 2, the holder check and persisted labels: Alice's part reads her private repository. Bob opening it
-   * sees a placeholder; Sam, the owner, switching it to everyone shows Bob nothing; Alice showing it shows him.
-   */
-  async attackHolder(): Promise<{ alice: string; bobFirst: string; afterSamShows: string; afterAliceShows: string }> {
-    const { at, people, room, owner } = await this.stage('holder');
-    const alice = await personSocket(this.env, at, people.alice);
-    const bob = await personSocket(this.env, at, people.bob);
-    const first = SlateDurabilityProbeRoot.said(await room.callAs(people.alice, 'prs', ['secret']));
-    const saw = await this.allowed(room, alice, { email: people.alice, fn: 'prs', args: ['secret'] });
-    const key = first.part ?? '';
-
-    const bobSees = async (): Promise<string> => {
-      const since = bob.mark();
-
-      await bob.call({ op: 'open', part: key });
-      const part = (await bob.view((each) => each.parts[key] !== undefined && each.parts[key].state !== 'running', since)).parts[key];
-
-      return part === undefined ? 'none' : `${part.state}${JSON.stringify(part).includes('the-secret') ? ' with the secret' : ''}`;
-    };
-
-    const bobFirst = await bobSees();
-
-    await owner.call({ op: 'show', part: key, scope: 'anyone' });
-    const afterSamShows = await bobSees();
-
-    await alice.call({ op: 'show', part: key, scope: 'members' });
-    const afterAliceShows = await bobSees();
-
-    return { alice: saw.includes('the-secret') ? 'her secret' : saw, bobFirst, afterSamShows, afterAliceShows };
-  }
-
-  /**
-   * The design's team board and public dashboard (Friction.lean): Sam's own GitHub read, lent and shown to everyone,
-   * two decisions of his; Alice and Bob use it and a visitor with only the link reads it, and no one is asked anything.
-   */
-  async scenarioBoard(): Promise<{ alice: string; bob: string; visitor: string; asked: { sam: number; alice: number; bob: number } }> {
-    const { at, people, room, owner, asOwner } = await this.stage('board');
-
-    await asOwner('prs', ['board']);
-    await owner.call({ op: 'setLend', fn: 'prs', on: true });
-    await owner.call({ op: 'setLendShown', fn: 'prs', shown: 'everyone' });
-    await owner.call({ op: 'setAudience', audience: 'anyone' });
-    const alice = await personSocket(this.env, at, people.alice);
-    const bob = await personSocket(this.env, at, people.bob);
-
-    const read = async (email: string | null): Promise<string> => {
-      const call = room.callAs(email, 'prs', ['board']);
-      // A read Sam had to approve would wait for him: the ask is then what is seen.
-      const asked = await SlateDurabilityProbeRoot.askedOrEnded(owner, (each) => each.asks.length > 0, call);
-
-      if (asked !== null) return `Sam asked: ${asked.asks.map((ask) => ask.kind).join(', ')}`;
-      const answer = SlateDurabilityProbeRoot.said(await call).said;
-
-      return answer.includes('acme') ? 'the board' : answer;
-    };
-
-    const seen = { alice: await read(people.alice), bob: await read(people.bob), visitor: await read(null) };
-
-    const asks = async (socket: PersonSocket): Promise<number> => {
-      const since = socket.mark();
-
-      await socket.call({ op: 'here', where: null, typing: null });
-
-      return (await socket.view(() => true, since)).asks.length;
-    };
-
-    return { ...seen, asked: { sam: await asks(owner), alice: await asks(alice), bob: await asks(bob) } };
-  }
-
-  /**
-   * Who may change the slate: a visitor through the link may read it, never write its SQL or its state; someone signed
-   * in may. A page's own `workspace` call is answered. A call that changed the slate before it reached a connection it
-   * did not hold is not run again by the room.
-   */
-  async roomWrites(): Promise<{ visitorNote: string; visitorPut: string; bobNote: string; notes: string; stamps: string; stampedTwice: string }> {
-    const { people, room, owner, asOwner } = await this.stage('writes');
-
-    await owner.call({ op: 'setAudience', audience: 'anyone' });
-    const said = async (email: string | null, fn: string, args: JsonValue[]): Promise<string> => SlateDurabilityProbeRoot.said(await room.callAs(email, fn, args)).said;
-    // A visitor with only the link, as the slate's own host admits them: no email, the link's generation.
-    const link = (await owner.view((each) => each.sheet?.url != null)).sheet?.url ?? '';
-    const entry = await room.ticketFor(null, new URL(link).searchParams.get('k'));
-    const claim = entry === null ? null : await readPass(this.env, { workspace: 'attack-writes', handle: roomHandle('attack-writes', 'attack') }, new URL(entry).searchParams.get('t') ?? '', 'ticket');
-
-    const visitor = async (fn: string, args: JsonValue[]): Promise<string> => {
-      const answered = await room.fetch(new Request('https://slate.host/__kinu/call', {
-        method: 'POST', headers: { [ROOM_HOST_HEADER]: JSON.stringify(claim === null ? null : { email: claim.email, access: claim.access }) }, body: JSON.stringify({ method: fn, args }),
-      }));
-
-      const body = v.parse(v.union([v.object({ ok: v.literal(true), value: v.unknown() }), v.object({ ok: v.literal(false), reason: v.string(), error: v.string() })]), await answered.json());
-
-      return body.ok ? `value ${JSON.stringify(body.value)}` : `refused ${body.reason}: ${body.error}`;
-    };
-
-    const visitorNote = await visitor('note', ['graffiti']);
-    const visitorPut = await visitor('stamp', ['board']);
-    const bobNote = await said(people.bob, 'note', ['hello']);
-    const notes = await said(people.bob, 'notes', []);
-    // Bob's GitHub is his own: `stamp` reaches it after it changed the slate, so the room asks, and does not run it again.
-    const stamped = await said(people.bob, 'stamp', ['secret']);
-    const stamps = await asOwner('stamps', []);
-
-    return { visitorNote, visitorPut, bobNote, notes, stamps: stamped, stampedTwice: stamps };
-  }
-
-  /**
-   * A listed slate whose listing the Gallery lost (its tables made anew) is listed again by the deploy's walk, which
-   * reaches the room: before the walk the Gallery holds nothing of it, after it the listing with its link.
-   */
-  async listingRefill(): Promise<{ listed: boolean; lost: boolean; refilled: boolean }> {
-    const { at, room, owner } = await this.stage('refill');
-    const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
-    const listed = async (): Promise<boolean> => (await gallery.slate(at.workspace, at.slate, null)) !== null;
-
-    await owner.call({ op: 'setAudience', audience: 'anyone' });
-    await owner.call({ op: 'list', line: 'A refilled slate', category: 'fun' });
-    const before = await listed();
-
-    await gallery.unlist(at.workspace, at.slate);
-    const lost = !(await listed());
-
-    await room.opsTables(await opsCaller(this.env));
-
-    return { listed: before, lost, refilled: await listed() };
-  }
-
-  /**
-   * Attack 6's other half, revision binding at the worker: Sam's own call is admitted at image A, and before its worker is
-   * made Ben publishes image B. The run runs the code it was admitted at, under the grants admitted with it; B's code never
-   * runs under them.
-   */
-  async attackStaleImage(): Promise<{ first: string; edited: string; held: string; fromB: number }> {
-    const { at, people, room, asOwner } = await this.stage('stale');
-    const first = await asOwner('which', []);
-    // Bob's part asks for his own GitHub, so every broadcast reads his connections: the seam this test holds.
-    const bob = await personSocket(this.env, at, people.bob);
-    const asked = SlateDurabilityProbeRoot.said(await room.callAs(people.bob, 'prs', ['secret'])).part ?? '';
-
-    const since = bob.mark();
-
-    await bob.call({ op: 'open', part: asked });
-    // The open's own broadcast reads Bob's connections as it draws his view: done once that view arrives.
-    await bob.view((view) => view.parts[asked] !== undefined, since);
-    const hold = holdNextConnectionsRead(people.bob);
-    // Admitted at image A; its run broadcasts before its worker is made, and that broadcast is held.
-    const held = asOwner('which', []);
-
-    await hold.reached;
-    const edited = await room.editorEdit(people.ben, { 'server.ts': ATTACK_SLATE.replace('"image-A"', '"image-B"') });
-
-    hold.release();
-
-    return {
-      first, edited: edited?.ok === true ? 'ok' : JSON.stringify(edited), held: await held,
-      fromB: SlateDurabilityProbeRoot.count(people.sam, 'list_pull_requests', (args) => args.note === 'image-B'),
-    };
-  }
-
-  /** `email`'s own workspace `workspace`, in their own account, holding a browser one of its actors opened. */
-  private async ownBrowser(email: string, workspace: string, session: string): Promise<void> {
-    const caller = await ownerCaller(this.env);
-    const account = await accountIdFor(this.env, email);
-    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(account));
-    const target = await this.workspaceTarget(workspace);
-
-    await userDO.registerWorkspace(caller, workspace, 'Browser Probe');
-    await userDO.ensureProfile(caller, email);
-    const claim = await target.claimOwner(account);
-
-    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
-    await target.recordBrowserSession('main', session);
-  }
-
-  /**
-   * Alice drives a browser from Sam's slate. Her own, in her own request: once she allows her browser for it and lets
-   * Sam's code send what it reads, the room dials it, and closes it when Sam removes her. Bob's browser: never dialled.
-   * A dial that skipped the room's authorization, and a forged one from outside: refused.
-   */
-  async browserDrives(): Promise<{
-    asked: string; own: string[]; afterRemoval: string; others: string; othersLog: string[]; raw: string; forged: number[]; lent: string; samLog: string[];
-  }> {
-    const { at, people, room, owner, asOwner } = await this.stage('browser');
-
-    await this.ownBrowser(people.alice, 'browser-alice-ws', 'alice-browser');
-    await this.ownBrowser(people.bob, 'browser-bob-ws', 'bob-browser');
-    // Sam drives his own browser in his own slate, then lends `drive`: his browser grant is now a lend.
-    await this.ownBrowser(people.sam, 'browser-sam-ws', 'sam-browser-hangs-up');
-    await asOwner('drive', ['sam-browser-hangs-up']);
-    await owner.call({ op: 'setLend', fn: 'drive', on: true });
-    const lent = SlateDurabilityProbeRoot.said(await room.callAs(people.bob, 'drive', ['sam-browser-hangs-up'])).said;
-    const alice = await personSocket(this.env, at, people.alice);
-    // A run never authorized for a browser, dialling straight through its stub: the room refuses it.
-    const raw = SlateDurabilityProbeRoot.said(await room.callAs(people.bob, 'rawDial', ['bob-browser'])).said;
-
-    // Bob's browser for Alice's request: refused, or (were it not) dialled, which the log says at once.
-    const others = await Promise.race([
-      this.allowedApproving(room, alice, { email: people.alice, fn: 'drive', args: ['bob-browser'] }),
-      browserLogged('connected bob-browser').then(() => 'dialled bob-browser'),
-    ]);
-
-    // Her own: the fake browser answers nothing, so the drive holds its socket open until something ends it.
-    // Her socket closes when she is removed, which may end the call before its own answer does: either says it stopped.
-    const own = Promise.allSettled([this.allowedApproving(room, alice, { email: people.alice, fn: 'drive', args: ['alice-browser'] })])
-      .then(([settled]) => (settled.status === 'fulfilled' ? settled.value : `stopped: ${String(settled.reason)}`));
-
-    await browserLogged('connected alice-browser');
-    const asked = 'outflow approved';
-    // While her drive holds her browser, a dial forged from outside the run, naming each run the room may have: refused.
-    const forged: number[] = [];
-
-    for (let run = 1; run <= 30; run++) {
-      const dialled = await room.fetch(new Request('https://slate.host/alice-browser', {
-        headers: { upgrade: 'websocket', 'x-kinu-room-browser': JSON.stringify({ run, seal: 'guessed', invocation: null }) },
-      }));
-
-      forged.push(dialled.status);
-    }
-
-    await owner.call({ op: 'remove', email: people.alice });
-    await browserLogged('closed alice-browser');
-    const afterRemoval = await own;
-
-    return {
-      asked, own: browserLogOf('alice-browser'), afterRemoval, others, othersLog: browserLogOf('bob-browser'), raw, forged: [...new Set(forged)],
-      lent, samLog: browserLogOf('sam-browser-hangs-up'),
-    };
-  }
-
-  /** `allowed`, and each outflow its person is asked to let go, let go: the person's own decisions, made as they come. */
-  private async allowedApproving(room: DurableObjectStub<SlateRoom>, socket: PersonSocket, call: { email: string; fn: string; args: JsonValue[] }): Promise<string> {
-    const run = this.allowed(room, socket, call);
-
-    // Until the call ends: each new outflow ask, approved as it comes.
-    for (const approved = new Set<string>(); ;) {
-      const view = await SlateDurabilityProbeRoot.askedOrEnded(socket, (each) => each.asks.some((ask) => ask.kind === 'outflow' && !approved.has(ask.id)), run);
-      const ask = view?.asks.find((each) => each.kind === 'outflow' && !approved.has(each.id));
-
-      if (ask === undefined) return await run;
-      approved.add(ask.id);
-      await socket.call({ op: 'approve', ask: ask.id });
-    }
-  }
-
-  /** A collaborator's own AI: Alice's call reaches her account's model, never Sam's, once she allows it. */
-  async ownAi(): Promise<{ alice: string; aliceCalls: number; samCalls: number }> {
-    const { at, people, room } = await this.stage('own-ai');
-    const alice = await personSocket(this.env, at, people.alice);
-    const saw = await this.allowed(room, alice, { email: people.alice, fn: 'ask', args: ['what changed?'] });
-
-    return {
-      alice: saw, aliceCalls: SlateDurabilityProbeRoot.count(people.alice, 'ai.run'), samCalls: SlateDurabilityProbeRoot.count(people.sam, 'ai.run'),
-    };
-  }
-
-  /** Attack 3, the requester check: Alice's own GitHub, allowed for her part, never runs for Bob's request. */
-  async attackRequester(): Promise<{ alice: string; bob: string; aliceCallsForBob: number }> {
-    const { at, people, room } = await this.stage('requester');
-    const alice = await personSocket(this.env, at, people.alice);
-    const saw = await this.allowed(room, alice, { email: people.alice, fn: 'prs', args: ['secret'] });
-    const before = SlateDurabilityProbeRoot.count(people.alice, 'list_pull_requests');
-    const bob = SlateDurabilityProbeRoot.said(await room.callAs(people.bob, 'prs', ['secret']));
-
-    return {
-      alice: saw.includes('the-secret') ? 'her secret' : saw, bob: bob.said,
-      aliceCallsForBob: SlateDurabilityProbeRoot.count(people.alice, 'list_pull_requests') - before,
-    };
-  }
-
-  /**
-   * Attack 5, the tool-flow check: Sam lends `leak`, which mails what it read. Alice runs it on her private repository:
-   * her data never leaves through Sam's mail.
-   */
-  async attackToolFlow(): Promise<{ samOwn: string; alice: string; samMailsForAlice: number }> {
-    const { at, people, room, owner, asOwner } = await this.stage('flow');
-    const samOwn = await asOwner('leak', ['board']);
-
-    await owner.call({ op: 'setLend', fn: 'leak', on: true });
-    const before = SlateDurabilityProbeRoot.count(people.sam, 'send');
-    const alice = await personSocket(this.env, at, people.alice);
-    const saw = await this.allowed(room, alice, { email: people.alice, fn: 'leak', args: ['secret'] });
-
-    return { samOwn: samOwn.startsWith('value') ? 'sent' : samOwn, alice: saw.includes('the-secret') ? 'leaked' : 'stopped', samMailsForAlice: SlateDurabilityProbeRoot.count(people.sam, 'send') - before };
-  }
-
-  /**
-   * Attack 9, the sink audience: Alice's own request, her own repository, her own mail, but Sam's code picks who the
-   * mail goes to. It waits for Alice as an outflow; she declines, and nothing is sent.
-   */
-  async attackSink(): Promise<{ asked: string; mailedBeforeDeciding: number; mailedAfter: number; alice: string }> {
-    const { at, people, room } = await this.stage('sink');
-    const alice = await personSocket(this.env, at, people.alice);
-    const run = this.allowed(room, alice, { email: people.alice, fn: 'leak', args: ['secret'] });
-    const view = await SlateDurabilityProbeRoot.askedOrEnded(alice, (each) => each.asks.some((ask) => ask.kind === 'outflow'), run);
-    const ask = view?.asks.find((each) => each.kind === 'outflow');
-    const mailedBeforeDeciding = SlateDurabilityProbeRoot.count(people.alice, 'send');
-
-    await alice.call({ op: 'decline', ask: ask?.id ?? '' });
-    const saw = await run;
-
-    return { asked: ask?.kind ?? 'nothing', mailedBeforeDeciding, mailedAfter: SlateDurabilityProbeRoot.count(people.alice, 'send'), alice: saw.startsWith('value') ? 'sent' : 'stopped' };
-  }
-
-  /**
-   * Attacks 10 and 4, one approval per step and generations: Sam lends `deploy`, which deploys twice. Bob's call waits
-   * for Sam at its first deploy; Bob cannot approve it himself; Sam's approval lets that one deploy go, and the second
-   * waits again. Then a call waiting while Sam takes the lend back and lends it again never deploys.
-   */
-  async attackApprovals(): Promise<{ bobApproves: string; week2BeforeApproval: number; week2AfterOne: number; secondAsked: boolean; week3: number; bob3: string }> {
-    const { at, people, room, owner, asOwner } = await this.stage('approve');
-
-    await asOwner('deploy', [1]);
-    await owner.call({ op: 'setLend', fn: 'deploy', on: true });
-    // A deploy reaches whoever its service serves: what it carries of Sam's is his to show to everyone, as the sheet asks.
-    await owner.call({ op: 'setLendShown', fn: 'deploy', shown: 'everyone' });
-    const bob = await personSocket(this.env, at, people.bob);
-    const week = (n: number) => (args: JsonObject): boolean => args.week === n;
-    const effect = (exclude: readonly string[]) => (each: RoomView): boolean => each.asks.some((ask) => ask.kind === 'effect' && !exclude.includes(ask.id));
-    const effectId = (view: RoomView, exclude: readonly string[]): string => view.asks.find((ask) => ask.kind === 'effect' && !exclude.includes(ask.id))?.id ?? '';
-    const run2 = room.callAs(people.bob, 'deploy', [2]);
-    const first = effectId(await owner.view(effect([])), []);
-    const bobApproves = JSON.stringify(await bob.call({ op: 'approve', ask: first }));
-    const week2BeforeApproval = SlateDurabilityProbeRoot.count(people.sam, 'deploy', week(2));
-
-    await owner.call({ op: 'approve', ask: first });
-    const secondView = await SlateDurabilityProbeRoot.askedOrEnded(owner, effect([first]), run2);
-    const second = secondView === null ? '' : effectId(secondView, [first]);
-    const week2AfterOne = SlateDurabilityProbeRoot.count(people.sam, 'deploy', week(2));
-
-    await owner.call({ op: 'decline', ask: second });
-    await run2;
-    const run3 = room.callAs(people.bob, 'deploy', [3]);
-    const thirdView = await SlateDurabilityProbeRoot.askedOrEnded(owner, effect([first, second]), run3);
-    const third = thirdView === null ? '' : effectId(thirdView, [first, second]);
-
-    await owner.call({ op: 'setLend', fn: 'deploy', on: false });
-    await owner.call({ op: 'setLend', fn: 'deploy', on: true });
-    await owner.call({ op: 'approve', ask: third });
-    const bob3 = SlateDurabilityProbeRoot.said(await run3).said;
-
-    return {
-      bobApproves: bobApproves.includes('"refusal":null') ? 'went through' : 'refused', week2BeforeApproval, week2AfterOne, secondAsked: second !== '',
-      week3: SlateDurabilityProbeRoot.count(people.sam, 'deploy', week(3)), bob3: bob3.startsWith('value') ? 'deployed' : 'stopped',
-    };
-  }
-
-  /**
-   * Attack 6, revision binding: Sam lends `deploy`; Ben, an editor, changes it. Neither Bob's call nor Sam's own runs
-   * Ben's code with Sam's grant: the lend and Sam's own grant wait for Sam.
-   */
-  async attackRevision(): Promise<{ edited: string; bob: string; sam: string; deploysAfterEdit: number }> {
-    const { at, people, room, owner, asOwner } = await this.stage('revision');
-
-    await asOwner('deploy', [1]);
-    await owner.call({ op: 'setLend', fn: 'deploy', on: true });
-    const before = SlateDurabilityProbeRoot.count(people.sam, 'deploy');
-    const edited = await room.editorEdit(people.ben, { 'server.ts': ATTACK_SLATE.replace('Ops.deploy({ week })', 'Ops.deploy({ week: week + 100 })') });
-    const own = asOwner('deploy', [5]);
-    // Admitted with his own grant, Ben's code would wait for Sam to let it send: that ask is what is then seen.
-    const samAsked = await SlateDurabilityProbeRoot.askedOrEnded(owner, (each) => each.asks.some((ask) => ask.kind === 'outflow'), own);
-    const outflow = samAsked?.asks.find((ask) => ask.kind === 'outflow')?.id ?? null;
-
-    if (outflow !== null) await owner.call({ op: 'decline', ask: outflow });
-    const sam = outflow === null ? await own : 'asked to let Ben\'s code send';
-    const call = room.callAs(people.bob, 'deploy', [4]);
-    // Admitted with Sam's lend, it would wait for Sam at its deploy: the ask is then what is seen.
-    const asked = await SlateDurabilityProbeRoot.askedOrEnded(owner, (each) => each.asks.some((ask) => ask.kind === 'effect'), call);
-    const waiting = asked?.asks.find((ask) => ask.kind === 'effect')?.id ?? null;
-
-    // A step left waiting would hold the run open: Sam declines it, so the run ends either way.
-    if (waiting !== null) await owner.call({ op: 'decline', ask: waiting });
-    const bob = waiting === null ? SlateDurabilityProbeRoot.said(await call).said : 'waited for Sam';
-
-    void at;
-
-    return { edited: edited?.ok === true ? 'ok' : 'refused', bob, sam: sam.startsWith('value') || sam.startsWith('asked') ? sam.replace(/^value .*/u, 'deployed') : 'stopped', deploysAfterEdit: SlateDurabilityProbeRoot.count(people.sam, 'deploy') - before };
-  }
-
-  /** Attacks 2 and 8, persisted labels and the post guard: a run that read Alice's repository cannot post it publicly. */
-  async attackPost(): Promise<{ alice: string; bobBoard: string }> {
-    const { at, people, room } = await this.stage('post');
-    const alice = await personSocket(this.env, at, people.alice);
-    const saw = await this.allowed(room, alice, { email: people.alice, fn: 'copy', args: ['secret'] });
-    const board = SlateDurabilityProbeRoot.said(await room.callAs(people.bob, 'board', [])).said;
-
-    return { alice: saw.startsWith('value') ? 'copied' : 'stopped', bobBoard: board.includes('the-secret') ? 'the secret' : board };
-  }
-
-  /** Attack 7, bare forks: Dana forks Sam's slate, which lends `deploy`; her fork holds no lend, and Sam's Ops is never called for her. */
-  async attackFork(): Promise<{ forked: string; dana: string; samDeploysForDana: number }> {
-    const { people, room, owner, asOwner } = await this.stage('fork');
-
-    await asOwner('deploy', [1]);
-    await owner.call({ op: 'setLend', fn: 'deploy', on: true });
-    const dana = 'dana-fork@probe.local';
-    const danaWorkspace = 'attack-fork-dana';
-
-    await owner.call({ op: 'invite', email: probeEmail('dana-fork'), role: 'use' });
-    await this.claimWorkspace(await this.workspaceTarget(danaWorkspace), danaWorkspace, 'dana-fork');
-    const bundle = await room.forkBundle({ email: probeEmail('dana-fork'), name: dana }, null);
-    const admitted = bundle?.ok === true ? await workspaceOwner(this.env, danaWorkspace).admitBlueprint(bundle.value, 'attack-fork/attack') : null;
-    const before = SlateDurabilityProbeRoot.count(people.sam, 'deploy');
-    const call = admitted?.ok === true ? await workspaceOwner(this.env, danaWorkspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: admitted.value.slate, method: 'deploy', args: [7] }) : null;
-
-    return {
-      forked: admitted?.ok === true ? 'ok' : 'refused', dana: call?.ok === true ? 'deployed' : 'stopped',
-      samDeploysForDana: SlateDurabilityProbeRoot.count(people.sam, 'deploy') - before,
-    };
-  }
-
-  /** A part's sealed content, as the app's origin serves it: its headers and its body. */
-  async sealed(value: JsonValue | null): Promise<{ csp: string | null; type: string | null; body: string }> {
-    const response = await sealedPart(value, 'https://board-token-ws.slates.test');
-
-    return { csp: response.headers.get('content-security-policy'), type: response.headers.get('content-type'), body: await response.text() };
-  }
-
-  /** A Plan caller's call of a slate method: refused before anything runs. */
-  async planCall(input: { workspace: string; owner: string }): Promise<{ ok: boolean; reason: string | null }> {
-    const target = await this.workspaceTarget(input.workspace);
-
-    await this.claimWorkspace(target, input.workspace, input.owner);
-    const answered = await workspaceOwner(this.env, input.workspace).slateAs({ ...ROOT_SLATE_CALLER, workMode: 'plan' }, { op: 'call', id: 'network', method: 'shared' });
-
-    return { ok: answered.ok, reason: answered.ok ? null : answered.reason };
-  }
-
-  /** The owner's program makes the crafted tool `helper`, then runs it through the `runner` slate's class. */
-  async craftedToolInSlate(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[] }> {
+  async craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }> {
     const target = await this.workspaceTarget(input.workspace);
 
     await this.claimWorkspace(target, input.workspace, input.owner);
@@ -1005,7 +421,15 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const reached = v.parse(GraphValueSchema, graph.value).namespaces
       .flatMap((row) => row.members.map((member) => `${row.namespace}.${member.member}:${member.impact}`));
 
-    return { owner, reached };
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, {
+      op: 'share', id: 'runner', visibility: 'public', approved: [{ slate: 'runner', namespace: 'tools', member: 'helper' }],
+    });
+
+    if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
+    const { handle } = v.parse(SharedValueSchema, shared.value).share;
+    const page = await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/');
+
+    return { owner, reached, viewer: await page.text() };
   }
 
   async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
@@ -1035,7 +459,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'lilt' });
     const shown = preview.ok ? v.parse(v.object({ url: v.string(), broken: v.optional(v.string()) }), preview.value) : null;
-    const client = shown === null ? null : await this.drivePreview(shown.url, '/__kinu/client.js');
+    const client = shown === null ? null : await this.drivePreview(new URL('/__kinu/client.js', shown.url).href);
 
     return {
       wrote, preview: shown === null ? `refused: ${preview.ok ? '' : preview.error}` : shown.broken ?? 'builds',
@@ -1148,7 +572,13 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return { before, after, says: called.ok ? v.parse(v.string(), called.value) : `refused: ${called.error}` };
   }
 
+  async portReservations(workspace: string): Promise<DurabilityReservation[]> {
+    return (await this.workspaceTarget(workspace)).portReservations();
+  }
 
+  async forgetActivation(workspace: string): Promise<void> {
+    await (await this.workspaceTarget(workspace)).forgetActivation();
+  }
 
   async pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }> {
     return (await this.workspaceTarget(workspace)).pendingNimbusTasks();
@@ -1158,105 +588,153 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return (await this.workspaceTarget(workspace)).executorRows();
   }
 
-  /** The room a frame address names, `/api/rooms/<workspace>/<slate>/frame`. */
-  private roomOf(url: string) {
-    const [, , , workspace = '', slate = ''] = new URL(url).pathname.split('/').map((part) => decodeURIComponent(part));
-    const owner = this.ctx.storage.kv.get(`owner:${workspace}`);
+  /** The workspace's own pass to its preview (`selfPreviewPass`): what its own browsers and fetches carry. */
+  private async selfPass(url: string): Promise<Record<string, string>> {
+    const at = new URL(url);
+    const workspace = parseWorkspacePreviewLabel(at.hostname.split('.')[0] ?? '')?.workspace ?? '';
+    const pass = await selfPreviewPass(this.env, workspace, at);
 
-    return {
-      workspace, slate, owner: typeof owner === 'string' ? owner : null,
-      stub: this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, roomHandle(workspace, slate)))),
-    };
+    if (pass === null) throw new Error(`no pass of its own for ${url}`);
+
+    return { cookie: `${pass.name}=${pass.value}` };
   }
 
-  /** `email` entering the slate's own host as the app's frame route sends them: their ticket, then the host's cookie. */
-  private async enter(url: string, email: string | null): Promise<{ readonly host: string; readonly cookie: string } | { readonly refused: number }> {
-    const entered = await this.roomOf(url).stub.ticketFor(email === null ? null : { email, name: email }, null);
+  /** The workspace itself reading its preview. A `null` answer is the edge declining the hostname, a fixture fault, so it throws. */
+  async drivePreview(url: string): Promise<PreviewAnswer> {
+    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers: await this.selfPass(url) }), this.env);
 
-    if (entered === null) return { refused: email === null ? 401 : 403 };
-    const exchange = await handleSlateRoomHostRequest(new Request(entered), this.env);
-    const cookie = exchange?.headers.get('set-cookie')?.split(';')[0];
-
-    if (cookie === undefined) throw new Error(`the slate's host set no cookie for ${entered}`);
-
-    return { host: new URL(entered).origin, cookie };
-  }
-
-  /** The owner's page, or `path` on the slate's own host, as the owner's frame shows it. */
-  async drivePreview(url: string, path = '/'): Promise<PreviewAnswer> {
-    const entered = await this.enter(url, this.roomOf(url).owner);
-
-    if ('refused' in entered) return { status: entered.refused, body: '' };
-    const response = await handleSlateRoomHostRequest(new Request(`${entered.host}${path}`, { headers: { cookie: entered.cookie } }), this.env);
-
-    if (response === null) throw new Error(`the slate's host declined ${entered.host}`);
+    if (response === null) throw new Error(`the preview edge declined ${url}`);
 
     return { status: response.status, body: await response.text() };
   }
 
-  /** Someone who holds the slate's host and nothing else: no ticket, no cookie. */
+  /** A visitor's request to a preview that carries only `headers`: what someone who holds the URL alone is answered. */
   async visitPreview(url: string, headers: Record<string, string>): Promise<PreviewAnswer & { location: string | null }> {
-    const entered = await this.enter(url, this.roomOf(url).owner);
+    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers }), this.env);
 
-    if ('refused' in entered) throw new Error(`the owner could not enter ${url}`);
-    const response = await handleSlateRoomHostRequest(new Request(`${entered.host}/`, { headers }), this.env);
-
-    if (response === null) throw new Error(`the slate's host declined ${entered.host}`);
+    if (response === null) throw new Error(`the preview edge declined ${url}`);
 
     return { status: response.status, body: await response.text(), location: response.headers.get('location') };
   }
 
-  /** `userId`'s account opening the slate's frame: the room says whether they may, and their page if so. */
+  /**
+   * `userId` opening the preview as their browser does: the preview's host sends them to the app's entry, which knows
+   * them (here, `userId` stands for the app's sign-in), and the entry's ticket becomes the host's cookie.
+   */
   async visitPreviewAs(url: string, userId: string): Promise<PreviewAnswer & { entry: number }> {
-    const entered = await this.enter(url, probeEmail(userId));
+    const entry = await previewEntry(new Request(`https://app.test${PREVIEW_ENTRY_PATH}?to=${encodeURIComponent(url)}`), this.env, userId);
+    const exchangeAt = entry.headers.get('location');
 
-    if ('refused' in entered) return { entry: entered.refused, status: entered.refused, body: '' };
-    const page = await handleSlateRoomHostRequest(new Request(`${entered.host}/`, { headers: { cookie: entered.cookie } }), this.env);
+    if (entry.status !== 303 || exchangeAt === null) return { entry: entry.status, status: entry.status, body: await entry.text() };
+    const exchange = await handleNimbusPreviewHostRequest(new Request(exchangeAt), this.env);
+    const cookie = exchange?.headers.get('set-cookie')?.split(';')[0];
+    const next = exchange?.headers.get('location');
 
-    if (page === null) throw new Error(`the slate's host declined ${entered.host}`);
+    if (cookie === undefined || next === null || next === undefined) throw new Error(`the exchange at ${exchangeAt} set no cookie`);
+    const page = await handleNimbusPreviewHostRequest(new Request(new URL(next, url), { headers: { cookie, 'sec-fetch-mode': 'navigate' } }), this.env);
 
-    return { entry: 303, status: page.status, body: await page.text() };
+    if (page === null) throw new Error(`the preview edge declined ${url}`);
+
+    return { entry: entry.status, status: page.status, body: await page.text() };
   }
 
-  /** A well-signed cookie naming `userId` as a member, as if they once were: the room asks again and finds no such session. */
+  /** What a preview tells a visitor it does not admit, as text and as the entry page writes it. */
+  refusalText(slate: boolean) {
+    return { text: previewRefusalText(slate), html: escapeHtml(previewRefusalText(slate)) };
+  }
+
+  /** A visitor carrying a valid viewer cookie for this preview minted for `userId`, as if they had once owned it. */
   async visitPreviewWithCookieOf(url: string, userId: string): Promise<PreviewAnswer> {
-    const owner = await this.enter(url, this.roomOf(url).owner);
+    const at = new URL(url);
+    const preview = parseWorkspacePreviewLabel(at.hostname.split('.')[0] ?? '');
 
-    if ('refused' in owner) throw new Error(`the owner could not enter ${url}`);
-    const { workspace, slate } = this.roomOf(url);
-    const room = { workspace, handle: roomHandle(workspace, slate) };
-    const ticket = await frameTicket(this.env, room, { email: probeEmail(userId), access: { kind: 'member', gen: 0 } });
-    const cookie = ticket === null ? null : await cookieForTicket(this.env, room, ticket);
+    if (preview === null) throw new Error(`${url} is no preview`);
+    const issued = await viewerCookieResponse(this.env, { workspace: preview.workspace, handle: previewViewerKey(preview.port, preview.handle), subject: userId }, '/');
+    const cookie = issued.headers.get('set-cookie')?.split(';')[0] ?? '';
+    const response = await handleNimbusPreviewHostRequest(new Request(url, { headers: { cookie } }), this.env);
 
-    if (cookie === null) throw new Error('no cookie could be signed');
-    const response = await handleSlateRoomHostRequest(new Request(`${owner.host}/`, { headers: { cookie: `${ROOM_COOKIE}=${cookie}` } }), this.env);
-
-    if (response === null) throw new Error(`the slate's host declined ${owner.host}`);
+    if (response === null) throw new Error(`the preview edge declined ${url}`);
 
     return { status: response.status, body: await response.text() };
   }
 
-  /** The owner's page calling the slate's `method` through its room, as `slate.method(...args)` on the page does. */
+  /** Uses the WebSocket arm: a 101 cannot cross the RPC boundary the plain drive uses. */
   async rpcPreview(url: string, method: string, args: JsonValue[] = []): Promise<RpcAnswer> {
-    const entered = await this.enter(url, this.roomOf(url).owner);
+    const opened = await this.previewSocket(url);
 
-    if ('refused' in entered) return { ok: false, error: `refused ${String(entered.refused)}` };
+    if ('refused' in opened) return { ok: false, error: opened.refused };
 
-    const response = await handleSlateRoomHostRequest(new Request(`${entered.host}/__kinu/call`, {
-      method: 'POST', headers: { cookie: entered.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ method, args }),
-    }), this.env);
-
-    const answer = v.parse(PageCallAnswer, await response?.json());
-
-    if (!answer.ok) return { ok: false, error: answer.error };
-
-    return 'value' in answer.value ? { ok: true, value: JSON.stringify(answer.value.value) } : { ok: false, error: 'answered a part' };
+    try {
+      return await calledOver(opened.stub, method, args);
+    } finally {
+      opened.socket.close();
+    }
   }
 
+  /** A page's `/__rpc` socket held open across calls, as an open tab holds it. */
+  private heldPreview: PreviewSocket | undefined;
 
+  async holdPreview(url: string): Promise<RpcAnswer> {
+    const opened = await this.previewSocket(url);
+
+    if ('refused' in opened) return { ok: false, error: opened.refused };
+    this.heldPreview = opened;
+
+    return { ok: true };
+  }
+
+  async callHeldPreview(method: string): Promise<RpcAnswer> {
+    if (this.heldPreview === undefined) throw new Error('no preview socket is held');
+
+    return await calledOver(this.heldPreview.stub, method, []);
+  }
+
+  /** Closes the held socket as a closed tab does; answers once the far end's close has come back through the relay. */
+  async closeHeldPreview(): Promise<{ code: number }> {
+    if (this.heldPreview === undefined) throw new Error('no preview socket is held');
+    const { socket } = this.heldPreview;
+
+    const closed = new Promise<number>((resolve) => {
+      socket.addEventListener('close', (event) => { resolve(event.code); });
+    });
+
+    socket.close(1001, 'tab closed');
+    this.heldPreview = undefined;
+
+    return { code: await closed };
+  }
+
+  /** Moves this isolate's clock `ms` ahead, for every object in it; `restoreClock` puts it back. */
+  advanceClock(ms: number): void {
+    advancedMs += ms;
+    Date.now = () => platformNow() + advancedMs;
+  }
+
+  restoreClock(): void {
+    advancedMs = 0;
+    Date.now = platformNow;
+  }
 
   async wakeOnce(workspace: string): Promise<void> {
     await (await this.workspaceTarget(workspace)).wakeOnce();
+  }
+
+  private async previewSocket(url: string): Promise<PreviewSocket | { refused: string }> {
+    const endpoint = new URL(url);
+    endpoint.pathname = '/__rpc';
+
+    const response = await handleNimbusPreviewHostRequest(
+      new Request(endpoint.toString(), { headers: { Upgrade: 'websocket', ...await this.selfPass(url) } }), this.env);
+
+    if (response === null) throw new Error(`the preview edge declined ${endpoint.toString()}`);
+
+    const socket = response.webSocket;
+
+    if (socket === null || socket === undefined) return { refused: `upgrade refused: ${response.status} ${await response.text()}` };
+
+    socket.accept();
+
+    return { socket, stub: newWebSocketRpcSession<PreviewRpc>(socket) };
   }
 
   async removeSlate(workspace: string, id: string): Promise<RemovedSlate> {
@@ -1266,146 +744,6 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const value = v.parse(RemovedValueSchema, removed.value);
 
     return { ok: value.removed, port: value.port };
-  }
-
-  /** A slate that was never built, whose room its owner opened anyway (the frame route makes it): its link on. */
-  async draftRoom(workspace: string, id: string): Promise<boolean> {
-    const target = await this.workspaceTarget(workspace);
-
-    await this.writeSlateFile(target, `/slates/${id}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: id } }));
-    const made = await workspaceOwner(this.env, workspace).ensureSlateRoom(id);
-
-    if (!made.ok) throw new Error(`room refused: ${made.reason}: ${made.error}`);
-    const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, made.value.handle)));
-
-    return await room.exists();
-  }
-
-  /**
-   * The owner, over the room's own socket, turns the link on, lists the slate, adds someone and removes them: whether the
-   * link the Gallery listed before the removal, and the one it lists after, still let a visitor in.
-   */
-  async rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }> {
-    const { room, call, close } = await this.ownerSocket(workspace, id);
-    const gallery = this.env.GALLERY.get(this.env.GALLERY.idFromName(GALLERY_OBJECT));
-    const listed = async (): Promise<string | null> => (await gallery.slate(workspace, id, null))?.listing.url ?? null;
-
-    await call({ op: 'setAudience', audience: 'anyone' });
-    await call({ op: 'list', line: 'A probe slate', category: 'fun' });
-    const before = await listed();
-
-    await call({ op: 'invite', email: 'gone@probe.local', role: 'use' });
-    await call({ op: 'remove', email: 'gone@probe.local' });
-    const after = await listed();
-    const opens = async (url: string | null): Promise<boolean> => url !== null && await room.ticketFor(null, new URL(url, 'https://app.test').searchParams.get('k')) !== null;
-
-    close();
-
-    return { moved: before !== after, before: await opens(before), after: await opens(after) };
-  }
-
-  /**
-   * The owner of `workspace` adds the owner of `editorWorkspace` to edit slate `id`, and the editor's own workspace reads
-   * and changes it through the room: what each step answered, and the page and author after the edit.
-   */
-  async editorEdits(input: { workspace: string; id: string; editorWorkspace: string; editor: string; server: string }): Promise<{
-    before: string; files: string[]; edited: string; page: string | null; author: string | null; reaching: string; restored: boolean; pageAfter: string | null; afterRemoval: string;
-  }> {
-    const owned = await this.workspaceTarget(input.workspace);
-
-    // A file of the owner's outside the slate, which no edit of an editor's may build in.
-    await this.writeSlateFile(owned, '/slates/private/secret.ts', 'export const secret = "owner-private";\n');
-    const target = await this.workspaceTarget(input.editorWorkspace);
-
-    await this.claimWorkspace(target, input.editorWorkspace, input.editor);
-    const email = probeEmail(input.editor);
-    const editor = workspaceOwner(this.env, input.editorWorkspace);
-    const shared = { workspace: input.workspace, slate: input.id };
-    const said = (answer: SlateCallResult): string => (answer.ok ? 'ok' : answer.reason);
-    const before = said(await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedEdit', ...shared, files: { 'server.ts': input.server } }));
-    const { room, call, close } = await this.ownerSocket(input.workspace, input.id);
-
-    await call({ op: 'invite', email, role: 'edit' });
-    const read = await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedFiles', ...shared });
-    const files = read.ok ? v.parse(SharedSlateFilesSchema, read.value).files.map((file) => file.path) : [];
-    const edited = said(await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedEdit', ...shared, files: { 'server.ts': input.server } }));
-    const ticket = await room.ticketFor({ email: this.ctx.storage.kv.get<string>(`owner:${input.workspace}`) ?? '', name: 'owner' }, null);
-    const page = ticket === null ? null : await this.pageAt(ticket);
-    const author = await room.author();
-
-    // An edit that imports the owner's file outside the slate does not build, and is taken back whole.
-    const reaching = said(await editor.slateAs(ROOT_SLATE_CALLER, {
-      op: 'sharedEdit', ...shared, files: { 'server.ts': `import { secret } from "../private/secret.ts";\n${input.server.replace('editor-body', '" + secret + "')}` },
-    }));
-
-    const reread = await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedFiles', ...shared });
-    const restored = reread.ok && v.parse(SharedSlateFilesSchema, reread.value).files.every((file) => !file.text.includes('private/secret'));
-    const again = await room.ticketFor({ email: this.ctx.storage.kv.get<string>(`owner:${input.workspace}`) ?? '', name: 'owner' }, null);
-    const pageAfter = again === null ? null : await this.pageAt(again);
-
-    await call({ op: 'remove', email });
-    const afterRemoval = said(await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedEdit', ...shared, files: { 'server.ts': input.server } }));
-
-    close();
-
-    return { before, files, edited, page, author, reaching, restored, pageAfter, afterRemoval };
-  }
-
-  /** A page of the slate's own host, entered with `entry`, as the owner's frame opens it. */
-  private async pageAt(entry: string): Promise<string | null> {
-    const exchange = await handleSlateRoomHostRequest(new Request(entry), this.env);
-    const cookie = exchange?.headers.get('set-cookie')?.split(';')[0];
-
-    if (cookie === undefined) return null;
-    const page = await handleSlateRoomHostRequest(new Request(`${new URL(entry).origin}/`, { headers: { cookie } }), this.env);
-
-    return page === null ? null : await page.text();
-  }
-
-  /** The room's own socket, as its owner holds it: each call answered in turn. */
-  private async ownerSocket(workspace: string, id: string): Promise<{
-    room: DurableObjectStub<SlateRoom>; call: (body: JsonValue) => Promise<void>; close: () => void;
-  }> {
-    const room = this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, roomHandle(workspace, id))));
-    const owner = this.ctx.storage.kv.get<string>(`owner:${workspace}`) ?? '';
-
-    const upgraded = await room.fetch('https://room.internal/socket', {
-      headers: { upgrade: 'websocket', [ROOM_PERSON_HEADER]: JSON.stringify({ email: owner, name: owner }) },
-    });
-
-    const socket = upgraded.webSocket;
-
-    if (socket === null) throw new Error(`the room answered ${String(upgraded.status)}, not a socket`);
-    socket.accept();
-    const answers = new Map<number, () => void>();
-
-    socket.addEventListener('message', (event) => {
-      const frame = v.parse(v.object({ id: v.optional(v.number()) }), JSON.parse(String(event.data)));
-
-      if (frame.id !== undefined) answers.get(frame.id)?.();
-    });
-    let next = 0;
-
-    const call = async (body: JsonValue): Promise<void> => {
-      const answered = Promise.withResolvers<undefined>();
-      const callId = next++;
-
-      answers.set(callId, () => { answered.resolve(undefined); });
-      socket.send(JSON.stringify({ id: callId, call: body }));
-      await answered.promise;
-    };
-
-    return { room, call, close: () => { socket.close(); } };
-  }
-
-  /** Whether `id`'s room still holds anything of the slate's. */
-  async roomExists(workspace: string, id: string): Promise<boolean> {
-    return await this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(roomObjectName(workspace, roomHandle(workspace, id)))).exists();
-  }
-
-  /** The owner's deletion of the whole workspace, as their account's roster runs it. */
-  async deleteWorkspace(workspace: string, owner: string): Promise<void> {
-    await this.env.UserDO.get(this.env.UserDO.idFromName(owner)).removeWorkspace(await ownerCaller(this.env), workspace, owner);
   }
 
   /** A stand-in for the picture a capture stores. */

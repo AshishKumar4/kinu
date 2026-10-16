@@ -10,12 +10,11 @@ import { env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
 
-it("a slate's room binding call hands back its answer without the disposer it received", async () => {
+it("a slate's binding call hands back its answer without the disposer it received", async () => {
   const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('relayed-slate-answer'));
   const seen = await probe.slateBindingAnswer('relayed-slate-answer-workspace');
 
-  expect(seen.answer).toEqual({ ok: true, value: null });
-  expect(seen.refused).toBe('denied');
+  expect(seen.answer).toEqual({ ok: true, value: { value: 'kept' } });
   expect(seen.carriesDisposer).toBe(false);
 });
 
@@ -23,7 +22,7 @@ it("a slate's room binding call hands back its answer without the disposer it re
 // workerd ends it ok, so this pins the binding's side. Measured on cmp-kinu-slate (2026-10-14, compatibility date
 // 2026-09-30): SlateBinding handing ai.stream's and agent.ask's received streams to a slate's facet ended hung 13 of 13
 // times, as staging 0c7b3ee7's did (2026-10-13, after 8 s with 0 ms CPU); piped through its own isolate, 12 of 12 ok.
-it("a slate's room binding hands on ai.stream's and agent.ask's streams as its own", async () => {
+it("a slate's binding hands on ai.stream's and agent.ask's streams as its own", async () => {
   const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('relayed-slate-streams'));
 
   expect(await probe.slateBindingStreams('relayed-slate-streams-workspace')).toEqual([

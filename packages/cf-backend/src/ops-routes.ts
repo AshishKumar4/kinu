@@ -19,8 +19,8 @@ import { evalAccountEmail } from './auth/session';
 import { controlPlaneStub, hasControlPlane } from './control-plane/stub';
 import type { ControlPlaneDO } from './control-plane/control-plane-do';
 
-/** The classes the walk reaches. */
-const OPS_CLASSES = ['UserDO', 'OrchestratorAgent', 'SlateRoom', 'GalleryDO'] as const;
+/** The classes the walk reaches, and the namespace each is bound as. */
+const OPS_CLASSES = ['UserDO', 'OrchestratorAgent'] as const;
 
 type OpsClass = (typeof OPS_CLASSES)[number];
 
@@ -47,8 +47,6 @@ export interface OpsEnv extends SignInDeclarationEnv {
   DEV_USER_EMAIL?: string;
   UserDO: OpsNamespace;
   OrchestratorAgent: OpsNamespace;
-  SLATE_ROOM: OpsNamespace;
-  GALLERY: OpsNamespace;
   ControlPlaneDO?: DurableObjectNamespace<ControlPlaneDO>;
 }
 
@@ -99,7 +97,7 @@ opsRoutes.post('/ops/tables', (c) => settle(Effect.gen(function* () {
   const body = yield* Effect.promise(() => safeJson(c.req.raw, OpsRequestSchema));
 
   if (body === null) return err(400, `The body names a class, and at most ${String(OPS_OBJECTS_PER_REQUEST)} objects by name.`);
-  const namespace: OpsNamespace = { UserDO: c.env.UserDO, OrchestratorAgent: c.env.OrchestratorAgent, SlateRoom: c.env.SLATE_ROOM, GalleryDO: c.env.GALLERY }[body.class satisfies OpsClass];
+  const namespace: OpsNamespace = c.env[body.class satisfies OpsClass];
   const caller = yield* Effect.promise(() => opsCaller(c.env));
 
   const objects = body.names.map((name) => ({ id: namespace.idFromName(name), name }));

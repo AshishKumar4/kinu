@@ -1,16 +1,83 @@
 /**
- * `/api/shared/*`: the Drive's library of slates. A slate's own sharing goes through its room (`slates/room-routes.ts`);
- * these routes list what a person owns and what reaches them, and let them leave a slate shared with them.
+ * `/api/shared/*`: shared library and blueprints. `GET /api/shared/blueprint/:id` is public by link: the signature is
+ * checked before any object is touched, and the owner's object re-reads the row every call (S6). No credential crosses (S8).
  */
 import { Hono } from 'hono';
+import { Result } from 'effect';
 import * as v from 'valibot';
-import { err, json, objectNamed, safeJson, type DriveLibrary, type DriveRoomCard, type DriveSlate, type UserCaller } from '@kinu.run/core';
-import { GALLERY_OBJECT } from '../gallery/gallery-do';
-import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
+import {
+  objectNamed,
+  err, ERROR_STATUS, json, safeJson,
+  formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
+  type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
+  LiveShareCreatedSchema,
+} from '@kinu.run/core';
+import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
-import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
+import { accountIdFor } from '../auth/store';
+import { claimOwnedWorkspace } from '../user/workspace-ownership';
+import { workspaceOwner } from '../workspace-owner-rpc';
+import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
-const LeaveBody = v.object({ workspace: v.string(), slate: v.string() });
+/** Its own salt and info, so preview and blueprint tokens never verify each other. */
+const blueprintSigner = labelSigner('kinu.blueprint.salt', 'kinu.blueprint.v1');
+
+function blueprintMessage(workspace: string, share: string): string {
+  return `kinu:blueprint:v1:${workspace}:${share}`;
+}
+
+/** Null on a deployment with no signing secret. */
+async function mintBlueprintId(env: Env, workspace: string, share: string): Promise<string | null> {
+  const secret = blueprintSigner.secret(env);
+
+  if (secret === undefined) return null;
+
+  return formatBlueprintId({ workspace, share, token: await blueprintSigner.token(secret, blueprintMessage(workspace, share)) });
+}
+
+async function verifiedBlueprintAddress(env: Env, id: string): Promise<{ workspace: string; share: string } | null> {
+  const address = parseBlueprintId(id);
+
+  if (address === null) return null;
+
+  if (!await blueprintSigner.verify(env, blueprintMessage(address.workspace, address.share), address.token)) return null;
+
+  return { workspace: address.workspace, share: address.share };
+}
+
+const NOT_FOUND = 'No such blueprint';
+
+/** Public half: before the session gate; answers nothing but page data. */
+export const sharedPublicRoutes = new Hono<FamilyEnv<Env, object>>();
+
+sharedPublicRoutes.get('/api/shared/blueprint/:id', async (c) => {
+  const id = decodeURIComponent(rawParam(c, 'id'));
+  const address = await verifiedBlueprintAddress(c.env, id);
+
+  // Unminted, forged and malformed ids get one answer, without waking an object.
+  if (address === null) return err(404, NOT_FOUND);
+  const answer = await workspaceOwner(c.env, address.workspace).readBlueprint(address.share);
+
+  // A revoked blueprint is indistinguishable from one that never existed.
+  if (!answer.ok) return err(404, NOT_FOUND);
+  const view: BlueprintView = { id, ...answer.value.view };
+
+  return json({ body: view }, { headers: { 'cache-control': 'no-store' } });
+});
+
+const PublishBody = v.object({
+  workspace: v.string(),
+  slate: v.string(),
+  version: v.string(),
+  include: v.optional(v.array(v.string())),
+  emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
+});
+
+const ForkBody = v.union([
+  v.strictObject({ blueprint: v.string(), workspace: v.string() }),
+  v.strictObject({ live: v.string(), ownerWorkspace: v.string(), workspace: v.string() }),
+]);
 
 interface SharedVariables extends ApiVariables {
   owner: UserCaller;
@@ -31,38 +98,223 @@ sharedRoutes.post('/api/shared/seen', async (c) => {
   return json({ body: { seen: true } });
 });
 
-/** Leaves a slate shared with this person: their membership ends, and every session they hold on it with it. */
-sharedRoutes.post('/api/shared/leave', async (c) => {
-  const body = await safeJson(c.req.raw, LeaveBody);
+sharedRoutes.post('/api/shared/publish', async (c) => publish(c.req.raw, c.env, c.get('identity')));
 
-  if (!body) return err(400, 'Body must be { workspace, slate }');
-  const room = c.env.SLATE_ROOM.get(c.env.SLATE_ROOM.idFromName(roomObjectName(body.workspace, roomHandle(body.workspace, body.slate))));
+sharedRoutes.post('/api/shared/fork', async (c) => fork(c.req.raw, c.env, c.get('identity')));
 
-  if (!await room.exists()) return err(404, 'No such slate');
-  await room.leave(c.get('identity').email.trim().toLowerCase());
+sharedRoutes.post('/api/shared/live', async (c) => shareLive(c.req.raw, c.env, c.get('identity')));
 
-  return new Response(null, { status: 204 });
-});
+sharedRoutes.post('/api/shared/revoke', async (c) => revoke(c.req.raw, c.env, c.get('identity')));
 
-async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<DriveLibrary> {
-  const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));
-  const slates: DriveSlate[] = [];
+sharedRoutes.post('/api/shared/live/open', async (c) => openLive(c.req.raw, c.env, c.get('identity')));
+
+async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
+  const userDO = objectNamed(env.UserDO, identity.userId);
+  const slates: OwnedSlate[] = [];
+  const mine: SharedRow[] = [];
 
   for (const { workspace, overview } of await userDO.libraryTiles(owner)) {
-    for (const slate of overview.slates) slates.push({ id: slate.id, title: slate.title, workspace, ...(slate.picture !== null && { picture: slate.picture }) });
+    for (const slate of overview.slates) {
+      slates.push({
+        id: slate.id, title: slate.title, workspace, ...(slate.visibility !== null && { visibility: slate.visibility }),
+        ...(slate.picture !== null && { picture: slate.picture }),
+      });
+    }
+
+    for (const share of overview.shares) {
+      const row = {
+        share: share.share, title: share.title, description: share.description, createdAt: share.createdAt,
+        workspace, users: share.users,
+      };
+
+      if (share.kind === 'live') {
+        mine.push({
+          ...row, id: share.share, kind: 'live', slate: share.slate,
+          ...(share.visibility !== undefined && { visibility: share.visibility }), ...(share.fork !== undefined && { fork: share.fork }),
+        });
+        continue;
+      }
+
+      const id = await mintBlueprintId(env, workspace, share.share);
+
+      if (id !== null) mine.push({ ...row, id, kind: 'blueprint' });
+    }
   }
 
-  // What rooms wrote to this account: a slate shared with this person carries the role it was shared with; one used
-  // through its link carries none, and its link.
-  const seenAt = await userDO.sharesSeenAt(owner) ?? 0;
+  const received: SharedRow[] = [];
+  const seenAt = await userDO.sharesSeenAt(owner);
 
-  const cards: DriveRoomCard[] = (await userDO.sharesReceived_list(owner)).flatMap((held) => held.card.url === undefined ? [] : [{
-    workspace: held.workspace, slate: held.shareId, title: held.card.title, owner: { email: held.card.owner, name: null },
-    relation: held.card.role === undefined ? 'used' as const : 'shared' as const, ...(held.card.role !== undefined && { role: held.card.role }),
-    at: held.receivedAt, ...(held.receivedAt > seenAt && { unseen: true as const }), url: held.card.url,
-  }]);
+  // The cards their owners sent: listed without waking a single owner's workspace. A share revoked since is gone
+  // once its removal lands; one opened before then refuses at its owner's object. One that reached this account
+  // since Shared was last opened is unseen.
+  for (const { workspace, shareId, card, receivedAt } of await userDO.sharesReceived_list(owner)) {
+    const row = {
+      share: shareId, title: card.title, description: card.description, createdAt: card.createdAt, workspace, owner: card.owner,
+      ...((seenAt === null || receivedAt > seenAt) && { unseen: true as const }),
+    };
 
-  const starred = await env.GALLERY.get(env.GALLERY.idFromName(GALLERY_OBJECT)).starred(identity.email.trim().toLowerCase());
+    if (card.kind === 'live') {
+      received.push({
+        ...row, id: shareId, kind: 'live',
+        ...(card.visibility !== undefined && { visibility: card.visibility }), ...(card.fork !== undefined && { fork: card.fork }),
+      });
+      continue;
+    }
 
-  return { slates, shared: cards.filter((card) => card.relation === 'shared'), used: cards.filter((card) => card.relation === 'used'), starred };
+    const id = await mintBlueprintId(env, workspace, shareId);
+
+    if (id !== null) received.push({ ...row, id, kind: 'blueprint' });
+  }
+
+  return { slates, mine, received };
+}
+
+/** Behind when any write behind the answer could not reach the owner's tile, which is what its cards are sent from. */
+function listed(...writes: ReadonlyArray<{ readonly listing?: 'pending' }>): { listing?: 'pending' } {
+  return writes.some((write) => write.listing === 'pending') ? { listing: 'pending' } : {};
+}
+
+async function publish(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+  const body = await safeJson(request, PublishBody);
+
+  if (!body) return err(400, 'Body must be { workspace, slate, version, include?, emails? }');
+  const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
+
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
+  const owned = claim.success;
+  const published = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'publish', id: body.slate, version: body.version, include: body.include });
+
+  if (!published.ok) return err(ERROR_STATUS[published.reason], published.error);
+
+  const { share } = v.parse(PublishedBlueprintSchema, published.value);
+
+  const id = await mintBlueprintId(env, body.workspace, share.id);
+
+  if (id === null) return err(503, 'This deployment cannot sign blueprint links: CREDENTIAL_ENCRYPTION_KEY is not set.');
+  const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
+  const writes: Array<{ readonly listing?: 'pending' }> = [published];
+  let users: readonly string[] = share.users;
+
+  if (emails.length > 0) {
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
+    const recorded = await owned.shareBlueprintWith(share.id, named);
+
+    if (!recorded.ok) return err(409, recorded.error);
+    writes.push(recorded);
+    users = v.parse(v.object({ users: v.array(v.string()) }), recorded.value).users;
+  }
+
+  // Each person named gets their card from the owner's account, sent from the tile this write pushed.
+  return json({ body: { id, share: share.id, users, published: published.value, ...listed(...writes) } }, { status: 201 });
+}
+
+async function fork(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+  const body = await safeJson(request, ForkBody);
+
+  if (!body) return err(400, 'Body must be { blueprint, workspace } or { live, ownerWorkspace, workspace }');
+
+  // The target is proven mine before the owner's object is asked for bytes.
+  const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
+
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
+
+  const bundle = 'blueprint' in body
+    ? await blueprintBundle(env, body.blueprint)
+    : await workspaceOwner(env, body.ownerWorkspace).liveShareBundle(body.live, identity.userId);
+
+  if (!bundle.ok) return err(404, NOT_FOUND);
+  const admitted = await claim.success.admitBlueprint(bundle.value);
+
+  if (!admitted.ok) return err(ERROR_STATUS[admitted.reason], admitted.error);
+  const result: BlueprintFork = admitted.value;
+
+  return json({ body: result }, { status: 201 });
+}
+
+async function blueprintBundle(env: Env, id: string) {
+  const address = await verifiedBlueprintAddress(env, id);
+
+  if (address === null) return { ok: false as const, reason: 'missing' as const, error: NOT_FOUND };
+
+  return workspaceOwner(env, address.workspace).blueprintBundle(address.share);
+}
+
+const LiveShareBody = v.object({
+  workspace: v.string(),
+  slate: v.string(),
+  visibility: v.picklist(['users', 'public']),
+  emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
+  approved: v.optional(v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() }))),
+  fork: v.optional(v.boolean()),
+});
+
+const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
+
+/** `emails` names users on a `users` share; `approved` is the mutating grant the dialog checked. */
+async function shareLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+  const body = await safeJson(request, LiveShareBody);
+
+  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork? }');
+  const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
+
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
+
+  const owned = claim.success;
+
+  const created = await owned.slateAs(ROOT_SLATE_CALLER, {
+    op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork,
+  });
+
+  if (!created.ok) return err(ERROR_STATUS[created.reason], created.error);
+
+  const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
+  const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
+  const writes: Array<{ readonly listing?: 'pending' }> = [created];
+  // Answered as it stands once the people it names are recorded, so the answer names them.
+  let answered = share;
+
+  if (share.visibility === 'users' && emails.length > 0) {
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
+    const recorded = await owned.shareLiveWith(share.id, named);
+
+    if (!recorded.ok) return err(409, recorded.error);
+    writes.push(recorded);
+    answered = recorded.value;
+  }
+
+  return json({ body: { share: answered, url, ...listed(...writes) } }, { status: 201 });
+}
+
+/** A live share and a blueprint link revoke alike: the owner's object knows which it holds. */
+async function revoke(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+  const body = await safeJson(request, LiveIdBody);
+
+  if (!body) return err(400, 'Body must be { workspace, share }');
+  const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
+
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
+  const revoked = await claim.success.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: body.share });
+
+  if (!revoked.ok) return err(ERROR_STATUS[revoked.reason], revoked.error);
+
+  return json({ body: { ...v.parse(v.record(v.string(), v.unknown()), revoked.value), ...listed(revoked) } });
+}
+
+async function openLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+  const body = await safeJson(request, LiveIdBody);
+
+  if (!body) return err(400, 'Body must be { workspace, share }');
+  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share);
+
+  if (!reading.ok) return err(404, NOT_FOUND);
+
+  const { handle, visibility } = reading.value.record;
+
+  const url = visibility === 'public'
+    ? await slateShareUrl(env, body.workspace, handle)
+    : await viewerEntryUrl(env, body.workspace, handle, identity.userId);
+
+  if (url === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
+
+  return json({ body: { url } });
 }

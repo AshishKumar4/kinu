@@ -132,9 +132,6 @@
       // an AUDIT LOG and no business logic: every action it exposes proxies an
       // existing @callable on the DO that already owns that state.
       { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" },
-      // One per slate: every use of a slate goes through its room, the one caretaker of who may do what with it
-      // (docs/SLATE-SHARING-SECURITY.md). Named by workspace and handle (src/slates/room-passes.ts).
-      { "class_name": "SlateRoom", "name": "SLATE_ROOM" },
       // The Gallery's index, one for the deployment: rooms list and unlist, its routes read (src/gallery/gallery-do.ts).
       { "class_name": "GalleryDO", "name": "GALLERY" },
       // One guided self-deployment per run (docs/SELF-DEPLOY.md). A run is the
@@ -183,7 +180,6 @@
     "UserDO": { "type": "durable-object", "storage": "sqlite" },
     "MonitorDO": { "type": "durable-object", "storage": "sqlite" },
     "ControlPlaneDO": { "type": "durable-object", "storage": "sqlite" },
-    "SlateRoom": { "type": "durable-object", "storage": "sqlite" },
     "GalleryDO": { "type": "durable-object", "storage": "sqlite" },
     "DeployRunDO": { "type": "durable-object", "storage": "sqlite" },
     "MossaicUserDO": { "type": "durable-object", "storage": "sqlite" },
@@ -485,7 +481,6 @@
           { "class_name": "MonitorDO", "name": "MonitorDO" },
           { "class_name": "KinuDevbox", "name": "KinuDevbox" },
           { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" },
-          { "class_name": "SlateRoom", "name": "SLATE_ROOM" },
           { "class_name": "GalleryDO", "name": "GALLERY" },
           { "class_name": "DeployRunDO", "name": "DeployRunDO" },
           { "class_name": "MossaicUserDO", "name": "MOSSAIC_USER" },
