@@ -461,11 +461,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     Object.assign(this.env, bindings);
   }
 
-  /** Every task the workspace detached has run: what it tells another object in the background has been told. */
-  async harnessSettleBackground(): Promise<void> {
-    await this.settleBackgroundTasks();
-  }
-
   /** The provider revision every later resolution reads, as the account's settings changing would move it. */
   harnessProviderRevision(revision: string): void {
     this._providerRevision = revision;

@@ -15,6 +15,7 @@ const grant: ShareGrant = {
   members: [
     { slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe' },
     { slate: 'board', namespace: 'workspace', member: 'writeFile', impact: 'mutate' },
+    { slate: 'board', namespace: 'web', member: 'connectBrowser', impact: 'execute' },
   ],
 };
 
@@ -62,8 +63,8 @@ function world(mode: 'own' | 'owner', revision = 'rev-1') {
   const viewers = new SlateShareViewers({ live, shareEntry: () => null, ownerUserId: () => 'sam', revision: () => revision, ownerEffects: owner.queue });
   const ran: string[] = [];
 
-  const call = (member: string, subject = 'user:ana') => viewers.call({
-    share: 's1', id: 'board', request: { path: [member], args: [{ path: 'notes.md', text: 'hello' }], invocation: null }, chain: [],
+  const call = (member: string, subject = 'user:ana', authorize?: true) => viewers.call({
+    share: 's1', id: 'board', request: { path: member.split('.'), args: [{ path: 'notes.md', text: 'hello' }], invocation: null, ...(authorize && { authorize }) }, chain: [],
     issued: { id: 'inv', chain: [], viewer: { share: 's1', subject, request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
     run: async () => {
       ran.push(`${subject}:${member}`);
@@ -109,4 +110,16 @@ test('an owner share whose slate moved past the approved revision lends nothing,
   await expect(call('writeFile')).rejects.toThrow('changed since its owner approved what it reaches');
   expect(await call('writeFile', 'user:sam')).toMatchObject({ ok: true });
   expect({ ran, asked: owner.asked.size }).toEqual({ ran: ['user:sam:writeFile'], asked: 0 });
+});
+
+test("a browser member the class runs waits on the owner when the host is asked to authorize it, and its refusal report asks nothing", async () => {
+  const { owner, call, ran } = world('owner');
+
+  await expect(call('web.connectBrowser', 'user:ana', true)).rejects.toThrow('waits for the owner to approve it: connectBrowser on web');
+  owner.approveAll();
+  expect(await call('web.connectBrowser', 'user:ana', true)).toMatchObject({ ok: true });
+
+  // What the class hands its host member when its own run failed: no effect, so nothing is asked.
+  expect(await call('web.connectBrowser')).toMatchObject({ ok: true });
+  expect({ ran, asked: owner.asked.size, settled: owner.settled.length }).toEqual({ ran: ['user:ana:web.connectBrowser', 'user:ana:web.connectBrowser'], asked: 0, settled: 1 });
 });

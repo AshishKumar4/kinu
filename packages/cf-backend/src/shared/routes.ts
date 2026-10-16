@@ -10,7 +10,7 @@ import {
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, type LiveShareBody,
+  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen, type LiveShareBody,
   type LiveShareRecord, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
@@ -123,7 +123,7 @@ sharedRoutes.post(LIVE_SHARE_LISTING_PATH, async (c) => shareChange({
   usage: '{ workspace, share, listed: true, line, category } or { workspace, share, listed: false }',
 }, async (owned, body) => owned.setLiveShareListing(body)));
 
-sharedRoutes.post('/api/shared/live/open', async (c) => openLive(c.req.raw, c.env, c.get('identity')));
+sharedRoutes.post(LIVE_SHARE_OPEN_PATH, async (c) => openLive(c.req.raw, c.env, c.get('identity')));
 
 async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
   const userDO = objectNamed(env.UserDO, identity.userId);
@@ -350,11 +350,12 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity): Pro
   const body = await safeJson(request, LiveIdBody);
 
   if (!body) return err(400, 'Body must be { workspace, share }');
-  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share);
+  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share, identity.userId);
 
-  if (!reading.ok) return err(404, NOT_FOUND);
+  // A share that names people says what it is to them and its owner only, as its address admits only them.
+  if (!reading.ok || !reading.value.admits) return err(404, NOT_FOUND);
 
-  const { handle, visibility } = reading.value.record;
+  const { handle, visibility, slate } = reading.value.record;
 
   const url = visibility === 'public'
     ? await slateShareUrl(env, body.workspace, handle)
@@ -362,5 +363,5 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity): Pro
 
   if (url === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
 
-  return json({ body: { url } });
+  return json({ body: { url, slate, title: reading.value.title } satisfies LiveShareOpen });
 }

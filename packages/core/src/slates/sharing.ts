@@ -138,6 +138,14 @@ export const LiveShareListingBodySchema = v.variant('listed', [
 
 export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySchema>;
 
+/** `POST`, signed in: where a live share opens for this person (a public share's address, else their signed entry to
+ *  one that names them), with the slate it serves and its title, which the page that frames it names it by. */
+export const LIVE_SHARE_OPEN_PATH = '/api/shared/live/open';
+
+export const LiveShareOpenSchema = v.object({ url: v.string(), slate: v.string(), title: v.string() });
+
+export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
+
 export const LiveShareCreatedSchema = v.object({
   share: LiveShareRecordSchema,
   url: v.nullable(v.string()),

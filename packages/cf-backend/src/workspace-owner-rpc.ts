@@ -11,6 +11,15 @@ import type { BlueprintReading, PartRunAnswer, PartRunRequest, PartShowRequest, 
 import type { PartViewer } from './slates/part-runs';
 import type { ObjectNamespace } from '@kinu.run/core';
 
+/** A live share as its workspace reads it for someone opening it: the row, its slate's words, and whether its address
+ *  admits them. */
+export interface LiveShareReading {
+  readonly record: LiveShareRecord;
+  readonly title: string;
+  readonly description: string;
+  readonly admits: boolean;
+}
+
 /** Slate operations made as a caller; the browser's `@callable slate` mints the root caller locally. */
 export interface WorkspaceOwnerRpc {
   slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult>;
@@ -34,7 +43,7 @@ export interface WorkspaceOwnerRpc {
   admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>>;
   // The claim is built at the edge, never trusted.
   routeSlateShare(handle: string, claim: ShareViewerClaim, request: Request, pathname: string): Promise<Response>;
-  readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>>;
+  readLiveShare(share: string, reader: string): Promise<SlateAnswer<LiveShareReading>>;
   shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>>;
   // Fork flag and the caller's admission are checked in the owner's object, never trusted from the route.
   liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>>;

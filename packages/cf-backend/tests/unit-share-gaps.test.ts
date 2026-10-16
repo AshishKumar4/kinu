@@ -8,11 +8,11 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type GalleryCategory, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
+import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, until, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedConfiguredMcpServer, seedMcpTools } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type GalleryListingSync } from '@kinu.run/core/slates';
@@ -253,24 +253,29 @@ test('a users share link sends each visitor to sign in, then lets in its owner a
   const url = present(created.url, 'the share URL');
   await world.owner.agent.shareLiveWith(created.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
 
-  // Each follows the link as a browser does: to the app's page for the share, whose open hands them a ticket.
-  const openAs = async (identity: AuthIdentity, ip: string): Promise<number | undefined> => {
+  // Each follows the link as a browser does: to the app's page for the share, whose open hands them a ticket and names
+  // the slate it frames; to anyone else it says nothing of the share.
+  const openAs = async (identity: AuthIdentity, ip: string): Promise<readonly [number, number | undefined]> => {
     const sent = present(await visit(world, url, ip), 'the first visit');
     const page = new URL(present(sent.headers.get('location'), 'where the first visit was sent'));
 
     expect([sent.status, page.origin]).toEqual([303, APP_ORIGIN]);
     const { params } = present(matchPath(APP_ROUTES.sharedLive, page.pathname), 'the share\'s entry page');
-    const opened = await sharedRequest(world.env, identity, post('/api/shared/live/open', { workspace: params.workspace, share: params.share }));
-    const entry = await jsonBody(present(opened, 'the open answer'), v.object({ url: v.string() }));
+    const opened = present(await sharedRequest(world.env, identity, post(LIVE_SHARE_OPEN_PATH, { workspace: params.workspace, share: params.share })), 'the open answer');
+
+    if (opened.status === 404) return [opened.status, undefined];
+    const entry = await jsonBody(opened, LiveShareOpenSchema);
+
+    expect([entry.slate, entry.title]).toEqual(['issues', 'Issue triage']);
     const exchanged = await handleSlateShareHostRequest(new Request(entry.url, { headers: { 'cf-connecting-ip': ip } }), world.env);
     const cookie = present(exchanged?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
 
-    return (await visit(world, url, ip, { cookie }))?.status;
+    return [opened.status, (await visit(world, url, ip, { cookie }))?.status];
   };
 
-  expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toBe(200);
-  expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toBe(200);
-  expect(await openAs(identityOf('00112233445566778899aabbccddeeff', 'sam@example.test'), '203.0.113.7')).toBe(404);
+  expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toEqual([200, 200]);
+  expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toEqual([200, 200]);
+  expect(await openAs(identityOf('00112233445566778899aabbccddeeff', 'sam@example.test'), '203.0.113.7')).toEqual([404, undefined]);
 });
 
 test('D1: a live share forks for who it names, refuses who it does not, honors fork:false, and its owner forks it too', async () => {
@@ -672,8 +677,9 @@ test("a live share its owner lists tells the Gallery its card, stays off the own
   const synced: GalleryListingSync[] = [];
   const listing = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', ...body }));
 
+  // The workspace tells the Gallery in the background: observed as the control plane receives it.
   const told = async () => {
-    await world.owner.agent.harnessSettleBackground();
+    await until(() => synced.length > 0, 'the Gallery told of the listing');
 
     return synced.splice(0);
   };

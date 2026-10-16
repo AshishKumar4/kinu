@@ -297,16 +297,15 @@ export {
   type ShareGrantMember, type ShareGrant, type ShareCard,
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
+  LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
   SlateReachSchema, LiveShareBodySchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema,
   type SlateReach, type LiveShareBody, type LiveShareModeBody, type LiveShareListingBody,
 } from './slates/sharing';
 
 export { ShareModeSchema, type ShareMode } from './slates/share-modes';
 
-export {
-  DriveLibrarySchema, ForkPreviewSchema, ForkedSchema,
-  type RoomPerson, type RoomRole, type RoomAccess, type RoomAudience, type RoomService, type RoomTool, type RoomSource, type RoomReach,
-  type DriveRoomCard, type DriveSlate, type DriveLibrary, type ForkPreview, type Forked,
+export type {
+  RoomPerson, RoomRole, RoomAccess, RoomAudience, RoomService, RoomTool, RoomSource, RoomReach, ForkPreview,
 } from './slates/room-api';
 
 export {
