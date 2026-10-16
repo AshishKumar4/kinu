@@ -15,7 +15,9 @@ import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { WorkspaceOverview } from '@kinu.run/core';
+import type { ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
+import type { GalleryListingSync } from '@kinu.run/core/slates';
+import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import { bindAgentSql } from '../../src/runtime';
 import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
@@ -453,8 +455,15 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  Declare before the read: `slates` memoizes its deps on first use. */
   harnessDeclareEnv(bindings: {
     AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CLI_PUBLIC_ORIGIN?: string; CREDENTIAL_ENCRYPTION_KEY?: string; KinuDevbox?: Env["KinuDevbox"];
+    /** The control plane as far as a workspace tells it its Gallery listings. */
+    ControlPlaneDO?: ObjectNamespace<string, { gallerySync(caller: ControlCaller, sync: GalleryListingSync): Promise<void> }>;
   }): void {
     Object.assign(this.env, bindings);
+  }
+
+  /** Every task the workspace detached has run: what it tells another object in the background has been told. */
+  async harnessSettleBackground(): Promise<void> {
+    await this.settleBackgroundTasks();
   }
 
   /** The provider revision every later resolution reads, as the account's settings changing would move it. */

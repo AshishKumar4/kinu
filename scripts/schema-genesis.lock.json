@@ -1304,7 +1304,11 @@
     "revoked_at INTEGER",
     "mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner'))",
     "grant_revision TEXT",
-    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))"
+    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))",
+    "listing_line TEXT",
+    "listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun'))",
+    "CHECK ((listing_line IS NULL) = (listing_category IS NULL))",
+    "CHECK (listing_line IS NULL OR mode = 'own')"
   ],
   "slate_pictures@packages/cf-backend/src/slates/pictures.ts": [
     "slate TEXT PRIMARY KEY",

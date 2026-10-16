@@ -9,6 +9,7 @@ import { ShareStore, type ShareTable } from './shares';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 import { ShareModeSchema } from './share-modes';
 import type { LiveShareAuthority } from './share-policy';
+import { GalleryCategorySchema, type GalleryCategory } from './gallery-api';
 import {
   ShareGrantSchema, ViewerCallSchema, ViewerRequestRecordSchema,
   type LiveShareRecord, type ShareGrant, type ViewerCall, type ViewerRequestRecord,
@@ -17,11 +18,17 @@ import {
 export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
   // `mode` is whose access a viewer's calls act with (docs/SLATE-SHARING-NIMBUS.md §2): `own`, their own, which is
   // every share made before the column; `owner`, the owner's, approved for the one revision `grant_revision` names.
+  // `listing_*` are the Gallery card's words its owner wrote, while it is listed: the Gallery's index is their copy
+  // (gallery.ts), and only an `own` share is ever listed. The categories are gallery-api.ts `GALLERY_CATEGORIES`.
   execRaw(`CREATE TABLE IF NOT EXISTS slate_live_shares (
     id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, visibility TEXT NOT NULL CHECK (visibility IN ('users', 'public')),
     handle TEXT NOT NULL UNIQUE, grant_json TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER,
     mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner')), grant_revision TEXT,
-    CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))
+    listing_line TEXT,
+    listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun')),
+    CHECK ((mode = 'owner') = (grant_revision IS NOT NULL)),
+    CHECK ((listing_line IS NULL) = (listing_category IS NULL)),
+    CHECK (listing_line IS NULL OR mode = 'own')
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_live_share_users (
     share_id TEXT NOT NULL, user_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL,
@@ -37,6 +44,7 @@ const LiveShareRow = v.object({
   id: v.string(), slate_id: v.string(), visibility: LiveShareVisibilitySchema,
   handle: v.string(), grant_json: v.string(), created_at: v.number(), revoked_at: v.nullable(v.number()),
   mode: ShareModeSchema, grant_revision: v.nullable(v.string()),
+  listing_line: v.nullable(v.string()), listing_category: v.nullable(GalleryCategorySchema),
 });
 
 const AuthorityRow = v.object({ mode: ShareModeSchema, grant_json: v.string(), grant_revision: v.nullable(v.string()) });
@@ -59,6 +67,8 @@ const LIVE_SHARES: ShareTable<v.InferOutput<typeof LiveShareRow>, LiveShareRecor
     id: row.id, slate: row.slate_id, visibility: row.visibility, handle: row.handle,
     grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)),
     createdAt: row.created_at, revokedAt: row.revoked_at, users, mode: row.mode, grantRevision: row.grant_revision,
+    // A revoked share is listed nowhere, whatever its row still holds.
+    gallery: row.revoked_at === null && row.listing_line !== null && row.listing_category !== null ? { line: row.listing_line, category: row.listing_category } : null,
   }),
 };
 
@@ -80,8 +90,22 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
 
     return {
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,
-      grant: share.grant, createdAt, revokedAt: null, users: [], mode: authority.mode, grantRevision: authority.grantRevision,
+      grant: share.grant, createdAt, revokedAt: null, users: [], mode: authority.mode, grantRevision: authority.grantRevision, gallery: null,
     };
+  }
+
+  /** A live share listed in the Gallery with its card's words, or taken off it (null). A slate is listed once, so
+   *  listing one share takes its slate's others off. Only a live `own` share is listed; whether it is, after. */
+  setListing(id: string, listing: { readonly line: string; readonly category: GalleryCategory } | null): boolean {
+    const held = this.get(id);
+
+    if (held === undefined || held.revokedAt !== null || (listing !== null && held.mode !== 'own')) return false;
+
+    if (listing !== null) this.db.exec('UPDATE slate_live_shares SET listing_line = NULL, listing_category = NULL WHERE slate_id = ? AND id <> ?', held.slate, id);
+    this.db.exec('UPDATE slate_live_shares SET listing_line = ?, listing_category = ? WHERE id = ?', listing?.line ?? null, listing?.category ?? null, id);
+    markStoreChanged(this.db);
+
+    return true;
   }
 
   /** A live share's mode set: `own`, its grant kept for a later `owner`; `owner`, with the grant its owner approved

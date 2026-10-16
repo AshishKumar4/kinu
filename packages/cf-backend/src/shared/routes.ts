@@ -10,15 +10,20 @@ import {
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  LiveShareBodySchema, LiveShareCreatedSchema,
+  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, type LiveShareBody,
+  type LiveShareRecord, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
+import type { OrchestratorAgent } from '../orchestrator';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
+
+/** The owner's workspace, once the app host proved it is theirs. */
+type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'setLiveShareListing' | 'slateAs'>;
 
 /** Its own salt and info, so preview and blueprint tokens never verify each other. */
 const blueprintSigner = labelSigner('kinu.blueprint.salt', 'kinu.blueprint.v1');
@@ -105,6 +110,18 @@ sharedRoutes.post('/api/shared/fork', async (c) => fork(c.req.raw, c.env, c.get(
 sharedRoutes.post('/api/shared/live', async (c) => shareLive(c.req.raw, c.env, c.get('identity')));
 
 sharedRoutes.post('/api/shared/revoke', async (c) => revoke(c.req.raw, c.env, c.get('identity')));
+
+// Its mode set, or its reach approved again at the slate's revision now.
+sharedRoutes.post(LIVE_SHARE_MODE_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareModeBodySchema,
+  usage: "{ workspace, share, mode: 'own' } or { workspace, share, mode: 'owner', approved, revision }",
+}, async (owned, body) => owned.setLiveShareMode(body)));
+
+// Listed in the Gallery with its card's words, or taken off it.
+sharedRoutes.post(LIVE_SHARE_LISTING_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareListingBodySchema,
+  usage: '{ workspace, share, listed: true, line, category } or { workspace, share, listed: false }',
+}, async (owned, body) => owned.setLiveShareListing(body)));
 
 sharedRoutes.post('/api/shared/live/open', async (c) => openLive(c.req.raw, c.env, c.get('identity')));
 
@@ -247,8 +264,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
 
   if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork?, mode?, revision? }');
 
-  // Not yet: a share on its owner's access lands with its reach approval (docs/SLATE-SHARING-NIMBUS.md §2).
-  if (body.mode === 'owner') return err(400, 'Sharing on your own access is not available yet: share it on each viewer\'s own access');
+  if (body.mode === 'owner' && body.revision === undefined) return err(400, 'Sharing on your access names the revision whose reach you reviewed');
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
@@ -262,10 +278,13 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   if (!created.ok) return err(ERROR_STATUS[created.reason], created.error);
 
   const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
+  const owning = await ownerMode(owned, { workspace: body.workspace, share, body });
+
+  if (owning instanceof Response) return owning;
   const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
   const writes: Array<{ readonly listing?: 'pending' }> = [created];
   // Answered as it stands once the people it names are recorded, so the answer names them.
-  let answered = share;
+  let answered = owning;
 
   if (share.visibility === 'users' && emails.length > 0) {
     const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
@@ -277,6 +296,39 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   }
 
   return json({ body: { share: answered, url, ...listed(...writes) } }, { status: 201 });
+}
+
+/**
+ * A share made on its owner's access: made in `own` mode, which grants nothing, then turned to `owner` over the reach the
+ * owner reviewed (docs/SLATE-SHARING-NIMBUS.md §2). Where that refuses (the slate changed since), the share is revoked
+ * again, so nothing is left shared other than as asked. The share as it stands, or the refusal.
+ */
+async function ownerMode(owned: OwnedWorkspace, made: { workspace: string; share: LiveShareRecord; body: LiveShareBody }): Promise<LiveShareRecord | Response> {
+  const { body, share } = made;
+
+  if (body.mode !== 'owner' || body.revision === undefined) return share;
+  const set = await owned.setLiveShareMode({ workspace: made.workspace, share: share.id, mode: 'owner', revision: body.revision, approved: body.approved ?? [] });
+
+  if (set.ok) return set.value;
+  await owned.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: share.id });
+
+  return err(ERROR_STATUS[set.reason], set.error);
+}
+
+/** Its owner's word on one of their live shares, from their share sheet: answered with the share as it stands after. */
+async function shareChange<Schema extends v.GenericSchema<unknown, { readonly workspace: string }>>(
+  input: { readonly request: Request; readonly env: Env; readonly identity: AuthIdentity; readonly schema: Schema; readonly usage: string },
+  change: (owned: OwnedWorkspace, body: v.InferOutput<Schema>) => Promise<SlateAnswer<LiveShareRecord>>,
+): Promise<Response> {
+  const body = await safeJson(input.request, input.schema);
+
+  if (!body) return err(400, `Body must be ${input.usage}`);
+  const claim = await claimOwnedWorkspace(input.env, input.identity.userId, body.workspace);
+
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
+  const set = await change(claim.success, body);
+
+  return set.ok ? json({ body: set.value }) : err(ERROR_STATUS[set.reason], set.error);
 }
 
 /** A live share and a blueprint link revoke alike: the owner's object knows which it holds. */

@@ -5659,7 +5659,7 @@ const LIVE_SHARE: LiveShareRecord = {
     { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
   ] },
   // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
-  createdAt: NOW - 864e5, revokedAt: null, users: [], mode: "owner", grantRevision: "r1", stale: true,
+  createdAt: NOW - 864e5, revokedAt: null, users: [], mode: "owner", grantRevision: "r1", stale: true, gallery: null,
 };
 
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */

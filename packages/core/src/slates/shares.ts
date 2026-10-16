@@ -81,7 +81,8 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
       this.db.exec(`UPDATE ${this.table.shares} SET revoked_at = ? WHERE id = ?`, revokedAt, id);
       markStoreChanged(this.db);
 
-      return Effect.succeed({ ...share, revokedAt });
+      // Read back, as every record is: what a revoke ends (a live share's listing) is the row's to say.
+      return Effect.succeed(this.get(id) ?? { ...share, revokedAt });
     }));
   }
 

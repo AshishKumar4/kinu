@@ -8,13 +8,14 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
-  type AgentRuntime, type SlateAnswer,
+  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  type AgentRuntime, type GalleryCategory, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
+import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedConfiguredMcpServer, seedMcpTools } from './helpers/agents-sdk';
-import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, type GalleryListingSync } from '@kinu.run/core/slates';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
 import { accountRoutes } from '../src/user/account-routes';
@@ -59,7 +60,7 @@ async function exerciseIssuesSlate(owner: HarnessOrchestratorAgent): Promise<voi
   }
 }
 
-const post = (path: string, body: Record<string, string | boolean | readonly string[] | undefined>) => new Request(`https://app.test${path}`, {
+const post = (path: string, body: Readonly<Record<string, JsonValue | undefined>>) => new Request(`https://app.test${path}`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 });
 
@@ -636,4 +637,68 @@ test("a share whose recipients' tile cannot be pushed says the list is behind, w
 
   expect(answer.status).toBe(201);
   expect(await jsonBody(answer, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({ listing: 'pending' });
+});
+
+test("a share on its owner's access is refused where the slate is not at the revision they reviewed, and none is left made", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const approved = [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }];
+  const open = async () => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema)).filter((row) => row.revokedAt === null);
+  const mode = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post(LIVE_SHARE_MODE_PATH, { workspace: 'issues-owner', ...body }));
+
+  // No slate process runs here, so the slate has no revision a review could have read.
+  expect(answered(await world.owner.agent.slate({ op: 'graph', id: 'issues' }), SlateReachSchema).revision).toBeNull();
+
+  const refused = await sharedRequest(world.env, owner, post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'public', mode: 'owner', revision: 'a-revision-it-is-not-at', approved,
+  }));
+
+  expect(refused?.status).toBe(400);
+  expect(await open()).toEqual([]);
+
+  const made = await sharePublic(world, 'public');
+
+  expect((await mode({ share: made.share.id, mode: 'owner', revision: 'a-revision-it-is-not-at', approved }))?.status).toBe(400);
+  expect((await mode({ share: 'no-such-share', mode: 'own' }))?.status).toBe(404);
+  expect(await jsonBody(present(await mode({ share: made.share.id, mode: 'own' }), 'the mode answer'), LiveShareRecordSchema))
+    .toMatchObject({ id: made.share.id, mode: 'own', grantRevision: null });
+});
+
+test("a live share its owner lists tells the Gallery its card, stays off the owner's access, and leaves the Gallery with its revoke", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const synced: GalleryListingSync[] = [];
+  const listing = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', ...body }));
+
+  const told = async () => {
+    await world.owner.agent.harnessSettleBackground();
+
+    return synced.splice(0);
+  };
+
+  // The one member a listing reaches on the control plane.
+  world.owner.agent.harnessDeclareEnv({
+    ControlPlaneDO: { idFromName: (name: string) => name, get: () => ({ gallerySync: async (_caller: ControlCaller, sync: GalleryListingSync) => { synced.push(sync); } }) },
+  });
+  const made = await sharePublic(world, 'public');
+  const card = { line: 'Triage the open issues', category: 'work' } satisfies { line: string; category: GalleryCategory };
+
+  expect((await listing({ share: made.share.id, listed: true, line: 'x'.repeat(141), category: 'work' }))?.status).toBe(400);
+  expect(await jsonBody(present(await listing({ share: made.share.id, listed: true, ...card }), 'the listing answer'), LiveShareRecordSchema))
+    .toMatchObject({ id: made.share.id, mode: 'own', gallery: card });
+  expect(await told()).toEqual([{
+    share: made.share.id, workspace: 'issues-owner', slate: 'issues', handle: made.share.handle, listed: true, url: present(made.url, 'the share URL'),
+    card: { title: 'Issue triage', ...card, ownerName: expect.any(String), picture: null },
+  }]);
+
+  // Listed, it is never put on the owner's access.
+  const refused = present(await sharedRequest(world.env, owner, post(LIVE_SHARE_MODE_PATH, {
+    workspace: 'issues-owner', share: made.share.id, mode: 'owner', revision: 'any', approved: [],
+  })), 'the mode answer');
+
+  expect({ status: refused.status, body: await refused.text() }).toMatchObject({ status: 400, body: expect.stringContaining('Take it off the Gallery first') });
+  expect((await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: made.share.id })))?.status).toBe(200);
+  expect(await told()).toEqual([{ share: made.share.id, workspace: 'issues-owner', slate: 'issues', handle: made.share.handle, listed: false }]);
 });
