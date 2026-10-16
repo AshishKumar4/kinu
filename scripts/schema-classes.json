@@ -18,6 +18,7 @@
     "device_status_watchers",
     "experience_library",
     "share_cards_sent",
+    "slate_ai_spend",
     "user_access_tokens",
     "user_auth_generation",
     "user_browser_sessions",

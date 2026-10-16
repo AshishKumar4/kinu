@@ -174,6 +174,7 @@ const USER_DO_METHODS = [
   'userMcp_add',
   'userMcp_callTool',
   'slateAi',
+  'slateAiSpend',
   'userMcp_cancelCall',
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',

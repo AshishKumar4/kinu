@@ -43,6 +43,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove'
   | 'userMcp_handleOAuthCallback'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
+  | 'slateAiSpend'
 >;
 
 export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {

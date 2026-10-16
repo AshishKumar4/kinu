@@ -56,6 +56,7 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
   | 'hasWorkspace' | 'listDevices' | 'listActiveWorkspaces'
   | 'getProfileCatalog' | 'putProfileCatalog'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'getAuthHeaders' | 'getCredentialEndpoint'
+  | 'slateAiSpend'
 >;
 
 export type CliAgentTarget = CloudWorkspaceBirth & ModelSettingsFanoutTarget & AccountLedgerTarget

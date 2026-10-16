@@ -50,7 +50,7 @@ import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationS
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi } from './slate-ai-account';
 import type { SlateAiRoute } from '@kinu.run/core/slates';
-import type { SlateSurfaceValue } from '@kinu.run/core';
+import { AccountSpendSchema, mergeAccountSpend, type AccountSpend, type SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
@@ -214,7 +214,15 @@ export class UserDO extends Agent<Env> {
 
     return accountSlateAi({
       env: this.env, accountId: this.name, catalog: (asker) => this.profile.getProfileCatalog(asker), credentialsRevision: (asker) => this.credentials.getCredentialsRevision(asker),
+      spent: (workspace, spend) => { this.sqlx('INSERT INTO slate_ai_spend (at, workspace, spend) VALUES (?, ?, ?)', Date.now(), workspace, JSON.stringify(spend)); },
     }, caller, request);
+  }
+
+  /** This account's model calls in other people's slates, per provider account: read with its workspaces' in its usage. */
+  async slateAiSpend(caller: UserCaller): Promise<AccountSpend[]> {
+    await this.requireTier(caller, 'account');
+
+    return mergeAccountSpend([this.sqlx<{ spend: string }>('SELECT spend FROM slate_ai_spend').map((row) => v.parse(AccountSpendSchema, JSON.parse(row.spend)))]);
   }
 
   getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {

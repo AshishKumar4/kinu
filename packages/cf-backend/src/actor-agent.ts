@@ -95,7 +95,7 @@ import {
   WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
-  buildModelCallEvent,
+  pricedModelCallEvent,
   type FactsStore,
   createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
   agentArtifactDirectory, agentHome, MAIN_AGENT,
@@ -1809,13 +1809,10 @@ export abstract class ActorAgent extends Agent<Env> {
   /**
    * Record one non-turn model call (judges, fast tier, evolution, compaction, AI bindings) as a
    * `model_call` row; filed under the current run or the workspace id. Row shape and pricing guard
-   * live in core's `buildModelCallEvent`.
+   * live in core's `pricedModelCallEvent`.
    */
   protected reportModelCall(report: ModelCallReport): void {
-    const event = buildModelCallEvent(report, {
-      effectiveSpec: this.effectiveModelSpec(),
-      pricing: this.modelCatalog.pricing(),
-    });
+    const event = pricedModelCallEvent(report, this.modelCatalog);
 
     settleLoggedSync('event.model_call_emit_failed', { doing: 'recording a model_call run event', otherwise: 'io' }, () => {
       this.eventRecorder.emit(currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID), event);
@@ -2554,6 +2551,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
       throw cause;
     }
+
+    // Priced as every call is: its model's rate, warmed when it is not the turn's own.
+    await this.modelCatalog.warm([profile.tier.model]);
 
     return slateAiAnswer(route, { spec: profile.tier.model, tier: profile.tier.id }, {
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.reportModelCall(report); }, operations: this.modelOperations,

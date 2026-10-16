@@ -1273,7 +1273,7 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  buildModelCallEvent,
+  buildModelCallEvent, pricedModelCallEvent,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -1851,7 +1851,7 @@ export type { RunListEntry, RunSummary } from './read-models/runs';
 export { headStepSources, spendLedger, workspaceSpend } from './read-models/workspace-spend';
 
 export {
-  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountUsage,
+  AccountSpendSchema, AccountUsageSchema, accountSpendOfCall, mergeAccountSpend, readAccountUsage,
   type AccountUsage,
 } from './read-models/account-usage';
 

@@ -7,6 +7,7 @@ import { WORKSPACE_RUN_ID } from '../src/events/model-call';
 import { buildModelCallEvent } from '../src/events/model-call-event';
 import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
+import { accountSpendOfCall, mergeAccountSpend } from '../src/read-models/account-usage';
 import { MissionGovernor } from '../src/mission-budget';
 import { usageTotal, UsageSchema, type Usage } from '../src/usage';
 import { createTestActors } from '@kinu.run/test-utils';
@@ -464,5 +465,29 @@ describe('workspaceSpend — by the account that paid', () => {
     expect(accounts[0]?.quota?.windows).toEqual([{ measure: 'requests', limit: 50, remaining: 12, resetsAt: 62_000 }]);
     expect(accounts[1]?.quota).toBeUndefined();
     expect(accounts.reduce((calls, row) => calls + row.calls, 0)).toBe(total.calls);
+  });
+});
+
+describe('one model call made away from a workspace counts as a workspace\'s ledger counts it', () => {
+  test('priced, unpriced and unmeasured: accountSpendOfCall equals the ledger the same call would make', () => {
+    const pricing = { input: 3, output: 15 };
+
+    const calls = [
+      // Priced as the account prices its own call: at the rate of the very spec it called.
+      buildModelCallEvent({ source: 'slate', usage: { input: 1_000, output: 100 }, spec: 'anthropic@work/m', account: { provider: 'anthropic', name: 'work' } }, { effectiveSpec: 'anthropic@work/m', pricing }),
+      buildModelCallEvent({ source: 'slate', usage: { input: 50 }, spec: 'openai@main/x', account: { provider: 'openai', name: 'main' } }, { effectiveSpec: null, pricing: null }),
+      buildModelCallEvent({ source: 'slate', usage: {}, spec: 'openai@main/x', account: { provider: 'openai', name: 'main' } }, { effectiveSpec: null, pricing }),
+    ];
+
+    for (const call of calls) {
+      const { events } = rig();
+
+      events.emit(WORKSPACE_RUN_ID, call);
+      expect(mergeAccountSpend([[accountSpendOfCall(call)]])).toEqual(events.spendByAccount());
+    }
+
+    expect(accountSpendOfCall(calls[0])).toMatchObject({ unpricedCalls: 0, usd: expect.any(Number) });
+    expect(accountSpendOfCall(calls[1])).toMatchObject({ unpricedCalls: 1 });
+    expect(accountSpendOfCall(calls[2])).toMatchObject({ callsWithoutUsage: 1, unpricedCalls: 0 });
   });
 });

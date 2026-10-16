@@ -386,4 +386,14 @@ export function initUserTables(sql: SqlExec): void {
       PRIMARY KEY (workspace, share_id, recipient_user_id)
     )
   `);
+
+  // This account's own model calls made in other people's slates (its own AI grant in their rooms): one row per call,
+  // its spend as one call's `AccountSpend`, counted with every workspace's in the account's usage.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS slate_ai_spend (
+      at        INTEGER NOT NULL,
+      workspace TEXT NOT NULL,
+      spend     TEXT NOT NULL
+    )
+  `);
 }
