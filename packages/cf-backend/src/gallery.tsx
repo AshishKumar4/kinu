@@ -78,7 +78,7 @@ import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
-import { installPartsFixture, PartFrameFrame, partFrameEntry, PartHostFrame } from "@/gallery-parts";
+import { installPartsFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame } from "@/gallery-parts";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
@@ -7684,6 +7684,7 @@ async function mount() {
     ["gallery-slate", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
     // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
     ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
+    ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
     ["part-frame", { node: <PartFrameFrame />, entries: [partFrameEntry(new URLSearchParams(location.search))] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],

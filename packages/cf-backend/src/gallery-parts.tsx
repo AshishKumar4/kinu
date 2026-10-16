@@ -16,6 +16,7 @@ import * as v from "valibot";
 import {
   APP_ROUTES, PartRunRequestSchema, slatePartFramePath, type PartRunAnswer, type SlateConsent,
 } from "@kinu.run/core";
+import { PartView } from "@/components/sharing/PartView";
 import { usePartHost } from "@/hooks/use-part-host";
 import PartFramePage from "@/pages/PartFramePage";
 
@@ -144,4 +145,31 @@ export function PartFrameFrame() {
 /** The part frame's address, as the slate's page writes it (`slatePartFramePath`). */
 export function partFrameEntry(search: URLSearchParams): string {
   return slatePartFramePath(WORKSPACE, SLATE, search.get("part") ?? "standup", []) + (search.has("scheme") ? `&scheme=${search.get("scheme") ?? ""}` : "");
+}
+
+/** Every state a personal part shows its viewer, side by side, as the slate's page frames each (`part-states`). */
+const STATES: readonly { name: string; answer: PartRunAnswer }[] = [
+  { name: "Asks to use a connection", answer: { kind: "needs-consent", ask: GITHUB } },
+  { name: "Shown, with its own controls", answer: { kind: "shown", revision: REVISION, html: STANDUP.html, actions: [{ id: "refresh", label: "Refresh" }], show: STANDUP.show } },
+  { name: "An effect waits for approval", answer: { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, tool: "deploy", root: VERCEL.root, payload: { project: "site", target: "production" } } } },
+  { name: "Signed out", answer: { kind: "stub", reason: "signed-out", message: "Sign in to see your own part of Team board." } },
+  { name: "Not shared with this person", answer: { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." } },
+  { name: "Its run failed", answer: { kind: "failed", message: "GitHub didn't answer in time. Your token is fine; try again." } },
+];
+
+export function PartStatesFrame() {
+  const controls = { act: () => undefined, decide: () => undefined, signIn: () => undefined, retry: () => undefined };
+
+  return (
+    <div className="min-h-dvh p-bg p-6">
+      <div className="mx-auto grid max-w-5xl gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
+        {STATES.map((state) => (
+          <section key={state.name} data-part-state={state.answer.kind} className="flex flex-col overflow-hidden rounded-xl border p-border p-surface">
+            <h2 className="border-b p-border px-3 py-2 p-meta font-medium p-text-2">{state.name}</h2>
+            <div className="flex h-56 flex-col p-3 p-text"><PartView answer={state.answer} slate={TITLE} controls={controls} /></div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
 }
