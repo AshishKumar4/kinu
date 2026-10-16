@@ -8,8 +8,8 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
-  type AgentRuntime, type GalleryCategory, type JsonValue, type SlateAnswer,
+  APP_ROUTES, GallerySlateSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  type AgentRuntime, type GalleryCategory, type GallerySlate, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, until, workspaceFiles } from './helpers/actor-harness';
@@ -19,6 +19,7 @@ import { ROOT_SLATE_CALLER, type GalleryListingSync } from '@kinu.run/core/slate
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
 import { accountRoutes } from '../src/user/account-routes';
+import { galleryRoutes } from '../src/gallery/routes';
 import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
@@ -699,6 +700,26 @@ test("a live share its owner lists tells the Gallery its card, stays off the own
     card: { title: 'Issue triage', ...card, ownerName: expect.any(String), picture: null },
   }]);
 
+  // Its Gallery page names, from the share its index lists, the connections a visitor's own parts will ask them for.
+  const page = async () => {
+    const listed = {
+      workspace: 'issues-owner', slate: 'issues', share: made.share.id, title: 'Issue triage', ...card, owner: { name: 'Owner' },
+      stars: 0, starred: false, listedAt: 1, featured: false, url: present(made.url, 'the share URL'),
+    };
+
+    const ControlPlaneDO = { idFromName: (name: string) => name, get: () => ({ gallerySlate: async (): Promise<GallerySlate | null> => ({ listing: listed }) }) };
+    const partialEnv: Partial<Env> = {};
+
+    Object.assign(partialEnv, { ...world.env, ControlPlaneDO });
+    // SAFETY: the Gallery's page reaches the control plane's gallerySlate alone; the rest is the world's own env.
+    const env = partialEnv as Env;
+    const read = present(await serveFamily(galleryRoutes)(new Request('https://app.test/api/gallery/issues-owner/issues'), env), 'the Gallery page');
+
+    return (await jsonBody(read, GallerySlateSchema)).needs;
+  };
+
+  expect(await page()).toEqual([{ kind: 'github', title: 'github' }]);
+
   // Listed, it is never put on the owner's access.
   const refused = present(await sharedRequest(world.env, owner, post(LIVE_SHARE_MODE_PATH, {
     workspace: 'issues-owner', share: made.share.id, mode: 'owner', revision: 'any', approved: [],
@@ -707,4 +728,6 @@ test("a live share its owner lists tells the Gallery its card, stays off the own
   expect({ status: refused.status, body: await refused.text() }).toMatchObject({ status: 400, body: expect.stringContaining('Take it off the Gallery first') });
   expect((await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: made.share.id })))?.status).toBe(200);
   expect(await told()).toEqual([{ share: made.share.id, workspace: 'issues-owner', slate: 'issues', handle: made.share.handle, listed: false }]);
+  // Off the Gallery, its share says nothing of what it reaches to a page the index still held.
+  expect(await page()).toBeUndefined();
 });

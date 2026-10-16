@@ -5,6 +5,7 @@
  * read from the share when a slate's own page is opened.
  */
 import * as v from 'valibot';
+import { RoomServiceSchema } from './room-api';
 
 export const GALLERY_CATEGORIES = ['work', 'money', 'home', 'developer', 'fun'] as const;
 
@@ -57,6 +58,9 @@ export function galleryPath(query: { q: string; sort: GallerySort; category: Gal
 /** A listed slate's own page, as the index holds it. */
 export const GallerySlateSchema = v.object({
   listing: GalleryListingSchema,
+  /** The connections a visitor's own parts will ask them for, read from its share when the page is opened: a listed
+   *  share is on each visitor's own access, so these are theirs, never its owner's. Absent when it could not be read. */
+  needs: v.optional(v.array(RoomServiceSchema)),
   forks: v.optional(v.number()),
   /** People who used it this week. */
   people: v.optional(v.number()),

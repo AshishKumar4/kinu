@@ -304,6 +304,8 @@ export {
 
 export { ShareModeSchema, type ShareMode } from './slates/share-modes';
 
+export { RoomServiceSchema } from './slates/room-api';
+
 export type {
   RoomPerson, RoomRole, RoomAccess, RoomAudience, RoomService, RoomTool, RoomSource, RoomReach, ForkPreview,
 } from './slates/room-api';

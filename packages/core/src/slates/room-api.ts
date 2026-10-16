@@ -39,7 +39,7 @@ export type RoomAudience = v.InferOutput<typeof RoomAudienceSchema>;
 // ── What a grant reaches ────────────────────────────────────────────────────────────────────────────────────────
 
 /** A connection as people know it: GitHub, an MCP server by its title, the workspace's own model. */
-const RoomServiceSchema = v.object({
+export const RoomServiceSchema = v.object({
   title: v.string(),
   kind: v.picklist(['github', 'mcp', 'ai', 'workspace'] as const),
 });

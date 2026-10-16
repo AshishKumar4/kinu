@@ -5,7 +5,7 @@ import { objectNamed } from '@kinu.run/core';
 import { type SlateCaller } from '@kinu.run/core/slates';
 import type {
   BlueprintBundle, BlueprintFork, JsonValue, LiveShareRecord, OperationCaller, OperationListing, OperationResult, ShareViewerClaim, SlateAnswer,
-  SlateCallRequest, SlateCallResult, SlateOperation, SlateShareRecord, SlateSurfaceResult,
+  RoomService, SlateCallRequest, SlateCallResult, SlateOperation, SlateShareRecord, SlateSurfaceResult,
 } from '@kinu.run/core';
 import type { BlueprintReading, PartRunAnswer, PartRunRequest, PartShowRequest, ShareUser } from '@kinu.run/core/slates';
 import type { PartViewer } from './slates/part-runs';
@@ -44,6 +44,7 @@ export interface WorkspaceOwnerRpc {
   // The claim is built at the edge, never trusted.
   routeSlateShare(handle: string, claim: ShareViewerClaim, request: Request, pathname: string): Promise<Response>;
   readLiveShare(share: string, reader: string): Promise<SlateAnswer<LiveShareReading>>;
+  galleryNeeds(share: string): Promise<SlateAnswer<RoomService[]>>;
   shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>>;
   // Fork flag and the caller's admission are checked in the owner's object, never trusted from the route.
   liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>>;

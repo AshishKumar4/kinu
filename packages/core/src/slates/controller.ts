@@ -21,7 +21,8 @@ import { slateAuthority } from './authority';
 import { WorkspaceBlueprints, type BlueprintReading } from './blueprints';
 import type { SlateBuilds } from './builds';
 import { ROOT_SLATE_CALLER, type SlateCaller } from './caller';
-import { slateCapabilityGraph, type SlateSurfaceCatalog } from './capability-graph';
+import { slateCapabilityGraph, visitorNeeds, type SlateSurfaceCatalog } from './capability-graph';
+import type { RoomService } from './room-api';
 import { WorkspaceSlateContentStore } from './content';
 import type { DurableAppIdentity, DurableApps } from './durable-app';
 import { EphemeralSlates } from './ephemeral';
@@ -513,6 +514,18 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       this.ports.listingChanged?.(listed);
 
       return listed;
+    })));
+  }
+
+  /** What a visitor's own parts will ask them for, of a share listed in the Gallery: read from its slate's reach now.
+   *  Any other share is missing here, as the Gallery's public page asks. */
+  galleryNeeds(share: string): Promise<SlateAnswer<RoomService[]>> {
+    return settle(answer(`reading what share ${share} needs`, Effect.gen({ self: this }, function* () {
+      const held = this.live.get(share);
+
+      if (held === undefined || held.gallery === null) return yield* new KinuError('missing', 'No such listing');
+
+      return visitorNeeds(yield* Effect.promise(async () => this.graph(held.slate)));
     })));
   }
 
