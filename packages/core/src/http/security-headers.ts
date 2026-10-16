@@ -42,12 +42,21 @@ export function publicHtmlHeaders() {
 }
 
 
-/** `previewOrigin` (`https://*.<PREVIEW_HOST_SUFFIX>`) is the only framable host; null falls back to `'self'`. */
-function appDocumentCsp(url: URL, previewOrigin: string | null): string {
+/**
+ * A personal part's frame, `/s/:workspace/:slate/parts/:part` (APP_ROUTES.liveSlatePart): the one app page a slate's own
+ * page frames, from its preview host (docs/SLATE-SHARING-NIMBUS.md §3).
+ */
+const PART_FRAME = /^\/s\/[^/]+\/[^/]+\/parts\/[^/]+$/u;
+
+/**
+ * `previewOrigin` (`https://*.<PREVIEW_HOST_SUFFIX>`) is the only framable host; null falls back to `'self'`. `framedBy`
+ * replaces `frame-ancestors 'none'` for the one page a preview host frames.
+ */
+function appDocumentCsp(url: URL, previewOrigin: string | null, framedBy: string | null): string {
   const frameSrc = previewOrigin ? `'self' ${previewOrigin}` : "'self'";
 
   return [
-    ...BASE_CSP,
+    ...BASE_CSP.map((directive) => (framedBy !== null && directive === "frame-ancestors 'none'" ? `frame-ancestors ${framedBy}` : directive)),
     `connect-src 'self' wss://${url.host}`,
     "img-src 'self' data: blob: https:",
     // `data:`: Vite inlines small KaTeX fonts as data URLs.
@@ -83,12 +92,16 @@ export function withAppSecurityHeaders(
   const headers = new Headers(response.headers);
 
   const desktopClient = url.pathname.startsWith(DESKTOP_CLIENT_ROOT);
+  // X-Frame-Options names no host, so a page preview hosts may frame carries none; its CSP names them.
+  const partFramedBy = previewOrigin !== null && PART_FRAME.test(url.pathname) ? previewOrigin : null;
 
   for (const [key, value] of Object.entries(BASE_HEADERS)) headers.set(key, value);
   // How long the shell is kept is the shell's (`cachePolicy`, app-shell.ts).
 
   if (desktopClient) headers.set('x-frame-options', 'SAMEORIGIN');
-  headers.set('content-security-policy', desktopClient ? desktopClientCsp(url) : appDocumentCsp(url, previewOrigin));
+
+  if (partFramedBy !== null) headers.delete('x-frame-options');
+  headers.set('content-security-policy', desktopClient ? desktopClientCsp(url) : appDocumentCsp(url, previewOrigin, partFramedBy));
 
   return new Response(response.body, {
     status: response.status,
