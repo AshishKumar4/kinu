@@ -3,7 +3,7 @@
 // A collaborator's call is kept as one call's tally and counted with their workspaces (unit-account-usage-routes).
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { accountSpendOfCall, initUserTables, mergeAccountSpend, ModelCatalogSession, pricedModelCallEvent, type ModelInfo, type ModelPricing } from '@kinu.run/core';
+import { accountSpendOfCall, initUserTables, ModelCatalogSession, pricedModelCallEvent, type ModelInfo, type ModelPricing } from '@kinu.run/core';
 import { addSlateAiSpend, slateAiSpendOf } from '../src/user/slate-ai-account';
 import { durableSqlStorage } from './helpers/programmatic-host';
 
@@ -59,7 +59,11 @@ describe('a collaborator\'s room AI spend is a tally per provider account, as a 
     for (const call of calls) addSlateAiSpend(sql, call);
 
     expect(database.query('SELECT COUNT(*) AS n FROM slate_ai_spend').get()).toEqual({ n: 2 });
-    expect(mergeAccountSpend([slateAiSpendOf(sql)])).toEqual(mergeAccountSpend(calls.map((call) => [call])));
+    // Work's three calls in one row: one priced (1,000 in at $3/M, 100 out at $15/M), one unpriced, one that said nothing.
+    expect(slateAiSpendOf(sql).sort((a, b) => b.calls - a.calls)).toEqual([
+      { provider: 'anthropic', account: 'work', calls: 3, callsWithoutUsage: 1, unpricedCalls: 1, usage: { input: 1_500, output: 100, cacheRead: 40 }, usd: 0.0045 },
+      { provider: null, account: null, calls: 1, callsWithoutUsage: 0, unpricedCalls: 1, usage: { input: 7, neurons: 0.5 } },
+    ]);
   });
 });
 
