@@ -71,6 +71,7 @@ import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { controlPlaneStub, hasControlPlane } from './control-plane/stub';
+import { serialQueue } from '@kinu.run/agent-utils';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
 import { PREVIEW_SELF } from "./viewer-pass";
@@ -5938,27 +5939,35 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** The Gallery told what one live share's listing is now: its card, read fresh, while listed; else that it is off. */
-  private async syncListing(share: LiveShareRecord): Promise<void> {
-    if (!hasControlPlane(this.env)) return;
-    const shared = { share: share.id, workspace: this.name, slate: share.slate, handle: share.handle };
-    const listing = share.gallery;
+  /** The Gallery is told one share at a time, in order: a refill read before an unlist or a revoke is sent before it. */
+  private readonly gallerySends = serialQueue();
 
-    if (listing === null) {
-      await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), { ...shared, listed: false });
+  /**
+   * The Gallery told what one live share's listing is now, read from its row when it is sent, not when it was asked: its
+   * card, read fresh, while listed; else that it is off. A send queued before the owner's unlist or revoke cannot undo it.
+   */
+  private syncListing(asked: LiveShareRecord): Promise<void> {
+    return this.gallerySends(async () => {
+      if (!hasControlPlane(this.env)) return;
+      const share = (await this.slates()).controller.live.get(asked.id) ?? asked;
+      const shared = { share: share.id, workspace: this.name, slate: share.slate, handle: share.handle };
+      const listing = share.gallery;
+      const url = listing === null ? null : await slateShareUrl(this.env, this.name, share.handle);
 
-      return;
-    }
+      // A deployment that gives shares no address has nothing to list.
+      if (listing === null || url === null) {
+        await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), { ...shared, listed: false });
 
-    const url = await slateShareUrl(this.env, this.name, share.handle);
+        return;
+      }
 
-    // A deployment that gives shares no address has nothing to list.
-    if (url === null) return;
-    const read = await (await this.slates()).controller.readLiveShareRecord(share.id);
-    const title = read.ok ? read.value.title : share.slate;
+      const read = await (await this.slates()).controller.readLiveShareRecord(share.id);
+      const title = read.ok ? read.value.title : share.slate;
 
-    await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), {
-      ...shared, listed: true, url,
-      card: { title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: this.pictures.digests().get(share.slate) ?? null },
+      await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), {
+        ...shared, listed: true, url,
+        card: { title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: this.pictures.digests().get(share.slate) ?? null },
+      });
     });
   }
 

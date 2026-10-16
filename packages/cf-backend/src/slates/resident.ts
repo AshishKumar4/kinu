@@ -246,7 +246,10 @@ export function slateRunnerSource(
     '    web[member] = async (...args) => {',
     '      const invocation = invocations.getStore();',
     '      if (invocation === undefined) throw new Error(`workspace.web.${member} is called outside a slate method; there is no invocation to run it under`);',
-    '      const result = await stub.call(["web", member], [], invocation, true);',
+    // The host authorizes the call as made, so an owner who approves it approves this one: its session, or its tool and
+    // input. A page is no value the host can hold, and reading a page's tools acts on nothing.
+    '      const asked = member === "connectBrowser" ? [String(args[0])] : member === "callPageTool" ? [String(args[1]), args[2] ?? null] : [];',
+    '      const result = await stub.call(["web", member], asked, invocation, true);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '      return local(...args);',
     '    };',

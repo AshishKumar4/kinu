@@ -1,125 +1,148 @@
 // An `owner` share's server acts with its owner's access, so each call of it that acts runs only on the owner's
 // approval of that exact call, taken once (docs/SLATE-SHARING-NIMBUS.md §2). An observing call needs none, an `own`
-// share asks nothing of the owner, and the owner's own call is theirs to make.
+// share asks nothing of the owner, and the owner's own call is theirs to make. The owner's queue is the workspace's own
+// deferred approvals, as the orchestrator hands it over.
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { Effect } from 'effect';
+import { createTestActors } from '@kinu.run/test-utils';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
-import { SlateShareViewers, type OwnerEffects } from '../src/slates/share-viewers';
-import type { SlateEffect } from '../src/safety/approval-kind';
-import type { ApprovalSpend } from '../src/safety/approval-gate';
+import { SlateShareViewers } from '../src/slates/share-viewers';
+import { approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable } from '../src/index';
 import type { ShareGrant } from '../src/slates/sharing';
-import { makeExecRaw, makeSqlExec } from './helpers';
+import type { JsonValue } from '../src/utils/json';
+import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 
 const grant: ShareGrant = {
-  slates: ['board'],
+  slates: ['board', 'digest'],
   members: [
     { slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe' },
     { slate: 'board', namespace: 'workspace', member: 'writeFile', impact: 'mutate' },
     { slate: 'board', namespace: 'web', member: 'connectBrowser', impact: 'execute' },
+    { slate: 'digest', namespace: 'workspace', member: 'readFile', impact: 'observe' },
   ],
 };
 
-/** The owner's queue as the viewers meet it: an ask per exact call, approved by the test, taken once. */
-function ownerQueue() {
-  const asked = new Map<string, { effect: SlateEffect; approved: boolean }>();
-  const settled: string[] = [];
-  let spends = 0;
-
-  const queue: OwnerEffects = {
-    ask: (id, effect) => {
-      const held = asked.get(id);
-
-      if (held?.approved === true) {
-        asked.delete(id);
-        spends += 1;
-
-        return { outcome: 'run', spend: { approvalId: id, spend: spends } satisfies ApprovalSpend };
-      }
-
-      if (held === undefined) asked.set(id, { effect, approved: false });
-
-      return { outcome: 'asked', action: { id, actor: 'main', command: '', executor: '', context: {}, reason: '', status: 'queued', requestedAt: 0, decidedAt: null } };
-    },
-    settle: async (spend, outcome) => {
-      settled.push(`${spend.approvalId}:${outcome}`);
-
-      return true;
-    },
-  };
-
-  return { queue, asked, settled, approveAll: () => { for (const held of asked.values()) held.approved = true; } };
-}
-
-function world(mode: 'own' | 'owner', revision = 'rev-1') {
+/** `revisions` is each slate's revision now; the share approved `board`'s at `rev-1`. */
+function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>> = { board: 'rev-1', digest: 'rev-9' }) {
   const db = new Database(':memory:');
+  const execRaw = makeExecRaw(db);
 
-  initSlateLiveShareTables(makeExecRaw(db));
+  initSlateLiveShareTables(execRaw);
+  initDeferredApprovalsTable(execRaw);
   const live = new SlateLiveShareStore(makeSqlExec(db));
+  const sql = makeSql(db);
+
+  const queue = new DeferredApprovalQueue({
+    store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main), writes: null, remember: () => undefined, wake: () => Effect.void,
+  });
 
   live.add({ id: 's1', slate: 'board', visibility: 'public', handle: '0123456789', grant });
 
   if (mode === 'owner') live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, grant);
-  const owner = ownerQueue();
-  const viewers = new SlateShareViewers({ live, shareEntry: () => null, ownerUserId: () => 'sam', revision: () => revision, ownerEffects: owner.queue });
-  const ran: string[] = [];
 
-  const call = (member: string, subject = 'user:ana', authorize?: true) => viewers.call({
-    share: 's1', id: 'board', request: { path: member.split('.'), args: [{ path: 'notes.md', text: 'hello' }], invocation: null, ...(authorize && { authorize }) }, chain: [],
-    issued: { id: 'inv', chain: [], viewer: { share: 's1', subject, request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
-    run: async () => {
-      ran.push(`${subject}:${member}`);
-
-      return { ok: true, value: { done: true } };
-    },
+  const viewers = new SlateShareViewers({
+    live, shareEntry: () => null, ownerUserId: () => 'sam', revision: (slate) => revisions[slate] ?? null,
+    ownerEffects: { ask: (id, effect) => queue.slateEffect(id, effect), settle: async (spend, outcome) => queue.settle(spend, outcome) },
   });
 
-  return { owner, call, ran };
+  const ran: string[] = [];
+
+  const call = (member: string, options: { subject?: string; authorize?: true; slate?: string; args?: JsonValue[]; fails?: true } = {}) => {
+    const subject = options.subject ?? 'user:ana';
+
+    return viewers.call({
+      share: 's1', id: options.slate ?? 'board', chain: [],
+      request: { path: member.split('.'), args: options.args ?? [{ path: 'notes.md', text: 'hello' }], invocation: null, ...(options.authorize && { authorize: options.authorize }) },
+      issued: { id: 'inv', chain: [], viewer: { share: 's1', subject, request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
+      run: async () => {
+        ran.push(`${subject}:${member}`);
+
+        if (options.fails) throw new Error('the call failed after it was handed on');
+
+        return { ok: true, value: { done: true } };
+      },
+    });
+  };
+
+  // The owner's decision stack: what this share asked of them, as their Work tab lists it.
+  const asked = () => queue.list().map((row) => approvalKindOf(row));
+  const approveAll = async () => queue.decide(queue.list().map((row) => row.id), 'approved');
+
+  return { call, ran, asked, approveAll };
 }
 
 test('an owner share\'s acting call waits for the owner, then runs once on their approval', async () => {
-  const { owner, call, ran } = world('owner');
+  const { call, ran, asked, approveAll } = world('owner');
 
   await expect(call('writeFile')).rejects.toThrow('waits for the owner to approve it: writeFile on workspace');
-  expect([...owner.asked.values()].map(({ effect }) => [effect.tool, effect.viewer, effect.revision, effect.payload]))
+  expect(asked().map((kind) => (kind.kind === 'slate-effect' ? [kind.effect.tool, kind.effect.viewer, kind.effect.revision, kind.effect.payload] : kind.kind)))
     .toEqual([['writeFile', 'user:ana', 'rev-1', { path: 'notes.md', text: 'hello' }]]);
   expect(ran).toEqual([]);
 
-  owner.approveAll();
+  await approveAll();
   expect(await call('writeFile')).toMatchObject({ ok: true });
+  // Spent: the same call made again is asked of the owner again.
   await expect(call('writeFile')).rejects.toThrow('waits for the owner');
-  expect({ ran, settled: owner.settled.map((entry) => entry.split(':')[1]) }).toEqual({ ran: ['user:ana:writeFile'], settled: ['spent'] });
+  expect({ ran, asked: asked().length }).toEqual({ ran: ['user:ana:writeFile'], asked: 1 });
+});
+
+test('an approval is spent once its call is handed on, even when the call fails after', async () => {
+  const { call, ran, asked, approveAll } = world('owner');
+
+  await expect(call('writeFile')).rejects.toThrow('waits for the owner');
+  await approveAll();
+  await expect(call('writeFile', { fails: true })).rejects.toThrow('the call failed after it was handed on');
+  await expect(call('writeFile')).rejects.toThrow('waits for the owner');
+  expect({ ran, asked: asked().length }).toEqual({ ran: ['user:ana:writeFile'], asked: 1 });
+});
+
+test('an approval admits the exact call it was asked for, and no other payload', async () => {
+  const { call, ran, approveAll } = world('owner');
+
+  await expect(call('writeFile')).rejects.toThrow('waits for the owner');
+  await approveAll();
+  await expect(call('writeFile', { args: [{ path: 'notes.md', text: 'something else' }] })).rejects.toThrow('waits for the owner');
+  expect(ran).toEqual([]);
 });
 
 test('an observing call, an own share and the owner\'s own call ask the owner nothing', async () => {
   const owned = world('owner');
 
   expect(await owned.call('readFile')).toMatchObject({ ok: true });
-  expect(await owned.call('writeFile', 'user:sam')).toMatchObject({ ok: true });
-  expect(owned.owner.asked.size).toBe(0);
+  expect(await owned.call('writeFile', { subject: 'user:sam' })).toMatchObject({ ok: true });
+  expect(owned.asked()).toEqual([]);
 
   const own = world('own');
 
   expect(await own.call('writeFile')).toMatchObject({ ok: true });
-  expect(own.owner.asked.size).toBe(0);
+  expect(own.asked()).toEqual([]);
 });
 
 test('an owner share whose slate moved past the approved revision lends nothing, observing or not, until its owner approves again', async () => {
-  const { owner, call, ran } = world('owner', 'rev-2');
+  const { call, ran, asked } = world('owner', { board: 'rev-2', digest: 'rev-9' });
 
   await expect(call('readFile')).rejects.toThrow('changed since its owner approved what it reaches');
   await expect(call('writeFile')).rejects.toThrow('changed since its owner approved what it reaches');
-  expect(await call('writeFile', 'user:sam')).toMatchObject({ ok: true });
-  expect({ ran, asked: owner.asked.size }).toEqual({ ran: ['user:sam:writeFile'], asked: 0 });
+  expect(await call('writeFile', { subject: 'user:sam' })).toMatchObject({ ok: true });
+  expect({ ran, asked: asked().length }).toEqual({ ran: ['user:sam:writeFile'], asked: 0 });
+});
+
+test('a call from a slate the share hops to is held to the shared slate\'s approved revision, not its own', async () => {
+  const { call } = world('owner');
+
+  expect(await call('readFile', { slate: 'digest' })).toMatchObject({ ok: true });
 });
 
 test("a browser member the class runs waits on the owner when the host is asked to authorize it, and its refusal report asks nothing", async () => {
-  const { owner, call, ran } = world('owner');
+  const { call, ran, asked, approveAll } = world('owner');
 
-  await expect(call('web.connectBrowser', 'user:ana', true)).rejects.toThrow('waits for the owner to approve it: connectBrowser on web');
-  owner.approveAll();
-  expect(await call('web.connectBrowser', 'user:ana', true)).toMatchObject({ ok: true });
+  await expect(call('web.connectBrowser', { authorize: true, args: ['kitesurf'] })).rejects.toThrow('waits for the owner to approve it: connectBrowser on web');
+  expect(asked().map((kind) => (kind.kind === 'slate-effect' ? kind.effect.payload : null))).toEqual(['kitesurf']);
+  await approveAll();
+  expect(await call('web.connectBrowser', { authorize: true, args: ['kitesurf'] })).toMatchObject({ ok: true });
 
   // What the class hands its host member when its own run failed: no effect, so nothing is asked.
-  expect(await call('web.connectBrowser')).toMatchObject({ ok: true });
-  expect({ ran, asked: owner.asked.size, settled: owner.settled.length }).toEqual({ ran: ['user:ana:web.connectBrowser', 'user:ana:web.connectBrowser'], asked: 0, settled: 1 });
+  expect(await call('web.connectBrowser', { args: [{ refused: 'no socket', reason: 'unavailable' }] })).toMatchObject({ ok: true });
+  expect({ ran, asked: asked().length }).toEqual({ ran: ['user:ana:web.connectBrowser', 'user:ana:web.connectBrowser'], asked: 0 });
 });

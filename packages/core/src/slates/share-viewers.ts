@@ -148,8 +148,9 @@ export class SlateShareViewers {
 
         const ran = yield* Effect.exit(Effect.promise(async () => input.run(call.route, nested)));
 
-        // The approval is used once the call ran at all; one that never started gives it back.
-        if (approval !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(approval, ran._tag === 'Success' ? 'spent' : 'did-not-run'));
+        // The approval is used once the call was handed on: a failure after that may have acted, so it never runs twice
+        // on one word of the owner's. The same call made again asks again.
+        if (approval !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(approval, 'spent'));
         const result = viewerAnswer(yield* ran);
         row = { ...row, ok: result.ok };
 
@@ -179,7 +180,8 @@ export class SlateShareViewers {
     const owner = this.deps.ownerUserId?.();
 
     if (share.mode !== 'owner' || (owner != null && input.viewer === `user:${owner}`)) return Effect.succeed(null);
-    const revision = this.deps.revision(input.slate);
+    // The owner approved the shared slate's reach at its revision, whichever slate it hops to makes the call.
+    const revision = this.deps.revision(share.slate);
 
     if (revision === null || revision !== share.grantRevision) {
       return Effect.fail(new KinuError('denied', 'This slate changed since its owner approved what it reaches: it acts on their access again once they approve it'));

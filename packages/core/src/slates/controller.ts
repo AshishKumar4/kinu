@@ -418,7 +418,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return Effect.gen({ self: this }, function* () {
       if (caller.path.length > 0) return yield* new KinuError('denied', 'Only the workspace root publishes, shares or revokes slates');
       const blueprints = yield* this.blueprints();
-      const copy = operation.op === 'share' && operation.start === 'empty' ? yield* this.sharedCopy(caller, operation.id, operation.approved.length) : null;
+
+      if (operation.op === 'share' && operation.start === 'empty') return yield* this.shareCopy(caller, operation);
 
       return yield* Effect.promise(async (): Promise<SlateCallResult> => {
         switch (operation.op) {
@@ -426,18 +427,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
           case 'publish': return await this.changedShares(answered({ value: await blueprints.publish(operation.id, operation.version, operation.include) }));
           case 'unshare': return await this.changedShares(answered({ value: await this.unshare(operation.share, blueprints) }));
           case 'shares': return answered({ value: blueprints.list() });
-          case 'share': {
-            const id = copy ?? operation.id;
-
-            const created = await shareLiveSlate({
-              shares: this.live, graph: await this.graph(id), visibility: operation.visibility, approved: operation.approved,
-              fork: operation.fork, url: (handle) => this.ports.shareUrl(handle),
-            });
-
-            await this.ports.shareChanged?.(id);
-
-            return await this.changedShares(answered({ value: created }));
-          }
+          case 'share': return await this.shareSlateLive(operation, operation.id);
 
           case 'liveShares': return answered({ value: this.live.list().map((row) => ({ ...row, paused: this.viewers.paused(row), stale: this.stale(row) })) });
           case 'viewerRequests': return answered({ value: this.live.requests(operation.share) });
@@ -446,28 +436,48 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     });
   }
 
+  /** `slate` shared live as the op asks, in `own` mode. */
+  private async shareSlateLive(operation: Extract<SlateOperation, { op: 'share' }>, slate: string): Promise<SlateCallResult> {
+    const created = await shareLiveSlate({
+      shares: this.live, graph: await this.graph(slate), visibility: operation.visibility, approved: operation.approved,
+      fork: operation.fork, url: (handle) => this.ports.shareUrl(handle),
+    });
+
+    await this.ports.shareChanged?.(slate);
+
+    return await this.changedShares(answered({ value: created }));
+  }
+
   /**
    * H7's "Start the shared copy empty": the slate as it is now, committed and forked here (code only, so its state starts
-   * empty), its title saying it is a copy. A copy has run nothing, so it reaches nothing: no member is approved on it.
+   * empty), its title saying it is a copy, and shared. A copy has run nothing, so it reaches nothing: no member is
+   * approved on it. Its manifest is read before any copy is made, and a copy whose share then fails is removed again.
    */
-  private sharedCopy(caller: SlateCaller, id: string, approved: number): Effect.Effect<string, KinuError> {
+  private shareCopy(caller: SlateCaller, operation: Extract<SlateOperation, { op: 'share' }>): Effect.Effect<SlateCallResult, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      if (approved > 0) return yield* new KinuError('bad_input', 'A copy that starts empty has reached nothing yet, so nothing is approved on it');
+      if (operation.approved.length > 0) return yield* new KinuError('bad_input', 'A copy that starts empty has reached nothing yet, so nothing is approved on it');
+      const vfs = (yield* Effect.promise(async () => this.ports.session())).vfs.as(caller.cred);
+      const read = (dir: string) => v.parse(CopiedManifestSchema, JSON.parse(vfs.readFileString(`${dir}/package.json`)));
+      const manifest = yield* Effect.try({ try: () => read(slateDirectory(new SlateId(operation.id))), catch: () => new KinuError('bad_input', `Slate ${operation.id} has no package.json a copy can carry`) });
 
       const fork = yield* Effect.promise(async () => {
         const slates = await this.slates(caller.cred);
 
-        return slates.fork((await slates.commit(new SlateId(id))).id);
+        return slates.fork((await slates.commit(new SlateId(operation.id))).id);
       });
 
       const path = `${slateDirectory(fork.id)}/package.json`;
-      const vfs = (yield* Effect.promise(async () => this.ports.session())).vfs.as(caller.cred);
-      const manifest = v.parse(CopiedManifestSchema, JSON.parse(vfs.readFileString(path)));
+      const copy = fork.id.value;
 
-      vfs.writeFile(path, JSON.stringify({ ...manifest, slate: { ...manifest.slate, title: `${manifest.slate?.title ?? id} (shared copy)` } }, null, 2));
-      this.filesChanged([path]);
+      return yield* Effect.tryPromise({
+        try: async () => {
+          vfs.writeFile(path, JSON.stringify({ ...manifest, slate: { ...manifest.slate, title: `${manifest.slate?.title ?? operation.id} (shared copy)` } }, null, 2));
+          this.filesChanged([path]);
 
-      return fork.id.value;
+          return await this.shareSlateLive(operation, copy);
+        },
+        catch: (cause) => new KinuError('io', `Sharing a copy of ${operation.id} failed, so the copy was removed`, { cause }),
+      }).pipe(Effect.tapError(() => Effect.promise(async () => this.remove(caller, copy))));
     });
   }
 

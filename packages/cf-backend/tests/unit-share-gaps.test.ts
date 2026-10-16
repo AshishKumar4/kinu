@@ -748,6 +748,12 @@ test("a slate's first share can start empty: a copy made now, code only, named a
   expect((await share({ approved: [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }] }))?.status).toBe(400);
   expect(await slates()).toEqual(['issues']);
 
+  // A slate whose manifest no copy could carry is refused before any copy is made.
+  await files.mkdir('/slates/broken', { recursive: true });
+  await writeText(files, '/slates/broken/package.json', '{ not a manifest');
+  expect((await share({ slate: 'broken' }))?.status).toBe(400);
+  expect([...await files.readdir('/slates')].map((entry) => entry.name).sort()).toEqual(['broken', 'issues']);
+
   const made = await jsonBody(present(await share({}), 'the share answer'), LiveShareCreatedSchema);
   const copy = made.share.slate;
 

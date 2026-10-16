@@ -330,6 +330,10 @@ const ORCHESTRATOR_METHODS = [
   'readLiveShare',
   'shareLiveWith',
   'liveShareBundle',
+  // The owner's share sheet's mode and Gallery listing, and a listed share's needs for the Gallery's public page.
+  'setLiveShareMode',
+  'setLiveShareListing',
+  'galleryNeeds',
   'liveShareUrl',
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
