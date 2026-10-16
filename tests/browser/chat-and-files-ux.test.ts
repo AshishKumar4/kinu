@@ -4424,6 +4424,32 @@ describe('the composer while a turn runs and under a status row', () => {
 });
 
 describe('the Environment tab', () => {
+  // At the inspector's width the computer's tabs outrun the column: one opened past its edge must come into view.
+  test('a session opened past the column edge is brought into view', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=environment&inspector=340`, { waitUntil: 'networkidle0' });
+      await page.click('[data-env-card="computer"] button');
+      await page.waitForSelector('[data-session]');
+      const before = await page.$$eval('[data-session]', (tabs) => tabs.length);
+
+      await page.click('button[aria-label="New session"]');
+      await page.waitForFunction((had: number) => document.querySelectorAll('[data-session]').length > had
+        && document.querySelector('[data-session][aria-selected="true"]') === [...document.querySelectorAll('[data-session]')].at(-1), {}, before);
+
+      const placed = await page.$eval('[data-session][aria-selected="true"]', (tab) => {
+        const strip = tab.closest('[role="tablist"]')?.getBoundingClientRect();
+        const box = tab.getBoundingClientRect();
+
+        return { overflows: (tab.closest('[role="tablist"]')?.scrollWidth ?? 0) > (strip?.width ?? 0), inView: strip !== undefined && box.left >= strip.left - 1 && box.right <= strip.right + 1 };
+      });
+
+      expect(placed).toEqual({ overflows: true, inView: true });
+      await page.close();
+    });
+  });
+
   // Staging, 2026-10-08: at the inspector's default width every card ran past the panel's right edge.
   test('fits a panel as narrow as the inspector', async () => {
     await withGallery(async ({ newPage, origin }) => {

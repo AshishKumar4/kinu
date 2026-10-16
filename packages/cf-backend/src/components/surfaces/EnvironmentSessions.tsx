@@ -3,7 +3,7 @@
  * and the one place a session says where it is, what it serves and how its last command ended. One status language:
  * the dot a machine wears, on a session.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Effect } from "effect";
 import { DesktopIcon, FolderOpenIcon, GitBranchIcon, PlusIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
@@ -148,10 +148,15 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
   onClose: (id: string) => Effect.Effect<void>;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const hidden = useHiddenEdges(strip, `${current}:${String(sessions?.length ?? 0)}`);
 
   return (
     <div className="flex shrink-0 items-end gap-1 border-b p-border pr-2 pl-4">
-      <div role="tablist" aria-label={label} className="p-session-tabs">
+      {/* Scrolls sideways when the tabs outrun the column: a wheel turns it, and a fade marks the side with more. */}
+      <div ref={strip} role="tablist" aria-label={label} className="p-session-tabs"
+        data-hidden-start={hidden.start || undefined} data-hidden-end={hidden.end || undefined}
+        onWheel={(event) => { if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY; }}>
         {sessions === null && (
           <button type="button" role="tab" aria-selected={current === ONE_SHELL} className="p-session-tab" onClick={() => onChoose(ONE_SHELL)}>
             <Dot tone="ready" />{ONE_SHELL}
@@ -195,6 +200,49 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
       )}
     </div>
   );
+}
+
+/** Room kept at a scrolled edge for its fade, so a tab brought into view clears it. */
+const EDGE_FADE_PX = 40;
+
+/**
+ * Which ends of a sideways strip hide tabs, and the chosen tab brought into view each time `shown` changes: a tab
+ * chosen or opened past the column's edge (a new session lands last) is never left behind the fade.
+ */
+function useHiddenEdges(strip: RefObject<HTMLDivElement | null>, shown: string): { start: boolean; end: boolean } {
+  const [edges, setEdges] = useState({ start: false, end: false });
+
+  useLayoutEffect(() => {
+    const element = strip.current;
+    const chosen = element?.querySelector<HTMLElement>('[aria-selected="true"]');
+
+    if (element === null || chosen === null || chosen === undefined) return;
+    // Measured on screen: a tab sits in its own positioned slot, so its offsets are its slot's, not the strip's.
+    const left = chosen.getBoundingClientRect().left - element.getBoundingClientRect().left + element.scrollLeft;
+    const right = left + chosen.getBoundingClientRect().width;
+
+    if (left < element.scrollLeft + EDGE_FADE_PX) element.scrollLeft = Math.max(0, left - EDGE_FADE_PX);
+    else if (right > element.scrollLeft + element.clientWidth - EDGE_FADE_PX) element.scrollLeft = right - element.clientWidth + EDGE_FADE_PX;
+  }, [strip, shown]);
+
+  useEffect(() => {
+    const element = strip.current;
+
+    if (element === null) return undefined;
+    const read = () => setEdges({ start: element.scrollLeft > 1, end: element.scrollLeft + element.clientWidth < element.scrollWidth - 1 });
+    const observer = new ResizeObserver(read);
+
+    read();
+    observer.observe(element);
+    element.addEventListener("scroll", read, { passive: true });
+
+    return () => {
+      observer.disconnect();
+      element.removeEventListener("scroll", read);
+    };
+  }, [strip, shown]);
+
+  return edges;
 }
 
 /** The one place a session says where it is, the branch there, what it serves, and what it runs or last ran. */

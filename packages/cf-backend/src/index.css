@@ -2174,11 +2174,14 @@ body > .annotation-toolbar {
   align-items: stretch;
   gap: 2px;
   margin-bottom: -1px;
-  padding-right: 24px;
+  padding-right: 40px;
   overflow-x: auto;
   scrollbar-width: none;
-  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
 }
+/* A fade on each side that hides tabs, and only there. */
+.p-session-tabs[data-hidden-end] { mask-image: linear-gradient(to right, black calc(100% - 40px), transparent); }
+.p-session-tabs[data-hidden-start] { mask-image: linear-gradient(to right, transparent, black 40px); }
+.p-session-tabs[data-hidden-start][data-hidden-end] { mask-image: linear-gradient(to right, transparent, black 40px, black calc(100% - 40px), transparent); }
 .p-session-tab-slot { position: relative; display: inline-flex; flex-shrink: 0; }
 .p-session-tab {
   position: relative;

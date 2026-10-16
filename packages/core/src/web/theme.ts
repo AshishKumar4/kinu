@@ -27,7 +27,7 @@ export function accountTheme(stored: string | null): ThemeName {
   return themeNamed(stored) ?? DEFAULT_THEME;
 }
 
-type ColourToken =
+export type ColourToken =
   | '--c-recessed' | '--c-bg' | '--c-sidebar' | '--c-surface' | '--c-elevated' | '--c-fill' | '--c-overlay'
   | '--c-border' | '--c-border-strong' | '--c-input-border' | '--c-dash'
   | '--c-text' | '--c-text-2' | '--c-text-3' | '--c-text-4'
@@ -263,3 +263,46 @@ export const THEME_CSS = [
   `:root{${declarations(RADII)}}`,
   ...ORDERED.flatMap((theme) => (['dark', 'light'] as const).map((mode) => `${selectors(theme, mode)}{${declarations(THEME_TOKENS[theme][mode])}}`)),
 ].join('\n');
+
+/** The ANSI colours a terminal draws in: each of the 16 slots and the ground. */
+export interface TerminalPalette {
+  readonly background: string;
+  readonly foreground: string;
+  readonly cursor: string;
+  readonly black: string; readonly red: string; readonly green: string; readonly yellow: string;
+  readonly blue: string; readonly magenta: string; readonly cyan: string; readonly white: string;
+  readonly brightBlack: string; readonly brightRed: string; readonly brightGreen: string; readonly brightYellow: string;
+  readonly brightBlue: string; readonly brightMagenta: string; readonly brightCyan: string; readonly brightWhite: string;
+}
+
+/** Magenta and cyan, which no role names, pulled into the warm family. */
+const ANSI_UNTOKENED = {
+  dark: { magenta: '#c9a0c6', cyan: '#8fbdb8' },
+  light: { magenta: '#7a3f74', cyan: '#2f6660' },
+} as const satisfies Readonly<Record<Mode, { magenta: string; cyan: string }>>;
+
+/**
+ * A terminal's palette from a theme's tokens, every slot a program writes text in readable on its ground. The status
+ * slots take their role's token, and a bright slot its plain one, as bold draws in it: xterm's own bright colours
+ * (tango's #8ae234 green, 1.5:1 on the light ground) left a bold prompt nearly unreadable there (the owner,
+ * 2026-10-15). On a light ground black is the ink and white a grey, as GitHub's and Solarized's light terminals have
+ * them; on a dark one, black stays the recess a program paints backgrounds with.
+ */
+export function terminalPalette(mode: Mode, token: (name: ColourToken) => string): TerminalPalette {
+  const { magenta, cyan } = ANSI_UNTOKENED[mode];
+  const roles = { red: token('--c-danger'), green: token('--c-success'), yellow: token('--c-warning'), blue: token('--c-info'), magenta, cyan };
+  const light = mode === 'light';
+
+  return {
+    background: token('--c-bg'),
+    foreground: token('--c-text'),
+    cursor: token('--c-accent'),
+    ...roles,
+    brightRed: roles.red, brightGreen: roles.green, brightYellow: roles.yellow, brightBlue: roles.blue,
+    brightMagenta: magenta, brightCyan: cyan,
+    black: light ? token('--c-text') : token('--c-recessed'),
+    white: light ? token('--c-text-2') : token('--c-text'),
+    brightBlack: token('--c-text-3'),
+    brightWhite: light ? token('--c-text-3') : token('--c-text'),
+  };
+}
