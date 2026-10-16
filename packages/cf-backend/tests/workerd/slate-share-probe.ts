@@ -16,7 +16,7 @@ import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
-  agentCred, bindActorHandle, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
+  agentCred, approvalKindOf, bindActorHandle, DeferredApprovalQueue, DeferredApprovalStore, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
@@ -158,6 +158,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private _budget: MissionGovernor | undefined;
   private readonly sql: SqlExecutor;
   private lastCall: string | null = null;
+  private readonly deferrals: DeferredApprovalQueue;
   /** Each viewer's own account, as their parts reach it. */
   private readonly accounts = new FakeViewerAccounts();
   /** The run the last part call named, as its process's binding sent it. */
@@ -179,6 +180,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     initWorkspaceSchema({
       execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec, transactionSync: (write) => ctx.storage.transactionSync(write),
+    });
+    // The owner's one queue of parked actions, as the orchestrator's: an `owner` share's acting calls wait in it.
+    this.deferrals = new DeferredApprovalQueue({
+      store: new DeferredApprovalStore(sql, this.mainActor()), writes: null, remember: () => undefined, wake: () => Effect.void,
     });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
     initSlateBuildTable((ddl: string) => ctx.storage.sql.exec(ddl));
@@ -247,16 +252,24 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       ownerTitle: async () => ctx.id.name ?? ctx.id.toString(),
       ownerUserId: () => 'u-owner',
       partConnections: this.accounts,
+      ownerEffects: {
+        ask: (id, effect) => this.deferrals.slateEffect(id, effect),
+        settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
+        retire: (share) => { this.deferrals.retireSlateEffects(share); },
+      },
     });
+  }
+
+  private mainActor() {
+    return bindActorHandle(this.sql, {
+      actorId: 'main', workspaceId: this.ctx.id.name ?? this.ctx.id.toString(), parentActorId: null, name: 'main', storageKey: 'main',
+    }, () => Effect.void);
   }
 
   private governor(): MissionGovernor {
     this._budget ??= new MissionGovernor({
       storage: { sql: this.sql, execRaw: (ddl: string) => this.ctx.storage.sql.exec(ddl) },
-      actor: bindActorHandle(this.sql, {
-        actorId: 'main', workspaceId: this.ctx.id.name ?? this.ctx.id.toString(),
-        parentActorId: null, name: 'main', storageKey: 'main',
-      }, () => Effect.void),
+      actor: this.mainActor(),
     });
 
     return this._budget;
@@ -369,16 +382,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       op: 'share', id: 'driver', visibility: 'public', approved: approved.map((member) => ({ slate: 'driver', namespace: 'web', member })),
     }));
 
-    const share = this.host.controller.live.get(created.value.share.id);
-
     // The owner's approved reach, on "my access", at the revision the driver runs.
-    if (share !== undefined) {
-      this.host.controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: slateRevision(this.host.controller.builds, 'driver') ?? '' }, share.grant);
-      await this.host.shareChanged('driver');
-    }
+    await this.ownerMode(created.value.share.id, 'driver', approved.map((member) => ({ slate: 'driver', namespace: 'web', member })));
+    const visit = async () => (await this.host.routeShare(created.value.share.handle, claim, new Request(`https://share.invalid/?session=${encodeURIComponent(session)}`), '/')).text();
+    const asked = await visit();
 
-    const request = new Request(`https://share.invalid/?session=${encodeURIComponent(session)}`);
-    const answer = await (await this.host.routeShare(created.value.share.handle, claim, request, '/')).text();
+    // A connect acts with the owner's access, so it waits for them; on their word it runs, once.
+    const answer = await this.ownerDecides(true) > 0 ? await visit() : asked;
 
     return { answer, dialed: browserRunDials - before };
   }
@@ -434,17 +444,56 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     });
 
     const created = v.safeParse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ id: v.string() }) }) }), shared);
-    const share = created.success ? this.host.controller.live.get(created.output.value.share.id) : undefined;
 
-    if (mode === 'owner' && share !== undefined) {
-      this.host.controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: slateRevision(this.host.controller.builds, SLATE_ID) ?? '' }, share.grant);
-      await this.host.shareChanged(SLATE_ID);
-    }
+    if (mode === 'owner' && created.success) await this.ownerMode(created.output.value.share.id, SLATE_ID, approved.map((granted) => ({ slate: SLATE_ID, ...granted })));
 
     // What the owner's own use left running once the share stopped the board's app: a share's own calls start it again.
     this.ownersOwn = this.processes.getRunning().length;
 
     return shared;
+  }
+
+  /** Its owner turns `share` to "my access" over the reach the slate's graph answers now, as their share sheet does. */
+  private async ownerMode(share: string, slate: string, approved: readonly { slate: string; namespace: string; member: string }[]): Promise<void> {
+    const reach = v.parse(v.object({ ok: v.literal(true), value: v.object({ revision: v.string() }) }),
+      await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'graph', id: slate }));
+
+    const set = await this.setMode(share, reach.value.revision, approved);
+
+    if (!set.ok) throw new Error(`owner mode refused: ${set.error}`);
+  }
+
+  /** The owner's word on a share's mode, at the revision they reviewed the reach at. */
+  setMode(share: string, revision: string, approved: readonly { slate: string; namespace: string; member: string }[] = []) {
+    return this.host.controller.setLiveShareMode({ workspace: this.ctx.id.name ?? this.ctx.id.toString(), share, mode: 'owner', revision, approved: [...approved] });
+  }
+
+  /** What `owner` shares' calls asked of the owner and still wait on them, as their decision stack lists it. */
+  ownerQueue(): { tool: string; server: string; viewer: string; payload: JsonValue; revision: string }[] {
+    return this.deferrals.list().flatMap((action) => {
+      const kind = approvalKindOf(action);
+
+      return kind.kind === 'slate-effect' ? [{ tool: kind.effect.tool, server: kind.effect.server, viewer: kind.effect.viewer, payload: kind.effect.payload, revision: kind.effect.revision }] : [];
+    });
+  }
+
+  /** The owner answers everything their shares asked of them; how many they answered. */
+  async ownerDecides(approve: boolean): Promise<number> {
+    const asked = this.deferrals.list().filter((action) => approvalKindOf(action).kind === 'slate-effect').map((action) => action.id);
+
+    return asked.length === 0 ? 0 : (await this.deferrals.decide(asked, approve ? 'approved' : 'denied')).length;
+  }
+
+  /** The owner edits the board and it builds anew; its revision now. */
+  async editBoard(): Promise<string> {
+    const path = `/slates/${SLATE_ID}/server.ts`;
+    const files = this.vfs.as(CRED_KERNEL);
+
+    files.writeFile(path, `${files.readFileString(path)}\n// edited`);
+    this.host.controller.filesChanged([path]);
+    await this.host.ensure(ROOT_SLATE_CALLER, SLATE_ID);
+
+    return slateRevision(this.host.controller.builds, SLATE_ID) ?? '';
   }
 
   /** Publishes the board as a blueprint and imports it back as a fork, as a forker's workspace admits one. */

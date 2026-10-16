@@ -173,15 +173,51 @@ it("shared on each viewer's own access, the slate's server uses no one's connect
   expect(refused.mutate).toContain('can turn on My access');
 });
 
-it('a mutating member is granted by approval only', async () => {
+it("a mutating member is granted by approval only, and on its owner's access each call of it waits for the owner's word", async () => {
   const probe = subject('live-approved');
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
     await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
 
-  // The unapproved share above refuses the same call: the approval is the grant.
+  // The unapproved share above refuses the same call: the approval is the grant. Granted, it acts with the owner's
+  // access, so it waits on them, with what it would write; the read beside it runs.
+  expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: expect.stringContaining('waits for the owner to approve it: writeFile on workspace') });
+  expect(await probe.ownerQueue()).toEqual([{ tool: 'writeFile', server: 'workspace', viewer: 'source:vitest', payload: ['/x', 'y'], revision: expect.any(String) }]);
+
+  // On their word it runs, once: the same call made again asks again.
+  expect(await probe.ownerDecides(true)).toBe(1);
   expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: 'mutate answered' });
+  expect((await probe.viewerBatch(created.share.handle, CLAIM)).mutateError).toContain('waits for the owner to approve it');
+  expect(await probe.ownerQueue()).toHaveLength(1);
+
+  // Declined, it is refused while the decline stands.
+  expect(await probe.ownerDecides(false)).toBe(1);
+  expect((await probe.viewerBatch(created.share.handle, CLAIM)).mutateError).toContain('The owner declined this call');
+});
+
+it("an owner share's approval moves with its owner's own edit, and a review read at the old revision turns nothing on", async () => {
+  const probe = subject('live-owner-edit');
+  await probe.start();
+
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+
+  const shares = async () => v.parse(v.object({ ok: v.literal(true), value: v.array(LiveShareRecordSchema) }), await probe.liveShares()).value;
+  const before = (await shares()).find((row) => row.id === created.share.id);
+
+  expect(before).toMatchObject({ mode: 'owner', grantRevision: expect.any(String), stale: false });
+  await probe.viewerBatch(created.share.handle, CLAIM);
+  expect(await probe.ownerQueue()).toHaveLength(1);
+
+  // The owner's edit is a new revision their approval carries to; what was asked at the old one is retired.
+  const edited = await probe.editBoard();
+
+  expect(edited).not.toBe(before?.grantRevision);
+  expect((await shares()).find((row) => row.id === created.share.id)).toMatchObject({ mode: 'owner', grantRevision: edited, stale: false });
+  expect(await probe.ownerQueue()).toEqual([]);
+  expect((await probe.viewerBatch(created.share.handle, CLAIM)).probe).toBe('fixture-bytes');
+  expect(await probe.setMode(created.share.id, before?.grantRevision ?? '')).toMatchObject({ ok: false, reason: 'bad_input' });
 });
 
 it("revoking a share refuses the next call of a session it admitted", async () => {
