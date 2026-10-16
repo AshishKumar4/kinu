@@ -7,11 +7,12 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  galleryPath, GalleryPageSchema, GallerySlateSchema, gallerySlatePath, LIVE_SHARE_LISTING_PATH, LiveShareCreatedSchema, LiveShareRecordSchema,
+  APP_ROUTES, galleryPath, GalleryPageSchema, GallerySlateSchema, gallerySlatePath, LIVE_SHARE_LISTING_PATH, LiveShareCreatedSchema, LiveShareRecordSchema,
   type GalleryListing, type LiveShareRecord, type RoomService,
 } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { openBrowser } from '../../evals/src/browser';
 
 const SUITE = 'First-run · gallery-listing';
 
@@ -60,12 +61,41 @@ async function listShare(input: { origin: string; headers: Readonly<Record<strin
   return listed?.success === true ? listed.output : null;
 }
 
+/** What a signed-out visitor's browser draws on the slate's Gallery page: each connection it says their parts would ask
+ *  for, by kind, in order (GallerySlatePage `[data-gallery-needs]`). */
+async function drawnNeeds(origin: string, workspace: string): Promise<readonly string[]> {
+  const chrome = await openBrowser();
+
+  try {
+    const page = await chrome.browser.newPage();
+
+    await page.goto(`${origin}${APP_ROUTES.gallerySlate.replace(':workspace', encodeURIComponent(workspace)).replace(':slate', SLATE)}`);
+    await page.waitForSelector('[data-gallery-needs]');
+
+    return await page.$$eval('[data-gallery-need]', (rows) => rows.map((row) => row.getAttribute('data-gallery-need') ?? ''));
+  } finally {
+    await chrome.close();
+  }
+}
+
 /** What a listed slate's own page names a visitor's parts would ask them to connect; none when it cannot be read. */
 async function pageNeeds(origin: string, workspace: string): Promise<{ readonly status: number; readonly needs: readonly RoomService[] }> {
   const page = await fetch(`${origin}${gallerySlatePath(workspace, SLATE)}`);
   const read = page.ok ? v.safeParse(GallerySlateSchema, await page.json()) : null;
 
   return { status: page.status, needs: read?.success === true ? read.output.needs ?? [] : [] };
+}
+
+/** The page's needs as its API answers them, naming the MCP server the slate reaches, and as its page draws them, in order. */
+function needsGoals(server: string, needs: readonly RoomService[], drawn: readonly string[]): EvalSubgoal[] {
+  return [
+    { what: 'its-page-names-what-a-visitor-connects', reached: needs.some((each) => each.kind === 'mcp' && each.title === server), detail: JSON.stringify(needs) },
+    {
+      what: 'its-page-draws-what-a-visitor-connects',
+      reached: drawn.includes('mcp') && JSON.stringify(drawn) === JSON.stringify(needs.map((each) => each.kind)),
+      detail: JSON.stringify(drawn),
+    },
+  ];
 }
 
 describe(SUITE, () => {
@@ -103,6 +133,7 @@ END`));
         const listed = await listShare({ origin: plan.origin, headers: webHeaders(plan.identity), workspace: session.workspace, share: share?.id ?? '', line });
         const found = await indexed(plan.origin, line);
         const page = await pageNeeds(plan.origin, session.workspace);
+        const drawn = found === null ? [] : await drawnNeeds(plan.origin, session.workspace);
 
         await session.slateOp({ op: 'unshare', share: share?.id ?? '' });
         const after = await indexed(plan.origin, line);
@@ -117,11 +148,7 @@ END`));
           reached: found !== null && found.share === share?.id && found.url === url && found.category === 'developer',
           detail: JSON.stringify(found),
         });
-        goals.push({
-          what: 'its-page-names-what-a-visitor-connects',
-          reached: page.needs.some((each) => each.kind === 'mcp' && each.title === server),
-          detail: JSON.stringify(page),
-        });
+        goals.push(...needsGoals(server, page.needs, drawn));
         goals.push({ what: 'revoke-takes-it-off', reached: found !== null && after === null, detail: JSON.stringify(after) });
 
         return goals;
