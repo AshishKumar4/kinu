@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
-import type { SlateConsent } from '@kinu.run/core/slates';
+import { EffectAskSchema, type SlateConsent } from '@kinu.run/core/slates';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { recordedMcpToolCalls, resetRecordedMcp, seedConfiguredMcpServer, seedMcpAnswer, seedMcpTools } from './helpers/agents-sdk';
 
@@ -33,7 +34,7 @@ async function connection() {
   seedConfiguredMcpServer(user.sql, 'viewer-connection', { name: 'github', url: 'https://viewer-github.example/sse', transport: 'auto' });
   await user.userDO.userMcp_list(caller);
   seedMcpTools('viewer-connection', [
-    { name: 'list_issues', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+    { name: 'list_issues', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true, openWorldHint: false } },
     { name: 'create_issue', inputSchema: { type: 'object' } },
   ]);
   const answer = { content: [{ type: 'text' as const, text: 'viewer-only issue' }], structuredContent: { issue: 3 } };
@@ -169,6 +170,38 @@ describe('personal part calls on the viewer\'s own account', () => {
     expect(recordedMcpToolCalls()).toEqual([]);
   });
 
+  test('reads need exact-payload approval unless both read-only and closed-world annotations are present', async () => {
+    const { user, caller, read, answer } = await connection();
+
+    const tools = [
+      { name: 'open_read', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true, openWorldHint: true } },
+      { name: 'unbounded_read', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+      { name: 'closed_write', inputSchema: { type: 'object' }, annotations: { readOnlyHint: false, openWorldHint: false } },
+      { name: 'unmarked_closed', inputSchema: { type: 'object' }, annotations: { openWorldHint: false } },
+      { name: 'unmarked', inputSchema: { type: 'object' } },
+    ];
+
+    seedMcpTools('viewer-connection', tools);
+    const consent = { ...CONSENT, tools: tools.map((tool) => tool.name) };
+
+    for (const tool of tools) {
+      const call = { ...read, tool: tool.name, args: [{ ...ROOT, private: 'viewer-only input' }] };
+      await user.userDO.consentSlate(caller, { ...consent, effects: false });
+      expect(await user.userDO.slatePartTool(caller, call)).toMatchObject({ kind: 'needs-consent', ask: { effects: true } });
+      await user.userDO.consentSlate(caller, consent);
+      const asked = await user.userDO.slatePartTool(caller, call);
+      expect(asked).toMatchObject({ kind: 'needs-approval', ask: { tool: tool.name, payload: call.args[0] } });
+      const ask = v.parse(EffectAskSchema, 'ask' in asked ? asked.ask : null);
+      await user.userDO.decideSlateEffect(caller, { id: ask.id, decision: 'approve' });
+      seedMcpAnswer(answer);
+
+      expect(await user.userDO.slatePartTool(caller, call)).toEqual({ kind: 'ran', value: answer });
+      expect(await user.userDO.slatePartTool(caller, call)).toMatchObject({ kind: 'needs-approval' });
+    }
+
+    expect(recordedMcpToolCalls()).toHaveLength(tools.length);
+  });
+
   test('MCP arguments must be exactly one JSON object, and malformed consents are refused', async () => {
     const { user, caller, read } = await connection();
     await user.userDO.consentSlate(caller, CONSENT);
@@ -199,7 +232,9 @@ describe('personal part calls on the viewer\'s own account', () => {
     const streamRequest = { ...request, route: { ...request.route, stream: true as const } };
     expect(await user.userDO.slatePartAi(caller, streamRequest)).toMatchObject({ kind: 'needs-consent', ask: { tools: ['run', 'stream'] } });
     await user.userDO.consentSlate(caller, { ...consent, tools: ['run', 'stream'] });
-    expect(await user.userDO.slatePartAi(caller, streamRequest)).toEqual({ kind: 'ran', value: answer });
+    const stream = new ReadableStream<Uint8Array>();
+    ai.mockResolvedValueOnce(stream);
+    expect(await user.userDO.slatePartAi(caller, streamRequest)).toEqual({ kind: 'ran', value: stream });
     await user.userDO.withdrawSlateConsent(caller, consent);
     expect(await user.userDO.slatePartAi(caller, request)).toMatchObject({ kind: 'needs-consent' });
     expect(ai).toHaveBeenCalledTimes(2);

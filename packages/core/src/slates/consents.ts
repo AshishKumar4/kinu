@@ -1,20 +1,20 @@
 import * as v from 'valibot';
 import type { SqlExec, SqlExecRow } from '../types/primitives';
-import { parseJsonValue, type JsonValue } from '../utils/json';
+import { parseJsonValue } from '../utils/json';
 import { SlateConsentSchema, type SlateConsent } from './share-modes';
 import { canonicalRoot } from './share-policy';
 import type { ConsentAsk, EffectAsk } from './personal-parts';
 import type { SlateSurfaceValue } from './rpc';
 
 /** One account's answer to a personal part's call, never a shared server's answer. */
-export type PartToolAnswer<Value = JsonValue> =
+export type PartConnectionAnswer<Value = SlateSurfaceValue> =
   | { readonly kind: 'ran'; readonly value: Value }
   | { readonly kind: 'needs-consent'; readonly ask: ConsentAsk }
   | { readonly kind: 'needs-approval'; readonly ask: EffectAsk }
   | { readonly kind: 'missing'; readonly message: string };
 
-/** AI is always a read: it needs consent, never a per-effect approval. */
-export type PartAiAnswer = Extract<PartToolAnswer<SlateSurfaceValue>, { readonly kind: 'ran' | 'needs-consent' }>;
+/** The account's AI stays with its own model service: it needs consent, never a per-call approval. */
+export type PartAiAnswer = Extract<PartConnectionAnswer, { readonly kind: 'ran' | 'needs-consent' }>;
 
 const ConsentRow = v.object({
   workspace: v.string(), slate: v.string(), server: v.string(), root: v.string(), tools: v.string(),

@@ -52,10 +52,10 @@ import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationS
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
 import {
-  EffectApprovals, SlateConsentSchema, SlateConsentStore, partCallRoot, partCallVerdict,
-  type PartAiAnswer, type PartToolAnswer, type SlateAiRoute, type SlateConsent,
+  EffectApprovals, SlateConsentSchema, SlateConsentStore, containedTool, partCallRoot, partCallVerdict,
+  type PartAiAnswer, type PartConnectionAnswer, type SlateAiRoute, type SlateConsent,
 } from '@kinu.run/core/slates';
-import { McpToolSurfaceSchema, type SerializableToolDescriptor } from '@kinu.run/core';
+import { McpToolSurfaceSchema } from '@kinu.run/core';
 import { isJsonObject, parseJsonValue } from '../../../core/src/utils/json';
 import { Effect } from 'effect';
 import type { AccountSpend, SlateSurfaceValue } from '@kinu.run/core';
@@ -70,10 +70,6 @@ import {
 const ROSTER_NUDGE_LANES = 4;
 
 const DeviceRotationAckSchema = v.object({ type: v.literal(DEVICE_FRAMES.rotated) });
-
-function partToolEffect(descriptor: SerializableToolDescriptor): boolean {
-  return descriptor.readOnly !== true;
-}
 
 function isTextWebSocketMessage(
   message: string | ArrayBuffer | ArrayBufferView,
@@ -223,7 +219,7 @@ export class UserDO extends Agent<Env> {
   }
 
   /**
-   * A slate's `workspace.ai` call for this account's own AI grant in a room it was added to: run with this account's
+   * A slate's `workspace.ai` call for this account's own personal part: run with this account's
    * own catalog, credentials and spend (`slate-ai-account.ts`), never the slate owner's.
    */
   async slateAi(caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
@@ -270,7 +266,7 @@ export class UserDO extends Agent<Env> {
   /** `mcp.tools` is the same floor as userMcp_callTool: the account's connection, with this slate's consent checked too. */
   async slatePartTool(caller: UserCaller, request: {
     readonly workspace: string; readonly slate: string; readonly revision: string; readonly server: string; readonly tool: string; readonly args: JsonValue[];
-  }): Promise<PartToolAnswer> {
+  }): Promise<PartConnectionAnswer<JsonValue>> {
     await this.requireTier(caller, 'mcp.tools');
 
     return settle(Effect.gen({ self: this }, function* () {
@@ -286,7 +282,7 @@ export class UserDO extends Agent<Env> {
       }
 
       const root = partCallRoot(server, payload);
-      const verdict = partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, effect: partToolEffect(descriptor) }, revision, false);
+      const verdict = partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, false);
 
       if (verdict.kind === 'needs-consent') return verdict;
 
@@ -306,7 +302,7 @@ export class UserDO extends Agent<Env> {
   async slatePartAi(caller: UserCaller, request: { readonly workspace: string; readonly slate: string; readonly revision: string; readonly route: SlateAiRoute }): Promise<PartAiAnswer> {
     await this.requireTier(caller, 'credentials.model');
     const tool = request.route.stream === true ? 'stream' : 'run';
-    const verdict = partCallVerdict(this.slateConsentStore.find(request.workspace, request.slate, 'ai', {}), { server: 'ai', root: {}, tool, effect: false }, request.revision, false);
+    const verdict = partCallVerdict(this.slateConsentStore.find(request.workspace, request.slate, 'ai', {}), { server: 'ai', root: {}, tool, contained: true }, request.revision, false);
 
     if (verdict.kind === 'needs-consent') return verdict;
 
