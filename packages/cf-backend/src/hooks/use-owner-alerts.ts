@@ -62,6 +62,9 @@ function chime(): Effect.Effect<void> {
 
 const SAYS: Record<OwnerAlert, string> = { finished: "Finished", "needs-you": "Waiting on you" };
 
+/** A turn that ended with work still owed, as a failed one does: it stopped, and says so. */
+const saysOf = (alert: OwnerAlert, tile: RosterEntry) => (alert === "finished" && tile.overview?.activity === "unfinished" ? "Stopped before it finished" : SAYS[alert]);
+
 /** Mounted once, in the app's shell. */
 function useOwnerAlerts(): void {
   const { subscribe, entries, accountProposals } = useWorkspaceRoster();
@@ -102,7 +105,7 @@ function useOwnerAlerts(): void {
     if (frame.entry === null) seen.current.delete(frame.name);
     else seen.current.set(frame.name, frame.entry);
 
-    if (said !== null && frame.entry !== null) alert(workspaceDisplayTitle(frame.entry), SAYS[said], `/workspace/${encodeURIComponent(frame.name)}`);
+    if (said !== null && frame.entry !== null) alert(workspaceDisplayTitle(frame.entry), saysOf(said, frame.entry), `/workspace/${encodeURIComponent(frame.name)}`);
   }), [subscribe, alert]);
 
   // An account memory a workspace proposes waits on the owner too: each one new since the first read.

@@ -33,6 +33,17 @@ describe("a roster frame's alert", () => {
     expect(ownerAlertOf(entry('working', 1), entry('idle', 1))).toBeNull();
   });
 
+  test('a turn that failed is finished too: its tile stops working, unfinished when work is still owed', () => {
+    expect(ownerAlertOf(entry('working'), entry('unfinished'))).toBe('finished');
+  });
+
+  test('one turn ending is one alert, however many frames the roster sends after it', () => {
+    const frames = [entry('idle'), entry('working'), entry('working'), entry('working'), entry('idle'), entry('idle'), entry('unfinished'), entry('idle')];
+    const alerts = frames.slice(1).map((after, at) => ownerAlertOf(frames[at] ?? null, after)).filter((alert) => alert !== null);
+
+    expect(alerts).toEqual(['finished']);
+  });
+
   test('a workspace first seen, or one that left the roster, tells nothing', () => {
     expect(ownerAlertOf(null, entry('idle', 3))).toBeNull();
     expect(ownerAlertOf(entry('working', 0), null)).toBeNull();
