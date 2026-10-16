@@ -103,6 +103,7 @@ const AFTER_CI_SUITES = {
   'evals/tasks/coding.eval.ts': 'bun run evals',
   'evals/tasks/dashboards.eval.ts': 'bun run evals',
   'evals/tasks/delegation.eval.ts': 'bun run evals',
+  'evals/tasks/minecraft.eval.ts': 'bun run evals',
   'evals/tasks/office.eval.ts': 'bun run evals',
   'evals/tasks/swarm.eval.ts': 'bun run evals',
   'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',

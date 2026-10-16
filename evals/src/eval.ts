@@ -6,7 +6,7 @@ import { evalCommit, evalMatrix } from './config';
 import { createKinuHarness } from './harness';
 import { trialAccounts, trialSlot } from './slot';
 import { ARMS, resolveEvalTarget } from './target';
-import { failureRationale, taskVersion, type EvalRunInput, type EvalRunOutput, type EvalTask } from './task';
+import { failureRationale, graded, taskVersion, type EvalRunInput, type EvalRunOutput, type EvalTask } from './task';
 
 /** Set while `collectEvalTasks` imports the task files: a task is gathered, not registered. */
 let collected: EvalTask[] | null = null;
@@ -48,7 +48,7 @@ export async function defineTaskEval(task: EvalTask): Promise<void> {
   const { createJudge, describeEval } = await import('vitest-evals');
 
   const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional result', ({ output }) => {
-    const checks = output.turns.flatMap((turn) => turn.checks);
+    const checks = output.turns.flatMap((turn) => turn.checks).filter(graded);
     const failed = checks.filter((check) => !check.pass).map((check) => check.id);
 
     return {

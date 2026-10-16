@@ -12,8 +12,8 @@ import { prepareTrialAccount } from './slot';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm } from './target';
 import { type EvalTarget } from './workspace-roster';
 import {
-  taskTurns, type EvalCheck, type EvalRunInput, type EvalRunOutput, type EvalTask, type EvalTurn, type EvalTurnOutcome, type EvalTurnResult,
-  type HarnessError, type TurnRun,
+  graded, taskTurns, type EvalCheck, type EvalRunInput, type EvalRunOutput, type EvalTask, type EvalTurn, type EvalTurnOutcome, type EvalTurnResult,
+  type HarnessError, type PrepareCommand, type TurnRun,
 } from './task';
 import { redact } from './redact';
 import { cutButCompleted, measure, toolFailures, toTranscript, type StepMessages } from './transcript';
@@ -136,11 +136,23 @@ function partGate() {
     goesOn: (result: EvalTurnResult): boolean => {
       if (result.outcome.status !== 'completed') return false;
 
-      if (result.checks.some((check) => !check.pass)) failed = result.part;
+      if (result.checks.some((check) => graded(check) && !check.pass)) failed = result.part;
 
       return true;
     },
   };
+}
+
+/** A turn's executors prepared, each command in order as the Env pane runs one; the first refused or failing ends it. */
+export async function prepareExecutors(session: Pick<KinuPublicSession, 'execute'>, commands: readonly PrepareCommand[]): Promise<void> {
+  for (const { executor, command } of commands) {
+    const answer = await session.execute(executor, command);
+    const refused = answer.refusal?.error ?? answer.error;
+
+    if (refused !== undefined || answer.exitCode !== 0) {
+      throw new Error(`preparing the ${executor} executor failed (${refused ?? `exit ${String(answer.exitCode)}`}): ${(answer.stderr ?? answer.stdout ?? '').trim().slice(-2_000)}`);
+    }
+  }
 }
 
 /** One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. */
@@ -157,6 +169,8 @@ export async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeli
   await timeline.span('seed', async () => {
     for (const file of turn.seed ?? []) await session.writeFile(file.path, file.content);
   });
+
+  await timeline.span('prepare', () => prepareExecutors(session, turn.prepare ?? []));
 
   const before = new Set((await timeline.span('ledger', () => session.runEvents())).map((event) => event.runId));
   const startedAt = Date.now();
@@ -210,7 +224,7 @@ export async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeli
   if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies, runStartedAt, settled).collect(verify)));
   const afterEviction = turn.verifyAfterEviction;
 
-  if (afterEviction !== undefined && checks.every((check) => check.pass)) {
+  if (afterEviction !== undefined && checks.every((check) => !graded(check) || check.pass)) {
     checks.push(...await timeline.span('evict', async () => {
       await session.abortActivation();
       session.disconnect();
@@ -401,8 +415,10 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
       const checks = turns.flatMap((turn) => turn.checks);
 
+      const grading = checks.filter(graded);
+
       const success = errors.length === 0 && turns.length === placed.length
-        && turns.every((turn) => turn.outcome.status === 'completed') && checks.length > 0 && checks.every((check) => check.pass);
+        && turns.every((turn) => turn.outcome.status === 'completed') && grading.length > 0 && grading.every((check) => check.pass);
 
       const transcript: TranscriptEvent[] = toTranscript(events, output);
 

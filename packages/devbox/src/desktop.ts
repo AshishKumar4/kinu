@@ -190,7 +190,8 @@ XTerm*internalBorder: 8`;
  */
 const DESKTOP_START = `cd /
 if ! pgrep -x Xkasmvnc >/dev/null; then
-  printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-component-update --no-first-run --no-default-browser-check"' > /etc/chromium.d/devbox
+  # No GPU here: SwiftShader is WebGL's only rasteriser, and the container, not Chromium's sandbox, is the boundary.
+  printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --enable-unsafe-swiftshader --disable-dev-shm-usage --disable-component-update --no-first-run --no-default-browser-check"' > /etc/chromium.d/devbox
   mkdir -p ${SESSION} /usr/local/share/themes/Kinu/openbox-3
   printf '%s\\n' ${launcher('Terminal', 'sh -c "cd /workspace 2>/dev/null; exec xterm"', '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
   printf '%s\\n' ${launcher('Browser', 'chromium', '/usr/share/icons/hicolor/48x48/apps/chromium.png')} > ${SESSION}/browser.desktop
