@@ -4555,6 +4555,12 @@ about a second, which the wake's store mount meets (D44's paired store-mount pha
 enabled against 1,910 ms disabled). A workspace with no owner configures no vault, so its web
 requests go out unrouted, as its raw sockets do.
 
+Measured again 2026-10-16 on a staging computer at next-rc `15a575d6e`, as designed: UDP DNS to 1.1.1.1 and 8.8.8.8
+answered; github.com:22, 1.1.1.1:853 and smtp.gmail.com:587 connected; HTTPS on 443 met the intercept, a bare IP's too;
+and QUIC leaves directly, so Chromium reached example.com and www.google.com over HTTP/3 with their own certificates
+(`Cloudflare TLS Issuing ECC CA 3`, `WE2`) while openssl over TCP to the same hosts met the intercept CA. A site a browser
+shows with its real certificate is not a bypass: like any raw socket it carries nothing Kinu resolves.
+
 D83. The box answers to a name of its own, `computer` in Kinu, set at every start (2026-10-13). The owner asked why
 every computer has a long random name: the prompt read `root@702e7477…cdde:/workspace#` and tmux and the desktop
 showed the same 64 hex characters, the platform's container id. Measured on staging `71d06f4a9` (an eval workspace's
@@ -4927,6 +4933,19 @@ where it is in the document, since an iframe moved in the document reloads, and 
 `main`'s box (`position: fixed`), following that box as the rail folds for it; Back to panel returns it. A
 `container-type` ancestor makes no containing block for it (Chrome 129, Safari 18.4; measured in the tier's Chrome
 151). The product-flow row `desktop-switch` reads both on each deployment, with the switch times.
+
+D100. The desktop's Chromium trusts the intercept CA of the start it runs in, and only it, through a managed policy the
+trust step writes (2026-10-16, the owner: most sites in the computer's browser said "Not secure"). Debian's Chromium 154
+reads none of the bundle the trust step builds (the image has no NSS roots module that would), so every site that reached
+it through the intercept showed `ERR_CERT_AUTHORITY_INVALID`; sites it reached over QUIC (D82) showed secure, which is
+why some did and most did not. Measured on staging over the DevTools protocol in the desktop's own browser: github.com,
+classic.minecraft.net and en.wikipedia.org went from `insecure-broken` to `secure` with either fix. p11-kit's trust
+module in place of `libnssckbi.so` reads `/etc/ssl/certs/ca-certificates.crt` and leaves `nss-mozilla-ca-policy` unset,
+so Chromium would take all 151 of the bundle's roots as roots a person added, without Certificate Transparency for any;
+Chromium's `CACertificates` policy (132+) names exactly the one CA, so its own roots and CT still judge the rest. The
+trust step writes it at every start into `kinu-box.json` in `/etc/chromium/policies/managed`, beside nothing else of the
+box's (the desktop's `devbox.json` is folded in), so a host or an eval adds its own file there under keys of its own.
+The container tier's `browser-trust` step reads the desktop's browser on two starts of one box, each with its own CA.
 
 ## Open
 

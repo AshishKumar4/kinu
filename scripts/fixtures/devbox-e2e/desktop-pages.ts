@@ -86,3 +86,57 @@ print('keys', *keys, 'buttons', *[button for button in range(1, 6) if mask.value
 
 /** The grid's cells' centres on a 1280-wide screen, as points safe under a bar of up to 100 px above the page. */
 export const GRID_POINTS: ReadonlyArray<readonly [number, number]> = [150, 395, 645].flatMap((y) => [213, 640, 1067].map((x) => [x, y] as const));
+
+/**
+ * On the box, the desktop's Chromium as a person opens a site: each URL in a new tab of a browser listening on
+ * `$PORT`, read over the DevTools protocol for the security state the address bar shows, the issuer of the certificate it
+ * judged, and the page's title. One JSON line per URL. Python's standard library only: the box has no CDP client.
+ */
+export const SITE_TRUST_PY = String.raw`import base64, json, os, socket, struct, sys, time, urllib.request
+port = int(os.environ['PORT'])
+def exact(s, n):
+    b = b''
+    while len(b) < n:
+        c = s.recv(n - len(b))
+        if not c: raise EOFError
+        b += c
+    return b
+def send(s, obj):
+    data = json.dumps(obj).encode(); mask = os.urandom(4); n = len(data)
+    head = bytes([0x81]) + (bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + struct.pack('>H', n))
+    s.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+def recv(s):
+    out = b''
+    while True:
+        b1, b2 = exact(s, 2); n = b2 & 0x7f
+        if n == 126: n = struct.unpack('>H', exact(s, 2))[0]
+        elif n == 127: n = struct.unpack('>Q', exact(s, 8))[0]
+        out += exact(s, n)
+        if b1 & 0x80: return json.loads(out)
+def visit(url):
+    target = json.load(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:%d/json/new?about:blank' % port, method='PUT')))
+    hp, path = target['webSocketDebuggerUrl'][len('ws://'):].split('/', 1)
+    s = socket.create_connection(tuple([hp.split(':')[0], int(hp.split(':')[1])]), timeout=5)
+    s.sendall(('GET /%s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n' % (path, hp, base64.b64encode(os.urandom(16)).decode())).encode())
+    head = b''
+    while b'\r\n\r\n' not in head: head += exact(s, 1)
+    for i, method in enumerate(['Security.enable', 'Page.enable']): send(s, {'id': i + 1, 'method': method})
+    send(s, {'id': 10, 'method': 'Page.navigate', 'params': {'url': url}})
+    seen = {'url': url, 'state': None, 'issuer': None, 'error': None, 'title': None}
+    loaded, deadline = False, time.time() + 40
+    while not loaded and time.time() < deadline:
+        try: message = recv(s)
+        except socket.timeout: continue
+        if message.get('method') == 'Security.visibleSecurityStateChanged':
+            shown = message['params']['visibleSecurityState']; cert = shown.get('certificateSecurityState') or {}
+            seen.update(state=shown.get('securityState'), issuer=cert.get('issuer'), error=cert.get('certificateNetworkError'))
+        loaded = message.get('method') == 'Page.loadEventFired'
+    send(s, {'id': 20, 'method': 'Runtime.evaluate', 'params': {'expression': 'document.title'}})
+    deadline = time.time() + 10
+    while seen['title'] is None and time.time() < deadline:
+        try: message = recv(s)
+        except socket.timeout: continue
+        if message.get('id') == 20: seen['title'] = message.get('result', {}).get('result', {}).get('value')
+    s.close()
+    return seen
+for url in sys.argv[1:]: print(json.dumps(visit(url)), flush=True)`;

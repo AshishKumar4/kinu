@@ -28,6 +28,17 @@ export const WATCH_SHEET = { percent: 50, columns: [1, 2, 2, 2, 4, 4, 4, 4] } as
 export const DESKTOP_COLOURS = { background: '#0F0D0B', foot: '#141110', glow: '#E0A458', panel: '#141110' } as const;
 
 /** The panel's height; its launchers sit at its left, each centred this far from the screen's left edge. */
+/** Chromium's managed policies: every JSON file here applies, merged by key, and refreshes in a running browser. */
+export const CHROMIUM_POLICIES = '/etc/chromium/policies/managed';
+
+/**
+ * The box's own Chromium policy, rewritten at every start; any other file in {@link CHROMIUM_POLICIES} is left alone, so a
+ * host or an eval layers its own beside it under keys of its own. `CACertificates` names exactly this start's intercept CA
+ * (Chromium 132+ on Linux): Chromium's own roots, and Certificate Transparency, still judge everything else. Debian's
+ * Chromium reads none of the system bundle, so before this every intercepted site showed `ERR_CERT_AUTHORITY_INVALID`.
+ */
+export const BOX_CHROMIUM_POLICY = `${CHROMIUM_POLICIES}/kinu-box.json`;
+
 export const DESKTOP_PANEL = { height: 36, launchers: { terminal: 21, browser: 51 } } as const;
 
 const launcher = (name: string, exec: string, icon: string) => ['[Desktop Entry]', 'Type=Application', `Name=${name}`, `Exec=${exec}`, `Icon=${icon}`]
@@ -177,8 +188,7 @@ XTerm*internalBorder: 8`;
 const DESKTOP_START = `cd /
 if ! pgrep -x Xkasmvnc >/dev/null; then
   printf '%s\\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-component-update --no-first-run --no-default-browser-check"' > /etc/chromium.d/devbox
-  mkdir -p /etc/chromium/policies/managed ${SESSION} /usr/local/share/themes/Kinu/openbox-3
-  printf '%s\\n' '{"CommandLineFlagSecurityWarningsEnabled": false}' > /etc/chromium/policies/managed/devbox.json
+  mkdir -p ${SESSION} /usr/local/share/themes/Kinu/openbox-3
   printf '%s\\n' ${launcher('Terminal', 'sh -c "cd /workspace 2>/dev/null; exec xterm"', '/usr/share/pixmaps/xterm-color_48x48.xpm')} > ${SESSION}/terminal.desktop
   printf '%s\\n' ${launcher('Browser', 'chromium', '/usr/share/icons/hicolor/48x48/apps/chromium.png')} > ${SESSION}/browser.desktop
   cat > ${SESSION}/tint2rc <<'PANEL'
