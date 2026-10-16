@@ -1,6 +1,7 @@
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Effect } from 'effect';
-import { KinuError, settle } from '@kinu.run/core/obs';
+import { actorEnded } from '@kinu.run/core';
+import { KinuError, settle, toKinuError } from '@kinu.run/core/obs';
 import { DevboxError, settle as settleDevbox } from '../../../devbox/src/errors';
 
 class PipelinedValue extends RpcTarget {
@@ -19,6 +20,20 @@ export class EffectAtomicityProbeDO extends DurableObject<Cloudflare.Env> {
 
   refusal(): Promise<never> {
     return settle(Effect.fail(new KinuError('unavailable', 'upstream refused', { cause: new TypeError('socket closed') })));
+  }
+
+  /** The workspace's refusal for an agent that no longer acts, `wrapped` as a step of its own may pass it on, or a
+   *  failure that only quotes its words. */
+  endedRefusal(form: 'raised' | 'wrapped' | 'quoted'): Promise<never> {
+    const refusal = actorEnded('denied', { actorId: 'agent-1', standing: 'retired' }, 'Agent task is retired and no longer acts in this workspace.');
+
+    const failures = {
+      raised: refusal,
+      wrapped: toKinuError({ doing: "relaying the agent's report", cause: refusal, otherwise: 'unavailable' }),
+      quoted: new KinuError('unavailable', `the relay answered: ${refusal.message} (actor.ended agent-1 retired)`),
+    };
+
+    return settle(Effect.fail(failures[form]));
   }
 
   devboxRefusal(): Promise<never> {

@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { KinuError, renderThrownChain } from '../obs/error';
+import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { ActorReferenceSchema, bindActorHandle, type ActorHandle, type ActorReference } from './actor-handle';
@@ -73,23 +73,44 @@ export interface WorkspaceActor extends ActorProfile {
 /** Live until its retirement starts, retiring while its work winds down, retired once its record is deleted. */
 export type ActorStanding = 'live' | 'retiring' | 'retired';
 
-/** Marks a refusal answered because its actor no longer acts, with the standing it has: read wherever it lands, a crossing
- *  included, with no call to ask (`endedStandingOf`). */
-const ACTOR_ENDED = /actor_ended\((retiring|retired)\)/u;
+/** What a refusal for an actor that no longer acts carries as its cause: whose identity ended, and in what standing.
+ *  A plain object, so it crosses RPC as the refusal's own field (compat 2026-09-28): read by its fields, never its text. */
+const ActorEndedSchema = v.object({
+  kind: v.literal('actor.ended'),
+  actorId: v.string(),
+  standing: v.picklist(['retiring', 'retired']),
+});
 
-const EndedStandingSchema = v.picklist(['retiring', 'retired']);
+export type ActorEnded = Omit<v.InferOutput<typeof ActorEndedSchema>, 'kind'>;
 
-/** A refusal for an actor that no longer acts, saying so and in what standing. */
-export function actorEnded(code: 'denied' | 'missing', standing: Exclude<ActorStanding, 'live'>, refusal: string): KinuError {
-  return new KinuError(code, `actor_ended(${standing}): ${refusal}`);
+/** A refusal for an actor that no longer acts, here or across RPC: a KinuError with its own code and that cause. */
+const EndedRefusalSchema = v.looseObject({
+  _tag: v.literal('KinuError'),
+  code: v.picklist(['denied', 'missing']),
+  cause: ActorEndedSchema,
+});
+
+/** A refusal for `ended`'s actor, which no longer acts: it says so by its fields (`endedStandingOf`). */
+export function actorEnded(code: 'denied' | 'missing', ended: ActorEnded, refusal: string): KinuError {
+  return new KinuError(code, refusal, { cause: { kind: 'actor.ended', ...ended } });
 }
 
-/** The standing a failure says its actor has ended in (`actorEnded`), however it was wrapped or crossed; null for one
- *  that says nothing of it. */
-export function endedStandingOf(failure: { readonly cause: unknown }): Exclude<ActorStanding, 'live'> | null {
-  const said = ACTOR_ENDED.exec(renderThrownChain(failure))?.[1];
+/**
+ * The standing `actorId` ended in, where `failure`'s chain holds the refusal its workspace answered for it
+ * (`actorEnded`), however it was wrapped or crossed; null otherwise. Another actor's refusal, or one's words quoted in
+ * a message, says nothing of this one.
+ */
+export function endedStandingOf(failure: { readonly cause: unknown }, actorId: string): ActorEnded['standing'] | null {
+  const seen = new Set<unknown>();
 
-  return said === undefined ? null : v.parse(EndedStandingSchema, said);
+  for (let link: unknown = failure.cause; link instanceof Error && !seen.has(link); link = link.cause) {
+    seen.add(link);
+    const refusal = v.safeParse(EndedRefusalSchema, link);
+
+    if (refusal.success && refusal.output.cause.actorId === actorId) return refusal.output.cause.standing;
+  }
+
+  return null;
 }
 
 export function actorStanding(actor: Pick<WorkspaceActor, 'retiringAt' | 'deletedAt'>): ActorStanding {
@@ -256,7 +277,7 @@ export class WorkspaceActorDirectory {
   /** `also` runs after the directory's own checks and can only refuse further, never authorise. */
   private issue(row: WorkspaceActor, also?: () => Effect.Effect<void, KinuError>): ActorHandle {
     const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => (this.retired(row.actorId)
-      ? Effect.fail(actorEnded('missing', this.standing(row.actorId) === 'retiring' ? 'retiring' : 'retired', 'The actor identity is no longer present.'))
+      ? Effect.fail(actorEnded('missing', { actorId: row.actorId, standing: this.standing(row.actorId) === 'retiring' ? 'retiring' : 'retired' }, 'The actor identity is no longer present.'))
       : also?.() ?? Effect.void));
 
     this.handles.add(handle);
