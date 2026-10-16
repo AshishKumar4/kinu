@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test';
 import { runToExit } from '@kinu.run/test-utils';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
-import { contractOwner, contractOwnerEnded, contractRunEnded } from './fixtures/devbox-e2e/ledger';
-import type { ContractOwner } from './fixtures/devbox-e2e/ledger';
+import { contractOwner, contractOwnerEnded, contractRunEnded, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
+import type { ContractOwner, ContractTeardown } from './fixtures/devbox-e2e/ledger';
 
 test('the real-container tier refuses missing staging authority even when production authority exists', () => {
   expect(() => tierIdentity({ KINU_EVAL_WEB_IDENTITY: 'production' })).toThrow('requires KINU_EVAL_STAGING_WEB_IDENTITY');
@@ -28,6 +28,44 @@ test('a throwing health check is recorded and never stops Worker, application or
 
   expect(deleted).toEqual(['worker', 'application', 'bucket']);
   expect(outcome).toEqual({ status: 'fulfilled', value: { health: { failure: 'DNS ETIMEOUT' }, errors: [] } });
+});
+
+/** An abandoned run's teardown record, as the ledger answers it. */
+const abandoned = (run: string): ContractTeardown => ({
+  schema: 'devbox-contracts/teardown@2', run, worker: `kinu-${run}`, app: `kinu-${run}-contractbox`, bucket: `kinu-${run}`,
+  boxes: [], declared: 'cloudflare/debian-trixie', snapshots: [], applicationIds: [],
+  owner: { job: '20261015185143-44a621b9', index: 2, attempt: 1, vessel: 'v1', statusUrl: 'https://armada.invalid/status/20261015185143-44a621b9', statusToken: 'scoped' },
+});
+
+test('inherited teardowns are replayed at once, each timed, before anything is created', async () => {
+  const order: string[] = [];
+  const runs = ['dc20261015185153bd8a1', 'dc202610151851575e717', 'dc20261015185157f140c'];
+
+  const recovered = await recoverAbandoned(runs.map(abandoned), async ({ run }) => {
+    order.push(`start ${run}`);
+    // Tasks, not timers: each replay yields once, so one that waited on another would end before the next began.
+    await Promise.resolve();
+    await Promise.resolve();
+    order.push(`end ${run}`);
+  });
+
+  expect(order).toEqual([...runs.map((run) => `start ${run}`), ...runs.map((run) => `end ${run}`)]);
+  expect(recovered.map(({ contract, detail }) => ({ contract, detail }))).toEqual(runs.map((run) => ({
+    contract: 'recovered-teardown', detail: { run, owner: { job: '20261015185143-44a621b9', index: 2, attempt: 1, vessel: 'v1' } },
+  })));
+  expect(recovered.every(({ ms }) => Number.isInteger(ms) && ms >= 0)).toBe(true);
+});
+
+test('one failed inherited teardown refuses the run, naming it, after every other was still replayed', async () => {
+  const replayed: string[] = [];
+  const runs = ['dc20261015185153bd8a1', 'dc202610151851575e717', 'dc20261015185157f140c'];
+
+  await expect(recoverAbandoned(runs.map(abandoned), async ({ run }) => {
+    replayed.push(run);
+
+    if (run === 'dc202610151851575e717') throw new Error('its replay exited 1');
+  })).rejects.toThrow('no new fixture was created: dc202610151851575e717: Error: its replay exited 1');
+  expect(replayed).toEqual(runs);
 });
 
 test('the exact physical owner must be gone, including a late copy of an already decided task', () => {
