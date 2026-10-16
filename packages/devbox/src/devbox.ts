@@ -1856,6 +1856,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // The step its base is at rides along: the caller holds while the build moves on (D79).
     if (base !== undefined && this.ctx.container?.running !== true) return base;
     await this.#resolveAdoption();
+    this.#trace('readiness.adopted', { phase: this.#restoration.phase });
 
     // Native allocation can report running before restoration starts.
     if (wasRunning && this.#restoration.phase === 'unstarted') await this.#startContainer();
@@ -1868,6 +1869,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (admission !== undefined) return admission;
 
     await this.#armStartup();
+    this.#trace('readiness.armed', { phase: this.#restoration.phase });
 
     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
       throw new DevboxError('refused', terminalRefusal(this.#restoration.reason));
