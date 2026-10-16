@@ -18,14 +18,25 @@ import { makeExecRaw, makeSql } from './helpers';
 
 const NOW = 1_700_000_000_000;
 
-/** What the workspace answers a call it refuses for a retired agent, per effect, as the effect's body passes it on. */
-const REFUSED: Readonly<Record<'turn_report' | 'auto_title', KinuError>> = {
+type Refusals = (actorId: string) => Readonly<Record<'turn_report' | 'auto_title', Error>>;
+
+/** What the workspace answers a call it refuses for retired agent `actorId`, per effect, as the effect's body passes it on. */
+const REFUSED: Refusals = (actorId) => ({
   turn_report: toKinuError({
     doing: 'relaying the turn report', otherwise: 'unavailable',
-    cause: actorEnded('denied', 'retired', 'Agent stand-one-question is retired and no longer acts in this workspace.'),
+    cause: actorEnded('denied', { actorId, standing: 'retired' }, 'Agent stand-one-question is retired and no longer acts in this workspace.'),
   }),
-  auto_title: actorEnded('missing', 'retired', 'The actor identity is no longer present.'),
-};
+  auto_title: actorEnded('missing', { actorId, standing: 'retired' }, 'The actor identity is no longer present.'),
+});
+
+/** The words of an ended refusal inside failures that are not one: a tool's output, and a provider's message. */
+const QUOTED: Refusals = () => ({
+  turn_report: new Error('tool shell answered: actor_ended(retired): Agent stand-one-question is retired and no longer acts in this workspace.'),
+  auto_title: toKinuError({
+    doing: 'drawing the name', otherwise: 'unavailable',
+    cause: new KinuError('unavailable', 'the provider answered HTTP 503: actor_ended(retired): The actor identity is no longer present.'),
+  }),
+});
 
 const OWED: readonly OwedEffect[] = [
   { name: 'turn_report', scope: '', input: {}, lane: 'detached' },
@@ -34,9 +45,13 @@ const OWED: readonly OwedEffect[] = [
 
 /**
  * A ledger owing `turn_report` and `auto_title`, whose actor's standing is `standing()`. Each body runs `during` and
- * then throws the workspace's refusal for a retired agent.
+ * then throws what `refusals` answers for the ledger's actor: the workspace's refusal for a retired agent, unless said.
  */
-function owing(standing: (failure: { readonly cause: unknown }) => Promise<ActorStanding>, during: () => void = () => {}) {
+function owing(
+  standing: (failure: { readonly cause: unknown }, actorId: string) => Promise<ActorStanding>,
+  during: () => void = () => {},
+  refusals: Refusals = REFUSED,
+) {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
@@ -52,12 +67,12 @@ function owing(standing: (failure: { readonly cause: unknown }) => Promise<Actor
       ran.push(name);
       during();
 
-      throw REFUSED[name];
+      throw refusals(actor.actorId)[name];
     },
   });
 
   const ledger = new TerminalEffectLedger({
-    sql, actor, now: () => NOW, standing,
+    sql, actor, now: () => NOW, standing: (failure) => standing(failure, actor.actorId),
     transaction: (body) => db.transaction(body)(),
     effects: { turn_report: refusing('turn_report'), auto_title: refusing('auto_title') },
     scheduleRetry: async () => {},
@@ -65,7 +80,7 @@ function owing(standing: (failure: { readonly cause: unknown }) => Promise<Actor
 
   const rows = () => sql<{ effect_name: string }>`SELECT effect_name FROM terminal_effects ORDER BY effect_name`.map((row) => row.effect_name);
 
-  return { ledger, ran, rows };
+  return { ledger, ran, rows, actor };
 }
 
 /** The ledger's pass over `OWED`, and what it logged of each effect. */
@@ -138,14 +153,35 @@ test('a standing that cannot be read is no sign the agent ended: its effects ans
   expect(failed).toHaveLength(2);
 });
 
-test("an agent's isolate reads the standing off the workspace's refusal, with no call to ask", async () => {
-  // As agent-chat's ledger reads it: the refusal says the agent ended, however the effect's body wrapped it.
-  const { ledger, ran, rows } = owing(async (failure) => endedStandingOf(failure) ?? 'live');
+/** As agent-chat's ledger reads its actor's standing: off the failure, with no call to ask. */
+const offTheRefusal = async (failure: { readonly cause: unknown }, actorId: string): Promise<ActorStanding> => endedStandingOf(failure, actorId) ?? 'live';
+
+test("an agent's isolate reads the standing off the workspace's refusal, by its fields, however its body wrapped it", async () => {
+  const { ledger, ran, rows } = owing(offTheRefusal);
   const { ended, failed } = await settled(ledger);
 
   expect(ran.sort()).toEqual(['auto_title', 'turn_report']);
   expect(failed).toEqual([]);
   expect(ended.map((fields) => [fields.effect, fields.standing])).toEqual([['v1:auto_title:m-1', 'retired'], ['v1:turn_report', 'retired']]);
   expect(rows()).toEqual([]);
-  expect(endedStandingOf({ cause: new KinuError('denied', 'Agent stand-one-question is not the hirer.') })).toBeNull();
+});
+
+// Review of 66938aa25: the standing was read off the refusal's text, so any failure quoting it ended a live agent's work.
+test("an ended refusal's words inside a tool's output or a provider's message end nothing: the effects fail as theirs", async () => {
+  const { ledger, ran, rows } = owing(offTheRefusal, () => {}, QUOTED);
+  const { ended, failed } = await settled(ledger);
+
+  expect(ran.sort()).toEqual(['auto_title', 'turn_report']);
+  expect(ended).toEqual([]);
+  expect(failed.map((fields) => fields.effect)).toEqual(['v1:auto_title:m-1', 'v1:turn_report']);
+  expect(rows()).toEqual(['auto_title', 'turn_report']);
+});
+
+test("another actor's ended refusal ends nothing of this one's: the actor it names must be the ledger's own", async () => {
+  const { ledger, ran } = owing(offTheRefusal, () => {}, () => REFUSED('a-sibling-the-tool-reached'));
+  const { ended, failed } = await settled(ledger);
+
+  expect(ran.sort()).toEqual(['auto_title', 'turn_report']);
+  expect(ended).toEqual([]);
+  expect(failed).toHaveLength(2);
 });
