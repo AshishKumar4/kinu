@@ -18,6 +18,12 @@ export type ShareMode = (typeof SHARE_MODES)[number];
 export const ShareModeSchema = v.picklist(SHARE_MODES);
 
 /**
+ * What a slate's first share starts from (H7): `as-is`, the slate itself with its state; `empty`, a copy of it made
+ * now in the same workspace, code only, so its state starts empty. One path either way: the copy is a fork, shared.
+ */
+export const ShareStartSchema = v.picklist(['as-is', 'empty']);
+
+/**
  * A slate's revision (`share-policy.ts` `slateRevision`): the source digest its durable app was last built from. A
  * viewer's consent and the owner's `owner`-mode grant (`slate_live_shares.grant_revision`) each name the revision they
  * were given for; a different one asks again.

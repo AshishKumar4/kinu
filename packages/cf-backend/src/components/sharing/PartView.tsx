@@ -86,7 +86,7 @@ export function PartView({ answer, slate, controls }: { answer: PartRunAnswer; s
 
     case "needs-consent": {
       return (
-        <InPlace data-part-needs="consent" icon={<PlugIcon size={22} />} said={`${slate} wants to use your ${serverWords(answer.ask.server)} to show you this part.`}
+        <InPlace data-part-needs="consent" icon={<PlugIcon size={22} />} said={`${slate} wants to use your ${serverWords(answer.ask)} to show you this part.`}
           action="Review…" onAct={() => controls.decide("consent")} />
       );
     }
@@ -94,7 +94,7 @@ export function PartView({ answer, slate, controls }: { answer: PartRunAnswer; s
     case "needs-approval": {
       return (
         <InPlace data-part-needs="approval" icon={<WarningCircleIcon size={22} />}
-          said={`This part wants to ${answer.ask.tool} on your ${serverWords(answer.ask.server)}. Nothing happens until you approve it.`}
+          said={`This part wants to make a change on your ${serverWords(answer.ask)}. Nothing happens until you approve it.`}
           action="Review…" onAct={() => controls.decide("approval")} />
       );
     }

@@ -5,7 +5,10 @@
  */
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
-import { err, json, safeJson, GALLERY_CATEGORIES, GALLERY_SORTS } from '@kinu.run/core';
+import { Effect } from 'effect';
+import { err, json, safeJson, GALLERY_CATEGORIES, GALLERY_SORTS, type GallerySlate } from '@kinu.run/core';
+import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
+import { workspaceOwner } from '../workspace-owner-rpc';
 import { crossSiteRejection, requestIdentity } from '../auth/session';
 import { rawParam, type FamilyEnv } from '../api/context';
 import { pictureKey, readSlatePicture } from '../slates/pictures';
@@ -84,9 +87,24 @@ galleryRoutes.get('/api/gallery/:workspace/:slate/picture/:digest', async (c) =>
   return await readSlatePicture(bucket, pictureKey(workspace, slate, digest), 'public') ?? new Response('Not found', { status: 404, headers: NO_STORE });
 });
 
-galleryRoutes.get('/api/gallery/:workspace/:slate', async (c) => {
-  const { plane, caller } = await gallery(c.env);
-  const listed = await plane.gallerySlate(caller, decodeURIComponent(rawParam(c, 'workspace')), decodeURIComponent(rawParam(c, 'slate')), await viewerOf(c));
+galleryRoutes.get('/api/gallery/:workspace/:slate', (c) => settle(Effect.gen(function* () {
+  const { plane, caller } = yield* Effect.promise(async () => gallery(c.env));
+  const workspace = decodeURIComponent(rawParam(c, 'workspace'));
+  const viewer = yield* Effect.promise(async () => viewerOf(c));
+  const listed = yield* Effect.promise(async () => plane.gallerySlate(caller, workspace, decodeURIComponent(rawParam(c, 'slate')), viewer));
 
-  return listed === null ? err(404, 'No such listing') : json({ body: listed }, { headers: NO_STORE });
-});
+  if (listed === null) return err(404, 'No such listing');
+
+  // What only its share knows, read from the share the index names: absent when its workspace cannot say.
+  const needs = yield* attempt({ doing: 'reading what a listed slate needs of its visitors', otherwise: 'unavailable' },
+    async () => workspaceOwner(c.env, workspace).galleryNeeds(listed.listing.share)).pipe(
+    Effect.map((answered) => (answered.ok ? answered.value : null)),
+    Effect.catch((failure) => Effect.sync(() => {
+      diagnostics.failure('gallery.needs_unread', failure, { workspace });
+
+      return null;
+    })),
+  );
+
+  return json({ body: (needs === null ? listed : { ...listed, needs }) satisfies GallerySlate }, { headers: NO_STORE });
+})));

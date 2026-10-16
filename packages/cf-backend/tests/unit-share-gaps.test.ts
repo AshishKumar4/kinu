@@ -8,16 +8,18 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
-  type AgentRuntime, type SlateAnswer,
+  APP_ROUTES, GallerySlateSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  type AgentRuntime, type GalleryCategory, type GallerySlate, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
+import type { ControlCaller } from '@kinu.run/core/control-plane';
+import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, until, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedConfiguredMcpServer, seedMcpTools } from './helpers/agents-sdk';
-import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, type GalleryListingSync } from '@kinu.run/core/slates';
 import { makeKv } from './helpers/kv';
 import { sharedPublicRoutes, sharedRoutes } from '../src/shared/routes';
 import { accountRoutes } from '../src/user/account-routes';
+import { galleryRoutes } from '../src/gallery/routes';
 import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
@@ -59,7 +61,7 @@ async function exerciseIssuesSlate(owner: HarnessOrchestratorAgent): Promise<voi
   }
 }
 
-const post = (path: string, body: Record<string, string | boolean | readonly string[] | undefined>) => new Request(`https://app.test${path}`, {
+const post = (path: string, body: Readonly<Record<string, JsonValue | undefined>>) => new Request(`https://app.test${path}`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 });
 
@@ -252,24 +254,29 @@ test('a users share link sends each visitor to sign in, then lets in its owner a
   const url = present(created.url, 'the share URL');
   await world.owner.agent.shareLiveWith(created.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
 
-  // Each follows the link as a browser does: to the app's page for the share, whose open hands them a ticket.
-  const openAs = async (identity: AuthIdentity, ip: string): Promise<number | undefined> => {
+  // Each follows the link as a browser does: to the app's page for the share, whose open hands them a ticket and names
+  // the slate it frames; to anyone else it says nothing of the share.
+  const openAs = async (identity: AuthIdentity, ip: string): Promise<readonly [number, number | undefined]> => {
     const sent = present(await visit(world, url, ip), 'the first visit');
     const page = new URL(present(sent.headers.get('location'), 'where the first visit was sent'));
 
     expect([sent.status, page.origin]).toEqual([303, APP_ORIGIN]);
     const { params } = present(matchPath(APP_ROUTES.sharedLive, page.pathname), 'the share\'s entry page');
-    const opened = await sharedRequest(world.env, identity, post('/api/shared/live/open', { workspace: params.workspace, share: params.share }));
-    const entry = await jsonBody(present(opened, 'the open answer'), v.object({ url: v.string() }));
+    const opened = present(await sharedRequest(world.env, identity, post(LIVE_SHARE_OPEN_PATH, { workspace: params.workspace, share: params.share })), 'the open answer');
+
+    if (opened.status === 404) return [opened.status, undefined];
+    const entry = await jsonBody(opened, LiveShareOpenSchema);
+
+    expect([entry.slate, entry.title]).toEqual(['issues', 'Issue triage']);
     const exchanged = await handleSlateShareHostRequest(new Request(entry.url, { headers: { 'cf-connecting-ip': ip } }), world.env);
     const cookie = present(exchanged?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
 
-    return (await visit(world, url, ip, { cookie }))?.status;
+    return [opened.status, (await visit(world, url, ip, { cookie }))?.status];
   };
 
-  expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toBe(200);
-  expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toBe(200);
-  expect(await openAs(identityOf('00112233445566778899aabbccddeeff', 'sam@example.test'), '203.0.113.7')).toBe(404);
+  expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toEqual([200, 200]);
+  expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toEqual([200, 200]);
+  expect(await openAs(identityOf('00112233445566778899aabbccddeeff', 'sam@example.test'), '203.0.113.7')).toEqual([404, undefined]);
 });
 
 test('D1: a live share forks for who it names, refuses who it does not, honors fork:false, and its owner forks it too', async () => {
@@ -636,4 +643,115 @@ test("a share whose recipients' tile cannot be pushed says the list is behind, w
 
   expect(answer.status).toBe(201);
   expect(await jsonBody(answer, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({ listing: 'pending' });
+});
+
+test("a share on its owner's access is refused where the slate is not at the revision they reviewed, and none is left made", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const approved = [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }];
+  const open = async () => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema)).filter((row) => row.revokedAt === null);
+  const mode = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post(LIVE_SHARE_MODE_PATH, { workspace: 'issues-owner', ...body }));
+
+  // No slate process runs here, so the slate has no revision a review could have read.
+  expect(answered(await world.owner.agent.slate({ op: 'graph', id: 'issues' }), SlateReachSchema).revision).toBeNull();
+
+  const refused = await sharedRequest(world.env, owner, post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'public', mode: 'owner', revision: 'a-revision-it-is-not-at', approved,
+  }));
+
+  expect(refused?.status).toBe(400);
+  expect(await open()).toEqual([]);
+
+  const made = await sharePublic(world, 'public');
+
+  expect((await mode({ share: made.share.id, mode: 'owner', revision: 'a-revision-it-is-not-at', approved }))?.status).toBe(400);
+  expect((await mode({ share: 'no-such-share', mode: 'own' }))?.status).toBe(404);
+  expect(await jsonBody(present(await mode({ share: made.share.id, mode: 'own' }), 'the mode answer'), LiveShareRecordSchema))
+    .toMatchObject({ id: made.share.id, mode: 'own', grantRevision: null });
+});
+
+test("a live share its owner lists tells the Gallery its card, stays off the owner's access, and leaves the Gallery with its revoke", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const synced: GalleryListingSync[] = [];
+  const listing = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', ...body }));
+
+  // The workspace tells the Gallery in the background: observed as the control plane receives it.
+  const told = async () => {
+    await until(() => synced.length > 0, 'the Gallery told of the listing');
+
+    return synced.splice(0);
+  };
+
+  // The one member a listing reaches on the control plane.
+  world.owner.agent.harnessDeclareEnv({
+    ControlPlaneDO: { idFromName: (name: string) => name, get: () => ({ gallerySync: async (_caller: ControlCaller, sync: GalleryListingSync) => { synced.push(sync); } }) },
+  });
+  const made = await sharePublic(world, 'public');
+  const card = { line: 'Triage the open issues', category: 'work' } satisfies { line: string; category: GalleryCategory };
+
+  expect((await listing({ share: made.share.id, listed: true, line: 'x'.repeat(141), category: 'work' }))?.status).toBe(400);
+  expect(await jsonBody(present(await listing({ share: made.share.id, listed: true, ...card }), 'the listing answer'), LiveShareRecordSchema))
+    .toMatchObject({ id: made.share.id, mode: 'own', gallery: card });
+  expect(await told()).toEqual([{
+    share: made.share.id, workspace: 'issues-owner', slate: 'issues', handle: made.share.handle, listed: true, url: present(made.url, 'the share URL'),
+    card: { title: 'Issue triage', ...card, ownerName: expect.any(String), picture: null },
+  }]);
+
+  // Its Gallery page names, from the share its index lists, the connections a visitor's own parts will ask them for.
+  const page = async () => {
+    const listed = {
+      workspace: 'issues-owner', slate: 'issues', share: made.share.id, title: 'Issue triage', ...card, owner: { name: 'Owner' },
+      stars: 0, starred: false, listedAt: 1, featured: false, url: present(made.url, 'the share URL'),
+    };
+
+    const ControlPlaneDO = { idFromName: (name: string) => name, get: () => ({ gallerySlate: async (): Promise<GallerySlate | null> => ({ listing: listed }) }) };
+    const partialEnv: Partial<Env> = {};
+
+    Object.assign(partialEnv, { ...world.env, ControlPlaneDO });
+    // SAFETY: the Gallery's page reaches the control plane's gallerySlate alone; the rest is the world's own env.
+    const env = partialEnv as Env;
+    const read = present(await serveFamily(galleryRoutes)(new Request('https://app.test/api/gallery/issues-owner/issues'), env), 'the Gallery page');
+
+    return (await jsonBody(read, GallerySlateSchema)).needs;
+  };
+
+  expect(await page()).toEqual([{ kind: 'github', title: 'github' }]);
+
+  // Listed, it is never put on the owner's access.
+  const refused = present(await sharedRequest(world.env, owner, post(LIVE_SHARE_MODE_PATH, {
+    workspace: 'issues-owner', share: made.share.id, mode: 'owner', revision: 'any', approved: [],
+  })), 'the mode answer');
+
+  expect({ status: refused.status, body: await refused.text() }).toMatchObject({ status: 400, body: expect.stringContaining('Take it off the Gallery first') });
+  expect((await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: made.share.id })))?.status).toBe(200);
+  expect(await told()).toEqual([{ share: made.share.id, workspace: 'issues-owner', slate: 'issues', handle: made.share.handle, listed: false }]);
+  // Off the Gallery, its share says nothing of what it reaches to a page the index still held.
+  expect(await page()).toBeUndefined();
+});
+
+test("a slate's first share can start empty: a copy made now, code only, named as a copy, and none made when refused", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const files = workspaceFiles(world.owner.agent);
+  const slates = async () => (await world.owner.agent.listSlates()).slates.map((slate) => slate.id);
+
+  const share = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'public', start: 'empty', ...body,
+  }));
+
+  // A copy has run nothing: it is never shared on the owner's access, nor with anything approved on it.
+  expect((await share({ mode: 'owner', revision: 'any' }))?.status).toBe(400);
+  expect((await share({ approved: [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }] }))?.status).toBe(400);
+  expect(await slates()).toEqual(['issues']);
+
+  const made = await jsonBody(present(await share({}), 'the share answer'), LiveShareCreatedSchema);
+  const copy = made.share.slate;
+
+  expect({ copy: copy === 'issues', mode: made.share.mode, slates: [...await slates()].sort() }).toEqual({ copy: false, mode: 'own', slates: [copy, 'issues'].sort() });
+  expect(JSON.parse(await readText(files, `/slates/${copy}/package.json`))).toMatchObject({ slate: { title: 'Issue triage (shared copy)' }, description: 'Triage the open issues' });
+  expect(await readText(files, `/slates/${copy}/src/server.ts`)).toBe(await readText(files, '/slates/issues/src/server.ts'));
 });

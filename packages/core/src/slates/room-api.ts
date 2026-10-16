@@ -1,5 +1,5 @@
 /**
- * Client contracts used by the live page, share sheet, part frame, Drive and Gallery.
+ * Client contracts for what a grant reaches and what a fork brings, as the share sheet and the part frame show them.
  * Client-safe: valibot and nothing of the runtime.
  *
  * Slates run as Nimbus apps in their owner's workspace (docs/SLATE-SHARING-NIMBUS.md). The policy model is
@@ -9,7 +9,6 @@
  * the sentences around them.
  */
 import * as v from 'valibot';
-import { GalleryListingSchema } from './gallery-api';
 
 /** Who someone is to a room. People are named by email: an account id is derived from it (`accountIdFor`). */
 const RoomPersonSchema = v.object({
@@ -40,7 +39,7 @@ export type RoomAudience = v.InferOutput<typeof RoomAudienceSchema>;
 // ── What a grant reaches ────────────────────────────────────────────────────────────────────────────────────────
 
 /** A connection as people know it: GitHub, an MCP server by its title, the workspace's own model. */
-const RoomServiceSchema = v.object({
+export const RoomServiceSchema = v.object({
   title: v.string(),
   kind: v.picklist(['github', 'mcp', 'ai', 'workspace'] as const),
 });
@@ -81,56 +80,13 @@ const RoomReachSchema = v.object({
 
 export type RoomReach = v.InferOutput<typeof RoomReachSchema>;
 
-// ── Drive, Gallery, fork ────────────────────────────────────────────────────────────────────────────────────────
-
-/** A slate in someone's Drive that is not theirs: shared with them, or used through its link. */
-const DriveRoomCardSchema = v.object({
-  workspace: v.string(),
-  slate: v.string(),
-  title: v.string(),
-  owner: RoomPersonSchema,
-  relation: v.picklist(['shared', 'used'] as const),
-  /** Shared only. */
-  role: v.optional(RoomRoleSchema),
-  at: v.number(),
-  /** Shared with this person since they last opened Shared. */
-  unseen: v.optional(v.literal(true)),
-  /** Where it opens: {@link roomPagePath} when shared, the link with its key when used through it. */
-  url: v.string(),
-});
-
-export type DriveRoomCard = v.InferOutput<typeof DriveRoomCardSchema>;
-
-/** A slate of this person's own, as the Drive lists it: its audience once its room has one. */
-const DriveSlateSchema = v.object({
-  id: v.string(),
-  title: v.string(),
-  workspace: v.string(),
-  audience: v.optional(RoomAudienceSchema),
-  picture: v.optional(v.string()),
-});
-
-export type DriveSlate = v.InferOutput<typeof DriveSlateSchema>;
-
-/** `GET /api/shared`: the person's own slates, the ones shared with them, the ones they used, and the ones they starred. */
-export const DriveLibrarySchema = v.object({
-  slates: v.array(DriveSlateSchema),
-  shared: v.array(DriveRoomCardSchema),
-  used: v.array(DriveRoomCardSchema),
-  starred: v.array(GalleryListingSchema),
-});
-
-export type DriveLibrary = v.InferOutput<typeof DriveLibrarySchema>;
+// ── Fork ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** What forking a slate brings: its code; per part, whether it ran with someone's lend, which the fork does not keep. */
-export const ForkPreviewSchema = v.object({
+const ForkPreviewSchema = v.object({
   title: v.string(),
   owner: RoomPersonSchema,
   parts: v.array(v.object({ fn: v.string(), lent: v.boolean(), needs: v.nullable(RoomServiceSchema) })),
 });
 
 export type ForkPreview = v.InferOutput<typeof ForkPreviewSchema>;
-
-export const ForkedSchema = v.object({ workspace: v.string(), slate: v.string() });
-
-export type Forked = v.InferOutput<typeof ForkedSchema>;

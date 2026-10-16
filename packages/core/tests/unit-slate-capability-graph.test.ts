@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { cutShareGrant, grantAdmits, slateCapabilityGraph, type SlateSurfaceCatalog, type SlateUsage } from '../src/slates/capability-graph';
+import { cutShareGrant, grantAdmits, slateCapabilityGraph, visitorNeeds, type SlateSurfaceCatalog, type SlateUsage } from '../src/slates/capability-graph';
 
 const used = (...paths: string[]): SlateUsage[] => paths.map((path) => {
   const names = path.split('.');
@@ -135,4 +135,8 @@ test("a slate reaches what each operation's catalog entry says, and nothing unde
     ['workspace', []],
   ]);
   expect(cutShareGrant(notes, []).members).toEqual([{ slate: 'notes', namespace: 'file', member: 'read', impact: 'observe' }]);
+});
+
+test("a visitor's needs are the MCP servers and the model the slate reaches, never its owner's workspace, the web or its slates", () => {
+  expect(visitorNeeds(graph)).toEqual([{ kind: 'github', title: 'GitHub' }, { kind: 'ai', title: 'AI' }]);
 });

@@ -64,6 +64,8 @@ describe("a slate's personal parts", () => {
           // top gives it, not by the id in its own address.
           expect(await stateOf(standup)).toBe('needs-consent');
           expect(await standup.$eval('[data-part-needs="consent"]', (node) => node.textContent ?? '')).toContain('Team board');
+          // The connection by the title the viewer's account gives it.
+          expect(await standup.$eval('[data-part-needs="consent"]', (node) => node.textContent ?? '')).toContain('GitHub connection');
           await standup.click('[data-part-needs="consent"] button');
           await page.waitForSelector('[data-consent-allow]', SOON);
           expect(await page.$('[data-consent-changed]')).not.toBeNull();
@@ -97,6 +99,7 @@ describe("a slate's personal parts", () => {
           await deploy.click('[data-part-needs="approval"] button');
           await page.waitForSelector('[data-approval-approve]', SOON);
           expect(JSON.parse(await page.$eval('[data-approval-payload]', (node) => node.textContent ?? 'null'))).toEqual({ project: 'site', target: 'production', ref: 'main' });
+          expect(await page.$eval('[data-approval-tool]', (node) => node.textContent)).toBe('Create deployment');
           await noDecisionIn(deploy);
           await page.click('[data-approval-approve]');
           await reaches(deploy, 'shown');
@@ -106,6 +109,30 @@ describe("a slate's personal parts", () => {
 
           expect(after.some((each) => each.path.endsWith('/approvals/approval-1') && JSON.parse(each.body ?? '{}').decision === 'approve')).toBe(true);
           expect(JSON.parse(lastDeploy?.body ?? '{}').approval).toBe('approval-1');
+        } finally {
+          await page.close();
+        }
+      }
+    });
+  });
+
+  test("a share's page frames the slate under Kinu's bar and hosts its parts for the visitor", async () => {
+    await withGallery(async (gallery) => {
+      for (const [theme, viewport] of [['light', 'desktop'], ['dark', 'mobile']] as const) {
+        const page = await freshPage(gallery, 'shared-live', theme, viewport);
+
+        try {
+          await page.waitForSelector('[data-shared-slate="team-board"]', SOON);
+          expect(await page.$eval('[data-shared-title]', (node) => node.textContent)).toBe('Team board');
+
+          // The visitor allows their own GitHub at the share's page, and sees their part.
+          const standup = await partFrame(page, 'standup');
+
+          await standup.click('[data-part-needs="consent"] button');
+          await page.waitForSelector('[data-consent-allow]', SOON);
+          await noDecisionIn(standup);
+          await page.click('[data-consent-allow]');
+          await reaches(standup, 'shown');
         } finally {
           await page.close();
         }

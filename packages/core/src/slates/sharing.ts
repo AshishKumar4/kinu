@@ -5,7 +5,7 @@
 import * as v from 'valibot';
 import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
-import { ShareModeSchema } from './share-modes';
+import { ShareModeSchema, ShareStartSchema } from './share-modes';
 import { GalleryCategorySchema } from './gallery-api';
 
 
@@ -58,7 +58,7 @@ const SlateGraphNamespaceSchema = v.object({
 
 export type SlateGraphNamespace = v.InferOutput<typeof SlateGraphNamespaceSchema>;
 
-export const SlateCapabilityGraphSchema = v.object({
+const SlateCapabilityGraphSchema = v.object({
   slate: v.string(),
   slates: v.array(v.string()),
   namespaces: v.array(SlateGraphNamespaceSchema),
@@ -86,6 +86,8 @@ export const LiveShareRecordSchema = v.object({
   mode: ShareModeSchema,
   /** `owner` mode: the revision whose reach the owner approved; null in `own` mode. */
   grantRevision: v.nullable(v.string()),
+  /** Its card's words while its owner lists it in the Gallery; null when not listed, and always on an `owner` share. */
+  gallery: v.nullable(v.object({ line: v.string(), category: GalleryCategorySchema })),
   /** Computed where the row is answered, never stored. */
   paused: v.optional(v.boolean()),
   /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner
@@ -108,6 +110,8 @@ export const LiveShareBodySchema = v.object({
   fork: v.optional(v.boolean()),
   mode: v.optional(ShareModeSchema),
   revision: v.optional(v.string()),
+  /** H7, offered at a slate's first share: `empty` shares a copy made now, code only (`share.slate` is the copy's). */
+  start: v.optional(ShareStartSchema),
 });
 
 export type LiveShareBody = v.InferOutput<typeof LiveShareBodySchema>;
@@ -135,6 +139,14 @@ export const LiveShareListingBodySchema = v.variant('listed', [
 ]);
 
 export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySchema>;
+
+/** `POST`, signed in: where a live share opens for this person (a public share's address, else their signed entry to
+ *  one that names them), with the slate it serves and its title, which the page that frames it names it by. */
+export const LIVE_SHARE_OPEN_PATH = '/api/shared/live/open';
+
+export const LiveShareOpenSchema = v.object({ url: v.string(), slate: v.string(), title: v.string() });
+
+export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
 
 export const LiveShareCreatedSchema = v.object({
   share: LiveShareRecordSchema,

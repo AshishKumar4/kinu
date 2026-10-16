@@ -1,8 +1,9 @@
 /** Typed client for `/api/shared/*` and the public blueprint read; the session rides the HttpOnly cookie. */
 import { Effect } from 'effect';
 import {
-  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema, LIVE_SHARE_MODE_PATH,
-  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareModeBody, type LiveShareRecord,
+  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH,
+  LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
+  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareListingBody, type LiveShareModeBody, type LiveShareRecord,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -83,12 +84,17 @@ export async function revokeShare(input: { workspace: string; share: string }): 
   return settle(api(v.object({ listing: Listing }), 'POST', '/api/shared/revoke', input));
 }
 
-/** Share origin for a public share; a ticket-bearing entry for one that names people. */
-export function openLiveShare(input: { workspace: string; share: string }): Promise<{ url: string }> {
-  return settle(api(v.object({ url: v.string() }), 'POST', '/api/shared/live/open', input));
+/** Share origin for a public share; a ticket-bearing entry for one that names people; with the slate and its title. */
+export function openLiveShare(input: { workspace: string; share: string }): Promise<LiveShareOpen> {
+  return settle(api(LiveShareOpenSchema, 'POST', LIVE_SHARE_OPEN_PATH, input));
 }
 
 /** Switches a share's mode, or approves the reach again at the slate's new revision: the share as it now is. */
 export function setShareMode(body: LiveShareModeBody): Promise<LiveShareRecord> {
   return settle(api(LiveShareRecordSchema, 'POST', LIVE_SHARE_MODE_PATH, body));
+}
+
+/** Lists a share in the Gallery with its card's words, or takes it off: the share as it now is. */
+export function listShare(body: LiveShareListingBody): Promise<LiveShareRecord> {
+  return settle(api(LiveShareRecordSchema, 'POST', LIVE_SHARE_LISTING_PATH, body));
 }

@@ -2,7 +2,7 @@ import { exports } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateController, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
+  SlateController, type SlateControllerPorts, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
   ROOT_SLATE_CALLER, serverAuthority, shareCaller, slateRevision,
   type LiveShareAuthority, type ServerAuthority, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
 } from '@kinu.run/core/slates';
@@ -61,6 +61,12 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   /** Each viewer's own account, where their personal parts' calls run (`part-runs.ts`); absent, no part runs. */
   readonly partConnections?: PartConnections;
   ownerUserId?(): string | null;
+  /** The workspace's one queue of actions parked on its owner, where `owner` shares' effects wait (deferred-approval.ts). */
+  readonly ownerEffects?: NonNullable<SlateControllerPorts<SlateSource, ResidentSlateProcess>['ownerEffects']>;
+  /** A live share's Gallery listing changed where its owner waits: the Gallery is told now, a failure logged. */
+  listingChanged?(share: LiveShareRecord): Promise<void>;
+  /** The Gallery told again of these listed shares, in the background. */
+  relisted?(shares: readonly LiveShareRecord[]): void;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
   previewed?(slate: string): void;
@@ -140,6 +146,9 @@ export class SlateHost {
       ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.sharesChanged !== undefined && { sharesChanged: deps.sharesChanged.bind(deps) }),
+      ...(deps.ownerEffects !== undefined && { ownerEffects: deps.ownerEffects }),
+      ...(deps.listingChanged !== undefined && { listingChanged: deps.listingChanged.bind(deps) }),
+      ...(deps.relisted !== undefined && { relisted: deps.relisted.bind(deps) }),
       shareChanged: async (slate) => { await this.shareChanged(slate); },
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
     });

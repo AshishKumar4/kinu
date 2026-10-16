@@ -8,17 +8,21 @@
  * - `deploy` shows a deploy button whose run asks the viewer to approve one effect, with its payload, then shows done.
  * - `team` is a part the slate does not declare for this share: a stub that says what to do.
  *
+ * `shared-live` is the same slate entered as a share: the share's page opens it (`/api/shared/live/open`) and frames it
+ * under Kinu's bar, hosting its parts as the visitor.
+ *
  * What the page asked is on the root for a test to read; the slate's page is drawn here, as its own author would.
  */
 import { useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
-  APP_ROUTES, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
+  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
   type PartRunAnswer, type SlateConsent,
 } from "@kinu.run/core";
 import { PartView } from "@/components/sharing/PartView";
 import { usePartHost } from "@/hooks/use-part-host";
+import LiveSharePage from "@/pages/LiveSharePage";
 import PartFramePage from "@/pages/PartFramePage";
 
 /** The slate's address and the revision of its code now. */
@@ -28,8 +32,8 @@ const { workspace: WORKSPACE, slate: SLATE, title: TITLE, revision: REVISION } =
 
 /** What each part asks of the viewer's grants, at this revision. */
 const ASKS = {
-  github: { server: "mcp.github", root: { org: "acme" }, tools: ["list_pull_requests"], effects: false, revision: REVISION },
-  vercel: { server: "mcp.vercel", root: { project: "site" }, tools: ["deploy"], effects: true, revision: REVISION },
+  github: { server: "mcp.github", serverTitle: "GitHub", root: { org: "acme" }, tools: ["list_pull_requests"], effects: false, revision: REVISION },
+  vercel: { server: "mcp.vercel", serverTitle: "Vercel", root: { project: "site" }, tools: ["deploy"], effects: true, revision: REVISION },
 };
 
 const { github: GITHUB, vercel: VERCEL } = ASKS;
@@ -55,7 +59,7 @@ function slatePage(gallery: string): string {
 
 /** The part routes, answered at the top as the server answers its one viewer. */
 export function installPartsFixture(frame: string): void {
-  if (frame !== "part-host") return;
+  if (frame !== "part-host" && frame !== "shared-live") return;
 
   const next = window.fetch.bind(window);
   const consents: SlateConsent[] = [{ workspace: WORKSPACE, slate: SLATE, ...GITHUB, revision: "r1" }];
@@ -74,7 +78,7 @@ export function installPartsFixture(frame: string): void {
 
       if (approval !== null && approved.has(approval)) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed site to production.</p>`, actions: [], show: null };
 
-      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, tool: "deploy", root: VERCEL.root, payload: { project: "site", target: "production", ref: "main" } } };
+      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref: "main" } } };
     }
 
     return { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." };
@@ -84,6 +88,13 @@ export function installPartsFixture(frame: string): void {
     const request = new Request(input, init);
     const url = new URL(request.url);
     const [, api, area, workspace, slate, kind, part, verb] = url.pathname.split("/");
+
+    // The share's entry: the slate's page as its host serves it, at an address of the page's own origin.
+    if (url.pathname === LIVE_SHARE_OPEN_PATH) {
+      const page = URL.createObjectURL(new Blob([slatePage(location.origin + location.pathname)], { type: "text/html" }));
+
+      return Response.json({ url: page, slate: SLATE, title: TITLE });
+    }
 
     if (api !== "api" || area !== "slates" || workspace !== WORKSPACE || decodeURIComponent(slate ?? "") !== SLATE) return next(input, init);
 
@@ -122,25 +133,39 @@ export function installPartsFixture(frame: string): void {
 }
 
 /**
- * The share dialog's mode switch (`sharedialog`): a share moved to each person's own access answers as the route does,
- * the record with that mode and no grant revision, the share the dialog last showed otherwise as it was. `shown` is read
- * at the call, as the gallery defines its share further down.
+ * The share dialog's mode switch and Gallery listing (`sharedialog`), answered as the routes do: each answers the share as
+ * it now is, and a share on the owner's access is refused a listing. `shown` is read at the first call, as the gallery
+ * defines its share further down.
  */
 export function installShareModeFixture(frame: string, shown: () => LiveShareRecord): void {
   if (frame !== "sharedialog") return;
 
   const next = window.fetch.bind(window);
+  let share: LiveShareRecord | null = null;
 
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
+    const path = new URL(request.url).pathname;
 
-    if (new URL(request.url).pathname !== LIVE_SHARE_MODE_PATH) return next(input, init);
+    if (path !== LIVE_SHARE_MODE_PATH && path !== LIVE_SHARE_LISTING_PATH) return next(input, init);
 
-    const body = v.parse(LiveShareModeBodySchema, await request.json());
+    const was = share ?? shown();
 
-    const share = shown();
+    if (path === LIVE_SHARE_MODE_PATH) {
+      const body = v.parse(LiveShareModeBodySchema, await request.json());
 
-    return Response.json(body.mode === "own" ? { ...share, id: body.share, mode: "own", grantRevision: null, stale: false } : { ...share, id: body.share, mode: "owner", grantRevision: body.revision, stale: false });
+      share = body.mode === "own" ? { ...was, mode: "own", grantRevision: null, stale: false } : { ...was, mode: "owner", grantRevision: body.revision, stale: false };
+
+      return Response.json(share);
+    }
+
+    const body = v.parse(LiveShareListingBodySchema, await request.json());
+
+    if (body.listed && was.mode === "owner") return Response.json({ error: "A share on your access is never listed in the Gallery" }, { status: 400 });
+
+    share = { ...was, gallery: body.listed ? { line: body.line, category: body.category } : null };
+
+    return Response.json(share);
   }, { preconnect: window.fetch.preconnect });
 }
 
@@ -156,6 +181,17 @@ export function PartHostFrame() {
     </div>
   );
 }
+
+/** The share's page, at the share's address. */
+export function SharedLiveFrame() {
+  return (
+    <Routes>
+      <Route path={APP_ROUTES.sharedLive} element={<LiveSharePage />} />
+    </Routes>
+  );
+}
+
+export const SHARED_LIVE_ENTRY = `/shared/live/${WORKSPACE}/share-1`;
 
 /** One part frame, at its route as the slate's page addresses it. */
 export function PartFrameFrame() {
@@ -175,7 +211,7 @@ export function partFrameEntry(search: URLSearchParams): string {
 const STATES: readonly { name: string; answer: PartRunAnswer }[] = [
   { name: "Asks to use a connection", answer: { kind: "needs-consent", ask: GITHUB } },
   { name: "Shown, with its own controls", answer: { kind: "shown", revision: REVISION, html: STANDUP.html, actions: [{ id: "refresh", label: "Refresh" }], show: STANDUP.show } },
-  { name: "An effect waits for approval", answer: { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, tool: "deploy", root: VERCEL.root, payload: { project: "site", target: "production" } } } },
+  { name: "An effect waits for approval", answer: { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production" } } } },
   { name: "Signed out", answer: { kind: "stub", reason: "signed-out", message: "Sign in to see your own part of Team board." } },
   { name: "Not shared with this person", answer: { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." } },
   { name: "Its run failed", answer: { kind: "failed", message: "GitHub didn't answer in time. Your token is fine; try again." } },

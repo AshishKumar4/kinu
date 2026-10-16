@@ -1,14 +1,14 @@
 /**
  * Gallery frames (`gallery-list`, `gallery-slate&slate=<slate>`; `&signed=out` for a visitor, `&fork=1` back from
  * signing in to fork) on a fixed set of listings: `/api/gallery` answers as the Gallery's contract says (room-api.ts),
- * sorted, filtered and searched here, six to a page; a star and a report are taken; a listed slate's fork admits only its
- * link's key. Each listing but Team lunch poll has a picture; a test or a shot answers its reads.
+ * sorted, filtered and searched here, six to a page; a star and a report are taken. Each listing but Team lunch poll has
+ * a picture; a test or a shot answers its reads.
  */
 import { lazy, Suspense, type ReactNode } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
-import { APP_ROUTES, type ForkPreview, type GalleryListing, type GallerySlate, type RoomService } from "@kinu.run/core";
+import { APP_ROUTES, type GalleryListing, type GallerySlate } from "@kinu.run/core";
 import GalleryShell from "@/components/gallery/GalleryShell";
 
 const GalleryPage = lazy(() => import("@/pages/GalleryPage"));
@@ -27,10 +27,6 @@ const listing = (
 const PICTURES = {
   "pr-board": "fb78dc00234ee9eeda9437ad7af4cd8c89a6836d2111827b4df00569ecd26b74", trip: "34a389d790fc2bdd8458e5f1cde6933c97d11eeda65cf328b64460f0d68f04b5", habits: "d68cffa59de9dff4b72aaaa70edfd8f4a957c580c654b7da4b0fcea7ad307a95", digest: "0bf474896363505e5ea5e5d6ace8ebfb13a760a409b1fb467d428fc716f9f284", standup: "c0fbdc38b1762851a9221b774a130fd2ae0bf78c61bd69eb334f8cd2caa08319", recipe: "e1d8e552330911f9f779f85b6f2c00a15e790dcc3fbb3b28f5da1d660a30c5b8",
 } as const;
-
-const GITHUB = { title: "GitHub", kind: "github" } as const;
-
-const MODEL = { title: "Model", kind: "ai" } as const;
 
 /** In trending order, as the Gallery answers it unsorted. */
 const LISTINGS: readonly GalleryListing[] = [
@@ -71,16 +67,7 @@ const PAGES = {
 
 const pageOf = (slate: string): Omit<GallerySlate, "listing"> => (slate === "pr-board" ? PAGES[slate] : {});
 
-/** What a fork of each asks its forker to connect. */
-const NEEDS = new Map<string, readonly RoomService[]>([["pr-board", [GITHUB]], ["digest", [MODEL]], ["standup", [MODEL, GITHUB]]]);
-
 const PAGE_SIZE = 6;
-
-const FORK_PREVIEW = (found: GalleryListing): ForkPreview => ({
-  title: found.title,
-  owner: { email: `${found.workspace}@example.com`, name: found.owner.name },
-  parts: (NEEDS.get(found.slate) ?? []).map((need, at) => ({ fn: `part${String(at)}`, lent: false, needs: need })),
-});
 
 const ORDER = {
   trending: () => 0,
@@ -132,7 +119,7 @@ export function installGalleryFixture(frame: string): void {
 
     const found = listings.find((each) => each.workspace === workspace && each.slate === slate);
 
-    if (api !== "api" || (area !== "gallery" && area !== "rooms")) return next(input, init);
+    if (api !== "api" || area !== "gallery") return next(input, init);
 
     asked.push({ path: url.pathname, search: url.search, body: request.method === "POST" ? await request.clone().text() : null });
     document.documentElement.setAttribute("data-gallery-asked", JSON.stringify(asked));
@@ -155,13 +142,6 @@ export function installGalleryFixture(frame: string): void {
     if (found === undefined) return Response.json({ error: "There's no slate here" }, { status: 404 });
 
     if (area === "gallery" && rest === undefined) return Response.json({ listing: found, ...pageOf(found.slate) });
-
-    // The fork admits by the link's key, as the room does.
-    if (area === "rooms" && rest === "fork") {
-      return found.url.endsWith(`?k=${url.searchParams.get("k") ?? ""}`)
-        ? Response.json(FORK_PREVIEW(found))
-        : Response.json({ error: "This slate isn't shared with you" }, { status: 403 });
-    }
 
     return next(input, init);
   }, { preconnect: next.preconnect });
