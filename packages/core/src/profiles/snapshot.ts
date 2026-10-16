@@ -7,7 +7,7 @@ import { DECISION_MODELS } from '../providers/decision-model';
 import { NAMED_SWARM_PRESETS } from '../types/swarm';
 import { REASONING_EFFORTS } from '../providers/effort';
 import type { WorkMode } from '../types/turn';
-import { TierIdSchema,
+import { TIER_IDS, TierIdSchema,
   ProfileAuthoritySchema, parseProfileValue,
   type RoleId, type TierId,
 } from './catalog';
@@ -52,12 +52,12 @@ const ResolvedTurnProfileSchema = v.strictObject({
     fallbacks: FallbacksSchema,
     replaced: v.nullable(v.string()),
   }),
-  /** Per slot, so a snapshot missing one fails here rather than at a producer (model-route.ts). */
-  tiers: v.strictObject({
-    fast: TierSlotSchema,
-    default: TierSlotSchema,
-    deep: TierSlotSchema,
-  }),
+  /** Every tier the catalog held, a tier an account names itself as well as the built-in three; a snapshot missing a
+   *  built-in slot fails here rather than at a producer (model-route.ts). */
+  tiers: v.pipe(
+    v.record(TierIdSchema, TierSlotSchema),
+    v.check((tiers) => TIER_IDS.every((id) => Object.hasOwn(tiers, id)), `a frozen profile routes every built-in tier: ${TIER_IDS.join(', ')}`),
+  ),
   retries: v.number(),
   decisionModel: v.picklist(DECISION_MODELS),
   workMode: v.picklist(['plan', 'build']),

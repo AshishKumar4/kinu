@@ -10,6 +10,7 @@ import {
   type ResolveTurnProfileInput, type RoleDefinition, type TierAssignments,
 } from '../src/profiles';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../src/providers/workers-ai';
+import { parseResolvedTurnProfile } from '../src/profiles/snapshot';
 
 const TIERS: TierAssignments = {
   default: { model: 'm-default' },
@@ -549,5 +550,34 @@ describe('output discipline', () => {
     expect(profile.catalogVersion).toBe(12);
     expect(profile.providerRevision).toBe('rev-7');
     expect(profile.digest).not.toBe(env.digest);
+  });
+});
+
+describe('a turn under a tier the account named itself', () => {
+  // The eval reviewer's tier, as the evals write it into eval-service's catalog (evals/src/reviewer.ts): on staging
+  // (66938aa25, 2026-10-16) every later turn of that account failed reading back its own frozen profile.
+  const reviewer: RoleDefinition = {
+    description: 'Reads a run.', instructions: 'Read the files.', tier: 'eval-reviewer', preset: 'research', allowedTools: ['file'],
+  };
+
+  const resolved = () => resolveTurnProfile({
+    envelope: envelope(catalog({ roles: { reviewer }, tiers: { ...TIERS, 'eval-reviewer': { model: 'm-default', reasoningEffort: 'max' } } })),
+    provider: provider(), roleId: 'task', workMode: 'build', availableTools: ['file'], activeSkills: [],
+  });
+
+  test('freezes and reads back whole, as a resumed run reads it', () => {
+    const stored = JSON.parse(JSON.stringify(resolved()));
+
+    expect(parseResolvedTurnProfile({ value: stored })).toEqual(stored);
+    expect(Object.keys(stored.tiers).sort()).toEqual(['deep', 'default', 'eval-reviewer', 'fast']);
+  });
+
+  test('a frozen profile missing a built-in slot, or naming a tier no catalog could, is still refused', () => {
+    const { deep: _deep, ...missing } = JSON.parse(JSON.stringify(resolved())).tiers;
+    const stored = JSON.parse(JSON.stringify(resolved()));
+
+    expect(() => parseResolvedTurnProfile({ value: { ...stored, tiers: missing } })).toThrow("a run's frozen turn profile");
+    expect(() => parseResolvedTurnProfile({ value: { ...stored, tiers: { ...stored.tiers, 'Not A Tier!': stored.tiers.fast } } }))
+      .toThrow("a run's frozen turn profile");
   });
 });
