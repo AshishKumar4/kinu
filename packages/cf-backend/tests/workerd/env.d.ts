@@ -319,6 +319,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   sealed(value: JsonValue | null): Promise<{ csp: string | null; type: string | null; body: string }>;
   attackHolder(): Promise<{ alice: string; bobFirst: string; afterSamShows: string; afterAliceShows: string }>;
   scenarioBoard(): Promise<{ alice: string; bob: string; visitor: string; asked: { sam: number; alice: number; bob: number } }>;
+  roomWrites(): Promise<{ visitorNote: string; visitorPut: string; bobNote: string; notes: string; stamps: string; stampedTwice: string }>;
   attackRequester(): Promise<{ alice: string; bob: string; aliceCallsForBob: number }>;
   attackToolFlow(): Promise<{ samOwn: string; alice: string; samMailsForAlice: number }>;
   attackSink(): Promise<{ asked: string; mailedBeforeDeciding: number; mailedAfter: number; alice: string }>;
@@ -330,7 +331,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   roomExists(workspace: string, id: string): Promise<boolean>;
   rekeyedListing(workspace: string, id: string): Promise<{ moved: boolean; before: boolean; after: boolean }>;
   editorEdits(input: { workspace: string; id: string; editorWorkspace: string; editor: string; server: string }): Promise<{
-    before: string; files: string[]; edited: string; page: string | null; author: string | null; afterRemoval: string;
+    before: string; files: string[]; edited: string; page: string | null; author: string | null; reaching: string; restored: boolean; pageAfter: string | null; afterRemoval: string;
   }>;
   putPicture(workspace: string, slate: string, digest: string): Promise<void>;
   pictureKeys(workspace: string): Promise<string[]>;

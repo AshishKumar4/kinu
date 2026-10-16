@@ -59,8 +59,8 @@ export interface SlateRoomStub {
   publish(input: {
     readonly author: string; readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string;
     readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null;
-    /** The version of the slate's files the image was built from, which a fork of it gets. */
-    readonly source: string;
+    /** The version of the slate's files the image was built from, which a fork of it gets; null for an answer's page. */
+    readonly source: string | null;
     /** Each function's input contract, as the slate's package.json declares it. */
     readonly contracts: Readonly<Record<string, Codec>>;
   }): Promise<{ readonly methods: readonly string[] }>;
@@ -92,6 +92,7 @@ export class SlateHost {
       digest: (cred, id, source) => this.slateSources.digest(cred, id, source),
       build: async (caller, id, source) => this.resident.build({
         owner: id, root: source.root, project: source.project, read: await this.slateSources.reader(caller.cred, source), cred: caller.cred,
+        ...(this.editing.has(id) && { scope: 'tree' as const }),
       }),
       launch: (launch) => this.launch(launch),
       // A socket-held invocation dies with the process that held it.
@@ -292,12 +293,27 @@ export class SlateHost {
 
       if (!written.ok) return yield* new KinuError(written.reason, written.error);
       this.editing.set(id, editor);
-      yield* Effect.ensuring(
-        attempt({ doing: `building slate ${id}`, otherwise: 'io' }, async () => this.ensure(ROOT_SLATE_CALLER, id)),
-        Effect.sync(() => { this.editing.delete(id); }),
-      );
 
-      return written.value;
+      // Built from the slate's own tree alone (`SlateBuildInput.scope`); a change that does not build is taken back whole,
+      // so no later build of the owner's ever compiles what the editor's could not.
+      // A tree that does not build leaves the last image that did running, and says why: the edit did not take.
+      const built = yield* Effect.result(Effect.ensuring(
+        Effect.flatMap(
+          attempt({ doing: `building slate ${id}`, otherwise: 'io' }, async () => this.controller.processes.booted(ROOT_SLATE_CALLER, id)),
+          (running) => (running.broken === null ? Effect.void : Effect.fail(new KinuError('bad_input', running.broken))),
+        ),
+        Effect.sync(() => { this.editing.delete(id); }),
+      ));
+
+      if (built._tag === 'Failure') {
+        const undone = yield* Effect.promise(async () => this.controller.writeShared(id, written.value.before));
+
+        if (!undone.ok) return yield* new KinuError(undone.reason, `${built.failure.message}; taking the change back failed too: ${undone.error}`);
+
+        return yield* Effect.fail(built.failure);
+      }
+
+      return written.value.paths;
     })));
   }
 
@@ -330,13 +346,14 @@ export class SlateHost {
       const owner = yield* this.owner();
       const room = yield* this.room(id, owner);
       const secret = yield* attempt({ doing: `scanning slate ${id} for secrets`, otherwise: 'io' }, async () => this.secretIn(source));
-      const version = yield* Effect.promise(async () => this.controller.currentSource(id));
+      // A slate of files is published at the version its files are now, which a fork of it gets; an answer's page has none.
+      const version = source.kind === 'files' ? yield* Effect.promise(async () => this.controller.currentSource(id)) : null;
 
-      if (!version.ok) return yield* new KinuError(version.reason, version.error);
+      if (version !== null && !version.ok) return yield* new KinuError(version.reason, version.error);
 
       const { methods } = yield* attempt({ doing: `publishing slate ${id}`, otherwise: 'unavailable' }, async () => room.publish({
         author: this.editing.get(id) ?? owner, image: sha256Hex(stableStringify(image.modules)), modules: image.modules, title: slateTitle(source.project, id), secret,
-        source: version.value, contracts: Object.fromEntries(Object.entries(source.project.slate.functions ?? {}).map(([fn, declared]) => [fn, declared.input])),
+        source: version?.value ?? null, contracts: Object.fromEntries(Object.entries(source.project.slate.functions ?? {}).map(([fn, declared]) => [fn, declared.input])),
       }));
 
       // Nothing of the workspace's serves the slate: its URL and its socket are its room's.

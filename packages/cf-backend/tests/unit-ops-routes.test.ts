@@ -36,6 +36,7 @@ function world(written: readonly string[]) {
     UserDO: namespace('UserDO'),
     OrchestratorAgent: namespace('OrchestratorAgent'),
     SLATE_ROOM: namespace('SlateRoom'),
+    GALLERY: namespace('GalleryDO'),
   };
 
   return { env, asked };

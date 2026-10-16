@@ -5,12 +5,15 @@
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { err, json, safeJson, GALLERY_CATEGORIES, GALLERY_SORTS } from '@kinu.run/core';
-import { requestIdentity } from '../auth/session';
+import { crossSiteRejection, requestIdentity } from '../auth/session';
 import { rawParam, type FamilyEnv } from '../api/context';
 import { pictureKey, readSlatePicture } from '../slates/pictures';
 import { GALLERY_OBJECT, type GalleryDO, type GalleryMark } from './gallery-do';
 
 export const galleryRoutes = new Hono<FamilyEnv<Env, object>>();
+
+// A star or a report is a signed-in person's: one sent with their cookie from another origin is refused, as the gate does.
+galleryRoutes.use('/api/gallery/*', async (c, next) => crossSiteRejection(c.req.raw) ?? await next());
 
 const NO_STORE = { 'cache-control': 'no-store' };
 

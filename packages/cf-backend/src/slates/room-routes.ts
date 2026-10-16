@@ -7,7 +7,7 @@ import { Hono, type Context } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
 import { hostTokenHolds, parseSlateShareLabel, previewHostSuffix, RoomEntrySchema, safeJson, type Forked, type RoomEntry } from '@kinu.run/core';
-import { requestIdentity, type AuthIdentity } from '../auth/session';
+import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { rawParam, type FamilyEnv } from '../api/context';
@@ -17,6 +17,10 @@ import {
 import { ROOM_HOST_HEADER, ROOM_KEY_HEADER, ROOM_PERSON_HEADER, type RoomVisitor, type SlateRoom } from './room';
 
 export const roomRoutes = new Hono<FamilyEnv<Env, object>>();
+
+// Before the session gate, so its cross-site check is this family's own: a cookie-bearing write or socket from any other
+// origin, a sibling slate's included, is refused before a room is woken. Reads stay open, as a link visitor's are.
+roomRoutes.use('/api/rooms/*', async (c, next) => crossSiteRejection(c.req.raw) ?? await next());
 
 /** The session's person, or null for a request with no session or an expired one: a room treats both as signed out. */
 async function visitorOf(request: Request, env: Env): Promise<{ identity: AuthIdentity; visitor: RoomVisitor } | null> {

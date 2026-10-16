@@ -389,7 +389,13 @@
     "room_lend_uses",
     "room_listing",
     "room_members",
+    "room_outputs",
     "room_readers",
     "room_shows"
+  ],
+  "gallery": [
+    "gallery_listings",
+    "gallery_reports",
+    "gallery_stars"
   ]
 }

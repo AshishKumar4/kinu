@@ -203,9 +203,10 @@ test('the walk follows the roots to the directory\'s accounts and every account\
     'UserDO 10 id(s)',
     'OrchestratorAgent u-seen-ws,u-builtin-ws',
     'SlateRoom u-seen-ws/0123456789,u-builtin-ws/0123456789',
+    'GalleryDO gallery',
   ]);
   // `u-seen` was listed too, and named first: it is asked once.
-  expect({ reached: reached.length, listed }).toEqual({ reached: 67, listed: 61 });
+  expect({ reached: reached.length, listed }).toEqual({ reached: 68, listed: 61 });
   expect(forgotten).toEqual(admitted);
 });
 

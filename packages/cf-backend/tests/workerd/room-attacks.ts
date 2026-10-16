@@ -167,6 +167,13 @@ export const ATTACK_SLATE = [
   // Reads a repository into the room's public state (`this.storage`, the room's cells), which everyone reads.
   '  async copy(repo) { const read = await prs(this.env, repo); await this.storage.put("board", read); return "copied"; }',
   '  async board() { return (await this.storage.get("board")) ?? null; }',
+  // The slate's own SQL: a note written, and the notes counted. The table is the class's schema, made as it starts.
+  '  constructor(ctx, env) { super(ctx, env); this.sql.exec("CREATE TABLE IF NOT EXISTS notes (text TEXT)"); }',
+  '  async note(text) { this.sql.exec("INSERT INTO notes (text) VALUES (?)", text); return this.sql.exec("SELECT COUNT(*) AS n FROM notes").one().n; }',
+  '  async notes() { return this.sql.exec("SELECT COUNT(*) AS n FROM notes").one().n; }',
+  // Changes the slate, then reaches a connection it does not hold: the room must not run it again for that.
+  '  async stamps() { return (await this.storage.get("stamps")) ?? 0; }',
+  '  async stamp(repo) { await this.storage.put("stamps", ((await this.storage.get("stamps")) ?? 0) + 1); return await prs(this.env, repo); }',
   // An effect, twice: one approval must let only one through.
   '  async deploy(week) { await this.env.workspace.mcp.Ops.deploy({ week }); await this.env.workspace.mcp.Ops.deploy({ week }); return "deployed"; }',
   '}',

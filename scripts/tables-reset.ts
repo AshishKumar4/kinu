@@ -32,7 +32,7 @@ import { restCall } from './cloudflare-rest';
 import type { GenesisLock } from './schema-drift';
 
 /** The classes the walk reaches, as `/ops/tables` names them. */
-export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent', 'SlateRoom'] as const;
+export const RESET_CLASSES = ['UserDO', 'OrchestratorAgent', 'SlateRoom', 'GalleryDO'] as const;
 
 export type ResetClass = (typeof RESET_CLASSES)[number];
 
@@ -311,7 +311,7 @@ export interface OpsBody {
 }
 
 const RepairSchema = v.object({
-  schema: v.picklist(['account', 'workspace', 'agent', 'local', 'room']),
+  schema: v.picklist(['account', 'workspace', 'agent', 'local', 'room', 'gallery']),
   rebuilt: v.array(v.string()),
   refilled: v.array(v.string()),
   retired: v.array(v.string()),
@@ -433,6 +433,7 @@ export async function walk(target: TablesTarget): Promise<{ readonly reached: Re
 
     const listed = {
       UserDO: await target.objects('UserDO'), OrchestratorAgent: await target.objects('OrchestratorAgent'), SlateRoom: await target.objects('SlateRoom'),
+      GalleryDO: await target.objects('GalleryDO'),
     };
 
     let accounts = (await askAdmitted(target, pass, { path: 'roots', body: null, schema: RootsSchema })).accounts;
@@ -450,8 +451,10 @@ export async function walk(target: TablesTarget): Promise<{ readonly reached: Re
     await reachEach(walking, 'OrchestratorAgent', { names: [], ids: listed.OrchestratorAgent });
     await reachEach(walking, 'SlateRoom', { names: answers().flatMap((answer) => answer.rooms), ids: [] });
     await reachEach(walking, 'SlateRoom', { names: [], ids: listed.SlateRoom });
+    // The Gallery is one object, by its one name.
+    await reachEach(walking, 'GalleryDO', { names: ['gallery'], ids: listed.GalleryDO });
 
-    return { reached: [...reached.values()], listed: listed.UserDO.length + listed.OrchestratorAgent.length + listed.SlateRoom.length };
+    return { reached: [...reached.values()], listed: listed.UserDO.length + listed.OrchestratorAgent.length + listed.SlateRoom.length + listed.GalleryDO.length };
   } finally {
     target.forget(digest);
   }

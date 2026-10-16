@@ -11,12 +11,12 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { cookieForTicket, frameTicket, roomHandle, roomObjectName, ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { cookieForTicket, frameTicket, readPass, roomHandle, roomObjectName, ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { handleSlateRoomHostRequest } from '../../src/slates/room-routes';
 import { sealedPart } from '../../src/slates/room-parts';
 import type { RoomCallOutcome } from '../../src/slates/room';
 import { ATTACK_SLATE, GITHUB, MAIL, OPS, persona, personSocket, reachedCalls, type PersonSocket } from './room-attacks';
-import { ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
+import { ROOM_HOST_HEADER, ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
 import { GALLERY_OBJECT } from '../../src/gallery/gallery-do';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -518,12 +518,25 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /** A person's call that needs their own connection: they allow it on its part, and call again. */
+  /**
+   * A person's call that needs their own connection: they allow it on its part, and the room runs the call once more.
+   * What that run came to: a failure the part shows, or, once it holds what it needed, the call's answer now.
+   */
   private async allowed(room: DurableObjectStub<SlateRoom>, socket: PersonSocket, call: { email: string; fn: string; args: JsonValue[] }): Promise<string> {
     for (let tries = 0; tries < 3; tries++) {
       const answer = SlateDurabilityProbeRoot.said(await room.callAs(call.email, call.fn, call.args));
 
       if (answer.part === null) return answer.said;
-      await socket.call({ op: 'allow', part: answer.part });
+      const key = answer.part;
+
+      await socket.call({ op: 'open', part: key });
+      await socket.call({ op: 'allow', part: key });
+      const since = socket.mark();
+
+      await socket.call({ op: 'here', where: null, typing: null });
+      const part = (await socket.view(() => true, since)).parts[key];
+
+      if (part?.state === 'failed') return `stopped: ${part.message}`;
     }
 
     return 'still a part';
@@ -609,6 +622,42 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     };
 
     return { ...seen, asked: { sam: await asks(owner), alice: await asks(alice), bob: await asks(bob) } };
+  }
+
+  /**
+   * Who may change the slate: a visitor through the link may read it, never write its SQL or its state; someone signed
+   * in may. A page's own `workspace` call is answered. A call that changed the slate before it reached a connection it
+   * did not hold is not run again by the room.
+   */
+  async roomWrites(): Promise<{ visitorNote: string; visitorPut: string; bobNote: string; notes: string; stamps: string; stampedTwice: string }> {
+    const { people, room, owner, asOwner } = await this.stage('writes');
+
+    await owner.call({ op: 'setAudience', audience: 'anyone' });
+    const said = async (email: string | null, fn: string, args: JsonValue[]): Promise<string> => SlateDurabilityProbeRoot.said(await room.callAs(email, fn, args)).said;
+    // A visitor with only the link, as the slate's own host admits them: no email, the link's generation.
+    const link = (await owner.view((each) => each.sheet?.url != null)).sheet?.url ?? '';
+    const entry = await room.ticketFor(null, new URL(link).searchParams.get('k'));
+    const claim = entry === null ? null : await readPass(this.env, { workspace: 'attack-writes', handle: roomHandle('attack-writes', 'attack') }, new URL(entry).searchParams.get('t') ?? '', 'ticket');
+
+    const visitor = async (fn: string, args: JsonValue[]): Promise<string> => {
+      const answered = await room.fetch(new Request('https://slate.host/__kinu/call', {
+        method: 'POST', headers: { [ROOM_HOST_HEADER]: JSON.stringify(claim === null ? null : { email: claim.email, access: claim.access }) }, body: JSON.stringify({ method: fn, args }),
+      }));
+
+      const body = v.parse(v.union([v.object({ ok: v.literal(true), value: v.unknown() }), v.object({ ok: v.literal(false), reason: v.string(), error: v.string() })]), await answered.json());
+
+      return body.ok ? `value ${JSON.stringify(body.value)}` : `refused ${body.reason}: ${body.error}`;
+    };
+
+    const visitorNote = await visitor('note', ['graffiti']);
+    const visitorPut = await visitor('stamp', ['board']);
+    const bobNote = await said(people.bob, 'note', ['hello']);
+    const notes = await said(people.bob, 'notes', []);
+    // Bob's GitHub is his own: `stamp` reaches it after it changed the slate, so the room asks, and does not run it again.
+    const stamped = await said(people.bob, 'stamp', ['secret']);
+    const stamps = await asOwner('stamps', []);
+
+    return { visitorNote, visitorPut, bobNote, notes, stamps: stamped, stampedTwice: stamps };
   }
 
   /** Attack 3, the requester check: Alice's own GitHub, allowed for her part, never runs for Bob's request. */
@@ -768,7 +817,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   /** A part's sealed content, as the app's origin serves it: its headers and its body. */
   async sealed(value: JsonValue | null): Promise<{ csp: string | null; type: string | null; body: string }> {
-    const response = await sealedPart(value);
+    const response = await sealedPart(value, 'https://board-token-ws.slates.test');
 
     return { csp: response.headers.get('content-security-policy'), type: response.headers.get('content-type'), body: await response.text() };
   }
@@ -1104,8 +1153,12 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
    * and changes it through the room: what each step answered, and the page and author after the edit.
    */
   async editorEdits(input: { workspace: string; id: string; editorWorkspace: string; editor: string; server: string }): Promise<{
-    before: string; files: string[]; edited: string; page: string | null; author: string | null; afterRemoval: string;
+    before: string; files: string[]; edited: string; page: string | null; author: string | null; reaching: string; restored: boolean; pageAfter: string | null; afterRemoval: string;
   }> {
+    const owned = await this.workspaceTarget(input.workspace);
+
+    // A file of the owner's outside the slate, which no edit of an editor's may build in.
+    await this.writeSlateFile(owned, '/slates/private/secret.ts', 'export const secret = "owner-private";\n');
     const target = await this.workspaceTarget(input.editorWorkspace);
 
     await this.claimWorkspace(target, input.editorWorkspace, input.editor);
@@ -1124,12 +1177,22 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const page = ticket === null ? null : await this.pageAt(ticket);
     const author = await room.author();
 
+    // An edit that imports the owner's file outside the slate does not build, and is taken back whole.
+    const reaching = said(await editor.slateAs(ROOT_SLATE_CALLER, {
+      op: 'sharedEdit', ...shared, files: { 'server.ts': `import { secret } from "../private/secret.ts";\n${input.server.replace('editor-body', '" + secret + "')}` },
+    }));
+
+    const reread = await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedFiles', ...shared });
+    const restored = reread.ok && v.parse(SharedSlateFilesSchema, reread.value).files.every((file) => !file.text.includes('private/secret'));
+    const again = await room.ticketFor({ email: this.ctx.storage.kv.get<string>(`owner:${input.workspace}`) ?? '', name: 'owner' }, null);
+    const pageAfter = again === null ? null : await this.pageAt(again);
+
     await call({ op: 'remove', email });
     const afterRemoval = said(await editor.slateAs(ROOT_SLATE_CALLER, { op: 'sharedEdit', ...shared, files: { 'server.ts': input.server } }));
 
     close();
 
-    return { before, files, edited, page, author, afterRemoval };
+    return { before, files, edited, page, author, reaching, restored, pageAfter, afterRemoval };
   }
 
   /** A page of the slate's own host, entered with `entry`, as the owner's frame opens it. */

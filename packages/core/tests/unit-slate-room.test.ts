@@ -168,7 +168,9 @@ test('a run that read private data posts nothing public, and observes only what 
   const run = caretaker.admit({ requester: alice, fn: 'prs', input: null, grants: [grant.id], inputs: [], out: 'part:prs:alice2' });
 
   expect(() => caretaker.post(run.id, 'board', 'leak')).toThrow(/private data/);
-  caretaker.post(null, 'board', 'public');
+  const publicRun = caretaker.admit({ requester: alice, fn: 'count', input: null, grants: [], inputs: [], out: null });
+
+  caretaker.post(publicRun.id, 'board', 'public');
   expect(caretaker.observe(run.id, 'board')).toBe('public');
   const plain = caretaker.admit({ requester: alice, fn: 'count', input: null, grants: [], inputs: [], out: 'part:count:alice' });
   expect(() => caretaker.observe(plain.id, 'part:prs:alice')).toThrow(/cannot read/);
@@ -264,9 +266,10 @@ test('each function takes what its slate declares: the image carries the contrac
   expect(caretaker.grantsFor(enter(caretaker, BOB), 'deploy', 41).map((grant) => grant.id)).toEqual([lend.id]);
   expect(caretaker.grantsFor(enter(caretaker, BOB), 'deploy', 'rm -rf /')).toEqual([]);
 
-  // Sam narrows it: his own lend follows his new image, contract and all.
+  // Sam narrows it: his own lend follows his new image, contract and all, as a new grant: the old one is gone.
   caretaker.publish(SAM, { image: 'img-3', modules: {}, title: 'Board', secret: null, contracts: { deploy: { kind: 'enum', values: [1, 2] } } });
-  expect(caretaker.grant(lend.id)?.domain).toEqual({ kind: 'enum', values: [1, 2] });
+  expect(caretaker.grant(lend.id)).toBeNull();
+  expect(caretaker.grants().filter((grant) => grant.fn === 'deploy').map((grant) => grant.domain)).toEqual([{ kind: 'enum', values: [1, 2] }]);
   expect(caretaker.grantsFor(enter(caretaker, BOB), 'deploy', 41)).toEqual([]);
 });
 

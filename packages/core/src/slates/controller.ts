@@ -334,7 +334,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   }
 
   /** An editor's change to `slate`'s files, written where the workspace keeps them; what builds of it is the editor's. */
-  writeShared(slate: string, files: SlateFileChange): Promise<SlateAnswer<readonly string[]>> {
+  writeShared(slate: string, files: SlateFileChange): Promise<SlateAnswer<{ readonly paths: readonly string[]; readonly before: SlateFileChange }>> {
     return settle(answer(`changing slate ${slate}'s files`, Effect.gen({ self: this }, function* () {
       const change = v.safeParse(SlateFileChangeSchema, files);
 
@@ -343,6 +343,16 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       const root = `${SLATES_ROOT}/${slate}`;
 
       if (!vfs.exists(root)) return yield* new KinuError('missing', `No slate ${slate}`);
+      // What each file held before, so a change that does not build is taken back whole: text, or null for none.
+      const before: Record<string, string | null> = {};
+
+      for (const path of Object.keys(change.output)) {
+        const at = `${root}/${path}`;
+        const bytes = vfs.exists(at) ? vfs.readFile(at) : null;
+
+        if (bytes !== null && bytes.includes(0)) return yield* new KinuError('bad_input', `${path} is not a text file: an editor changes text`);
+        before[path] = bytes === null ? null : new TextDecoder().decode(bytes);
+      }
 
       for (const [path, text] of Object.entries(change.output)) {
         const at = `${root}/${path}`;
@@ -356,7 +366,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
         vfs.writeFile(at, text);
       }
 
-      return Object.keys(change.output).sort();
+      return { paths: Object.keys(change.output).sort(), before };
     })));
   }
 

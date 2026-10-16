@@ -37,7 +37,7 @@ export { answer as slateAnswer } from './controller';
 
 export {
   RoomCaretaker, initSlateRoomTables,
-  type Access, type Cell, type Grant, type PendingEffect, type RoomCaretakerDeps, type RoomMember, type RoomRecord,
+  type Access, type Cell, type Grant, type Output, type PendingEffect, type RoomCaretakerDeps, type RoomMember, type RoomRecord,
   type Run, type SecretSighting, type Session, type ToolVerdict,
 } from './room/caretaker';
 
@@ -53,6 +53,12 @@ export {
 
 export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
 
-export { codecIsFree, CodecSchema, type Codec } from './room/codec';
+export { codecIsFree, CodecSchema, UNDECLARED, type Codec } from './room/codec';
+
+export { toolTerms, joinTerms, type GrantTerms } from './room/terms';
+
+export { partKey, partFn, rootOf, callArgument, type Need } from './room/calls';
+
+export { partDecision, roomAsks, sheetView, serviceOf, reachOf, personOf, accessName, type PartDecision } from './room/views';
 
 export { planReaderCheck, searchFindsRepository, READER_CHECK_LIFETIME_MS, type ConnectionTool, type ReaderCheckPlan } from './room/reader-check';

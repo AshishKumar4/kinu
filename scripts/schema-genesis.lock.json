@@ -1166,7 +1166,7 @@
     "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
     "FOREIGN KEY(actor_id,context_id,revision) REFERENCES context_revisions(actor_id,context_id,revision)"
   ],
-  "room_asks@packages/core/src/slates/room/caretaker.ts": [
+  "room_asks@packages/core/src/slates/room/schema.ts": [
     "asker TEXT NOT NULL",
     "holder TEXT NOT NULL",
     "server TEXT NOT NULL",
@@ -1174,12 +1174,11 @@
     "fn TEXT NOT NULL",
     "PRIMARY KEY (asker, holder, server, root, fn)"
   ],
-  "room_cells@packages/core/src/slates/room/caretaker.ts": [
+  "room_cells@packages/core/src/slates/room/schema.ts": [
     "key TEXT PRIMARY KEY",
-    "label TEXT NOT NULL",
     "value TEXT NOT NULL"
   ],
-  "room_grants@packages/core/src/slates/room/caretaker.ts": [
+  "room_grants@packages/core/src/slates/room/schema.ts": [
     "id INTEGER PRIMARY KEY",
     "holder TEXT NOT NULL",
     "personal INTEGER NOT NULL",
@@ -1190,35 +1189,44 @@
     "image TEXT NOT NULL",
     "domain TEXT NOT NULL",
     "effect INTEGER NOT NULL",
-    "sink TEXT NOT NULL",
-    "gen INTEGER NOT NULL"
+    "sink TEXT NOT NULL"
   ],
-  "room_images@packages/core/src/slates/room/caretaker.ts": [
+  "room_images@packages/core/src/slates/room/schema.ts": [
     "image TEXT PRIMARY KEY",
     "modules TEXT NOT NULL",
     "contracts TEXT NOT NULL"
   ],
-  "room_lend_uses@packages/core/src/slates/room/caretaker.ts": [
+  "room_lend_uses@packages/core/src/slates/room/schema.ts": [
     "fn TEXT NOT NULL",
     "email TEXT NOT NULL",
     "calls INTEGER NOT NULL",
     "last_at INTEGER NOT NULL",
     "PRIMARY KEY (fn, email)"
   ],
-  "room_listing@packages/core/src/slates/room/caretaker.ts": [
+  "room_listing@packages/core/src/slates/room/schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "line TEXT NOT NULL",
     "category TEXT NOT NULL",
     "listed_at INTEGER NOT NULL",
     "picture TEXT"
   ],
-  "room_members@packages/core/src/slates/room/caretaker.ts": [
+  "room_members@packages/core/src/slates/room/schema.ts": [
     "email TEXT PRIMARY KEY",
     "name TEXT",
     "role TEXT NOT NULL CHECK (role IN ('owner', 'edit', 'use', 'removed'))",
     "gen INTEGER NOT NULL"
   ],
-  "room_readers@packages/core/src/slates/room/caretaker.ts": [
+  "room_outputs@packages/core/src/slates/room/schema.ts": [
+    "run INTEGER PRIMARY KEY",
+    "part TEXT NOT NULL",
+    "fn TEXT NOT NULL",
+    "input TEXT NOT NULL",
+    "requester TEXT",
+    "label TEXT NOT NULL",
+    "value TEXT",
+    "written INTEGER NOT NULL"
+  ],
+  "room_readers@packages/core/src/slates/room/schema.ts": [
     "email TEXT NOT NULL",
     "holder TEXT NOT NULL",
     "server TEXT NOT NULL",
@@ -1226,7 +1234,7 @@
     "checked_at INTEGER NOT NULL",
     "PRIMARY KEY (email, holder, server, root)"
   ],
-  "room_shows@packages/core/src/slates/room/caretaker.ts": [
+  "room_shows@packages/core/src/slates/room/schema.ts": [
     "id INTEGER PRIMARY KEY",
     "holder TEXT NOT NULL",
     "server TEXT NOT NULL",
@@ -1235,7 +1243,7 @@
     "images TEXT",
     "audience TEXT NOT NULL"
   ],
-  "room@packages/core/src/slates/room/caretaker.ts": [
+  "room@packages/core/src/slates/room/schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "workspace TEXT NOT NULL",
     "slate TEXT NOT NULL",

@@ -122,6 +122,8 @@ interface Seen {
   readonly verdict?: ToolVerdict;
   /** The model asks this step of another slate's state, which the room it runs in cannot name at all. */
   readonly elsewhere?: true;
+  /** A step that waited for its holder went ahead once the holder's approval was decided. */
+  readonly went?: true;
 }
 
 /** Where a model id was issued: the slate whose room holds it, and the room's own id for it. */
@@ -151,6 +153,10 @@ class Replay {
   private readonly shows = new Map<number, Issued>();
   private readonly runs = new Map<number, Issued>();
   private readonly cells = new Map<number, number>();
+  /** Who each grant was minted to, by the model's number for it. */
+  private readonly holders = new Map<number, string | null>();
+  /** Each approval the model registered ahead of its step, as the room's ids name it: decided through the caretaker when the step waits. */
+  private readonly approvals: { readonly actor: string | null; readonly slate: number; readonly cap: number; readonly run: number; readonly arg: number; readonly seq: number }[] = [];
 
   private room(slate: number): RoomCaretaker {
     const room = this.rooms.get(slate);
@@ -201,8 +207,8 @@ class Replay {
       }
 
       case 'admit': return this.admitting(at, event);
-      case 'toolStep': return this.stepping(step, event);
-      case 'approve': return { ok: step.ok };
+      case 'toolStep': return this.stepping(event);
+      case 'approve': return this.approving(event);
       case 'observe': return this.onRun(event.run, (room, run) => {
         // A cell of another slate is not in this room at all: the model refuses it, and the room has no way to ask.
         if (this.cells.get(event.cell) !== this.runs.get(event.run)?.slate) return { ok: false, elsewhere: true };
@@ -255,12 +261,30 @@ class Replay {
     return ok ? { ok, shown } : { ok };
   }
 
+  /**
+   * An edit: the author's grants follow the new image, each re-granted under a new id, which is its generation. The
+   * model keeps its numbers for them, so each is matched to the grant that replaced it: same holder, source and function.
+   */
   private editing(event: Extract<Event, { ev: 'editCode' }>): Seen {
+    const room = this.room(event.slate);
+    const before = new Map(room.grants().map((grant) => [grant.id, grant]));
+
     const ok = through(() => {
-      this.room(event.slate).publish(address(event.actor), { image: image(event.rev), modules: {}, title: 'Slate', secret: null });
+      room.publish(address(event.actor), { image: image(event.rev), modules: {}, title: 'Slate', secret: null });
     });
 
-    if (ok) this.revs.set(event.slate, event.rev);
+    if (!ok) return { ok };
+    this.revs.set(event.slate, event.rev);
+    const after = room.grants();
+
+    for (const [model, issued] of this.caps) {
+      const old = issued.slate === event.slate && room.grant(issued.id) === null ? before.get(issued.id) : undefined;
+
+      const renewed = old === undefined ? undefined
+        : after.find((grant) => grant.holder === old.holder && grant.server === old.server && grant.root === old.root && grant.fn === old.fn && grant.personal === old.personal);
+
+      if (renewed !== undefined) this.caps.set(model, { slate: event.slate, id: renewed.id });
+    }
 
     return { ok };
   }
@@ -290,6 +314,7 @@ class Replay {
         });
 
         this.caps.set(at, { slate: event.slate, id: grant.id });
+        this.holders.set(at, grant.holder);
       }),
     };
   }
@@ -338,27 +363,39 @@ class Replay {
    * A tool step, and its effect as the model's `effectOk` has it: one the holder need not decide goes now; one the
    * holder approved for this step goes once they decide it, and no one else's decision counts; one they did not waits.
    */
-  private stepping(step: Step, event: Extract<Event, { ev: 'toolStep' }>): Seen {
+  /**
+   * `approve`: the model registers it ahead of its step; the room decides a step once it waits. It is kept, with the room's
+   * ids for its grant and run, and its permission is the caretaker's own test for a decision: the grant's holder decides.
+   */
+  private approving(event: Extract<Event, { ev: 'approve' }>): Seen {
+    const run = this.runs.get(event.run);
+    const cap = this.caps.get(event.cap);
+
+    if (run === undefined || cap === undefined) return { ok: false };
+    // Registered ahead of its step, it names a grant by the holder it was minted to, taken back since or not.
+    this.approvals.push({ actor: email(event.actor), slate: cap.slate, cap: cap.id, run: run.id, arg: event.arg, seq: event.seq });
+
+    return { ok: this.holders.get(event.cap) === email(event.actor) };
+  }
+
+  /**
+   * A tool step, and its effect as the model's `effectOk` has it. A step that waits for its holder is decided by every
+   * approval the model registered for that very step (its grant, its run, its argument, its count), each through the
+   * caretaker's `decide`, which refuses anyone but the holder; it goes ahead when one is let through and it resumes.
+   */
+  private stepping(event: Extract<Event, { ev: 'toolStep' }>): Seen {
     return this.onRun(event.run, (room, run, slate) => {
       let verdict: ToolVerdict | undefined;
       const input = room.run(run)?.input ?? null;
       const ok = through(() => { verdict = room.toolStep(run, this.local(this.caps.get(event.cap), slate, event.cap), TOOL, input); });
 
-      if (!ok || verdict === undefined) return { ok };
+      if (!ok || verdict === undefined || verdict.kind === 'go' || verdict.pending.kind !== 'effect') return verdict === undefined ? { ok } : { ok, verdict };
+      const { pending } = verdict;
+      const matching = this.approvals.filter((each) => each.slate === slate && each.run === pending.run && each.cap === pending.grant && each.arg === input && each.seq === pending.step);
+      const decided = matching.filter((each) => through(() => { room.decide(each.actor, pending.id, true); }));
+      const goes = decided.length > 0 && through(() => { room.resume(pending.id); });
 
-      if (step.effect === 'goes' && verdict.kind === 'wait') {
-        const pending = verdict.pending;
-        const holder = room.grant(pending.grant)?.holder ?? null;
-        const others = ['p0@model.test', 'p1@model.test', 'p2@model.test', null].filter((each) => each !== holder);
-
-        const decided = others.every((each) => !through(() => { room.decide(each, pending.id, true); }))
-          && through(() => { room.decide(holder, pending.id, true); })
-          && through(() => { room.resume(pending.id); });
-
-        return { ok: decided, verdict };
-      }
-
-      return { ok, verdict };
+      return { ok, verdict, ...(goes && { went: true as const }) };
     });
   }
 
@@ -367,8 +404,9 @@ class Replay {
     if (step.effect === undefined || !step.ok) return true;
 
     if (step.effect === 'none') return seen.verdict?.kind === 'go';
+    const waited = seen.verdict?.kind === 'wait' && seen.verdict.pending.kind === 'effect';
 
-    return seen.verdict?.kind === 'wait' && seen.verdict.pending.kind === 'effect';
+    return step.effect === 'goes' ? waited && seen.went === true : waited && seen.went !== true;
   }
 
   /**
@@ -386,7 +424,7 @@ class Replay {
     const grant = room.grant(this.local(this.caps.get(step.event.cap), issued.slate, step.event.cap));
 
     if (run === null || grant === null) return false;
-    const holds = room.runOk(run) && run.caps.some((cap) => cap.grant === grant.id) && (!grant.personal || run.requester?.email === grant.holder);
+    const holds = room.runOk(run) && run.caps.includes(grant.id) && (!grant.personal || run.requester?.email === grant.holder);
     const own = run.requester?.email === grant.holder && run.label.every((elem) => elem.holder === grant.holder);
     const sinkOnly = !audienceFlows(room.facts(), run.label, observers(grant.holder, grant.sink));
     // Wholly theirs: they published it and no one else's code, a fork's parent's included, ever entered it.

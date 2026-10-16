@@ -44,6 +44,11 @@ export interface SlateBuildInput {
   readonly read: (entry: string) => string | null;
   /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
   readonly cred: VfsCred;
+  /**
+   * `tree`: the compile reads the slate's own tree alone, its own node_modules included, and the runtime's generated
+   * files: an editor's change imports nothing else of the owner's workspace. Absent for the owner's own builds.
+   */
+  readonly scope?: 'tree';
 }
 
 /** What a launch runs an image as. */
@@ -95,11 +100,18 @@ const CLASS_BOOT: readonly string[] = [
   '        .join(", ");',
   '      return { ok: false, error: "package.json main must export class Slate extends SlateObject from kinu:slate (the Slate export or the default export); found " + (found === "" ? "no exports at all" : found) };',
   '    }',
-  '    const slate = new Slate({',
-  '      storage: this.ctx.storage,',
-  '      kv: storageProxy(this.env.__storage),',
-  '      waitUntil: (work) => this.ctx.waitUntil(work),',
-  '    }, Object.freeze({ workspace: workspaceSurface(this.env.workspace) }));',
+  '    let slate;',
+  // The class is constructed once, at boot: what its constructor makes of its own SQL is its schema, not a call's write.
+  '    constructing = true;',
+  '    try {',
+  '      slate = new Slate({',
+  '        storage: { sql: guardedSql(this.ctx.storage.sql) },',
+  '        kv: storageProxy(this.env.__storage),',
+  '        waitUntil: (work) => this.ctx.waitUntil(work),',
+  '      }, Object.freeze({ workspace: workspaceSurface(this.env.workspace) }));',
+  '    } finally {',
+  '      constructing = false;',
+  '    }',
   '    // The callable surface: prototype methods between the instance and',
   '    // SlateObject (exclusive) whose name passes the host\'s own method rule.',
   '    // Own properties never appear: a closure assigned in the constructor',
@@ -263,29 +275,61 @@ export function slateRunnerSource(
     '  constructor(stub) { super(); this.#stub = stub; }',
     '  $workspace(path, args) { return surface(this.#stub, path)(...args); }',
     '}',
-    // `__storage` needs no lineage, so it always passes the root invocation.
+    // `__storage` runs under the call's own invocation, so the room holds each read and write to the run that made it.
     'function storageProxy(stub) {',
+    '  const call = (path, args) => stub.call(path, args, invocations.getStore() ?? null);',
     '  return Object.freeze({',
     '    get: async (key) => {',
-    '      const result = await stub.call(["get"], [key], null);',
+    '      const result = await call(["get"], [key]);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '      return result.value === null ? undefined : result.value.value;',
     '    },',
     '    put: async (key, value) => {',
-    '      const result = await stub.call(["put"], [key, value], null);',
+    '      const result = await call(["put"], [key, value]);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '    },',
     '    delete: async (key) => {',
-    '      const result = await stub.call(["delete"], [key], null);',
+    '      const result = await call(["delete"], [key]);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '      return result.value;',
     '    },',
     '    list: async (options) => {',
-    '      const result = await stub.call(["list"], options === undefined ? [] : [options], null);',
+    '      const result = await call(["list"], options === undefined ? [] : [options]);',
     '      if (!result.ok) throw new SlateRefusal(result);',
     '      return result.value;',
     '    },',
     '  });',
+    '}',
+    // The slate's own SQL is its public state too: a statement that changes it runs only in a call the room said may
+    // change the slate (`x-slate-writes`), until the room takes that back, or while the class is constructed.
+    'const writers = new Set();',
+    'const wrote = new Set();',
+    'let constructing = false;',
+    'function readsOnly(query) {',
+    '  const text = String(query).replace(/^(?:\\s+|--[^\\n]*(?:\\n|$)|\\/\\*[\\s\\S]*?\\*\\/)+/, "");',
+    '  if (/;\\s*\\S/.test(text)) return false;',
+    '  const head = (/^[A-Za-z]+/.exec(text)?.[0] ?? "").toUpperCase();',
+    '  if (head === "SELECT" || head === "VALUES") return true;',
+    '  return head === "WITH" && !/\\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\\b/i.test(text);',
+    '}',
+    'function guardedSql(sql) {',
+    '  return Object.freeze({',
+    '    exec(query, ...bindings) {',
+    '      if (!readsOnly(query)) {',
+    '        const invocation = invocations.getStore();',
+    '        if (!constructing && !writers.has(invocation)) throw new Error("This call may not change the slate: its person is not signed in, or their access ended");',
+    '        if (invocation !== undefined) wrote.add(invocation);',
+    '      }',
+    '      return sql.exec(query, ...bindings);',
+    '    },',
+    '    get databaseSize() { return sql.databaseSize; },',
+    '  });',
+    '}',
+    // A request may change the slate when the room said so; the room takes it back when the call ends or its access does.
+    'function admitted(request) {',
+    '  const invocation = request.headers.get("x-slate-call");',
+    '  if (invocation !== null && request.headers.get("x-slate-writes") === "1") writers.add(invocation);',
+    '  return invocation;',
     '}',
     'export class NimbusProcess extends DurableObject {',
     '  #slate;',
@@ -295,6 +339,8 @@ export function slateRunnerSource(
     '  #started;',
     '  constructor(ctx, env) { super(ctx, env); }',
     '  startProcess() { return this.#ensureStarted(); }',
+  // The room's word that a call ended, or its access did: it may change the slate no more. Answers whether it did.
+  '  settleInvocation(invocation) { writers.delete(invocation); return { wrote: wrote.delete(invocation) }; }',
     '  #ensureStarted() {',
     '    if (this.#started === undefined) {',
     '      const started = this.#bootProcess();',
@@ -337,7 +383,7 @@ export function slateRunnerSource(
     '      }',
     '      // A POST batch carries the host hop invocation on x-slate-call,',
     '      // already minted: no getStore() round trip.',
-    '      return invocations.run(request.headers.get("x-slate-call"), () => newWorkersRpcResponse(request, this.#forwarder));',
+    '      return invocations.run(admitted(request), () => newWorkersRpcResponse(request, this.#forwarder));',
     '    }',
     '    // The shell mounts at the slate root; every other registered asset',
     '    // answers at its own path.',
@@ -357,7 +403,7 @@ export function slateRunnerSource(
     '    // answers the same bare body when nothing listens, and the two must',
     '    // be told apart from outside.',
     '    if (slate === undefined || typeof slate.fetch !== "function") return new Response("Not found", { status: 404, headers: { "x-slate-runner": slate === undefined ? "unstarted" : "no-fetch" } });',
-    '    return invocations.run(request.headers.get("x-slate-call"), () => slate.fetch(request));',
+    '    return invocations.run(admitted(request), () => slate.fetch(request));',
     '  }',
     '}',
   ].join('\n');
@@ -462,7 +508,41 @@ interface SlateBuild {
  * still one this compile made. The resolver's own reads count as the bundled files' do, so a package.json whose
  * `exports` moves is a change.
  */
-function looking(fs: NamespaceFs, looked: Set<string>): EsbuildReadFs {
+/** An absolute path with every `.` and `..` resolved, as the compiler's resolution resolves them. */
+function normalPath(path: string): string {
+  const parts: string[] = [];
+
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue;
+
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+
+  return `/${parts.join('/')}`;
+}
+
+/**
+ * The file plane a scoped build reads: inside `roots` (each a directory, its subtree included) or one of `files`, by the
+ * path a symlink finally names. Anything else is not there, so an import of it does not resolve and the build fails.
+ */
+function confinedTo(fs: NamespaceFs, roots: readonly string[], files: readonly string[]): EsbuildReadFs {
+  const inside = (path: string): boolean => {
+    const real = normalPath(fs.resolveSymlink(normalPath(path)) ?? normalPath(path));
+
+    return files.includes(real) || roots.some((root) => real === root || real.startsWith(`${root}/`));
+  };
+
+  // A path outside is never there: resolution, which asks first, finds nothing, and a read of one is read as empty.
+  return {
+    exists: (path) => inside(path) && fs.exists(path),
+    isDirectory: (path) => inside(path) && fs.isDirectory(path),
+    readFile: (path) => (inside(path) ? fs.readFile(path) : new Uint8Array()),
+    readFileString: (path) => (inside(path) ? fs.readFileString(path) : ''),
+  };
+}
+
+function looking(fs: EsbuildReadFs, looked: Set<string>): EsbuildReadFs {
   const seen = (path: string) => { looked.add(path.startsWith('/') ? path : `/${path}`); };
 
   return {
@@ -646,7 +726,9 @@ export class ResidentSlateProcesses {
         }
       };
 
-      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(session.filesystem.namespaceFs(input.cred), looked) };
+      const files = session.filesystem.namespaceFs(input.cred);
+      const read = input.scope === 'tree' ? confinedTo(files, [input.root, entriesDir], Object.keys(runtimeFiles(slateVendor.reactStub)).map((name) => `${RUNTIME_DIR}/${name}`)) : files;
+      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(read, looked) };
       const application = yield* serverModule(build, input.project);
       const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
 

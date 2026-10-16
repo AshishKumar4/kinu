@@ -35,6 +35,8 @@ it('a part is sealed: no script, handler, link, media or style survives, and the
 
   expect(part.csp).toContain('sandbox');
   expect(part.csp).toContain("default-src 'none'");
+  // Framed by the slate's own page and by the app, and by nothing else.
+  expect(part.csp).toContain("frame-ancestors 'self' https://board-token-ws.slates.test;");
   expect(part.type).toBe('text/html; charset=utf-8');
   expect(body).toContain('kept <b>words</b>');
   expect(body).toContain('a link\'s text');

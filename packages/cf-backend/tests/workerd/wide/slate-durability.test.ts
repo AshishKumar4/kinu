@@ -236,7 +236,9 @@ it('someone added to edit a slate changes it from their own workspace: built in 
     server: 'import { SlateObject } from "kinu:slate";\nexport class Slate extends SlateObject {\n  async fetch() { return new Response("editor-body"); }\n}\n',
   })).toEqual({
     // Not added yet, then added: the files read, the change built and published as theirs, then removed again.
-    before: 'denied', files: ['package.json', 'server.ts'], edited: 'ok', page: 'editor-body', author: 'durability-editor@probe.local', afterRemoval: 'denied',
+    before: 'denied', files: ['package.json', 'server.ts'], edited: 'ok', page: 'editor-body', author: 'durability-editor@probe.local',
+    // An import of the owner's file outside the slate does not build, and the change is taken back: the page is as it was.
+    reaching: 'bad_input', restored: true, pageAfter: 'editor-body', afterRemoval: 'denied',
   });
 });
 

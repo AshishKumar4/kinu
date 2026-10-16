@@ -1,158 +1,31 @@
 /**
  * A slate room's caretaker: every check of `lean/Kinu/Sharing/Model.lean`'s `permits`, made on the room's own rows in
  * the one object that serializes them (docs/SLATE-SHARING-SECURITY.md §8). Each method is one event of the model; it
- * checks, then changes the rows, before anything else of the room runs.
+ * checks, then changes the rows, before anything else of the room runs. The rows are `schema.ts`'s.
  *
  * People are named by email; an account id is derived from it. The owner is a member row with role `owner`. Every
  * generation and id comes from `room.next`, which only grows. Runs live in memory: a run is one admitted call, alive
- * while its request is, and a revoke reaches it through the generations it holds.
+ * while its request is, and a revoke reaches it through the grants it holds, each of which is its own generation.
  */
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { KinuError } from '../../obs/error';
 import { settleSync } from '../../obs/effect';
-import type { RawSqlExec, SqlExec } from '../../types/primitives';
-import { parseJsonValue, type JsonValue } from '../../utils/json';
+import type { SqlExec } from '../../types/primitives';
+import type { JsonValue } from '../../utils/json';
 import type { RoomRole } from '../room-api';
 import { READER_CHECK_LIFETIME_MS } from './reader-check';
-import { codecAdmits, CodecSchema, type Codec } from './codec';
+import { codecAdmits, type Codec } from './codec';
 import {
   audienceFlows, canonicalRoot, dedup, flows, hidden, observers, sameTag, within,
   type Audience, type Elem, type LabelFacts, type Show, type Tag,
 } from './labels';
+import {
+  contractsOf, grantRow, memberRow, modulesOf, outputRow, publicCell, roomRecord, showRow,
+  type Cell, type Grant, type Output, type RoomMember, type RoomRecord, type SecretSighting,
+} from './schema';
 
-export function initSlateRoomTables(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS room (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    workspace TEXT NOT NULL,
-    slate TEXT NOT NULL,
-    title TEXT NOT NULL,
-    link INTEGER NOT NULL,
-    link_gen INTEGER NOT NULL,
-    image TEXT,
-    image_author TEXT,
-    secret TEXT,
-    source TEXT,
-    foreign_code INTEGER NOT NULL,
-    parent TEXT,
-    next INTEGER NOT NULL
-  )`);
-  // Each image the slate was published at: its modules by content digest, as its workspace stores them. Keyed by the
-  // image, so the room's image and the modules it runs can never describe two builds.
-  execRaw(`CREATE TABLE IF NOT EXISTS room_images (
-    image TEXT PRIMARY KEY,
-    modules TEXT NOT NULL,
-    contracts TEXT NOT NULL
-  )`);
-  // name: a display copy, written when the person opens the slate; NULL while only invited.
-  execRaw(`CREATE TABLE IF NOT EXISTS room_members (
-    email TEXT PRIMARY KEY,
-    name TEXT,
-    role TEXT NOT NULL CHECK (role IN ('owner', 'edit', 'use', 'removed')),
-    gen INTEGER NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS room_grants (
-    id INTEGER PRIMARY KEY,
-    holder TEXT NOT NULL,
-    personal INTEGER NOT NULL,
-    server TEXT NOT NULL,
-    root TEXT NOT NULL,
-    tools TEXT NOT NULL,
-    fn TEXT NOT NULL,
-    image TEXT NOT NULL,
-    domain TEXT NOT NULL,
-    effect INTEGER NOT NULL,
-    sink TEXT NOT NULL,
-    gen INTEGER NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS room_shows (
-    id INTEGER PRIMARY KEY,
-    holder TEXT NOT NULL,
-    server TEXT NOT NULL,
-    root TEXT NOT NULL,
-    fn TEXT,
-    images TEXT,
-    audience TEXT NOT NULL
-  )`);
-  // A check is of one tag, the holder's read of the source included: what one person's connection reads of a source
-  // need not be what another's does (`Model.Core.readers`).
-  execRaw(`CREATE TABLE IF NOT EXISTS room_readers (
-    email TEXT NOT NULL,
-    holder TEXT NOT NULL,
-    server TEXT NOT NULL,
-    root TEXT NOT NULL,
-    checked_at INTEGER NOT NULL,
-    PRIMARY KEY (email, holder, server, root)
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS room_cells (
-    key TEXT PRIMARY KEY,
-    label TEXT NOT NULL,
-    value TEXT NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS room_asks (
-    asker TEXT NOT NULL,
-    holder TEXT NOT NULL,
-    server TEXT NOT NULL,
-    root TEXT NOT NULL,
-    fn TEXT NOT NULL,
-    PRIMARY KEY (asker, holder, server, root, fn)
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS room_lend_uses (
-    fn TEXT NOT NULL,
-    email TEXT NOT NULL,
-    calls INTEGER NOT NULL,
-    last_at INTEGER NOT NULL,
-    PRIMARY KEY (fn, email)
-  )`);
-  // The slate's Gallery listing while it is listed: its owner's words for it. Only while its link is on.
-  execRaw(`CREATE TABLE IF NOT EXISTS room_listing (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    line TEXT NOT NULL,
-    category TEXT NOT NULL,
-    listed_at INTEGER NOT NULL,
-    picture TEXT
-  )`);
-}
-
-// ── Rows ────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-const AudienceSchema = v.union([v.literal('anyone'), v.array(v.string())]);
-
-const RoomRow = v.object({
-  workspace: v.string(), slate: v.string(), title: v.string(), link: v.number(), link_gen: v.number(), image: v.nullable(v.string()),
-  modules: v.nullable(v.string()),
-  image_author: v.nullable(v.string()), secret: v.nullable(v.string()), source: v.nullable(v.string()), foreign_code: v.number(), parent: v.nullable(v.string()),
-  next: v.number(),
-});
-
-export interface RoomRecord {
-  readonly workspace: string;
-  readonly slate: string;
-  /** The slate's title, from the image running: written with the image. */
-  readonly title: string;
-  readonly link: boolean;
-  readonly linkGen: number;
-  readonly image: string | null;
-  /** The image's modules, each by its content digest, as its workspace stores them. */
-  readonly modules: Readonly<Record<string, string>> | null;
-  readonly imageAuthor: string | null;
-  readonly secret: SecretSighting | null;
-  /** The version of the slate's files the image was built from: what a fork gets. */
-  readonly source: string | null;
-  /** Code by someone other than the owner has entered: no grant is implied by authorship from then on. */
-  readonly foreign: boolean;
-  readonly parent: string | null;
-}
-
-const SecretSightingSchema = v.object({ file: v.string(), line: v.number(), kind: v.string() });
-
-export type SecretSighting = v.InferOutput<typeof SecretSightingSchema>;
-
-const MemberRow = v.object({
-  email: v.string(), name: v.nullable(v.string()), role: v.picklist(['owner', 'edit', 'use', 'removed'] as const), gen: v.number(),
-});
-
-export type RoomMember = v.InferOutput<typeof MemberRow>;
+export { initSlateRoomTables, type Cell, type Grant, type Output, type RoomMember, type RoomRecord, type SecretSighting } from './schema';
 
 /**
  * What a function's contract is of: its one argument. A room's call carries its arguments as a list, so none is null,
@@ -162,42 +35,6 @@ function contractInput(input: JsonValue): JsonValue {
   if (!Array.isArray(input) || input.length > 1) return input;
 
   return input[0] ?? null;
-}
-
-const GrantRow = v.object({
-  id: v.number(), holder: v.string(), personal: v.number(), server: v.string(), root: v.string(), tools: v.string(),
-  fn: v.string(), image: v.string(), domain: v.string(), effect: v.number(), sink: v.string(), gen: v.number(),
-});
-
-/** A durable grant: a lend (`personal` false) or a person's own connection, bound to one function's image. */
-export interface Grant extends Tag {
-  readonly id: number;
-  readonly personal: boolean;
-  readonly tools: readonly string[];
-  readonly fn: string;
-  readonly image: string;
-  readonly domain: Codec;
-  readonly effect: boolean;
-  readonly sink: Audience;
-  readonly gen: number;
-}
-
-const ShowRow = v.object({
-  id: v.number(), holder: v.string(), server: v.string(), root: v.string(), fn: v.nullable(v.string()),
-  images: v.nullable(v.string()), audience: v.string(),
-});
-
-const CellRow = v.object({ key: v.string(), label: v.string(), value: v.string() });
-
-const ElemSchema = v.object({
-  holder: v.string(), server: v.string(), root: v.string(), fn: v.string(), image: v.string(),
-});
-
-export interface Cell {
-  readonly key: string;
-  readonly label: readonly Elem[];
-  /** Null until the run that owns the cell writes it. */
-  readonly value: JsonValue;
 }
 
 // ── Sessions and runs ───────────────────────────────────────────────────────────────────────────────────────────
@@ -217,16 +54,20 @@ export interface Session {
 /** One admitted call (the model's `Run`): requested by a session, or by the slate itself (`requester` null). */
 export interface Run {
   readonly id: number;
+  /** The part its output belongs to, or null for a call whose answer goes straight back and is kept nowhere. */
   readonly out: string | null;
   readonly requester: Session | null;
   readonly fn: string;
   readonly image: string;
   readonly input: JsonValue;
-  readonly caps: readonly { readonly grant: number; readonly gen: number }[];
+  /** The grants it was admitted with: a grant's id is its generation. */
+  readonly caps: readonly number[];
   readonly label: readonly Elem[];
   live: boolean;
-  /** Tool steps taken: an approval names one. */
+  /** What it has read so far, observes and tool steps that went ahead (the model's `reads`): an approval names its step by this count. */
   steps: number;
+  /** Effects it brought about: tool steps through an effect grant that went ahead, and posts to public state. */
+  effects: number;
 }
 
 /** An effect someone else's call asks for, waiting at its step for the grant's holder. */
@@ -234,7 +75,6 @@ export interface PendingEffect {
   readonly id: string;
   readonly run: number;
   readonly grant: number;
-  readonly gen: number;
   readonly step: number;
   readonly tool: string;
   readonly args: JsonValue;
@@ -242,7 +82,7 @@ export interface PendingEffect {
   decided: 'approved' | 'declined' | null;
 }
 
-/** What a tool step comes to: go ahead, wait for the holder (approval or outflow), or never. */
+/** What a tool step comes to: go ahead, or wait for the holder (an approval or an outflow). */
 export type ToolVerdict =
   | { readonly kind: 'go' }
   | { readonly kind: 'wait'; readonly pending: PendingEffect };
@@ -250,10 +90,6 @@ export type ToolVerdict =
 /** A refusal, as an Effect: every method runs its body once, at its edge. */
 function refused(code: 'denied' | 'missing' | 'bad_input', message: string): Effect.Effect<never, KinuError> {
   return Effect.fail(new KinuError(code, message));
-}
-
-function parseElems(text: string): Elem[] {
-  return v.parse(v.array(ElemSchema), JSON.parse(text));
 }
 
 /** The grant's element in a run's label: its tag, and the function and image the run is of. */
@@ -302,22 +138,20 @@ export class RoomCaretaker {
   private maybeRoom(): RoomRecord | null {
     const row = this.db.exec('SELECT room.*, room_images.modules AS modules FROM room LEFT JOIN room_images ON room_images.image = room.image WHERE id = 1').toArray()[0];
 
-    if (row === undefined) return null;
-    const parsed = v.parse(RoomRow, row);
-
-    return {
-      workspace: parsed.workspace, slate: parsed.slate, title: parsed.title, link: parsed.link === 1, linkGen: parsed.link_gen,
-      image: parsed.image, imageAuthor: parsed.image_author,
-      modules: parsed.modules === null ? null : v.parse(v.record(v.string(), v.string()), JSON.parse(parsed.modules)),
-      secret: parsed.secret === null ? null : v.parse(SecretSightingSchema, JSON.parse(parsed.secret)), source: parsed.source,
-      foreign: parsed.foreign_code === 1, parent: parsed.parent,
-    };
+    return row === undefined ? null : roomRecord(row);
   }
 
   room(): RoomRecord {
     return settleSync(Effect.gen({ self: this }, function* () {
       return this.maybeRoom() ?? (yield* refused('missing', 'This slate has no room'));
     }));
+  }
+
+  /** The modules of one image the slate was published at: a run loads the image it was admitted at, never a later one. */
+  modulesOf(image: string): Readonly<Record<string, string>> | null {
+    const row = this.db.exec('SELECT modules FROM room_images WHERE image = ?', image).toArray()[0];
+
+    return row === undefined ? null : modulesOf(v.parse(v.object({ modules: v.string() }), row).modules);
   }
 
   /** A fresh generation or id: the model's counter, which only grows. */
@@ -334,13 +168,18 @@ export class RoomCaretaker {
   }
 
   members(): RoomMember[] {
-    return this.db.exec('SELECT * FROM room_members ORDER BY email').toArray().map((row) => v.parse(MemberRow, row));
+    return this.db.exec('SELECT * FROM room_members ORDER BY email').toArray().map(memberRow);
   }
 
   private member(email: string): RoomMember | null {
     const row = this.db.exec('SELECT * FROM room_members WHERE email = ?', email).toArray()[0];
 
-    return row === undefined ? null : v.parse(MemberRow, row);
+    return row === undefined ? null : memberRow(row);
+  }
+
+  /** Everyone added and not removed, the owner included: "everyone here now". */
+  everyoneAdded(): string[] {
+    return this.members().filter((member) => member.role !== 'removed').map((member) => member.email);
   }
 
   /** The model's `canEdit`: the owner, or someone added with Edit. */
@@ -522,13 +361,14 @@ export class RoomCaretaker {
   // ── Code ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
   /**
-   * `editCode`: a new image, written by `author`. The author's own grants and function-scoped shows follow it; everyone
-   * else's stay at the image they were made for, so they are suspended until their holder renews them. The secret
-   * sighting is the new image's, set in the same statement.
+   * `editCode`: a new image, written by `author`. The author's own grants and function-scoped shows follow it, each a new
+   * grant; everyone else's stay at the image they were made for, so they are suspended until their holder renews them.
+   * The secret sighting is the new image's, set in the same statement.
    */
   publish(author: string, built: {
     readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string; readonly secret: SecretSighting | null;
-    readonly source?: string;
+    /** The version of the files the image was built from; absent for a page that has none. */
+    readonly source?: string | null;
     /** Each function's input contract, as the image's slate declares it: what a grant of it admits from then on. */
     readonly contracts?: Readonly<Record<string, Codec>>;
   }): void {
@@ -548,17 +388,28 @@ export class RoomCaretaker {
         'UPDATE room SET image = ?, image_author = ?, title = ?, secret = ?, source = ?, foreign_code = CASE WHEN ? THEN 1 ELSE foreign_code END, link = CASE WHEN ? THEN 0 ELSE link END WHERE id = 1',
         image, author, title, secret === null ? null : JSON.stringify(secret), source, author !== owner ? 1 : 0, secret !== null ? 1 : 0,
       );
-      this.db.exec('UPDATE room_grants SET image = ? WHERE holder = ?', image, author);
 
-      // The author's own grants take the new image's contract for their function, where it declares one.
-      for (const [fn, contract] of Object.entries(contracts)) {
-        this.db.exec('UPDATE room_grants SET domain = ? WHERE holder = ? AND fn = ?', JSON.stringify(contract), author, fn);
-      }
+      // The author's own grants follow, each re-granted at the new image under a new generation, with the contract the
+      // image declares for its function: a run holding the old grant does not carry over.
+      for (const grant of this.grants().filter((each) => each.holder === author)) this.regrant(grant, image, contracts[grant.fn] ?? grant.domain);
 
       for (const show of this.shows().filter((each) => each.holder === author && each.fn !== null)) {
         this.db.exec('UPDATE room_shows SET images = ? WHERE id = ?', JSON.stringify([...show.images ?? [], image]), show.id);
       }
     }));
+  }
+
+  private regrant(grant: Grant, image: string, domain: Codec): Grant {
+    const id = this.fresh();
+
+    this.db.exec('DELETE FROM room_grants WHERE id = ?', grant.id);
+    this.db.exec(
+      'INSERT INTO room_grants (id, holder, personal, server, root, tools, fn, image, domain, effect, sink) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, grant.holder, grant.personal ? 1 : 0, grant.server, grant.root, JSON.stringify([...grant.tools]), grant.fn, image,
+      JSON.stringify(domain), grant.effect ? 1 : 0, JSON.stringify(grant.sink),
+    );
+
+    return { ...grant, id, image, domain };
   }
 
   // ── Grants ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -570,24 +421,17 @@ export class RoomCaretaker {
 
     if (row === undefined) return null;
 
-    return v.parse(v.record(v.string(), CodecSchema), JSON.parse(v.parse(v.object({ contracts: v.string() }), row).contracts))[fn] ?? null;
+    return contractsOf(v.parse(v.object({ contracts: v.string() }), row).contracts)[fn] ?? null;
   }
 
   grants(): Grant[] {
-    return this.db.exec('SELECT * FROM room_grants ORDER BY id').toArray().map((row) => {
-      const parsed = v.parse(GrantRow, row);
-
-      return {
-        id: parsed.id, holder: parsed.holder, personal: parsed.personal === 1, server: parsed.server, root: parsed.root,
-        tools: v.parse(v.array(v.string()), JSON.parse(parsed.tools)), fn: parsed.fn, image: parsed.image,
-        domain: v.parse(CodecSchema, JSON.parse(parsed.domain)), effect: parsed.effect === 1,
-        sink: v.parse(AudienceSchema, JSON.parse(parsed.sink)), gen: parsed.gen,
-      };
-    });
+    return this.db.exec('SELECT * FROM room_grants ORDER BY id').toArray().map(grantRow);
   }
 
   grant(id: number): Grant | null {
-    return this.grants().find((grant) => grant.id === id) ?? null;
+    const row = this.db.exec('SELECT * FROM room_grants WHERE id = ?', id).toArray()[0];
+
+    return row === undefined ? null : grantRow(row);
   }
 
   /**
@@ -613,12 +457,30 @@ export class RoomCaretaker {
       const id = this.fresh();
 
       this.db.exec(
-        'INSERT INTO room_grants (id, holder, personal, server, root, tools, fn, image, domain, effect, sink, gen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO room_grants (id, holder, personal, server, root, tools, fn, image, domain, effect, sink) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         id, actor, input.personal ? 1 : 0, input.server, root, JSON.stringify([...input.tools]), input.fn, image,
-        JSON.stringify(input.domain), input.effect ? 1 : 0, JSON.stringify(input.sink), id,
+        JSON.stringify(input.domain), input.effect ? 1 : 0, JSON.stringify(input.sink),
       );
 
       return this.grant(id) ?? (yield* refused('missing', `Grant ${id} vanished`));
+    }));
+  }
+
+  /**
+   * "Use again" after someone else's edit: the holder grants their own connection, as they had it, to the image now
+   * running. Their grants for `fn` made for an earlier image are re-granted, each under a new generation.
+   */
+  renew(actor: string | null, fn: string): Grant[] {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (actor === null) return yield* refused('denied', 'Sign in to use it again');
+      const image = this.room().image ?? (yield* refused('missing', 'The slate has not run yet'));
+      const stale = this.grants().filter((grant) => grant.holder === actor && grant.fn === fn && grant.image !== image);
+
+      if (stale.length === 0) return yield* refused('missing', 'Nothing of yours waits for this part');
+
+      if (stale.some((grant) => !grant.personal) && !this.canEdit(actor)) return yield* refused('denied', 'Only an editor can lend a function');
+
+      return stale.map((grant) => this.regrant(grant, image, this.contract(fn) ?? grant.domain));
     }));
   }
 
@@ -638,15 +500,7 @@ export class RoomCaretaker {
   // ── Shows and readers ─────────────────────────────────────────────────────────────────────────────────────────
 
   shows(): Show[] {
-    return this.db.exec('SELECT * FROM room_shows ORDER BY id').toArray().map((row) => {
-      const parsed = v.parse(ShowRow, row);
-
-      return {
-        id: parsed.id, holder: parsed.holder, server: parsed.server, root: parsed.root, fn: parsed.fn,
-        images: parsed.images === null ? null : v.parse(v.array(v.string()), JSON.parse(parsed.images)),
-        audience: v.parse(AudienceSchema, JSON.parse(parsed.audience)),
-      };
-    });
+    return this.db.exec('SELECT * FROM room_shows ORDER BY id').toArray().map(showRow);
   }
 
   /** `declassify`: only a tag's holder shows it, to an audience, for anything or for one function at its current image. */
@@ -684,8 +538,9 @@ export class RoomCaretaker {
         'INSERT INTO room_readers (email, holder, server, root, checked_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (email, holder, server, root) DO UPDATE SET checked_at = excluded.checked_at',
         email, tag.holder, tag.server, tag.root, this.now(),
       );
+    } else {
+      this.db.exec('DELETE FROM room_readers WHERE email = ? AND holder = ? AND server = ? AND root = ?', email, tag.holder, tag.server, tag.root);
     }
-    else this.db.exec('DELETE FROM room_readers WHERE email = ? AND holder = ? AND server = ? AND root = ?', email, tag.holder, tag.server, tag.root);
   }
 
   facts(): LabelFacts {
@@ -749,12 +604,12 @@ export class RoomCaretaker {
 
   /**
    * `admit`: one call of `fn` on `input`, for a current session or the slate itself, holding the grants it is admitted
-   * with at their generations. Its output cell is allocated now, under `out`, with the run's label, so whether a cell
-   * exists never depends on what a run read.
+   * with. Its output is allocated now, as its own row with the run's label, so whether it exists never depends on what
+   * the run read, and no later admission relabels it.
    */
   admit(input: {
     readonly requester: Session | null; readonly fn: string; readonly input: JsonValue; readonly grants: readonly number[];
-    /** Null for a call whose answer goes straight back to its caller and is kept nowhere. */
+    /** The part its output belongs to; null for a call whose answer goes straight back to its caller and is kept nowhere. */
     readonly inputs: readonly string[]; readonly out: string | null;
   }): Run {
     return settleSync(Effect.gen({ self: this }, function* () {
@@ -784,14 +639,13 @@ export class RoomCaretaker {
 
       if (input.out !== null) {
         this.db.exec(
-          'INSERT INTO room_cells (key, label, value) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET label = excluded.label, value = excluded.value',
-          input.out, JSON.stringify(label), 'null',
+          'INSERT INTO room_outputs (run, part, fn, input, requester, label, value, written) VALUES (?, ?, ?, ?, ?, ?, NULL, 0)',
+          id, input.out, fn, JSON.stringify(input.input), requester?.email ?? null, JSON.stringify(label),
         );
       }
 
       const run: Run = {
-        id, out: input.out, requester, fn, image, input: input.input,
-        caps: grants.map((grant) => ({ grant: grant.id, gen: grant.gen })), label, live: true, steps: 0,
+        id, out: input.out, requester, fn, image, input: input.input, caps: grants.map((grant) => grant.id), label, live: true, steps: 0, effects: 0,
       };
 
       this.runs.set(id, run);
@@ -816,11 +670,11 @@ export class RoomCaretaker {
     return this.runs.get(id) ?? null;
   }
 
-  /** The model's `runOk`: live, its session current, every grant it holds at the generation it was admitted under. */
+  /** The model's `runOk`: live, its session current, every grant it was admitted with still granted. */
   runOk(run: Run): boolean {
     if (!run.live || (run.requester !== null && !this.current(run.requester))) return false;
 
-    return run.caps.every((cap) => this.grant(cap.grant)?.gen === cap.gen);
+    return run.caps.every((grant) => this.grant(grant) !== null);
   }
 
   private liveRun(id: number): Effect.Effect<Run, KinuError> {
@@ -834,17 +688,18 @@ export class RoomCaretaker {
   }
 
   /**
-   * `toolStep`: a run calls one tool through one of its grants. The grant must be one it holds, the tool one it reaches,
-   * the arguments within its root, and everyone who observes the call (its holder, and its sink) must be able to see the
-   * run's label. An effect another person's call asks for waits at this step for the holder; so does the holder's own
-   * data on its way to more people than may see it, which is the holder's to send.
+   * `toolStep`: a run calls one tool through one of its grants, now. The grant must be one it holds, the tool one it
+   * reaches, the arguments within its root, and everyone who observes the call (its holder, and its sink) must be able
+   * to see the run's label. An effect another person's call asks for waits at this step for the holder; so does the
+   * holder's own data on its way to more people than may see it, which is the holder's to send. Its caller dispatches a
+   * `go` at once, with nothing awaited in between, so no revoke lands between this check and the call.
    */
   toolStep(runId: number, grantId: number, tool: string, args: JsonValue): ToolVerdict {
     return settleSync(Effect.gen({ self: this }, function* () {
       const run = yield* this.liveRun(runId);
       const grant = this.grant(grantId) ?? (yield* refused('denied', 'This grant was taken back'));
 
-      if (!run.caps.some((cap) => cap.grant === grant.id)) return yield* refused('denied', 'This call holds no such grant');
+      if (!run.caps.includes(grant.id)) return yield* refused('denied', 'This call holds no such grant');
 
       if (!grant.tools.includes(tool)) return yield* refused('denied', `${tool} is not one of the tools this grant reaches`);
 
@@ -852,28 +707,30 @@ export class RoomCaretaker {
 
       if (grant.personal && run.requester?.email !== grant.holder) return yield* refused('denied', 'A person\'s own connection acts only in their own requests');
       const step = run.steps;
-      run.steps += 1;
 
       if (!audienceFlows(this.facts(), run.label, observers(grant.holder, grant.sink))) {
         const own = run.requester?.email === grant.holder && run.label.every((elem) => elem.holder === grant.holder);
 
         if (!own) return yield* refused('denied', 'This call would send data to someone who cannot see it');
 
-        // Their own data, in their own request, through code they wrote themselves: the request is their consent. Code
-        // someone else wrote waits for them to see where it sends their data (`Attacks.lean`, the sink audience).
+        // Their own data, in their own request, through code wholly theirs: the request is their consent. Code anyone
+        // else wrote waits for them to see where it sends their data (`Attacks.lean`, the sink audience).
         if (!this.ownCode(grant.holder)) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'outflow' }) };
       }
 
       if (grant.effect && run.requester?.email !== grant.holder) return { kind: 'wait', pending: this.wait(run, grant, step, { tool, args, kind: 'effect' }) };
+
+      // A step that goes ahead is a read: an approval names the step it is for by the count of them.
+      run.steps += 1;
+
+      if (grant.effect) run.effects += 1;
 
       return { kind: 'go' };
     }));
   }
 
   private wait(run: Run, grant: Grant, step: number, call: Pick<PendingEffect, 'tool' | 'args' | 'kind'>): PendingEffect {
-    const pending: PendingEffect = {
-      id: `${run.id}:${step}`, run: run.id, grant: grant.id, gen: grant.gen, step, ...call, decided: null,
-    };
+    const pending: PendingEffect = { id: `${run.id}:${crypto.randomUUID()}`, run: run.id, grant: grant.id, step, ...call, decided: null };
 
     this.pending.set(pending.id, pending);
 
@@ -908,17 +765,22 @@ export class RoomCaretaker {
     }));
   }
 
-  /** Whether a step still waits for a decision that can count: undecided, its run current, its grant at the generation named. */
+  /** Whether a step still waits for a decision that can count: undecided, its run current, its grant still granted. */
   stillWaiting(pendingId: string): boolean {
     const pending = this.pending.get(pendingId);
     const run = pending === undefined ? undefined : this.runs.get(pending.run);
 
-    return pending !== undefined && pending.decided === null && run !== undefined && this.runOk(run) && this.grant(pending.grant)?.gen === pending.gen;
+    return pending !== undefined && pending.decided === null && run !== undefined && this.runOk(run) && this.grant(pending.grant) !== null;
+  }
+
+  /** Whether a step was decided, and the room's waiter for it may stop waiting. */
+  decided(pendingId: string): boolean {
+    return this.pending.get(pendingId)?.decided !== null;
   }
 
   /**
-   * After the wait: the step goes ahead only if it was approved, the run is still current and the grant still at the
-   * generation the approval named; an outflow passes the sink check again with the holder's show in place.
+   * After the wait: the step goes ahead only if it was approved, the run is still current and the grant still granted;
+   * an outflow passes the sink check again with the holder's show in place. Its caller dispatches at once after it.
    */
   resume(pendingId: string): void {
     return settleSync(Effect.gen({ self: this }, function* () {
@@ -928,17 +790,19 @@ export class RoomCaretaker {
 
       if (pending.decided !== 'approved') return yield* refused('denied', 'Its holder declined this step');
       const run = yield* this.liveRun(pending.run);
-      const grant = this.grant(pending.grant);
-
-      if (grant === null || grant.gen !== pending.gen) return yield* refused('denied', 'This grant changed while the step waited');
+      const grant = this.grant(pending.grant) ?? (yield* refused('denied', 'This grant changed while the step waited'));
 
       if (!audienceFlows(this.facts(), run.label, observers(grant.holder, grant.sink))) {
         return yield* refused('denied', 'This call would send data to someone who cannot see it');
       }
+
+      run.steps += 1;
+
+      if (grant.effect) run.effects += 1;
     }));
   }
 
-  /** `observe`: a run reads a cell whose label lies inside its own. */
+  /** `observe`: a run reads state whose label lies inside its own. */
   observe(runId: number, key: string): JsonValue {
     return settleSync(Effect.gen({ self: this }, function* () {
       const run = yield* this.liveRun(runId);
@@ -947,12 +811,13 @@ export class RoomCaretaker {
       if (cell === null) return null;
 
       if (!within(cell.label, run.label)) return yield* refused('denied', 'This call cannot read that');
+      run.steps += 1;
 
       return cell.value;
     }));
   }
 
-  /** `write`: a run writes its own output cell, and only that. */
+  /** `write`: a run writes its own output, and only that. */
   write(runId: number, value: JsonValue): void {
     return settleSync(Effect.gen({ self: this }, function* () {
       const run = yield* this.liveRun(runId);
@@ -960,29 +825,35 @@ export class RoomCaretaker {
       if (run.requester !== null && run.requester.email === null) return yield* refused('denied', 'Sign in to change this slate');
 
       if (run.out === null) return yield* refused('denied', 'This call keeps no output');
-      this.db.exec('UPDATE room_cells SET value = ? WHERE key = ?', JSON.stringify(value), run.out);
+      this.db.exec('UPDATE room_outputs SET value = ?, written = 1 WHERE run = ?', JSON.stringify(value), run.id);
     }));
   }
 
-  /** `post`: only a run with an empty label adds or replaces public state. */
-  post(runId: number | null, key: string, value: JsonValue): void {
+  /**
+   * `post`: a current run with an empty label, for someone signed in or for the slate itself, adds or replaces public
+   * state, or removes it (`value` null). Nothing reaches public state outside a run.
+   */
+  post(runId: number, key: string, value: JsonValue | null): boolean {
     return settleSync(Effect.gen({ self: this }, function* () {
-      if (runId !== null) {
-        const run = yield* this.liveRun(runId);
+      const run = yield* this.liveRun(runId);
 
-        if (run.label.length > 0) return yield* refused('denied', 'A part that read private data can only return its result');
+      if (run.label.length > 0) return yield* refused('denied', 'A part that read private data can only return its result');
 
-        if (run.requester !== null && run.requester.email === null) return yield* refused('denied', 'Sign in to change this slate');
-      }
+      if (run.requester !== null && run.requester.email === null) return yield* refused('denied', 'Sign in to change this slate');
+      run.effects += 1;
 
-      const existing = this.cell(key);
+      if (value === null) return this.db.exec('DELETE FROM room_cells WHERE key = ? RETURNING key', key).toArray().length > 0;
+      this.db.exec('INSERT INTO room_cells (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, JSON.stringify(value));
 
-      if (existing !== null && existing.label.length > 0) return yield* refused('denied', `${key} holds a part's private result`);
-      this.db.exec(
-        "INSERT INTO room_cells (key, label, value) VALUES (?, '[]', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-        key, JSON.stringify(value),
-      );
+      return true;
     }));
+  }
+
+  /** Whether a run may change public state now: what a slate's own SQL is held to, by its runner, statement by statement. */
+  mayPost(runId: number): boolean {
+    const run = this.runs.get(runId);
+
+    return run !== undefined && this.runOk(run) && run.label.length === 0 && (run.requester === null || run.requester.email !== null);
   }
 
   /** `release`: what a run returns reaches a current session only if every element of its label may reach its person. */
@@ -996,6 +867,20 @@ export class RoomCaretaker {
     }));
   }
 
+  /**
+   * What a run returns, as the slate's page code receives it: page code is whoever wrote the slate's, so it gets a value
+   * only when its label is empty or every element's holder showed it to anyone; anything else is a sealed part.
+   */
+  releaseToPage(runId: number, to: Session | null): boolean {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const run = yield* this.liveRun(runId);
+
+      if (to !== null && !this.current(to)) return yield* refused('denied', 'This session has ended');
+
+      return audienceFlows(this.facts(), run.label, 'anyone');
+    }));
+  }
+
   /** `finish`. */
   finish(runId: number): void {
     const run = this.runs.get(runId);
@@ -1006,38 +891,32 @@ export class RoomCaretaker {
     for (const [id, pending] of this.pending) if (pending.run === runId) this.pending.delete(id);
   }
 
-  // ── Cells ─────────────────────────────────────────────────────────────────────────────────────────────────────
+  // ── State ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
+  /** State by key: public state, or else a part's newest written output (its newest admitted one while none is written). */
   cell(key: string): Cell | null {
-    const row = this.db.exec('SELECT * FROM room_cells WHERE key = ?', key).toArray()[0];
+    const shared = this.db.exec('SELECT key, value FROM room_cells WHERE key = ?', key).toArray()[0];
 
-    if (row === undefined) return null;
-    const parsed = v.parse(CellRow, row);
-
-    return { key: parsed.key, label: parseElems(parsed.label), value: parseJsonValue(parsed.value) };
+    return shared === undefined ? this.output(key) : publicCell(shared);
   }
 
-  /** Public state, as the shared server lists it: unlabelled cells only. */
+  /** A part's output, as its view shows it: its newest run's that wrote one, else its newest admitted. */
+  output(part: string): Output | null {
+    const row = this.db.exec('SELECT * FROM room_outputs WHERE part = ? ORDER BY written DESC, run DESC LIMIT 1', part).toArray()[0];
+
+    return row === undefined ? null : outputRow(row);
+  }
+
+  /** Public state, as the shared server lists it. */
   publicCells(prefix: string, limit: number): Cell[] {
-    return this.db.exec("SELECT * FROM room_cells WHERE label = '[]' AND key >= ? ORDER BY key LIMIT ?", prefix, limit).toArray()
-      .map((row) => v.parse(CellRow, row))
-      .filter((row) => row.key.startsWith(prefix))
-      .map((row) => ({ key: row.key, label: [], value: parseJsonValue(row.value) }));
-  }
-
-  deleteCell(key: string): boolean {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      const existing = this.cell(key);
-
-      if (existing !== null && existing.label.length > 0) return yield* refused('denied', `${key} holds a part's private result`);
-
-      return this.db.exec('DELETE FROM room_cells WHERE key = ? RETURNING key', key).toArray().length > 0;
-    }));
+    return this.db.exec('SELECT key, value FROM room_cells WHERE key >= ? ORDER BY key LIMIT ?', prefix, limit).toArray()
+      .map(publicCell)
+      .filter((cell) => cell.key.startsWith(prefix));
   }
 
   /**
-   * `render`: a cell as a current session sees it: its value if every element may reach the person, else the elements
-   * they may not read, whose holders a placeholder asks.
+   * `render`: state as a current session sees it: its value if every element may reach the person, else the elements
+   * they may not read, whose holders a placeholder asks. Nothing of the value is read before the check.
    */
   render(key: string, to: Session): { readonly shown: true; readonly value: JsonValue } | { readonly shown: false; readonly hidden: Elem[] } {
     return settleSync(Effect.gen({ self: this }, function* () {
@@ -1054,16 +933,5 @@ export class RoomCaretaker {
   /** `fork`: anyone signed in who can open the slate may copy its code; nothing else of the room goes with it. */
   mayFork(email: string | null): boolean {
     return email !== null && this.hasAccess(email);
-  }
-
-  /** The sources a person's grants read, once each, for the sheet and the part views. */
-  holderTags(email: string): Tag[] {
-    const tags: Tag[] = [];
-
-    for (const grant of this.grants()) {
-      if (grant.holder === email && !tags.some((seen) => sameTag(seen, grant))) tags.push({ holder: grant.holder, server: grant.server, root: grant.root });
-    }
-
-    return tags;
   }
 }

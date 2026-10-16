@@ -17,18 +17,19 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
   censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
-  JsonValueSchema, McpToolSurfaceSchema, ownerCaller, roomFramePath, roomPagePath, roomPartPath, sha256Hex, slateAddressImpact, slateCallAddress,
+  JsonValueSchema, McpToolSurfaceSchema, ownerCaller, roomFramePath, roomPagePath, roomPartPath, sha256Hex, slateCallAddress,
   RoomClientFrameSchema,
-  type JsonValue, type OpsCaller, type PartView, type Repair, type RoomAccess, type RoomAsk, type RoomAudience, type RoomCall,
-  type RoomPerson, type RoomReach, type RoomServerFrame, type RoomService, type RoomSource, type RoomView, type SheetView,
+  type JsonValue, type OpsCaller, type PartView, type Repair, type RoomAccess, type RoomAudience, type RoomCall,
+  type RoomPerson, type RoomServerFrame, type RoomView, type SheetView,
   GALLERY_CATEGORIES, slateHostOrigin, type BlueprintBundle, type ForkPreview, type SerializableToolDescriptor, type SlateAnswer, type SlateSurfaceResult,
   type SharedSlateFiles, type SlateFileChange,
   type SlateSurfaceValue, type TablesAnswer,
 } from '@kinu.run/core';
 import {
   canonicalRoot, frameTicket, linkKeyHolds, linkUrl, ROOM_ENTER_PATH, type FrameClaim,
-  RoomCaretaker, codecIsFree, flows, initSlateRoomTables, slateAnswer, ROOT_SLATE_CALLER, planReaderCheck, searchFindsRepository,
-  type Access, type Audience, type Codec, type Elem, type Grant, type RoomMember, type Run, type Session, type Tag,
+  RoomCaretaker, flows, initSlateRoomTables, slateAnswer, ROOT_SLATE_CALLER, planReaderCheck, searchFindsRepository,
+  UNDECLARED, accessName, callArgument, joinTerms, partDecision, partFn, partKey, personOf, reachOf, rootOf, roomAsks, serviceOf, sheetView, toolTerms,
+  type Access, type Audience, type Codec, type Elem, type Grant, type GrantTerms, type Need, type Run, type Session, type Tag,
 } from '@kinu.run/core/slates';
 import { attempt, diagnostics, inItsWords, KinuError, settle, settleSync, type ErrorCode } from '@kinu.run/core/obs';
 import { workspaceOwner } from '../workspace-owner-rpc';
@@ -97,19 +98,12 @@ const Started = v.object({ methods: v.array(v.string()) });
 
 const NotStarted = v.object({ error: v.string() });
 
-/** The process facet's surface: the runner's own boot (parsed by `Started` or `NotStarted`), and its HTTP. */
+/** The process facet's surface: the runner's own boot (parsed by `Started` or `NotStarted`), its HTTP, and a call's end. */
 interface ProcessFacet extends Rpc.DurableObjectBranded {
   startProcess(): Promise<JsonValue>;
   fetch(request: Request): Promise<Response>;
-}
-
-/** What a call of the slate's code needed and did not hold: a connection of the requester's, for one function. */
-interface Need {
-  readonly fn: string;
-  readonly server: string;
-  readonly tool: string;
-  readonly root: Readonly<Record<string, string>>;
-  readonly requester: string | null;
+  /** The call may change the slate no more: whether it changed the slate's own SQL. */
+  settleInvocation(invocation: string): Promise<{ readonly wrote: boolean }>;
 }
 
 /** The main module every slate image starts from (resident.ts). */
@@ -131,49 +125,13 @@ function care<A>(body: () => A): Effect.Effect<A, KinuError> {
   return inItsWords('io', Effect.sync(body));
 }
 
-/** How many of their own connections one call of someone's own code may come to hold before it answers a part. */
-const OWN_GRANTS_PER_CALL = 8;
-
-/** What the room records and carries on past: a Drive card it could not write, a Gallery picture it could not take. */
-const RECORDED = { card: 'slate.card_failed', picture: 'slate.gallery_picture_failed' } as const;
-
-/** What a personal grant made for its holder's own code admits: any input up to this size. */
-const OWN_GRANT_INPUT_BYTES = 256 * 1024;
-
-/** A part's key: one function on one input, for one person when what it reads is theirs. */
-function partKey(fn: string, args: readonly JsonValue[], requester: string | null): string {
-  return `${fn}.${sha256Hex(JSON.stringify(args), 16)}.${requester === null ? 'all' : sha256Hex(requester, 12)}`;
-}
-
-/** The fixed arguments a grant is made for: a GitHub call's repository, nothing for any other. */
-function rootOf(server: string, args: JsonValue): Record<string, string> {
-  if (!server.startsWith('mcp.') || args === null || typeof args !== 'object' || Array.isArray(args)) return {};
-  const { owner, repo } = args;
-
-  return typeof owner === 'string' && typeof repo === 'string' ? { owner, repo } : {};
-}
-
-function serviceOf(server: string): RoomService {
-  if (server === 'ai') return { title: 'AI', kind: 'ai' };
-
-  if (server.startsWith('mcp.')) {
-    const name = server.slice('mcp.'.length);
-
-    return { title: name, kind: name.toLowerCase().includes('github') ? 'github' : 'mcp' };
-  }
-
-  return { title: server, kind: 'workspace' };
-}
-
-function scopeText(root: string): string | null {
-  const fixed = v.parse(v.record(v.string(), v.string()), JSON.parse(root));
-  const { owner, repo } = fixed;
-
-  if (owner !== undefined && repo !== undefined) return `${owner}/${repo}`;
-  const values = Object.values(fixed);
-
-  return values.length === 0 ? null : values.join(' · ');
-}
+/**
+ * What the room records and carries on past: a Drive card it could not write, a Gallery picture it could not take, a
+ * shared server it could not tell that a call's writes ended.
+ */
+const RECORDED = {
+  card: 'slate.card_failed', picture: 'slate.gallery_picture_failed', writes: 'slate.writes_end_failed', listing: 'slate.gallery_listing_failed',
+} as const;
 
 export class SlateRoom extends DurableObject<Env> {
   private readonly caretaker: RoomCaretaker;
@@ -189,6 +147,9 @@ export class SlateRoom extends DurableObject<Env> {
 
   /** Parts that asked for a connection their requester has not allowed, by part key. */
   private readonly needs = new Map<string, Need>();
+
+  /** Parts whose call must be asked again by its requester, and why: it changed something before it stopped. */
+  private readonly again = new Map<string, { readonly requester: string | null; readonly message: string }>();
 
   /** Parts computing now. */
   private readonly computing = new Set<string>();
@@ -223,14 +184,21 @@ export class SlateRoom extends DurableObject<Env> {
     initSlateRoomTables((ddl) => { this.ctx.storage.sql.exec(ddl); });
   }
 
-  /** The deploy's walk: this room's tables and what its repair did. */
-  async opsTables(caller: OpsCaller): Promise<TablesAnswer> {
-    await requireOps(this.env, caller);
+  /**
+   * The deploy's walk: this room's tables and what its repair did. A listed room writes its listing to the Gallery again
+   * on the way, so a Gallery whose tables were made anew is filled again by the walk that reaches it.
+   */
+  opsTables(caller: OpsCaller): Promise<TablesAnswer> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* attempt({ doing: 'admitting the deploy\'s walk', otherwise: 'denied' }, async () => requireOps(this.env, caller));
 
-    return {
-      name: null, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
-      workspaces: [], accounts: [], agents: [], rooms: [],
-    };
+      if (this.storageRefusal === undefined && this.exists() && this.caretaker.listing() !== null) yield* this.recorded('listing', this.syncGallery());
+
+      return {
+        name: null, census: censusOf(this.ctx.storage.sql), repair: this.schemaRepair, refused: this.storageRefusal?.reason ?? null,
+        workspaces: [], accounts: [], agents: [], rooms: [],
+      } satisfies TablesAnswer;
+    }));
   }
 
   /** The owner's workspace makes its slate's room on the slate's first run; a second call changes nothing. */
@@ -324,7 +292,7 @@ export class SlateRoom extends DurableObject<Env> {
    */
   publish(input: {
     readonly author: string; readonly image: string; readonly modules: Readonly<Record<string, string>>; readonly title: string;
-    readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null; readonly source: string;
+    readonly secret: { readonly file: string; readonly line: number; readonly kind: string } | null; readonly source: string | null;
     readonly contracts: Readonly<Record<string, Codec>>;
   }): Promise<{ readonly methods: readonly string[] }> {
     return settle(Effect.gen({ self: this }, function* () {
@@ -375,16 +343,17 @@ export class SlateRoom extends DurableObject<Env> {
   }
 
   /**
-   * A worker of the image now running, its env the bindings for `run`. The loader caches a worker by `id` for as long as
-   * this isolate lives, its env and its module state with it: an id is never given to two runs, nor to two incarnations of
-   * the room. The shared server keeps the mediated egress every slate had; a confined run reaches no network at all.
+   * A worker of `image`, its env the bindings for `run`. The loader caches a worker by `id` for as long as this isolate
+   * lives, its env and its module state with it: an id is never given to two runs, nor to two incarnations of the room.
+   * A confined run loads the image it was admitted at, never one published since. The shared server keeps the mediated
+   * egress every slate had; a confined run reaches no network at all.
    */
-  private worker(id: string, run: number | null): Effect.Effect<WorkerStub, KinuError> {
+  private worker(id: string, image: string | null, run: number | null): Effect.Effect<WorkerStub, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const room = this.caretaker.room();
-      const modules = room.modules;
+      const modules = image === null ? null : this.caretaker.modulesOf(image);
 
-      if (room.image === null || modules === null) return yield* refuse('missing', 'This slate has not been built yet');
+      if (modules === null) return yield* refuse('missing', 'This slate has not been built yet');
       const texts = yield* this.moduleTexts(modules);
       // Loaded on a room's first run, not at the Worker's start: the vendor module carries the whole slate runtime.
       const { workerCompatibility } = yield* attempt({ doing: 'loading the slate runtime', otherwise: 'unavailable' }, async () => import('virtual:kinu-slate-vendor'));
@@ -408,7 +377,7 @@ export class SlateRoom extends DurableObject<Env> {
       const image = this.caretaker.room().image ?? '';
 
       if (this.server?.image === image) return this.server.facet;
-      const worker = yield* this.worker(`kinu-room:${this.name()}:${this.incarnation}:${image}`, null);
+      const worker = yield* this.worker(`kinu-room:${this.name()}:${this.incarnation}:${image}`, image, null);
       const process = this.ctx.facets.get<ProcessFacet>('server', () => ({ class: worker.getDurableObjectClass<ProcessFacet>(RUNNER_CLASS) }));
       const methods = yield* this.started(process);
 
@@ -436,7 +405,7 @@ export class SlateRoom extends DurableObject<Env> {
    */
   private confined(run: Run, isolate: string): Effect.Effect<Fetcher<ProcessFacet>, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const worker = yield* this.worker(`kinu-room-run:${this.name()}:${run.image}:${isolate}`, run.id);
+      const worker = yield* this.worker(`kinu-room-run:${this.name()}:${run.image}:${isolate}`, run.image, run.id);
       const facet = this.ctx.facets.get<ProcessFacet>(`run:${isolate}`, () => ({ class: worker.getDurableObjectClass<ProcessFacet>(RUNNER_CLASS) }));
 
       yield* this.started(facet);
@@ -457,7 +426,7 @@ export class SlateRoom extends DurableObject<Env> {
 
       return {
         status: 200, title: this.caretaker.room().title,
-        owner: { email: owner?.email ?? '', name: owner?.name ?? null }, access: this.roomAccess(visitor?.email ?? null, access),
+        owner: { email: owner?.email ?? '', name: owner?.name ?? null }, access: accessName(this.caretaker, { email: visitor?.email ?? null, access }),
       };
     }
 
@@ -473,14 +442,6 @@ export class SlateRoom extends DurableObject<Env> {
     const holdsKey = key !== null && room.link && await linkKeyHolds(this.env, room, key);
 
     return this.caretaker.open(visitor?.email ?? null, holdsKey);
-  }
-
-  private roomAccess(email: string | null, access: Access): RoomAccess {
-    if (access.kind === 'owner') return 'owner';
-
-    if (access.kind === 'link') return 'link';
-
-    return this.caretaker.members().find((member) => member.email === email)?.role === 'edit' ? 'edit' : 'use';
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -547,7 +508,7 @@ export class SlateRoom extends DurableObject<Env> {
 
   /** A call's answer frame: done, or refused in the room's words. It never fails. */
   private answer(ws: WebSocket, state: SocketState, id: number, call: RoomCall): Effect.Effect<RoomServerFrame> {
-    const called = Effect.ensuring(this.call(ws, state, call), Effect.sync(() => { this.releaseEnded(); }));
+    const called = Effect.ensuring(this.call(ws, state, call), this.releaseEnded());
 
     return Effect.catch(Effect.as(called, { id, refusal: null } satisfies RoomServerFrame), (error) => {
       const reason = error.code === 'denied' || error.code === 'missing' || error.code === 'bad_input' ? error.code : 'unavailable';
@@ -773,36 +734,55 @@ export class SlateRoom extends DurableObject<Env> {
 
   // ── Grants a person makes ───────────────────────────────────────────────────────────────────────────────────────
 
-  /** What a grant for `need` would be: its effect and its sink, by what the call does. */
-  private contract(need: Need, holder: string): Effect.Effect<{ effect: boolean; sink: Audience }, KinuError> {
+  /**
+   * What a grant of `tool` is, held by `holder` (`room/terms.ts`): an MCP tool by its own server's read-only mark, as the
+   * holder's account describes it; the workspace's own by what each member does.
+   */
+  private termsFor(holder: string, server: string, tool: string): Effect.Effect<GrantTerms, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      if (need.server === 'ai') return { effect: false, sink: [] };
+      const readOnly = server.startsWith('mcp.') && (yield* this.mcpDescriptor(holder, server, tool))?.readOnly === true;
 
-      if (need.server.startsWith('mcp.')) {
-        const descriptor = yield* this.mcpDescriptor(holder, need.server, need.tool);
-
-        return descriptor?.readOnly === true ? { effect: false, sink: [] } : { effect: true, sink: 'anyone' };
-      }
-
-      const impact = slateAddressImpact({ namespace: need.server, member: need.tool });
-
-      if (impact === null) return yield* refuse('denied', `${need.server}.${need.tool} is not something a slate reaches`);
-
-      return { effect: impact !== 'observe', sink: impact === 'externalSend' || impact === 'execute' ? 'anyone' : [] };
+      return toolTerms(server, tool, readOnly) ?? (yield* refuse('denied', `${server}.${tool} is not something a slate reaches`));
     });
   }
 
-  /** "Allow" on a part: the requester grants their own connection to the function it needed, for their own requests. */
+  /**
+   * "Allow" on a part: the requester grants their own connection to the function that needed it, and the call that
+   * needed it runs once more, now holding it. "Use again" after someone else's edit: their own grant follows the image
+   * now running, and the part's call runs once more.
+   */
   private allow(session: Session, part: string): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const need = this.needs.get(part);
+      const email = session.email;
 
-      if (need === undefined || session.email === null || need.requester !== session.email) {
-        return yield* refuse('missing', 'This part asks nothing of you now');
+      if (email === null) return yield* refuse('denied', 'Sign in to allow anything');
+
+      if (need !== undefined && need.requester === email) {
+        yield* this.personalGrant(email, need);
+        this.needs.delete(part);
+
+        return yield* this.completeOnce(part, need.call.session ?? session, need.call.args);
       }
 
-      yield* this.personalGrant(session.email, need);
-      this.needs.delete(part);
+      const output = this.caretaker.output(part);
+      const room = this.caretaker.room();
+      const edited = output === null ? [] : this.caretaker.grants().filter((grant) => grant.personal && grant.holder === email && grant.fn === output.fn && grant.image !== room.image);
+
+      if (output === null || edited.length === 0 || output.requester !== email) return yield* refuse('missing', 'This part asks nothing of you now');
+      yield* care(() => this.caretaker.renew(email, output.fn));
+
+      return yield* this.completeOnce(part, session, Array.isArray(output.input) ? output.input : []);
+    });
+  }
+
+  /** A part's call, run once more for its requester, its answer going to the part. A refusal shows on the part. */
+  private completeOnce(part: string, session: Session, args: readonly JsonValue[]): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      this.again.delete(part);
+      const outcome = yield* Effect.result(this.callMethod(session, partFn(part), args, 'part'));
+
+      if (outcome._tag === 'Failure' && !this.needs.has(part)) this.again.set(part, { requester: session.email, message: outcome.failure.message });
     });
   }
 
@@ -834,17 +814,14 @@ export class SlateRoom extends DurableObject<Env> {
         const answered = yield* attempt({ doing: `asking ${serviceOf(elem.server).title} who reads ${owner}/${repo}`, otherwise: 'unavailable' },
           async () => callUserMcpTool({ stub: this.userObject(account), caller }, descriptor, { query: `repo:${owner}/${repo}` }, undefined));
 
-        const reads = searchFindsRepository(answered, owner, repo);
-
-        yield* care(() => { this.caretaker.checked(email, elem, reads); });
+        yield* care(() => { this.caretaker.checked(email, elem, searchFindsRepository(answered, owner, repo)); });
       }
     });
   }
 
   /**
-   * A person's own connection granted to the function that needed it, for their own requests. A grant they held for that
-   * function on that source is renewed with its tools and this one: an effect if any tool is one (by what the tool is,
-   * for an MCP server its own read-only mark), and its sink the widest of theirs.
+   * A person's own connection granted to the function that needed it, for their own requests. A grant they hold for that
+   * function on that very source keeps its tools and takes this one, its terms the join of both (`joinTerms`).
    */
   private personalGrant(holder: string, need: Need): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
@@ -853,14 +830,13 @@ export class SlateRoom extends DurableObject<Env> {
       const held = this.caretaker.grants().find((grant) => grant.personal && grant.holder === holder && grant.server === need.server
         && grant.root === root && grant.fn === need.fn);
 
-      const asked = yield* this.contract(need, holder);
-      const effect = asked.effect || held?.effect === true;
-      const sink: Audience = asked.sink === 'anyone' || held?.sink === 'anyone' ? 'anyone' : [...new Set([...held?.sink ?? [], ...asked.sink])];
+      const asked = yield* this.termsFor(holder, need.server, need.tool);
+      const terms = held === undefined ? asked : joinTerms(held, asked);
 
       yield* care(() => {
         this.caretaker.mint(holder, {
           personal: true, server: need.server, root: need.root, tools: [...new Set([...held?.tools ?? [], need.tool])], fn: need.fn,
-          domain: this.caretaker.contract(need.fn) ?? { kind: 'json', maxBytes: OWN_GRANT_INPUT_BYTES }, effect, sink,
+          domain: this.caretaker.contract(need.fn) ?? UNDECLARED, effect: terms.effect, sink: terms.sink,
         });
       });
     });
@@ -878,8 +854,8 @@ export class SlateRoom extends DurableObject<Env> {
     for (const grant of own.filter((each) => each.personal)) {
       this.caretaker.mint(actor, {
         personal: false, server: grant.server, root: v.parse(v.record(v.string(), v.string()), JSON.parse(grant.root)), tools: grant.tools,
-        // A lend admits only what the function declares it takes; one that declares nothing takes free input, and says so.
-        fn, domain: this.caretaker.contract(fn) ?? grant.domain, effect: grant.effect, sink: grant.sink,
+        // A lend admits only what the function declares it takes; one that declares nothing takes what its call carries.
+        fn, domain: this.caretaker.contract(fn) ?? UNDECLARED, effect: grant.effect, sink: grant.sink,
       });
     }
   }
@@ -914,13 +890,9 @@ export class SlateRoom extends DurableObject<Env> {
 
   /** "Show to everyone here": the person shows their own sources in a part, for that part's function. */
   private showPart(session: Session, part: string, scope: 'members' | 'anyone'): void {
-    const audience: Audience = scope === 'anyone' ? 'anyone' : this.everyoneAdded();
+    const audience: Audience = scope === 'anyone' ? 'anyone' : this.caretaker.everyoneAdded();
 
     for (const elem of this.cellLabel(part).filter((each) => each.holder === session.email)) this.caretaker.show(session.email, elem, elem.fn, audience);
-  }
-
-  private everyoneAdded(): string[] {
-    return this.caretaker.members().filter((member) => member.role !== 'removed').map((member) => member.email);
   }
 
   private unshowPart(session: Session, part: string): void {
@@ -938,18 +910,31 @@ export class SlateRoom extends DurableObject<Env> {
     const tag: Tag = { holder: actor ?? '', server, root };
 
     if (op === 'showTo') this.caretaker.show(actor, tag, fn, [asker]);
-    else if (op === 'showToMembers') this.caretaker.show(actor, tag, fn, this.everyoneAdded());
+    else if (op === 'showToMembers') this.caretaker.show(actor, tag, fn, this.caretaker.everyoneAdded());
     else this.caretaker.dismissAsk(actor ?? '', asker, tag, fn);
   }
 
   /**
-   * Every step still waiting whose run a call just ended (a grant taken back, a person removed, the link stopped): woken,
-   * so its run meets the refusal at once instead of waiting for a decision that can no longer count.
+   * After every call of a session: each step still waiting whose run that call ended (a grant taken back, a person
+   * removed, the link stopped) is woken, so its run meets the refusal at once; and the shared server is told of each run
+   * that may change the slate no more.
    */
-  private releaseEnded(): void {
-    for (const [id, wake] of this.waiters) {
-      if (!this.caretaker.stillWaiting(id)) wake();
-    }
+  private releaseEnded(): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      for (const [id, wake] of this.waiters) {
+        if (!this.caretaker.stillWaiting(id) && !this.caretaker.decided(id)) wake();
+      }
+
+      for (const [invocation, runId] of this.invocations) {
+        const run = this.caretaker.run(runId);
+
+        if (run !== null && !this.caretaker.mayPost(runId) && this.server !== null) {
+          const { facet } = this.server;
+
+          yield* this.recorded('writes', attempt({ doing: 'ending a call\'s writes', otherwise: 'unavailable' }, async () => { await facet.settleInvocation(invocation); }));
+        }
+      }
+    });
   }
 
   private decideWaiting(actor: string | null, id: string, approve: boolean): void {
@@ -1002,17 +987,20 @@ export class SlateRoom extends DurableObject<Env> {
       }
 
       if (url.pathname === '/__rpc') return new Response('A slate page calls its server through kinu:slate', { status: 404, headers: NO_STORE });
+      // A page's own request runs as a call of its own: it may change the slate only for someone signed in, now.
       const run = yield* care(() => this.caretaker.admit({ requester: session, fn: 'fetch', input: null, grants: [], inputs: [], out: null }));
       const invocation = this.invoke(run);
       const headers = new Headers(request.headers);
 
       headers.set('x-slate-call', invocation);
 
+      if (this.caretaker.mayPost(run.id)) headers.set('x-slate-writes', '1');
+
       return yield* Effect.ensuring(
         Effect.flatMap(this.sharedServer(), (server) => attempt({ doing: 'serving the slate page', otherwise: 'unavailable' },
           async () => server.fetch(new Request(request, { headers })))),
-        Effect.sync(() => {
-          this.settleRun(invocation);
+        Effect.gen({ self: this }, function* () {
+          yield* this.settleRun(invocation, true);
           this.caretaker.finish(run.id);
         }),
       );
@@ -1027,9 +1015,20 @@ export class SlateRoom extends DurableObject<Env> {
     return invocation;
   }
 
-  /** The run's code has answered: its invocation goes. The run itself ends once its output is written and released. */
-  private settleRun(invocation: string): void {
-    this.invocations.delete(invocation);
+  /**
+   * The run's code has answered: its invocation goes, and the shared server ends its writes. What it answers is whether
+   * the call changed the slate's own SQL, which is one of the call's effects.
+   */
+  private settleRun(invocation: string, shared: boolean): Effect.Effect<boolean> {
+    return Effect.gen({ self: this }, function* () {
+      this.invocations.delete(invocation);
+      const server = shared ? this.server : null;
+
+      if (server === null) return false;
+      const settled = yield* Effect.result(attempt({ doing: 'ending the call\'s writes', otherwise: 'unavailable' }, async () => server.facet.settleInvocation(invocation)));
+
+      return settled._tag === 'Success' && settled.success.wrote;
+    });
   }
 
   /**
@@ -1053,110 +1052,120 @@ export class SlateRoom extends DurableObject<Env> {
   }
 
   /**
-   * One call of the slate's code from its page or the slate's own work. With no grant it runs in the shared server and
-   * answers its value; with grants it runs confined and its output is a part, answered as its value only when everyone
-   * may see it. One that needed a connection its requester has not allowed answers the part that asks for it.
-   */
-  /**
    * One call of the slate's code. Its answer goes back as itself to a `person` who may see its label (their own agent's
-   * call); to a `page`, whose code anyone who opens the slate runs, only if everyone who can open it may see it; to a
+   * call); to a `page`, whose code anyone who opens the slate runs, only if its label is empty or shown to anyone; to a
    * `part`, never: it shows in the part's sealed frame.
+   *
+   * A call that reaches a connection it does not hold stops there. When its requester runs code wholly theirs and it
+   * changed nothing yet, the connection is granted (their own code is their consent) and it runs again, once per
+   * connection it reaches; otherwise its part asks the requester, and runs once more when they allow it. A call that
+   * already changed something is never run again by the room: its part says to ask it again.
    */
   private callMethod(session: Session | null, fn: string, args: readonly JsonValue[], to: 'page' | 'part' | 'person'): Effect.Effect<RoomCallOutcome, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const requester = session?.email ?? null;
+      const asked = partKey(fn, args, requester);
 
-      // Someone running code they wrote themselves holds their own connections as it reaches them, no one asked: each
-      // need becomes a personal grant of theirs, at this image, and the call runs again (decision 1 of the design).
-      for (let tries = 0; ; tries++) {
-        const outcome = yield* this.callOnce(session, fn, args, to);
-        const need = [...this.needs.entries()].find(([, each]) => each.fn === fn && each.requester === requester);
+      if (this.needs.get(asked)?.requester === requester) return { part: { key: asked, frame: this.partFrame(asked) } };
 
-        if (!('part' in outcome) || need === undefined || requester === null || tries >= OWN_GRANTS_PER_CALL) return outcome;
+      for (;;) {
+        const attempted = yield* this.attemptCall(session, fn, args, to);
 
-        if (!this.caretaker.ownCode(requester)) return outcome;
-        yield* this.personalGrant(requester, need[1]);
-        this.needs.delete(need[0]);
+        if (attempted.kind === 'done') return attempted.outcome;
+        const need = this.needs.get(asked);
+
+        if (need === undefined) return yield* Effect.fail(attempted.failure);
+
+        if (requester === null || !this.caretaker.ownCode(requester)) {
+          if (attempted.changed) {
+            this.needs.delete(asked);
+            this.again.set(asked, { requester, message: `${fn} changed something before it reached a connection it needs: ask it again once you allow it` });
+          }
+
+          return { part: { key: asked, frame: this.partFrame(asked) } };
+        }
+
+        yield* this.personalGrant(requester, need);
+        this.needs.delete(asked);
+
+        if (attempted.changed) return yield* refuse('unavailable', `${fn} changed something before it reached your ${serviceOf(need.server).title}: it holds it now, so call it again`);
       }
     });
   }
 
-  private callOnce(session: Session | null, fn: string, args: readonly JsonValue[], to: 'page' | 'part' | 'person'): Effect.Effect<RoomCallOutcome, KinuError> {
+  /** One admission of a call, run to its end: its outcome, or its failure and whether it changed anything first. */
+  private attemptCall(session: Session | null, fn: string, args: readonly JsonValue[], to: 'page' | 'part' | 'person'): Effect.Effect<
+    { readonly kind: 'done'; readonly outcome: RoomCallOutcome } | { readonly kind: 'failed'; readonly failure: KinuError; readonly changed: boolean }, KinuError
+  > {
     return Effect.gen({ self: this }, function* () {
-      const asPart = to === 'part';
       const input: JsonValue = [...args];
       const grants = this.caretaker.grantsFor(session, fn, input);
       const requester = session?.email ?? null;
-      const mine = grants.some((grant) => grant.personal) || this.needs.has(partKey(fn, args, requester));
-      const key = partKey(fn, args, mine ? requester : null);
+      const shared = grants.length === 0;
+      const key = partKey(fn, args, grants.some((grant) => grant.personal) ? requester : null);
+      // A call that holds a grant keeps its output as a part; one that holds none answers straight back, unless asked for a part.
+      const out = shared && to !== 'part' ? null : key;
+      const run = yield* care(() => this.caretaker.admit({ requester: session, fn, input, grants: grants.map((grant) => grant.id), inputs: [], out }));
 
-      if (grants.length === 0 && !asPart) {
-        const run = yield* care(() => this.caretaker.admit({ requester: session, fn, input, grants: [], inputs: [], out: null }));
-        const answered = yield* Effect.result(Effect.ensuring(this.runMethod(run, this.sharedServer()), Effect.sync(() => { this.caretaker.finish(run.id); })));
+      return yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
+        const answered = yield* this.runMethod(run, shared);
 
-        if (answered._tag === 'Success') return { value: answered.success };
-        const need = [...this.needs.entries()].find(([, each]) => each.fn === fn && each.requester === requester);
+        if (answered.kind === 'failed') {
+          // A run whose session ended meanwhile writes nothing: its refusal is the caller's answer.
+          if (out !== null && !this.needs.has(key) && this.caretaker.runOk(run)) yield* care(() => { this.caretaker.write(run.id, { failed: answered.failure.message }); });
 
-        if (need !== undefined) return { part: { key: need[0], frame: this.partFrame(need[0]) } };
+          return { kind: 'failed' as const, failure: answered.failure, changed: answered.changed || run.effects > 0 };
+        }
 
-        return yield* Effect.fail(answered.failure);
-      }
-
-      const run = yield* care(() => this.caretaker.admit({ requester: session, fn, input, grants: grants.map((grant) => grant.id), inputs: [], out: key }));
-
-      return yield* Effect.ensuring(this.confinedCall(run, { session, key, to }), Effect.sync(() => { this.caretaker.finish(run.id); }));
+        return { kind: 'done' as const, outcome: yield* this.delivered(run, { session, key: out, to }, answered.value) };
+      }), Effect.sync(() => {
+        this.caretaker.finish(run.id);
+      }));
     });
   }
 
-  /** A confined run's call, its output written and then released as `to` may see it. */
-  private confinedCall(run: Run, call: { readonly session: Session | null; readonly key: string; readonly to: 'page' | 'part' | 'person' }): Effect.Effect<RoomCallOutcome, KinuError> {
+  /**
+   * What a run returns, delivered: written to its own output, then let through one final check for every way it goes
+   * back (`release` for a person, `releaseToPage` for page code), the run and the session both current now.
+   */
+  private delivered(run: Run, call: { readonly session: Session | null; readonly key: string | null; readonly to: 'page' | 'part' | 'person' }, value: JsonValue): Effect.Effect<RoomCallOutcome, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const { session, key, to } = call;
 
-      this.computing.add(key);
-      yield* this.broadcast();
-      const isolate = `${String(run.id)}:${crypto.randomUUID()}`;
-
-      const answered = yield* Effect.result(Effect.ensuring(this.runMethod(run, this.confined(run, isolate)), Effect.sync(() => {
-        this.computing.delete(key);
-        this.ctx.facets.delete(`run:${isolate}`);
-      })));
-
-      if (answered._tag === 'Success') this.caretaker.write(run.id, answered.success);
-      else if (!this.needs.has(key)) this.caretaker.write(run.id, { failed: answered.failure.message });
-      yield* this.broadcast();
-
-      if (answered._tag === 'Success' && to === 'person' && session !== null && (yield* care(() => this.caretaker.release(run.id, session)))) {
-        return { value: answered.success };
+      if (key !== null) {
+        yield* care(() => { this.caretaker.write(run.id, value); });
+        yield* this.broadcast();
       }
 
-      if (answered._tag === 'Success' && to === 'page' && this.openToEveryone(run.label)) return { value: answered.success };
+      const released = to === 'person' && session !== null
+        ? yield* care(() => this.caretaker.release(run.id, session))
+        : to === 'page' && (yield* care(() => this.caretaker.releaseToPage(run.id, session)));
+
+      if (released) return { value };
+
+      if (key === null) return yield* refuse('denied', 'This answer holds data you cannot see');
 
       return { part: { key, frame: this.partFrame(key) } };
     });
   }
 
-  /** Whether everyone who can open the slate may see a label: then a part's value goes back as itself. */
-  private openToEveryone(label: readonly Elem[]): boolean {
-    const facts = this.caretaker.facts();
-
-    return this.caretaker.room().link ? flows(facts, label, null) : this.everyoneAdded().every((email) => flows(facts, label, email));
-  }
-
-  /** A page's own `workspace` call: a run of no method of the slate's, for its session, with what that session holds. */
+  /** A page's own `workspace` call: a run of no method of the slate's, for its session, released to it before it ends. */
   private pageCall(session: Session, path: readonly string[], args: readonly JsonValue[]): Effect.Effect<RoomCallOutcome, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const grants = this.caretaker.grantsFor(session, PAGE_CALL, [...args]);
       const run = yield* care(() => this.caretaker.admit({ requester: session, fn: PAGE_CALL, input: [...args], grants: grants.map((grant) => grant.id), inputs: [], out: null }));
-      const value = yield* Effect.ensuring(this.surfaceCall(run, path, args), Effect.sync(() => { this.caretaker.finish(run.id); }));
 
-      if (value instanceof ReadableStream || (value !== null && typeof value === 'object' && 'reply' in value)) {
-        return yield* refuse('unsupported', 'A page reads a streamed answer through its slate\'s server');
-      }
+      return yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
+        const value = yield* this.surfaceCall(run, path, args);
 
-      if (!this.caretaker.release(run.id, session)) return yield* refuse('denied', 'This answer holds data you cannot see');
+        if (value instanceof ReadableStream || (value !== null && typeof value === 'object' && 'reply' in value)) {
+          return yield* refuse('unsupported', 'A page reads a streamed answer through its slate\'s server');
+        }
 
-      return { value };
+        if (!(yield* care(() => this.caretaker.release(run.id, session)))) return yield* refuse('denied', 'This answer holds data you cannot see');
+
+        return { value };
+      }), Effect.sync(() => { this.caretaker.finish(run.id); }));
     });
   }
 
@@ -1166,15 +1175,37 @@ export class SlateRoom extends DurableObject<Env> {
     return `${this.env.CLI_PUBLIC_ORIGIN ?? ''}${roomPartPath(room.workspace, room.slate, key)}`;
   }
 
-  /** Runs `run.fn` in a process, under an invocation naming the run, and settles it. */
-  private runMethod(run: Run, process: Effect.Effect<Fetcher<ProcessFacet>, KinuError>): Effect.Effect<JsonValue, KinuError> {
-    return Effect.acquireUseRelease(
-      Effect.sync(() => this.invoke(run)),
-      (invocation) => Effect.gen({ self: this }, function* () {
-        const facet = yield* process;
+  /**
+   * Runs `run.fn` under an invocation naming the run: in the shared server for a call that holds no grant, which may
+   * change the slate only as `mayPost` says; else confined, in an isolate of its own for this call alone (the model's
+   * premise that a run's label covers its whole heap), dropped after. Its failure answers whether it changed anything.
+   */
+  private runMethod(run: Run, shared: boolean): Effect.Effect<{ readonly kind: 'done'; readonly value: JsonValue } | { readonly kind: 'failed'; readonly failure: KinuError; readonly changed: boolean }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const isolate = `${String(run.id)}:${crypto.randomUUID()}`;
+      const invocation = this.invoke(run);
+      const writes = !shared || this.caretaker.mayPost(run.id);
 
-        const answered = yield* attempt({ doing: `slate ${run.fn}`, otherwise: 'io' }, async () => {
-          const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>>({ request: (request) => facet.fetch(request) }, invocation);
+      if (!shared) {
+        this.computing.add(run.out ?? '');
+        yield* this.broadcast();
+      }
+
+      let changed = false;
+
+      const answered = yield* Effect.result(Effect.ensuring(Effect.gen({ self: this }, function* () {
+        const facet = shared ? yield* this.sharedServer() : yield* this.confined(run, isolate);
+
+        return yield* attempt({ doing: `slate ${run.fn}`, otherwise: 'io' }, async () => {
+          const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>>({
+            request: async (request) => {
+              const headers = new Headers(request.headers);
+
+              if (writes) headers.set('x-slate-writes', '1');
+
+              return facet.fetch(new Request(request, { headers }));
+            },
+          }, invocation);
 
           try {
             return await stub[run.fn](...(Array.isArray(run.input) ? run.input : []));
@@ -1182,15 +1213,22 @@ export class SlateRoom extends DurableObject<Env> {
             stub[Symbol.dispose]();
           }
         });
+      }), Effect.gen({ self: this }, function* () {
+        changed = yield* this.settleRun(invocation, shared);
 
-        const value = v.safeParse(JsonValueSchema, answered ?? null);
+        if (!shared) {
+          this.computing.delete(run.out ?? '');
+          this.ctx.facets.delete(`run:${isolate}`);
+        }
+      })));
 
-        if (!value.success) return yield* refuse('bad_input', `${run.fn} must return a JSON value`);
+      if (answered._tag === 'Failure') return { kind: 'failed' as const, failure: answered.failure, changed };
+      const value = v.safeParse(JsonValueSchema, answered.success ?? null);
 
-        return value.output;
-      }),
-      (invocation) => Effect.sync(() => { this.settleRun(invocation); }),
-    );
+      if (!value.success) return { kind: 'failed' as const, failure: new KinuError('bad_input', `${run.fn} must return a JSON value`), changed };
+
+      return { kind: 'done' as const, value: value.output };
+    });
   }
 
   // ── What code calls ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -1198,12 +1236,12 @@ export class SlateRoom extends DurableObject<Env> {
   /** Every call a slate's code makes, through the stub its env holds: the stub's sealed props name its binding and run. */
   bindingCall(props: RoomBindingProps, request: { readonly path: string[]; readonly args: JsonValue[]; readonly invocation: string | null }): Promise<SlateSurfaceResult> {
     return settle(slateAnswer(`slate ${props.binding}`, Effect.gen({ self: this }, function* () {
-      // A confined run's stub names its run; the shared server's names none and is told the run by its invocation. Its
-      // `__storage` calls carry no invocation (they need no lineage), so the stub's own run is theirs.
+      // A confined run's stub names its run, and every call through it is that run's; the shared server's names none, and
+      // is told the run by its invocation. Outside any call (a class's constructor) there is no run at all.
       const invoked = request.invocation === null ? null : this.invocations.get(request.invocation) ?? null;
-      const runId = props.binding === '__storage' && request.invocation === null ? props.run : invoked;
 
-      if (props.run !== null && runId !== props.run) return yield* refuse('denied', 'This call belongs to no run of this stub');
+      if (props.run !== null && invoked !== null && invoked !== props.run) return yield* refuse('denied', 'This call belongs to no run of this stub');
+      const runId = props.run ?? invoked;
       const run = runId === null ? null : this.caretaker.run(runId);
 
       switch (props.binding) {
@@ -1218,32 +1256,31 @@ export class SlateRoom extends DurableObject<Env> {
     })));
   }
 
-  /** A cell the shared server may read: public state only. */
-  private publicValue(key: string): JsonValue {
-    const cell = this.caretaker.cell(key);
-
-    return cell === null || cell.label.length > 0 ? null : cell.value;
-  }
-
-  /** The slate's key-value state: public cells for the shared server; a confined run reads within its label and writes only by returning. */
+  /**
+   * The slate's key-value state. Outside a call, its public state may be read and nothing changed; in a call, what it
+   * reads lies within its label and what it changes is the caretaker's to allow (`post`): its run current and signed in,
+   * and nothing private read.
+   */
   private storage(run: Run | null, member: string, args: readonly JsonValue[]): Effect.Effect<JsonValue, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const key = v.parse(v.string(), args[0] ?? '');
 
       switch (member) {
         case 'get': {
-          const value = run === null ? this.publicValue(key) : yield* care(() => this.caretaker.observe(run.id, key));
+          const cell = this.caretaker.cell(key);
+          let value: JsonValue = null;
+
+          if (run !== null) value = yield* care(() => this.caretaker.observe(run.id, key));
+          else if (cell !== null && cell.label.length === 0) value = cell.value;
 
           return value === null ? null : { value };
         }
 
-        case 'put': return yield* care(() => { this.caretaker.post(run?.id ?? null, key, v.parse(JsonValueSchema, args[1] ?? null));
+        case 'put': case 'delete': {
+          if (run === null) return yield* refuse('denied', 'The slate changes only in a call');
+          const value = member === 'put' ? v.parse(JsonValueSchema, args[1] ?? null) : null;
 
- return null; });
-        case 'delete': {
-          if (run !== null && run.label.length > 0) return yield* refuse('denied', 'A part that read private data can only return its result');
-
-          return yield* care(() => this.caretaker.deleteCell(key));
+          return yield* care(() => this.caretaker.post(run.id, key, value));
         }
 
         case 'list': {
@@ -1258,70 +1295,78 @@ export class SlateRoom extends DurableObject<Env> {
   }
 
   /**
-   * A workspace call from a run: through a grant the run holds for that service and tool, under the caretaker's tool
-   * step; with none, the run's requester is asked to allow their own connection, and the call refuses.
+   * A workspace call from a run: through a grant the run holds for that service and tool. Its transport is made ready
+   * first; then the caretaker's tool step, and, at once after it (or after the holder's approval and its resumption),
+   * the call itself, so no revoke lands between the last check and the dispatch. With no grant, the run's requester is
+   * asked to allow their own connection, and the call refuses.
    */
   private surfaceCall(run: Run, path: readonly string[], args: readonly JsonValue[]): Effect.Effect<SlateSurfaceValue, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const address = slateCallAddress(path);
       const server = address.namespace;
       const tool = address.member;
-      const callArgs: JsonValue = args.length === 1 ? args[0] ?? null : [...args];
-      const root = rootOf(server, callArgs);
+      const callArgs = callArgument(args);
+      const root = canonicalRoot(rootOf(server, callArgs));
 
-      const held = run.caps.map((cap) => this.caretaker.grant(cap.grant)).find((grant): grant is Grant => grant !== null
-        && grant.server === server && grant.tools.includes(tool) && JSON.stringify(JSON.parse(grant.root)) === JSON.stringify(root));
+      const held = run.caps.map((id) => this.caretaker.grant(id)).find((grant): grant is Grant => grant !== null
+        && grant.server === server && grant.tools.includes(tool) && grant.root === root);
 
       if (held === undefined) {
         const requester = run.requester?.email ?? null;
         const key = partKey(run.fn, Array.isArray(run.input) ? run.input : [], requester);
 
-        this.needs.set(key, { fn: run.fn, server, tool, root, requester });
+        this.needs.set(key, { fn: run.fn, server, tool, root: rootOf(server, callArgs), requester, call: { session: run.requester, args: Array.isArray(run.input) ? run.input : [] } });
         yield* this.broadcast();
 
         return yield* refuse('denied', requester === null ? `${run.fn} needs a connection someone lends it` : `${run.fn} needs your ${serviceOf(server).title}: allow it on the part`);
       }
 
+      const send = yield* this.transport(held, path, args);
       const verdict = yield* care(() => this.caretaker.toolStep(run.id, held.id, tool, callArgs));
 
       if (verdict.kind === 'wait') {
-        yield* this.broadcast();
-        yield* Effect.promise(async () => new Promise<void>((resolve) => { this.waiters.set(verdict.pending.id, resolve); }));
-        this.waiters.delete(verdict.pending.id);
+        const decided = new Promise<void>((resolve) => { this.waiters.set(verdict.pending.id, resolve); });
+
+        yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
+          yield* this.broadcast();
+          yield* Effect.promise(async () => decided);
+        }), Effect.sync(() => { this.waiters.delete(verdict.pending.id); }));
         yield* care(() => { this.caretaker.resume(verdict.pending.id); });
       }
 
-      return yield* this.exercise(held, path, args);
+      return yield* send;
     });
   }
 
-  /** A tool step, exercised in its holder's own account: the owner's through their workspace, anyone else's MCP server through their own account. */
-  private exercise(grant: Grant, path: readonly string[], args: readonly JsonValue[]): Effect.Effect<SlateSurfaceValue, KinuError> {
+  /**
+   * How a tool step reaches its holder's own account, made ready before the step is checked: the owner's through their
+   * workspace, anyone else's MCP server through their own account. Nothing it does reaches a service until it is called.
+   */
+  private transport(grant: Grant, path: readonly string[], args: readonly JsonValue[]): Effect.Effect<Effect.Effect<SlateSurfaceValue, KinuError>, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const room = this.caretaker.room();
 
       if (grant.holder === this.caretaker.owner()) {
-        const result = yield* attempt({ doing: `${grant.server} for the slate`, otherwise: 'unavailable' },
-          async () => workspaceOwner(this.env, room.workspace).slateCallAs(ROOT_SLATE_CALLER, room.slate, 'workspace', { path: [...path], args: [...args], invocation: null }));
+        const owner = workspaceOwner(this.env, room.workspace);
 
-        if (!result.ok) return yield* refuse(result.reason, result.error);
+        return Effect.gen(function* () {
+          const result = yield* attempt({ doing: `${grant.server} for the slate`, otherwise: 'unavailable' },
+            async () => owner.slateCallAs(ROOT_SLATE_CALLER, room.slate, 'workspace', { path: [...path], args: [...args], invocation: null }));
 
-        return result.value;
+          return result.ok ? result.value : yield* refuse(result.reason, result.error);
+        });
       }
 
       if (!grant.server.startsWith('mcp.')) return yield* refuse('unsupported', `Only the slate's owner lends ${grant.server}; a person's own connections in a room are MCP servers`);
       const tool = path.at(-1) ?? '';
-      const descriptor = yield* this.mcpDescriptor(grant.holder, grant.server, tool);
-
-      if (descriptor === null) return yield* refuse('missing', `${grant.holder}'s ${grant.server.slice(4)} offers no ${tool}`);
+      const descriptor = (yield* this.mcpDescriptor(grant.holder, grant.server, tool)) ?? (yield* refuse('missing', `${grant.holder}'s ${grant.server.slice(4)} offers no ${tool}`));
       const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, grant.holder));
       const caller = yield* attempt({ doing: 'reaching the account', otherwise: 'unavailable' }, async () => ownerCaller(this.env));
       const callArgs = v.parse(v.record(v.string(), JsonValueSchema), args[0] ?? {});
+      const stub = this.userObject(account);
 
-      const answered = yield* attempt({ doing: `${tool} for the slate`, otherwise: 'unavailable' },
-        async () => callUserMcpTool({ stub: this.userObject(account), caller }, descriptor, callArgs, undefined));
-
-      return v.parse(JsonValueSchema, JSON.parse(answered));
+      return Effect.map(attempt({ doing: `${tool} for the slate`, otherwise: 'unavailable' }, async () => callUserMcpTool({ stub, caller }, descriptor, callArgs, undefined)),
+        (answered): SlateSurfaceValue => v.parse(JsonValueSchema, JSON.parse(answered)));
     });
   }
 
@@ -1352,83 +1397,36 @@ export class SlateRoom extends DurableObject<Env> {
 
     if (!this.caretaker.current(session) || this.caretaker.cell(key) === null) return new Response('Not found', { status: 404 });
     const seen = this.caretaker.render(key, session);
+    const host = await slateHostOrigin(this.env, this.caretaker.room().workspace, this.handle());
 
-    return sealedPart(seen.shown ? seen.value : null);
+    return sealedPart(seen.shown ? seen.value : null, host);
   }
 
-  private source(tag: Tag): RoomSource {
-    const member = this.caretaker.members().find((each) => each.email === tag.holder);
-    const scope = scopeText(tag.root);
-    const service = serviceOf(tag.server);
-
-    return {
-      holder: { email: tag.holder, name: member?.name ?? null }, service, scope, label: scope ?? service.title,
-      checkable: service.kind === 'github' && scope !== null,
-    };
-  }
-
-  private reach(grant: Pick<Grant, 'server' | 'tools' | 'root' | 'effect'>): RoomReach {
-    return {
-      service: serviceOf(grant.server), scope: scopeText(grant.root), effect: grant.effect,
-      tools: grant.tools.map((name) => ({ name, title: name, readOnly: slateAddressImpact({ namespace: grant.server, member: name }) === 'observe' })),
-    };
-  }
-
+  /** A part as a session sees it: decided by `partDecision` before anything it holds is read, then dressed for the view. */
   private partView(key: string, state: SocketState): Effect.Effect<PartView, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const fn = key.slice(0, key.indexOf('.'));
+      const fn = partFn(key);
       const session: Session = { email: state.email, access: state.access };
-      const need = this.needs.get(key);
+      const decided = partDecision(this.caretaker, key, session, { need: this.needs.get(key), computing: this.computing.has(key), again: this.again.get(key) });
 
-      if (need !== undefined && need.requester === state.email) {
-        if (state.email === null) return { state: 'needs-sign-in', key, fn } satisfies PartView;
-        const { effect } = yield* this.contract(need, state.email);
-        const reach = this.reach({ server: need.server, tools: [need.tool], root: JSON.stringify(need.root), effect });
-        const connected = !need.server.startsWith('mcp.') || (yield* this.mcpDescriptor(state.email, need.server, need.tool)) !== null;
+      switch (decided.kind) {
+        case 'needs-sign-in': case 'running': return { state: decided.kind, key, fn } satisfies PartView;
+        case 'needs-connection': {
+          const { need } = decided;
+          const email = state.email ?? '';
+          const { effect } = yield* this.termsFor(email, need.server, need.tool);
+          const connected = !need.server.startsWith('mcp.') || (yield* this.mcpDescriptor(email, need.server, need.tool)) !== null;
 
-        return { state: 'needs-connection', key, fn, reach, connected } satisfies PartView;
+          return { state: 'needs-connection', key, fn, reach: reachOf({ server: need.server, tools: [need.tool], root: JSON.stringify(need.root), effect }), connected } satisfies PartView;
+        }
+
+        case 'edited': return { state: 'edited', key, fn, editor: decided.editor, reach: reachOf(decided.grant) } satisfies PartView;
+        case 'waiting': return { state: 'waiting', key, fn, holder: decided.holder } satisfies PartView;
+        case 'placeholder': return { state: 'placeholder', key, fn, sources: decided.sources, asked: decided.asked } satisfies PartView;
+        case 'failed': return { state: 'failed', key, fn, message: decided.message } satisfies PartView;
+        case 'mine': return { state: 'mine', key, fn, source: decided.source, shownTo: decided.shownTo, content: yield* this.contentUrl(key, state) } satisfies PartView;
+        case 'shown': return { state: 'shown', key, fn, from: decided.from, content: yield* this.contentUrl(key, state) } satisfies PartView;
       }
-
-      const cell = this.caretaker.cell(key);
-
-      if (this.computing.has(key) || cell === null) return { state: 'running', key, fn } satisfies PartView;
-      const room = this.caretaker.room();
-      const suspended = this.caretaker.grants().find((grant) => grant.fn === fn && grant.image !== room.image);
-
-      if (suspended !== undefined && room.imageAuthor !== null && room.imageAuthor !== suspended.holder) {
-        const editor = { email: room.imageAuthor, name: this.caretaker.members().find((member) => member.email === room.imageAuthor)?.name ?? null };
-
-        if (suspended.personal && suspended.holder === state.email) return { state: 'edited', key, fn, editor, reach: this.reach(suspended) } satisfies PartView;
-
-        if (!suspended.personal) return { state: 'waiting', key, fn, holder: { email: suspended.holder, name: null } } satisfies PartView;
-      }
-
-      const failed = v.safeParse(v.object({ failed: v.string() }), cell.value);
-
-      if (failed.success) return { state: 'failed', key, fn, message: failed.output.failed } satisfies PartView;
-      const seen = this.caretaker.render(key, session);
-
-      if (!seen.shown) {
-        const asked = state.email !== null && seen.hidden.every((elem) => this.caretaker.asks(elem.holder).some((ask) => ask.asker === state.email));
-
-        return { state: 'placeholder', key, fn, sources: seen.hidden.map((elem) => this.source(elem)), asked } satisfies PartView;
-      }
-
-      const content = yield* this.contentUrl(key, state);
-      const mine = cell.label.filter((elem) => elem.holder === state.email);
-      const first = mine[0];
-
-      if (first !== undefined && mine.length === cell.label.length) {
-        const shows = this.caretaker.shows().filter((show) => show.holder === state.email && mine.some((elem) => elem.server === show.server && elem.root === show.root));
-        let shownTo: 'anyone' | 'members' | 'me' = 'me';
-
-        if (shows.some((show) => show.audience === 'anyone')) shownTo = 'anyone';
-        else if (shows.length > 0) shownTo = 'members';
-
-        return { state: 'mine', key, fn, source: this.source(first), shownTo, content } satisfies PartView;
-      }
-
-      return { state: 'shown', key, fn, from: cell.label.filter((elem) => elem.holder !== state.email).map((elem) => this.source(elem)), content } satisfies PartView;
     });
   }
 
@@ -1449,7 +1447,9 @@ export class SlateRoom extends DurableObject<Env> {
   private broadcast(): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const states = this.ctx.getWebSockets().map((ws) => ({ ws, state: this.socketState(ws) }));
-      const sheet = yield* this.sheet();
+      const room = this.caretaker.room();
+      const url = room.link ? yield* Effect.promise(async () => linkUrl(this.env, room)) : null;
+      const sheet = sheetView(this.caretaker, url, this.sheetListing());
 
       for (const { ws, state } of states) {
         if (state === null) continue;
@@ -1461,10 +1461,6 @@ export class SlateRoom extends DurableObject<Env> {
         if (view.ended !== null) ws.close(4403, view.ended.kind);
       }
     });
-  }
-
-  private person(member: RoomMember | undefined, email: string): RoomPerson {
-    return { email, name: member?.name ?? null };
   }
 
   /**
@@ -1490,12 +1486,12 @@ export class SlateRoom extends DurableObject<Env> {
   async forkPreview(visitor: RoomVisitor | null, key: string | null): Promise<ForkPreview | null> {
     if (!this.exists() || visitor === null || await this.access(visitor, key) === null || !this.caretaker.mayFork(visitor.email)) return null;
     const room = this.caretaker.room();
-    const owner = this.caretaker.members().find((member) => member.role === 'owner');
+    const owner = this.caretaker.owner();
     const grants = this.caretaker.grants();
     const fns = [...new Set(grants.map((grant) => grant.fn))].sort();
 
     return {
-      title: room.title, owner: this.person(owner, owner?.email ?? ''),
+      title: room.title, owner: personOf(this.caretaker.members(), owner),
       parts: fns.map((fn) => {
         const lent = grants.find((grant) => grant.fn === fn && !grant.personal);
         const used = lent ?? grants.find((grant) => grant.fn === fn);
@@ -1536,10 +1532,9 @@ export class SlateRoom extends DurableObject<Env> {
   async forkBundle(visitor: RoomVisitor, key: string | null): Promise<SlateAnswer<BlueprintBundle> | null> {
     if (await this.forkPreview(visitor, key) === null) return null;
     const room = this.caretaker.room();
-
     const { source } = room;
 
-    if (source === null) return await settle(slateAnswer('forking the slate', Effect.fail(new KinuError('missing', 'This slate has not been published'))));
+    if (source === null) return await settle(slateAnswer('forking the slate', Effect.fail(new KinuError('missing', 'This slate has no files to fork'))));
 
     return await workspaceOwner(this.env, room.workspace).slateForkBundle(room.slate, source);
   }
@@ -1561,8 +1556,7 @@ export class SlateRoom extends DurableObject<Env> {
     return Effect.gen({ self: this }, function* () {
       const room = this.caretaker.room();
       const members = this.caretaker.members();
-      const owner = members.find((member) => member.role === 'owner');
-      const ownerPerson = this.person(owner, owner?.email ?? '');
+      const ownerPerson = personOf(members, this.caretaker.owner());
       const session: Session = { email: state.email, access: state.access };
       const current = this.caretaker.current(session);
       const signedIn = new Map<string, SocketState>();
@@ -1575,99 +1569,23 @@ export class SlateRoom extends DurableObject<Env> {
 
       return {
         session: {
-          me: state.email === null ? null : this.person(members.find((member) => member.email === state.email), state.email),
-          access: this.roomAccess(state.email, state.access),
+          me: state.email === null ? null : personOf(members, state.email),
+          access: accessName(this.caretaker, session),
           title: room.title,
           owner: ownerPerson,
           mayEdit: this.caretaker.canEdit(state.email),
           mayFork: this.caretaker.mayFork(state.email),
-          members: state.access.kind === 'link' ? [] : members.filter((member) => member.role !== 'removed').map((member) => this.person(member, member.email)),
+          members: state.access.kind === 'link' ? [] : members.filter((member) => member.role !== 'removed').map((member) => personOf(members, member.email)),
           frame: current ? yield* this.frame(state) : '',
         },
         presence: {
-          here: [...signedIn.values()].map((each) => ({
-            person: this.person(members.find((member) => member.email === each.email), each.email ?? ''), where: each.where, typing: each.typing,
-          })),
+          here: [...signedIn.values()].map((each) => ({ person: personOf(members, each.email ?? ''), where: each.where, typing: each.typing })),
           signedOut: [state, ...others].filter((each) => each.email === null).length,
         },
         parts,
-        asks: state.email === null || !current ? [] : this.asks(state.email),
+        asks: state.email === null || !current ? [] : roomAsks(this.caretaker, state.email),
         ended: current ? null : { kind: removed ? 'removed' : 'stopped', by: ownerPerson },
         sheet: state.access.kind === 'owner' ? sheet : null,
-      };
-    });
-  }
-
-  private asks(holder: string): RoomAsk[] {
-    const people = this.caretaker.members();
-    const personOf = (email: string): RoomPerson => ({ email, name: people.find((member) => member.email === email)?.name ?? null });
-
-    const shows: RoomAsk[] = this.caretaker.asks(holder).map((ask) => ({
-      kind: 'show', id: JSON.stringify([ask.asker, ask.tag.server, ask.tag.root, ask.fn]), from: personOf(ask.asker),
-      part: { key: ask.fn, fn: ask.fn }, source: this.source(ask.tag),
-    }));
-
-    const waiting: RoomAsk[] = this.caretaker.waiting(holder).flatMap((pending): RoomAsk[] => {
-      const run = this.caretaker.run(pending.run);
-      const grant = this.caretaker.grant(pending.grant);
-
-      if (run === null || grant === null) return [];
-      const tool = { name: pending.tool, title: pending.tool, readOnly: !grant.effect };
-
-      if (pending.kind === 'outflow') {
-        return [{ kind: 'outflow', id: pending.id, fn: run.fn, source: this.source(run.label[0] ?? grant), service: serviceOf(grant.server), tool, argument: JSON.stringify(pending.args) }];
-      }
-
-      return [{
-        kind: 'effect', id: pending.id, from: personOf(run.requester?.email ?? ''), fn: run.fn, service: serviceOf(grant.server), tool,
-        scope: scopeText(grant.root), argument: JSON.stringify(pending.args),
-      }];
-    });
-
-    return [...shows, ...waiting];
-  }
-
-  private sheet(): Effect.Effect<SheetView> {
-    return Effect.gen({ self: this }, function* () {
-      const room = this.caretaker.room();
-      const owner = this.caretaker.owner();
-      const people = this.caretaker.members().filter((member) => member.role === 'edit' || member.role === 'use');
-      let audience: RoomAudience = 'only-you';
-
-      if (room.link) audience = 'anyone';
-      else if (people.length > 0) audience = 'people';
-      const grants = this.caretaker.grants();
-      const personal = new Set(grants.filter((grant) => grant.personal).map((grant) => grant.holder));
-      const ownFns = [...new Set(grants.filter((grant) => grant.holder === owner).map((grant) => grant.fn))];
-      const shows = this.caretaker.shows();
-      const url = room.link ? yield* Effect.promise(async () => linkUrl(this.env, room)) : null;
-
-      return {
-        audience, url,
-        people: people.map((member) => ({ person: this.person(member, member.email), role: member.role === 'edit' ? 'edit' : 'use' })),
-        privateOf: this.caretaker.members().filter((member) => member.email !== owner && personal.has(member.email)).map((member) => this.person(member, member.email)),
-        listing: this.sheetListing(),
-        lends: ownFns.flatMap((fn) => {
-          const own = grants.find((grant) => grant.holder === owner && grant.fn === fn && grant.personal);
-          const lend = grants.find((grant) => grant.holder === owner && grant.fn === fn && !grant.personal);
-          const terms = lend ?? own;
-
-          if (terms === undefined) return [];
-          const suspended = lend !== undefined && lend.image !== room.image && room.imageAuthor !== null && room.imageAuthor !== owner;
-          const domain: Codec = terms.domain;
-
-          return [{
-            fn, reach: this.reach(terms), free: codecIsFree(domain),
-            shown: shows.some((show) => show.holder === owner && show.fn === fn && show.audience === 'anyone') ? 'everyone' as const : 'holder' as const,
-            on: lend !== undefined && !suspended,
-            suspendedBy: suspended ? { email: room.imageAuthor ?? '', name: null } : null,
-          }];
-        }),
-        uses: this.caretaker.lendUses().map((use) => ({
-          fn: use.fn, calls: use.calls, lastAt: use.lastAt,
-          person: this.person(this.caretaker.members().find((member) => member.email === use.email), use.email),
-        })),
-        secret: room.secret,
       };
     });
   }

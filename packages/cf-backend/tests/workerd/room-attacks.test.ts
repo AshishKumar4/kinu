@@ -46,3 +46,14 @@ it('7. a fork holds none of its parent\'s lends: Sam\'s Ops is never called for 
 it('the team board and the public dashboard: Sam decides twice, and no one who uses it is asked anything', async () => {
   expect(await probe().scenarioBoard()).toEqual({ alice: 'the board', bob: 'the board', visitor: 'the board', asked: { sam: 0, alice: 0, bob: 0 } });
 });
+
+it('the slate changes only for someone signed in, and a call that changed it is never run again by the room', async () => {
+  const answered = await probe().roomWrites();
+
+  expect(answered.visitorNote).toMatch(/^refused .*may not change the slate/);
+  expect(answered.visitorPut).toMatch(/^refused .*changes only in a call|^refused .*Sign in/);
+  expect([answered.bobNote, answered.notes]).toEqual(['value 1', 'value 1']);
+  expect(answered.stamps).toBe('part');
+  // It changed the slate once: the room asked Bob instead of running it again.
+  expect(answered.stampedTwice).toBe('value 1');
+});
