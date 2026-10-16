@@ -26,8 +26,6 @@ export const APP_ROUTES = {
   sharedBlueprint: '/shared/blueprint/:id',
   /** Where a person a live share names enters it: signed in, they are handed the share's ticket. */
   sharedLive: '/shared/live/:workspace/:share',
-  /** A shared slate, live (the room-era page; the UI lane retires it). */
-  liveSlate: '/s/:workspace/:slate',
   /** One personal part of a shared slate, in the app's own frame inside the slate's page (`slatePartFramePath`). */
   liveSlatePart: '/s/:workspace/:slate/parts/:part',
   /** Slates people listed for anyone to use. */

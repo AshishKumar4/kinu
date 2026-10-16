@@ -5,20 +5,20 @@ import { Button } from "@cloudflare/kumo";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
-import { joinDir, type DriveEntry, type DriveRoomCard, type DriveSlate, type MarkedSkill } from "@kinu.run/core";
+import { joinDir, type DriveEntry, type MarkedSkill, type OwnedSlate, type SharedRow } from "@kinu.run/core";
 import { showing, settle } from "@kinu.run/core/obs";
 import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
 } from "@/lib/drive-api";
-import { linkKeyOf } from "@/lib/room-client";
-import { leaveSlate } from "@/lib/shared-api";
+import { revokeShare } from "@/lib/shared-api";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
+import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { ForkDialog } from "@/components/shared/ForkDialog";
-import { RoomSheet } from "@/components/sharing/RoomSheet";
+import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 
 function relativePathOf(file: File): string {
@@ -143,6 +143,12 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
   );
 }
 
+function DriveShareSheet({ slate, onClose, onListingPending }: { slate: OwnedSlate; onClose: () => void; onListingPending: () => void }) {
+  const { rpc } = useWorkspaceRpc(slate.workspace);
+
+  return <ShareSlateDialog workspace={slate.workspace} slate={slate.id} title={slate.title} rpc={rpc} onClose={onClose} onListingPending={onListingPending} />;
+}
+
 const NEW_BUTTON = "h-8 gap-1.5 px-3 text-sm max-sm:!size-9 max-sm:rounded-full max-sm:!p-0";
 
 interface NewProps {
@@ -215,21 +221,31 @@ export function PrimaryAction({ inSkills, ...rest }: NewProps & { readonly inSki
   );
 }
 
+const PEOPLE = new Intl.ListFormat("en-GB", { type: "conjunction" });
+
+function whoLoses(row: SharedRow): string {
+  const users = row.users ?? [];
+
+  if (row.kind === "blueprint" || row.visibility === "public" || users.length === 0) return "Everyone with the link loses";
+
+  return `${PEOPLE.format(users)} ${users.length === 1 ? "loses" : "lose"}`;
+}
+
 export type DriveDialogState =
   | { kind: "new-folder" }
   | { kind: "rename"; entry: DriveEntry }
   | { kind: "delete"; entry: DriveEntry }
   | { kind: "add-skill" }
-  | { kind: "share"; slate: DriveSlate }
-  | { kind: "leave"; card: DriveRoomCard }
-  | { kind: "fork"; card: DriveRoomCard };
+  | { kind: "share"; slate: OwnedSlate }
+  | { kind: "stop"; row: SharedRow }
+  | { kind: "fork"; row: SharedRow };
 
 export function DriveDialog({ dialog, folder, onClose, onListingChanged, onSharesChanged, onSkillAdded }: {
   dialog: DriveDialogState;
   folder: string;
   onClose: () => void;
   onListingChanged: () => void;
-  onSharesChanged: () => void;
+  onSharesChanged: (listing?: "pending") => void;
   onSkillAdded: () => void;
 }) {
   const { create } = useWorkspaceRoster();
@@ -261,22 +277,23 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
     case "add-skill":
       return <AddSkillDialog onClose={onClose} onAdded={onSkillAdded} />;
     case "share":
-      return <RoomSheet workspace={dialog.slate.workspace} slate={dialog.slate.id} title={dialog.slate.title} onClose={() => { onClose(); onSharesChanged(); }} />;
-    case "leave":
+      return <DriveShareSheet slate={dialog.slate} onClose={() => { onClose(); onSharesChanged(); }} onListingPending={() => onSharesChanged("pending")} />;
+    case "stop":
       return (
-        <ConfirmDialog title={dialog.card.relation === "shared" ? `Leave ${dialog.card.title}?` : `Remove ${dialog.card.title}?`}
-          action={dialog.card.relation === "shared" ? "Leave" : "Remove"} marker="data-drive-leave-confirm" maxWidthClass="max-w-sm"
+        <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm" maxWidthClass="max-w-sm"
           onConfirm={() => settle(Effect.gen(function* () {
-            yield* Effect.promise(async () => leaveSlate({ workspace: dialog.card.workspace, slate: dialog.card.slate }));
-            onSharesChanged();
+            const workspace = dialog.row.workspace;
+
+            if (workspace === undefined) return yield* Effect.die(new Error("this share names no workspace"));
+            onSharesChanged((yield* Effect.promise(async () => revokeShare({ workspace, share: dialog.row.share }))).listing);
           }))}
           onClose={onClose}>
-          <p className="p-row-text p-text-2">{dialog.card.relation === "shared"
-            ? "It leaves your Drive, and you stop being able to open it until it's shared with you again."
-            : "It leaves your Drive. Its link still opens it."}</p>
+          <p className="p-row-text p-text-2">{`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}</p>
         </ConfirmDialog>
       );
     case "fork":
-      return <ForkDialog room={{ workspace: dialog.card.workspace, slate: dialog.card.slate, key: linkKeyOf(dialog.card.url) }} title={dialog.card.title} mode="fork" onClose={onClose} create={create} />;
+      return dialog.row.kind === "live"
+        ? <ForkDialog live={{ share: dialog.row.share, workspace: dialog.row.workspace ?? "" }} title={dialog.row.title} onClose={onClose} create={create} />
+        : <ForkDialog blueprint={dialog.row.id} title={dialog.row.title} onClose={onClose} create={create} />;
   }
 }

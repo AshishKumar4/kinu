@@ -12,7 +12,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AccountProvider } from "@/hooks/use-account";
-import { signInAndReturn } from "@/hooks/use-room-frames";
+import { signInAndReturn } from "@/lib/sign-in";
 import { readSignedIn } from "@/lib/shared-api";
 
 const SignedInContext = createContext(true);

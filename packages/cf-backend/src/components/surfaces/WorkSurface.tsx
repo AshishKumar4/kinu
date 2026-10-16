@@ -26,7 +26,7 @@ import type { FilesSurfaceProps } from "./FilesSurface";
 import type { ActivitySurfaceProps } from "./ActivitySurface";
 import { lazyRoute } from "@/lazy-route";
 import { SlateFrame } from "@/components/slates/SlateFrame";
-import { RoomShareControl } from "@/components/sharing/RoomSheet";
+import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
 import {
   ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, planSurface, planTitle, surfaceHasContent,
@@ -238,7 +238,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     ...(props.slates ?? []).map((slate) => ({
       key: slateSurface(slate.id), title: slate.title, Icon: SparkleIcon,
       // Share is the open Slate's, as it was beside the strip: what is on screen is what is shared.
-      action: props.workspace === undefined || slate.id !== openSlate ? undefined : <RoomShareControl workspace={props.workspace} slate={slate.id} title={slate.title} />,
+      action: props.workspace === undefined || slate.id !== openSlate ? undefined : <ShareSlateControl workspace={props.workspace} slate={slate} rpc={props.rpc} />,
     })),
     ...ports.map((port) => ({
       key: `preview:${port.executor}:${port.port}` as const,

@@ -38,7 +38,7 @@ import {
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
-  ACTIVE_TAB_INDEX, CHATS, CHAT_COMPOSER_LIVE, CHAT_IDLE, FILES_FAILURE, type FlowTarget, type FrameLedger, INSPECTOR_WIDTH, PAGE_TABS, type RpcCounts, type SendSite, countRpc, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWaits, openWorkspacePage, painted, recordRenderTasks, removeFlowWorkspace, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, typeIntoComposer, until, waitOn,
+  ACTIVE_TAB_INDEX, CHATS, CHAT_COMPOSER_LIVE, CHAT_IDLE, FILES_FAILURE, type FlowTarget, type FrameLedger, INSPECTOR_WIDTH, PAGE_TABS, type RpcCounts, type SendSite, countRpc, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, painted, recordRenderTasks, removeFlowWorkspace, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn,
 } from './browser-page';
 
 
@@ -1688,6 +1688,104 @@ export async function slateOpensFromSlates(target: FlowTarget): Promise<SlateOpe
 
     return { workspace, tileName, landedAt: `${url.pathname}${url.search}`, slateTabCurrent };
   } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+/** The titles of the shares a Drive section draws. */
+function sharesIn(section: string): string {
+  return `[...document.querySelectorAll('[data-drive-section="${section}"] [data-drive-share] [data-drive-tile-name]')]
+    .map((name) => (name.textContent ?? '').trim())`;
+}
+
+export interface SlateShareVerdict {
+  readonly workspace: string;
+  /** Whether the dialog drew a Reach row for a slate that reaches nothing. */
+  readonly reachRow: boolean;
+  /** The link the dialog gave once shared; null when it gave none. */
+  readonly link: string | null;
+  /** What pressing the link's copy control put on the clipboard. */
+  readonly copied: string | null;
+  /** Shared by you, once shared. */
+  readonly sharedByYou: readonly string[];
+  /** Shared by you after Stop sharing; the tab is gone when nothing else is shared. */
+  readonly afterStop: readonly string[];
+}
+
+/**
+ * Row: a slate that calls nothing of its owner's shares from its tile, and stops.
+ *
+ * Share… on the slate's tile opens the dialog #25 asked to be short: with
+ * nothing to reach there is no Reach row and no spend limit. The row shares it
+ * with anyone who has the link, finds it under Shared by you, and stops it
+ * there. A share the row did not stop is revoked through the route.
+ */
+export async function slateSharesReachingNothing(target: FlowTarget): Promise<SlateShareVerdict> {
+  const workspace = await workspaceWithSlate(target, 'drive-share');
+  let share: string | null = null;
+  let stopped = false;
+
+  try {
+    const page = await driveWithSlate(target, workspace);
+
+    await openSlateShareDialog(page, slateTile(workspace));
+
+    const reachRow = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-share-reach]') !== null`));
+
+    const link = await submitPublicSlateShare(page);
+    let copied: string | null = null;
+
+    if (link !== null) {
+      // Chrome's writeText asks for the sanitized-write grant, not clipboard-write (measured on Chrome 151).
+      await page.browserContext().overridePermissions(target.origin, ['clipboard-read', 'clipboard-sanitized-write']);
+      await page.bringToFront();
+      copied = v.parse(v.string(), await waitOn(page, 'the share link on the clipboard', page.evaluate(`(async () => {
+        await navigator.clipboard.writeText('');
+        document.querySelector('[role="dialog"] a[href]').parentElement.querySelector('button').click();
+        for (;;) {
+          const held = await navigator.clipboard.readText();
+          if (held !== '') return held;
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+      })()`)));
+    }
+
+    await page.evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => (button.textContent ?? '').trim() === 'Done')?.click()`);
+    // At the desktop width the Drive's places are its column's.
+    await until(page, 'the Shared place', `document.querySelector('[data-drive-place="shared"]') !== null`);
+    await page.click('[data-drive-place="shared"]');
+
+    const mine = `[data-drive-section="Shared by you"] [data-drive-share-kind="live"]`;
+    await until(page, 'the share under Shared by you', `document.querySelector(${JSON.stringify(mine)}) !== null`);
+    const sharedByYou = v.parse(v.array(v.string()), await page.evaluate(sharesIn('Shared by you')));
+
+    share = await page.$eval(mine, (element) => element.getAttribute('data-drive-share'));
+    const tile = `[data-drive-share="${share ?? ''}"]`;
+
+    await page.click(`${tile} [data-drive-menu]`);
+    await page.click(`${tile} [data-drive-stop-sharing]`);
+    await until(page, 'the stop confirmation', `document.querySelector('[data-drive-stop-confirm]') !== null`);
+    await page.click('[data-drive-stop-confirm]');
+    await until(page, 'the share to leave the Drive', `document.querySelector(${JSON.stringify(tile)}) === null`);
+    stopped = true;
+    await painted(page);
+
+    const afterStop = v.parse(v.array(v.string()), await page.evaluate(sharesIn('Shared by you')));
+
+    await page.close();
+
+    return { workspace, reachRow, link, copied, sharedByYou, afterStop };
+  } finally {
+    if (share !== null && !stopped) {
+      const left = await fetch(`${target.origin}/api/shared/revoke`, {
+        method: 'POST',
+        headers: { ...webHeaders(target.identity), 'content-type': 'application/json' },
+        body: JSON.stringify({ workspace, share }),
+      });
+
+      if (!left.ok) console.warn(`product-flows: revoking ${share} answered ${String(left.status)}`);
+    }
+
     await removeFlowWorkspace(target, workspace);
   }
 }

@@ -128,7 +128,7 @@ describe('the Gallery', () => {
     });
   });
 
-  test("a listed slate's page: Open by its link, Fork with its key, Star, what it uses, the files, Report", async () => {
+  test("a listed slate's page: Open by its link, Fork, Star, its counts, Report", async () => {
     await withGallery(async (gallery) => {
       for (const [theme, viewport] of [['light', 'desktop'], ['dark', 'mobile']] as const) {
         const page = await freshPage(gallery, 'gallery-slate&slate=pr-board', theme, viewport);
@@ -137,9 +137,6 @@ describe('the Gallery', () => {
           await page.waitForSelector('[data-gallery-slate="pr-board"]', SOON);
           expect(await page.$('[data-gallery-hero] img[data-slate-picture]')).not.toBeNull();
           expect(await page.$eval('[data-gallery-open]', (link) => link.getAttribute('href'))).toBe('/s/ravi/pr-board?k=p8x2');
-          expect(await page.$$eval('[data-gallery-need]', (rows) => rows.map((row) => row.getAttribute('data-gallery-need')))).toEqual(['github']);
-          expect(await page.$eval('[data-gallery-reads-author]', (row) => row.getAttribute('data-gallery-reads-author'))).toBe('false');
-          expect(await page.$$eval('[data-gallery-file]', (rows) => rows.map((row) => row.textContent))).toEqual(['package.json', 'server.ts', 'board.tsx', 'github.ts', 'README.md']);
           expect(await page.$('[data-gallery-people]')).not.toBeNull();
           expect(await page.$('[data-gallery-forks]')).not.toBeNull();
           // More like it: the same category, never itself.
@@ -154,9 +151,9 @@ describe('the Gallery', () => {
           await page.click('[data-gallery-star]');
           await page.waitForSelector(`[data-gallery-star][aria-pressed="false"][data-gallery-stars="${String(stars)}"]`, SOON);
 
-          // Fork admits them by the link's key, as opening it does.
+          // Fork picks a workspace for the copy of its code.
           await page.click('[data-gallery-fork]');
-          await page.waitForSelector('[data-fork-needs]', SOON);
+          await page.waitForSelector('input[name="fork-target"]', SOON);
           await page.keyboard.press('Escape');
           await page.waitForFunction(() => document.querySelector('input[name="fork-target"]') === null, SOON);
 
@@ -180,12 +177,11 @@ describe('the Gallery', () => {
         await back.close();
       }
 
-      // A slate run with its author's own lend says so; one with no counts yet draws none.
+      // One with no counts yet draws none.
       const lent = await freshPage(gallery, 'gallery-slate&slate=digest', 'dark', 'desktop');
 
       try {
         await lent.waitForSelector('[data-gallery-slate="digest"]', SOON);
-        expect(await lent.$eval('[data-gallery-reads-author]', (row) => row.getAttribute('data-gallery-reads-author'))).toBe('true');
         expect(await lent.$('[data-gallery-people]')).toBeNull();
         expect(await lent.$('[data-gallery-forks]')).toBeNull();
       } finally {

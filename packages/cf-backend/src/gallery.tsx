@@ -77,9 +77,12 @@ import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFr
 import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
-import { installRoomFixture, RoomClosedFrame, RoomFrame, RoomPartFrame, RoomSlateFrame } from "@/gallery-sharing";
 import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
+import { installPartsFixture, installShareModeFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame } from "@/gallery-parts";
+import BlueprintPage from "@/pages/BlueprintPage";
+import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
+import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateCapabilityGraph } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
@@ -1270,9 +1273,11 @@ window.fetch = galleryFetch;
 
 installDriveFixture(frame);
 
-installRoomFixture(frame);
-
 installGalleryFixture(frame);
+
+installPartsFixture(frame);
+
+installShareModeFixture(frame, () => LIVE_SHARE);
 
 
 // Stands in for the runtime's terminal facet (core execution/workspace-terminal.ts): echoes input, runs a line at CR,
@@ -5579,6 +5584,110 @@ const PENDING_ACTIONS: PendingAction[] = [
 const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "plan_review");
 
 
+const BLUEPRINT_REACHES = ["mcp.github", "workspace", "memory", "slates.digest"];
+
+const BLUEPRINT_ID = "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha";
+
+const BLUEPRINT_VIEW: BlueprintView = {
+  id: BLUEPRINT_ID,
+  title: "Issue triage",
+  description: "Reads the open issues of a repository, groups them by area, and writes a triage note into workspace memory every morning.",
+  reaches: BLUEPRINT_REACHES,
+  entries: [
+    { path: "package.json", kind: "file", included: true },
+    { path: "src", kind: "directory", included: true },
+    { path: "src/server.ts", kind: "file", included: true },
+    { path: "src/triage.ts", kind: "file", included: true },
+    { path: "src/config.ts", kind: "file", included: true },
+    { path: "assets", kind: "directory", included: true },
+    { path: "assets/logo.svg", kind: "file", included: true },
+  ],
+  warnings: [{ path: "src/config.ts", line: 4, pattern: "aws-access-key", message: "AWS access key id" }],
+  createdAt: NOW - 3 * 864e5,
+};
+
+const BLUEPRINT_INSPECTION: BlueprintInspection = {
+  slate: "issue-triage", version: "v2k9q1c7xw4m", title: BLUEPRINT_VIEW.title, description: BLUEPRINT_VIEW.description,
+  entries: [...BLUEPRINT_VIEW.entries, { path: "scratch", kind: "directory", included: false }, { path: "scratch/notes.md", kind: "file", included: false }],
+  reaches: BLUEPRINT_REACHES, warnings: BLUEPRINT_VIEW.warnings,
+};
+
+/** As core draws it: every member classified, each mutating one's risk worded for the visibility, and the digest slate behind the peer hop. */
+const RISK = (body: string) => ({ public: `${body} Anyone who opens this share can trigger it.`, users: `${body} Anyone you named on this share can trigger it.` });
+
+const NO_RISK = { public: "", users: "" };
+
+const SHARE_GRAPH: SlateCapabilityGraph = {
+  slate: "issue-triage",
+  slates: ["issue-triage", "digest"],
+  namespaces: [
+    { slate: "issue-triage", namespace: "mcp.github", title: "GitHub", members: [
+      { member: "read_issue", impact: "observe", risk: NO_RISK },
+      { member: "create_issue", impact: "externalSend", risk: RISK("Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there.") },
+    ] },
+    { slate: "issue-triage", namespace: "workspace", title: "workspace", members: [
+      { member: "readFile", impact: "observe", risk: NO_RISK },
+      { member: "writeFile", impact: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
+    ] },
+    { slate: "issue-triage", namespace: "memory", title: "memory", members: [
+      { member: "recall", impact: "observe", risk: NO_RISK },
+      { member: "remember", impact: "mutate", risk: RISK("Changes your workspace memory as you: notes and remembered facts your agent reads back later.") },
+    ] },
+    { slate: "issue-triage", namespace: "agent", title: "agent", members: [
+      { member: "send", impact: "externalSend", risk: RISK("Sends agent.send out of workspace checkout-fixes as you: your agent reads it and acts on it.") },
+    ] },
+    { slate: "issue-triage", namespace: "ai", title: "ai", members: [
+      { member: "run", impact: "execute", risk: RISK("Runs a model call on your inference. Every call spends it.") },
+    ] },
+    { slate: "issue-triage", namespace: "slates.digest", title: "slates.digest", members: [
+      { member: "summary", impact: "observe", risk: NO_RISK },
+    ] },
+    { slate: "digest", namespace: "workspace", title: "workspace", members: [
+      { member: "readFile", impact: "observe", risk: NO_RISK },
+    ] },
+  ],
+};
+
+const LIVE_SHARE: LiveShareRecord = {
+  id: "live-board-1", slate: "issue-triage", visibility: "public", handle: "3f9a1c7e02",
+  grant: { slates: ["issue-triage", "digest"], members: [
+    { slate: "issue-triage", namespace: "mcp.github", member: "read_issue", impact: "observe" },
+    { slate: "issue-triage", namespace: "workspace", member: "readFile", impact: "observe" },
+    { slate: "issue-triage", namespace: "memory", member: "recall", impact: "observe" },
+    { slate: "issue-triage", namespace: "slates.digest", member: "summary", impact: "observe" },
+    { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
+  ] },
+  createdAt: NOW - 864e5, revokedAt: null, users: [], mode: "owner", grantRevision: "r2",
+};
+
+/** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
+function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
+
+  return (
+    <div className="h-screen p-bg p-text">
+      <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
+        fixture={{
+          mode,
+          live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
+          blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
+            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
+          ] },
+        }} />
+    </div>
+  );
+}
+
+/** Routed so `useParams` names the id; `&viewer=signedout` renders the sign-in branch. */
+function BlueprintFrame() {
+  const signedOut = new URLSearchParams(location.search).get("viewer") === "signedout";
+
+  return (
+    <Routes>
+      <Route path="/shared/blueprint/:id" element={<BlueprintPage fixture={BLUEPRINT_VIEW} viewer={signedOut ? null : "me@example.com"} workspaces={STOCK_ROSTER.entries} />} />
+    </Routes>
+  );
+}
+
 const workRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult(WORKSPACE_WORK).json<T>();
 
@@ -7562,6 +7671,7 @@ async function mount() {
     ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
     ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
     ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_SHOWN} /></div>, entries: ["/"] }],
+    ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
     ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
     ["jobstreaming", { node: <JobStreamingFrame />, entries: ["/"] }],
     // `&path=/projects/ops` opens a folder; `shared` is the other tab; `drive-recipient` holds only what others shared.
@@ -7574,11 +7684,17 @@ async function mount() {
     // The Gallery, and `&slate=<slate>`'s own page.
     ["gallery-list", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
     ["gallery-slate", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
+    // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
+    ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
+    ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
+    ["part-frame", { node: <PartFrameFrame />, entries: [partFrameEntry(new URLSearchParams(location.search))] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
+    ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
+    ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
     ["fork-reach", {
       node: (
         <div className="h-screen w-[720px] p-sidebar p-text">
-          <ForkReachPanel title="Issue triage" reaches={["mcp.github", "workspace", "memory", "slates.digest"]} onOpen={() => {}} />
+          <ForkReachPanel title="Issue triage" reaches={BLUEPRINT_REACHES} onOpen={() => {}} />
         </div>
       ), entries: ["/"],
     }],
@@ -7602,11 +7718,6 @@ async function mount() {
   // Frames whose module or fixture is runtime-loaded.
   const dynamicFrames = new Map<string, () => Promise<{ node: React.ReactNode; entries: string[] }>>([
     ["deploy", deployFrame],
-    // Sharing (gallery-sharing.tsx): the live page as one person sees it, the slate's own page, one part, a closed room.
-    ["room", async () => ({ node: <RoomFrame />, entries: [`/?${location.search.slice(1)}`] })],
-    ["room-slate", async () => ({ node: <RoomSlateFrame />, entries: [`/?${location.search.slice(1)}`] })],
-    ["room-part", async () => ({ node: <RoomPartFrame />, entries: [`/?${location.search.slice(1)}`] })],
-    ["room-closed", async () => ({ node: <RoomClosedFrame />, entries: [`/?${location.search.slice(1)}`] })],
     ["updates", updatesFrame],
     ["app", appShellFrame],
     ["forkfull", () => mctsExplorerFrame("n000")],
