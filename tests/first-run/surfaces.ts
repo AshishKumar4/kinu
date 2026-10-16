@@ -43,8 +43,8 @@ export const PAGE_ROWS = {
   sharedBlueprint: ['blueprint-fork'],
   sharedLive: ['users-share'],
   liveSlatePart: { unreachable: 'a personal part runs through slatePartRunPath, which the Nimbus sharing build serves next; until then no deployed slate declares a part' },
-  gallery: { unreachable: 'the Gallery reads its listings from the control plane, which the sharing-gallery lane serves; until then no deployed row has a listing to open' },
-  gallerySlate: { unreachable: 'a listed slate\'s page reads the same control-plane index' },
+  gallery: ['gallery-listing'],
+  gallerySlate: ['gallery-listing'],
   deploy: ['deploy-door'],
   updates: { unreachable: 'the update offer answers only the deployment\'s recorded owner and 404s everyone else (updates/routes.ts), and the eval identity is not the owner' },
   connected: { unreachable: 'only a provider sign-in ends here, in a window it opened, and a deployed row signs in with a minted session, never through a provider' },
@@ -68,7 +68,7 @@ export const ENTRY_ROWS = {
   tui: ['enter-sends'],
   cli: ['workspace-title', 'preview-address', 'command-refusal', 'multi-account'],
   daemon: ['device-link', 'device-join', 'two-machines', 'approve-clears'],
-  shareHost: ['public-share', 'share-capability-cut', 'users-share'],
+  shareHost: ['public-share', 'share-capability-cut', 'users-share', 'owner-effects', 'start-empty'],
 } as const satisfies Record<string, Rows>;
 
 /** What the owner asked a deployed proof of, beyond a page answering. */
@@ -88,4 +88,8 @@ export const CAPABILITY_ROWS = {
   'a correction sent while the agent works': ['steer-correction'],
   'several accounts of one provider, each listed and chosen per workspace': ['multi-account'],
   'a turn rated from the user\'s reply by the decision model': ['turn-rated'],
+  'a share on its owner\'s access, each acting call waiting for their approval': ['owner-effects'],
+  'a share on each viewer\'s own access reading nothing of its owner\'s': ['public-share'],
+  'a slate listed in the Gallery and taken off it': ['gallery-listing'],
+  'a first share started as an empty copy': ['start-empty'],
 } as const satisfies Record<string, Rows>;
