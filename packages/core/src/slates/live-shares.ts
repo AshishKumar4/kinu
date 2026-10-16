@@ -41,6 +41,11 @@ const LiveShareRow = v.object({
 
 const AuthorityRow = v.object({ mode: ShareModeSchema, grant_json: v.string(), grant_revision: v.nullable(v.string()) });
 
+/** Whose access a share's server acts with: the viewer's own, or the owner's, approved at one revision. */
+export type ShareAuthority = { readonly mode: 'own'; readonly grantRevision: null } | { readonly mode: 'owner'; readonly grantRevision: string };
+
+const OWN: ShareAuthority = { mode: 'own', grantRevision: null };
+
 /** A stored request decodes straight into the record: `calls` is the one column stored as JSON text. */
 const RequestRow = v.object({ ...ViewerRequestRecordSchema.entries, calls: v.pipe(v.string(), v.parseJson(), v.array(ViewerCallSchema)) });
 
@@ -62,11 +67,14 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
     super(db, now, LIVE_SHARES);
   }
 
-  add(share: { id: string; slate: string; visibility: 'users' | 'public'; handle: string; grant: ShareGrant }): LiveShareRecord {
+  add(share: { id: string; slate: string; visibility: 'users' | 'public'; handle: string; grant: ShareGrant; authority?: ShareAuthority }): LiveShareRecord {
     const createdAt = this.now();
+    const authority = share.authority ?? OWN;
+
     this.db.exec(
-      'INSERT INTO slate_live_shares (id, slate_id, visibility, handle, grant_json, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
-      share.id, share.slate, share.visibility, share.handle, JSON.stringify(share.grant), createdAt,
+      `INSERT INTO slate_live_shares (id, slate_id, visibility, handle, grant_json, created_at, revoked_at, mode, grant_revision)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      share.id, share.slate, share.visibility, share.handle, JSON.stringify(share.grant), createdAt, authority.mode, authority.grantRevision,
     );
     markStoreChanged(this.db);
 
@@ -74,6 +82,16 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,
       grant: share.grant, createdAt, revokedAt: null, users: [],
     };
+  }
+
+  /** A live share's mode set: `own`, its grant kept for a later `owner`; `owner`, with the grant its owner approved
+   *  now and the revision they approved it at. A revoked share keeps what it had. */
+  setAuthority(id: string, authority: ShareAuthority, grant: ShareGrant): void {
+    this.db.exec(
+      'UPDATE slate_live_shares SET mode = ?, grant_revision = ?, grant_json = ? WHERE id = ? AND revoked_at IS NULL',
+      authority.mode, authority.grantRevision, JSON.stringify(grant), id,
+    );
+    markStoreChanged(this.db);
   }
 
   /** What each of `slate`'s live shares lets its server act with: the server's authority is read from all of them

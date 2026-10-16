@@ -6,7 +6,7 @@
 import type { AccountMemoryProposal } from '../memory/account';
 import type { DeferredApproval } from '../safety/deferred-approval';
 import { proposedSoul, type WorkspaceProposal } from '../safety/workspace-proposals';
-import { boundWriteOf } from '../safety/bound-write';
+import { approvalKindOf } from '../safety/approval-kind';
 import { describeExecutionContext } from '../safety/approval-gate';
 import type { PendingConsent } from '../protocol';
 import type { PlanReview } from '../types/plans';
@@ -130,32 +130,42 @@ export interface PendingActionInputs {
   }>;
 }
 
+/** A parked action's card, by what it parks. */
+function deferredCard(action: PendingActionInputs['deferredActions'][number]): PendingAction {
+  const parked = approvalKindOf(action);
+  const card = { id: action.id, kind: 'deferred_action', at: action.requestedAt } as const;
+
+  switch (parked.kind) {
+    case 'write': return { ...card, raisedBy: action.actor, title: `Replace ${parked.write.path}`, detail: null, write: { path: parked.write.path } };
+
+    // The owner approves this one call, its payload drawn exactly as the shared slate's server sent it. No agent asked
+    // it, so it names none.
+    case 'slate-effect': {
+      const { effect } = parked;
+
+      return {
+        ...card, title: `Approve: ${effect.tool} on ${effect.server}, for ${effect.viewer} through a share of ${effect.slate}`,
+        detail: JSON.stringify(effect.payload, null, 2),
+      };
+    }
+
+    case 'command': {
+      const where = describeExecutionContext(action.context);
+
+      // Name the machine: commands against the agent's own sandbox never reach this queue.
+      return {
+        ...card, raisedBy: action.actor, title: `Approve: a command the agent wants to run on ${action.executor}`, detail: action.command,
+        ...(where !== '' && { where }),
+      };
+    }
+  }
+}
+
 export function buildPendingActions(input: PendingActionInputs): PendingAction[] {
   const actions: PendingAction[] = [];
 
   for (const action of input.deferredActions) {
-    if (action.status !== 'queued') continue;
-    const write = boundWriteOf(action.command);
-    const where = describeExecutionContext(action.context);
-
-    actions.push(write === null ? {
-      id: action.id,
-      kind: 'deferred_action',
-      // Name the machine: commands against the agent's own sandbox never reach this queue.
-      title: `Approve: a command the agent wants to run on ${action.executor}`,
-      detail: action.command,
-      at: action.requestedAt,
-      raisedBy: action.actor,
-      ...(where !== '' && { where }),
-    } : {
-      id: action.id,
-      kind: 'deferred_action',
-      title: `Replace ${write.path}`,
-      detail: null,
-      at: action.requestedAt,
-      raisedBy: action.actor,
-      write: { path: write.path },
-    });
+    if (action.status === 'queued') actions.push(deferredCard(action));
   }
 
   for (const proposal of input.workspaceProposals) {
