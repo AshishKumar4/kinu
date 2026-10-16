@@ -1175,9 +1175,6 @@ export class SlateRoom extends DurableObject<Env> {
   }
 
   /** The slate's page here, entered as its owner: what the owner's previews show. */
-  ownerFrame(): Promise<string> {
-    return settle(this.frame({ email: this.caretaker.owner(), name: null, access: { kind: 'owner' }, parts: [], where: null, typing: null }));
-  }
 
   /**
    * One call of the slate's code. Its answer goes back as itself to a `person` who may see its label (their own agent's

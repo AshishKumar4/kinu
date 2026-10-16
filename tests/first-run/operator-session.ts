@@ -60,6 +60,11 @@ export class OperatorFirstRunSession implements FirstRunSession {
     this.describe = `CLI REST + AgentClient ${auth.origin}/${workspace}, deployed ${deployedSha}, no model`;
   }
 
+  /** The deployment's app origin, which the operator's bearer belongs to. */
+  get origin(): string {
+    return this.auth.origin;
+  }
+
   static async open(auth: LocalCloudSession, sha: string, purpose: string): Promise<OperatorFirstRunSession> {
     const response = await fetch(auth.origin + '/api/health');
 

@@ -5,7 +5,8 @@ import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
 import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
-import { AGENT_RPC_ACCESS, CLI_PREVIEW_ENTRY_PATH, PRIVATE_NO_STORE } from '@kinu.run/core';
+import { AGENT_RPC_ACCESS, CLI_PREVIEW_ENTRY_PATH, PRIVATE_NO_STORE, roomFramePath } from '@kinu.run/core';
+import { roomHandle } from '@kinu.run/core/slates';
 import type { JsonValue } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -248,6 +249,32 @@ describe('access token scope enforcement', () => {
     expect(read?.status).toBe(403);
     expect((await errorBody(read)).error).toContain('workspace.exec');
     expect(exec?.status).toBe(404);
+  });
+
+  // A slate's page is its room's: the CLI's entry sends its bearer's person to the room's frame, as a browser's frame
+  // route does, and the room says whether they may open it.
+  test("the CLI's preview entry enters a slate's room as the bearer's own person", async () => {
+    const { env } = setupEnv();
+    const asked: (string | null)[] = [];
+
+    const rooms: CliRoutesEnv<string>['SLATE_ROOM'] = {
+      idFromName: (name) => name,
+      get: (id) => ({
+        ticketFor: async (visitor) => {
+          asked.push(`${id} ${visitor?.email ?? 'nobody'}`);
+
+          return id.startsWith('open/') ? 'https://board-token-open.slates.example/__kinu/enter?t=ticket' : null;
+        },
+      }),
+    };
+
+    const frame = (workspace: string) => `?to=${encodeURIComponent(`https://kinu.example.com${roomFramePath(workspace, 'board')}`)}`;
+    const opened = await cli(req(EXEC_TOKEN, `${CLI_PREVIEW_ENTRY_PATH}${frame('open')}`), { ...env, SLATE_ROOM: rooms });
+    const shut = await cli(req(EXEC_TOKEN, `${CLI_PREVIEW_ENTRY_PATH}${frame('shut')}`), { ...env, SLATE_ROOM: rooms });
+
+    expect([opened?.status, opened?.headers.get('location')]).toEqual([303, 'https://board-token-open.slates.example/__kinu/enter?t=ticket']);
+    expect(shut?.status).toBe(403);
+    expect(asked).toEqual([`open/${roomHandle('open', 'board')} ashish@example.com`, `shut/${roomHandle('shut', 'board')} ashish@example.com`]);
   });
 
   test('workspace.exec token cannot read agent state without workspace.read', async () => {

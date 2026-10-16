@@ -11,7 +11,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { requireWorkModePermission } from '../execution/work-mode';
 import { classifyErrorCode, KinuError, type Refusal } from '../obs/error';
-import { refusing, settle } from '../obs/effect';
+import { attempt, refusing, settle } from '../obs/effect';
 import type { SqlExec } from '../types/primitives';
 import { projectJsonValue, type JsonValue } from '../utils/json';
 import type { WorkspaceSession } from '../vfs/nimbus-workspace';
@@ -76,8 +76,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   transaction<Result>(body: () => Result): Result;
   session(): Promise<Pick<WorkspaceSession, 'vfs'>>;
   readonly apps: SlateApps;
-  /** The slate's page in its room, entered as the workspace's owner: what a preview shows. */
-  frame(id: string): Promise<string>;
+  /** The slate's room, made for its owner if it is not yet: what a preview opens, as the live page does. */
+  room(id: string): Promise<void>;
   /** Invokes a method in the slate's process. */
   call(request: SlateAppCall): Promise<SlateCallResult>;
   catalog(): Promise<SlateSurfaceCatalog>;
@@ -434,17 +434,18 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return settle(this.answerServed(caller, id, 'build', ({ broken }) => Effect.succeed<JsonValue>(broken === null ? {} : { broken })));
   }
 
-  /** Every slate runs in its room (docs/SLATE-SHARING-SECURITY.md §2.7): a preview is its page there, as the owner. */
+  /**
+   * Every slate runs in its room (docs/SLATE-SHARING-SECURITY.md §2.7): a preview names the room, which the view opens as
+   * the live page does (its socket, its frame, its asks), never a page address of its own.
+   */
   preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     return settle(this.answerServed(caller, id, 'preview', ({ source, broken }) => Effect.gen({ self: this }, function* () {
-      const url = yield* Effect.promise(async () => this.ports.frame(id));
-
-      if (url === '') return yield* new KinuError('unavailable', 'This deployment cannot mint a slate page address');
+      yield* attempt({ doing: `opening slate ${id}'s room`, otherwise: 'unavailable' }, async () => this.ports.room(id));
 
       // An answer's own block is shown where the answer is, never again as a card of the turn's slates.
       if (source.kind === 'files') this.ports.previewed?.(id);
       // Every page the runner answers reports its height, its class's own `fetch` pages too.
-      const shown = { url, sized: true, title: slateTitle(source.project, id) };
+      const shown = { room: { workspace: this.ports.workspace, slate: id }, sized: true, title: slateTitle(source.project, id) };
 
       // Its latest source does not build: the last that did is what this URL serves, and the compiler's words say why.
       return broken === null ? shown : { ...shown, broken };

@@ -65,7 +65,6 @@ export interface SlateRoomStub {
     readonly contracts: Readonly<Record<string, Codec>>;
   }): Promise<{ readonly methods: readonly string[] }>;
   callAs(email: string | null, fn: string, args: JsonValue[]): Promise<SlateAnswer<RoomCallOutcome>>;
-  ownerFrame(): Promise<string>;
 }
 
 
@@ -102,7 +101,7 @@ export class SlateHost {
         }
       },
       call: (request) => this.call(request),
-      frame: (id) => this.ownerFrame(id),
+      room: async (id) => { await this.ownerRoom(id); },
       catalog: () => deps.catalog(),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.forgetRoom !== undefined && { forgetRoom: deps.forgetRoom.bind(deps) }),
@@ -256,12 +255,11 @@ export class SlateHost {
   }
 
   /** The slate's page in its room, entered as the workspace's owner: what a preview shows. */
-  ownerFrame(id: string): Promise<string> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const room = yield* this.room(id, yield* this.owner());
-
-      return yield* attempt({ doing: `slate ${id}'s page`, otherwise: 'unavailable' }, async () => room.ownerFrame());
-    }));
+  /** The slate's room, made for the workspace's owner if it is not yet. */
+  ownerRoom(id: string): Promise<void> {
+    return settle(Effect.asVoid(Effect.gen({ self: this }, function* () {
+      return yield* this.room(id, yield* this.owner());
+    })));
   }
 
   private owner(): Effect.Effect<string, KinuError> {

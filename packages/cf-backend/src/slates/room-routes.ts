@@ -6,7 +6,7 @@
 import { Hono, type Context } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
-import { hostTokenHolds, parseSlateShareLabel, previewHostSuffix, RoomEntrySchema, safeJson, type Forked, type RoomEntry } from '@kinu.run/core';
+import { hostTokenHolds, parseSlateShareLabel, previewHostSuffix, RoomEntrySchema, safeJson, type Forked, type ObjectNamespace, type RoomEntry } from '@kinu.run/core';
 import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { workspaceOwner } from '../workspace-owner-rpc';
@@ -132,14 +132,34 @@ roomRoutes.post('/api/rooms/:workspace/:slate/fork', async (c) => {
 
 /** The slate's page in a frame: the visitor, as the app knows them, sent on to the slate's own host with a ticket. */
 roomRoutes.get('/api/rooms/:workspace/:slate/frame', async (c) => {
-  const { workspace, slate } = addressOf(c);
   const signed = await visitorOf(c.req.raw, c.env);
-  const entered = await roomOf(c.env, workspace, slate).ticketFor(signed?.visitor ?? null, new URL(c.req.url).searchParams.get('k'));
 
-  if (entered === null) return new Response(signed === null ? 'Sign in to open this slate.' : 'This slate is not shared with you.', { status: signed === null ? 401 : 403, headers: NO_STORE });
+  return await roomFrame(c.env, addressOf(c), signed?.visitor ?? null, new URL(c.req.url).searchParams.get('k'));
+});
+
+/**
+ * The visitor sent on to the slate's own host, as themselves, with a ticket of theirs: the browser's frame route, and the
+ * CLI's (`/api/cli/preview?to=` this route), which knows its person by their bearer instead.
+ */
+export async function roomFrame<Id>(env: RoomFrameEnv<Id>, address: { readonly workspace: string; readonly slate: string }, visitor: RoomVisitor | null, key: string | null): Promise<Response> {
+  const entered = await env.SLATE_ROOM.get(env.SLATE_ROOM.idFromName(roomObjectName(address.workspace, roomHandle(address.workspace, address.slate)))).ticketFor(visitor, key);
+
+  if (entered === null) return new Response(visitor === null ? 'Sign in to open this slate.' : 'This slate is not shared with you.', { status: visitor === null ? 401 : 403, headers: NO_STORE });
 
   return new Response(null, { status: 303, headers: { ...NO_STORE, location: entered } });
-});
+}
+
+/** What entering a room's frame reads: the rooms. */
+export interface RoomFrameEnv<Id = DurableObjectId> {
+  readonly SLATE_ROOM: ObjectNamespace<Id, Pick<SlateRoom, 'ticketFor'>>;
+}
+
+/** The room a same-origin URL of its frame route names, or null. */
+export function roomFrameAddress(target: URL, origin: string): { workspace: string; slate: string } | null {
+  const match = target.origin === origin ? /^\/api\/rooms\/([^/]+)\/([^/]+)\/frame$/u.exec(target.pathname) : null;
+
+  return match === null ? null : { workspace: decodeURIComponent(match[1] ?? ''), slate: decodeURIComponent(match[2] ?? '') };
+}
 
 /** A part's sealed content: the room renders what this ticket's session may see, with no script and nothing to reach. */
 roomRoutes.get('/api/rooms/:workspace/:slate/parts/:part/content', async (c) => {
