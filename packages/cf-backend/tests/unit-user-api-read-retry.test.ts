@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { asFetchFunction } from '@kinu.run/core';
 import { listDrive, makeFolder } from '../src/lib/drive-api';
-import { getDriveLibrary } from '../src/lib/shared-api';
+import { getSharedLibrary } from '../src/lib/shared-api';
 import { listAvailableModels, touchWorkspace } from '../src/lib/user-api';
 
 const realFetch = globalThis.fetch;
@@ -59,9 +59,9 @@ describe('every route of the browser shares one transport', () => {
     expect(await listDrive('')).toEqual({ path: '', entries: [] });
     expect(asked).toEqual(['GET /api/drive?path=', 'GET /api/drive?path=']);
 
-    const shared = droppingConnection(1, () => Response.json({ slates: [], shared: [], used: [], starred: [] }));
+    const shared = droppingConnection(1, () => Response.json({ slates: [], mine: [], received: [] }));
 
-    expect(await getDriveLibrary()).toEqual({ slates: [], shared: [], used: [], starred: [] });
+    expect(await getSharedLibrary()).toEqual({ slates: [], mine: [], received: [] });
     expect(shared).toEqual(['GET /api/shared', 'GET /api/shared']);
 
     const wrote = droppingConnection(1, () => Response.json({ ok: true }));
@@ -75,6 +75,6 @@ describe('every route of the browser shares one transport', () => {
     await expect(makeFolder('reports')).rejects.toThrow('a folder named reports already exists');
 
     droppingConnection(0, () => new Response('upstream gone', { status: 502 }));
-    await expect(getDriveLibrary()).rejects.toMatchObject({ status: 502 });
+    await expect(getSharedLibrary()).rejects.toMatchObject({ status: 502 });
   });
 });

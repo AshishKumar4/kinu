@@ -11,7 +11,7 @@ import { GalleryCategorySchema } from './gallery-api';
  * viewer's personal parts run with that viewer's own. `owner`, "my access": the shared server acts with the owner's
  * share grant, inside the slate's reach, its effects approved by the owner.
  */
-export const SHARE_MODES = ['own', 'owner'] as const;
+const SHARE_MODES = ['own', 'owner'] as const;
 
 export type ShareMode = (typeof SHARE_MODES)[number];
 

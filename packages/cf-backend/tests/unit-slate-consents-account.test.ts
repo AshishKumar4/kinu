@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
-import { EffectAskSchema, type SlateConsent } from '@kinu.run/core/slates';
+import type { SlateConsent } from '@kinu.run/core/slates';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { recordedMcpToolCalls, resetRecordedMcp, seedConfiguredMcpServer, seedMcpAnswer, seedMcpTools } from './helpers/agents-sdk';
+
+/** What an approval is named by in an ask. */
+const AskId = v.object({ id: v.string() });
 
 const users: TestUserDO[] = [];
 
@@ -196,7 +199,7 @@ describe('personal part calls on the viewer\'s own account', () => {
       await user.userDO.consentSlate(caller, consent);
       const asked = await user.userDO.slatePartTool(caller, call);
       expect(asked).toMatchObject({ kind: 'needs-approval', ask: { tool: tool.name, payload: call.args[0] } });
-      const ask = v.parse(EffectAskSchema, 'ask' in asked ? asked.ask : null);
+      const ask = v.parse(AskId, 'ask' in asked ? asked.ask : null);
       await user.userDO.decideSlateEffect(caller, { id: ask.id, decision: 'approve' });
       seedMcpAnswer(answer);
 

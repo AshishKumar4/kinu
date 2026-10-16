@@ -365,9 +365,17 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     await this.drive('kitesurf');
     const before = browserRunDials;
 
-    const created = v.parse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ handle: v.string() }) }) }), await this.host.controller.operation(ROOT_SLATE_CALLER, {
+    const created = v.parse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ id: v.string(), handle: v.string() }) }) }), await this.host.controller.operation(ROOT_SLATE_CALLER, {
       op: 'share', id: 'driver', visibility: 'public', approved: approved.map((member) => ({ slate: 'driver', namespace: 'web', member })),
     }));
+
+    const share = this.host.controller.live.get(created.value.share.id);
+
+    // The owner's approved reach, on "my access", at the revision the driver runs.
+    if (share !== undefined) {
+      this.host.controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: slateRevision(this.host.controller.builds, 'driver') ?? '' }, share.grant);
+      await this.host.shareChanged('driver');
+    }
 
     const request = new Request(`https://share.invalid/?session=${encodeURIComponent(session)}`);
     const answer = await (await this.host.routeShare(created.value.share.handle, claim, request, '/')).text();
@@ -412,14 +420,31 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  /** `approved` names members granted beyond the graph's observing members. */
-  async share(approved: readonly { namespace: string; member: string }[] = []): Promise<SlateCallResult> {
+  /**
+   * `approved` names members granted beyond the graph's observing members. On "my access" (`owner`, as every base share
+   * acted) the owner approves that grant at the revision the board runs; on each viewer's own access it grants nothing.
+   */
+  async share(approved: readonly { namespace: string; member: string }[] = [], mode: 'own' | 'owner' = 'owner'): Promise<SlateCallResult> {
     await this.exerciseBoard();
-    this.ownersOwn = this.processes.getRunning().length;
+    // Built, so there is a revision for the owner to approve the reach at.
+    await this.host.ensure(ROOT_SLATE_CALLER, SLATE_ID);
 
-    return this.host.controller.operation(ROOT_SLATE_CALLER, {
+    const shared = await this.host.controller.operation(ROOT_SLATE_CALLER, {
       op: 'share', id: SLATE_ID, visibility: 'public', approved: approved.map((granted) => ({ slate: SLATE_ID, ...granted })),
     });
+
+    const created = v.safeParse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ id: v.string() }) }) }), shared);
+    const share = created.success ? this.host.controller.live.get(created.output.value.share.id) : undefined;
+
+    if (mode === 'owner' && share !== undefined) {
+      this.host.controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: slateRevision(this.host.controller.builds, SLATE_ID) ?? '' }, share.grant);
+      await this.host.shareChanged(SLATE_ID);
+    }
+
+    // What the owner's own use left running once the share stopped the board's app: a share's own calls start it again.
+    this.ownersOwn = this.processes.getRunning().length;
+
+    return shared;
   }
 
   /** Publishes the board as a blueprint and imports it back as a fork, as a forker's workspace admits one. */
@@ -510,6 +535,19 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /** The transport ships one batch, so both calls issue in the same tick. */
+  /** What a viewer's call of each member is refused with, as the slate's server's refusal reaches them. */
+  async viewerRefusals(handle: string, claim: ShareViewerClaim): Promise<{ probe: string; mutate: string }> {
+    const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(
+      { request: (request) => this.host.routeShare(handle, claim, request, '/__rpc') }, 'ignored',
+    );
+
+    const [probe, mutate] = await Promise.all([refusedText(stub.probe()), refusedText(stub.mutate())]);
+
+    stub[Symbol.dispose]();
+
+    return { probe, mutate };
+  }
+
   async viewerBatch(handle: string, claim: ShareViewerClaim): Promise<{ probe: string | null; mutateError: string }> {
     const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(
       { request: (request) => this.host.routeShare(handle, claim, request, '/__rpc') }, 'ignored',

@@ -9,8 +9,9 @@ import {
   CONTINUE, CONTINUED, FEEDBACK_HEARD, HIRED, HOME_ASK, HOME_REPORTED, INTERRUPTED_BRIEF, PIN_ASK, PIN_PAGE, PLAN_COMMENT,
   PLAN_COMMENT_ASK, REACH_REPLY, REACH_SLATE, REACH_SLATE_ASK, REACH_STREAM, THREAD_REPLY,
 } from './flows-script';
-import { CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle, settled, settledAfter, startNewChat, until, waitOn, openSlateShareSheet, shareWithAnyone, shareWithNoOne, type FlowTarget } from './browser-page';
+import { CHAT_IDLE, CHATS, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openWorkspacePage, PAGE_TABS, removeFlowWorkspace, sendAndSettle, settled, settledAfter, startNewChat, until, waitOn, openSlateShareDialog, submitPublicSlateShare, type FlowTarget } from './browser-page';
 import { signedInPage } from '../evals/src/browser';
+import { webHeaders } from '../evals/src/workspace-roster';
 
 const ChatTextSchema = v.string();
 
@@ -201,7 +202,7 @@ async function streamed(page: Page, frame: Frame, control: string, answer: { rea
  */
 export async function slateStreamsAndHires(target: FlowTarget): Promise<SlateReachVerdict> {
   const workspace = await createFlowWorkspace(target, 'slate-reach');
-  let shared = false;
+  let share: { readonly id: string } | null = null;
 
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
@@ -226,13 +227,13 @@ export async function slateStreamsAndHires(target: FlowTarget): Promise<SlateRea
 
     const ownerHire = await hired(page, frame);
 
-    const link = await sharedPublicly(target, workspace);
+    const made = await sharedPublicly(target, workspace);
 
-    shared = true;
+    share = made;
 
-    return { modelStream, agentStream, ownerHire, viewerHire: await viewerHired(target, link) };
+    return { modelStream, agentStream, ownerHire, viewerHire: made.url === null ? null : await viewerHired(target, made.url) };
   } finally {
-    if (shared) await stopSharing(target, workspace);
+    if (share !== null) await revokeShare(target, workspace, share.id);
     await removeFlowWorkspace(target, workspace);
   }
 }
@@ -245,28 +246,36 @@ async function hired(page: Page, frame: Frame): Promise<string> {
   return v.parse(v.string(), await frame.evaluate(`document.querySelector('[data-hire-result]')?.textContent ?? ''`));
 }
 
-/** The reach slate opened to anyone with the link, from its tile in My stuff: its link. */
-async function sharedPublicly(target: FlowTarget, workspace: string): Promise<string> {
+const SharedSchema = v.object({ id: v.string(), url: v.nullable(v.string()) });
+
+/** The reach slate shared with anyone who has the link, from its tile in My stuff: the share and its link. */
+async function sharedPublicly(target: FlowTarget, workspace: string): Promise<v.InferOutput<typeof SharedSchema>> {
   const page = await signedInPage(target.browser, target);
-
-  try {
-    await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
-    await openSlateShareSheet(page, await slateTile(page, workspace));
-
-    return await shareWithAnyone(page);
-  } finally {
-    await page.close();
-  }
-}
-
-/** The reach slate's tile in My stuff, once the Drive lists it. */
-async function slateTile(page: Page, workspace: string): Promise<string> {
   const tile = `[data-drive-slate="${REACH_SLATE.id}"][data-drive-workspace="${workspace}"]`;
 
+  await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
   await until(page, "the slate's tile in My stuff", `document.querySelector(${JSON.stringify(tile)}) !== null`);
+  await openSlateShareDialog(page, tile);
 
-  return tile;
+  const url = await submitPublicSlateShare(page);
+  const listed = await fetch(`${target.origin}/api/shared`, { headers: webHeaders(target.identity) });
+
+  if (!listed.ok) throw new Error(`listing the account's shares answered ${String(listed.status)}`);
+
+  const id = v.parse(SharesSchema, await listed.json()).mine
+    .find((row) => row.kind === 'live' && row.workspace === workspace && row.slate === REACH_SLATE.id)?.share;
+
+  await page.close();
+
+  if (id === undefined) throw new Error('the share was made, but the workspace lists no live share');
+
+  return { id, url };
 }
+
+/** The account's shares (`GET /api/shared`): each of its own by kind, workspace and slate, and the share's id. */
+const SharesSchema = v.looseObject({
+  mine: v.array(v.looseObject({ share: v.string(), kind: v.string(), workspace: v.optional(v.string()), slate: v.optional(v.string()) })),
+});
 
 /** Open `url` signed out, as anyone with the link, and press the slate page's Hire there. */
 async function viewerHired(target: FlowTarget, url: string): Promise<string> {
@@ -288,17 +297,12 @@ async function viewerHired(target: FlowTarget, url: string): Promise<string> {
   }
 }
 
-/** The reach slate back to its owner alone: the link goes off. */
-async function stopSharing(target: FlowTarget, workspace: string): Promise<void> {
-  const page = await signedInPage(target.browser, target);
+async function revokeShare(target: FlowTarget, workspace: string, share: string): Promise<void> {
+  const left = await fetch(`${target.origin}/api/shared/revoke`, {
+    method: 'POST', headers: { ...webHeaders(target.identity), 'content-type': 'application/json' }, body: JSON.stringify({ workspace, share }),
+  });
 
-  try {
-    await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
-    await openSlateShareSheet(page, await slateTile(page, workspace));
-    await shareWithNoOne(page);
-  } finally {
-    await page.close();
-  }
+  if (!left.ok) console.warn(`owner-ask-flows: revoking ${share} answered ${String(left.status)}`);
 }
 
 /** The page a frame element holds, once it holds a document of its own. */

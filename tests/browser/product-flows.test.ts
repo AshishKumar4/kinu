@@ -19,12 +19,12 @@ import {
   DRIVE_SLATE, agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces,
   accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone,
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
-  slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
+  slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
   computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, type AgentPlanVerdict, type AgentReturnVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
-  type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict,
+  type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type DesktopSwitchVerdict, type ReopenVerdict,
   type SessionsVerdict, type AgentJobVerdict,
 } from '../../scripts/product-flows';
@@ -548,6 +548,33 @@ describe(productFlowTestName('slate-opens', 'a slate opens from My stuff on its 
 
     expect(opened.landedAt.startsWith(`/workspace/${encodeURIComponent(opened.workspace)}`)).toBe(true);
     expect(opened.slateTabCurrent).toBe(true);
+  });
+});
+
+describe(productFlowTestName('slate-share', 'a slate that reaches nothing of its owner\'s shares from its tile, and stops (#25)'), () => {
+  let observed: SlateShareVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('slate-share', slateSharesReachingNothing);
+  });
+
+  test('the dialog draws no Reach row and states only the request limit', () => {
+    const shared = verdictOf(observed, 'slate-share');
+
+    expect(shared.reachRow).toBe(false);
+    // docs/SLATE-SHARING.md S5 specifies 120 requests per viewer per minute; this slate spends no model budget.
+  });
+
+  test('the share is made, its link copies, and it is listed under Shared by you', () => {
+    const shared = verdictOf(observed, 'slate-share');
+
+    expect(shared.link).not.toBeNull();
+    expect(shared.copied).toBe(shared.link);
+    expect(shared.sharedByYou).toContain(DRIVE_SLATE.title);
+  });
+
+  test('Stop sharing takes it off the Drive', () => {
+    expect(verdictOf(observed, 'slate-share').afterStop).not.toContain(DRIVE_SLATE.title);
   });
 });
 

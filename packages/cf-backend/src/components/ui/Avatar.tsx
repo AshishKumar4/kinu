@@ -1,4 +1,4 @@
-/** A person by their initial, in a hue of their own that their presence in a shared slate also wears. */
+/** A person by their initial, in a hue of their own, the same wherever they appear. */
 
 /** A name's own hue, the same wherever that person appears. */
 function hueOf(name: string): number {
@@ -8,9 +8,6 @@ function hueOf(name: string): number {
 
   return sum % 360;
 }
-
-/** The colour that marks where someone is in a shared slate. */
-export const presenceColor = (name: string) => `hsl(${String(hueOf(name))} 62% 48%)`;
 
 export function Avatar({ name, size = 24 }: { name: string; size?: number }) {
   return (

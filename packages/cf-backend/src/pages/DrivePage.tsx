@@ -9,13 +9,13 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import { Loader } from "@cloudflare/kumo";
 import {
   AppWindowIcon, ArrowSquareOutIcon, BookOpenIcon, CaretDownIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
-  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, StarIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, WarningIcon, XIcon,
+  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
-  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, compareCodeUnits, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
+  APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareCodeUnits, liveSharePagePath, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
   skillViewPath, workspaceDisplayTitle,
-  type DriveEntry, type DriveLibrary, type DriveListing, type DriveRoomCard, type DriveSlate, type FileText, type GalleryListing, type RoomAudience,
+  type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
 } from "@kinu.run/core";
 import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
@@ -23,8 +23,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
-import { getDriveLibrary, markSharedSeen } from "@/lib/shared-api";
-import { gallerySlateHref, ListingPicture } from "@/components/gallery/GalleryTiles";
+import { getSharedLibrary, markSharedSeen } from "@/lib/shared-api";
 import { useAsyncResource, lastValue, type AsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
@@ -43,7 +42,7 @@ function folderHref(path: string): string {
   return path === "/" ? APP_ROUTES.drive : `${APP_ROUTES.drive}${path}`;
 }
 
-function slateHref(slate: DriveSlate): string {
+function slateHref(slate: OwnedSlate): string {
   return `/workspace/${encodeURIComponent(slate.workspace)}?slate=${encodeURIComponent(slate.id)}`;
 }
 
@@ -59,7 +58,7 @@ const PLACES: readonly { id: DriveTab; label: string; to: string; icon: ReactNod
 ];
 
 /** The places that hold something: My stuff always, Slates once there is a slate, Shared once there is a share. */
-function placesOf(library: DriveLibrary | null): DriveTab[] {
+function placesOf(library: SharedLibrary | null): DriveTab[] {
   return PLACES.map((each) => each.id).filter((id) => {
     if (id === "slates") return (library?.slates.length ?? 0) > 0;
 
@@ -476,13 +475,12 @@ function TransferPicture({ status, progress }: { status: Transfer["status"]; pro
   );
 }
 
-/** Who can open a slate besides its owner, at a glance; a slate never shared, or not yet run, shows nothing. */
-function AudienceGlyph({ audience }: { audience: RoomAudience | undefined }) {
-  if (audience === undefined || audience === "only-you") return null;
+function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | undefined }) {
+  if (visibility === undefined) return null;
 
-  return audience === "anyone"
-    ? <GlobeIcon size={13} className="shrink-0 p-text-4" aria-label="Anyone with the link" data-drive-audience={audience} />
-    : <UsersIcon size={13} className="shrink-0 p-text-4" aria-label="People you add" data-drive-audience={audience} />;
+  return visibility === "public"
+    ? <GlobeIcon size={13} className="shrink-0 p-text-4" aria-label="Anyone with the link" />
+    : <UsersIcon size={13} className="shrink-0 p-text-4" aria-label="Shared with people" />;
 }
 
 function whyUnused(refusal: SkillFileRefusal): string {
@@ -505,8 +503,16 @@ function SkillMeta({ entry, from }: { entry: DriveEntry; from: string | null }) 
   return <span className="truncate">{entry.mtimeMs > 0 ? `Updated ${shortAge(entry.mtimeMs)}` : ""}</span>;
 }
 
-function isEmptyLibrary(library: DriveLibrary): boolean {
-  return library.shared.length + library.used.length + library.starred.length === 0;
+function whoCanOpen(row: SharedRow): string {
+  if (row.kind === "blueprint" || row.visibility === "public") return "Anyone with the link";
+
+  const users = row.users ?? [];
+
+  return users.length === 1 ? users[0] ?? "" : `${String(users.length)} people`;
+}
+
+function isEmptyLibrary(library: SharedLibrary): boolean {
+  return library.received.length + library.mine.length === 0;
 }
 
 interface MineContents {
@@ -546,7 +552,7 @@ interface Arrival {
   /** The listing and the library have both answered. */
   readonly settled: boolean;
   readonly nothingOwned: boolean;
-  readonly library: DriveLibrary | null;
+  readonly library: SharedLibrary | null;
 }
 
 function landing({ tab, firstVisit, settled, nothingOwned, library }: Arrival): ReactNode {
@@ -587,42 +593,33 @@ function SectionList({ groups, titled = false, heading = "quiet" }: {
   );
 }
 
-/** Narrowed to what the search names: a title, a line, or whose it is. */
-function matching<Row>(rows: readonly Row[], needle: string, words: (row: Row) => readonly string[]): Row[] {
-  return rows.filter((row) => needle === "" || words(row).some((text) => text.toLowerCase().includes(needle)));
+/** Newest first, narrowed to rows whose title, description or sharer holds the search. */
+function sharedRows(rows: readonly SharedRow[], needle: string): SharedRow[] {
+  return rows
+    .filter((row) => needle === "" || [row.title, row.description, row.owner ?? ""].some((text) => text.toLowerCase().includes(needle)))
+    .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-const newestFirst = (rows: readonly DriveRoomCard[]) => [...rows].sort((a, b) => b.at - a.at);
-
-function SharedBody({ library, query, card, starred }: {
-  library: DriveLibrary | null;
-  query: string;
-  card: (row: DriveRoomCard) => ReactNode;
-  starred: (listing: GalleryListing) => ReactNode;
-}) {
-  if (library === null) return <div className="flex justify-center py-16"><Loader size="base" /></div>;
-
+function SharedBody({ shared, query, tile }: { shared: SharedLibrary | null; query: string; tile: (row: SharedRow, mine: boolean) => ReactNode }) {
+  if (shared === null) return <div className="flex justify-center py-16"><Loader size="base" /></div>;
   const needle = query.trim().toLowerCase();
-  const cardWords = (row: DriveRoomCard) => [row.title, row.owner.name ?? row.owner.email];
-  const shared = newestFirst(matching(library.shared, needle, cardWords));
-  const used = newestFirst(matching(library.used, needle, cardWords));
-  const stars = matching(library.starred, needle, (listing) => [listing.title, listing.line, listing.owner.name]);
+  const received = sharedRows(shared.received, needle);
+  const mine = sharedRows(shared.mine, needle);
 
-  if (needle !== "" && shared.length + used.length + stars.length === 0) {
+  if (needle !== "" && received.length + mine.length === 0) {
     return <p className="py-12 text-center p-text-3" data-drive-no-match>{`Nothing matches “${query.trim()}”`}</p>;
   }
 
   return (
     <SectionList titled heading="lead" groups={[
-      { label: "Shared with you", tiles: shared.map(card) },
-      { label: "Used", tiles: used.map(card) },
-      { label: "Starred", tiles: stars.map(starred) },
+      { label: "Shared with you", tiles: received.map((row) => tile(row, false)) },
+      { label: "Shared by you", tiles: mine.map((row) => tile(row, true)) },
     ]} />
   );
 }
 
 /** Every slate across the owner's workspaces, each labelled with its workspace. */
-function SlatesBody({ slates, tile }: { slates: readonly DriveSlate[] | null; tile: (slate: DriveSlate) => ReactNode }) {
+function SlatesBody({ slates, tile }: { slates: readonly OwnedSlate[] | null; tile: (slate: OwnedSlate) => ReactNode }) {
   if (slates === null) return <div className="flex justify-center py-16"><Loader size="base" /></div>;
 
   return <section aria-label="Slates" data-drive-section="Slates"><ul className={GRID}>{slates.map(tile)}</ul></section>;
@@ -673,10 +670,11 @@ function DropZone({ label, onFiles, children }: { label: string; onFiles: (files
   );
 }
 
-function DriveNotices({ notice, onDismissNotice, libraryResource, onRetryLibrary, copyStatus }: {
+function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource, onRetryLibrary, copyStatus }: {
   notice: string | null;
+  listingPending: boolean;
   onDismissNotice: () => void;
-  libraryResource: AsyncResource<DriveLibrary>;
+  libraryResource: AsyncResource<SharedLibrary>;
   onRetryLibrary: () => void;
   copyStatus: ReturnType<typeof useCopy>["status"];
 }) {
@@ -689,6 +687,7 @@ function DriveNotices({ notice, onDismissNotice, libraryResource, onRetryLibrary
           <button type="button" onClick={onDismissNotice} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label="Dismiss"><XIcon size={12} /></button>
         </div>
       )}
+      {listingPending && <p role="status" data-drive-listing-pending className="mt-4 p-meta p-text-3">Saved. The list will catch up.</p>}
       {libraryResource.status === "error" && (
         <LoadFailure what="your slates and shares" message={libraryResource.message} onRetry={onRetryLibrary} className="mt-4" />
       )}
@@ -782,10 +781,11 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const copier = useCopy();
   const loadListing = useCallback(() => listDrive(path), [path]);
   const listing = useAsyncResource(loadListing, undefined, path);
-  const loadLibrary = useCallback(() => getDriveLibrary(), []);
+  const loadLibrary = useCallback(() => getSharedLibrary(), []);
   const library = useAsyncResource(loadLibrary, undefined, "library");
   const [dialog, setDialog] = useState<DriveDialogState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [listingPending, setListingPending] = useState(false);
   const [query, setQuery] = useState("");
 
   const titleOf = (workspace: string): string => {
@@ -813,6 +813,11 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     startTransition(() => settle(Effect.catchCause(Effect.promise(work), showing(setNotice))));
   };
 
+  // Entered as its link's visitor enters it, through the page that hands this account its ticket.
+  const openLive = (row: SharedRow): void => {
+    if (row.workspace !== undefined) window.open(liveSharePagePath(row.workspace, row.share), "_blank", "noopener");
+  };
+
   const afterSkillAdded = async (): Promise<void> => {
     listing.reload();
 
@@ -830,7 +835,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   const shared = lastValue(library.resource);
   const places = placesOf(shared);
-  const unseen = shared?.shared.some((row) => row.unseen === true) ?? false;
+  const unseen = shared?.received.some((row) => row.unseen === true) ?? false;
 
   useSeeingShared(tab === "shared" && unseen, library.reload, setNotice);
   const contents = mineContents(path, lastValue(listing.resource)?.entries ?? []);
@@ -873,45 +878,45 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     { label: "Delete", icon: <TrashIcon size={15} />, marker: "data-drive-delete", danger: true, apart: true, onSelect: () => setDialog({ kind: "delete", entry }) },
   ];
 
-  // A slate shared with this person, or used through its link: opened live, where everyone uses it together.
-  const cardTile = (row: DriveRoomCard): ReactNode => {
-    const href = row.url;
-    const meta = [row.owner.name ?? row.owner.email, row.relation === "shared" && row.role === "edit" ? "Edit" : null, shortAge(row.at)].filter(Boolean).join(" · ");
+  const shareTile = (row: SharedRow, mine: boolean): ReactNode => {
+    const open: MenuItem = row.kind === "live"
+      ? { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => openLive(row) }
+      : { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(blueprintPagePath(row.id)) };
+
+    const menu: MenuItem[] = [open];
+
+    if (row.kind === "blueprint") {
+      menu.push({ label: "Copy link", icon: <CopyIcon size={15} />, onSelect: () => copier.copy(new URL(blueprintPagePath(row.id), window.location.origin).toString()) });
+    }
+
+    if (row.kind === "blueprint" || (row.workspace !== undefined && row.fork === true)) {
+      menu.push({ label: "Fork…", icon: <GitForkIcon size={15} />, onSelect: () => setDialog({ kind: "fork", row }) });
+    }
+
+    if (mine) {
+      menu.push({ label: "Stop sharing", icon: <ProhibitIcon size={15} />, marker: "data-drive-stop-sharing", danger: true, apart: true, onSelect: () => setDialog({ kind: "stop", row }) });
+    }
+
+    const meta = mine ? whoCanOpen(row) : [row.kind === "live" ? "Live" : "Blueprint", row.owner, shortAge(row.createdAt)].filter(Boolean).join(" · ");
+    const cover = <Cover title={row.title} />;
+    // A live share of yours shows the picture of the slate it shares.
+    const slate = mine && row.kind === "live" ? shared?.slates.find((each) => each.workspace === row.workspace && each.id === row.slate) : undefined;
 
     return (
-      <Tile key={`${row.workspace}:${row.slate}`} title={row.title} icon={SHARE_ICON.live} picture={<Cover title={row.title} />} href={href}
-        meta={<><span className="truncate">{meta}</span>{row.unseen === true && <NewDot />}</>}
-        attributes={{ "data-drive-room": row.slate, "data-drive-room-relation": row.relation }}
-        menu={[
-          { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(href) },
-          { label: "Fork…", icon: <GitForkIcon size={15} />, onSelect: () => setDialog({ kind: "fork", card: row }) },
-          { label: row.relation === "shared" ? "Leave" : "Remove", icon: <ProhibitIcon size={15} />, marker: "data-drive-leave", danger: true, apart: true, onSelect: () => setDialog({ kind: "leave", card: row }) },
-        ]} />
+      <Tile key={`${row.kind}:${row.id}`} title={row.title} icon={SHARE_ICON[row.kind]}
+        picture={slate === undefined ? cover : <SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top" fallback={cover} />}
+        href={row.kind === "blueprint" ? blueprintPagePath(row.id) : undefined} onOpen={row.kind === "live" ? () => openLive(row) : undefined}
+        meta={<span className="truncate">{meta}</span>} menu={menu}
+        attributes={{ "data-drive-share": row.id, "data-drive-share-kind": row.kind }} />
     );
   };
 
-  // A Gallery slate this person starred: its Gallery page, and its link to open it live.
-  const starredTile = (star: GalleryListing): ReactNode => {
-    const href = star.url;
-
-    return (
-      <Tile key={`star:${star.workspace}:${star.slate}`} title={star.title} icon={<StarIcon size={15} weight="fill" className="p-accent" />}
-        picture={<ListingPicture listing={star} />}
-        href={gallerySlateHref(star.workspace, star.slate)}
-        meta={<span className="truncate">{[star.owner.name, star.line].join(" · ")}</span>} attributes={{ "data-drive-starred": star.slate }}
-        menu={[
-          { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(href) },
-          { label: "Copy link", icon: <CopyIcon size={15} />, onSelect: () => copier.copy(new URL(href, window.location.origin).toString()) },
-        ]} />
-    );
-  };
-
-  const slateTile = (slate: DriveSlate): ReactNode => (
+  const slateTile = (slate: OwnedSlate): ReactNode => (
     <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title}
       picture={<SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top"
         fallback={<Cover title={slate.title} />} />}
       icon={SLATE_ICON} href={slateHref(slate)}
-      meta={<><span className="truncate">{titleOf(slate.workspace)}</span><AudienceGlyph audience={slate.audience} /></>}
+      meta={<><span className="truncate">{titleOf(slate.workspace)}</span><VisibilityGlyph visibility={slate.visibility} /></>}
       attributes={{ "data-drive-slate": slate.id, "data-drive-workspace": slate.workspace }}
       menu={[
         { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(slateHref(slate)) },
@@ -1000,7 +1005,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
               onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
           )} />
 
-        <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} libraryResource={library.resource} onRetryLibrary={library.reload}
+        <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
           copyStatus={copier.status} />
 
         {tab === "mine" && (
@@ -1015,7 +1020,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         )}
         {/* From `lg` Slates has no head of its own: the column names the place. */}
         {tab === "slates" && <div className="mt-6 lg:mt-0"><SlatesBody slates={shared?.slates ?? null} tile={slateTile} /></div>}
-        {tab === "shared" && <div className="mt-6"><SharedBody library={shared} query={query} card={cardTile} starred={starredTile} /></div>}
+        {tab === "shared" && <div className="mt-6"><SharedBody shared={shared} query={query} tile={shareTile} /></div>}
       </div>
 
       </div>
@@ -1024,7 +1029,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       {builtin !== undefined && <BuiltinSkillDrawer name={builtin} onClose={() => show("skill", null)} />}
       {dialog !== null && (
         <DriveDialog dialog={dialog} folder={path} onClose={() => setDialog(null)} onListingChanged={listing.reload}
-          onSharesChanged={library.reload} onSkillAdded={() => void afterSkillAdded()} />
+          onSharesChanged={(behind) => { if (behind === "pending") setListingPending(true); library.reload(); }} onSkillAdded={() => void afterSkillAdded()} />
       )}
     </div>
   );

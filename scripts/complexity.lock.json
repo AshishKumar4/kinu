@@ -178,6 +178,10 @@
       "complexity": 28
     },
     {
+      "key": "packages/cf-backend/src/components/slates/BlueprintShareForm.tsx#BlueprintShareForm",
+      "complexity": 28
+    },
+    {
       "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
       "complexity": 28
     },
