@@ -3,7 +3,7 @@
  * and the one place a session says where it is, what it serves and how its last command ended. One status language:
  * the dot a machine wears, on a session.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Effect } from "effect";
 import { DesktopIcon, FolderOpenIcon, GitBranchIcon, PlusIcon, SparkleIcon, XIcon } from "@phosphor-icons/react";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
@@ -14,13 +14,13 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
  *  marks current while the tab is open, and nothing reads while it is closed or hidden. */
 const SESSIONS_EVERY_MS = 3_000;
 
-export type SessionTone = "working" | "ready" | "danger" | "off" | "attention";
+type SessionTone = "working" | "ready" | "danger" | "off" | "attention";
 
 /** A session's state: its dot's tone and its word. */
 interface SessionReading { readonly tone: SessionTone; readonly word: string }
 
 /** Waiting for an answer, running, done, failed, or not open. */
-export function sessionTone(session: TerminalSession): SessionReading {
+function sessionTone(session: TerminalSession): SessionReading {
   if (!session.open) return { tone: "off", word: "Not open" };
 
   if (session.needsInput) return { tone: "attention", word: "Needs input" };
@@ -42,7 +42,7 @@ function sessionDetail(session: TerminalSession, now: number): string | null {
 }
 
 /** How long ago, as a row has room for: now, minutes, hours. */
-export function since(at: number, now: number): string {
+function since(at: number, now: number): string {
   const minutes = Math.floor((now - at) / 60_000);
 
   if (minutes < 1) return "now";
@@ -123,7 +123,7 @@ function Dot({ tone }: { tone: SessionTone }) {
 }
 
 /** A session an agent's job runs in (D95), beside the person's own. */
-export function AgentMark() {
+function AgentMark() {
   return <span title="Started by the agent" className="inline-flex shrink-0"><SparkleIcon size={11} weight="fill" className="p-accent-mark" aria-label="Started by the agent" /></span>;
 }
 
@@ -148,10 +148,15 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
   onClose: (id: string) => Effect.Effect<void>;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const hidden = useHiddenEdges(strip, `${current}:${String(sessions?.length ?? 0)}`);
 
   return (
     <div className="flex shrink-0 items-end gap-1 border-b p-border pr-2 pl-4">
-      <div role="tablist" aria-label={label} className="p-session-tabs">
+      {/* Scrolls sideways when the tabs outrun the column: a wheel turns it, and a fade marks the side with more. */}
+      <div ref={strip} role="tablist" aria-label={label} className="p-session-tabs"
+        data-hidden-start={hidden.start || undefined} data-hidden-end={hidden.end || undefined}
+        onWheel={(event) => { if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY; }}>
         {sessions === null && (
           <button type="button" role="tab" aria-selected={current === ONE_SHELL} className="p-session-tab" onClick={() => onChoose(ONE_SHELL)}>
             <Dot tone="ready" />{ONE_SHELL}
@@ -197,6 +202,49 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
   );
 }
 
+/** Room kept at a scrolled edge for its fade, so a tab brought into view clears it. */
+const EDGE_FADE_PX = 40;
+
+/**
+ * Which ends of a sideways strip hide tabs, and the chosen tab brought into view each time `shown` changes: a tab
+ * chosen or opened past the column's edge (a new session lands last) is never left behind the fade.
+ */
+function useHiddenEdges(strip: RefObject<HTMLDivElement | null>, shown: string): { start: boolean; end: boolean } {
+  const [edges, setEdges] = useState({ start: false, end: false });
+
+  useLayoutEffect(() => {
+    const element = strip.current;
+    const chosen = element?.querySelector<HTMLElement>('[aria-selected="true"]');
+
+    if (element === null || chosen === null || chosen === undefined) return;
+    // Measured on screen: a tab sits in its own positioned slot, so its offsets are its slot's, not the strip's.
+    const left = chosen.getBoundingClientRect().left - element.getBoundingClientRect().left + element.scrollLeft;
+    const right = left + chosen.getBoundingClientRect().width;
+
+    if (left < element.scrollLeft + EDGE_FADE_PX) element.scrollLeft = Math.max(0, left - EDGE_FADE_PX);
+    else if (right > element.scrollLeft + element.clientWidth - EDGE_FADE_PX) element.scrollLeft = right - element.clientWidth + EDGE_FADE_PX;
+  }, [strip, shown]);
+
+  useEffect(() => {
+    const element = strip.current;
+
+    if (element === null) return undefined;
+    const read = () => setEdges({ start: element.scrollLeft > 1, end: element.scrollLeft + element.clientWidth < element.scrollWidth - 1 });
+    const observer = new ResizeObserver(read);
+
+    read();
+    observer.observe(element);
+    element.addEventListener("scroll", read, { passive: true });
+
+    return () => {
+      observer.disconnect();
+      element.removeEventListener("scroll", read);
+    };
+  }, [strip, shown]);
+
+  return edges;
+}
+
 /** The one place a session says where it is, the branch there, what it serves, and what it runs or last ran. */
 export function SessionDetails({ session, name }: { session: TerminalSession | null; name?: string }): ReactNode {
   const now = Date.now();
@@ -233,14 +281,4 @@ function folderTail(cwd: string): string {
 /** Opens a session, then shows it; a refusal stays with the hook's failure. */
 export function openSession(sessions: ComputerSessions, show: (id: string) => void): Effect.Effect<void> {
   return sessions.open().pipe(Effect.map((record) => { if (record !== null) show(record.id); }));
-}
-
-/** The wide column's new session, under the computer's sessions. */
-export function NewSessionRow({ onOpen }: { onOpen: () => Effect.Effect<void> }) {
-  return (
-    <button type="button" onClick={() => detach(onOpen())}
-      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 p-meta p-text-3 hover:bg-[var(--c-neutral-tint)] hover:p-text">
-      <PlusIcon size={12} aria-hidden />New session
-    </button>
-  );
 }
