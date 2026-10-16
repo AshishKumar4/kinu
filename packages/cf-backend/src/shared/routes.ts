@@ -262,9 +262,12 @@ const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
 async function shareLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, LiveShareBodySchema);
 
-  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork?, mode?, revision? }');
+  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork?, mode?, revision?, start? }');
 
   if (body.mode === 'owner' && body.revision === undefined) return err(400, 'Sharing on your access names the revision whose reach you reviewed');
+
+  // A copy made now has no revision anyone reviewed: it is shared on each viewer's own access, and turned later.
+  if (body.mode === 'owner' && body.start === 'empty') return err(400, "A copy that starts empty is shared on each viewer's own access first: turn on your access once it has run");
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
@@ -272,7 +275,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   const owned = claim.success;
 
   const created = await owned.slateAs(ROOT_SLATE_CALLER, {
-    op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork,
+    op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork, start: body.start,
   });
 
   if (!created.ok) return err(ERROR_STATUS[created.reason], created.error);

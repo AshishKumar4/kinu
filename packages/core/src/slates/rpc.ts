@@ -4,6 +4,7 @@ import { JsonValueSchema, type JsonValue } from '../utils/json';
 import type { WorkMode } from '../types/turn';
 import { requireWorkModePermission } from '../execution/work-mode';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
+import { ShareStartSchema } from './share-modes';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
@@ -70,6 +71,7 @@ export const SlateOperationSchema = v.variant('op', [
     visibility: LiveShareVisibilitySchema,
     approved: v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() })),
     fork: v.optional(v.boolean()),
+    start: v.optional(ShareStartSchema),
   }),
   v.strictObject({ op: v.literal('liveShares') }),
   v.strictObject({ op: v.literal('viewerRequests'), share: ShareId }),

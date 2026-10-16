@@ -5,7 +5,7 @@
 import * as v from 'valibot';
 import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
-import { ShareModeSchema } from './share-modes';
+import { ShareModeSchema, ShareStartSchema } from './share-modes';
 import { GalleryCategorySchema } from './gallery-api';
 
 
@@ -58,7 +58,7 @@ const SlateGraphNamespaceSchema = v.object({
 
 export type SlateGraphNamespace = v.InferOutput<typeof SlateGraphNamespaceSchema>;
 
-export const SlateCapabilityGraphSchema = v.object({
+const SlateCapabilityGraphSchema = v.object({
   slate: v.string(),
   slates: v.array(v.string()),
   namespaces: v.array(SlateGraphNamespaceSchema),
@@ -110,6 +110,8 @@ export const LiveShareBodySchema = v.object({
   fork: v.optional(v.boolean()),
   mode: v.optional(ShareModeSchema),
   revision: v.optional(v.string()),
+  /** H7, offered at a slate's first share: `empty` shares a copy made now, code only (`share.slate` is the copy's). */
+  start: v.optional(ShareStartSchema),
 });
 
 export type LiveShareBody = v.InferOutput<typeof LiveShareBodySchema>;

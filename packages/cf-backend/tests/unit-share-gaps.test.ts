@@ -731,3 +731,27 @@ test("a live share its owner lists tells the Gallery its card, stays off the own
   // Off the Gallery, its share says nothing of what it reaches to a page the index still held.
   expect(await page()).toBeUndefined();
 });
+
+test("a slate's first share can start empty: a copy made now, code only, named as a copy, and none made when refused", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const files = workspaceFiles(world.owner.agent);
+  const slates = async () => (await world.owner.agent.listSlates()).slates.map((slate) => slate.id);
+
+  const share = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'public', start: 'empty', ...body,
+  }));
+
+  // A copy has run nothing: it is never shared on the owner's access, nor with anything approved on it.
+  expect((await share({ mode: 'owner', revision: 'any' }))?.status).toBe(400);
+  expect((await share({ approved: [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }] }))?.status).toBe(400);
+  expect(await slates()).toEqual(['issues']);
+
+  const made = await jsonBody(present(await share({}), 'the share answer'), LiveShareCreatedSchema);
+  const copy = made.share.slate;
+
+  expect({ copy: copy === 'issues', mode: made.share.mode, slates: (await slates()).toSorted() }).toEqual({ copy: false, mode: 'own', slates: [copy, 'issues'].toSorted() });
+  expect(JSON.parse(await readText(files, `/slates/${copy}/package.json`))).toMatchObject({ slate: { title: 'Issue triage (shared copy)' }, description: 'Triage the open issues' });
+  expect(await readText(files, `/slates/${copy}/src/server.ts`)).toBe(await readText(files, '/slates/issues/src/server.ts'));
+});
