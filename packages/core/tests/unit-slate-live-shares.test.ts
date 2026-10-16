@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
-import { shareLiveSlate } from '../src/slates/live-sharing';
+import { setShareMode, shareLiveSlate } from '../src/slates/live-sharing';
+import { initSlateBuildTable, SlateBuilds } from '../src/slates/builds';
 import { grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
 import { makeExecRaw, makeSqlExec } from './helpers';
 import type { ShareGrant } from '../src/slates/sharing';
@@ -202,4 +203,40 @@ test('an owner share names the revision its reach was approved for, and an own s
   } finally {
     db.close();
   }
+});
+
+test('its owner turns a share to owner mode over the reach at a built revision, and back to own', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    const graph = slateCapabilityGraph({
+      slate: 'issues', workspace: 'my-workspace', catalog: { mcp: [], slates: ['issues'] },
+      usage: () => [{ namespace: 'workspace', member: 'readFile' }, { namespace: 'workspace', member: 'writeFile' }],
+    });
+
+    shares.add(liveShare());
+    expect(() => setShareMode({ shares, share: 's1', graph, mode: 'owner', approved: [], revision: null })).toThrow('has not built yet');
+
+    setShareMode({ shares, share: 's1', graph, mode: 'owner', approved: [{ slate: 'issues', namespace: 'workspace', member: 'writeFile' }], revision: 'rev-1' });
+    expect(shares.authoritiesOf('issues')).toEqual([{ mode: 'owner', grant: expect.objectContaining({ members: grant.members }), grantRevision: 'rev-1' }]);
+
+    setShareMode({ shares, share: 's1', graph, mode: 'own', approved: [], revision: 'rev-1' });
+    expect(shares.get('s1')).toMatchObject({ mode: 'own', grantRevision: null });
+  } finally {
+    db.close();
+  }
+});
+
+test('a slate\'s build record tells its listener only when the code it serves moves', () => {
+  const db = new Database(':memory:');
+  initSlateBuildTable(makeExecRaw(db));
+  const builds = new SlateBuilds(makeSqlExec(db));
+  const moved: string[] = [];
+
+  builds.whenBuilt((slate, authority, key) => { moved.push(`${slate}:${authority}:${key}`); });
+  builds.built('issues', 'root', 'k1', { modules: {} });
+  builds.built('issues', 'root', 'k1', { modules: {} });
+  builds.built('issues', 'root', 'k2', { modules: {} });
+
+  expect(moved).toEqual(['issues:root:k1', 'issues:root:k2']);
 });

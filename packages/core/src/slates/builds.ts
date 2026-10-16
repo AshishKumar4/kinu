@@ -98,7 +98,15 @@ export class SlateBuilds {
   /** Read once per activation per authority, as every model step asks; each write below keeps it current. */
   readonly #failing = new Map<string, FailingSlateBuild[]>();
 
+  /** Told each time a slate's working image moves to a new source as an authority. */
+  readonly #moved = new Set<(slate: string, authority: string, key: string) => void>();
+
   constructor(private readonly db: SqlExec) {}
+
+  /** `listener` is told each time a slate's working image moves to a new source as an authority. */
+  whenBuilt(listener: (slate: string, authority: string, key: string) => void): void {
+    this.#moved.add(listener);
+  }
 
   private row(slate: string, authority: string): v.InferOutput<typeof RowSchema> | null {
     const [row] = this.db.exec(`SELECT good_key, good_image, failed_key, failure FROM slate_images WHERE slate = ? AND authority = ?`, slate, authority).toArray();
@@ -110,6 +118,7 @@ export class SlateBuilds {
    *  its next build is stale by. */
   built(slate: string, authority: string, key: string, image: SlateImage): void {
     const { inputs = [], ...kept } = image;
+    const before = this.row(slate, authority)?.good_key ?? null;
 
     this.db.exec(
       `INSERT INTO slate_images (slate, authority, good_key, good_image) VALUES (?, ?, ?, ?)
@@ -119,6 +128,8 @@ export class SlateBuilds {
     this.db.exec(`DELETE FROM slate_build_inputs WHERE slate = ? AND authority = ?`, slate, authority);
     this.looked(slate, authority, inputs);
     this.#failing.clear();
+
+    if (before !== key) for (const listener of this.#moved) listener(slate, authority, key);
   }
 
   /** The source `key` did not compile as `authority`: what it looked at joins what the image still served looked at. A

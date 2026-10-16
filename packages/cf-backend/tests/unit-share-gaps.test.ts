@@ -8,8 +8,8 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, LiveShareRecordSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
-  type AgentRuntime, type SlateAnswer,
+  APP_ROUTES, LIVE_SHARE_MODE_PATH, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  type AgentRuntime, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
@@ -59,7 +59,7 @@ async function exerciseIssuesSlate(owner: HarnessOrchestratorAgent): Promise<voi
   }
 }
 
-const post = (path: string, body: Record<string, string | boolean | readonly string[] | undefined>) => new Request(`https://app.test${path}`, {
+const post = (path: string, body: Readonly<Record<string, JsonValue | undefined>>) => new Request(`https://app.test${path}`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
 });
 
@@ -636,4 +636,30 @@ test("a share whose recipients' tile cannot be pushed says the list is behind, w
 
   expect(answer.status).toBe(201);
   expect(await jsonBody(answer, v.object({ listing: v.optional(v.literal('pending')) }))).toEqual({ listing: 'pending' });
+});
+
+test("a share on its owner's access is refused where the slate is not at the revision they reviewed, and none is left made", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const approved = [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }];
+  const open = async () => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema)).filter((row) => row.revokedAt === null);
+  const mode = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post(LIVE_SHARE_MODE_PATH, { workspace: 'issues-owner', ...body }));
+
+  // No slate process runs here, so the slate has no revision a review could have read.
+  expect(answered(await world.owner.agent.slate({ op: 'graph', id: 'issues' }), SlateReachSchema).revision).toBeNull();
+
+  const refused = await sharedRequest(world.env, owner, post('/api/shared/live', {
+    workspace: 'issues-owner', slate: 'issues', visibility: 'public', mode: 'owner', revision: 'a-revision-it-is-not-at', approved,
+  }));
+
+  expect(refused?.status).toBe(400);
+  expect(await open()).toEqual([]);
+
+  const made = await sharePublic(world, 'public');
+
+  expect((await mode({ share: made.share.id, mode: 'owner', revision: 'a-revision-it-is-not-at', approved }))?.status).toBe(400);
+  expect((await mode({ share: 'no-such-share', mode: 'own' }))?.status).toBe(404);
+  expect(await jsonBody(present(await mode({ share: made.share.id, mode: 'own' }), 'the mode answer'), LiveShareRecordSchema))
+    .toMatchObject({ id: made.share.id, mode: 'own', grantRevision: null });
 });

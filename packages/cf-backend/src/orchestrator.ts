@@ -125,7 +125,7 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type LiveShareRecord,
+  type LiveShareRecord, type LiveShareModeBody,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
@@ -5764,6 +5764,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),
       ownerUserId: () => this.getOwnerUserId(),
+      // `owner` shares' effects wait on the owner in the workspace's one queue, as every parked action does.
+      ownerEffects: {
+        ask: (id, effect) => this.deferrals.slateEffect(id, effect),
+        settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
+        retire: (share) => { this.deferrals.retireSlateEffects(share); },
+      },
       forgetPicture: async (slate) => {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
         this.armDurableWake();
@@ -5886,6 +5892,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** DO-only, like the blueprint twin, for the same reason. */
   async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
     return (await this.slates()).controller.shareLiveWith(share, users);
+  }
+
+  /** DO-only: a live share's mode, set by its owner's own share sheet, which the app host proves is theirs. No agent
+   *  turns on `owner` mode, so no slate op or callable reaches this. */
+  async setLiveShareMode(body: LiveShareModeBody): Promise<SlateAnswer<LiveShareRecord>> {
+    return (await this.slates()).controller.setLiveShareMode(body);
   }
 
   @callable() async listSlates() {

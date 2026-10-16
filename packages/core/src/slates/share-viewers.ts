@@ -11,6 +11,11 @@ import type { MissionGovernor } from '../mission-budget';
 import type { JsonValue } from '../utils/json';
 import { shareCaller, type SlateCaller } from './caller';
 import type { SlateLiveShareStore } from './live-shares';
+import { partCallRoot } from './share-policy';
+import { sha256Hex } from '../safety/argument-digest';
+import { slateEffectText, type SlateEffect } from '../safety/approval-kind';
+import type { SlateEffectVerdict } from '../safety/deferred-approval';
+import type { ApprovalSpend, ApprovalSpendOutcome } from '../safety/approval-gate';
 import { slateAddressImpact } from './members';
 import { isJsonAnswer, type SlateCallResult, type SlateSurfaceResult } from './rpc';
 import {
@@ -28,6 +33,16 @@ export interface SlateShareViewersDeps {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerUserId?(): string | null;
+  /** The slate's revision now (share-policy.ts `slateRevision`): what an `owner` share's effect is approved at. */
+  revision(slate: string): string | null;
+  /** The owner's queue of share effects (deferred-approval.ts): absent, an `owner` share's effect is refused. */
+  readonly ownerEffects?: OwnerEffects;
+}
+
+/** Where an `owner` share's effects wait for its owner, and how a run settles the approval it took. */
+export interface OwnerEffects {
+  ask(id: string, effect: SlateEffect): SlateEffectVerdict;
+  settle(spend: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<boolean>;
 }
 
 /** What a request to a share's page is answered, before anything of the owner's runs. */
@@ -123,11 +138,16 @@ export class SlateShareViewers {
 
         const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
         row = { slate: id, ...call.address, impact: call.impact, ok: false };
+        const approval = yield* this.ownerApproval({ share, slate: id, call, args: request.args, viewer: viewer.subject });
 
         // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
         const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.deps.live.live(input.share).grant, id, { namespace, member }); };
 
-        const result = viewerAnswer(yield* Effect.promise(async () => input.run(call.route, nested)));
+        const ran = yield* Effect.exit(Effect.promise(async () => input.run(call.route, nested)));
+
+        // The approval is used once the call ran at all; one that never started gives it back.
+        if (approval !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(approval, ran._tag === 'Success' ? 'spent' : 'did-not-run'));
+        const result = viewerAnswer(yield* ran);
         row = { ...row, ok: result.ok };
 
         if (result.ok) this.debit(share, result.value);
@@ -137,6 +157,49 @@ export class SlateShareViewers {
 
       return yield* Effect.ensuring(answered, Effect.sync(() => { this.deps.live.recordCall(viewer.request, row); }));
     }));
+  }
+
+  /**
+   * An `owner` share lends its owner's access only at the revision whose reach they approved, and a call of it that acts
+   * (any member but an observing one) runs only on their approval of this exact call, which it takes
+   * (docs/SLATE-SHARING-NIMBUS.md §2): the spend it runs under, or null where it needs none (an `own` share, an observing
+   * call, or the owner's own call, who is the one who approves). Else refused, the ask waiting on the owner's decision stack.
+   */
+  private ownerApproval(input: {
+    readonly share: LiveShareRecord;
+    readonly slate: string;
+    readonly call: { readonly address: { readonly namespace: string; readonly member: string }; readonly impact: string };
+    readonly args: readonly JsonValue[];
+    readonly viewer: string;
+  }): Effect.Effect<ApprovalSpend | null, KinuError> {
+    const { share, call } = input;
+    const owner = this.deps.ownerUserId?.();
+
+    if (share.mode !== 'owner' || (owner != null && input.viewer === `user:${owner}`)) return Effect.succeed(null);
+    const revision = this.deps.revision(input.slate);
+
+    if (revision === null || revision !== share.grantRevision) {
+      return Effect.fail(new KinuError('denied', 'This slate changed since its owner approved what it reaches: it acts on their access again once they approve it'));
+    }
+
+    if (call.impact === 'observe') return Effect.succeed(null);
+    const queue = this.deps.ownerEffects;
+
+    if (queue === undefined) return Effect.fail(new KinuError('denied', 'This share cannot ask its owner to approve a call now'));
+    const payload: JsonValue = input.args.length === 1 ? input.args[0] ?? null : [...input.args];
+    const server = call.address.namespace;
+
+    const effect: SlateEffect = {
+      share: share.id, slate: input.slate, revision, server, tool: call.address.member, root: partCallRoot(server, payload), payload, viewer: input.viewer,
+    };
+
+    const verdict = queue.ask(sha256Hex(slateEffectText(effect), 32), effect);
+
+    switch (verdict.outcome) {
+      case 'run': return Effect.succeed(verdict.spend);
+      case 'denied': return Effect.fail(new KinuError('denied', `The owner declined this call: ${effect.tool} on ${server}`));
+      case 'asked': return Effect.fail(new KinuError('denied', `This call waits for the owner to approve it: ${effect.tool} on ${server}`));
+    }
   }
 
   /** The label carries the UTC day, so the bound renews without a rollover job; unparented so no turn owns it. */
