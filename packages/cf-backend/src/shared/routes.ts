@@ -10,8 +10,8 @@ import {
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, type LiveShareBody,
-  type LiveShareRecord,
+  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, type LiveShareBody,
+  type LiveShareRecord, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
@@ -23,7 +23,7 @@ import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
 /** The owner's workspace, once the app host proved it is theirs. */
-type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'slateAs'>;
+type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'setLiveShareListing' | 'slateAs'>;
 
 /** Its own salt and info, so preview and blueprint tokens never verify each other. */
 const blueprintSigner = labelSigner('kinu.blueprint.salt', 'kinu.blueprint.v1');
@@ -111,7 +111,17 @@ sharedRoutes.post('/api/shared/live', async (c) => shareLive(c.req.raw, c.env, c
 
 sharedRoutes.post('/api/shared/revoke', async (c) => revoke(c.req.raw, c.env, c.get('identity')));
 
-sharedRoutes.post(LIVE_SHARE_MODE_PATH, async (c) => shareMode(c.req.raw, c.env, c.get('identity')));
+// Its mode set, or its reach approved again at the slate's revision now.
+sharedRoutes.post(LIVE_SHARE_MODE_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareModeBodySchema,
+  usage: "{ workspace, share, mode: 'own' } or { workspace, share, mode: 'owner', approved, revision }",
+}, async (owned, body) => owned.setLiveShareMode(body)));
+
+// Listed in the Gallery with its card's words, or taken off it.
+sharedRoutes.post(LIVE_SHARE_LISTING_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareListingBodySchema,
+  usage: '{ workspace, share, listed: true, line, category } or { workspace, share, listed: false }',
+}, async (owned, body) => owned.setLiveShareListing(body)));
 
 sharedRoutes.post('/api/shared/live/open', async (c) => openLive(c.req.raw, c.env, c.get('identity')));
 
@@ -305,15 +315,18 @@ async function ownerMode(owned: OwnedWorkspace, made: { workspace: string; share
   return err(ERROR_STATUS[set.reason], set.error);
 }
 
-/** Its owner sets a live share's mode, or approves its reach again at the slate's revision now. */
-async function shareMode(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
-  const body = await safeJson(request, LiveShareModeBodySchema);
+/** Its owner's word on one of their live shares, from their share sheet: answered with the share as it stands after. */
+async function shareChange<Schema extends v.GenericSchema<unknown, { readonly workspace: string }>>(
+  input: { readonly request: Request; readonly env: Env; readonly identity: AuthIdentity; readonly schema: Schema; readonly usage: string },
+  change: (owned: OwnedWorkspace, body: v.InferOutput<Schema>) => Promise<SlateAnswer<LiveShareRecord>>,
+): Promise<Response> {
+  const body = await safeJson(input.request, input.schema);
 
-  if (!body) return err(400, "Body must be { workspace, share, mode: 'own' } or { workspace, share, mode: 'owner', approved, revision }");
-  const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
+  if (!body) return err(400, `Body must be ${input.usage}`);
+  const claim = await claimOwnedWorkspace(input.env, input.identity.userId, body.workspace);
 
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
-  const set = await claim.success.setLiveShareMode(body);
+  const set = await change(claim.success, body);
 
   return set.ok ? json({ body: set.value }) : err(ERROR_STATUS[set.reason], set.error);
 }

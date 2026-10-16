@@ -37,7 +37,7 @@ import {
 import { WorkspaceSlates } from './runtime';
 import { SlateShareViewers, type OwnerEffects } from './share-viewers';
 import { slateRevision } from './share-policy';
-import type { BlueprintBundle, BlueprintFork, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SlateReach, SlateShareCard, SlateShareRecord } from './sharing';
+import type { BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SlateReach, SlateShareCard, SlateShareRecord } from './sharing';
 import { SlateShareStore, type ShareUser } from './shares';
 import { SqliteSlateStateStore } from './state';
 import { SqliteSlateStore } from './store';
@@ -102,6 +102,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   shareChanged?(slate: string): Promise<void>;
   /** Where `owner` shares' effects wait for the owner, and how a share's open ones retire with it. */
   readonly ownerEffects?: OwnerEffects & { retire(share: string): void };
+  /** The Gallery's copy of a live share's listing is behind it: the host tells the Gallery, in the background. */
+  listingChanged?(share: LiveShareRecord): void;
   previewed?(slate: string): void;
 }
 
@@ -139,7 +141,10 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     this.builds = ports.builds;
     // A root build of new code is a new revision: the owner's own edits carry their `owner` shares' approval with them.
     this.builds.whenBuilt((slate, authority, key) => {
-      if (authority === slateAuthority(ROOT_SLATE_CALLER.cred)) this.reapproveOnBuild(slate, key);
+      if (authority !== slateAuthority(ROOT_SLATE_CALLER.cred)) return;
+      this.reapproveOnBuild(slate, key);
+      // A new revision may name it anew: its listing's card is read again.
+      this.relist(slate);
     });
     this.viewers = new SlateShareViewers({
       live: this.live, shareEntry: (share) => ports.shareEntry(share),
@@ -157,6 +162,9 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       launch: (launch) => ports.launch(launch),
       ...(ports.ended !== undefined && { ended: ports.ended.bind(ports) }),
     });
+    // The Gallery's index is a copy of the listed shares, which may have lost them (a repair drops it): each start of the
+    // workspace's slates tells it again.
+    this.relist();
   }
 
   /** A slate's package.json, as `cred` reads it. */
@@ -431,10 +439,15 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   /** A blueprint's share ends; a live share is revoked and its viewers' processes stop. Invocations outlive the revoke,
    *  so an in-flight viewer call is refused as 'no longer shared'. */
   private async unshare(share: string, blueprints: WorkspaceBlueprints): Promise<JsonValue> {
-    if (this.live.get(share) === undefined) return projectJsonValue({ value: blueprints.unshare(share) });
+    const held = this.live.get(share);
+
+    if (held === undefined) return projectJsonValue({ value: blueprints.unshare(share) });
     const revoked = this.live.revoke(share);
 
     this.ports.ownerEffects?.retire(revoked.id);
+
+    // Off the Gallery with its address: a revoked share is listed nowhere.
+    if (held.gallery !== null) this.ports.listingChanged?.(revoked);
 
     await this.processes.stopWhere((running) => running.caller.share === revoked.id);
     await this.ports.shareChanged?.(revoked.slate);
@@ -458,6 +471,11 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       const held = this.live.get(input.share);
 
       if (held === undefined || held.revokedAt !== null) return yield* new KinuError('missing', 'No such share');
+
+      if (input.mode === 'owner' && held.gallery !== null) {
+        return yield* new KinuError('bad_input', 'Take it off the Gallery first: a share on your access is never listed there');
+      }
+
       const revision = slateRevision(this.builds, held.slate);
 
       if (input.mode === 'owner' && input.revision !== revision) {
@@ -475,9 +493,40 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   }
 
   /**
+   * Its owner lists a live share in the Gallery with its card's words, or takes it off, from their share sheet only. Only
+   * a share on each viewer's own access is listed (§2). The Gallery holds one listing per slate, so a share listed in
+   * another's place replaces it there.
+   */
+  setLiveShareListing(input: LiveShareListingBody): Promise<SlateAnswer<LiveShareRecord>> {
+    return settle(answer(`listing share ${input.share}`, Effect.gen({ self: this }, function* () {
+      const held = this.live.get(input.share);
+
+      if (held === undefined || held.revokedAt !== null) return yield* new KinuError('missing', 'No such share');
+
+      if (input.listed && held.mode !== 'own') {
+        return yield* new KinuError('bad_input', "A share on your access is never listed in the Gallery: turn it to each viewer's own access to list it");
+      }
+
+      this.live.setListing(held.id, input.listed ? { line: input.line, category: input.category } : null);
+      const listed = this.live.get(held.id) ?? held;
+
+      this.ports.listingChanged?.(listed);
+
+      return listed;
+    })));
+  }
+
+  /** The Gallery told again of every listed live share, or of `slate`'s alone: its index refills from these. */
+  relist(slate?: string): void {
+    for (const share of this.live.list()) {
+      if (share.gallery !== null && (slate === undefined || share.slate === slate)) this.ports.listingChanged?.(share);
+    }
+  }
+
+  /**
    * A slate built anew as the workspace root: each of its `owner` shares carries its approval to the new revision, and
-   * their effects asked under the old one retire. The one place a build moves an approval, so an edit that must not
-   * (another's) is told apart here.
+   * their effects asked under the old one retire. Only the root's build moves it: the root is the workspace's owner, and
+   * a build as anyone else (a viewer's part) is not their edit.
    */
   reapproveOnBuild(slate: string, revision: string): void {
     for (const share of this.live.list().filter((row) => row.slate === slate && row.revokedAt === null && row.mode === 'owner' && row.grantRevision !== revision)) {

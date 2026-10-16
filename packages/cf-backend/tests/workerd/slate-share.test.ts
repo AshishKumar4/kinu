@@ -162,6 +162,23 @@ it('a shared slate still serves after the object that ran it is evicted', async 
   expect(await probe().viewerFetch(created.share.handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
 });
 
+it("a listed share is told to the Gallery when listed, when its slate builds anew, and at each start of the slates", async () => {
+  const probe = () => subject('live-listed');
+  await probe().start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe().share([], 'own')).value);
+
+  expect(await probe().listShare(created.share.id)).toMatchObject({ ok: true, value: { gallery: { line: 'A board', category: 'work' } } });
+  expect(await probe().told()).toEqual([created.share.id]);
+
+  // A new revision may carry a new title for its card.
+  await probe().editBoard();
+  expect(await probe().told()).toEqual([created.share.id]);
+
+  // The Gallery's index is a copy that a repair may drop: a fresh start of the workspace's slates refills it.
+  await abortAllDurableObjects();
+  expect(await probe().told()).toEqual([created.share.id]);
+});
+
 it("shared on each viewer's own access, the slate's server uses no one's connections, and says who can change that", async () => {
   const probe = subject('own-access-share');
   await probe.start();

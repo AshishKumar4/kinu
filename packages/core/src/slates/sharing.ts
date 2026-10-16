@@ -86,6 +86,8 @@ export const LiveShareRecordSchema = v.object({
   mode: ShareModeSchema,
   /** `owner` mode: the revision whose reach the owner approved; null in `own` mode. */
   grantRevision: v.nullable(v.string()),
+  /** Its card's words while its owner lists it in the Gallery; null when not listed, and always on an `owner` share. */
+  gallery: v.nullable(v.object({ line: v.string(), category: GalleryCategorySchema })),
   /** Computed where the row is answered, never stored. */
   paused: v.optional(v.boolean()),
   /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner

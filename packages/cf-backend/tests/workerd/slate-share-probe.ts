@@ -16,7 +16,8 @@ import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
-  agentCred, approvalKindOf, bindActorHandle, DeferredApprovalQueue, DeferredApprovalStore, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
+  agentCred, approvalKindOf, bearWorkspaceIdentity, bindActorHandle, DeferredApprovalQueue, DeferredApprovalStore, initWorkspaceSchema, openWorkspaceMainActor, WORKSPACE_IDENTITY_DDL,
+  type ActorHandle, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
@@ -159,6 +160,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly sql: SqlExecutor;
   private lastCall: string | null = null;
   private readonly deferrals: DeferredApprovalQueue;
+  /** Each live share whose listing the Gallery was told, in order, since this object started. */
+  private readonly relisted: string[] = [];
   /** Each viewer's own account, as their parts reach it. */
   private readonly accounts = new FakeViewerAccounts();
   /** The run the last part call named, as its process's binding sent it. */
@@ -183,7 +186,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     });
     // The owner's one queue of parked actions, as the orchestrator's: an `owner` share's acting calls wait in it.
     this.deferrals = new DeferredApprovalQueue({
-      store: new DeferredApprovalStore(sql, this.mainActor()), writes: null, remember: () => undefined, wake: () => Effect.void,
+      store: new DeferredApprovalStore(sql, this.mainAgent()), writes: null, remember: () => undefined, wake: () => Effect.void,
     });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
     initSlateBuildTable((ddl: string) => ctx.storage.sql.exec(ddl));
@@ -257,19 +260,26 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
         retire: (share) => { this.deferrals.retireSlateEffects(share); },
       },
+      listingChanged: (share) => { this.relisted.push(share.id); },
     });
   }
 
-  private mainActor() {
-    return bindActorHandle(this.sql, {
-      actorId: 'main', workspaceId: this.ctx.id.name ?? this.ctx.id.toString(), parentActorId: null, name: 'main', storageKey: 'main',
-    }, () => Effect.void);
+  /** The workspace's main agent as its directory holds it, born with the probe's identity: whose rows the owner's
+   *  queue lists. */
+  private mainAgent(): ActorHandle {
+    this.ctx.storage.sql.exec(WORKSPACE_IDENTITY_DDL);
+    const born = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`.length > 0;
+
+    return born ? openWorkspaceMainActor(this.sql) : bearWorkspaceIdentity(this.sql, { name: this.ctx.id.name ?? 'probe', createdAt: Date.now() });
   }
 
   private governor(): MissionGovernor {
     this._budget ??= new MissionGovernor({
       storage: { sql: this.sql, execRaw: (ddl: string) => this.ctx.storage.sql.exec(ddl) },
-      actor: this.mainActor(),
+      actor: bindActorHandle(this.sql, {
+        actorId: 'main', workspaceId: this.ctx.id.name ?? this.ctx.id.toString(),
+        parentActorId: null, name: 'main', storageKey: 'main',
+      }, () => Effect.void),
     });
 
     return this._budget;
@@ -482,6 +492,16 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const asked = this.deferrals.list().filter((action) => approvalKindOf(action).kind === 'slate-effect').map((action) => action.id);
 
     return asked.length === 0 ? 0 : (await this.deferrals.decide(asked, approve ? 'approved' : 'denied')).length;
+  }
+
+  /** Its owner lists `share` in the Gallery, as their share sheet does. */
+  listShare(share: string) {
+    return this.host.controller.setLiveShareListing({ workspace: this.ctx.id.name ?? this.ctx.id.toString(), share, listed: true, line: 'A board', category: 'work' });
+  }
+
+  /** The shares the Gallery was told of since the last ask, or since this object started. */
+  told(): string[] {
+    return this.relisted.splice(0);
   }
 
   /** The owner edits the board and it builds anew; its revision now. */

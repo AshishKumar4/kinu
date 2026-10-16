@@ -37,6 +37,7 @@ test('a workspace\'s live shares made before share modes repair to their viewers
   unstartedOrchestratorHarness(undefined, 'shared', db);
 
   expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.workspace);
-  expect(db.query('SELECT id, handle, mode, grant_revision FROM slate_live_shares').all())
-    .toEqual([{ id: 's-1', handle: '0123456789', mode: 'own', grant_revision: null }]);
+  // Nor listed in the Gallery: no share was before the listing columns.
+  expect(db.query('SELECT id, handle, mode, grant_revision, listing_line, listing_category FROM slate_live_shares').all())
+    .toEqual([{ id: 's-1', handle: '0123456789', mode: 'own', grant_revision: null, listing_line: null, listing_category: null }]);
 });

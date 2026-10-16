@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
 import { setShareMode, shareLiveSlate } from '../src/slates/live-sharing';
 import { initSlateBuildTable, SlateBuilds } from '../src/slates/builds';
+import { GALLERY_CATEGORIES, type GalleryCategory } from '../src/slates/gallery-api';
 import { grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
 import { makeExecRaw, makeSqlExec } from './helpers';
 import type { ShareGrant } from '../src/slates/sharing';
@@ -34,7 +35,7 @@ test('a live share round-trips its grant and refuses viewers once revoked', () =
     const added = shares.add(liveShare());
     expect(added).toEqual({
       id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789',
-      grant, createdAt: 1_000, revokedAt: null, users: [], mode: 'own', grantRevision: null,
+      grant, createdAt: 1_000, revokedAt: null, users: [], mode: 'own', grantRevision: null, gallery: null,
     });
 
     expect(shares.get('s1')).toMatchObject({ id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789', grant });
@@ -239,4 +240,38 @@ test('a slate\'s build record tells its listener only when the code it serves mo
   builds.built('issues', 'root', 'k2', { modules: {} });
 
   expect(moved).toEqual(['issues:root:k1', 'issues:root:k2']);
+});
+
+test('a live share is listed with its card\'s words while on its viewers\' own access, once per slate, and nowhere once revoked', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    const card = { line: 'Triage the open issues', category: 'work' } satisfies { line: string; category: GalleryCategory };
+
+    shares.add(liveShare());
+    shares.add({ ...liveShare(), id: 's2', handle: '9876543210' });
+
+    expect(shares.setListing('s1', card)).toBe(true);
+    expect(shares.get('s1')?.gallery).toEqual(card);
+
+    // One listing per slate: listing another share of it takes the first off.
+    expect(shares.setListing('s2', { ...card, category: 'fun' })).toBe(true);
+    expect([shares.get('s1')?.gallery, shares.get('s2')?.gallery]).toEqual([null, { ...card, category: 'fun' }]);
+
+    // Never on the owner's access: the store refuses, and the table refuses a row that would say so.
+    shares.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, grant);
+    expect(shares.setListing('s1', card)).toBe(false);
+    expect(() => db.exec(`UPDATE slate_live_shares SET listing_line = 'x', listing_category = 'work' WHERE id = 's1'`)).toThrow('CHECK constraint failed');
+    expect(() => db.exec(`UPDATE slate_live_shares SET listing_line = 'x', listing_category = 'games' WHERE id = 's2'`)).toThrow('CHECK constraint failed');
+    expect(() => db.exec(`UPDATE slate_live_shares SET listing_line = 'x', listing_category = NULL WHERE id = 's2'`)).toThrow('CHECK constraint failed');
+
+    // Every category the Gallery offers is one the table keeps.
+    for (const category of GALLERY_CATEGORIES) expect(shares.setListing('s2', { ...card, category })).toBe(true);
+
+    shares.revoke('s2');
+    expect(shares.get('s2')?.gallery).toBeNull();
+    expect(shares.setListing('s2', card)).toBe(false);
+  } finally {
+    db.close();
+  }
 });

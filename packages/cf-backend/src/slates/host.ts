@@ -63,6 +63,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   ownerUserId?(): string | null;
   /** The workspace's one queue of actions parked on its owner, where `owner` shares' effects wait (deferred-approval.ts). */
   readonly ownerEffects?: NonNullable<SlateControllerPorts<SlateSource, ResidentSlateProcess>['ownerEffects']>;
+  /** A live share's Gallery listing changed, or the Gallery must be told it again: sent in the background. */
+  listingChanged?(share: LiveShareRecord): void;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
   previewed?(slate: string): void;
@@ -143,6 +145,7 @@ export class SlateHost {
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.sharesChanged !== undefined && { sharesChanged: deps.sharesChanged.bind(deps) }),
       ...(deps.ownerEffects !== undefined && { ownerEffects: deps.ownerEffects }),
+      ...(deps.listingChanged !== undefined && { listingChanged: deps.listingChanged.bind(deps) }),
       shareChanged: async (slate) => { await this.shareChanged(slate); },
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
     });
