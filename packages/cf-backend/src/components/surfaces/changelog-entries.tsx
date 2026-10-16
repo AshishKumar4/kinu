@@ -33,8 +33,8 @@ const KIND_ICON = {
   refinement: ArrowsClockwiseIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
-/** Showing the digest marks it seen; `onSeen` zeroes the tab badge upstream. */
-export function useChangelog(rpc: WorkspaceRpc, onSeen?: () => void, moved = 0) {
+/** Showing the digest marks it seen, so what is new to the owner is lit once. */
+export function useChangelog(rpc: WorkspaceRpc, moved = 0) {
   const load = useCallback((): Promise<ChangelogView> => settle(Effect.gen(function* () {
     const view = yield* Effect.promise(async () => rpc("getEvolutionChangelog", [{ limit: 30 }]));
     // Enrichment only: a failed tool list leaves the entries as their rows hold them.
@@ -72,8 +72,7 @@ export function useChangelog(rpc: WorkspaceRpc, onSeen?: () => void, moved = 0) 
     if (!view || view.unseenCount === 0) return;
     await rpc("markChangelogSeen", []);
     setSeenError(null);
-    onSeen?.();
-  }, [view, rpc, onSeen]);
+  }, [view, rpc]);
 
   const { resource: seenMark } = useAsyncResource(markSeen);
 

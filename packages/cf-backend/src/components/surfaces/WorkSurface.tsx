@@ -114,7 +114,6 @@ interface WorkSurfaceProps {
   pendingActions: PendingAction[];
   /** Opens an ask's card in the chat's attention stack, where Work's parked commands and proposals are decided. */
   onOpenAsk?: (key: string) => void | Promise<void>;
-  onChangelogSeen?: () => void;
   slates?: readonly SlateSummary[];
   slateReloads?: ReadonlyMap<string, number>;
   changesMoved?: number;
@@ -325,7 +324,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 snapshot={props.snapshot}
                 memory={props.memory} memoryContent={props.memoryContent}
                 onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
-                onChangelogSeen={props.onChangelogSeen} rpc={props.rpc} readMoves={props.readMoves} workspace={props.workspace}
+                rpc={props.rpc} readMoves={props.readMoves} workspace={props.workspace}
               />
             )}
             {surface === "Environment" && (

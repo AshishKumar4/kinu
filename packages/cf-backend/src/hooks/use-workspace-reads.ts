@@ -291,11 +291,6 @@ export function useWorkspaceReads(link: ChatLink) {
 
   const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", () => rpc("listSubordinates", []), setSubordinates), [refreshCurrentLiveResource, rpc]);
 
-  // Stable, or the changelog hook's effect fires markChangelogSeen every render.
-  const clearChangelogUnseen = useCallback(() => {
-    setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
-  }, []);
-
   // The server pushes the fact, not the rows; one re-read updates every open tab.
   const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
     try {
@@ -710,8 +705,6 @@ export function useWorkspaceReads(link: ChatLink) {
       owedIntents,
       resolveConsent,
       unavailableDevices,
-      /** Work marks self-changes seen server-side, then calls the clear. */
-      clearChangelogUnseen,
       branchRuns,
       dismissBranchRun: (branchId: string) =>
         setBranchRuns((prev) => prev.filter((b) => b.branchId !== branchId)),

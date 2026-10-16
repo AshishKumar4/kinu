@@ -14,7 +14,7 @@ import type { DeferredApproval } from '../src/safety/deferred-approval';
 
 const EMPTY: PendingActionInputs = {
   scaffoldVersions: [], deferredActions: [], workspaceProposals: [],
-  unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, curriculum: [], pendingPlans: [],
+  changeApprovals: { count: 0, latestAt: 0 }, pendingPlans: [],
 };
 
 function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
@@ -45,42 +45,18 @@ describe('buildPendingActions', () => {
     expect(action.title).toContain('v8');
   });
 
-  test('unseen self-changes are ONE row that points at the digest, not N rows', () => {
-    const actions = buildPendingActions({
-      ...EMPTY, unseenChanges: { count: 3, revertable: 3, latestAt: 6000 },
-    });
+  test('skills waiting on the owner are ONE row that points at the journal, not N rows', () => {
+    const actions = buildPendingActions({ ...EMPTY, changeApprovals: { count: 3, latestAt: 6000 } });
 
     expect(actions).toHaveLength(1);
-    expect(actions[0].kind).toBe('unseen_changes');
+    expect(actions[0]).toMatchObject({ kind: 'change_approval', at: 6000 });
     expect(actions[0].title).toContain('3');
   });
 
-  test('one unseen change is singular', () => {
-    const [action] = buildPendingActions({
-      ...EMPTY, unseenChanges: { count: 1, revertable: 1, latestAt: 1 },
-    });
+  test('one waiting skill is singular', () => {
+    const [action] = buildPendingActions({ ...EMPTY, changeApprovals: { count: 1, latestAt: 1 } });
 
-    expect(action.title).toContain('1');
-  });
-
-  test('a mixed window says how many of them can actually be decided', () => {
-    const [action] = buildPendingActions({
-      ...EMPTY, unseenChanges: { count: 4, revertable: 1, latestAt: 1 },
-    });
-
-    expect(action.detail).toContain('1');
-  });
-
-  test('only pending curriculum proposals are the owner\'s call', () => {
-    const actions = buildPendingActions({
-      ...EMPTY,
-      curriculum: [
-        { id: 'cur_1', task: 'Learn the coupon schema', status: 'pending', proposedAt: 4000 },
-        { id: 'cur_2', task: 'Already accepted', status: 'accepted', proposedAt: 4500 },
-      ],
-    });
-
-    expect(actions.map((a) => a.id)).toEqual(['cur_1']);
+    expect(action.title).toBe('A skill the agent wrote waits for your approval');
   });
 
   test('a command an agent parked on the owner is a needs-you row, raised by that agent', () => {
@@ -109,14 +85,13 @@ describe('buildPendingActions', () => {
     const actions = buildPendingActions({
       scaffoldVersions: [{ version: 8, status: 'pending', rationale: 'r', written_at: 5000 }],
       deferredActions: [parked({ requestedAt: 6000 })],
-      unseenChanges: { count: 2, revertable: 2, latestAt: 4000 },
-      curriculum: [{ id: 'cur', task: 't', status: 'pending', proposedAt: 2000 }],
+      changeApprovals: { count: 2, latestAt: 4000 },
       pendingPlans: [],
       workspaceProposals: [],
     });
 
     expect(actions.map((a) => a.kind)).toEqual([
-      'deferred_action', 'scaffold_version', 'unseen_changes', 'curriculum_task',
+      'deferred_action', 'scaffold_version', 'change_approval',
     ]);
   });
 });
@@ -203,13 +178,12 @@ describe('what the inspector opens for on its own', () => {
 
     expect(needsTheUser(made)).toBe(false);
 
-    // Recorded after a "hello" turn on the dev server, 2026-09-23.
     const note: PendingAction = {
-      id: 'unseen-changes', kind: 'unseen_changes', title: '1 self-change you have not seen',
-      detail: 'Read them in the journal below.', at: 1790199280964,
+      id: 'change-approvals', kind: 'change_approval', title: 'A skill the agent wrote waits for your approval',
+      detail: 'Approve or decline in the Agent tab.', at: 1790199280964,
     };
 
-    for (const kind of ['unseen_changes', 'scaffold_version', 'curriculum_task'] as const) {
+    for (const kind of ['change_approval', 'scaffold_version'] as const) {
       expect(needsTheUser({ ...nothing, pendingActions: [{ ...note, kind }] })).toBe(false);
     }
 
@@ -226,7 +200,7 @@ describe('the attention stack the chat shows', () => {
   test('is what holds the person and every consent, newest first, from the reads Work shows', () => {
     const asks = ownerAsks({
       pendingActions: [row('push', 'deferred_action', 30), row('v8', 'scaffold_version', 90), row('plan', 'plan_review', 10),
-        row('notes', 'unseen_changes', 80), row('pricing', 'workspace_proposal', 50), row('task', 'curriculum_task', 70)],
+        row('skill', 'change_approval', 80), row('pricing', 'workspace_proposal', 50)],
       pendingConsents: [consent('c-1', 40)],
     });
 

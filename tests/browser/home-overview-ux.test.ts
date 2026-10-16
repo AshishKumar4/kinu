@@ -114,10 +114,10 @@ describe('the home workspace cards', () => {
 
         expect(cardNamed(list, 'Dew').chip).toBe('Working');
 
-        // A sealed run with unread updates: the chip says so, and no run word
-        // decorates the line.
+        // A sealed run is idle: what the agent learned by itself is no
+        // update to look at, and no run word decorates the line.
         const triage = cardNamed(list, 'Support inbox');
-        expect(triage.chip).toBe('Updated');
+        expect(triage.chip).toBe('Idle');
         expect(triage.task).toBe("Answer this week's refund requests");
 
         // A sealed error outranks the durable leftovers beside it; and the
@@ -219,7 +219,7 @@ describe('the home workspace cards', () => {
       try {
         const card = cardNamed(await cards(page), 'Support inbox');
 
-        expect(card.chip).toBe('Updated');
+        expect(card.chip).toBe('Idle');
         expect(card.task).toBe("Answer this week's refund requests");
 
         // The line's rule at 390px: the title and task keep to one line
