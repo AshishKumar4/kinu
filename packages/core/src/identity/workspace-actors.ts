@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { KinuError } from '../obs/error';
+import { KinuError, renderThrownChain } from '../obs/error';
 import { settle } from '../obs/effect';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { ActorReferenceSchema, bindActorHandle, type ActorHandle, type ActorReference } from './actor-handle';
@@ -72,6 +72,25 @@ export interface WorkspaceActor extends ActorProfile {
 
 /** Live until its retirement starts, retiring while its work winds down, retired once its record is deleted. */
 export type ActorStanding = 'live' | 'retiring' | 'retired';
+
+/** Marks a refusal answered because its actor no longer acts, with the standing it has: read wherever it lands, a crossing
+ *  included, with no call to ask (`endedStandingOf`). */
+const ACTOR_ENDED = /actor_ended\((retiring|retired)\)/u;
+
+const EndedStandingSchema = v.picklist(['retiring', 'retired']);
+
+/** A refusal for an actor that no longer acts, saying so and in what standing. */
+export function actorEnded(code: 'denied' | 'missing', standing: Exclude<ActorStanding, 'live'>, refusal: string): KinuError {
+  return new KinuError(code, `actor_ended(${standing}): ${refusal}`);
+}
+
+/** The standing a failure says its actor has ended in (`actorEnded`), however it was wrapped or crossed; null for one
+ *  that says nothing of it. */
+export function endedStandingOf(failure: { readonly cause: unknown }): Exclude<ActorStanding, 'live'> | null {
+  const said = ACTOR_ENDED.exec(renderThrownChain(failure))?.[1];
+
+  return said === undefined ? null : v.parse(EndedStandingSchema, said);
+}
 
 export function actorStanding(actor: Pick<WorkspaceActor, 'retiringAt' | 'deletedAt'>): ActorStanding {
   if (actor.deletedAt !== null) return 'retired';
@@ -237,7 +256,7 @@ export class WorkspaceActorDirectory {
   /** `also` runs after the directory's own checks and can only refuse further, never authorise. */
   private issue(row: WorkspaceActor, also?: () => Effect.Effect<void, KinuError>): ActorHandle {
     const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => (this.retired(row.actorId)
-      ? Effect.fail(new KinuError('missing', 'The actor identity is no longer present.'))
+      ? Effect.fail(actorEnded('missing', this.standing(row.actorId) === 'retiring' ? 'retiring' : 'retired', 'The actor identity is no longer present.'))
       : also?.() ?? Effect.void));
 
     this.handles.add(handle);

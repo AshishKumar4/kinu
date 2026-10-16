@@ -50,6 +50,11 @@ export interface BackgroundResumeRequest {
   readonly signal: AbortSignal;
 }
 
+/** Whether {@link resumeBackgroundJob} re-drives a job: only a search does, by its durable rows. */
+export function resumableBackgroundJob(kind: string, input: JsonValue): boolean {
+  return resumableAgentsInput(kind, input) !== null;
+}
+
 /**
  * Re-drive an evicted/exited background job (B6). Only a search resumes; the raw agents tool re-enters its
  * durable rows. Only this path sets {@link RESUME_REDRIVE_OPTION}: a fresh call must get its own tree.

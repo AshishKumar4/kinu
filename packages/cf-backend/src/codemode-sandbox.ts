@@ -73,17 +73,19 @@ type ProgramResult = Awaited<ReturnType<DynamicWorkerExecutor['execute']>>;
  * never resolved; its namespace serves its own properties first, so each such name is set there as the sanitized
  * member. `workspace.createTool` takes the function itself, sent as its source: source written as text in the program
  * had its escapes read once by the program and again by the tool's parser.
+ *
+ * Every namespace has its own `then`, undefined, so it is never a thenable: the vendor's proxy answers any other name
+ * as a member, and `await agents` called `agents.then` as one, which rejected unheard while the await waited on its
+ * callbacks forever (production crafted-harbor-37f29697, 2026-10-16: a program held its job running for 12.5 h).
  */
 function reachableAsWritten(provider: ResolvedProvider): ResolvedProvider {
   const ns = provider.name;
 
-  const lines = Object.keys(provider.fns)
+  const lines = [`    ${ns}.then = undefined;`, ...Object.keys(provider.fns)
     .filter((name) => sanitizeToolName(name) !== name)
-    .map((name) => `    ${ns}[${JSON.stringify(name)}] = ${ns}[${JSON.stringify(sanitizeToolName(name))}];`);
+    .map((name) => `    ${ns}[${JSON.stringify(name)}] = ${ns}[${JSON.stringify(sanitizeToolName(name))}];`)];
 
   if (ns === 'workspace' && Object.hasOwn(provider.fns, 'createTool')) lines.push(`    ${SANDBOX_CREATE_TOOL_PRELUDE}`);
-
-  if (lines.length === 0) return provider;
 
   // Before its own prelude, which defines what it serves itself (a crafted tool's body) under the written name.
   return { ...provider, prelude: [...lines, ...(provider.prelude === undefined ? [] : [provider.prelude])].join('\n') };

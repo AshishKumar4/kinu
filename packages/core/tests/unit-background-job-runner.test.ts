@@ -67,9 +67,12 @@ function fakeHost() {
   };
 }
 
+/** A resumer's re-drive, as the cases write it; the resumer re-drives every job unless `resumes` says otherwise. */
+type Redrive = JobResumer['redrive'];
+
 /** `db` lets a second process (a restart) open the same durable rows. */
 function setup(opts: {
-  resume?: JobResumer; policy?: BackgroundPolicy; db?: Database; harvest?: JobHarvester;
+  resume?: Redrive; resumes?: JobResumer['resumes']; policy?: BackgroundPolicy; db?: Database; harvest?: JobHarvester;
   onDetached?: ((jobId: string, requestIds: readonly string[]) => Promise<void> | void) | null;
   onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   scheduleResume?: (atMs: number) => Promise<void> | void;
@@ -109,7 +112,7 @@ function setup(opts: {
     onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),
     onDetached: opts.onDetached,
     onCancelled: opts.onCancelled,
-    resume: opts.resume,
+    resume: opts.resume === undefined ? undefined : { resumes: opts.resumes ?? (() => true), redrive: opts.resume },
     policy: policy === undefined ? undefined : () => policy,
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
@@ -286,7 +289,7 @@ describe('BackgroundJobRunner — a detached job whose work stops answering', ()
     expect({ status: store.get(jobId)?.status, error: store.get(jobId)?.error }).toEqual({
       status: 'failed',
       error: 'interrupted before completion: nothing came back from its work for 10m, so it was given up as lost: '
-        + 'its executor was lost and this kind cannot be re-driven, and it had produced no partial result to hand back',
+        + 'this kind of work cannot pick up where it left off, and it had produced nothing to keep',
     });
     expect(enqueued.map((turn) => turn.metadata?.status)).toEqual(['failed']);
   });
@@ -342,6 +345,22 @@ describe('BackgroundJobRunner — a detached job whose work stops answering', ()
   });
 });
 
+describe('BackgroundJobRunner.cancel — work that never answers', () => {
+  // Production crafted-harbor-37f29697, 2026-10-16: a program awaiting what never settles held its job's fiber, which
+  // keeps the object awake, for 12.5 h; the owner's cancel must end that hold whether or not the work ever answers.
+  test("the owner's cancel ends the job's hold on its work, which never answers", async () => {
+    const { runner, store, settled, enqueued } = setup();
+    const id = runner.create('eval', { code: '// wait on nothing\nawait new Promise(() => {});' }, 'build', new AbortController());
+
+    runner.detach(id, 'eval', new Promise<never>(() => {}));
+    expect(await runner.cancel(id)).toBe(true);
+    await settled();
+
+    expect(store.get(id)?.status).toBe('cancelled');
+    expect(enqueued.map((turn) => turn.metadata?.status)).toEqual(['cancelled']);
+  });
+});
+
 describe('BackgroundJobRunner.create — descriptive labels', () => {
   test('a backgrounded search labels the task it is running', () => {
     const { runner, store } = setup();
@@ -355,10 +374,13 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
     expect(store.get(id)?.label).toBe('Computer: npm test');
   });
 
-  test('an eval call labels the code snippet', () => {
+  // Production crafted-harbor-37f29697, 2026-10-16: a card titled `return await agents ? undefined : undefined;`.
+  test('an eval call is labelled by the intent its first line declares, else as a tool program, never by its code', () => {
     const { runner, store } = setup();
-    const id = runner.create('eval', { code: '  const x = await workspace.readFile("/a");\n  return x;' }, 'build', new AbortController());
-    expect(store.get(id)?.label).toBe('const x = await workspace.readFile("/a");\n  return x;');
+    const declared = runner.create('eval', { code: '\n  // read the notes\n  return await workspace.readFile("/a");' }, 'build', new AbortController());
+    const undeclared = runner.create('eval', { code: 'return await agents ? undefined : undefined;' }, 'build', new AbortController());
+
+    expect([store.get(declared)?.label, store.get(undeclared)?.label]).toEqual(['read the notes', 'A tool program']);
   });
 
   test('an unrecognized shape gets no label rather than a guess', () => {
@@ -600,7 +622,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
     await runner.recover({ jobId: id, phase: 'running' });
 
     expect(store.get(id)?.status).toBe('failed');
-    expect(store.get(id)?.error).toContain('eviction');
+    expect(store.get(id)?.error).toContain('the workspace restarted before it finished');
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].metadata?.status).toBe('failed');
   });
@@ -644,7 +666,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     let seenInput: unknown = undefined;
     let seenMode: 'plan' | 'build' | undefined;
 
-    const resume: JobResumer = async (_kind, input, mode) => {
+    const resume: Redrive = async (_kind, input, mode) => {
       seenInput = input;
       seenMode = mode;
 
@@ -671,8 +693,29 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     expect(logs.find((l) => l.e === 'bg_job_resume')).toBeTruthy();
   });
 
-  test('a kind the resumer cannot re-drive falls back to the eviction failure', async () => {
-    const resume: JobResumer = async (kind) => { throw new JobNotResumable(kind); };
+  // Production crafted-harbor-37f29697, 2026-10-16: an `eval` job found running at a restart was reclaimed first, so
+  // its card said "re-driven once, the work was not lost" beside the error that it could not be re-driven.
+  test('a job the resumer cannot re-drive ends at once, never claimed or counted as re-driven', async () => {
+    const redriven: string[] = [];
+    const resume: Redrive = async (kind) => { redriven.push(kind); throw new JobNotResumable(kind); };
+
+    const { runner, store, enqueued, settled, logs } = setup({ resume, resumes: (kind) => kind === 'agents' });
+    store.create({ id: 'jn', kind: 'eval', workMode: 'build', input: '{"code":"return 1"}', now: Date.now() });
+
+    await runner.recover({ jobId: 'jn', phase: 'running' });
+    await settled();
+
+    expect(redriven).toEqual([]);
+    expect(store.get('jn')).toMatchObject({
+      status: 'failed', epoch: 0,
+      error: 'the workspace restarted before it finished: this kind of work cannot pick up where it left off, and it had produced nothing to keep',
+    });
+    expect(logs.map((line) => line.e)).not.toContain('bg_job_resume');
+    expect(enqueued[0].metadata?.status).toBe('failed');
+  });
+
+  test('a re-drive that finds it cannot run after all ends the job as one that cannot be re-driven', async () => {
+    const resume: Redrive = async (kind) => { throw new JobNotResumable(kind); };
 
     const { runner, store, enqueued, settled } = setup({ resume });
     store.create({ id: 'jn', kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
@@ -681,12 +724,12 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     await settled();
 
     expect(store.get('jn')?.status).toBe('failed');
-    expect(store.get('jn')?.error).toContain('eviction');
+    expect(store.get('jn')?.error).toContain('cannot pick up where it left off');
     expect(enqueued[0].metadata?.status).toBe('failed');
   });
 
   test('twelve interrupted activations leave the job running — an eviction is not a failure', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const first = setup({ resume });
     first.store.create({ id: 'jc', kind: 'think', workMode: 'build', input: '{}', now: Date.now() });
 
@@ -709,7 +752,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   });
 
   test('the wait between attempts is capped, durable, and respected by a runner that never wrote it', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const first = setup({ resume });
     first.store.create({ id: 'jp', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
@@ -738,7 +781,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   });
 
   test('a deferred attempt arms the durable wake, and the runner without one is not broken by it', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const first = setup({ resume });
     first.store.create({ id: 'jw', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     await setup({ resume, db: first.db }).runner.recover({ jobId: 'jw', phase: 'running' });
@@ -758,7 +801,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
   test('a re-driven job is in flight for its whole drive, though its row already reads deferred', async () => {
     // The row names the next attempt's wait before this one starts, so only the runner can say it drives it.
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
     store.create({ id: 'jr2', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
@@ -772,7 +815,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
   test('a job this runner is already driving is never re-driven out from under itself', async () => {
     // A resume leaves its own fiber row, so recover() can see the same job twice.
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
     store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
@@ -806,13 +849,13 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     await next.runner.recoverOrphans();
 
     expect(next.store.get(id)?.status).toBe('failed');
-    expect(next.store.get(id)?.error).toContain('eviction');
+    expect(next.store.get(id)?.error).toContain('the workspace restarted before it finished');
     expect(next.enqueued.at(-1)?.metadata?.status).toBe('failed');
     expect(enqueued).toHaveLength(0);
   });
 
   test('repeated restarts keep the job alive, and the sweep keeps naming it in flight', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const first = setup({ resume });
     first.store.create({ id: 'jz', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
@@ -834,7 +877,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
   });
 
   test('a job another live process runs is left to it and named in flight; one it no longer runs is re-driven and held here', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const held = new Map<string, string>([['jl', 'daemon'], ['jg', 'gone']]);
 
     const holder: JobHolder = {
@@ -923,13 +966,13 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
       const { fiber, settled } = fakeFiber();
 
-      const resume: JobResumer = async () => {
+      const resume: Redrive = async () => {
         resumed.push(name);
 
         return 'done';
       };
 
-      return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: hostDeliveries(fakeHost().host).signals, resume, holder }) };
+      return { store, settled, holder, runner: new BackgroundJobRunner({ store, fiber, inbox: hostDeliveries(fakeHost().host).signals, resume: { resumes: () => true, redrive: resume }, holder }) };
     };
 
     initBackgroundJobsTable(makeExecRaw(first));
@@ -1002,7 +1045,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
   });
 
   test('a job whose executor is alive in THIS process is not reclaimed as an orphan', async () => {
-    const resume: JobResumer = async () => 'should not run';
+    const resume: Redrive = async () => 'should not run';
     const { runner, store, settled } = setup({ resume });
     let finish: () => void = () => {};
 
@@ -1019,7 +1062,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 
   // `jobRedriveResumeGate` retires the fork run of every job absent from the sweep result.
   test('a job waiting for its next attempt keeps its fork run — and an absent one loses it', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const task = 'measure the three candidates';
     const first = setup({ resume });
     first.store.create({
@@ -1048,7 +1091,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
   });
 
   test('the wake re-drives only when an attempt has come due, and is a no-op otherwise', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const first = setup({ resume });
     first.store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
@@ -1071,7 +1114,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 
     const held = new Promise<string>((resolve) => { release = () => resolve('resumed'); });
 
-    const resume: JobResumer = (_kind, input) => {
+    const resume: Redrive = (_kind, input) => {
       resumed.push(input);
 
       return held;
@@ -1231,7 +1274,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
   test('eight jobs merely WAITING for their next attempt do not refuse a new detach', async () => {
     // A job waiting for its next attempt has no live process tree, so it does not count.
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
@@ -1250,7 +1293,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
   test('eight jobs actually DRIVING still refuse it — the ceiling did not move', async () => {
     // A job being re-driven also has a future `resume_after` (written at claim), yet is live.
-    const resume: JobResumer = () => new Promise<never>(() => {});
+    const resume: Redrive = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
@@ -1360,6 +1403,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   test('a kind that cannot be re-driven settles with the partial, instead of an eviction string', async () => {
     const { runner, store, settled } = setup({
       resume: async (kind) => { throw new JobNotResumable(kind); },
+      resumes: () => false,
       harvest: async () => ({ rootId: 'root-2', candidates: [{ nodeId: 'n1', score: 0.4 }] }),
     });
 
@@ -1381,6 +1425,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   test('a kind that cannot be re-driven with NOTHING to hand back fails, naming that', async () => {
     const { runner, store, settled } = setup({
       resume: async (kind) => { throw new JobNotResumable(kind); },
+      resumes: () => false,
       harvest: async () => null,
     });
 
@@ -1391,8 +1436,8 @@ describe('a background job gives up its turn, and hands over what it has', () =>
 
     const job = store.get('bgjob-unresumable-empty');
     expect(job?.status).toBe('failed');
-    expect(job?.error ?? '').toContain('no partial result');
-    expect(job?.error ?? '').toContain('cannot be re-driven');
+    expect(job?.error ?? '').toContain('produced nothing to keep');
+    expect(job?.error ?? '').toContain('cannot pick up where it left off');
   });
 
   test('a resumer that THROWS fails the job with its own error — a real failure is terminal', async () => {
@@ -1421,7 +1466,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
 
     const job = store.get('bgjob-empty');
     expect(job?.status).toBe('failed');
-    expect(job?.error ?? '').toContain('no partial result');
+    expect(job?.error ?? '').toContain('produced nothing to keep');
     expect(job?.result).toBeNull();
   });
 
