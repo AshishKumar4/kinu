@@ -6,6 +6,7 @@
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { CodecSchema } from './codec';
+import { SlateConsentSchema } from './share-modes';
 
 const Name = v.pipe(v.string(), v.minLength(1));
 
@@ -56,34 +57,40 @@ export const PartRunRequestSchema = v.object({
 
 export type PartRunRequest = v.InferOutput<typeof PartRunRequestSchema>;
 
+const RootSchema = v.record(v.string(), v.string());
+
 /** What the viewer is asked to let this slate use of theirs, for this revision. */
-export interface ConsentAsk {
-  readonly server: string;
-  readonly root: Readonly<Record<string, string>>;
-  readonly tools: readonly string[];
-  readonly effects: boolean;
-  readonly revision: string;
-}
+export const ConsentAskSchema = v.object({ server: Name, root: RootSchema, tools: v.array(Name), effects: v.boolean(), revision: Name });
+
+export type ConsentAsk = v.InferOutput<typeof ConsentAskSchema>;
 
 /** An effect the part's run reached with the viewer's grant, waiting for them: the tool and the exact payload. */
-export interface EffectAsk {
-  readonly id: string;
-  readonly server: string;
-  readonly tool: string;
-  readonly root: Readonly<Record<string, string>>;
-  readonly payload: JsonValue;
-}
+export const EffectAskSchema = v.object({ id: Name, server: Name, tool: Name, root: RootSchema, payload: JsonValueSchema });
+
+export type EffectAsk = v.InferOutput<typeof EffectAskSchema>;
 
 /**
  * The run's answer, to the viewer alone. `html` is already cut; `stub` is what someone without a session, or of a
- * share whose slate declares no such part, sees; `failed` is the run's own failure, shown only to its viewer.
+ * share whose slate declares no such part, sees, with what they can do about it; `failed` is the run's own failure,
+ * shown only to its viewer.
  */
-export type PartRunAnswer =
-  | { readonly kind: 'shown'; readonly revision: string; readonly html: string; readonly actions: readonly PartAction[]; readonly show: PartOutput['show'] }
-  | { readonly kind: 'needs-consent'; readonly ask: ConsentAsk }
-  | { readonly kind: 'needs-approval'; readonly ask: EffectAsk }
-  | { readonly kind: 'stub'; readonly reason: 'signed-out' | 'no-part' }
-  | { readonly kind: 'failed'; readonly message: string };
+export const PartRunAnswerSchema = v.variant('kind', [
+  v.object({
+    kind: v.literal('shown'), revision: Name, html: v.string(), actions: v.array(PartActionSchema),
+    show: v.nullable(v.object({ label: v.string(), value: JsonValueSchema })),
+  }),
+  v.object({ kind: v.literal('needs-consent'), ask: ConsentAskSchema }),
+  v.object({ kind: v.literal('needs-approval'), ask: EffectAskSchema }),
+  v.object({ kind: v.literal('stub'), reason: v.picklist(['signed-out', 'no-part']), message: v.string() }),
+  v.object({ kind: v.literal('failed'), message: v.string() }),
+]);
+
+export type PartRunAnswer = v.InferOutput<typeof PartRunAnswerSchema>;
+
+/** `GET slateConsentsPath`: this viewer's consents for the slate, at whatever revision each was given. */
+export const SlateConsentsAnswerSchema = v.object({ consents: v.array(SlateConsentSchema) });
+
+export type SlateConsentsAnswer = v.InferOutput<typeof SlateConsentsAnswerSchema>;
 
 /** `POST slatePartShowPath`: what the viewer confirmed in Kinu's prompt, to the slate's declared `show` method. */
 export const PartShowRequestSchema = v.object({
