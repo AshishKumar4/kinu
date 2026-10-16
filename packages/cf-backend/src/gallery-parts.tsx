@@ -40,11 +40,11 @@ const STANDUP = {
   show: { label: "Your open pull requests, as the team sees them", value: { author: "you", open: [412, 409] } },
 };
 
-/** The slate's own page, as its author drew it: three part frames in its layout. */
-function slatePage(origin: string): string {
+/** The slate's own page, as its author drew it: three part frames in its layout. `gallery` is this gallery's own address. */
+function slatePage(gallery: string): string {
   const frame = (part: string, height: number) => `<section style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">
     <h2 style="margin:0;padding:8px 12px;font:600 12px system-ui;color:#4a5568;border-bottom:1px solid #eef1f5">${part}</h2>
-    <iframe data-slate-part="${part}" src="${origin}/gallery.html?frame=part-frame&part=${part}&scheme=light" style="border:0;width:100%;flex:1;min-height:${String(height)}px"></iframe>
+    <iframe data-slate-part="${part}" src="${gallery}?frame=part-frame&part=${part}&scheme=light" style="border:0;width:100%;flex:1;min-height:${String(height)}px"></iframe>
   </section>`;
 
   return `<!doctype html><body style="margin:0;padding:16px;background:#f8fafc;font-family:system-ui">
@@ -151,7 +151,7 @@ export function PartHostFrame() {
 
   return (
     <div className="flex h-dvh flex-col p-bg">
-      <iframe ref={slateFrame} title={TITLE} srcDoc={slatePage(location.origin)} data-slate-page className="block min-h-0 w-full flex-1 border-0" />
+      <iframe ref={slateFrame} title={TITLE} srcDoc={slatePage(location.origin + location.pathname)} data-slate-page className="block min-h-0 w-full flex-1 border-0" />
       {decision}
     </div>
   );
