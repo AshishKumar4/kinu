@@ -7,7 +7,7 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
-import { setDiagnosticsSink } from '@kinu.run/core/obs';
+import { KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import type { AgentWorkspaceHost } from '../src/agent-facets';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { gatewayWorkspace, runDelegatedTask, until } from './helpers/actor-harness';
@@ -90,4 +90,17 @@ test("a helper retired as its turn's report is relayed owes its hirer nothing: t
 
   expect(failed).toEqual([]);
   expect(ended).toEqual([expect.objectContaining({ effect: expect.stringContaining('turn_report'), standing: 'retired' })]);
+});
+
+// Review of 66938aa25: the isolate read the standing off the refusal's text, so a live helper's failure quoting it
+// ended its report unsent.
+test("a live helper whose report's relay fails quoting an ended refusal's words still owes it: the failure is its own", async () => {
+  const { ended, failed } = await dismissedWhile('turn_report', (port) => {
+    port.turnReport = async () => {
+      throw new KinuError('unavailable', 'the relay answered: actor_ended(retired): Agent task is retired and no longer acts in this workspace.');
+    };
+  });
+
+  expect(ended).toEqual([]);
+  expect(failed).toEqual([expect.objectContaining({ effect: expect.stringContaining('turn_report') })]);
 });

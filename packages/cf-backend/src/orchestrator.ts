@@ -715,7 +715,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (actorStanding(agent) !== 'retired') return agent;
 
-    return settleSync(Effect.fail(actorEnded('denied', 'retired', `Agent ${agent.name} is retired and no longer acts in this workspace.`)));
+    return settleSync(Effect.fail(actorEnded('denied', { actorId: agent.actorId, standing: 'retired' }, `Agent ${agent.name} is retired and no longer acts in this workspace.`)));
   }
 
   async agentCred(record: WorkspaceActor): Promise<VfsCred> {

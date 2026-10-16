@@ -408,9 +408,10 @@ export class FacetChat {
       sql: actor.runtime.storage.sql,
       holds: this.deps.database.held,
       actor: actor.handle,
-      // Its identity is the workspace's, which refuses what an ended agent's effects ask saying so: read off the
-      // refusal, with no call to ask (a settled turn's close crosses into the workspace a measured number of times).
-      standing: async (failure) => endedStandingOf(failure) ?? 'live',
+      // Its identity is the workspace's, which refuses what an ended agent's effects ask with a refusal naming it: read off
+      // that refusal's fields, with no call to ask (a settled turn's close crosses into the workspace a measured number of
+      // times), and only where it names this agent.
+      standing: async (failure) => endedStandingOf(failure, actor.handle.actorId) ?? 'live',
       effects: {
         ...chatTerminalEffects({ chat: () => this.session, orchestrator: () => actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),
         ...actorTerminalEffects({
