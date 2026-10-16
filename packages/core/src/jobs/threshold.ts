@@ -11,7 +11,7 @@ import {
 } from '../types/jobs';
 
 export {
-  BACKGROUND_POLICY, type BackgroundPolicy, type InvocationSurface,
+  BACKGROUND_POLICY, type BackgroundPolicy, type InvocationSurface, InvocationSurfaceSchema,
 } from '../types/jobs';
 
 /** The surface owns the foreground half (`detachAfterMs`, `settleGraceMs`); session durability owns

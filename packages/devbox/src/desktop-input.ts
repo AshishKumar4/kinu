@@ -62,7 +62,8 @@ export interface DesktopScreen {
 const BUTTONS = { left: '1', middle: '2', right: '3' } as const;
 
 /**
- * A watch: its frames taken evenly over its window, the last at its end, each by scrot with the pointer drawn in; then
+ * A watch: its frames taken evenly over its window, the last at its end, each by scrot with the pointer drawn in and
+ * silent (`-z`: scrot rings X's bell on each capture otherwise, which the owner's desktop client plays); then
  * their thumbnails tiled into one PNG on stdout by Pillow, which the image carries (python3-pil, D89). Its arguments: a
  * name for the run, the seconds, the frames, the thumbnail's percent and the columns.
  */
@@ -76,7 +77,7 @@ try:
     for at in range(frames):
         due = seconds if frames == 1 else at * seconds / (frames - 1)
         time.sleep(max(0.0, start + due - time.monotonic()))
-        subprocess.run(['scrot', '-o', '-p', '-t', str(percent), '%s/f%d.ppm' % (folder, at)], check=True, env=dict(os.environ, DISPLAY=':0'))
+        subprocess.run(['scrot', '-z', '-o', '-p', '-t', str(percent), '%s/f%d.ppm' % (folder, at)], check=True, env=dict(os.environ, DISPLAY=':0'))
         tiles.append(Image.open('%s/f%d-thumb.ppm' % (folder, at)).convert('RGB'))
     width, height = tiles[0].size
     sheet = Image.new('RGB', (width * min(cols, len(tiles)), height * -(-len(tiles) // cols)), 'white')
@@ -95,8 +96,8 @@ export function watchArgv(action: { readonly seconds: number; readonly frames: n
   return ['python3', '-c', WATCH_PY, 'devbox-watch', String(action.seconds), String(action.frames), String(WATCH_SHEET.percent), String(columns)];
 }
 
-/** Captured with the pointer drawn in, read back and removed in the same run. */
-export const SCREENSHOT = 'f=$(mktemp --suffix=.png) && scrot -o -p "$f" && cat "$f"; s=$?; rm -f "$f"; exit $s';
+/** Captured silently with the pointer drawn in, read back and removed in the same run. */
+export const SCREENSHOT = 'f=$(mktemp --suffix=.png) && scrot -z -o -p "$f" && cat "$f"; s=$?; rm -f "$f"; exit $s';
 
 const xy = ([x, y]: readonly [number, number]): string[] => [String(x), String(y)];
 

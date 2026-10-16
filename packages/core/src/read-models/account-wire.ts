@@ -78,6 +78,17 @@ export const AccountMemoryFrameSchema = v.object({
 
 export type AccountMemoryFrame = v.InferOutput<typeof AccountMemoryFrameSchema>;
 
+/** A page tells its roster socket whether its owner is looking at it, shown and focused, each time that changes. */
+export const ForegroundReportSchema = v.object({ type: v.literal('foreground'), looking: v.boolean() });
+
+export type ForegroundReport = v.InferOutput<typeof ForegroundReportSchema>;
+
+/** On the same socket: how many of the account's open pages, on every device, its owner is looking at, as it changes and
+ *  as the socket opens. Kinu's alerts are for an owner away from all of them (use-owner-alerts.ts). */
+export const AccountForegroundFrameSchema = v.object({ type: v.literal('account_foreground'), looking: v.number() });
+
+export type AccountForegroundFrame = v.InferOutput<typeof AccountForegroundFrameSchema>;
+
 export const CredentialSummarySchema = v.object({
   key: v.string(),
   kind: v.picklist(['bearer', 'oauth', 'openai-compat']),

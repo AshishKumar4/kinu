@@ -12,8 +12,11 @@ import {
   DeviceConsentRegistry,
   DeviceConsentStore,
   initWorkspaceActorTable,
+  InvocationSurfaceSchema,
   JsonValueSchema,
+  RESUMED_SURFACE,
   type DeviceConsentRequest,
+  type InvocationSurface,
   type DeviceConsentVerdict,
   type JsonValue,
   type SqlExec,
@@ -128,8 +131,8 @@ export interface TestUserDO {
   pendingConsents(workspace: string): Array<{ consentId: string }>;
   /** The owner's click, as `resolveDeviceConsent` runs it over RPC. */
   resolveConsent(workspace: string, consentId: string, answer: 'once' | 'always' | 'deny'): Promise<{ ok: boolean }>;
-  /** The agents an owner's answer woke, with what it told them. */
-  consentWakes: Array<{ workspace: string; actorId: string; text: string }>;
+  /** The agents an owner's answer woke, with what it told them and the surface their turn opens on, if it named one. */
+  consentWakes: Array<{ workspace: string; actorId: string; text: string; surface: InvocationSurface | null }>;
   /** The binding an owner's `always` leaves, for tests whose subject is not consent: the workspace was granted the
    *  device before the test began. */
   grantDevice(agentName: string, deviceId: string): void;
@@ -472,7 +475,11 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     const registry: DeviceConsentRegistry = new DeviceConsentRegistry({
       store: storeFor(name),
       newId: () => `cons-${++mintedConsents}`,
-      wake: (actorId, signal) => Effect.sync(() => { consentWakes.push({ workspace: name, actorId, text: signal.text }); }),
+      wake: (actorId, signal) => Effect.sync(() => {
+        const surface = v.safeParse(InvocationSurfaceSchema, signal.metadata?.[RESUMED_SURFACE]);
+
+        consentWakes.push({ workspace: name, actorId, text: signal.text, surface: surface.success ? surface.output : null });
+      }),
       announce: (notice) => {
         if (notice.kind !== 'raised') return;
         const consent = notice.consent;
@@ -664,6 +671,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       db.query(`INSERT INTO device_consent (agent_name, device_id, policy, updated_at) VALUES (?, ?, 'allow', ?)`).run(agentName, deviceId, Date.now());
     },
     deviceCall: async (...call) => {
+      // Counted before the call: an answer the harness gives as the card is raised wakes the agent inside the call.
+      const wakesBefore = consentWakes.length;
+
       try {
         return await userDO.deviceRpc(...call);
       } catch (parked) {
@@ -672,7 +682,6 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         // agent's call is re-issued only once a wake reached that agent. The owner's own call (no agent) is re-issued
         // as the owner re-clicks it.
         const answered = answering.splice(0);
-        const wakesBefore = consentWakes.length;
 
         if (answered.length === 0) throw parked;
         await Promise.all(answered);

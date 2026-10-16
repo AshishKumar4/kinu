@@ -607,8 +607,8 @@ export class RunEventRecorder {
     return events.filter((event) => event.phase === 'start' && !ended.has(event.operationId));
   }
 
-  /** The latest run's end (null if unsealed). Not WORKSPACE_RUN_ID. */
-  latestRunHeader(): { status: string | null; userMessage: string | null } | null {
+  /** The latest run: its id, and its end (null if unsealed). Not WORKSPACE_RUN_ID. */
+  latestRunHeader(): { status: string | null; userMessage: string | null; run: string } | null {
     this.actor.assertCurrent();
 
     const latest = this.fromHead((head) => head.latest, () => {
@@ -629,7 +629,7 @@ export class RunEventRecorder {
       return { runId, status: sealed?.type === 'run_end' ? sealed.reason ?? null : null };
     });
 
-    return latest === null ? null : { status: latest.status, userMessage: this.operatorWords() };
+    return latest === null ? null : { status: latest.status, userMessage: this.operatorWords(), run: latest.runId };
   }
 
   /** The person's newest words, as their run's start stamped `operator` recorded them; none before they first spoke. */

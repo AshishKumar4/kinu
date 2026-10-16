@@ -183,6 +183,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   turnSettled(settled: HandedOffTurn) { return this.open(() => this.answers.turnSettled(settled), settled); }
   runSettled(run: SettledRun) { return this.open(() => this.answers.runSettled(run), run); }
   hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(() => this.answers.hireAdvisor(advisor)); }
+  standing() { return this.open(() => this.answers.standing()); }
   owes(seq: number, next: number | null, holds: boolean, report: AgentReport) { return this.open(() => this.answers.owes(seq, next, holds, report)); }
   birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }

@@ -270,7 +270,7 @@ export const DECLARED = byFile([
       'gallery fixtures that mirror workspace RPC answers'],
     ['packages/cf-backend/src/gallery-slate-fallback.tsx', ['frameRpc'],
       'a gallery fixture that mirrors SlateHost.preview\'s answer'],
-    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
+    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'storedConfigFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
       'gallery fixtures that mirror RPC, HTTP and model-test answers'],
     ['packages/cf-backend/src/hooks/use-workspace-reads.ts', ['dismissSubordinate'],
       'the dismissSubordinate RPC answer as the hook passes it on'],

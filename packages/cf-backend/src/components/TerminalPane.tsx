@@ -7,7 +7,7 @@ import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
-import { readFailureText } from "@kinu.run/core";
+import { readFailureText, terminalPalette, type TerminalPalette } from "@kinu.run/core";
 import { renderThrownChain, showing, tolerate, detach, hold } from "@kinu.run/core/obs";
 import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
@@ -605,29 +605,9 @@ function newTerminal(mode: ThemeMode): Terminal {
   });
 }
 
-/**
- * xterm needs concrete colours, so the palette is read off the document at theme time.
- * ANSI status slots take their role's token; magenta and cyan are pulled into the warm family.
- */
-const ANSI_UNTOKENED = {
-  dark: { magenta: "#c9a0c6", cyan: "#8fbdb8" },
-  light: { magenta: "#7a3f74", cyan: "#2f6660" },
-} as const;
-
-function terminalTheme(mode: ThemeMode): NonNullable<ConstructorParameters<typeof Terminal>[0]>["theme"] {
+/** xterm needs concrete colours, so the palette is read off the document at theme time. */
+function terminalTheme(mode: ThemeMode): TerminalPalette {
   const cs = getComputedStyle(document.documentElement);
-  const tok = (name: string) => cs.getPropertyValue(name).trim();
 
-  return {
-    background: tok("--c-bg"),
-    foreground: tok("--c-text"),
-    cursor: tok("--c-accent"),
-    black: tok("--c-recessed"),
-    white: tok("--c-text"),
-    red: tok("--c-danger"),
-    green: tok("--c-success"),
-    yellow: tok("--c-warning"),
-    blue: tok("--c-info"),
-    ...ANSI_UNTOKENED[mode],
-  };
+  return terminalPalette(mode, (name) => cs.getPropertyValue(name).trim());
 }

@@ -5,7 +5,7 @@ import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { pictureKey, PictureAddressSchema, readSlatePicture, type PictureBucket } from '../slates/pictures';
-import { PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed } from '@kinu.run/core';
+import { FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
@@ -452,6 +452,10 @@ userRoutes.put('/api/user/config/:key', async (c) => {
   }
 
   if (c.get('key') === THEME_CONFIG_KEY && themeNamed(body.value) === null) return err(400, `${THEME_CONFIG_KEY} must be one of ${THEME_NAMES.join(', ')}.`);
+
+  if (c.get('key') === FILES_VIEW_CONFIG_KEY && filesViewNamed(body.value) === null) {
+    return err(400, `${FILES_VIEW_CONFIG_KEY} must be JSON: { layout: "list" | "tiles", hidden: boolean }.`);
+  }
 
   await c.get('stub').setConfig(c.get('owner'), c.get('key'), body.value);
 

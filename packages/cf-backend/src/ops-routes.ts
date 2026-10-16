@@ -1,5 +1,5 @@
 /**
- * `/ops/tables`: the deploy's walk (`scripts/reset.ts tables`) opening the objects it names, by id or by name, so each
+ * `/ops/tables`: the deploy's walk (`scripts/reset.ts tables`) opening the objects it names, by name alone, so each
  * repairs itself under this build (core state/schema-repair.ts), and reading back what each holds and what its repair
  * did. `/ops/roots` names the accounts the walk starts from. Their bearer is a one-time pass the step itself wrote into
  * this deployment's AUTH_KV with wrangler, the authority a reset deletes with: who cannot write the deployment's own
@@ -24,21 +24,18 @@ const OPS_CLASSES = ['UserDO', 'OrchestratorAgent', 'SlateRoom', 'GalleryDO'] as
 
 type OpsClass = (typeof OPS_CLASSES)[number];
 
-const OpsRequestSchema = v.pipe(
-  v.object({
-    class: v.picklist(OPS_CLASSES),
-    ids: v.optional(v.array(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u))), []),
-    names: v.optional(v.array(v.pipe(v.string(), v.nonEmpty(), v.maxLength(512))), []),
-  }),
-  v.check((body) => body.ids.length + body.names.length <= OPS_OBJECTS_PER_REQUEST),
-);
+// By name alone: a workspace opened by an id it never recorded a name under refuses to construct, so a walk that
+// opened objects by id threw in each one never named (staging rc12, 2026-10-16).
+const OpsRequestSchema = v.strictObject({
+  class: v.picklist(OPS_CLASSES),
+  names: v.pipe(v.array(v.pipe(v.string(), v.nonEmpty(), v.maxLength(512))), v.maxLength(OPS_OBJECTS_PER_REQUEST)),
+});
 
 interface OpsObject {
   opsTables(caller: OpsCaller): Promise<TablesAnswer>;
 }
 
 interface OpsNamespace {
-  idFromString(id: string): DurableObjectId;
   idFromName(name: string): DurableObjectId;
   get(id: DurableObjectId): OpsObject;
 }
@@ -55,18 +52,18 @@ export interface OpsEnv extends SignInDeclarationEnv {
   ControlPlaneDO?: DurableObjectNamespace<ControlPlaneDO>;
 }
 
-/** An object as the walk named it: by its id, and by its name where it was reached by one. */
+/** An object as the walk named it, and the id its name makes, which Cloudflare's list is read against. */
 interface NamedObject {
   readonly id: string;
-  readonly name?: string;
+  readonly name: string;
 }
 
 /** One object's answer, or why it gave none. */
 type OpsAnswer = NamedObject & ({ readonly answer: TablesAnswer } | { readonly error: string });
 
 /** `object` as its answer names it. */
-function named(object: { readonly id: DurableObjectId; readonly name?: string }): NamedObject {
-  return object.name === undefined ? { id: object.id.toString() } : { id: object.id.toString(), name: object.name };
+function named(object: { readonly id: DurableObjectId; readonly name: string }): NamedObject {
+  return { id: object.id.toString(), name: object.name };
 }
 
 export const opsRoutes = new Hono<FamilyEnv<OpsEnv, object>>();
@@ -101,18 +98,15 @@ opsRoutes.post('/ops/tables', (c) => settle(Effect.gen(function* () {
   if (!(yield* admitted(c.env, c.req.header('authorization')))) return err(401, REFUSED);
   const body = yield* Effect.promise(() => safeJson(c.req.raw, OpsRequestSchema));
 
-  if (body === null) return err(400, `The body names a class, and at most ${String(OPS_OBJECTS_PER_REQUEST)} objects by id or by name.`);
+  if (body === null) return err(400, `The body names a class, and at most ${String(OPS_OBJECTS_PER_REQUEST)} objects by name.`);
   const namespace: OpsNamespace = { UserDO: c.env.UserDO, OrchestratorAgent: c.env.OrchestratorAgent, SlateRoom: c.env.SLATE_ROOM, GalleryDO: c.env.GALLERY }[body.class satisfies OpsClass];
   const caller = yield* Effect.promise(() => opsCaller(c.env));
 
-  const objects: Array<{ readonly id: DurableObjectId; readonly name?: string }> = [
-    ...body.ids.map((id) => ({ id: namespace.idFromString(id) })),
-    ...body.names.map((name) => ({ id: namespace.idFromName(name), name })),
-  ];
+  const objects = body.names.map((name) => ({ id: namespace.idFromName(name), name }));
 
   // An object that cannot answer is named with why, and the rest still answer: the step prints both.
   const answers = yield* Effect.forEach(objects, (object) => Effect.match(
-    attempt({ doing: `reaching ${body.class} ${object.name ?? object.id.toString()}`, otherwise: 'unavailable' }, () => namespace.get(object.id).opsTables(caller)),
+    attempt({ doing: `reaching ${body.class} ${object.name}`, otherwise: 'unavailable' }, () => namespace.get(object.id).opsTables(caller)),
     {
       onSuccess: (answer): OpsAnswer => ({ ...named(object), answer }),
       onFailure: (failure): OpsAnswer => ({ ...named(object), error: renderThrownChain({ cause: failure }) }),

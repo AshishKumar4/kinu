@@ -12,8 +12,8 @@ import {
   type ReactNode,
 } from "react";
 
-import { rosterBucket, rosterMatches, AccountMemoryFrameSchema, RosterFrameSchema, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
-import type { AccountMemoryProposal } from "@kinu.run/core";
+import { rosterBucket, rosterMatches, AccountForegroundFrameSchema, AccountMemoryFrameSchema, RosterFrameSchema, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import type { AccountMemoryProposal, ForegroundReport } from "@kinu.run/core";
 import {
   decideAccountMemory, getAccountMemory, listWorkspaces, registerWorkspace, ROSTER_SOCKET_ROUTE,
   type RosterFilterBucket,
@@ -60,6 +60,10 @@ interface WorkspaceRosterValue extends RosterPages {
   readonly accountProposals: readonly AccountMemoryProposal[] | null;
   /** Decides a proposal, then reads what waits again, so a page with no socket loses the row too. */
   readonly decideAccountProposal: (id: string, decision: "accept" | "decline") => Promise<void>;
+  /** How many of the account's pages, on every device, the owner is looking at, as the socket last said; 0 before it has. */
+  readonly accountLooking: number;
+  /** Tells the account whether the owner is looking at this page: now, and again on every socket the page opens. */
+  readonly reportForeground: (looking: boolean) => void;
 }
 
 const WorkspaceRosterContext = createContext<WorkspaceRosterValue | null>(null);
@@ -205,6 +209,7 @@ function useRosterPages(filter: RosterFilter | null, subscribe: WorkspaceRosterV
 }
 
 interface RosterSocket extends EventTarget {
+  send(data: string): void;
   close(): void;
 }
 
@@ -235,6 +240,16 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
   const [accountProposals, setAccountProposals] = useState<readonly AccountMemoryProposal[] | null>(null);
   // Counts the socket's memory frames, so a read cannot overwrite a frame newer than it.
   const memoryFrames = useRef(0);
+  const [accountLooking, setAccountLooking] = useState(0);
+  // This page's last word on being looked at, and the socket open to say it on: a new socket starts the page unlooked-at.
+  const foreground = useRef<boolean | null>(null);
+  const said = useRef<RosterSocket | null>(null);
+
+  const reportForeground = useCallback((looking: boolean): void => {
+    foreground.current = looking;
+    said.current?.send(JSON.stringify({ type: "foreground", looking } satisfies ForegroundReport));
+  }, []);
+
   // Only the newest read publishes; an unmount retires the one in flight.
   const memoryReads = useRef(0);
 
@@ -293,6 +308,9 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
       opened.addEventListener("open", () => {
         open = true;
         attempts = 0;
+        said.current = opened;
+
+        if (foreground.current !== null) opened.send(JSON.stringify({ type: "foreground", looking: foreground.current } satisfies ForegroundReport));
         setEpoch((current) => current + 1);
       });
 
@@ -309,6 +327,14 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
           return;
         }
 
+        const looking = v.safeParse(AccountForegroundFrameSchema, parsed);
+
+        if (looking.success) {
+          setAccountLooking(looking.output.looking);
+
+          return;
+        }
+
         const frame = v.safeParse(RosterFrameSchema, parsed);
 
         if (!frame.success) return;
@@ -317,6 +343,8 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
       });
 
       opened.addEventListener("close", () => {
+        if (said.current === opened) said.current = null;
+
         if (stopped || socket !== opened) return;
 
         if (open) {
@@ -365,8 +393,8 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
 
   const value = useMemo<WorkspaceRosterValue>(() => ({
     ...pages, total: pages.counts.all, pending, refresh, upsert, create, rename, remove, subscribe, epoch, accountProposals,
-    decideAccountProposal,
-  }), [pages, pending, refresh, upsert, create, rename, remove, subscribe, epoch, accountProposals, decideAccountProposal]);
+    decideAccountProposal, accountLooking, reportForeground,
+  }), [pages, pending, refresh, upsert, create, rename, remove, subscribe, epoch, accountProposals, decideAccountProposal, accountLooking, reportForeground]);
 
   return <WorkspaceRosterContext.Provider value={value}>{children}</WorkspaceRosterContext.Provider>;
 }

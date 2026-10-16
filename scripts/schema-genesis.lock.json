@@ -617,7 +617,8 @@
     "created_at INTEGER NOT NULL",
     "epoch INTEGER NOT NULL",
     "status TEXT NOT NULL DEFAULT 'queued'",
-    "decided_at INTEGER"
+    "decided_at INTEGER",
+    "surface TEXT"
   ],
   "device_consent@packages/core/src/state/user-schema.ts": [
     "agent_name TEXT NOT NULL",

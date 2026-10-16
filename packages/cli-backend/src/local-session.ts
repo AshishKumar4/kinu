@@ -1882,6 +1882,7 @@ export class LocalAgentSession {
         sql: this.rt.storage.sql,
         holds: ASKED,
         actor: this.rt.actor,
+        standing: async () => localActorDirectory(this.rt.actor).directory.standing(this.rt.actor.actorId),
         effects: this.terminalEffectTable(),
         now: () => Date.now() + this.terminalClockSkewMs,
         fault: () => this.terminalEffectFault,

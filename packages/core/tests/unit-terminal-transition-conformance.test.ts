@@ -154,6 +154,7 @@ class Plane {
 
   process(): TerminalTransitions {
     this.live ??= new TerminalTransitions({
+      standing: async () => 'live' as const,
       sql: this.sql,
       actor: this.actor,
       effects: this.effects(),
@@ -430,6 +431,7 @@ test('recorded terminal rosters with colliding identities belong only to their a
   initToolEffectClaimTable(execRaw);
 
   const open = (actor: ActorHandle) => new TerminalTransitions({
+    standing: async () => 'live' as const,
     sql, actor, now: () => 0, scheduleRetry: async () => {},
     transaction: (body) => db.transaction(body)(),
     turnIsLive: () => false,

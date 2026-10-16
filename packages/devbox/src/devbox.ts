@@ -1856,6 +1856,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // The step its base is at rides along: the caller holds while the build moves on (D79).
     if (base !== undefined && this.ctx.container?.running !== true) return base;
     await this.#resolveAdoption();
+    this.#trace('readiness.adopted', { phase: this.#restoration.phase });
 
     // Native allocation can report running before restoration starts.
     if (wasRunning && this.#restoration.phase === 'unstarted') await this.#startContainer();
@@ -1868,6 +1869,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (admission !== undefined) return admission;
 
     await this.#armStartup();
+    this.#trace('readiness.armed', { phase: this.#restoration.phase });
 
     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
       throw new DevboxError('refused', terminalRefusal(this.#restoration.reason));
@@ -2159,7 +2161,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #quiesceAdmitted(ending: boolean): Promise<CheckpointOutcome> {
     const starting = this.#flights.startup;
 
+    this.#trace('quiesce.enter', { starting: starting !== undefined, callers: this.#activeCallers, ending });
+
     if (starting !== undefined) await Promise.allSettled([starting.run]);
+    this.#trace('quiesce.startup', {});
 
     if (ending) await Promise.allSettled([...this.#running.keys()].map((execId) => this.killExec(execId)));
 
@@ -2168,9 +2173,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.#callersDrained.promise;
     }
 
+    this.#trace('quiesce.callers', {});
+
     await this.#resources.drain();
+    this.#trace('quiesce.resources', {});
     await this.#lane.drain();
+    this.#trace('quiesce.lane', {});
     await this.#storageMutationTail;
+    this.#trace('quiesce.storage', {});
 
     if (this.ctx.container?.running !== true) {
       this.#invalidateGeneration();
@@ -2193,7 +2203,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     let warning: string | undefined;
 
     try {
+      this.#trace('quiesce.list.enter', {});
       const listed = await this.#processes().list();
+      this.#trace('quiesce.list.exit', { count: listed.length });
       const residents = new Set((await this.#procSpecs()).map(spec => spec.processId));
 
       if (!ending && listed.some(process => isProcessLive(process.status) && !residents.has(process.id))) {
@@ -2325,7 +2337,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   listSupervised(): Promise<readonly SupervisedProcessRow[]> {
     return settle(attempt('io', async () => {
       await this.ensureReady();
+      this.#trace('list.ready', {});
       const specs = await this.#procSpecs();
+      this.#trace('list.specs', { count: specs.length });
       const rows = new Map<string, SupervisedProcessRow>();
 
       for (const spec of specs) {
@@ -2342,7 +2356,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       const specIds = new Set(specs.map(spec => spec.processId));
 
-      for (const live of await this.#processes().list()) {
+      const native = await this.#processes().list();
+      this.#trace('list.native', { count: native.length });
+
+      for (const live of native) {
         rows.set(live.id, {
           processId: live.id,
           pid: live.pid,
@@ -3263,7 +3280,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   #files(): Files { return this.#fileClient ??= new Files(this.#container()); }
-  #processes(): Processes { return this.#processClient ??= new Processes(this.#container()); }
+  #processes(): Processes {
+    return this.#processClient ??= new Processes(this.#container(), undefined, (event, fields) => { this.#trace(event, fields); });
+  }
 
   #supervised(): SupervisedProcesses {
     return this.#supervisedClient ??= new SupervisedProcesses({

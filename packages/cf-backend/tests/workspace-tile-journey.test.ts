@@ -186,10 +186,10 @@ describe("a workspace's tile on its owner's home", () => {
       // ── A turn reads Working from its admission until it closes, never as unfinished. ──
       await agent.declareTurnInFlight(true);
       await until(() => last()?.activity === 'working', 'the admitted turn is pushed');
-      expect(last()?.latestRun).toEqual({ status: null, task: 'a live turn' });
+      expect(last()?.latestRun).toMatchObject({ status: null, task: 'a live turn' });
       await agent.declareTurnInFlight(false);
       await until(() => last()?.activity === 'idle', 'the closed turn is pushed');
-      expect(last()?.latestRun).toEqual({ status: 'completed', task: 'a live turn' });
+      expect(last()?.latestRun).toMatchObject({ status: 'completed', task: 'a live turn' });
       expect(overviews.map((each) => each.activity)).not.toContain('unfinished');
 
       // ── Decisions: each change pushed once, a fold that changed nothing not pushed again. ──
@@ -322,10 +322,16 @@ describe("the tile's line is the person's own words", () => {
     expect(await agent.beginGenesisTurn()).toEqual({ started: true });
     await genesis;
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
-    expect((await agent.foldOverview()).latestRun).toEqual({ status: 'completed', task: null });
+    expect((await agent.foldOverview()).latestRun).toMatchObject({ status: 'completed', task: null });
+    const genesisRun = (await agent.foldOverview()).latestRun?.run;
 
     await turns.run("Sort this week's receipts into the ledger");
     expect((await agent.foldOverview()).latestRun?.task).toBe("Sort this week's receipts into the ledger");
+    // Each run is its own, which the owner's alerts tell one end from the next by (owner-alerts.ts).
+    const sortRun = (await agent.foldOverview()).latestRun?.run;
+
+    expect(typeof genesisRun).toBe('string');
+    expect(sortRun).not.toBe(genesisRun);
 
     // What the owner types while a turn runs is queued as a programmatic turn, stamped theirs.
     await turns.enqueue('And flag anything over $500', { metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' } });
@@ -335,6 +341,6 @@ describe("the tile's line is the person's own words", () => {
     // A drain, a wake or a gate after it leaves the owner's words on the line.
     await turns.enqueue('Two background jobs finished.', { metadata: { kinuEvent: 'background_jobs' } });
     await turns.drainEnqueued();
-    expect((await agent.foldOverview()).latestRun).toEqual({ status: 'completed', task: 'And flag anything over $500' });
+    expect((await agent.foldOverview()).latestRun).toMatchObject({ status: 'completed', task: 'And flag anything over $500' });
   });
 });

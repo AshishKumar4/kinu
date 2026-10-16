@@ -12,7 +12,10 @@ import * as v from 'valibot';
 const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/u));
 
 const RowSchema = v.object({
-  run: v.string(), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
+  /** The name armada grades and times the row by: a ladder row's label, which outlasts the files its command names. */
+  name: v.string(),
+  /** The row's command, which armada's own row for a task that ended before its verdict does not know. */
+  run: v.optional(v.string()), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
   timings: v.optional(v.record(v.string(), v.number())),
   /** The revision whose run this unchanged row reuses. */
   cached: v.optional(v.string()),
@@ -29,9 +32,9 @@ export interface Evidence {
 }
 
 /** One copier for deploy rows and eval trials: the exact files copied are the row's declared artifacts. */
-export function ciVerdictRow(gate: { readonly run: string; readonly evidence?: string }, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
+export function ciVerdictRow(gate: { readonly label: string; readonly run?: string; readonly evidence?: string }, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
   const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
-  const row: CIVerdict = { run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
+  const row: CIVerdict = { name: gate.label, run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
 
   if (evidence === undefined || gate.evidence === undefined || !existsSync(evidence.dir)) return row;
   const into = join(evidence.artifacts, gate.evidence);
@@ -64,7 +67,7 @@ export function readHostedCosts(): HostedCosts {
   return v.parse(HostedCostsSchema, JSON.parse(readFileSync(new URL('./ci-cost.json', import.meta.url), 'utf8')));
 }
 
-/** What the container runner measured (cf-ci's `{timings}`): each green row's seconds by its command, each file's. */
+/** What the container runner measured (cf-ci's `{timings}`): each green row's seconds by its name, each file's. */
 const RunnerTimingsSchema = v.object({ rows: v.record(v.string(), v.number()), files: v.record(v.string(), v.number()) });
 
 export type RunnerTimings = v.InferOutput<typeof RunnerTimingsSchema>;
@@ -73,18 +76,10 @@ export function parseRunnerTimings(text: string): RunnerTimings {
   return v.parse(RunnerTimingsSchema, JSON.parse(text));
 }
 
-/** The hosted costs with the runner's measurements over them: a row (named by `labels` from its command) or a file
- *  the runner timed takes its time. */
-export function withRunnerCosts(hosted: HostedCosts, measured: RunnerTimings, labels: ReadonlyMap<string, string>): HostedCosts {
-  const seconds = { ...hosted.seconds };
-
-  for (const [run, taken] of Object.entries(measured.rows)) {
-    const label = labels.get(run);
-
-    if (label !== undefined) seconds[label] = taken;
-  }
-
-  return { ...hosted, seconds, files: { ...hosted.files, ...measured.files } };
+/** The hosted costs with the runner's measurements over them: a row (named by its label) or a file the runner timed
+ *  takes its time. */
+export function withRunnerCosts(hosted: HostedCosts, measured: RunnerTimings): HostedCosts {
+  return { ...hosted, seconds: { ...hosted.seconds, ...measured.rows }, files: { ...hosted.files, ...measured.files } };
 }
 
 /** Bun's first-party --timings/--update-timings report, measured per file rather than inferred from its console. */

@@ -66,6 +66,32 @@ export interface ContractLedger {
   pending(): Promise<readonly ContractTeardown[]>;
 }
 
+/**
+ * Every abandoned run's teardown replayed at once, each timed. Each names its own Worker, application and bucket, so
+ * none waits on another: one after another, a staging deploy that inherited three spent 757 s before its own fixture
+ * was first asked anything, against 42-73 s with none (2026-10-15, a907148d8). Settled whole before the caller
+ * creates anything, and refused whole if any failed, naming each, so a failing teardown never adds a fixture.
+ */
+export async function recoverAbandoned(
+  abandoned: readonly ContractTeardown[],
+  replay: (manifest: ContractTeardown) => Promise<void>,
+): Promise<{ readonly contract: 'recovered-teardown'; readonly ms: number; readonly detail: unknown }[]> {
+  const outcomes = await Promise.allSettled(abandoned.map(async (manifest) => {
+    const since = Date.now();
+
+    await replay(manifest);
+    const { job, index, attempt, vessel } = manifest.owner;
+
+    return { contract: 'recovered-teardown' as const, ms: Date.now() - since, detail: { run: manifest.run, owner: { job, index, attempt, vessel } } };
+  }));
+
+  const failed = outcomes.flatMap((outcome, at) => outcome.status === 'rejected' ? [`${abandoned[at]?.run ?? '?'}: ${String(outcome.reason)}`] : []);
+
+  if (failed.length > 0) throw new Error(`unfinished contract teardown failed, so no new fixture was created: ${failed.join('; ')}`);
+
+  return outcomes.flatMap((outcome) => outcome.status === 'fulfilled' ? [outcome.value] : []);
+}
+
 export async function contractOwnerEnded(owner: ContractOwner, query: (url: string, init: RequestInit) => Promise<Response> = fetch): Promise<boolean> {
   const response = await query(`${owner.statusUrl}/${String(owner.index)}`, { headers: { authorization: `Bearer ${owner.statusToken}` } });
 

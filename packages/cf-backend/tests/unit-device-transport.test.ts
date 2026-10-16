@@ -10,7 +10,7 @@ import {
   type DeviceHubClient,
   type HubDeviceCallOptions,
 } from '@kinu.run/core';
-import type { UserCaller } from '@kinu.run/core';
+import type { InvocationSurface, UserCaller } from '@kinu.run/core';
 import { machine, oneMachine } from '@kinu.run/test-utils';
 
 const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;
@@ -348,6 +348,22 @@ describe('createHubDeviceTransport', () => {
 
     await outsideTurn.rpc('writeFile', ['/x', 'y']);
     expect(requiredCall(hub.rpcCalls, 1)[2]?.checkpoint).toBeUndefined();
+  });
+
+  test("each call carries the surface of the turn it is made in, read per call as its background policy is", async () => {
+    const hub = fakeHub(() => (oneMachine()));
+    let surface: InvocationSurface = 'interactive';
+
+    const transport = createHubDeviceTransport({
+      hub: () => hub, agentName: 'a', actorId: 'actor-1', cliCwd: () => null, caller, surface: () => surface,
+    });
+
+    await transport.rpc('exec', ['make deploy']);
+    surface = 'one-shot';
+    await transport.rpc('exec', ['make deploy']);
+    await createHubDeviceTransport({ hub: () => hub, agentName: 'a', actorId: 'actor-1', cliCwd: () => null, caller }).rpc('exec', ['ls']);
+
+    expect(hub.rpcCalls.map((call) => call[2]?.surface)).toEqual(['interactive', 'one-shot', undefined]);
   });
 
   test('exec calls are rewritten into the CLI-forwarded working directory', async () => {

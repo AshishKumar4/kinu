@@ -255,6 +255,37 @@ describe('account panels', () => {
     });
   });
 
+  // Kinu's alerts (use-owner-alerts.ts): the sound is this device's to turn off, and a notification waits on the
+  // browser's own permission, asked once the owner presses Allow.
+  test("Appearance turns this device's alert sound off for good, and says where the browser stands on notifications", async () => {
+    await withGallery(async (gallery) => {
+      for (const theme of ['dark', 'light'] as const) {
+        const page = await freshPage(gallery, 'usersettingsstate&section=appearance', theme, 'desktop');
+
+        try {
+          await page.waitForSelector('[data-alerts-sound][aria-checked="true"]');
+          // Not yet asked: the browser's own prompt is one press away.
+          expect(await page.$('[data-alerts-allow]')).not.toBeNull();
+          await page.click('[data-alerts-sound]');
+          await page.waitForSelector('[data-alerts-sound][aria-checked="false"]');
+          await page.reload({ waitUntil: 'load' });
+          await page.waitForSelector('[data-alerts-sound][aria-checked="false"]');
+          await page.click('[data-alerts-sound]');
+          await page.waitForSelector('[data-alerts-sound][aria-checked="true"]');
+
+          // Allowed: nothing left to press.
+          await page.browserContext().overridePermissions(gallery.origin, ['notifications']);
+          await page.reload({ waitUntil: 'load' });
+          await page.waitForSelector('[data-alerts-sound]');
+          expect(await page.$('[data-alerts-allow]')).toBeNull();
+          await page.browserContext().clearPermissionOverrides();
+        } finally {
+          await page.close();
+        }
+      }
+    });
+  });
+
   test('the account computer size saves through its picker and survives reload', async () => {
     await withGallery(async (gallery) => {
       const control = '[aria-label="Default computer size"]';

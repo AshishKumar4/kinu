@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
-import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner } from './fixtures/devbox-e2e/ledger';
+import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
 import { containerApplicationsNamed, deleteContainerApplication, r2, requireCloudflareAccountId } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
@@ -22,10 +22,11 @@ import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
 import { shellQuote } from '../packages/core/src/utils/shell';
+import { endedNearSilence } from './row-verdicts';
 import { withTestChrome } from './test-chrome';
 import { contextSignedInAt } from '../evals/src/browser';
 import { DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
-import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
+import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, RING_PY, SCROLL, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 import { REPO_ROOT as REPO } from './repo-root';
 
 
@@ -137,6 +138,9 @@ const RESURRECT_READ_MS = 500;
 
 /** How long after its first frame a fresh desktop must show its background and panel: a person waits seconds, not minutes. */
 const DESKTOP_SEEN_MS = 30_000;
+
+/** The ground a bell's ring is followed by: no colour the desktop draws, so seeing it is seeing what came after. */
+const RUNG = '#ff00ff';
 
 const Json = v.looseObject({ error: v.optional(v.string()) });
 
@@ -289,10 +293,9 @@ function prepareLedger() {
   return { ledger, accessKeyId, secretAccessKey };
 }
 
+/** Each abandoned run's teardown, replayed by this script's own `--cleanup-report` in a directory of its own. */
 async function recoverContracts(ledger: ContractLedger, scratch: string): Promise<Step[]> {
-  const recovered: Step[] = [];
-
-  for (const abandoned of await ledger.pending()) {
+  return recoverAbandoned(await ledger.pending(), async (abandoned) => {
     const directory = join(scratch, abandoned.run);
 
     mkdirSync(directory, { recursive: true });
@@ -302,14 +305,9 @@ async function recoverContracts(ledger: ContractLedger, scratch: string): Promis
     const replay = Bun.spawn([process.execPath, import.meta.path, '--cleanup-report', recovery], { cwd: REPO, env: process.env, stdout: 'inherit', stderr: 'inherit' });
 
     try {
-      if (await replay.exited !== 0) throw new Error(`unfinished contract teardown ${abandoned.run} failed; no new fixture was created`);
-      const { job, index, attempt, vessel } = abandoned.owner;
-
-      recovered.push({ contract: 'recovered-teardown', ms: 0, detail: { run: abandoned.run, owner: { job, index, attempt, vessel } } });
+      if (await replay.exited !== 0) throw new Error(`its replay exited ${String(replay.exitCode)}`);
     } finally { rmSync(recovery, { force: true }); }
-  }
-
-  return recovered;
+  });
 }
 
 async function main(): Promise<void> {
@@ -542,88 +540,148 @@ async function main(): Promise<void> {
     await step('desktop-client', async () => {
       const fresh = names[4] ?? '';
 
-      return withTestChrome(async browser => {
-        // Signed in once on the fixture's origin, which the browser scopes the session to (`contextSignedInAt`).
-        const page = await (await contextSignedInAt(browser, `${origin}/sign-in`, { authorization: `Bearer ${identity}` })).newPage();
-        page.setDefaultTimeout(0);
-        await page.setViewport({ width: 1300, height: 820 });
-        await page.goto(`${origin}/view?box=${fresh}`);
-        const frame = await (await page.waitForSelector('iframe'))?.contentFrame();
+      try {
+        return await withTestChrome(async browser => {
+          // What the step waits on now, and what it last read there: named when the run's silence nears its bound.
+          let waiting = 'the sign-in on the fixture';
+          let reading = '';
+          const heard: string[] = [];
 
-        if (frame == null) throw new Error('the desktop client did not frame');
+          const watched = (async () => {
+            // Signed in once on the fixture's origin, which the browser scopes the session to (`contextSignedInAt`).
+            const page = await (await contextSignedInAt(browser, `${origin}/sign-in`, { authorization: `Bearer ${identity}` })).newPage();
+            page.setDefaultTimeout(0);
+            page.on('console', (message) => { if (message.type() === 'error' && heard.length < 12) heard.push(`console: ${message.text().slice(0, 200)}`); });
+            page.on('requestfailed', (request) => { if (heard.length < 12) heard.push(`failed: ${request.url().slice(0, 160)} ${request.failure()?.errorText ?? ''}`); });
+            page.on('response', (response) => { if (response.status() >= 400 && heard.length < 12) heard.push(`${String(response.status())}: ${response.url().slice(0, 160)}`); });
+            await page.setViewport({ width: 1300, height: 820 });
+            waiting = 'the view page';
+            await page.goto(`${origin}/view?box=${fresh}`);
+            waiting = 'the view page\'s frame';
+            const frame = await (await page.waitForSelector('iframe'))?.contentFrame();
 
-        // The desktop a quarter in from its corner, where X never starts its pointer (the middle), the wallpaper's glow
-        // just above the panel's middle, and the foot's middle, in the desktop's own coordinates; and where the client
-        // draws it.
-        const screen = (): Promise<DesktopReading | null> => frame.evaluate((size, footY, glowY) => {
-          const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
+            if (frame == null) throw new Error('the desktop client did not frame');
 
-          if (canvas === undefined || canvas.width < 640) return null;
-          const context = canvas.getContext('2d');
-          const at = (x: number, y: number) => [...context?.getImageData(x * canvas.width / size.width, y * canvas.height / size.height, 1, 1).data ?? []];
-          const rect = canvas.getBoundingClientRect();
+            // The desktop a quarter in from its corner, where X never starts its pointer (the middle), the wallpaper's glow
+            // just above the panel's middle, and the foot's middle, in the desktop's own coordinates; and where the client
+            // draws it.
+            const screen = (): Promise<DesktopReading | null> => frame.evaluate((size, footY, glowY) => {
+              const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
 
-          return {
-            desktop: at(size.width / 4, size.height / 4), glow: at(size.width / 2, glowY), panel: at(size.width / 2, footY),
-            rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-          };
-        }, DESKTOP_SIZE, DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2, DESKTOP_SIZE.height - DESKTOP_PANEL.height - 8);
+              if (canvas === undefined || canvas.width < 640) return null;
+              const context = canvas.getContext('2d');
+              const at = (x: number, y: number) => [...context?.getImageData(x * canvas.width / size.width, y * canvas.height / size.height, 1, 1).data ?? []];
+              const rect = canvas.getBoundingClientRect();
 
-        await frame.waitForFunction(() => {
-          const canvas = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0];
+              return {
+                desktop: at(size.width / 4, size.height / 4), glow: at(size.width / 2, glowY), panel: at(size.width / 2, footY),
+                rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+              };
+            }, DESKTOP_SIZE, DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2, DESKTOP_SIZE.height - DESKTOP_PANEL.height - 8);
 
-          return canvas !== undefined && canvas.width >= 640 && canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data[3] === 255;
-        }, { polling: 'raf' });
+            // The client's first frame: its canvas drawn opaque at the middle. Read, not awaited by the page, so a wait
+            // that never ends says what the frame held.
+            waiting = 'the desktop client\'s first frame';
 
-        const near = (rgba: readonly number[] | undefined, hex: string) => rgba !== undefined
-          && [1, 3, 5].every((at, channel) => Math.abs((rgba[channel] ?? -99) - Number.parseInt(hex.slice(at, at + 2), 16)) <= 12);
+            for (;;) {
+              const first = await frame.evaluate(() => {
+                const canvases = [...document.querySelectorAll('canvas')].sort((x, y) => y.width * y.height - x.width * x.height);
+                const canvas = canvases[0];
+                const alpha = canvas === undefined || canvas.width < 640 ? null : canvas.getContext('2d')?.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data[3] ?? null;
 
-        // The wallpaper's glow warms the ground above the panel: its red stands well above its blue, where the bare
-        // ground's sit within a few levels of each other (D88).
-        const glowing = (rgba: readonly number[] | undefined) => rgba !== undefined && (rgba[0] ?? 0) - (rgba[2] ?? 0) >= 12;
+                return { href: location.href, canvases: canvases.map((each) => `${String(each.width)}x${String(each.height)}`), alpha, text: document.body?.innerText.slice(0, 160) ?? '' };
+              });
 
-        const drawn = (shown: DesktopReading | null) => shown !== null
-          && near(shown.desktop, DESKTOP_COLOURS.background) && glowing(shown.glow) && near(shown.panel, DESKTOP_COLOURS.panel);
+              reading = JSON.stringify(first);
 
-        // The first frame may come before the panel and the wallpaper paint: a person sees the desktop within seconds, or
-        // sees none.
-        const seenBy = Date.now() + DESKTOP_SEEN_MS;
-        let seen = await screen();
+              if (first.alpha === 255) break;
+              await delay(250);
+            }
 
-        while (!drawn(seen) && Date.now() < seenBy) {
-          await delay(250);
-          seen = await screen();
-        }
+            const near = (rgba: readonly number[] | undefined, hex: string) => rgba !== undefined
+              && [1, 3, 5].every((at, channel) => Math.abs((rgba[channel] ?? -99) - Number.parseInt(hex.slice(at, at + 2), 16)) <= 12);
 
-        if (seen === null || !drawn(seen)) {
-          // The desktop's own log says why a part did not paint: the wallpaper's and the panel's errors land there.
-          const log = await shell(`grep -v 'INFO\\|\\[mi\\]\\|^$' ${DESKTOP_LOG} | tail -n 30 2>&1; true`, fresh);
+            // The wallpaper's glow warms the ground above the panel: its red stands well above its blue, where the bare
+            // ground's sit within a few levels of each other (D88).
+            const glowing = (rgba: readonly number[] | undefined) => rgba !== undefined && (rgba[0] ?? 0) - (rgba[2] ?? 0) >= 12;
 
-          throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, glow: seen?.glow, panel: seen?.panel })} `
-            + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its ground ${DESKTOP_COLOURS.background}, the wallpaper's glow `
-            + `and the panel ${DESKTOP_COLOURS.panel}; its log:\n${log}`);
-        }
+            const drawn = (shown: DesktopReading | null) => shown !== null
+              && near(shown.desktop, DESKTOP_COLOURS.background) && glowing(shown.glow) && near(shown.panel, DESKTOP_COLOURS.panel);
 
-        const rect = seen.rect;
+            // The first frame may come before the panel and the wallpaper paint: a person sees the desktop within seconds, or
+            // sees none.
+            waiting = 'the desktop\'s ground, wallpaper and panel';
+            const seenBy = Date.now() + DESKTOP_SEEN_MS;
+            let seen = await screen();
 
-        const opened = async (launcher: keyof typeof DESKTOP_PANEL.launchers, windowClass: string) => {
-          await page.mouse.click(rect.x + DESKTOP_PANEL.launchers[launcher] * rect.width / DESKTOP_SIZE.width,
-            rect.y + (DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2) * rect.height / DESKTOP_SIZE.height);
-          await shell(`until DISPLAY=:0 xdotool search --onlyvisible --class ${windowClass} >/dev/null 2>&1; do sleep 0.1; done`, fresh);
-        };
+            while (!drawn(seen) && Date.now() < seenBy) {
+              await delay(250);
+              seen = await screen();
+              reading = JSON.stringify(seen);
+            }
 
-        await opened('terminal', 'xterm');
-        await opened('browser', 'chromium');
+            if (seen === null || !drawn(seen)) {
+              throw new Error(`opening the desktop of a fresh box showed ${JSON.stringify({ desktop: seen?.desktop, glow: seen?.glow, panel: seen?.panel })} `
+                + `${String(DESKTOP_SEEN_MS / 1000)} s after its first frame, not its ground ${DESKTOP_COLOURS.background}, the wallpaper's glow `
+                + `and the panel ${DESKTOP_COLOURS.panel}`);
+            }
 
-        const elsewhere = await frame.evaluate(() => new Promise<string>(resolve => {
-          document.addEventListener('securitypolicyviolation', event => { resolve(event.violatedDirective); }, { once: true });
-          new WebSocket('ws://elsewhere.example/websockify', ['binary']).addEventListener('open', () => { resolve('opened'); });
-        }));
+            // A ring of the desktop's bell plays nothing in the owner's tab: Kinu's own alerts are its only sounds
+            // (use-owner-alerts.ts), and the client chimed on every ring, an agent's every look among them (staging,
+            // 2026-10-15). The ground repainted after the ring is the client's proof it has the ring: RFB keeps the
+            // server's messages in order, and the client plays its bell (its own `noVNC_bell`) as it reads one.
+            waiting = 'a ring of the desktop\'s bell, then the ground it was followed by';
+            await frame.evaluate(() => {
+              const bell = document.getElementById('noVNC_bell');
 
-        requireEqual(elsewhere, 'connect-src');
+              if (!(bell instanceof HTMLMediaElement)) throw new Error('the desktop client has no bell element to count');
+              bell.dataset.rings = '0';
+              bell.play = async () => { bell.dataset.rings = String(Number(bell.dataset.rings) + 1); };
+            });
+            await shell(`DISPLAY=:0 python3 -c ${shellQuote(RING_PY)} && DISPLAY=:0 xsetroot -solid '${RUNG}'`, fresh);
 
-        return 'a fresh box\'s desktop opened on its background and panel; the panel\'s clicks opened a terminal and a browser; foreign sockets refused';
-      });
+            for (let rung = await screen(); !near(rung?.desktop, RUNG); rung = await screen()) {
+              reading = JSON.stringify(rung);
+              await delay(250);
+            }
+
+            requireEqual(await frame.evaluate(() => document.getElementById('noVNC_bell')?.dataset.rings), '0');
+
+            const rect = seen.rect;
+
+            const opened = async (launcher: keyof typeof DESKTOP_PANEL.launchers, windowClass: string) => {
+              waiting = `the panel's ${launcher} opening a ${windowClass} window`;
+              await page.mouse.click(rect.x + DESKTOP_PANEL.launchers[launcher] * rect.width / DESKTOP_SIZE.width,
+                rect.y + (DESKTOP_SIZE.height - DESKTOP_PANEL.height / 2) * rect.height / DESKTOP_SIZE.height);
+              await shell(`until DISPLAY=:0 xdotool search --onlyvisible --class ${windowClass} >/dev/null 2>&1; do sleep 0.1; done`, fresh);
+            };
+
+            await opened('terminal', 'xterm');
+            await opened('browser', 'chromium');
+
+            waiting = 'a foreign socket refused by the client\'s policy';
+
+            const elsewhere = await frame.evaluate(() => new Promise<string>(resolve => {
+              document.addEventListener('securitypolicyviolation', event => { resolve(event.violatedDirective); }, { once: true });
+              new WebSocket('ws://elsewhere.example/websockify', ['binary']).addEventListener('open', () => { resolve('opened'); });
+            }));
+
+            requireEqual(elsewhere, 'connect-src');
+
+            return 'a fresh box\'s desktop opened on its background and panel; a ring of its bell played nothing; the panel\'s clicks opened a terminal and a browser; foreign sockets refused';
+          })();
+
+          return endedNearSilence(watched, async () => { await browser.disconnect(); },
+            () => `${waiting}${reading === '' ? '' : `; it last read ${reading}`}${heard.length === 0 ? '' : `; the page heard ${heard.join(' | ')}`}`);
+        });
+      } catch (cause) {
+        // Said before anything else is asked of the box, so a fetch of its log that hangs cannot swallow it.
+        process.stdout.write(`[${run}] desktop-client failed: ${String(cause)}\n`);
+        // The desktop's own log says why a part did not paint: the wallpaper's and the panel's errors land there.
+        const log = await shell(`grep -v 'INFO\\|\\[mi\\]\\|^$' ${DESKTOP_LOG} | tail -n 30 2>&1; true`, fresh);
+
+        throw new Error(`${String(cause)}; the desktop's log:\n${log}`, { cause });
+      }
     });
   };
 

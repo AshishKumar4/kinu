@@ -432,6 +432,7 @@ describe('the ladder measures something', () => {
       'Live app in a browser: a slate that serves its own page, in its answer',
       'Live app in a browser: a wait on the provider',
       'Live app in a browser: the inspector column\'s layout',
+      'Live app in a browser: the owner hears a turn end, or a decision, only while away',
       'Live app in a browser: the root answers under the dev stack',
       'Product flows in a browser, on the deployment',
       'Production deploy contract',
@@ -802,7 +803,7 @@ describe('a deploy phase\'s armada report', () => {
     expect(planned.exitCode, planned.stderr).toBe(0);
 
     const plan = v.parse(v.object({ include: v.array(v.object({
-      name: v.string(), row: v.string(), rows: v.array(v.string()),
+      name: v.string(), row: v.string(), rows: v.tuple([v.string()]),
     })) }), JSON.parse(planned.stdout));
 
     const flows = plan.include.filter((entry) => entry.row.startsWith('bash scripts/product-flows-tier.sh'));
@@ -811,17 +812,18 @@ describe('a deploy phase\'s armada report', () => {
 
     expect(flows.length).toBe(PRODUCT_FLOW_ROWS.length);
     expect(new Set(flows.map((entry) => entry.name)).size).toBe(flows.length);
-    expect(flows.every((entry) => entry.rows.length === 1 && entry.rows[0] === entry.row)).toBe(true);
+    expect(new Set(flows.map((entry) => entry.rows[0])).size).toBe(flows.length);
 
     if (complete === undefined || hung === undefined) throw new Error('product flows were not split into independently reported tasks');
 
     const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bash scripts/product-flows-tier.sh');
 
+    // A task that ended before its verdict is armada's row under the planned name; a finished one is the task's own.
     const read = armadaRowVerdicts(rows, {
       job: 'interrupted-flow', graded: 'fail', problems: [], artifacts: {},
       verdicts: { rows: flows.map((entry) => entry === hung
-        ? { name: entry.row, exitCode: 124, seconds: 1800, output: 'task ended before its verdict' }
-        : { run: entry.row, exitCode: 0, seconds: 10, output: '' }) },
+        ? { name: entry.rows[0], exitCode: 124, seconds: 1800, output: 'task ended before its verdict' }
+        : { name: entry.rows[0], run: entry.row, exitCode: 0, seconds: 10, output: '' }) },
     });
 
     expect(read.find(({ gate }) => gate.run === complete.row)?.green).toBe(true);
@@ -835,14 +837,16 @@ describe('a phase armada could not grade', () => {
     const rows = armadaPhaseRows(['post-publish']).filter((gate) => gate.run === 'bun run gate:first-run' || gate.run === 'bash scripts/product-flows-tier.sh')
       .map((gate) => gate.run === 'bash scripts/product-flows-tier.sh' ? { ...gate, run: `${gate.run} --flow=welcome` } : gate);
 
+    const [firstRun, welcome] = rows.map((gate) => gate.label);
+
     const report: ArmadaReport = {
       job: '20261009-evidence',
       graded: 'not graded',
       problems: ['incomplete evidence'],
       verdicts: {
         rows: [
-          { name: 'bun run gate:first-run', exitCode: 2, seconds: 61, output: '', artifacts: ['first-run/report.json'], problem: 'evidence was not retained' },
-          { run: 'bash scripts/product-flows-tier.sh --flow=welcome', exitCode: 0, seconds: 300, output: '' },
+          { name: firstRun, run: 'bun run gate:first-run', exitCode: 2, seconds: 61, output: '', artifacts: ['first-run/report.json'], problem: 'evidence was not retained' },
+          { name: welcome, run: 'bash scripts/product-flows-tier.sh --flow=welcome', exitCode: 0, seconds: 300, output: '' },
         ],
       },
       artifacts: {},
@@ -1375,8 +1379,8 @@ describe('a tier runs its gates as a wave', () => {
 
 describe('CI verdicts belong to the exact pushed revision and the complete row plan', () => {
   const sha = 'a'.repeat(40);
-  const first = { run: 'bun test a.test.ts', exitCode: 0, seconds: 1, output: '' };
-  const second = { run: 'bun test b.test.ts', exitCode: 1, seconds: 2, output: 'a real failure' };
+  const first = { name: 'a', run: 'bun test a.test.ts', exitCode: 0, seconds: 1, output: '' };
+  const second = { name: 'b', run: 'bun test b.test.ts', exitCode: 1, seconds: 2, output: 'a real failure' };
   const rows = [first, second];
 
   // armada graded the plan's every row before it stored the verdict; the ladder reads it through Kinu's pinned armada.
@@ -1399,10 +1403,50 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
   test('a missing or red hammer run never verifies the revision', () => {
     const hammer = ciUnits().find((unit) => unit.gate.phase === 'hammer')?.gate.run ?? '';
-    const proved = ciUnits().map((unit) => ({ run: unit.gate.run, exitCode: unit.gate.run === hammer ? 1 : 0, seconds: 1, output: '' }));
+    const proved = ciUnits().map((unit) => ({ name: unit.gate.label, run: unit.gate.run, exitCode: unit.gate.run === hammer ? 1 : 0, seconds: 1, output: '' }));
 
     expect(reportCIVerdicts({ sha, part: 'all', rows: proved }, 'armada verdict', '')).toBe(false);
     expect(reportCIVerdicts({ sha, part: 'all', rows }, 'armada verdict', '')).toBe(false);
+  });
+
+  // A part's command names the files its run's timings cut it, which the deploy's own cut need not repeat.
+  test('the deploy reports a CI row by the name armada graded it by, and its command as the command', () => {
+    const report = scratchDir('ci-verdict-names');
+    const unit = ciUnits().find((each) => each.gate.phase === 'hammer')?.gate;
+
+    if (unit === undefined) throw new Error('the hammer has no CI unit');
+    const run = `${unit.run.split(' ').slice(0, 3).join(' ')} a-file-this-cut-names.test.ts`;
+
+    reportCIVerdicts({ sha, part: 'all', rows: [{ name: unit.label, run, exitCode: 1, seconds: 2, output: 'a real failure' }] }, 'armada verdict', report);
+
+    const entries = readFileSync(join(report, 'entries.jsonl'), 'utf8').split('\n').filter((line) => line !== '')
+      .map((line) => v.parse(v.looseObject({ kind: v.string(), what: v.string(), command: v.optional(v.string()) }), JSON.parse(line)));
+
+    expect(entries.filter((entry) => entry.kind !== 'notice').map(({ kind, what, command }) => ({ kind, what, command })))
+      .toEqual([{ kind: 'timing', what: unit.label, command: run }, { kind: 'red', what: unit.label, command: run }]);
+  });
+
+  // armada's own row for a task that ended before its verdict (`underExit`) has the planned name and no command.
+  test('a CI row armada wrote for a task that ended before its verdict is read, and reported red by its name', () => {
+    const directory = scratchDir('armada-verdict-unreported');
+    const bin = join(directory, 'node_modules', '.bin');
+    const label = ciUnits()[0]?.gate.label ?? '';
+    const said = { sha, part: 'all', rows: [{ name: label, exitCode: 124, seconds: 1800, output: 'the task exited 124 and reported no row' }] };
+
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'armada'), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(said)}'\nexit 1\n`, { mode: 0o755 });
+    const file = armadaVerdict(directory, sha);
+
+    if (file === null) throw new Error('armada answered no verdict');
+    const report = scratchDir('ci-verdict-unreported');
+    const green = reportCIVerdicts(file, 'armada verdict', report);
+
+    const red = readFileSync(join(report, 'entries.jsonl'), 'utf8').split('\n').filter((line) => line !== '')
+      .map((line) => v.parse(v.looseObject({ kind: v.string(), what: v.string(), command: v.optional(v.string()), reproduce: v.optional(v.string()) }), JSON.parse(line)))
+      .find((entry) => entry.kind === 'red');
+
+    expect({ green, red: red === undefined ? undefined : { what: red.what, command: red.command, reproduce: red.reproduce } })
+      .toEqual({ green: false, red: { what: label, command: undefined, reproduce: `node_modules/.bin/armada run ${sha}` } });
   });
 
   test('CI runs the hammer six times, each run in parts that cover the suite once, and leaves no CI source work in the deploy', () => {
@@ -1440,7 +1484,36 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
     expect(live?.row.rssMb).toBe(2048);
     expect(live?.row.threads).toBe(1);
-    expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'armada verdict', '')).toBe(false);
+    expect(reportCIVerdicts({ sha, part: 'all', rows: [{ name: 'Product flows', run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'armada verdict', '')).toBe(false);
+  });
+
+  // 2026-10-16: armada keeps a row's timing under the name the plan gives it. Named by their commands, each change's
+  // hammer parts named new files, and the 888 rows they left made every run's job too big for armada to store.
+  test('the plan names each CI row by its unit\'s label, which the files its command covers leave as it was', async () => {
+    const directory = scratchDir('ci-plan-names');
+    const hammer = ciUnits(readHostedCosts()).filter((unit) => unit.gate.phase === 'hammer').map((unit) => unit.gate.run.split(' ').slice(3));
+
+    const plans = await Promise.all([hammer[0]?.[0], hammer[1]?.[0]].map(async (file, at) => {
+      const costs = join(directory, `${String(at)}.json`);
+
+      if (file === undefined) throw new Error('the hammer was not cut in parts');
+      writeFileSync(costs, JSON.stringify({ rows: {}, files: { [file]: 1e9 } }));
+      const planned = await runToExit([process.execPath, 'scripts/ladder.ts', '--ci-plan', `--ci-costs=${costs}`], { cwd: root });
+
+      if (planned.exitCode !== 0) throw new Error(planned.stderr);
+
+      return v.parse(v.object({ include: v.array(v.object({
+        row: v.string(), rows: v.tuple([v.union([v.string(), v.object({ name: v.string() })])]),
+      })) }), JSON.parse(planned.stdout)).include;
+    }));
+
+    const [before, after] = plans.map((plan) => ({
+      runs: new Set(plan.map((entry) => entry.row)), names: plan.map((entry) => typeof entry.rows[0] === 'string' ? entry.rows[0] : entry.rows[0].name).sort(),
+    }));
+
+    expect([...before?.runs ?? []].every((run) => after?.runs.has(run))).toBe(false);
+    expect(before?.names).toEqual(after?.names ?? []);
+    expect(before?.names).toEqual(ciUnits(readHostedCosts()).map((unit) => unit.gate.label).sort());
   });
 
   // The container runner (armada, `.armada.json`) runs the same units one task each, weighed by what it measured.
@@ -1448,7 +1521,7 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     const hosted = readHostedCosts();
     const unit = ciUnits(hosted).find((each) => each.gate.phase !== 'hammer' && each.gate.ciShards === undefined);
     const run = unit?.gate.run ?? '';
-    const measured = withRunnerCosts(hosted, { rows: { [run]: 1e6, 'a command no row runs': 5 }, files: { 'a.test.ts': 2 } }, new Map([[run, unit?.gate.label ?? '']]));
+    const measured = withRunnerCosts(hosted, { rows: { [unit?.gate.label ?? '']: 1e6, 'a command no row runs': 5 }, files: { 'a.test.ts': 2 } });
     const weights = new Map(ciUnits(measured).map((each) => [each.gate.run, each.seconds]));
 
     expect({ timed: weights.get(run), others: ciUnits(hosted).filter((each) => each.gate.run !== run).every((each) => weights.get(each.gate.run) === each.seconds), file: measured.files['a.test.ts'] })

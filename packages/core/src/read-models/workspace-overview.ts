@@ -13,9 +13,11 @@ import { SlateShareCardSchema, type SlateShareCard } from '../slates/sharing';
 
 const TASK_PREVIEW_MAX = 240;
 
+/** `run`: the run's id, which owner alerts tell one run from the next by; null on a tile stored before runs were named. */
 const WorkspaceOverviewRunSchema = v.object({
   status: v.nullable(v.string()),
   task: v.nullable(v.string()),
+  run: v.optional(v.nullable(v.string()), null),
 });
 
 /** `picture`: the latest capture's digest; visibility is the current shared reach or null. */
@@ -54,7 +56,7 @@ export interface WorkspaceOverviewInputs {
   readonly activePlan: { readonly status: PlanReviewStatus } | null;
   /** Open questions to the owner, the workspace agent's and its hosted agents': each waits on their decision. */
   readonly openQuestions: number;
-  readonly latestRun: { readonly status: string | null; readonly task: string | null } | null;
+  readonly latestRun: { readonly status: string | null; readonly task: string | null; readonly run: string | null } | null;
   readonly slates: readonly Omit<WorkspaceOverviewSlate, 'visibility'>[];
   readonly shares: readonly WorkspaceOverviewShare[];
 }
@@ -108,7 +110,7 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
 
     latestRun: inputs.latestRun === null
       ? null
-      : { status: inputs.latestRun.status, task: task === null ? null : task.slice(0, TASK_PREVIEW_MAX) },
+      : { status: inputs.latestRun.status, task: task === null ? null : task.slice(0, TASK_PREVIEW_MAX), run: inputs.latestRun.run },
 
     slates: inputs.slates.map((slate) => ({ ...slate, visibility: widestReach(inputs.shares, slate.id) })),
     shares: [...inputs.shares],

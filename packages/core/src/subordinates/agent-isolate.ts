@@ -216,7 +216,8 @@ export interface AgentAnswerTexts {
 export interface AgentStanding {
   readonly messageCount: number;
   readonly context: ContextFill | null;
-  readonly latestRun: { readonly status: string | null; readonly userMessage: string | null } | null;
+  /** `run`: its id; null on a run about to start, or on a standing stored before runs were named. */
+  readonly latestRun: { readonly status: string | null; readonly userMessage: string | null; readonly run: string | null } | null;
   /** Words sent into a running turn and not yet read by it. */
   readonly pendingSteers: readonly InlineSteer[];
   readonly plans: PlanStanding;

@@ -552,7 +552,7 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding } from './identity/workspace-actors';
 
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
@@ -1095,7 +1095,7 @@ export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
+  isHiddenEntry, workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
@@ -1481,7 +1481,7 @@ export {
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, type DeviceConsentOutcome,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
   DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentAnswer, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
   type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
@@ -1582,7 +1582,7 @@ export {
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
-  type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
+  type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema,
   type BackgroundJobRunnerDeps, type JobHolder, initJobHoldersTable, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
   WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
@@ -1905,13 +1905,13 @@ export {
   getExecutorFiles, readExecutorFile, sortDirEntries, writeExecutorFileOp,
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
   listEnvironments, joinDir, parentDir,
-  FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, FILES_PAGE_ENTRIES,
+  FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, FILES_PAGE_ENTRIES, shownEntries,
   ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
 } from './read-models/files';
 
 export type {
   DirEntry, EnvironmentInfo, ExecutorFileLookup, ExecutorRowLookup, ExecutorTextFile, ExecutorWriteResult,
-  FilesPage,
+  FilesPage, FilesRequest,
 } from './read-models/files';
 
 export { inlineFileType } from './read-models/file-types';
@@ -1991,12 +1991,14 @@ export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks 
 
 export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
+export { ownerIsAway, watchFrame, type AlertWatch, type OwnerAlert } from './read-models/owner-alerts';
+
 export { OverviewPush, type OverviewPushHost } from './read-models/overview-push';
 
 export {
-  AccountMemoryFrameSchema, CredentialSummarySchema, ModelMenuResponseSchema, ProviderCatalogEntrySchema,
-  RosterFrameSchema, RosterPageSchema, UserProfileSchema, WorkspaceEntrySchema,
-  type AccountMemoryFrame, type CredentialSummary, type ModelMenuEntry, type ModelMenuResponse, type ProviderCatalogEntry,
+  AccountForegroundFrameSchema, AccountMemoryFrameSchema, CredentialSummarySchema, ForegroundReportSchema, ModelMenuResponseSchema,
+  ProviderCatalogEntrySchema, RosterFrameSchema, RosterPageSchema, UserProfileSchema, WorkspaceEntrySchema,
+  type AccountForegroundFrame, type AccountMemoryFrame, type CredentialSummary, type ForegroundReport, type ModelMenuEntry, type ModelMenuResponse, type ProviderCatalogEntry,
   type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type UserProfile, type WorkspaceEntry,
 } from './read-models/account-wire';
 
@@ -2193,8 +2195,13 @@ export {
 } from './http/public-shell';
 
 export {
-  accountTheme, DEFAULT_THEME, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed, type Mode, type ThemeName,
+  accountTheme, DEFAULT_THEME, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
+  type ColourToken, type Mode, type TerminalPalette, type ThemeName,
 } from './web/theme';
+
+export {
+  accountFilesView, DEFAULT_FILES_VIEW, FILES_VIEW_CONFIG_KEY, filesViewNamed, type FilesView,
+} from './web/files-view';
 
 export { hueStops, rankHue } from './web/agent-colour';
 

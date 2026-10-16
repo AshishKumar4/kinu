@@ -9,6 +9,7 @@ import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
 import { composing } from "./ui/form";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
+import { OwnerAlerts } from "@/hooks/use-owner-alerts";
 import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
 import { DESKTOP_QUERY } from "@/hooks/use-media-query";
 import { AppBackground } from "./AppBackground";
@@ -65,6 +66,7 @@ function Shell() {
 
   return (
     <WorkspaceRosterProvider>
+    <OwnerAlerts />
     <div className="isolate flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       <AppBackground />
       <header className={`h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>

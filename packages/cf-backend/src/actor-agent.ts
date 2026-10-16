@@ -103,7 +103,7 @@ import {
   type SqlExecutor,
   betaSwarms,
   // Background-job system (#173: auto-background past the surface threshold)
-  BackgroundJobRunner, type InvocationSurface,
+  BackgroundJobRunner, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
   resumeBackgroundJob, harvestBackgroundJob, type ActorToolsets,
@@ -1046,6 +1046,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get terminal(): TerminalTransitions {
     this._terminalTransitions ??= new TerminalTransitions({
       actor: this.actorHandle(),
+      standing: async () => this.actorDirectoryStore().standing(this.actorHandle().actorId),
       sql: this.boundSql,
       holds: this.held,
       effects: this.terminalEffectTable(),
@@ -2309,6 +2310,7 @@ export abstract class ActorAgent extends Agent<Env> {
         workspaceServing: () => this.workspaceServing(),
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
+        turnSurface: () => this.turnSurface(),
       }, {
         actor: this.actorHandle(),
         rootActor: true,
@@ -3540,8 +3542,12 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Chat turns are interactive: slow work must hand back a handle fast. Signal-driven turns are
-   *  one-shot: detaching there costs a truncated turn plus a synthesis turn and buys nothing. */
+   *  one-shot: detaching there costs a truncated turn plus a synthesis turn and buys nothing. A wake
+   *  that resumes parked calls opens its turn on the surface they were made on (`RESUMED_SURFACE`). */
   protected turnSurface(): InvocationSurface {
+    const resumed = v.safeParse(InvocationSurfaceSchema, this.turnUserMetadata()?.[RESUMED_SURFACE]);
+
+    if (resumed.success) return resumed.output;
     // Either marks one-shot: a CLI `oneShot` request (continuity 'independent_task') or a
     // signal-driven turn carrying `kinuEvent` metadata; continuity alone misses autonomous turns.
     const programmatic = this.turnUserMessageEvent() !== null;

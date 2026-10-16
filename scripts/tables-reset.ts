@@ -14,9 +14,11 @@
  * THE WALK, after the upload: every object opened once under the candidate, so each repairs itself before a user waits
  * on it, and its census read back with what its repair did. It starts from the accounts `/ops/roots` names (the builtin
  * sign-in directory, every user the control plane has seen, the eval service's own), follows each account to its
- * workspaces and each workspace to its agents, and reaches besides every object Cloudflare lists, which names only
- * objects holding KV data and so misses a database that holds only SQL. A refused or row-losing database fails the
- * walk; one it could not reach is a gap in the census, named with why. The census goes beside the record.
+ * workspaces and each workspace to its agents, and opens every object by its name, never by an id: a workspace opened
+ * by id that never recorded its name refuses to construct, and so throws (staging rc12, 2026-10-16). Cloudflare's list
+ * of objects is only read beside it, never opened: an object it lists that no root names is counted as unnamed, and
+ * repairs at its first request. A refused or row-losing database fails the walk; one it could not reach is a gap in
+ * the census, named with why. The census goes beside the record.
  *
  * THE PASS. `/ops/tables` and `/ops/roots` admit a one-time pass this step writes into the deployment's AUTH_KV with
  * wrangler, the authority `reset.ts wipe` deletes with, and deletes when it is done; no session reaches them.
@@ -252,7 +254,7 @@ export interface WalkReport {
 
 /** What the walk found: each repair, each refusal, each object that did not answer, and each rebuilt table whose rows
  *  moved, which no repair should do. */
-export function walkLines(reached: readonly Reached[], listed: number): WalkReport {
+export function walkLines({ reached, unnamed }: Walked): WalkReport {
   const stores = storesOf(reached);
   const repaired = stores.filter((store) => store.answer.repair !== null && store.answer.refused === null);
   const refused = stores.filter((store) => store.answer.refused !== null).map((store) => `${store.kind} ${store.label}: ${store.answer.refused ?? ''}`);
@@ -275,13 +277,15 @@ export function walkLines(reached: readonly Reached[], listed: number): WalkRepo
 
   return {
     lines: [
-      `${String(stores.length)} database(s) in ${String(reached.length)} object(s), ${String(listed)} of them listed by Cloudflare; `
+      `${String(stores.length)} database(s) in ${String(reached.length)} object(s) opened by name; `
         + `${String(repaired.length)} repaired by this walk (the rest were already at this build, or repaired by a request first)`,
       ...repaired.map(did),
       ...section('UNCHECKED (held, but the init made no shape to compare; left as they are):', unchecked),
       ...section('REFUSED (kept as they are, refusing every call with why):', refused),
       ...section('ROWS MOVED in a rebuild:', moved),
       ...section('UNREACHED, a gap in this census (each repairs at its first request on this build):', unreached),
+      ...unnamed.length === 0 ? [] : [`${String(unnamed.length)} object(s) Cloudflare lists that no root names, not opened (each repairs at its first `
+        + `request): ${unnamed.slice(0, 5).join(', ')}${unnamed.length > 5 ? `, and ${String(unnamed.length - 5)} more` : ''}`],
     ],
     failed: [...refused, ...moved],
   };
@@ -303,10 +307,9 @@ export interface TablesTarget {
   pause: (ms: number) => Promise<void>;
 }
 
-/** One `/ops/tables` batch. */
+/** One `/ops/tables` batch: objects by name alone. */
 export interface OpsBody {
   readonly class: ResetClass;
-  readonly ids: readonly string[];
   readonly names: readonly string[];
 }
 
@@ -385,42 +388,43 @@ const BUILD_BEFORE = /does not implement the method "opsTables"/u;
 /** How long the walk waits before asking such an object again. */
 const ASK_AGAIN_MS = 2_000;
 
-/** `asked` of `className`, in batches; each answer kept, over any earlier one for the same object. */
-async function askEach({ target, pass, reached }: Walking, className: ResetClass, asked: { names: readonly string[]; ids: readonly string[] }): Promise<void> {
-  const batches: OpsBody[] = [];
-
-  for (let at = 0; at < asked.names.length; at += OPS_OBJECTS_PER_REQUEST) batches.push({ class: className, ids: [], names: asked.names.slice(at, at + OPS_OBJECTS_PER_REQUEST) });
-
-  for (let at = 0; at < asked.ids.length; at += OPS_OBJECTS_PER_REQUEST) batches.push({ class: className, ids: asked.ids.slice(at, at + OPS_OBJECTS_PER_REQUEST), names: [] });
-
-  for (const body of batches) {
+/** `names` of `className`, in batches; each answer kept, over any earlier one for the same object. */
+async function askEach({ target, pass, reached }: Walking, className: ResetClass, names: readonly string[]): Promise<void> {
+  for (let at = 0; at < names.length; at += OPS_OBJECTS_PER_REQUEST) {
+    const body: OpsBody = { class: className, names: names.slice(at, at + OPS_OBJECTS_PER_REQUEST) };
     const answer = await askAdmitted(target, pass, { path: 'tables', body, schema: OpsAnswerSchema });
 
     for (const object of answer.objects) reached.set(object.id, { className, ...object });
   }
 }
 
-/** The objects of `className` named or listed and not yet asked, asked in batches; each answer's leads, kept. One that
- *  started on the build before is asked again, for as long as a version may take to reach every machine (the smoke
- *  test's bound); past it, it is a gap in the census, which repairs at its first request on the candidate. */
-async function reachEach(walking: Walking, className: ResetClass, asked: { names: readonly string[]; ids: readonly string[] }): Promise<void> {
+/** The objects of `className` named and not yet asked, asked in batches; each answer's leads, kept. One that started
+ *  on the build before is asked again, for as long as a version may take to reach every machine (the smoke test's
+ *  bound); past it, it is a gap in the census, which repairs at its first request on the candidate. */
+async function reachEach(walking: Walking, className: ResetClass, named: readonly string[]): Promise<void> {
   const { target, reached } = walking;
-  const names = [...new Set(asked.names)].filter((name) => ![...reached.values()].some((object) => object.className === className && object.name === name));
+  const asked = (name: string) => [...reached.values()].some((object) => object.className === className && object.name === name);
 
-  await askEach(walking, className, { names, ids: [...new Set(asked.ids)].filter((id) => !reached.has(id)) });
+  await askEach(walking, className, [...new Set(named)].filter((name) => !asked(name)));
 
   for (let left = Math.ceil((target.candidate?.propagationMs ?? 0) / ASK_AGAIN_MS); left > 0; left -= 1) {
     const behind = [...reached.values()].filter((object) => object.className === className && BUILD_BEFORE.test(object.error ?? ''));
 
     if (behind.length === 0) return;
     await target.pause(ASK_AGAIN_MS);
-    await askEach(walking, className, { names: behind.flatMap((object) => object.name ?? []), ids: behind.flatMap((object) => (object.name === undefined ? [object.id] : [])) });
+    await askEach(walking, className, behind.flatMap((object) => object.name ?? []));
   }
 }
 
 /** The walk: every account the roots and the builtin directory name, each one's workspaces, and every object
  *  Cloudflare lists besides, each opened once under a pass written for this run and deleted after it. */
-export async function walk(target: TablesTarget): Promise<{ readonly reached: Reached[]; readonly listed: number }> {
+/** What the walk opened, and what Cloudflare lists that no root names: ids it read, and did not open. */
+export interface Walked {
+  readonly reached: Reached[];
+  readonly unnamed: string[];
+}
+
+export async function walk(target: TablesTarget): Promise<Walked> {
   const pass = randomBytes(32).toString('base64url');
   const digest = sha256Hex(pass);
 
@@ -442,19 +446,19 @@ export async function walk(target: TablesTarget): Promise<{ readonly reached: Re
     while (accounts.length > 0) {
       const before = reached.size;
 
-      await reachEach(walking, 'UserDO', { names: accounts, ids: [] });
+      await reachEach(walking, 'UserDO', accounts);
       accounts = reached.size === before ? [] : answers().flatMap((answer) => answer.accounts);
     }
 
-    await reachEach(walking, 'UserDO', { names: [], ids: listed.UserDO });
-    await reachEach(walking, 'OrchestratorAgent', { names: answers().flatMap((answer) => answer.workspaces), ids: [] });
-    await reachEach(walking, 'OrchestratorAgent', { names: [], ids: listed.OrchestratorAgent });
-    await reachEach(walking, 'SlateRoom', { names: answers().flatMap((answer) => answer.rooms), ids: [] });
-    await reachEach(walking, 'SlateRoom', { names: [], ids: listed.SlateRoom });
-    // The Gallery is one object, by its one name.
-    await reachEach(walking, 'GalleryDO', { names: ['gallery'], ids: listed.GalleryDO });
+    await reachEach(walking, 'OrchestratorAgent', answers().flatMap((answer) => answer.workspaces));
+    // Each workspace names its slates' rooms; the Gallery is one object, by its one name.
+    await reachEach(walking, 'SlateRoom', answers().flatMap((answer) => answer.rooms));
+    await reachEach(walking, 'GalleryDO', ['gallery']);
 
-    return { reached: [...reached.values()], listed: listed.UserDO.length + listed.OrchestratorAgent.length + listed.SlateRoom.length + listed.GalleryDO.length };
+    return {
+      reached: [...reached.values()],
+      unnamed: [...listed.UserDO, ...listed.OrchestratorAgent, ...listed.SlateRoom, ...listed.GalleryDO].filter((id) => !reached.has(id)),
+    };
   } finally {
     target.forget(digest);
   }

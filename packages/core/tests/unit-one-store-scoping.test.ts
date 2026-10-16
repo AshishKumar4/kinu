@@ -370,6 +370,7 @@ describe('two actors, one database: terminal_effects', () => {
     initTerminalEffectTable(w.execRaw);
 
     const ledger = new TerminalEffectLedger({
+      standing: async () => 'live' as const,
       sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
       transaction: (body) => w.db.transaction(body)(),
     });
@@ -389,11 +390,13 @@ describe('two actors, one database: terminal_effects', () => {
 
     // Claim only: the roster write is synchronous, so no wake or effect body runs.
     const a = new TerminalEffectLedger({
+      standing: async () => 'live' as const,
       sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
       transaction: (body) => w.db.transaction(body)(),
     });
 
     const b = new TerminalEffectLedger({
+      standing: async () => 'live' as const,
       sql: w.sql, actor: w.b, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
       transaction: (body) => w.db.transaction(body)(),
     });

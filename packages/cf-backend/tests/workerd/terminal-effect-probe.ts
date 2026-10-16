@@ -149,6 +149,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
 
   private get transitions(): TerminalTransitions {
     this._transitions ??= new TerminalTransitions({
+      standing: async () => 'live' as const,
       sql: this.sql,
       actor: this.probeActor(),
       effects: this.effectTable(),

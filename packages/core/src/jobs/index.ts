@@ -22,7 +22,7 @@ export {
   type BackgroundHandle,
   type BackgroundPolicy,
   type DetachOutcome,
-  type InvocationSurface,
+  type InvocationSurface, InvocationSurfaceSchema,
   type ThresholdDeps,
 } from './threshold';
 

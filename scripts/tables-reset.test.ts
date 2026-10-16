@@ -109,11 +109,11 @@ const WORKSPACE: Reached = {
   }),
 };
 
-const LOST: Reached = { className: 'OrchestratorAgent', id: 'c'.repeat(64), error: 'reached by id before any named start' };
+const LOST: Reached = { className: 'OrchestratorAgent', id: 'c'.repeat(64), name: 'gone', error: 'the object failed to start' };
 
 test('a census is one sorted line per database and table, an unreachable object one line of its own', () => {
   expect(censusLines([WORKSPACE, LOST, ACCOUNT])).toEqual([
-    `OrchestratorAgent\t${'c'.repeat(64)}\t!unreachable\treached by id before any named start`,
+    'OrchestratorAgent\tgone\t!unreachable\tthe object failed to start',
     'OrchestratorAgent\tjarvis\ttrial_turns\t3',
     'UserDO\tu1\tdevice_joins\t2',
     'UserDO\tu1\tuser_profile\t1',
@@ -122,21 +122,22 @@ test('a census is one sorted line per database and table, an unreachable object 
 });
 
 test('the walk names what each repair did, fails on a refused or a row-moving database, and names a gap in its census', () => {
-  const { lines, failed } = walkLines([ACCOUNT, WORKSPACE, LOST], 1);
+  const { lines, failed } = walkLines({ reached: [ACCOUNT, WORKSPACE, LOST], unnamed: ['d'.repeat(64)] });
 
   expect(lines).toEqual([
-    '3 database(s) in 3 object(s), 1 of them listed by Cloudflare; 1 repaired by this walk (the rest were already at this build, or repaired by a request first)',
+    '3 database(s) in 3 object(s) opened by name; 1 repaired by this walk (the rest were already at this build, or repaired by a request first)',
     '  UserDO u1: rebuilt device_joins; retired user_peer_grants',
     'REFUSED (kept as they are, refusing every call with why):',
     '  OrchestratorAgent jarvis: trial_turns: NOT NULL constraint failed: trial_turns.segment_id',
     'UNREACHED, a gap in this census (each repairs at its first request on this build):',
-    `  OrchestratorAgent ${'c'.repeat(64)}: reached by id before any named start`,
+    '  OrchestratorAgent gone: the object failed to start',
+    `1 object(s) Cloudflare lists that no root names, not opened (each repairs at its first request): ${'d'.repeat(64)}`,
   ]);
   expect(failed).toEqual(['OrchestratorAgent jarvis: trial_turns: NOT NULL constraint failed: trial_turns.segment_id']);
 
   const moved: Reached = { ...ACCOUNT, answer: answer({ repair: { ...REPAIR, tables: [{ table: 'device_joins', before: 2, after: 1 }] } }) };
 
-  expect(walkLines([moved], 0).failed).toEqual(['UserDO u1: device_joins 2 → 1']);
+  expect(walkLines({ reached: [moved], unnamed: [] }).failed).toEqual(['UserDO u1: device_joins 2 → 1']);
 });
 
 /** What the walk is led to from `name`: the directory names a builtin account, an account its workspace, a workspace
@@ -161,12 +162,9 @@ function deployment(stale: number, onBuildBefore = 0) {
   let starting = onBuildBefore;
 
   // `u-builtin-ws` starts on the build before while its machine has not the candidate yet, `onBuildBefore` asks long.
-  const objectAnswer = (body: OpsBody) => [
-    ...body.names.map((name) => (name === 'u-builtin-ws' && starting-- > 0
+  const objectAnswer = (body: OpsBody) => body.names.map((name) => (name === 'u-builtin-ws' && starting-- > 0
       ? { id: sha256Hex(name), name, error: `reaching OrchestratorAgent ${name}: The RPC receiver does not implement the method "opsTables".` }
-      : { id: sha256Hex(name), name, answer: answer(leadsOf(body.class, name)) })),
-    ...body.ids.map((id) => ({ id, answer: answer({}) })),
-  ];
+      : { id: sha256Hex(name), name, answer: answer(leadsOf(body.class, name)) }));
 
   const target: TablesTarget = {
     objects: async (className) => (className === 'UserDO' ? [sha256Hex('u-seen'), ...Array.from({ length: 60 }, (_, at) => at.toString(16).padStart(64, '0'))] : []),
@@ -192,21 +190,22 @@ function deployment(stale: number, onBuildBefore = 0) {
   return { target, asked, admitted, forgotten };
 }
 
-test('the walk follows the roots to the directory\'s accounts and every account\'s workspaces, and reaches each listed object once', async () => {
+test('the walk reaches every object by name, from the roots, and only reads Cloudflare\'s list beside them', async () => {
   const { target, asked, admitted, forgotten } = deployment(0);
-  const { reached, listed } = await walk(target);
+  const { reached, unnamed } = await walk(target);
 
-  expect(asked.map((body) => `${body.class} ${body.names.join(',') || `${String(body.ids.length)} id(s)`}`)).toEqual([
+  // Staging rc12, 2026-10-16: an object asked by its listed id, which never recorded a name, threw as it constructed.
+  expect(asked.map((body) => `${body.class} ${body.names.join(',')}`)).toEqual([
     'UserDO directory,u-seen',
     'UserDO u-builtin',
-    'UserDO 50 id(s)',
-    'UserDO 10 id(s)',
     'OrchestratorAgent u-seen-ws,u-builtin-ws',
     'SlateRoom u-seen-ws/0123456789,u-builtin-ws/0123456789',
     'GalleryDO gallery',
   ]);
-  // `u-seen` was listed too, and named first: it is asked once.
-  expect({ reached: reached.length, listed }).toEqual({ reached: 68, listed: 61 });
+  expect(asked.every((body) => !('ids' in body))).toBe(true);
+  // Listed by Cloudflare and named by no root: counted, never opened. `u-seen` was named, so it is not among them.
+  expect({ reached: reached.length, unnamed: unnamed.length }).toEqual({ reached: 8, unnamed: 60 });
+  expect(unnamed).not.toContain(sha256Hex('u-seen'));
   expect(forgotten).toEqual(admitted);
 });
 
@@ -236,7 +235,7 @@ test('an object that starts on the build before is asked again until it starts o
 test('one still on the build before past the propagation bound is a gap in the census, which fails nothing', async () => {
   const { target } = deployment(0, Number.POSITIVE_INFINITY);
   const { reached } = await walk({ ...target, candidate: { version: 'v-candidate', propagationMs: 4_000 } });
-  const report = walkLines(reached, 0);
+  const report = walkLines({ reached, unnamed: [] });
 
   expect(report.failed).toEqual([]);
   expect(report.lines.slice(-2)).toEqual([

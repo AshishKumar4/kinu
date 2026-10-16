@@ -508,7 +508,7 @@ describe('the daemon answers the hub in core\'s frames', () => {
     const pages = [first];
 
     for (let from = first.next; from !== undefined;) {
-      const page = await getExecutorFiles(lookup, 'workspace', present(first.path, 'the landed folder'), from);
+      const page = await getExecutorFiles(lookup, 'workspace', present(first.path, 'the landed folder'), { from });
 
       pages.push(page);
       from = page.next;

@@ -50,15 +50,17 @@ export class UserProfileStore {
       email: string; display_name: string | null; created_at: number; last_seen_at: number; onboarded_at: number | null;
     }>(`SELECT email, display_name, created_at, last_seen_at, onboarded_at FROM user_profile WHERE id = 1`)[0];
 
+    // A sign-in's name only names an account that has none: once named, the name is the owner's (`setDisplayName`),
+    // and a session, which keeps the name it signed in under, must not write that back over a rename on each request.
     if (existing) {
       this.host.sqlx(
-        `UPDATE user_profile SET last_seen_at = ?, display_name = COALESCE(?, display_name) WHERE id = 1`,
+        `UPDATE user_profile SET last_seen_at = ?, display_name = COALESCE(display_name, ?) WHERE id = 1`,
         now, displayName ?? null,
       );
 
       return {
         email: existing.email,
-        displayName: displayName ?? existing.display_name,
+        displayName: existing.display_name ?? displayName ?? null,
         createdAt: existing.created_at,
         lastSeenAt: now,
         onboardedAt: existing.onboarded_at,

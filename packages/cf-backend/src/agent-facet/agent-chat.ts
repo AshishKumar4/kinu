@@ -408,6 +408,8 @@ export class FacetChat {
       sql: actor.runtime.storage.sql,
       holds: this.deps.database.held,
       actor: actor.handle,
+      // Its identity is the workspace's: dismissed or retired there, what its turns owed stands down here.
+      standing: () => workspace.standing(),
       effects: {
         ...chatTerminalEffects({ chat: () => this.session, orchestrator: () => actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),
         ...actorTerminalEffects({
@@ -534,7 +536,7 @@ export class FacetChat {
       seq: this.deps.database.nextInSequence(), next: at === undefined ? owed : Math.min(at, owed ?? Infinity),
       holds: owed !== null || this.owedWork().length > 0 || runEnds.length > 0,
       report: {
-        standing: upcoming === null ? standing : { ...standing, latestRun: { status: null, userMessage: upcoming } },
+        standing: upcoming === null ? standing : { ...standing, latestRun: { status: null, userMessage: upcoming, run: null } },
         runEnds, working: this.session.turnOwed,
       },
     };
@@ -609,21 +611,13 @@ export class FacetChat {
     await workspace.answerAmended(await database.history(TRANSCRIPT_WINDOW));
   }
 
-  /**
-   * The stand-in lands first, as every actor's does: the model's name may be refused. The workspace plans the title,
-   * and a draw that fails matters only while the title is still owed: an agent dismissed as its name was drawn has its
-   * draw refused, and asked again, the workspace plans no title for it.
-   */
+  /** The stand-in lands first, as every actor's does: the model's name may be refused. The workspace plans the title. */
   private async applyTitle(subject: string): Promise<void> {
     const { workspace } = this.deps;
     const mission = await workspace.autoTitle(subject, null);
 
     if (mission === null) return;
-    const drawn = this.suggestTitle(mission);
-    const refused = Exit.isFailure(await hold(Effect.tryPromise({ try: async () => await drawn, catch: (cause) => cause })));
-
-    if (refused && await workspace.autoTitle(subject, null) === null) return;
-    await workspace.autoTitle(subject, await drawn);
+    await workspace.autoTitle(subject, await this.suggestTitle(mission));
   }
 
   /** Down the fast tier's chain on the agent's own models, as every actor's title is named. */

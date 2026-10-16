@@ -17,6 +17,7 @@ import { DEVICE_ERRORS, DEVICE_METHOD, deviceFailure } from './device-protocol';
 import { KinuError, diagnostics, flight, renderThrownChain, settle, toKinuError, type LogEventName } from "../obs/index";
 import * as v from 'valibot';
 import { type UserCaller } from '../safety/workspace-capability';
+import type { InvocationSurface } from '../types/jobs';
 
 /** A failed refresh is recorded, then tolerated: the last snapshot is kept. */
 const STATUS_RECHECK_FAILED: LogEventName = 'device.status_refresh_failed';
@@ -52,6 +53,8 @@ export interface HubDeviceCallOptions {
   backgroundJobId?: string;
   /** Target machine. Absent: hub answers a one-machine account and refuses several. */
   deviceId?: string;
+  /** The surface of the turn the call is made in: a consent ask it raises keeps it for the re-issue. */
+  surface?: InvocationSurface;
   onOutput?: (output: DeviceExecOutput) => void;
 }
 
@@ -77,6 +80,8 @@ export interface HubDeviceTransportOpts {
   cliCwd(): string | null;
   /** Turn identity for the daemon's pre-mutation shadow-git snapshot. Null outside turns. */
   checkpointMeta?: () => { turnId: string; sessionId: string } | null;
+  /** The surface of the turn a call is made in, read per call as its background policy is. */
+  surface?: () => InvocationSurface;
   onStatusChanged?: () => void;
 }
 
@@ -165,6 +170,8 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
 
           const requestId = method === DEVICE_METHOD.exec ? rpcOpts?.requestId ?? nextDeviceRequestId() : undefined;
           const deviceOptions: HubDeviceCallOptions = { agentName: opts.agentName, actorId: opts.actorId, checkpoint };
+
+          if (opts.surface !== undefined) deviceOptions.surface = opts.surface();
 
           if (rpcOpts?.deviceId !== undefined) deviceOptions.deviceId = rpcOpts.deviceId;
 
