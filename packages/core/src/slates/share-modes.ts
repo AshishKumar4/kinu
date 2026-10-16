@@ -17,9 +17,9 @@ export type ShareMode = (typeof SHARE_MODES)[number];
 export const ShareModeSchema = v.picklist(SHARE_MODES);
 
 /**
- * A slate's revision: the digest of the application image its shared server runs. A viewer's consent and the owner's
- * `owner`-mode grant (`slate_live_shares.grant_revision`) each name the revision they were given for; a different one
- * asks again.
+ * A slate's revision (`share-policy.ts` `slateRevision`): the source digest its durable app was last built from. A
+ * viewer's consent and the owner's `owner`-mode grant (`slate_live_shares.grant_revision`) each name the revision they
+ * were given for; a different one asks again.
  */
 export type SlateRevision = string;
 
