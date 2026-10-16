@@ -39,6 +39,9 @@ export const CHROMIUM_POLICIES = '/etc/chromium/policies/managed';
  */
 export const BOX_CHROMIUM_POLICY = `${CHROMIUM_POLICIES}/kinu-box.json`;
 
+/** The desktop's Chromium profiles: the browser runs as root, in its default user data directory. */
+export const CHROMIUM_PROFILES = '/root/.config/chromium';
+
 export const DESKTOP_PANEL = { height: 36, launchers: { terminal: 21, browser: 51 } } as const;
 
 const launcher = (name: string, exec: string, icon: string) => ['[Desktop Entry]', 'Type=Application', `Name=${name}`, `Exec=${exec}`, `Icon=${icon}`]

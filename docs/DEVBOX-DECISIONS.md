@@ -4946,6 +4946,10 @@ Chromium's `CACertificates` policy (132+) names exactly the one CA, so its own r
 trust step writes it at every start into `kinu-box.json` in `/etc/chromium/policies/managed`, beside nothing else of the
 box's (the desktop's `devbox.json` is folded in), so a host or an eval adds its own file there under keys of its own.
 The container tier's `browser-trust` step reads the desktop's browser on two starts of one box, each with its own CA.
+The same step, before any browser runs, marks each Chromium profile's last exit clean (`profile.exit_type` `Normal`): a
+box's stop ends the browser with the container, and every restart opened it on "Restore pages? Chromium didn't shut down
+correctly" (the step's second-start shots, 2026-10-16). Chromium 154 on Linux has no switch for it; its own setting,
+"Continue where you left off", still brings a person's tabs back.
 
 ## Open
 
