@@ -17,7 +17,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
   censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
-  JsonValueSchema, McpToolSurfaceSchema, ownerCaller, roomFramePath, roomPagePath, roomPartPath, routeSlateCall, sha256Hex, slateCallAddress,
+  JsonValueSchema, McpToolSurfaceSchema, ownerCaller, roomFramePath, roomPagePath, roomPartPath, routeSlateCall, sha256Hex, SLATE_DRIVEN_MEMBERS, slateCallAddress,
   RoomClientFrameSchema,
   type JsonValue, type OpsCaller, type PartView, type Repair, type RoomAccess, type RoomAudience, type RoomCall,
   type RoomPerson, type RoomServerFrame, type RoomView, type SheetView,
@@ -31,13 +31,13 @@ import {
   UNDECLARED, accessName, callArgument, joinTerms, partDecision, partFn, partKey, personOf, reachOf, rootOf, roomAsks, serviceOf, sheetView, toolTerms,
   type Access, type Audience, type Codec, type Elem, type Grant, type GrantTerms, type Need, type Run, type Session, type Tag,
 } from '@kinu.run/core/slates';
-import { attempt, diagnostics, inItsWords, KinuError, settle, settleSync, type ErrorCode } from '@kinu.run/core/obs';
+import { attempt, diagnostics, inItsWords, KinuError, renderCauseChain, settle, settleSync, type ErrorCode } from '@kinu.run/core/obs';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { accountIdFor } from '../auth/store';
 import { callUserMcpTool } from '../user-mcp-call';
 import { codemodeEgress } from '../codemode-egress';
 import { slateBatchStub } from './rpc-transport';
-import type { RoomBindingName, RoomBindingProps } from './room-bindings';
+import { ROOM_BROWSER_HEADER, type RoomBindingName, type RoomBindingProps } from './room-bindings';
 import { sealedPart } from './room-parts';
 import { GALLERY_OBJECT } from '../gallery/gallery-do';
 import { browserCamera, pictureKey } from './pictures';
@@ -125,6 +125,11 @@ function care<A>(body: () => A): Effect.Effect<A, KinuError> {
   return inItsWords('io', Effect.sync(body));
 }
 
+/** A grant to drive a browser (`web.connectBrowser`): never lent, and used only in its holder's own request. */
+function isBrowserGrant(grant: Grant): boolean {
+  return grant.server === 'web' && grant.tools.includes('connectBrowser');
+}
+
 /**
  * What the room records and carries on past: a Drive card it could not write, a Gallery picture it could not take, a
  * shared server it could not tell that a call's writes ended.
@@ -160,6 +165,10 @@ export class SlateRoom extends DurableObject<Env> {
   /** The shared server, started for the image it was loaded from. */
   private server: { readonly image: string; readonly facet: Fetcher<ProcessFacet>; readonly methods: readonly string[] } | null = null;
 
+  /** Each confined run's `__browser` seal, while the run lives. */
+  private readonly seals = new Map<number, string>();
+  /** Each run's dialled browser sockets (both ends), closed with the run or its grant. */
+  private readonly browsers = new Map<number, Set<WebSocket>>();
   /** This incarnation of the room: a room retired and made again under its name loads its shared server afresh. */
   private incarnation: string = crypto.randomUUID();
 
@@ -336,8 +345,8 @@ export class SlateRoom extends DurableObject<Env> {
     });
   }
 
-  private binding(name: RoomBindingName, run: number | null): Fetcher {
-    const props: RoomBindingProps = { room: this.name(), binding: name, run };
+  private binding(name: RoomBindingName, run: number | null, seal?: string): Fetcher {
+    const props: RoomBindingProps = { room: this.name(), binding: name, run, ...(seal !== undefined && { seal }) };
 
     return exports.RoomBinding({ props });
   }
@@ -366,7 +375,11 @@ export class SlateRoom extends DurableObject<Env> {
         mainModule: RUNNER_MODULE,
         modules: texts,
         // `__writes`: the runner holds the slate's own SQL to the room's word on each call (`x-slate-writes`).
-        env: { workspace: this.binding('workspace', run), __storage: this.binding('__storage', run), __host: this.binding('__host', run), __writes: 'room' },
+        env: {
+          workspace: this.binding('workspace', run), __storage: this.binding('__storage', run), __host: this.binding('__host', run), __writes: 'room',
+          // A confined run dials its requester's own browser through the room, sealed to this run alone.
+          ...(run !== null && { __browser: this.binding('__browser', run, this.sealOf(run)) }),
+        },
         globalOutbound,
       }));
     });
@@ -447,6 +460,9 @@ export class SlateRoom extends DurableObject<Env> {
 
   override async fetch(request: Request): Promise<Response> {
     if (!this.exists()) return new Response('Not found', { status: 404 });
+    const dial = request.headers.get(ROOM_BROWSER_HEADER);
+
+    if (dial !== null) return settle(Effect.catch(this.browserSocket(request, dial), (refused) => Effect.succeed(new Response(refused.message, { status: 403 }))));
     const host = request.headers.get(ROOM_HOST_HEADER);
 
     if (host !== null) return settle(this.hostRequest(request, v.parse(HostClaimHeader, JSON.parse(host))));
@@ -783,7 +799,7 @@ export class SlateRoom extends DurableObject<Env> {
       this.again.delete(part);
       const outcome = yield* Effect.result(this.callMethod(session, partFn(part), args, 'part'));
 
-      if (outcome._tag === 'Failure' && !this.needs.has(part)) this.again.set(part, { requester: session.email, message: outcome.failure.message });
+      if (outcome._tag === 'Failure' && !this.needs.has(part)) this.again.set(part, { requester: session.email, message: renderCauseChain(outcome.failure) });
     });
   }
 
@@ -852,7 +868,8 @@ export class SlateRoom extends DurableObject<Env> {
 
     if (!on) return;
 
-    for (const grant of own.filter((each) => each.personal)) {
+    // A browser is driven only as its own person's, in their own request: the owner's is never lent with the function.
+    for (const grant of own.filter((each) => each.personal && !isBrowserGrant(each))) {
       this.caretaker.mint(actor, {
         personal: false, server: grant.server, root: v.parse(v.record(v.string(), v.string()), JSON.parse(grant.root)), tools: grant.tools,
         // A lend admits only what the function declares it takes; one that declares nothing takes what its call carries.
@@ -920,10 +937,120 @@ export class SlateRoom extends DurableObject<Env> {
    * removed, the link stopped) is woken, so its run meets the refusal at once; and the shared server is told of each run
    * that may change the slate no more.
    */
+  /** The seal a confined run's `__browser` stub carries, made when its worker is: no request can know it. */
+  private sealOf(run: number): string {
+    const known = this.seals.get(run);
+
+    if (known !== undefined) return known;
+    const seal = crypto.randomUUID();
+
+    this.seals.set(run, seal);
+
+    return seal;
+  }
+
+  /** The browser grant a run may drive under now: its requester's own, admitted with it, still current. */
+  private browserGrant(runId: number): Grant | null {
+    const run = this.caretaker.run(runId);
+    const requester = run?.requester?.email ?? null;
+
+    if (run === null || requester === null || !this.caretaker.runOk(run)) return null;
+
+    return run.caps.map((id) => this.caretaker.grant(id)).find((grant): grant is Grant => grant !== null
+      && grant.personal && grant.holder === requester && isBrowserGrant(grant)) ?? null;
+  }
+
+  /** A run's dialled browsers, closed: its run ended, or what let it drive them did. */
+  private endBrowsers(runId: number): void {
+    for (const socket of this.browsers.get(runId) ?? []) {
+      if (socket.readyState === WebSocket.OPEN) socket.close(1000, 'The slate\'s call that drove this browser ended');
+    }
+
+    this.browsers.delete(runId);
+    this.seals.delete(runId);
+  }
+
+  /**
+   * A confined run's dial of a browser, sealed by its stub: connected only to a browser its requester's own workspace
+   * opened, for a run admitted with their own browser grant, in a call of that run; proxied through the room, which
+   * closes both ends when the run ends or the grant does.
+   */
+  private browserSocket(request: Request, header: string): Effect.Effect<Response, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const dial = v.parse(v.object({ run: v.number(), seal: v.nullable(v.string()), invocation: v.nullable(v.string()) }), JSON.parse(header));
+
+      if (dial.seal === null || this.seals.get(dial.run) !== dial.seal) return yield* refuse('denied', 'This dial is no run\'s of this room');
+
+      if (dial.invocation === null || this.invocations.get(dial.invocation) !== dial.run) return yield* refuse('denied', 'A browser is dialled in a call of its run');
+      const grant = this.browserGrant(dial.run);
+
+      if (grant === null) return yield* refuse('denied', 'This run may drive no browser: only its person\'s own, granted for it');
+      const session = new URL(request.url).pathname.split('/').at(-1) ?? '';
+
+      if (!(yield* this.ownsBrowser(grant.holder, session))) return yield* refuse('denied', `Browser ${session} is not one of ${grant.holder}'s own`);
+      const far = yield* attempt({ doing: `connecting browser ${session}`, otherwise: 'unavailable' }, async () => this.browserSession(session));
+
+      if (far === null) return yield* refuse('unavailable', `Browser ${session} answered no socket, or this deployment drives no browser`);
+
+      return this.proxied(dial.run, far);
+    });
+  }
+
+  /** Browser Run's socket to `session`: the one place the room reaches a browser. Null where it answers none. */
+  protected async browserSession(session: string): Promise<WebSocket | null> {
+    const connected = await this.env.BROWSER.connectSession(session);
+
+    return (await connected.webSocket.fetch('https://browser-run.invalid/', { headers: { Upgrade: 'websocket' } })).webSocket;
+  }
+
+  /** The slate's end of a browser socket, its frames passed both ways through the room and closed with the run. */
+  private proxied(run: number, far: WebSocket): Response {
+    const { 0: near, 1: slate } = new WebSocketPair();
+    const open = this.browsers.get(run) ?? new Set<WebSocket>();
+
+    far.accept();
+    slate.accept();
+    // Each end passes frames to the other while it is open, and closes it when it closes.
+    const pass = (to: WebSocket) => (event: MessageEvent): void => { if (to.readyState === WebSocket.OPEN) to.send(event.data); };
+
+    const end = (to: WebSocket, why: string) => (): void => { if (to.readyState === WebSocket.OPEN) to.close(1000, why); };
+
+    far.addEventListener('message', pass(slate));
+    slate.addEventListener('message', pass(far));
+    far.addEventListener('close', end(slate, 'The browser closed'));
+    slate.addEventListener('close', end(far, 'The slate closed its browser'));
+    this.browsers.set(run, open.add(slate).add(far));
+
+    return new Response(null, { status: 101, webSocket: near });
+  }
+
+  /** Whether `session` is a browser one of `email`'s own workspaces opened. */
+  private ownsBrowser(email: string, session: string): Effect.Effect<boolean, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (session === '' || session === 'kitesurf') return false;
+      const account = yield* attempt({ doing: 'naming the account', otherwise: 'unavailable' }, async () => accountIdFor(this.env, email));
+      const caller = yield* attempt({ doing: 'reaching the account', otherwise: 'unavailable' }, async () => ownerCaller(this.env));
+      const workspaces = yield* attempt({ doing: 'listing their workspaces', otherwise: 'unavailable' }, async () => this.userObject(account).listActiveWorkspaces(caller));
+
+      for (const workspace of workspaces) {
+        const holds = yield* attempt({ doing: `asking ${workspace.name}`, otherwise: 'unavailable' }, async () => workspaceOwner(this.env, workspace.name).holdsBrowserSession(session));
+
+        if (holds) return true;
+      }
+
+      return false;
+    });
+  }
+
   private releaseEnded(): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       for (const [id, wake] of this.waiters) {
         if (!this.caretaker.stillWaiting(id) && !this.caretaker.decided(id)) wake();
+      }
+
+      // A browser stays connected only while its run may drive it: a run ended, a grant taken back, a person removed.
+      for (const runId of this.browsers.keys()) {
+        if (this.browserGrant(runId) === null) this.endBrowsers(runId);
       }
 
       for (const [invocation, runId] of this.invocations) {
@@ -1113,7 +1240,7 @@ export class SlateRoom extends DurableObject<Env> {
 
         if (answered.kind === 'failed') {
           // A run whose session ended meanwhile writes nothing: its refusal is the caller's answer.
-          if (out !== null && !this.needs.has(key) && this.caretaker.runOk(run)) yield* care(() => { this.caretaker.write(run.id, { failed: answered.failure.message }); });
+          if (out !== null && !this.needs.has(key) && this.caretaker.runOk(run)) yield* care(() => { this.caretaker.write(run.id, { failed: renderCauseChain(answered.failure) }); });
 
           return { kind: 'failed' as const, failure: answered.failure, changed: answered.changed || run.effects > 0 };
         }
@@ -1121,6 +1248,7 @@ export class SlateRoom extends DurableObject<Env> {
         return { kind: 'done' as const, outcome: yield* this.delivered(run, { session, key: out, to }, answered.value) };
       }), Effect.sync(() => {
         this.caretaker.finish(run.id);
+        this.endBrowsers(run.id);
       }));
     });
   }
@@ -1256,7 +1384,7 @@ export class SlateRoom extends DurableObject<Env> {
   // ── What code calls ─────────────────────────────────────────────────────────────────────────────────────────────
 
   /** Every call a slate's code makes, through the stub its env holds: the stub's sealed props name its binding and run. */
-  bindingCall(props: RoomBindingProps, request: { readonly path: string[]; readonly args: JsonValue[]; readonly invocation: string | null }): Promise<SlateSurfaceResult> {
+  bindingCall(props: RoomBindingProps, request: { readonly path: string[]; readonly args: JsonValue[]; readonly invocation: string | null; readonly authorize?: true }): Promise<SlateSurfaceResult> {
     return settle(slateAnswer(`slate ${props.binding}`, Effect.gen({ self: this }, function* () {
       // A confined run's stub names its run, and every call through it is that run's; the shared server's names none, and
       // is told the run by its invocation. Outside any call (a class's constructor) there is no run at all.
@@ -1268,11 +1396,13 @@ export class SlateRoom extends DurableObject<Env> {
 
       switch (props.binding) {
         case '__host': return null;
+        // A `__browser` stub dials through `fetch`; it calls nothing.
+        case '__browser': return yield* refuse('denied', 'A browser stub only dials');
         case '__storage': return yield* this.storage(run, request.path.join('.'), request.args);
         case 'workspace': {
           if (run === null) return yield* refuse('denied', 'workspace is called outside a slate method; there is no invocation to run it under');
 
-          return yield* this.surfaceCall(run, request.path, request.args);
+          return yield* this.surfaceCall(run, request.path, request.args, request.authorize === true);
         }
       }
     })));
@@ -1322,16 +1452,30 @@ export class SlateRoom extends DurableObject<Env> {
    * the call itself, so no revoke lands between the last check and the dispatch. With no grant, the run's requester is
    * asked to allow their own connection, and the call refuses.
    */
-  private surfaceCall(run: Run, path: readonly string[], args: readonly JsonValue[]): Effect.Effect<SlateSurfaceValue, KinuError> {
+  /**
+   * `authorize`: the class drives the member itself (a browser, `SLATE_DRIVEN_MEMBERS`), so the room admits the step and
+   * answers, and runs nothing; the browser is then dialled through `__browser`, which the room connects only for this.
+   */
+  private surfaceCall(run: Run, path: readonly string[], args: readonly JsonValue[], authorize = false): Effect.Effect<SlateSurfaceValue, KinuError> {
     return Effect.gen({ self: this }, function* () {
+      // Only the members a class drives itself are authorized without running (`routeSlateCall` refuses any other).
+      if (authorize) yield* attempt({ doing: 'reading the drive', otherwise: 'bad_input' }, async () => routeSlateCall({ id: this.caretaker.room().slate, request: { path: [...path], args: [...args], invocation: null, authorize: true }, chain: [] }));
       const address = slateCallAddress(path);
       const server = address.namespace;
       const tool = address.member;
       const callArgs = callArgument(args);
+      // A drive the class could not make, handed back in its own words (the prelude's `__kinuRefusing`): its answer is
+      // that refusal, as a member's own failure is; it reaches no service.
+      const report = v.safeParse(v.object({ refused: v.string(), reason: v.picklist(['denied', 'unavailable']) }), callArgs);
+
+      if (server === 'web' && SLATE_DRIVEN_MEMBERS.includes(tool) && report.success) return yield* refuse(report.output.reason, report.output.refused);
       const root = canonicalRoot(rootOf(server, callArgs));
 
+      // A browser is driven only as its requester's own, in their own request: someone's lend never drives one, so
+      // without their own the requester is asked for it, as for any connection they do not hold.
       const held = run.caps.map((id) => this.caretaker.grant(id)).find((grant): grant is Grant => grant !== null
-        && grant.server === server && grant.tools.includes(tool) && grant.root === root);
+        && grant.server === server && grant.tools.includes(tool) && grant.root === root
+        && (!authorize || (grant.personal && grant.holder === run.requester?.email)));
 
       if (held === undefined) {
         const requester = run.requester?.email ?? null;
@@ -1343,7 +1487,7 @@ export class SlateRoom extends DurableObject<Env> {
         return yield* refuse('denied', requester === null ? `${run.fn} needs a connection someone lends it` : `${run.fn} needs your ${serviceOf(server).title}: allow it on the part`);
       }
 
-      const send = yield* this.transport(held, path, args);
+      const send = authorize ? Effect.succeed<SlateSurfaceValue>(null) : yield* this.transport(held, path, args);
       const verdict = yield* care(() => this.caretaker.toolStep(run.id, held.id, tool, callArgs));
 
       if (verdict.kind === 'wait') {
@@ -1482,7 +1626,8 @@ export class SlateRoom extends DurableObject<Env> {
   /** Every socket gets its own view; a session that is no longer current gets why, and is closed. */
   private broadcast(): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const states = this.ctx.getWebSockets().map((ws) => ({ ws, state: this.socketState(ws) }));
+      // A socket closing, or closed by the room just now (a person removed), is told nothing more.
+      const states = this.ctx.getWebSockets().filter((ws) => ws.readyState === WebSocket.OPEN).map((ws) => ({ ws, state: this.socketState(ws) }));
       const room = this.caretaker.room();
       const url = room.link ? yield* Effect.promise(async () => linkUrl(this.env, room)) : null;
       const sheet = sheetView(this.caretaker, url, this.sheetListing());

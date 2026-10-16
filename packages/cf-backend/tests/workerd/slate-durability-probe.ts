@@ -15,8 +15,9 @@ import { cookieForTicket, frameTicket, readPass, roomHandle, roomObjectName, ROO
 import { handleSlateRoomHostRequest } from '../../src/slates/room-routes';
 import { sealedPart } from '../../src/slates/room-parts';
 import type { RoomCallOutcome } from '../../src/slates/room';
-import { ATTACK_SLATE, GITHUB, holdNextConnectionsRead, MAIL, OPS, persona, personSocket, reachedCalls, type PersonSocket } from './room-attacks';
+import { ATTACK_SLATE, browserLogged, browserLogOf, GITHUB, holdNextConnectionsRead, MAIL, OPS, persona, personSocket, reachedCalls, type PersonSocket } from './room-attacks';
 import { ROOM_HOST_HEADER, ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
+import { accountIdFor } from '../../src/auth/store';
 import { GALLERY_OBJECT } from '../../src/gallery/gallery-do';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -40,7 +41,7 @@ import type {
 export * from '../../src/server';
 
 // The production account object, its MCP servers faked for the people an attack names (room-attacks.ts).
-export { UserDO } from './room-attacks';
+export { SlateRoom, UserDO } from './room-attacks';
 
 // The production `CodemodeEgress` (through `export *` above): a slate's shared server fetches through the real policy,
 // over this worker's fake far side (vitest.config.ts `egressFake`).
@@ -60,9 +61,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'previewTabs');
     Reflect.deleteProperty(this, 'failingSlates');
     Reflect.deleteProperty(this, 'wakeOnce');
+    Reflect.deleteProperty(this, 'recordBrowserSession');
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
-      'failingSlates', 'wakeOnce',
+      'failingSlates', 'wakeOnce', 'recordBrowserSession',
     ]);
   }
 
@@ -165,6 +167,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    * the running application. Neither is destroyed, since destroying would end the facets, which is not
    * what the platform does.
    */
+  /** A browser an actor of this workspace opened, as `web.openBrowser` records it. */
+  recordBrowserSession(actor: string, session: string): void {
+    this.ctx.storage.sql.exec('INSERT OR REPLACE INTO browser_sessions (session_id, actor_id) VALUES (?, ?)', session, actor);
+  }
+
   forgetActivation(): void {
     const ended = this.ctx;
 
@@ -193,7 +200,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator,
   'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'
-  | 'wakeOnce'>;
+  | 'wakeOnce' | 'recordBrowserSession'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -711,6 +718,91 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       first, edited: edited?.ok === true ? 'ok' : JSON.stringify(edited), held: await held,
       fromB: SlateDurabilityProbeRoot.count(people.sam, 'list_pull_requests', (args) => args.note === 'image-B'),
     };
+  }
+
+  /** `email`'s own workspace `workspace`, in their own account, holding a browser one of its actors opened. */
+  private async ownBrowser(email: string, workspace: string, session: string): Promise<void> {
+    const caller = await ownerCaller(this.env);
+    const account = await accountIdFor(this.env, email);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(account));
+    const target = await this.workspaceTarget(workspace);
+
+    await userDO.registerWorkspace(caller, workspace, 'Browser Probe');
+    await userDO.ensureProfile(caller, email);
+    const claim = await target.claimOwner(account);
+
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await target.recordBrowserSession('main', session);
+  }
+
+  /**
+   * Alice drives a browser from Sam's slate. Her own, in her own request: once she allows her browser for it and lets
+   * Sam's code send what it reads, the room dials it, and closes it when Sam removes her. Bob's browser: never dialled.
+   * A dial that skipped the room's authorization, and a forged one from outside: refused.
+   */
+  async browserDrives(): Promise<{
+    asked: string; own: string[]; afterRemoval: string; others: string; othersLog: string[]; raw: string; forged: number[]; lent: string; samLog: string[];
+  }> {
+    const { at, people, room, owner, asOwner } = await this.stage('browser');
+
+    await this.ownBrowser(people.alice, 'browser-alice-ws', 'alice-browser');
+    await this.ownBrowser(people.bob, 'browser-bob-ws', 'bob-browser');
+    // Sam drives his own browser in his own slate, then lends `drive`: his browser grant is now a lend.
+    await this.ownBrowser(people.sam, 'browser-sam-ws', 'sam-browser-hangs-up');
+    await asOwner('drive', ['sam-browser-hangs-up']);
+    await owner.call({ op: 'setLend', fn: 'drive', on: true });
+    const lent = SlateDurabilityProbeRoot.said(await room.callAs(people.bob, 'drive', ['sam-browser-hangs-up'])).said;
+    const alice = await personSocket(this.env, at, people.alice);
+    // A run never authorized for a browser, dialling straight through its stub: the room refuses it.
+    const raw = SlateDurabilityProbeRoot.said(await room.callAs(people.bob, 'rawDial', ['bob-browser'])).said;
+
+    // Bob's browser for Alice's request: refused, or (were it not) dialled, which the log says at once.
+    const others = await Promise.race([
+      this.allowedApproving(room, alice, { email: people.alice, fn: 'drive', args: ['bob-browser'] }),
+      browserLogged('connected bob-browser').then(() => 'dialled bob-browser'),
+    ]);
+
+    // Her own: the fake browser answers nothing, so the drive holds its socket open until something ends it.
+    // Her socket closes when she is removed, which may end the call before its own answer does: either says it stopped.
+    const own = Promise.allSettled([this.allowedApproving(room, alice, { email: people.alice, fn: 'drive', args: ['alice-browser'] })])
+      .then(([settled]) => (settled.status === 'fulfilled' ? settled.value : `stopped: ${String(settled.reason)}`));
+
+    await browserLogged('connected alice-browser');
+    const asked = 'outflow approved';
+    // While her drive holds her browser, a dial forged from outside the run, naming each run the room may have: refused.
+    const forged: number[] = [];
+
+    for (let run = 1; run <= 30; run++) {
+      const dialled = await room.fetch(new Request('https://slate.host/alice-browser', {
+        headers: { upgrade: 'websocket', 'x-kinu-room-browser': JSON.stringify({ run, seal: 'guessed', invocation: null }) },
+      }));
+
+      forged.push(dialled.status);
+    }
+
+    await owner.call({ op: 'remove', email: people.alice });
+    await browserLogged('closed alice-browser');
+    const afterRemoval = await own;
+
+    return {
+      asked, own: browserLogOf('alice-browser'), afterRemoval, others, othersLog: browserLogOf('bob-browser'), raw, forged: [...new Set(forged)],
+      lent, samLog: browserLogOf('sam-browser-hangs-up'),
+    };
+  }
+
+  /** `allowed`, and each outflow its person is asked to let go, let go: the person's own decisions, made as they come. */
+  private async allowedApproving(room: DurableObjectStub<SlateRoom>, socket: PersonSocket, call: { email: string; fn: string; args: JsonValue[] }): Promise<string> {
+    const run = this.allowed(room, socket, call);
+
+    // Until the call ends: each new outflow ask, approved as it comes.
+    for (const approved = new Set<string>(); ;) {
+      const view = await SlateDurabilityProbeRoot.askedOrEnded(socket, (each) => each.asks.some((ask) => ask.kind === 'outflow' && !approved.has(ask.id)), run);
+      const ask = view?.asks.find((each) => each.kind === 'outflow' && !approved.has(each.id));
+
+      if (ask === undefined) return await run;
+      approved.add(ask.id);
+      await socket.call({ op: 'approve', ask: ask.id });
+    }
   }
 
   /** A collaborator's own AI: Alice's call reaches her account's model, never Sam's, once she allows it. */

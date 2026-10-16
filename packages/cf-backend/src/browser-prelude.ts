@@ -30,7 +30,8 @@ export const BROWSER_PRELUDE = String.raw`
       const { default: puppeteer } = await import('./${BROWSER_CLIENT_MODULE}');
       const gate = {
         fetch: async (url, init) => {
-          const answer = await globalThis.fetch(String(url).replace(/^https:\/\/[^/]+/, 'https://${BROWSER_GATE_HOST}'), init);
+          // A room's confined run dials through its room; everything else through the program's egress gate.
+          const answer = await (globalThis.__kinuBrowserFetch ?? globalThis.fetch)(String(url).replace(/^https:\/\/[^/]+/, 'https://${BROWSER_GATE_HOST}'), init);
 
           // The gate refuses in words; without this puppeteer reports only a missing socket.
           if (answer.webSocket === null) {

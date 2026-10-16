@@ -75,7 +75,7 @@ import type { SlateRoom } from "./slates/room";
 import { initSlateRoomRegistry, SlateRoomRegistry } from "./slates/room-registry";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
-import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
+import { holdsBrowserSession, initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
@@ -6453,6 +6453,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Asked by `CodemodeEgress` before it pipes a program's socket to a browser session. Never `@callable`. */
   ownsBrowserSession(actorId: string, sessionId: string): boolean {
     return ownsBrowserSession(this.ctx.storage.sql, actorId, sessionId);
+  }
+
+  /** DO-only: whether a browser of this workspace's (any of its actors') is `sessionId`, for a slate room's dial. */
+  async holdsBrowserSession(sessionId: string): Promise<boolean> {
+    return holdsBrowserSession(this.ctx.storage.sql, sessionId);
   }
 
   /** The workspace's tile on its owner's roster (overview-push.ts). */

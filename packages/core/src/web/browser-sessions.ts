@@ -37,6 +37,11 @@ interface AcquireOptions {
   readonly lab?: true;
 }
 
+/** Whether any actor of this workspace opened `sessionId`: a browser of the workspace's owner's. */
+export function holdsBrowserSession(db: SqlExec, sessionId: string): boolean {
+  return db.exec(`SELECT 1 AS x FROM browser_sessions WHERE session_id = ?`, sessionId).toArray().length > 0;
+}
+
 export function ownsBrowserSession(db: SqlExec, actorId: string, sessionId: string): boolean {
   return db.exec(`SELECT 1 AS x FROM browser_sessions WHERE session_id = ? AND actor_id = ?`, sessionId, actorId).toArray().length > 0;
 }

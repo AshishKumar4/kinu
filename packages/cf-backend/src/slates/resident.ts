@@ -338,7 +338,16 @@ export function slateRunnerSource(
     // The platform can re-create the object under a "running" process row, so every request starts through
     // this memo; a failed boot clears it so the next request retries.
     '  #started;',
-    '  constructor(ctx, env) { super(ctx, env); }',
+    // In a room's confined run the browser is dialled through the room (`__browser`), which checks it is the requester's
+    // own, in their own request, under this call: the prelude's gate reaches it here, never the network.
+    '  constructor(ctx, env) {',
+    '    super(ctx, env);',
+    '    if (env.__browser !== undefined) {',
+    '      globalThis.__kinuBrowserFetch = (url, init) => env.__browser.fetch(String(url), {',
+    '        ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), "x-slate-call": invocations.getStore() ?? "" },',
+    '      });',
+    '    }',
+    '  }',
     '  startProcess() { return this.#ensureStarted(); }',
   // The room's word that a call ended, or its access did: it may change the slate no more. Answers whether it did.
   '  settleInvocation(invocation) { writers.delete(invocation); return { wrote: wrote.delete(invocation) }; }',

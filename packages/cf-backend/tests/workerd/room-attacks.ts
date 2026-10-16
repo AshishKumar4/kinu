@@ -10,7 +10,7 @@ import type { SlateAiRoute } from '@kinu.run/core/slates';
 import { roomHandle, roomObjectName } from '@kinu.run/core/slates';
 import { UserDO as ProductionUserDO } from '../../src/user/user-do';
 import type { McpToolCall, McpToolSurface } from '../../src/user/mcp-servers';
-import { ROOM_PERSON_HEADER, type SlateRoom } from '../../src/slates/room';
+import { ROOM_PERSON_HEADER, SlateRoom as ProductionSlateRoom } from '../../src/slates/room';
 import { accountIdFor } from '../../src/auth/store';
 
 /** One tool of a person's MCP server; a GitHub preset's is the preset, and a tool that is not read-only is an effect. */
@@ -124,6 +124,49 @@ export function holdNextConnectionsRead(email: string) {
   return { reached: hold.reached.promise, release: () => { hold.release.resolve(undefined); } };
 }
 
+/** What the room's browser seam was asked: each session connected, and each closed, in order. */
+const browserLog: string[] = [];
+
+const browserWaits = new Map<string, () => void>();
+
+/** Resolves once `entry` (`connected <id>` or `closed <id>`) is in the log. */
+export function browserLogged(entry: string): Promise<void> {
+  if (browserLog.includes(entry)) return Promise.resolve();
+  const logged = Promise.withResolvers<undefined>();
+
+  browserWaits.set(entry, () => { logged.resolve(undefined); });
+
+  return logged.promise.then(() => undefined);
+}
+
+export function browserLogOf(session: string): string[] {
+  return browserLog.filter((entry) => entry.endsWith(` ${session}`));
+}
+
+function logBrowser(entry: string): void {
+  browserLog.push(entry);
+  browserWaits.get(entry)?.();
+}
+
+/**
+ * The production room, its one reach of Browser Run faked: a session's socket the browser end of which says nothing and
+ * logs when it is opened and closed. Everything before it (authorization, the seal, ownership) is the room's own.
+ */
+export class SlateRoom extends ProductionSlateRoom {
+  protected override async browserSession(session: string): Promise<WebSocket | null> {
+    const { 0: room, 1: browser } = new WebSocketPair();
+
+    browser.accept();
+    browser.addEventListener('close', () => { logBrowser(`closed ${session}`); });
+    logBrowser(`connected ${session}`);
+
+    // A browser that hangs up at once: its drive ends there, as one whose target closed does.
+    if (session.endsWith('-hangs-up')) browser.close(1000, 'The browser hung up');
+
+    return room;
+  }
+}
+
 /** A person's socket on a room: their calls answered in turn, and the latest view the room pushed them. */
 export interface PersonSocket {
   call(body: JsonValue): Promise<JsonValue>;
@@ -205,6 +248,14 @@ export const ATTACK_SLATE = [
   '  async board() { return (await this.storage.get("board")) ?? null; }',
   // A model call: whose AI answers it is the room's to say.
   '  async ask(prompt) { return (await this.env.workspace.ai.run({ prompt })).text; }',
+  // A browser, driven by the class itself once the room authorizes it; and a dial that skips the authorization.
+  '  async drive(id) { await this.env.workspace.web.connectBrowser(id); return "connected"; }',
+  // A dial that skips the room's authorization: through the room's stub where the run has one, else the network.
+  '  async rawDial(id) {',
+  '    const dial = globalThis.__kinuBrowserFetch ?? globalThis.fetch;',
+  '    try { const answered = await dial("https://browser.kinu.invalid/" + id, { headers: { Upgrade: "websocket" } }); return answered.webSocket === null ? "refused" : "socket"; }',
+  '    catch { return "refused"; }',
+  '  }',
   // Which image's code ran: each image says its own, and reads GitHub saying it too.
   '  async which() { await this.env.workspace.mcp.GitHub.list_pull_requests({ owner: "acme", repo: "board", note: MARK }); return MARK; }',
   // The slate's own SQL: a note written, and the notes counted. The table is the class's schema, made as it starts.

@@ -390,6 +390,11 @@ Build step 3b (`/mnt/local/kinu/tmp/sharing/plan-3b.md`, on hold) is redone agai
   - a holder could not decline a waiting step;
   - a revoked grant left its step waiting.
 - **The four scenarios.** These are the kernel-evaluated traces of `Friction.lean`. They are not yet replayed in workerd.
+- **Browsers (#10).** A confined run drives a browser only as its requester's own, in their own request:
+  - The class's drive is authorized by the room without running (`authorize`). Its dial goes through the run's sealed `__browser` stub to the room, which connects only a browser one of the requester's workspaces opened.
+  - The room proxies the socket and closes it when the run ends or its grant does.
+  - A lend never carries a browser.
+  - `room-attacks.test.ts` holds this, and each of the four guards turns it red when removed (mutations 11–14).
 
 ## 9. Step 0, measured
 

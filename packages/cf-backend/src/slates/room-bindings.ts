@@ -6,8 +6,14 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { isJsonAnswer, ownedStream, relayedAnswer, type JsonValue, type ObjectNamespace, type SlateSurfaceResult } from '@kinu.run/core';
 
-/** `workspace` (what the code calls), `__storage` (the room's cells) or `__host` (releasing a socket's invocation). */
-export type RoomBindingName = 'workspace' | '__storage' | '__host';
+/**
+ * `workspace` (what the code calls), `__storage` (the room's cells), `__host` (releasing a socket's invocation), or
+ * `__browser` (a confined run's dial of its requester's own browser, which only the room connects).
+ */
+export type RoomBindingName = 'workspace' | '__storage' | '__host' | '__browser';
+
+/** The header a `__browser` dial reaches its room with: the run, its seal, and the call it was made in. */
+export const ROOM_BROWSER_HEADER = 'x-kinu-room-browser';
 
 export interface RoomBindingProps {
   /** The room's object name. */
@@ -15,11 +21,17 @@ export interface RoomBindingProps {
   readonly binding: RoomBindingName;
   /** The confined run this stub belongs to; null in the slate's shared server, which holds no grant. */
   readonly run: number | null;
+  /**
+   * `__browser`'s proof to its room that the dial is this run's: a random value the room keeps for the run alone. The
+   * room's `fetch` is reached by people's requests too, so a dial carries what no request can know.
+   */
+  readonly seal?: string;
 }
 
 /** The one room method a binding reaches, as the room answers it. */
 interface RoomBindingTarget {
-  bindingCall(props: RoomBindingProps, request: { readonly path: string[]; readonly args: JsonValue[]; readonly invocation: string | null }): Promise<SlateSurfaceResult>;
+  bindingCall(props: RoomBindingProps, request: { readonly path: string[]; readonly args: JsonValue[]; readonly invocation: string | null; readonly authorize?: true }): Promise<SlateSurfaceResult>;
+  fetch(request: Request): Promise<Response>;
 }
 
 interface RoomBindingEnv {
@@ -28,11 +40,23 @@ interface RoomBindingEnv {
 
 /** Every call a slate's code makes returns through its room, as the stub's sealed props say. */
 export class RoomBinding extends WorkerEntrypoint<RoomBindingEnv, RoomBindingProps> {
-  call(path: string[], args: JsonValue[], invocation: string | null): Promise<SlateSurfaceResult> {
+  /** `authorize`: the class runs the member itself (a browser drive), once the room says it may; nothing runs here. */
+  call(path: string[], args: JsonValue[], invocation: string | null, authorize?: boolean): Promise<SlateSurfaceResult> {
     const props = this.ctx.props;
 
-    return relayedAnswer(this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(props.room)).bindingCall(props, { path, args, invocation }))
+    return relayedAnswer(this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(props.room)).bindingCall(props, { path, args, invocation, ...(authorize === true && { authorize: true }) }))
       .then(withOwnedStreams);
+  }
+
+  /** A `__browser` stub's dial: to its room, sealed, which connects it or refuses. Any other stub dials nothing. */
+  override async fetch(request: Request): Promise<Response> {
+    const props = this.ctx.props;
+
+    if (props.binding !== '__browser' || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('Not found', { status: 404 });
+
+    return await this.env.SLATE_ROOM.get(this.env.SLATE_ROOM.idFromName(props.room)).fetch(new Request(request.url, {
+      headers: { upgrade: 'websocket', [ROOM_BROWSER_HEADER]: JSON.stringify({ run: props.run, seal: props.seal ?? null, invocation: request.headers.get('x-slate-call') }) },
+    }));
   }
 }
 

@@ -70,3 +70,22 @@ it('a collaborator\'s own AI answers their call, in their own account: the owner
   // Twice in Alice's account: the room runs her call once she allows her AI, and she asks again to read its answer.
   expect(await probe().ownAi()).toEqual({ alice: 'value "alice-own-ai@probe.local\'s own model"', aliceCalls: 2, samCalls: 0 });
 });
+
+it('a browser is driven only as its own person\'s, in their own request, through the room, and closed when that ends', { timeout: 60_000 }, async () => {
+  const driven = await probe().browserDrives();
+
+  // Sam drove his own once; lending `drive` lends no browser, so Bob is asked for his own instead.
+  expect(driven.samLog).toEqual(['connected sam-browser-hangs-up', 'closed sam-browser-hangs-up']);
+  expect(driven.lent).toBe('part');
+
+  // Never authorized: the room refuses the dial. Bob's browser for Alice's request: never dialled.
+  expect(driven.raw).toBe('value "refused"');
+  expect(driven.others).toMatch(/^stopped:.*not one of/);
+  expect(driven.othersLog).toEqual([]);
+  // Hers: dialled once she let it, and closed when Sam removed her; her call ended with it.
+  expect(driven.own).toEqual(['connected alice-browser', 'closed alice-browser']);
+  // Her drive held its browser until then: the browser closed under it, and the call ended with it.
+  expect(driven.afterRemoval).toMatch(/Target closed/);
+  // Thirty forged dials of her browser while she drove it, each naming a run: every one refused, none connected.
+  expect(driven.forged).toEqual([403]);
+});

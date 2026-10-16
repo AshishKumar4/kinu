@@ -38,9 +38,13 @@ interface BrowserOwners {
   get(id: DurableObjectId): { ownsBrowserSession(actorId: string, sessionId: string): Promise<boolean> };
 }
 
-interface BrowserSockets {
-  fetch(input: string, init: RequestInit): Promise<Response>;
+/** Browser Run's own sockets to the sessions it keeps, which its binding has besides what its type declares. */
+export interface BrowserSessionSockets {
   connectSession(sessionId: string): Promise<{ webSocket: { fetch(input: string, init: RequestInit): Promise<Response> } }>;
+}
+
+interface BrowserSockets extends BrowserSessionSockets {
+  fetch(input: string, init: RequestInit): Promise<Response>;
 }
 
 type EgressEnv = PreviewSuffixEnv & LabelSignerEnv & { readonly BROWSER: BrowserSockets; readonly OrchestratorAgent: BrowserOwners };

@@ -22,6 +22,8 @@ export interface WorkspaceOwnerRpc {
   cancelOperation(callId: string): Promise<void>;
   /** Admits a fork of `parent` (`<workspace>/<slate>`): its room, when made, knows the code is not its owner's. */
   admitBlueprint(bundle: BlueprintBundle, parent: string): Promise<SlateAnswer<BlueprintFork>>;
+  /** Whether a browser any actor of this workspace opened is `sessionId`. */
+  holdsBrowserSession(sessionId: string): Promise<boolean>;
   /** A slate's text files, for an editor its room let in. */
   slateFilesFor(slate: string): Promise<SlateAnswer<SharedSlateFiles>>;
   /** An editor's change to a slate, which its room let in: written, built, and published as theirs. */

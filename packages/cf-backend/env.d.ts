@@ -3,6 +3,7 @@ import type { OrchestratorAgent } from "./src/orchestrator";
 import type { KinuDevbox } from "./src/kinu-devbox";
 import type { UserDO } from "./src/user/user-do";
 import type { SlateRoom } from "./src/slates/room";
+import type { BrowserSessionSockets } from "./src/codemode-egress";
 import type { GalleryDO } from "./src/gallery/gallery-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
@@ -64,7 +65,7 @@ declare global {
     /** Slate pictures; absent, a tile keeps its placeholder. */
     SLATE_PICTURES?: PictureBucket;
     /** Browser Run: the `web` tool's rendered fetches and screenshots, agents' browser sessions, and slate pictures. */
-    BROWSER: BrowserRun;
+    BROWSER: BrowserRun & BrowserSessionSockets;
     /** Analytics Engine datasets, optional; user-authored names are digested before indexing. */
     readonly AGENT_METRICS?: AnalyticsEngineDataset;
     readonly FEEDBACK_MARKERS?: AnalyticsEngineDataset;

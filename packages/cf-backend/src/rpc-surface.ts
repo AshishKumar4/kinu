@@ -265,6 +265,7 @@ const ORCHESTRATOR_METHODS = [
   'slateImageModules',
   'slateForkBundle',
   'slateFilesFor',
+  'holdsBrowserSession',
   'editSlateAs',
   'editShared',
   'acceptEmailDelivery',

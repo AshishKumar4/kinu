@@ -322,6 +322,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   scenarioBoard(): Promise<{ alice: string; bob: string; visitor: string; asked: { sam: number; alice: number; bob: number } }>;
   roomWrites(): Promise<{ visitorNote: string; visitorPut: string; bobNote: string; notes: string; stamps: string; stampedTwice: string }>;
   listingRefill(): Promise<{ listed: boolean; lost: boolean; refilled: boolean }>;
+  browserDrives(): Promise<{ asked: string; own: string[]; afterRemoval: string; others: string; othersLog: string[]; raw: string; forged: number[]; lent: string; samLog: string[] }>;
   ownAi(): Promise<{ alice: string; aliceCalls: number; samCalls: number }>;
   attackStaleImage(): Promise<{ first: string; edited: string; held: string; fromB: number }>;
   attackRequester(): Promise<{ alice: string; bob: string; aliceCallsForBob: number }>;
