@@ -53,7 +53,19 @@ export {
 
 export { GalleryIndex, initGalleryTables, type GalleryEntry } from './gallery';
 
-export { codecIsFree, CodecSchema, UNDECLARED, type Codec } from './room/codec';
+export { codecIsFree, CodecSchema, UNDECLARED, type Codec } from './codec';
+
+export {
+  SHARE_MODES, SHARED_STATES, GalleryListingSyncSchema, ShareModeSchema, SharedStateSchema, SlateConsentSchema,
+  type GalleryListingSync, type ShareMode, type SharedState, type SlateConsent, type SlateRevision,
+} from './share-modes';
+
+export {
+  EffectDecisionSchema, PartActionSchema, PartDeclarationSchema, PartOutputSchema, PartRunRequestSchema, PartShowRequestSchema,
+  slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartRunPath, slatePartShowPath,
+  type ConsentAsk, type EffectAsk, type PartAction, type PartDeclaration, type PartOutput, type PartRunAnswer, type PartRunRequest,
+  type PartShowRequest,
+} from './personal-parts';
 
 export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams } from './slate-ai';
 

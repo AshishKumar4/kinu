@@ -6,7 +6,7 @@
 import * as v from 'valibot';
 import type { RoomAsk, RoomAudience, RoomPerson, RoomReach, RoomService, RoomSource, SheetView } from '../room-api';
 import { slateAddressImpact } from '../members';
-import { codecIsFree } from './codec';
+import { codecIsFree } from '../codec';
 import { partFn, type Need } from './calls';
 import type { RoomCaretaker, Session } from './caretaker';
 import type { Elem, Tag } from './labels';

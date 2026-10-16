@@ -5,7 +5,7 @@
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecRow } from '../../types/primitives';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
-import { CodecSchema, type Codec } from './codec';
+import { CodecSchema, type Codec } from '../codec';
 import type { Audience, Elem, Show, Tag } from './labels';
 
 export function initSlateRoomTables(execRaw: RawSqlExec): void {

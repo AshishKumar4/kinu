@@ -5,7 +5,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initSlateRoomTables, RoomCaretaker, type Session } from '../src/slates/room/caretaker';
-import type { Codec } from '../src/slates/room/codec';
+import type { Codec } from '../src/slates/codec';
 import { canonicalRoot, type Elem } from '../src/slates/room/labels';
 import { makeExecRaw, makeSqlExec } from './helpers';
 

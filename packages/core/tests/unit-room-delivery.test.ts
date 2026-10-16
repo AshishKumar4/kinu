@@ -6,7 +6,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initSlateRoomTables, RoomCaretaker, type Session } from '../src/slates/room/caretaker';
-import { codecAdmits, codecIsFree, UNDECLARED } from '../src/slates/room/codec';
+import { codecAdmits, codecIsFree, UNDECLARED } from '../src/slates/codec';
 import { joinTerms, toolTerms } from '../src/slates/room/terms';
 import { partDecision } from '../src/slates/room/views';
 import { makeExecRaw, makeSqlExec } from './helpers';

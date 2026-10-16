@@ -15,7 +15,7 @@ import type { SqlExec } from '../../types/primitives';
 import type { JsonValue } from '../../utils/json';
 import type { RoomRole } from '../room-api';
 import { READER_CHECK_LIFETIME_MS } from './reader-check';
-import { codecAdmits, type Codec } from './codec';
+import { codecAdmits, type Codec } from '../codec';
 import {
   audienceFlows, canonicalRoot, dedup, flows, hidden, observers, sameTag, within,
   type Audience, type Elem, type LabelFacts, type Show, type Tag,

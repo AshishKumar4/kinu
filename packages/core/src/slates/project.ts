@@ -3,7 +3,8 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { renderIssues, type JsonPrimitive } from '../utils/json';
-import { CodecSchema } from './room/codec';
+import { CodecSchema } from './codec';
+import { PartDeclarationSchema } from './personal-parts';
 
 const Name = v.pipe(v.string(), v.minLength(1));
 
@@ -17,8 +18,10 @@ const SlateMetadata = v.strictObject({
   runtime: v.optional(v.literal('worker', NODE_ELSEWHERE), 'worker'),
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535))),
   title: v.optional(Name),
-  /** Each function's input contract: what its one argument may be when it runs with someone's lend (`room/codec.ts`). */
+  /** Each function's input contract: what its one argument may be when it runs with someone's lend (`codec.ts`). */
   functions: v.optional(v.record(Name, v.strictObject({ input: CodecSchema }))),
+  /** Each personal part: computed confined, as each viewer, and drawn by Kinu (`personal-parts.ts`). */
+  parts: v.optional(v.record(Name, PartDeclarationSchema)),
 });
 
 const Project = v.object({

@@ -3,7 +3,7 @@
  * (`slate.functions.<fn>.input`). A lend admits only input inside it (the model's `dom`).
  */
 import * as v from 'valibot';
-import type { JsonValue } from '../../utils/json';
+import type { JsonValue } from '../utils/json';
 
 /**
  * A bounded data-only codec for a lent function's input: what reaches the function is checked against it at admission
