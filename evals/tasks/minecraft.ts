@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { parseSync, type Argument, type ArrayExpressionElement, type CallExpression, type Directive, type Expression, type Statement } from 'oxc-parser';
-import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import { CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
 import type { EvalCheck, EvalPart, PrepareCommand } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
@@ -18,6 +18,14 @@ const EVAL = '/var/lib/kinu-eval';
 const PROFILE = `${EVAL}/minecraft`;
 
 const BASE = `${EVAL}/baseline`;
+
+/** The screen sampled through the trial, a thumbnail every {@link FRAME_EVERY_SECONDS}, for the frame strip its evidence keeps. */
+const FRAMES = `${EVAL}/frames`;
+
+const FRAME_EVERY_SECONDS = 20;
+
+/** Where the grader leaves the trial's pictures in its workspace, so its evidence keeps them (`gatherEvidence`). */
+const PICTURES = `${WORKSPACE_ROOT}/eval-minecraft`;
 
 /** The benchmark's own policy file, beside the box's (`BOX_CHROMIUM_POLICY`, the trust); no key is in both. */
 const POLICY = `${CHROMIUM_POLICIES}/eval-minecraft.json`;
@@ -136,6 +144,9 @@ while pgrep -x chromium >/dev/null; do sleep 0.1; done
 setsid chromium --app=${GAME} --user-data-dir=${PROFILE} --start-maximized >/dev/null 2>&1 </dev/null &
 for _ in $(seq 1 300); do xdotool search --name '^Minecraft Classic' >/dev/null 2>&1 && break; sleep 0.1; done
 xdotool search --name '^Minecraft Classic' >/dev/null
+mkdir -p ${FRAMES}
+setsid sh -c 'while :; do at=$(date +%s); scrot -z -o -t 25 ${FRAMES}/screen.png && mv ${FRAMES}/screen-thumb.png ${FRAMES}/$at.png; rm -f ${FRAMES}/screen.png; sleep ${String(FRAME_EVERY_SECONDS)}; done' >/dev/null 2>&1 </dev/null &
+echo $! > ${BASE}/sampler-pid
 [ -e ${EVAL}/xdotool ] || cp -L /usr/bin/xdotool ${EVAL}/xdotool
 cat > /usr/bin/xdotool <<'GATE'
 ${GATE_PY}GATE
@@ -202,9 +213,11 @@ found = processes()
 exec_sessions = {pid for pid, row in found.items() if row['ppid'] == 0 and pid != 1}
 known = set(open(f'{BASE}/comms').read().split()) | set(${JSON.stringify(BOX_DAEMONS)})
 browser = int(open(f'{BASE}/browser-pid').read())
+# The benchmark's own frame sampler, and what it runs.
+sampler = int(open(f'{BASE}/sampler-pid').read())
 foreign = [
     {'pid': pid, **row} for pid, row in sorted(found.items())
-    if not exec_sessions & set(lineage(found, pid))
+    if not exec_sessions & set(lineage(found, pid)) and sampler not in lineage(found, pid)
     and (row['comm'] not in known or (row['comm'] == 'chromium' and browser not in lineage(found, pid)))
 ]
 
@@ -387,6 +400,10 @@ import json, signal, sqlite3, time
 EVAL = '${EVAL}'
 PROFILE = '${PROFILE}'
 browser = int(open(f'{EVAL}/baseline/browser-pid').read())
+try:
+    os.kill(int(open(f'{EVAL}/baseline/sampler-pid').read()), signal.SIGTERM)
+except ProcessLookupError:
+    pass
 time.sleep(5)  # the game writes its save 3 s after its last change, and its unload does not
 try:
     os.kill(browser, signal.SIGTERM)
@@ -416,6 +433,37 @@ const FRAME = `DISPLAY=:0 scrot -z -o -p ${EVAL}/frame.png && python3 -c "from P
 image = Image.open('${EVAL}/frame.png')
 image.thumbnail((960, 960))
 image.save('${EVAL}/frame-small.png')" && base64 -w0 ${EVAL}/frame-small.png`;
+
+/** The sampled frames as one strip: at most twelve, the first and the last among them, evenly spaced and each labelled
+ *  with the minutes into the trial it was taken; a JPEG in base64, with how many frames there were. */
+const STRIP = String.raw`import base64, io, json, os
+from PIL import Image, ImageDraw
+folder = '${FRAMES}'
+taken = sorted(int(name[:-4]) for name in os.listdir(folder) if name.endswith('.png') and name[:-4].isdigit())
+if not taken:
+    print(json.dumps({'frames': 0, 'shown': [], 'jpeg': ''}))
+    raise SystemExit(0)
+count = min(12, len(taken))
+picked = sorted({taken[round(index * (len(taken) - 1) / max(1, count - 1))] for index in range(count)})
+tiles = [Image.open(f'{folder}/{at}.png').convert('RGB') for at in picked]
+width, height = tiles[0].size
+columns = min(4, len(tiles))
+sheet = Image.new('RGB', (width * columns, height * -(-len(tiles) // columns)), 'white')
+draw = ImageDraw.Draw(sheet)
+shown = []
+for index, (at, tile) in enumerate(zip(picked, tiles)):
+    x, y = (index % columns) * width, (index // columns) * height
+    sheet.paste(tile, (x, y))
+    label = '%d:%02d' % divmod(at - taken[0], 60)
+    shown.append(label)
+    draw.rectangle((x, y, x + 8 + 7 * len(label), y + 14), fill='black')
+    draw.text((x + 4, y + 2), label, fill='white')
+out = io.BytesIO()
+sheet.save(out, 'JPEG', quality=80)
+print(json.dumps({'frames': len(taken), 'shown': shown, 'jpeg': base64.b64encode(out.getvalue()).decode()}))
+`;
+
+const StripSchema = v.object({ frames: v.number(), shown: v.array(v.string()), jpeg: v.string() });
 
 /** A box script run as its own program: the executor runs a command line. */
 const python = (source: string): string => `python3 - <<'PY'\n${source}PY`;
@@ -719,6 +767,16 @@ async function verifyTower(verifier: EvalVerifier): Promise<void> {
     const { refused } = await box.closed();
 
     return { pass: refused.length === 0, evidence: refused.slice(0, 50) };
+  });
+
+  await verifier.record('frames', async () => {
+    await box.closed();
+    const strip = v.parse(StripSchema, JSON.parse(await verifier.execute('computer', python(STRIP))));
+
+    if (strip.frames > 0) await verifier.writeFile(`${PICTURES}/frames.jpg`, Uint8Array.from(Buffer.from(strip.jpeg, 'base64')));
+    await verifier.writeFile(`${PICTURES}/final.png`, await box.frame());
+
+    return { pass: strip.frames > 0, evidence: { frames: strip.frames, shown: strip.shown, kept: PICTURES } };
   });
 }
 
