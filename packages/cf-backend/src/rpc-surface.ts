@@ -56,6 +56,7 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
   'slateAi',
+  'slatePartConsented',
   'slateAiSpend',
   'slateConsents',
   'consentSlate',
@@ -324,6 +325,7 @@ const ORCHESTRATOR_METHODS = [
   'runSlatePart',
   'slatePartCall',
   'showSlatePart',
+  'releaseSlatePart',
   // An isolate running an actor's turn, or a slate, calls the actor's operations here.
   'callOperation',
   'listOperations',

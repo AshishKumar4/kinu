@@ -51,8 +51,11 @@ export const PartRunRequestSchema = v.object({
   /** From the shared page, checked against the declaration's `input`: public data going in. */
   args: v.array(JsonValueSchema),
   action: v.nullable(v.object({ id: Name, input: JsonValueSchema })),
-  /** An effect the viewer approved (`needs-approval`): admits that one effect, with that payload, once. */
-  approval: v.nullable(Name),
+  /**
+   * The run a `needs-consent` or `needs-approval` answer stopped, resumed after its viewer decided: the same input,
+   * answered the same up to where it stopped, at the same revision, while their consent still holds; taken once.
+   */
+  continuation: v.nullable(Name),
 });
 
 export type PartRunRequest = v.InferOutput<typeof PartRunRequestSchema>;
@@ -82,8 +85,8 @@ export const PartRunAnswerSchema = v.variant('kind', [
     kind: v.literal('shown'), revision: Name, html: v.string(), actions: v.array(PartActionSchema),
     show: v.nullable(v.object({ label: v.string(), value: JsonValueSchema })),
   }),
-  v.object({ kind: v.literal('needs-consent'), ask: ConsentAskSchema }),
-  v.object({ kind: v.literal('needs-approval'), ask: EffectAskSchema }),
+  v.object({ kind: v.literal('needs-consent'), ask: ConsentAskSchema, continuation: Name }),
+  v.object({ kind: v.literal('needs-approval'), ask: EffectAskSchema, continuation: Name }),
   v.object({ kind: v.literal('stub'), reason: v.picklist(['signed-out', 'no-part']), message: v.string() }),
   v.object({ kind: v.literal('failed'), message: v.string() }),
 ]);
@@ -114,6 +117,13 @@ function slateApiPath(workspace: string, slate: string): string {
 export function slatePartRunPath(workspace: string, slate: string, part: string): string {
   return `${slateApiPath(workspace, slate)}/parts/${encodeURIComponent(part)}/run`;
 }
+
+/** `POST { continuation }`: the run a decision stopped, let go once its viewer declined what it asked. */
+export function slatePartReleasePath(workspace: string, slate: string, part: string): string {
+  return `${slateApiPath(workspace, slate)}/parts/${encodeURIComponent(part)}/release`;
+}
+
+export const PartReleaseRequestSchema = v.object({ continuation: Name });
 
 export function slatePartShowPath(workspace: string, slate: string, part: string): string {
   return `${slateApiPath(workspace, slate)}/parts/${encodeURIComponent(part)}/show`;

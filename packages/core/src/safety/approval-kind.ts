@@ -7,10 +7,10 @@
  * - `write`: a file write an agent asked to make, naming the bytes it would write and the bytes it would replace
  *   (bound-write.ts).
  * - `slate-effect`: a call a shared slate's server made with its owner's access (docs/SLATE-SHARING-NIMBUS.md §2,
- *   `owner` mode), naming the share, the slate's revision, the tool and its exact payload, and the viewer it ran for.
- *   It is bound to its share as a command is to its machine (`executor` = {@link slateEffectExecutor}), which no machine
- *   is named, so a command whose words merely read like one stays a command. Its own run takes the approval; no agent
- *   is waiting on it.
+ *   `owner` mode), naming the slate (the one shared server), its revision, the tool and its exact payload, and whom it
+ *   ran for. It is bound to that server as a command is to its machine (`executor` = {@link slateEffectExecutor}), which
+ *   no machine is named, so a command whose words merely read like one stays a command. Its own run takes the approval;
+ *   no agent is waiting on it.
  *
  * Every reader switches on {@link ApprovalKind}; none reads the text itself.
  */
@@ -27,8 +27,10 @@ export interface BoundFileWrite {
 
 /** A call a shared slate's server made with its owner's access, exactly as the owner is asked to approve it. */
 export interface SlateEffect {
-  readonly share: string;
+  /** The shared server that asks: every share of the slate lends to it as one. */
   readonly slate: string;
+  /** The slate whose call it is: the shared server itself, or one its call hopped to. */
+  readonly caller: string;
   /** The slate's revision the call ran at: an approval of it never admits the call against other code. */
   readonly revision: string;
   readonly server: string;
@@ -53,7 +55,7 @@ const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => v.union([
 ]));
 
 const SlateEffectSchema = v.strictObject({
-  share: v.string(), slate: v.string(), revision: v.string(), server: v.string(), tool: v.string(),
+  slate: v.string(), caller: v.string(), revision: v.string(), server: v.string(), tool: v.string(),
   root: v.record(v.string(), v.string()), payload: JsonValueSchema, viewer: v.string(),
 });
 
@@ -62,9 +64,9 @@ export function boundWriteText(write: BoundFileWrite): string {
   return `file write ${write.path} sha256:${write.next} over sha256:${write.current}`;
 }
 
-/** What a share's effects are bound to, in the row's `executor`. */
-export function slateEffectExecutor(share: string): string {
-  return `share:${share}`;
+/** What a shared server's effects are bound to, in the row's `executor`. */
+export function slateEffectExecutor(slate: string): string {
+  return `slate:${slate}`;
 }
 
 /** The text a shared slate's effect parks under: its fields in one stable order, so one call is one text. */
@@ -83,7 +85,7 @@ export function approvalKindOf(row: { readonly command: string; readonly executo
   if (row.executor.startsWith(slateEffectExecutor('')) && command.startsWith(SLATE_EFFECT)) {
     const effect = v.safeParse(v.pipe(v.string(), v.parseJson(), SlateEffectSchema), command.slice(SLATE_EFFECT.length));
 
-    if (effect.success && row.executor === slateEffectExecutor(effect.output.share)) return { kind: 'slate-effect', effect: effect.output };
+    if (effect.success && row.executor === slateEffectExecutor(effect.output.slate)) return { kind: 'slate-effect', effect: effect.output };
   }
 
   return { kind: 'command', command };

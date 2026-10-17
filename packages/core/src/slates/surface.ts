@@ -46,10 +46,17 @@ export const SLATE_DRIVEN_MEMBERS: readonly string[] = Object.keys(WEB_SANDBOX_I
 
 export type SlateCallRequest = v.InferOutput<typeof SlateCallRequestSchema>;
 
+/**
+ * The host's record of one request into a slate's process: issued by the host to that one process (`incarnation`),
+ * under the sharing of each slate on its way as it was then (`generations`), and naming whom it is for. It lends no
+ * authority of its own (shared-server.ts): it only says whose a call is.
+ */
 export interface SlateInvocation {
   readonly id: string;
   readonly chain: readonly string[];
   readonly viewer?: SlateViewer;
+  readonly incarnation: string;
+  readonly generations: Readonly<Record<string, number>>;
 }
 
 export interface SlateViewer {

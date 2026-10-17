@@ -9,7 +9,7 @@ import {
 } from '@kinu.run/core/slates';
 import type { JsonValue } from '@kinu.run/core';
 import type { PartAiAnswer, PartConnectionAnswer } from '@kinu.run/core/slates';
-import type { PartConnections, PartViewer } from '../../src/slates/part-runs';
+import type { PartConnections, PartToolCall, PartViewer } from '../../src/slates/part-runs';
 
 /** Each server's tools by their own marks: GitHub's read is read-only and closed-world; Fetch's get may reach anywhere. */
 interface ToolMarks {
@@ -50,7 +50,11 @@ export class FakeViewerAccounts implements PartConnections {
     return this.book(email).decide(id, approve);
   }
 
-  tool(viewer: PartViewer, call: Parameters<PartConnections['tool']>[1]): Promise<PartConnectionAnswer<JsonValue>> {
+  /** How many times each viewer's own model was asked: each reply is new text, so a replay shows whether it was asked again. */
+  private modelAsked = 0;
+
+  tool(viewer: PartViewer, call: Parameters<PartConnections['tool']>[1], admit: () => void): Promise<PartConnectionAnswer<JsonValue>> {
+    admit();
     const descriptor = TOOLS.get(call.server)?.get(call.tool);
 
     if (descriptor === undefined) return Promise.resolve({ kind: 'missing', message: `${viewer.email}'s ${call.server} offers no ${call.tool}` });
@@ -75,7 +79,30 @@ export class FakeViewerAccounts implements PartConnections {
     return Promise.resolve({ kind: 'ran', value: call.tool === 'read_issue' ? { secret: privateIssue(viewer.email) } : `${call.tool} done` });
   }
 
-  ai(viewer: PartViewer): Promise<PartAiAnswer> {
-    return Promise.resolve({ kind: 'ran', value: `${viewer.email}'s own model` });
+  ai(viewer: PartViewer, call: Parameters<PartConnections['ai']>[1], admit: () => void): Promise<PartAiAnswer> {
+    admit();
+    this.modelAsked += 1;
+    this.dispatched.push(`${viewer.email} ai ${call.route.stream === true ? 'stream' : 'run'}`);
+    const text = `${viewer.email}'s own model, reply ${this.modelAsked}`;
+
+    if (call.route.stream !== true) return Promise.resolve({ kind: 'ran', value: text });
+
+    return Promise.resolve({ kind: 'ran', value: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } }) });
+  }
+
+  consented(viewer: PartViewer, calls: readonly PartToolCall[]): Promise<readonly boolean[]> {
+    return Promise.resolve(calls.map((call) => {
+      if (call.server === 'ai') return true;
+      const descriptor = TOOLS.get(call.server)?.get(call.tool);
+      const root = partCallRoot(call.server, call.args.length === 1 ? call.args[0] ?? null : call.args);
+      const consent = this.consents.get(JSON.stringify([viewer.email, call.workspace, call.slate, call.server, canonicalRoot(root)])) ?? null;
+
+      return descriptor !== undefined && partCallVerdict(consent, { server: call.server, root, tool: call.tool, contained: containedTool(descriptor) }, call.revision, true).kind === 'run';
+    }));
+  }
+
+  /** Takes back a consent, as its viewer may at any time. */
+  withdraw(email: string, consent: Pick<SlateConsent, 'workspace' | 'slate' | 'server' | 'root'>): void {
+    this.consents.delete(JSON.stringify([email, consent.workspace, consent.slate, consent.server, canonicalRoot(consent.root)]));
   }
 }

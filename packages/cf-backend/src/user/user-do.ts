@@ -308,6 +308,28 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
+  /**
+   * Whether each call a personal part's paused run already made is still within this account's consent at the revision
+   * (nothing is run): what a resumed run may be answered from. A connection no longer offered is no longer consented.
+   */
+  async slatePartConsented(caller: UserCaller, calls: readonly {
+    readonly workspace: string; readonly slate: string; readonly revision: string; readonly server: string; readonly tool: string; readonly args: JsonValue[];
+  }[]): Promise<boolean[]> {
+    await this.requireTier(caller, 'mcp.tools');
+
+    const mcp = calls.some((call) => call.server !== 'ai')
+      ? v.parse(McpToolSurfaceSchema, await this.userMcp_toolDescriptors(caller)).descriptors : [];
+
+    return calls.map(({ workspace, slate, revision, server, tool, args }) => {
+      if (server === 'ai') return partCallVerdict(this.slateConsentStore.find(workspace, slate, 'ai', {}), { server, root: {}, tool, contained: true }, revision, true).kind === 'run';
+      const descriptor = mcp.find((item) => `mcp.${item.serverName}` === server && item.name === tool);
+      const root = partCallRoot(server, args.length === 1 ? args[0] ?? null : args);
+
+      return descriptor !== undefined
+        && partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, true).kind === 'run';
+    });
+  }
+
   /** Same `credentials.model` floor as slateAi; consent adds the viewer's revision-bound permission, not a new credential path. */
   async slatePartAi(caller: UserCaller, request: { readonly workspace: string; readonly slate: string; readonly revision: string; readonly route: SlateAiRoute }): Promise<PartAiAnswer> {
     await this.requireTier(caller, 'credentials.model');

@@ -104,9 +104,9 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
   }
 
   /** The process holding `port`, and the key it is held under. */
-  onPort(port: number): { readonly held: string; readonly id: string } | null {
+  onPort(port: number): { readonly held: string; readonly id: string; readonly process: Process } | null {
     for (const [held, running] of this.running) {
-      if (running.app?.port === port) return { held, id: running.id };
+      if (running.app?.port === port) return { held, id: running.id, process: running.process };
     }
 
     return null;

@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, ownerCaller, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
-import { ROOT_SLATE_CALLER, slateAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, slateAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -76,6 +76,7 @@ import { internalCaller } from '@kinu.run/core/control-plane';
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
+import type { UserDO } from "./user/user-do";
 import type { PartViewer } from "./slates/part-runs";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
@@ -5790,8 +5791,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       shared: (operation) => this.editShared(operation),
       // Each viewer's own account answers their parts' calls, with their consents and connections: never this workspace.
       partConnections: {
-        tool: async (viewer, call) => objectNamed(this.env.UserDO, viewer.userId).slatePartTool(await ownerCaller(this.env), call),
-        ai: async (viewer, call) => objectNamed(this.env.UserDO, viewer.userId).slatePartAi(await ownerCaller(this.env), call),
+        // Prepared first, then the run's word read again with nothing awaited before the viewer's account is called.
+        tool: async (viewer, call, admit) => this.viewerAccount(viewer.userId, admit, async (account, caller) => account.slatePartTool(caller, call)),
+        ai: async (viewer, call, admit) => this.viewerAccount(viewer.userId, admit, async (account, caller) => account.slatePartAi(caller, call)),
+        consented: async (viewer, calls) => objectNamed(this.env.UserDO, viewer.userId).slatePartConsented(await ownerCaller(this.env), calls),
       },
       forgetPicture: async (slate) => {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
@@ -5832,8 +5835,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { html: addressedBlock(answer?.texts ?? [], address).html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
   }
 
-  async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult> {
-    return (await this.slates()).surfaceCall(caller, id, name, request);
+  async slateCallAs(from: SlateCallFrom, request: SlateCallRequest): Promise<SlateSurfaceResult> {
+    return (await this.slates()).surfaceCall(from, request);
   }
 
   /**
@@ -5875,6 +5878,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async slatePartCall(slate: string, run: string, name: string, call: { readonly path: readonly string[]; readonly args: readonly JsonValue[] }): Promise<SlateSurfaceResult> {
     return (await this.slates()).parts.call(slate, run, name, call);
+  }
+
+  /** A viewer's own account, called once its caller is prepared and `admit` holds, with nothing awaited between. */
+  private async viewerAccount<T>(userId: string, admit: () => void, send: (account: DurableObjectStub<UserDO>, caller: Awaited<ReturnType<typeof ownerCaller>>) => Promise<T>): Promise<T> {
+    const caller = await ownerCaller(this.env);
+
+    admit();
+
+    return send(objectNamed(this.env.UserDO, userId), caller);
+  }
+
+  async releaseSlatePart(viewer: PartViewer, continuation: string): Promise<boolean> {
+    return (await this.slates()).parts.release(viewer, continuation);
   }
 
   async showSlatePart(viewer: PartViewer, slate: string, part: string, request: PartShowRequest): Promise<SlateCallResult> {

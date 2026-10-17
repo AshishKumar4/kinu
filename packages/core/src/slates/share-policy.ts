@@ -5,7 +5,10 @@
  */
 import type { JsonValue } from '../utils/json';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
-import type { ShareGrant } from './sharing';
+import type { ShareGrant, SharePreapproval } from './sharing';
+import { settleSync } from '../obs/effect';
+import { KinuError } from '../obs/error';
+import { Effect } from 'effect';
 import type { ShareMode, SlateConsent } from './share-modes';
 import type { ConsentAsk, EffectAsk } from './personal-parts';
 import type { SlateBuilds } from './builds';
@@ -45,8 +48,51 @@ export function serverAuthority(shares: readonly LiveShareAuthority[], revision:
   const [first, ...rest] = shares.map((share) => share.grant);
   const key = (member: ShareGrant['members'][number]) => JSON.stringify([member.slate, member.namespace, member.member]);
   const members = (first?.members ?? []).filter((member) => rest.every((grant) => grant.members.some((other) => key(other) === key(member))));
+  const preapprovalKey = (entry: SharePreapproval) => JSON.stringify([entry.slate, entry.namespace, entry.member, canonicalRoot(entry.root), entry.revision]);
 
-  return { kind: 'grant', grant: { slates: first?.slates ?? [], members, fork: false } };
+  // Pre-approved only where every share of the one server pre-approved it, at the revision the server runs.
+  const preapproved = (first?.preapproved ?? []).filter((entry) => entry.revision === revision
+    && rest.every((grant) => (grant.preapproved ?? []).some((other) => preapprovalKey(other) === preapprovalKey(entry))));
+
+  return { kind: 'grant', grant: { slates: first?.slates ?? [], members, fork: false, ...(preapproved.length > 0 && { preapproved }) } };
+}
+
+/** Whether `grant` pre-approves `call` at `revision`: that slate's exact tool on that root, at that revision. */
+export function preapprovedEffect(
+  grant: ShareGrant, call: { readonly slate: string; readonly namespace: string; readonly member: string; readonly root: Readonly<Record<string, string>> }, revision: string,
+): boolean {
+  return (grant.preapproved ?? []).some((entry) => entry.revision === revision && entry.slate === call.slate
+    && entry.namespace === call.namespace && entry.member === call.member && canonicalRoot(entry.root) === canonicalRoot(call.root));
+}
+
+/**
+ * `value` as plain data, the one form an approval, a consent and a send all read it in: null, booleans, finite numbers,
+ * strings, arrays and plain objects, copied. Anything else (a Date, a Map, a class instance, a typed array, a function,
+ * a non-finite number) is refused, so no two different values can read as one.
+ */
+export function plainData(value: JsonValue): JsonValue {
+  return settleSync(plain(value, '$'));
+}
+
+/** `value` checked to its prototypes, where the wire may have handed a Date or an instance typed as data. */
+function plain(value: JsonValue, at: string): Effect.Effect<JsonValue, KinuError> {
+  const kind: string = typeof value;
+
+  if (value === null || kind === 'string' || kind === 'boolean') return Effect.succeed(value);
+
+  if (typeof value === 'number') return Number.isFinite(value) ? Effect.succeed(value) : Effect.fail(new KinuError('bad_input', `${at} is not a finite number`));
+
+  if (Array.isArray(value)) return Effect.forEach(value, (item, index) => plain(item, `${at}[${index}]`));
+
+  if (kind !== 'object') return Effect.fail(new KinuError('bad_input', `${at} is a ${kind}, not data`));
+  const proto: unknown = Object.getPrototypeOf(value);
+
+  if (proto !== Object.prototype && proto !== null) return Effect.fail(new KinuError('bad_input', `${at} is not plain data (${Object.prototype.toString.call(value)})`));
+
+  return Effect.map(
+    Effect.forEach(Object.entries(value), ([key, item]) => Effect.map(plain(item, `${at}.${key}`), (copied) => [key, copied] as const)),
+    (entries) => Object.fromEntries(entries),
+  );
 }
 
 /** The root a part's call is consented for: a GitHub call's repository, nothing for any other. */
@@ -127,7 +173,7 @@ export class EffectApprovals {
   private readonly asked = new Map<string, { readonly call: EffectCall; approved: boolean }>();
 
   static idOf(call: EffectCall): string {
-    return sha256Hex(stableStringify({ ...call, root: { ...call.root } }), 32);
+    return sha256Hex(stableStringify(plainData({ ...call, root: { ...call.root } })), 32);
   }
 
   ask(call: EffectCall): EffectAsk {

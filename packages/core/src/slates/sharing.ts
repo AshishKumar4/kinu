@@ -29,11 +29,27 @@ const ShareGrantMemberSchema = v.object({
 
 export type ShareGrantMember = v.InferOutput<typeof ShareGrantMemberSchema>;
 
+/**
+ * An effect its owner chose to let an `owner` share's server run unasked ("Always for this slate"): that slate's exact
+ * tool on that root, at that revision alone. A widening of the grant, chosen only by its owner, void at any other revision.
+ */
+const SharePreapprovalSchema = v.object({
+  slate: v.string(),
+  namespace: v.string(),
+  member: v.string(),
+  root: v.record(v.string(), v.string()),
+  revision: v.string(),
+});
+
+export type SharePreapproval = v.InferOutput<typeof SharePreapprovalSchema>;
+
 export const ShareGrantSchema = v.object({
   slates: v.array(v.string()),
   members: v.array(ShareGrantMemberSchema),
   /** Absent on old rows means forkable (D4). */
   fork: v.optional(v.boolean()),
+  /** `owner` mode: the effects its owner pre-approved; absent, none. */
+  preapproved: v.optional(v.array(SharePreapprovalSchema)),
 });
 
 export type ShareGrant = v.InferOutput<typeof ShareGrantSchema>;

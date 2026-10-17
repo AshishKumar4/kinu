@@ -27,6 +27,9 @@ import { present } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
 import { accountIdFor } from '../src/auth/store';
 
+/** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
+const UNSHARED = { incarnation: 'test', generation: 0 };
+
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
 
@@ -58,7 +61,7 @@ async function exerciseIssuesSlate(owner: HarnessOrchestratorAgent): Promise<voi
   for (const [path, args] of [
     [['mcp', 'github', 'read_issue'], [{}]], [['mcp', 'github', 'create_issue'], [{}]], [['readFile'], [source]], [['writeFile'], [source, 'export default {};']],
   ] as const) {
-    await owner.slateCallAs(ROOT_SLATE_CALLER, 'issues', 'workspace', { path: [...path], args: [...args], invocation: null });
+    await owner.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'issues', name: 'workspace', lineage: UNSHARED }, { path: [...path], args: [...args], invocation: null });
   }
 }
 

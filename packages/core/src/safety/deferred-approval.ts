@@ -820,7 +820,7 @@ export class DeferredApprovalQueue {
     store.sweepDenials(now);
 
     const action = store.create({
-      id, command: slateEffectText(effect), executor: slateEffectExecutor(effect.share), context: {}, requestedAt: now,
+      id, command: slateEffectText(effect), executor: slateEffectExecutor(effect.slate), context: {}, requestedAt: now,
       reason: `A shared slate's server, running with your access for ${effect.viewer}, asked to call ${effect.tool} on ${effect.server}`,
     }, []);
 
@@ -838,9 +838,9 @@ export class DeferredApprovalQueue {
     return this.deps.store.spend(id)?.spend ?? null;
   }
 
-  /** A share's open effects retired: it was revoked, left `owner` mode, or its slate was built anew. */
-  retireSlateEffects(share: string): string[] {
-    return this.deps.store.retireOpen(slateEffectExecutor(share));
+  /** A shared server's open effects retired: one of its shares was revoked or changed mode, or it was built anew. */
+  retireSlateEffects(slate: string): string[] {
+    return this.deps.store.retireOpen(slateEffectExecutor(slate));
   }
 
   /** A queued write's change, whoever parked it. */

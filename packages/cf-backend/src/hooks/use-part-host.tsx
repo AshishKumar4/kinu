@@ -11,7 +11,7 @@ import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";
 import type { PartRunAnswer } from "@kinu.run/core";
 import { ApprovalDecision, ConsentDecision, ShowDecision } from "@/components/sharing/PartDecisions";
 import { hostPartFrames, type Decided, type DecisionKind, type PartAddress } from "@/lib/part-bridge";
-import { decideEffect, giveConsent, readConsents, runPart, showPart } from "@/lib/parts-api";
+import { decideEffect, giveConsent, readConsents, releasePart, runPart, showPart } from "@/lib/parts-api";
 import { signInAndReturn } from "@/lib/sign-in";
 
 /** A decision open at the top: what it rests on, and how to tell the frame what came of it. */
@@ -85,7 +85,8 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
     const { ask } = answer;
 
     return (
-      <ConsentDecision slate={title} ask={ask} changed={open.changed} onClose={() => close({ kind: "declined" })}
+      <ConsentDecision slate={title} ask={ask} changed={open.changed}
+        onClose={() => detach(after(() => releasePart(address.workspace, address.slate, address.part, answer.continuation), { kind: "declined" }))}
         onAllow={() => detach(after(() => giveConsent({ workspace: address.workspace, slate: address.slate, ...ask }), { kind: "consented" }))} />
     );
   }
@@ -96,7 +97,11 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
     return (
       <ApprovalDecision slate={title} ask={ask}
         onApprove={() => detach(after(() => decideEffect(address.workspace, address.slate, ask.id, "approve"), { kind: "approved", approval: ask.id }))}
-        onDecline={() => detach(after(() => decideEffect(address.workspace, address.slate, ask.id, "decline"), { kind: "declined" }))} />
+        onDecline={() => detach(after(async () => {
+          await decideEffect(address.workspace, address.slate, ask.id, "decline");
+          // Declined, the run it stopped is let go on the server: it is never resumed.
+          await releasePart(address.workspace, address.slate, address.part, answer.continuation);
+        }, { kind: "declined" }))} />
     );
   }
 

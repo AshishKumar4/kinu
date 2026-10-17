@@ -2,7 +2,7 @@
  * file and execution operations need no owner RPC. */
 
 import { objectNamed } from '@kinu.run/core';
-import { type SlateCaller } from '@kinu.run/core/slates';
+import { type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 import type {
   BlueprintBundle, BlueprintFork, JsonValue, LiveShareRecord, OperationCaller, OperationListing, OperationResult, ShareViewerClaim, SlateAnswer,
   RoomService, SlateCallRequest, SlateCallResult, SlateFileChange, SlateOperation, SlateShareRecord, SlateSurfaceResult,
@@ -25,7 +25,8 @@ export interface WorkspaceOwnerRpc {
   slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult>;
   /** Whether a slate still builds, asked as a caller; a check, never a preview. */
   slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult>;
-  slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult>;
+  /** One call a slate's process made through its binding, with the lineage the host minted into that binding. */
+  slateCallAs(from: SlateCallFrom, request: SlateCallRequest): Promise<SlateSurfaceResult>;
   /** One of its slates' files, for an editor (the asking workspace's owner) a live share adds to edit it now. */
   slateFilesFor(slate: string, editor: SlateEditor): Promise<SlateCallResult>;
   /** An editor's change to one of its slates, refused unless a live share adds them to edit it now; answers the paths. */
@@ -34,6 +35,8 @@ export interface WorkspaceOwnerRpc {
   runSlatePart(viewer: PartViewer | null, slate: string, part: string, request: PartRunRequest): Promise<PartRunAnswer | null>;
   /** One call of a running part's process, through its `PartBinding`. */
   slatePartCall(slate: string, run: string, name: string, call: { readonly path: readonly string[]; readonly args: readonly JsonValue[] }): Promise<SlateSurfaceResult>;
+  /** A paused part run its viewer let go. */
+  releaseSlatePart(viewer: PartViewer, continuation: string): Promise<boolean>;
   /** What `viewer` confirmed in Kinu's prompt, to the slate's declared `show` method. */
   showSlatePart(viewer: PartViewer, slate: string, part: string, request: PartShowRequest): Promise<SlateCallResult>;
   /** An actor's operation, by `ns.op`, as eval runs it; refused when the actor does not reach it now. */

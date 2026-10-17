@@ -55,7 +55,7 @@ export {
 export {
   EffectDecisionSchema, PartDeclarationSchema, PartOutputSchema, PartRunAnswerSchema,
   PartRunRequestSchema, PartShowRequestSchema, SlateConsentsAnswerSchema, type SlateConsentsAnswer,
-  slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartRunPath, slatePartShowPath,
+  slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartReleasePath, slatePartRunPath, slatePartShowPath, PartReleaseRequestSchema,
   type ConsentAsk, type EffectAsk, type PartAction, type PartDeclaration, type PartOutput, type PartRunAnswer, type PartRunRequest,
   type PartShowRequest,
 } from './personal-parts';
@@ -67,6 +67,8 @@ export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams 
 export { answer as slateAnswer } from './controller';
 
 export {
-  EffectApprovals, canonicalRoot, containedTool, partCallRoot, partCallVerdict, serverAuthority, slateRevision,
+  EffectApprovals, canonicalRoot, containedTool, partCallRoot, partCallVerdict, plainData, preapprovedEffect, serverAuthority, slateRevision,
   type EffectCall, type LiveShareAuthority, type PartCall, type PartCallVerdict, type ServerAuthority,
 } from './share-policy';
+
+export { SharedServers, type OwnerEffects, type ServerCall, type ServerSend, type SharedServerDeps, type SlateCallFrom, type SlateLineage } from './shared-server';

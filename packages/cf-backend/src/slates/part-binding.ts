@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { relayedAnswer, type JsonValue, type SlateSurfaceResult } from '@kinu.run/core';
 import { workspaceOwner, type WorkspaceOwnerNamespace } from '../workspace-owner-rpc';
+import { withOwnedStreams } from './bindings';
 
 /**
  * Only the host mints these props, one set per personal part run (docs/SLATE-SHARING-NIMBUS.md §3): the confined
@@ -24,6 +25,6 @@ export class PartBinding extends WorkerEntrypoint<PartBindingEnv, PartBindingPro
   call(path: string[], args: JsonValue[]): Promise<SlateSurfaceResult> {
     const { workspace, slate, run, name } = this.ctx.props;
 
-    return relayedAnswer(workspaceOwner(this.env, workspace).slatePartCall(slate, run, name, { path, args }));
+    return relayedAnswer(workspaceOwner(this.env, workspace).slatePartCall(slate, run, name, { path, args })).then(withOwnedStreams);
   }
 }
