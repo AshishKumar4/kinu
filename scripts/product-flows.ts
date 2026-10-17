@@ -38,13 +38,15 @@ import {
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
-  ACTIVE_TAB_INDEX, CHATS, CHAT_COMPOSER_LIVE, CHAT_IDLE, FILES_FAILURE, type FlowTarget, type FrameLedger, INSPECTOR_WIDTH, PAGE_TABS, type RpcCounts, type SendSite, countRpc, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, painted, recordRenderTasks, removeFlowWorkspace, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn,
+  ACTIVE_TAB_INDEX, CHATS, CHAT_COMPOSER_LIVE, CHAT_IDLE, FILES_FAILURE, type FlowTarget, type FrameLedger, INSPECTOR_WIDTH, PAGE_TABS, type RpcCounts, type SendSite, countRpc, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, pagesTraffic, painted, recordRenderTasks, removeFlowWorkspace, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn,
 } from './browser-page';
 
 
 /** The waits open now, `; `-joined: what a row stopped for being silent was waiting on (`endedNearSilence`). */
 export function openWaitsNamed(): string {
-  return [...openWaits].map((pending) => pending.what).join('; ');
+  const traffic = pagesTraffic();
+
+  return [...openWaits].map((pending) => pending.what).join('; ') + (traffic === '' ? '' : `\n${traffic}`);
 }
 
 /** The composer of `agent`'s own pane, live: the pane that sends to that agent's chat. */
