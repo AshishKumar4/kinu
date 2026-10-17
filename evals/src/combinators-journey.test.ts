@@ -274,7 +274,7 @@ function desk(defect?: Defect) {
 
   const code = defect === 'memory-code' ? 'TM-COLL-724' : 'TM-COLL-905';
   const coordinator = defect === 'memory-coordinator' ? 'Theo' : 'Rhea';
-  const replies = [`${code}, ${coordinator}`];
+  const replies = [{ text: `${code}, ${coordinator}` }];
 
   return { session, seed, exportArchive, replies, close: () => server.stop(true) };
 }

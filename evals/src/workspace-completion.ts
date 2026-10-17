@@ -369,11 +369,11 @@ export async function settle(watch: TurnWatch, polled?: SettlePoll): Promise<voi
   }
 }
 
-/** What the agent said after `prompt`, oldest first; wake rows between are the agent's own work. */
-export function repliesTo(history: readonly PublicMessage[], prompt: string): string[] {
+/** What the agent said after `prompt`, oldest first, as the chat stores it; wake rows between are the agent's own work. */
+export function repliesTo(history: readonly PublicMessage[], prompt: string): PublicMessage[] {
   const asked = history.map((row) => row.role === 'user' && row.text.trim() === prompt.trim()).lastIndexOf(true);
 
   if (asked === -1) return [];
 
-  return history.slice(asked + 1).filter((row) => row.role === 'assistant' && row.text.trim() !== '').map((row) => row.text);
+  return history.slice(asked + 1).filter((row) => row.role === 'assistant' && row.text.trim() !== '');
 }

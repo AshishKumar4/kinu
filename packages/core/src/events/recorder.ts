@@ -14,7 +14,7 @@ import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, addUsage, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
-import { PROVIDER_WAIT_SOURCES } from '../providers/types';
+import { MODEL_ATTEMPT_OUTCOMES, PROVIDER_WAIT_SOURCES } from '../providers/types';
 import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../types/app-store';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import {
@@ -96,6 +96,10 @@ export const RunEventSchema = v.variant('type', [
     waitMs: v.number(), attempt: v.number(), retry: v.optional(v.number()), retries: v.optional(v.number()),
     status: v.optional(v.number()),
     source: v.picklist(PROVIDER_WAIT_SOURCES) }),
+  v.object({ ...BaseFields, type: v.literal('model_attempt'),
+    provider: v.string(), modelId: v.optional(v.string()), attempt: v.number(), sentAt: v.string(),
+    headersMs: v.optional(v.number()), firstOutputMs: v.optional(v.number()), lastOutputMs: v.optional(v.number()),
+    outcome: v.picklist(MODEL_ATTEMPT_OUTCOMES) }),
   v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),
   v.object({ ...BaseFields, type: v.literal('context_admitted'), tokens: v.nullable(v.number()), contextWindow: v.nullable(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('context_overflow'), model: v.string(), window: v.number() }),

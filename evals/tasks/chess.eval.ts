@@ -4,7 +4,7 @@ import { Seeded } from './seeded';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type EvalPart } from '../src/task';
 import type { Evidence, EvalVerifier, SlateClient } from '../src/verifier';
-import type { SlateView } from '../src/browser';
+import type { PressAnswer, SlateView } from '../src/browser';
 import { builtItself, buildsClean, slateQuality, type DrawnSlate } from './slate-quality';
 
 // The workshop-evals chess task: a complete engine authored without a chess package, extended
@@ -79,8 +79,9 @@ async function squares(view: SlateView): Promise<Record<string, string>> {
 }
 
 /** Press the square whose accessible name starts with `square`, as a person's pointer does. */
-function pressSquare(view: SlateView, square: string): Promise<boolean> {
-  return view.pressNamed(new RegExp(`^${square}\\b`, 'iu'));
+/** Press `square`: a selection the page may answer alone (`redraw`), a move its slate must keep (`call`). */
+function pressSquare(view: SlateView, square: string, answer: PressAnswer): Promise<boolean> {
+  return view.pressNamed(new RegExp(`^${square}\\b`, 'iu'), answer);
 }
 
 const MISSION = 'A shared chess workspace where a friend and I play, import games and share our own.';
@@ -550,7 +551,7 @@ pressing a piece and then a square plays that move.`,
       });
       await verifier.check('the-board-shows-the-game', () => verifier.browse(async (browser) => {
         const view = await browser.workSurface(SLATE_ID);
-        await view.waitForNamed(/^e1\s+white\s+king\b/iu);
+        await view.settled();
         const board = await squares(view);
         const said = (square: string) => board[square] ?? '';
 
@@ -569,8 +570,10 @@ pressing a piece and then a square plays that move.`,
           const wrong = (fen: string) => fen !== DEFAULT_POSITION && fen.split(' ')[0] !== PAWN_TO_E4;
 
           for (let attempt = 0; attempt < 3; attempt++) {
-            await view.waitForNamed(/^e2\s+white\s+pawn\b/iu);
-            const from = await pressSquare(view, 'e2');
+            await view.settled();
+            const from = await pressSquare(view, 'e2', 'redraw');
+
+            await view.settled();
             const selected = await read();
 
             if (wrong(selected.fen)) {
@@ -579,10 +582,12 @@ pressing a piece and then a square plays that move.`,
               return { pass: false, evidence: { attemptCount: attempts.length, attempts, wrongMove: true } };
             }
 
-            const to = await pressSquare(view, 'e4');
+            const to = await pressSquare(view, 'e4', 'call');
 
-            const { state, held } = await view.untilState(read, (drawn) => wrong(drawn.fen)
-              || (drawn.fen.split(' ')[0] === PAWN_TO_E4 && /^e4\s+white\s+pawn\b/iu.test(drawn.board.e4 ?? '')));
+            // The move's own render: read once the page has drawn what its move call answered.
+            await view.settled();
+            const state = await read();
+            const held = state.fen.split(' ')[0] === PAWN_TO_E4 && /^e4\s+white\s+pawn\b/iu.test(state.board.e4 ?? '');
 
             attempts.push({ from, to, fen: state.fen, e2: state.board.e2 ?? '', e4: state.board.e4 ?? '', held });
 
@@ -655,7 +660,7 @@ pressing a piece and then a square plays that move.`,
 Everything that already worked keeps working.`,
     verify: async verifier => {
       await builtItself(verifier, [SLATE_ID]);
-      await buildsClean(verifier, DRAWN);
+      await buildsClean(verifier, DRAWN.id);
       await verifier.check("imports-known-games-to-the-right-positions", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);
         const failures: Record<string, Evidence> = {};
@@ -764,7 +769,7 @@ available. The moves of a game loaded with loadPgn count; loadFen and newGame st
 Everything that already worked keeps working.`,
     verify: async verifier => {
       await builtItself(verifier, [SLATE_ID]);
-      await buildsClean(verifier, DRAWN);
+      await buildsClean(verifier, DRAWN.id);
       await verifier.check("detects-threefold-repetition-and-the-fifty-move-rule", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);
         const oracle = new Chess();

@@ -83,32 +83,46 @@ export function useAsyncResource<T>(
     ? state.resource
     : { status: "loading" };
 
-  // Only the newest run may write; a slow failing load must not overwrite its retry.
+  // Runs are numbered as they are asked. `shown` is the run whose answer is on screen.
   const runId = useRef(0);
+  const shown = useRef(0);
+  // What the newest run asked: an answer to another load or identity is another subject's, never this one's.
+  const asking = useRef<{ load: () => Promise<T>; identity: string | undefined } | null>(null);
 
   // A task that settles after unmount must not publish into a retired resource.
   useEffect(() => () => {
     runId.current += 1;
+    shown.current = runId.current;
   }, []);
 
   const run = useCallback((): void => {
     const id = ++runId.current;
+    const subject = { load, identity };
+
+    asking.current = subject;
     setState((previous) => ({
       identity,
       resource: beginLoad(previous.identity === identity ? previous.resource : { status: "loading" }),
     }));
 
-    // A superseded load publishes nothing, its answer or its failure.
+    // An answer is shown if it was asked after the one on screen, though a newer run is still out: reloads asked
+    // faster than they answer (a read the server says moved, through a running turn) would otherwise drop every answer
+    // and hold the screen on its first (live-app-plans, rc15). A failure is shown only for the newest run, so a slow
+    // failing load never overwrites its retry, and no older answer then covers it.
     detach(Effect.gen(function* () {
       const thrown = yield* Effect.catchCause(Effect.gen(function* () {
         const value = yield* Effect.promise(load);
 
-        if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
+        if (id > shown.current && asking.current?.load === subject.load && asking.current.identity === subject.identity) {
+          shown.current = id;
+          setState({ identity, resource: loadSucceeded(value) });
+        }
 
         return null;
       }), (failed) => Effect.succeed({ cause: Cause.squash(failed) }));
 
       if (thrown === null || id !== runId.current) return;
+      shown.current = id;
       setState((previous) => ({
         identity,
         resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, thrown),
@@ -131,6 +145,7 @@ export function useAsyncResource<T>(
 
   const set = useCallback((value: T): void => {
     runId.current += 1;
+    shown.current = runId.current;
     setState({ identity, resource: loadSucceeded(value) });
   }, [identity]);
 

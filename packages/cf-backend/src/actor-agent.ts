@@ -93,7 +93,7 @@ import {
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   priceCall, type Usage,
   WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
-  recordModelOperations, type ProviderWaitInfo,
+  recordModelOperations, type ModelAttemptInfo, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
   pricedModelCallEvent,
   type FactsStore,
@@ -896,6 +896,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // Asked of the same UserDO the registry reads; held as `accountSettingsAtOpen` keeps it current.
     getCredentialsRevision: () => this.account.credentialsRevision(),
     onProviderWait: (info) => { this.noteProviderWait(info); },
+    onModelAttempt: (info) => { this.noteModelAttempt(info); },
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
@@ -1867,8 +1868,19 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Records a provider-mandated wait to the ledger (`provider_wait`), and tells the windows of the turn it holds: a call
    *  a turn's tool made here. A call no turn made (a title, a logo, upkeep) holds no turn, so no window hears it.
    *  Recorder faults are contained so a ledger write never kills the sleep. */
+  /** The run a provider's word belongs to: the operation's in flight, else the actor's current run. */
+  private providerRunId(): string {
+    return currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID);
+  }
+
+  private noteModelAttempt(info: ModelAttemptInfo): void {
+    settleLoggedSync('event.model_attempt_emit_failed', { doing: 'recording a model_attempt run event', otherwise: 'io' }, () => {
+      this.eventRecorder.emit(this.providerRunId(), { type: 'model_attempt', ...info });
+    }, { provider: info.provider });
+  }
+
   private noteProviderWait(info: ProviderWaitInfo): void {
-    const runId = currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID);
+    const runId = this.providerRunId();
 
     settleLoggedSync('event.provider_wait_emit_failed', { doing: 'recording a provider_wait run event', otherwise: 'io' }, () => {
       this.eventRecorder.emit(runId, { type: 'provider_wait', ...info });

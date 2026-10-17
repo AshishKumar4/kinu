@@ -1,4 +1,3 @@
-import { slateUiSegments } from '@kinu.run/core';
 import type { EvalPart } from '../src/task';
 
 // Asked in Auto for a plan, the agent submits it for the owner's review: not a plan written in chat, a file or a slate,
@@ -32,7 +31,7 @@ export const planInAuto: EvalPart = {
 
       await verifier.check('built-nothing-before-approval', async () => {
         const writes = calls.filter((call) => MUTATES.get(call.name)?.test(call.args) === true);
-        const inline = verifier.replies.flatMap(slateUiSegments).filter((segment) => segment.kind === 'slate').length;
+        const inline = verifier.answerSlates.length;
 
         return {
           pass: writes.length === 0 && inline === 0,

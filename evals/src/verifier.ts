@@ -1,7 +1,7 @@
 import * as v from 'valibot';
-import { JsonValueSchema, projectJsonValue, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
+import { ephemeralSlateId, JsonValueSchema, projectJsonValue, slateUiSegments, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSlateListing, PublicSwarmRun, WorkBoard } from './session';
+import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicMessage, PublicSlateListing, PublicSwarmRun, WorkBoard } from './session';
 import { browserOwner, openPreviewAsOwner, type WorkspaceWeb } from './workspace-roster';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
@@ -250,6 +250,16 @@ function truncate(text: string): string {
   return text.length > EVIDENCE_LIMIT ? `${text.slice(0, EVIDENCE_LIMIT)}...` : text;
 }
 
+/** One of the agent's replies as the chat stores it: its text, and its message's id where the transcript keeps one. */
+export type Reply = Pick<PublicMessage, 'id' | 'text'>;
+
+/** One `<slate-ui>` block of the answer: its name, and the id the chat draws it under (`ephemeralSlateId`), null where
+ *  its message has no id to address it by. */
+export interface AnswerSlate {
+  readonly name: string;
+  readonly id: string | null;
+}
+
 /**
  * Runs one turn's functional checks against what the agent built. Checks are independent: one
  * that throws fails alone, with the error as its evidence, and the rest still run.
@@ -259,6 +269,8 @@ export class EvalVerifier {
   readonly workspace: string;
   /** What the agent said in the chat after this turn's prompt, oldest first. */
   readonly replies: readonly string[];
+  /** The ephemeral slates of those replies, oldest first: this turn's answer's, never an earlier answer's. */
+  readonly answerSlates: readonly AnswerSlate[];
   readonly #session: VerifierSession;
   readonly #startedAt: number;
   readonly #settled: () => Promise<void>;
@@ -267,10 +279,12 @@ export class EvalVerifier {
   readonly #pending: Promise<void>[] = [];
 
   /** `settled` waits until the workspace has nothing left to do, as the harness waits out a turn. */
-  constructor(session: VerifierSession, replies: readonly string[], startedAt: number, settled: () => Promise<void>) {
+  constructor(session: VerifierSession, replies: readonly Reply[], startedAt: number, settled: () => Promise<void>) {
     this.#session = session;
     this.workspace = session.web.workspace;
-    this.replies = replies;
+    this.replies = replies.map((reply) => reply.text);
+    this.answerSlates = replies.flatMap(({ id, text }) => slateUiSegments(text).flatMap((segment) => segment.kind === 'slate'
+      ? [{ name: segment.name, id: id === undefined ? null : ephemeralSlateId({ actorId: null, messageId: id, name: segment.name }) }] : []));
     this.#startedAt = startedAt;
     this.#settled = settled;
   }

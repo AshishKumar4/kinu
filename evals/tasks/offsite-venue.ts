@@ -2,7 +2,7 @@ import { WORKSPACE_ROOT } from '@kinu.run/core';
 import { shows, sightEvidence, type Sight } from '../src/sight';
 import type { EvalPart } from '../src/task';
 import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
-import { answerShows, answersWithSlates, madeNoApp, madeNoPrototype, readAnswer } from './ephemeral';
+import { answerIds, answerShows, answersWithSlates, madeNoApp, madeNoPrototype, readAnswer } from './ephemeral';
 
 // The agent's choice between the two kinds of slate. First a pick-one card in the chat: the venues that fit the team,
 // each with the total the checker computes, one click to pick, and the agent acting on the pick it is sent. That is
@@ -55,10 +55,9 @@ async function anAppShowsTheBooking(verifier: EvalVerifier): Promise<EvalCheckOu
   const listing = await verifier.slates();
 
   const readings = await verifier.browse((browser) => Promise.all(listing.slates.map(async (slate) => {
-    const view = await browser.workSurface(slate.id);
-    const { sight, held } = await view.until(NAMES, (seen) => (seen.regions[PICK.name] ?? []).some((region) => namesThePick(region.text)));
+    const sight = await (await browser.workSurface(slate.id)).drawn(NAMES);
 
-    return { slate: slate.id, held, seen: sightEvidence(sight) };
+    return { slate: slate.id, held: (sight.regions[PICK.name] ?? []).some((region) => namesThePick(region.text)), seen: sightEvidence(sight) };
   })));
 
   return { pass: readings.some((reading) => reading.held), evidence: { slates: listing.slates.map((slate) => slate.id), readings } };
@@ -89,7 +88,7 @@ date, the headcount and the total.`,
         const early = await verifier.readFile(BOOKING_PATH);
 
         const reached = await verifier.browse(async (browser) => {
-          const card = (await readAnswer(browser, 1, NAMES, offersTheVenuesThatFit)).find((reading) => reading.held);
+          const card = (await readAnswer(browser, answerIds(verifier), NAMES, offersTheVenuesThatFit)).find((reading) => reading.held);
 
           if (card === undefined) return { acted: false, runs: [] };
           let faults = null;

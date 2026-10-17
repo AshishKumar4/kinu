@@ -186,7 +186,9 @@ export function readEvalsVerdict(dir: string, sha: string) {
   return { run, verdict };
 }
 
-const EvalProofSchema = v.object({ run: EvalRunSchema, verdict: EvalVerdictSchema });
+/** A stored proof as promotion reads it: whose build it measured and the armada jobs that ran it. A proof is kept for its
+ *  sha, so one written before a run's other fields changed is read the same. */
+const EvalProofSchema = v.object({ run: v.pick(EvalRunSchema, ['candidateBuild', 'jobs']), verdict: EvalVerdictSchema });
 
 export const evalsKey = (sha: string): string => `evals/${sha}.json`;
 

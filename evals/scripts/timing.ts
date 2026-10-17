@@ -2,12 +2,14 @@
 //   bun evals/scripts/timing.ts <evidence dir>... [--steps]
 // A directory is searched for trials. Each trial prints its turns and its split; the run prints the
 // split summed over every trial, and with `--steps` every step's first token, generation and tools.
+// Where the deployment recorded its requests (`model_attempt`), each trial and the run also print the
+// split by the product's own clock, the helpers' requests (`descendants.jsonl`) beside the lead's.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { parseJsonValue } from '@kinu.run/core';
-import { buckets, LedgerRowSchema, TimelineEntrySchema, trialTiming, type StepTiming, type TrialTiming } from '../src/timing';
+import { attemptTiming, buckets, LedgerRowSchema, TimelineEntrySchema, trialTiming, type AttemptTiming, type StepTiming, type TrialTiming } from '../src/timing';
 
 const { values, positionals } = parseArgs({ options: { steps: { type: 'boolean' } }, allowPositionals: true });
 
@@ -59,19 +61,38 @@ function describe(name: string, timing: TrialTiming): string {
   return lines.join('\n');
 }
 
+/** The requests' split, as one line: none where the deployment recorded none. */
+function requestSplit(timing: AttemptTiming): string {
+  if (timing.attempts === 0) return 'no requests recorded (a deployment before model_attempt)';
+  const headers = [...timing.headersMs].sort((left, right) => left - right);
+  const first = [...timing.firstOutputMs].sort((left, right) => left - right);
+  const outcomes = Object.entries(timing.outcomes).map(([outcome, count]) => `${String(count)} ${outcome}`).join(', ');
+
+  return `${String(timing.attempts)} requests (${outcomes}); headers p50 ${s(quantile(headers, 0.5))}s p95 ${s(quantile(headers, 0.95))}s, `
+    + `first output p50 ${s(quantile(first, 0.5))}s p95 ${s(quantile(first, 0.95))}s, generation ${s(timing.generationMs)}s; `
+    + `answer to next request ${s(timing.betweenMs)}s: tools ${s(timing.toolsMs)}s, provider waits ${s(timing.waitMs)}s, `
+    + `product ${s(timing.otherMs)}s`;
+}
+
+const DescendantSchema = v.object({ actor: v.string(), event: LedgerRowSchema });
+
 const total: Record<string, number> = {};
+
+const asked: AttemptTiming[] = [];
 
 let wall = 0;
 
 for (const root of positionals) {
   for (const dir of trials(root)) {
-    const timing = trialTiming(
-      jsonl(join(dir, 'timeline.jsonl')).map((line) => v.parse(TimelineEntrySchema, line)),
-      jsonl(join(dir, 'ledger.jsonl')).map((line) => v.parse(LedgerRowSchema, line)),
-    );
+    const ledger = jsonl(join(dir, 'ledger.jsonl')).map((line) => v.parse(LedgerRowSchema, line));
+    const helpers = existsSync(join(dir, 'descendants.jsonl')) ? jsonl(join(dir, 'descendants.jsonl')).map((line) => v.parse(DescendantSchema, line)) : [];
+    // A helper's runs are its own: its run ids are kept apart from the lead's by its actor.
+    const attempts = attemptTiming([...ledger, ...helpers.map(({ actor, event }) => ({ ...event, runId: `${actor}/${event.runId}` }))]);
+    const timing = trialTiming(jsonl(join(dir, 'timeline.jsonl')).map((line) => v.parse(TimelineEntrySchema, line)), ledger);
 
-    process.stdout.write(`${describe(relative(root, dir) || dir, timing)}\n`);
+    process.stdout.write(`${describe(relative(root, dir) || dir, timing)}\n  requests: ${requestSplit(attempts)}\n`);
     wall += timing.wallMs;
+    asked.push(attempts);
 
     for (const [bucket, ms] of Object.entries(buckets(timing))) total[bucket] = (total[bucket] ?? 0) + ms;
   }
@@ -82,3 +103,18 @@ process.stdout.write(`\nSummed over trials: ${s(wall)}s\n`);
 for (const [bucket, ms] of Object.entries(total).sort((left, right) => right[1] - left[1])) {
   process.stdout.write(`  ${bucket.padEnd(40)} ${s(ms).padStart(9)}s ${(100 * ms / wall).toFixed(1).padStart(5)}%\n`);
 }
+
+const all: AttemptTiming = {
+  attempts: asked.reduce((sum, each) => sum + each.attempts, 0),
+  outcomes: asked.reduce<Record<string, number>>((sum, each) => {
+    for (const [outcome, count] of Object.entries(each.outcomes)) sum[outcome] = (sum[outcome] ?? 0) + count;
+
+    return sum;
+  }, {}),
+  headersMs: asked.flatMap((each) => each.headersMs), firstOutputMs: asked.flatMap((each) => each.firstOutputMs),
+  generationMs: asked.reduce((sum, each) => sum + each.generationMs, 0), betweenMs: asked.reduce((sum, each) => sum + each.betweenMs, 0),
+  toolsMs: asked.reduce((sum, each) => sum + each.toolsMs, 0), waitMs: asked.reduce((sum, each) => sum + each.waitMs, 0),
+  otherMs: asked.reduce((sum, each) => sum + each.otherMs, 0),
+};
+
+process.stdout.write(`\nRequests over trials: ${requestSplit(all)}\n`);

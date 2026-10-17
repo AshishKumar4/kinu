@@ -160,10 +160,11 @@ test("a helper's own jobs are the RPC's actor, and a helper dismissed since the 
   } finally { await session.teardown(); await server.stop(true); }
 });
 
-test('trial usage walks retained descendants and every run and event page without merging actor identities', async () => {
+test('trial usage walks retained descendants\' whole ledgers, every run and event page, without merging actor identities', async () => {
   const step = (index: number, input: number, cacheRead: number, output: number) => ({ type: 'step_finish', parts: [], runId: 'shared-run-id', eventIndex: index, stepIndex: index,
   timestamp: `2026-10-02T19:00:0${String(index)}Z`, usage: { input, cacheRead, output }, } satisfies Extract<RunEvent, { type: 'step_finish' }>);
 
+  const shell = { type: 'tool_call_end', runId: 'shared-run-id', eventIndex: 5, timestamp: '2026-10-02T19:00:05Z', name: 'shell', toolCallId: 'grep', args: { command: 'grep -r SlateObject /' }, outcome: { success: true } } satisfies Extract<RunEvent, { type: 'tool_call_end' }>;
   const child = (name: string) => ({ name, status: 'dismissed', lifetime: 'task', actorReference: { actorId: name } });
   const run = (runId: string) => ({ runId, startedAt: 10, status: 'completed', userMessage: 'work' });
 
@@ -196,7 +197,7 @@ test('trial usage walks retained descendants and every run and event page withou
       if (query.view === 'events') {
         let page: Extract<InspectionAnswer, { view: 'events' }>['page'];
 
-        if (query.actor === 'nested') page = { status: 'end', items: [step(4, 500, 400, 7)] };
+        if (query.actor === 'nested') page = { status: 'end', items: [step(4, 500, 400, 7), shell] };
         else if (query.runId === 'later-run') page = { status: 'end', items: [{ ...step(3, 50, 0, 3), runId: 'later-run' }] };
         else if (query.query.since === 0) page = { status: 'more', items: [step(1, 100, 60, 5)], next: 2 };
         else page = { status: 'end', items: [step(2, 200, 180, 9)] };
@@ -216,7 +217,11 @@ test('trial usage walks retained descendants and every run and event page withou
   try {
     await session.connect();
 
-    const usage = measurePromptUsage(await session.actorLedgers([step(0, 100, 20, 10)]));
+    const ledgers = await session.actorLedgers([step(0, 100, 20, 10)]);
+    const usage = measurePromptUsage(ledgers);
+
+    // A helper's tool calls are its run events as much as its steps are: its ledger keeps them.
+    expect(ledgers.find((ledger) => ledger.actor === 'nested')?.events.map((event) => event.type)).toEqual(['step_finish', 'tool_call_end']);
 
     expect(usage).toMatchObject({ inputTokens: 950, outputTokens: 34, metadata: { cacheReadTokens: 660 } });
     expect(usage.metadata.steps.map(({ actor, stepIndex }) => [actor, stepIndex])).toEqual([

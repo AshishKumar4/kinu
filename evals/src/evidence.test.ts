@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import type { JsonValue } from '@kinu.run/core';
+import type { JsonValue, RunEvent } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type EvidenceSession } from './evidence';
 import { HarnessRunSchema } from './results';
@@ -90,7 +90,7 @@ describe('a trial\'s evidence', () => {
 
     const directory = join(scratchDir('eval-evidence'), 'trial-2');
 
-    writeEvidence(directory, { run: RUN, verdict: { status: 'failed', durationMs: 60_000 }, events: [], workspace: gathered, timeline: [] });
+    writeEvidence(directory, { run: RUN, verdict: { status: 'failed', durationMs: 60_000 }, events: [], ledgers: [], workspace: gathered, timeline: [] });
 
     expect(readFileSync(join(directory, 'files/slates/exchange/server.ts'), 'utf8')).toBe('export class Slate {}\n');
     expect(readFileSync(join(directory, 'files/home/main/SOUL.md'), 'utf8')).toBe('Fernhill Bakery.');
@@ -120,10 +120,12 @@ describe('a trial\'s evidence', () => {
     const gathered = await gatherEvidence(reset, [{ part: 'logs', reads: async (call) => { await call('logs', 'days'); } }]);
     const directory = join(scratchDir('eval-evidence'), 'trial-1');
 
+    const lead: RunEvent = { runId: 'run-1', eventIndex: 1, timestamp: '2026-09-26T00:00:00.000Z', type: 'run_start', agentId: 'root' };
+    const helper: RunEvent = { runId: 'run-2', eventIndex: 1, timestamp: '2026-09-26T00:00:01.000Z', type: 'run_start', agentId: 'tally' };
+
     writeEvidence(directory, {
-      run: RUN, verdict: { status: 'failed', durationMs: 1 },
-      events: [{ runId: 'run-1', eventIndex: 1, timestamp: '2026-09-26T00:00:00.000Z', type: 'run_start', agentId: 'root' }],
-      workspace: gathered, timeline: [],
+      run: RUN, verdict: { status: 'failed', durationMs: 1 }, events: [lead],
+      ledgers: [{ actor: 'main', events: [lead] }, { actor: 'tally', events: [helper] }], workspace: gathered, timeline: [],
     });
 
     expect(readFileSync(join(directory, 'files/home/main/logs/2027-06-01.log'), 'utf8')).toBe('GET /api 200 3ms FRA\n');
@@ -132,6 +134,7 @@ describe('a trial\'s evidence', () => {
     expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('logs');
     expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('code 1006');
     expect(JSON.parse(readFileSync(join(directory, 'ledger.jsonl'), 'utf8'))).toMatchObject({ type: 'run_start', runId: 'run-1' });
+    expect(JSON.parse(readFileSync(join(directory, 'descendants.jsonl'), 'utf8'))).toMatchObject({ actor: 'tally', event: { type: 'run_start', runId: 'run-2' } });
     expect(existsSync(join(directory, 'transcript.md'))).toBe(true);
   });
 });
