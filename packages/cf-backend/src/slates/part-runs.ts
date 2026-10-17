@@ -73,16 +73,26 @@ interface PartRun {
   readonly viewer: PartViewer;
   readonly revision: string;
   needed: Exclude<PartConnectionAnswer<JsonValue>, { kind: 'ran' | 'missing' }> | null;
-  /** Each call it made and was answered, in order: what a run resumed after an approval is answered from. */
-  readonly steps: PartStep[];
-  /** What an earlier run of the same call answered, each consumed in order while the run makes the same calls. */
-  readonly replay: PartStep[];
+  /**
+   * Each call it made and was answered, at the slot of the order it was made in (not the order it was answered in): what
+   * a run resumed after a decision is answered from. A slot still unanswered when the run paused is a hole.
+   */
+  readonly steps: (PartStep | undefined)[];
+  /** What an earlier run of the same calls answered, by slot. */
+  readonly replay: Journal;
+  /** How many calls it has made: the next call's slot. */
+  issued: number;
+  /** The first slot whose call differed from the earlier run's: from it on, nothing is answered from the journal. */
+  diverged: number | null;
 }
+
+/** A run's answered calls by the slot of the order they were made in; a hole where a call was not answered. */
+type Journal = readonly (PartStep | undefined)[];
 
 /** What a run of a part's function is given: its arguments, the journal it is answered from first, and its revision. */
 interface PartInput {
   readonly args: readonly JsonValue[];
-  readonly replay: readonly PartStep[];
+  readonly replay: Journal;
   /** A resumed run's: the revision it began at, which it runs at or not at all. */
   readonly revision: string | null;
 }
@@ -98,14 +108,14 @@ interface Continuation {
   readonly part: string;
   readonly revision: string;
   readonly args: readonly JsonValue[];
-  readonly steps: readonly PartStep[];
+  readonly steps: Journal;
 }
 
 /** A run stopped for its viewer's decision: what it asks, what it was answered so far, and the revision it ran at. */
 interface PausedAnswer {
   readonly kind: 'paused';
   readonly needed: Exclude<PartConnectionAnswer<JsonValue>, { kind: 'ran' | 'missing' }>;
-  readonly steps: readonly PartStep[];
+  readonly steps: Journal;
   readonly revision: string;
 }
 
@@ -193,7 +203,7 @@ export class PersonalParts {
 
       if (slateRevision(this.deps.controller.builds, slate) !== held.revision) return stale;
 
-      const calls = held.steps.flatMap((step) => (step.call === null ? [] : [step.call]));
+      const calls = held.steps.flatMap((step) => (step === undefined || step.call === null ? [] : [step.call]));
 
       const still = calls.length === 0 || this.deps.connections === undefined ? [] : yield* attempt(
         { doing: `reading ${viewer.email}'s consents`, otherwise: 'unavailable' }, async () => this.deps.connections?.consented(viewer, calls) ?? [],
@@ -222,7 +232,7 @@ export class PersonalParts {
       }
 
       const id = crypto.randomUUID();
-      const run: PartRun = { slate, viewer, revision, needed: null, steps: [], replay: [...replay] };
+      const run: PartRun = { slate, viewer, revision, needed: null, steps: [], replay: [...replay], issued: 0, diverged: null };
       const bindings = Object.fromEntries(PART_SURFACES.map((name) => [name, exports.PartBinding({ props: { workspace, slate, run: id, name } })]));
 
       this.runs.set(id, run);
@@ -236,7 +246,7 @@ export class PersonalParts {
         return yield* Effect.ensuring(this.called(process, fn, args), Effect.promise(async () => { await process.stop(); }));
       }), Effect.sync(() => { this.runs.delete(id); }));
 
-      if (run.needed !== null) return { kind: 'paused', needed: run.needed, steps: run.steps, revision };
+      if (run.needed !== null) return { kind: 'paused', needed: run.needed, steps: [...run.steps], revision };
 
       if (drawn.kind === 'failed') return drawn;
       const output = v.safeParse(PartOutputSchema, drawn.value);
@@ -303,18 +313,21 @@ export class PersonalParts {
       // Plain data, read once: what is replayed, consented, approved and sent is this one form.
       const args = v.parse(v.array(JsonValueSchema), plainData([...call.args]));
       const key = JSON.stringify([call.path, args]);
-      const replayed = run.replay[0];
+      // Its slot is the order it was made in, taken as it arrives: concurrent calls answered in another order keep theirs.
+      const slot = run.issued;
 
-      // The same call an earlier run made before it stopped: answered as then, run no second time. A different one ends
-      // the replay, and every call from there runs, and asks, afresh.
+      run.issued += 1;
+      const replayed = run.diverged === null || slot < run.diverged ? run.replay[slot] : undefined;
+
+      // The same call an earlier run made at this slot before it stopped: answered as then, run no second time. A
+      // different one ends the replay there, and every call from it on runs, and asks, afresh.
       if (replayed?.key === key) {
-        run.replay.shift();
-        run.steps.push(replayed);
+        run.steps[slot] = replayed;
 
         return answerOf(replayed);
       }
 
-      run.replay.length = 0;
+      if (replayed !== undefined) run.diverged = slot;
       // The run's word read again where the viewer's account is called: ended, or its viewer removed, it sends nothing.
       const admit = (): void => { this.stillRunning(runId, slate); };
 
@@ -326,7 +339,7 @@ export class PersonalParts {
       if (answer.kind === 'ran') {
         const step = yield* Effect.promise(async () => journaled(key, this.consentFor(run, call.path, args), answer.value));
 
-        run.steps.push(step);
+        run.steps[slot] = step;
 
         return answerOf(step);
       }
@@ -429,3 +442,4 @@ function answerOf(step: PartStep): SlateSurfaceValue {
   // A byte stream of its own (a body's), as one sent across a binding must be.
   return new Response(step.answer.bytes).body ?? new Response('').body ?? new ReadableStream<Uint8Array>();
 }
+

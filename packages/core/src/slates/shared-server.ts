@@ -10,7 +10,7 @@ import { KinuError } from '../obs/error';
 import type { ApprovalSpend } from '../safety/approval-gate';
 import type { JsonValue } from '../utils/json';
 import { grantAdmits } from './capability-graph';
-import { partCallRoot, plainData, preapprovedEffect, serverAuthority, type LiveShareAuthority, type ServerAuthority } from './share-policy';
+import { partCallRoot, plainData, preapprovedEffect, serverAuthority, type LiveShareAuthority, type ServerAuthority, type ToolContract } from './share-policy';
 import type { ApprovalSpendOutcome } from '../safety/approval-gate';
 import { slateEffectText, type SlateEffect } from '../safety/approval-kind';
 import type { SlateEffectVerdict } from '../safety/deferred-approval';
@@ -50,6 +50,8 @@ export interface SharedServerDeps {
   generation(slate: string): number;
   /** The owner's queue of shared servers' effects: absent, every effect of a shared server is refused. */
   readonly ownerEffects?: OwnerEffects;
+  /** What the owner's catalog knows of a connection's tool (share-policy.ts `ToolContract`); null where it knows none. */
+  toolContract?(namespace: string, member: string): Promise<ToolContract | null>;
 }
 
 /** One call of a slate, as the shared servers it passes through weigh it. */
@@ -64,6 +66,8 @@ export interface ServerCall {
   readonly args: readonly JsonValue[];
   /** Whom the call is for, shown to the owner on an ask: never what it may do. */
   readonly on: string;
+  /** The calling process's lineage and the record its call names, read again at the send (`lineage`). */
+  readonly fence?: { readonly lineage: SlateLineage; readonly record: SlateInvocation | null };
 }
 
 /** What a gated call takes at its send: the owner's approval, when it needed one, or null. Throws to refuse. */
@@ -71,6 +75,11 @@ export interface ServerSend {
   /** Whether any shared server bounds the call (else it is its owner's own app, as it always was). */
   readonly bounded: boolean;
   admit(): ApprovalSpend | null;
+}
+
+/** A call's arguments as its tool is given them: the one argument, or all of them. */
+function payloadOf(call: Pick<ServerCall, 'args'>): JsonValue {
+  return plainData(call.args.length === 1 ? call.args[0] ?? null : [...call.args]);
 }
 
 /** Why a slate shared for each person's own access lends nothing, and who can change that. */
@@ -112,14 +121,23 @@ export class SharedServers {
    */
   gate(call: ServerCall): Effect.Effect<ServerSend, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const weighed = this.weigh(call, yield* Effect.promise(async () => this.owner()));
+      const owner = yield* Effect.promise(async () => this.owner());
+      const first = this.weigh(call, owner);
 
-      if (weighed.kind === 'unbounded') return { bounded: false, admit: () => null };
+      // Unbounded now is no standing permission: its send reads again that nothing shared bounds it.
+      if (first.kind === 'unbounded') return { bounded: false, admit: () => settleSync(this.stillUnbounded(call)) };
 
-      if (weighed.kind === 'refused') return yield* weighed.error;
-      const approval = weighed.preapproved || !call.effect ? null : yield* this.ask(call, weighed.origin);
+      if (first.kind === 'refused') return yield* first.error;
 
-      return { bounded: true, admit: () => settleSync(this.sendNow(call, weighed.origin, approval)) } satisfies ServerSend;
+      // An effect's resource, as its tool's own contract names it: what its approval and a pre-approval are of.
+      const contract = call.effect ? yield* Effect.promise(async () => this.deps.toolContract?.(call.address.namespace, call.address.member) ?? null) : null;
+      const root = partCallRoot(contract, payloadOf(call));
+      const weighed = this.weigh(call, owner, root);
+
+      if (weighed.kind !== 'bounded') return yield* new KinuError('denied', `Slate ${call.slate}'s sharing changed before this call was made`);
+      const approval = weighed.preapproved || !call.effect ? null : yield* this.ask(call, weighed.origin, root);
+
+      return { bounded: true, admit: () => settleSync(this.sendNow(call, weighed.origin, approval, root)) } satisfies ServerSend;
     });
   }
 
@@ -142,10 +160,30 @@ export class SharedServers {
     return settleSync(beyond === null ? Effect.void : Effect.fail(beyond));
   }
 
-  /** The send weighed again where it acts: the same server still bounds it as it did, and the approval it needs is taken now. */
-  private sendNow(call: ServerCall, origin: string, approval: string | null): Effect.Effect<ApprovalSpend | null, KinuError> {
+  /** The send of a call nothing shared bounded, read again where it acts: still its process's, and still unbounded. */
+  private stillUnbounded(call: ServerCall): Effect.Effect<null, KinuError> {
     return Effect.gen({ self: this }, function* () {
+      yield* this.fenced(call);
       const now = this.weigh(call, 'Its owner');
+
+      if (now.kind === 'refused') return yield* now.error;
+
+      return now.kind === 'unbounded' ? null : yield* new KinuError('denied', `Slate ${call.slate}'s sharing changed before this call was made`);
+    });
+  }
+
+  /** The calling process and its request still of the sharing they began under (`lineage`). */
+  private fenced(call: ServerCall): Effect.Effect<void, KinuError> {
+    const stale = call.fence === undefined ? null : this.lineage(call.slate, call.fence.lineage, call.fence.record);
+
+    return stale === null ? Effect.void : Effect.fail(stale);
+  }
+
+  /** The send weighed again where it acts: the same server still bounds it as it did, and the approval it needs is taken now. */
+  private sendNow(call: ServerCall, origin: string, approval: string | null, root: Readonly<Record<string, string>>): Effect.Effect<ApprovalSpend | null, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      yield* this.fenced(call);
+      const now = this.weigh(call, 'Its owner', root);
 
       if (now.kind === 'refused') return yield* now.error;
 
@@ -161,7 +199,7 @@ export class SharedServers {
   }
 
   /** The shared servers bounding a call now: none; the first that refuses it, and why; or the first, the one that asks. */
-  private weigh(call: ServerCall, owner: string)
+  private weigh(call: ServerCall, owner: string, root: Readonly<Record<string, string>> | null = null)
     : { readonly kind: 'unbounded' } | { readonly kind: 'refused'; readonly error: KinuError } | { readonly kind: 'bounded'; readonly origin: string; readonly preapproved: boolean } {
     const servers = [...new Set([...call.chain, call.slate])].map((slate) => ({ slate, authority: this.authorityOf(slate) }))
       .filter((each) => each.authority.kind !== 'owner');
@@ -179,9 +217,8 @@ export class SharedServers {
     }
 
     const revision = this.deps.revision(origin.slate) ?? '';
-    const root = partCallRoot(call.address.namespace, plainData(call.args.length === 1 ? call.args[0] ?? null : [...call.args]));
 
-    const preapproved = origin.authority.kind === 'grant'
+    const preapproved = root !== null && origin.authority.kind === 'grant'
       && preapprovedEffect(origin.authority.grant, { slate: call.slate, ...call.address, root }, revision);
 
     return { kind: 'bounded', origin: origin.slate, preapproved };
@@ -191,22 +228,26 @@ export class SharedServers {
   private lendsNothing(slate: string, owner: string): KinuError {
     const shares = this.deps.authoritiesOf(slate);
 
-    return shares.some((share) => share.mode === 'own')
-      ? ownAccessRefusal(slate, owner)
-      : new KinuError('denied', `Slate ${slate} changed since its owner approved what it reaches: it acts on their access again once they approve it`);
+    const edited = shares.find((share) => share.editedBy !== undefined)?.editedBy;
+
+    if (shares.some((share) => share.mode === 'own')) return ownAccessRefusal(slate, owner);
+
+    return edited === undefined
+      ? new KinuError('denied', `Slate ${slate} changed since its owner approved what it reaches: it acts on their access again once they approve it`)
+      : new KinuError('denied', `${edited}'s change to slate ${slate} is awaiting ${owner}'s review: it acts on their access again once they approve it`);
   }
 
   /** The owner asked about one exact effect of the shared server `origin`: its approval's id, or the refusal it waits on. */
-  private ask(call: ServerCall, origin: string): Effect.Effect<string, KinuError> {
+  private ask(call: ServerCall, origin: string, root: Readonly<Record<string, string>>): Effect.Effect<string, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const queue = this.deps.ownerEffects;
 
       if (queue === undefined) return yield* new KinuError('denied', 'This shared slate cannot ask its owner to approve a call now');
-      const payload = plainData(call.args.length === 1 ? call.args[0] ?? null : [...call.args]);
+      const payload = payloadOf(call);
       const { namespace: server, member: tool } = call.address;
 
       const effect: SlateEffect = {
-        slate: origin, caller: call.slate, revision: this.deps.revision(origin) ?? '', server, tool, root: partCallRoot(server, payload), payload, viewer: call.on,
+        slate: origin, caller: call.slate, revision: this.deps.revision(origin) ?? '', server, tool, root: { ...root }, payload, viewer: call.on,
       };
 
       const id = sha256Hex(slateEffectText(effect), 32);

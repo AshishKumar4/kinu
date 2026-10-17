@@ -4,7 +4,7 @@ import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateController, type SlateControllerPorts, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
   ROOT_SLATE_CALLER, shareCaller, slateAnswer,
-  type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage,
+  type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
 } from '@kinu.run/core/slates';
 import {
   ingressAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
@@ -32,7 +32,11 @@ type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
 export interface SlateDispatchContext {
   /** Check that the call may run, and run nothing: the class runs it, where its browser socket lives. */
   readonly authorizeOnly?: true;
-  /** A share's viewer: what runs for it reaches no browser of the owner's, as a viewer's slate process does not. */
+  /**
+   * The shared server's environment: a call any shared slate bounds, whoever's request it is (a viewer's or the
+   * owner's own), runs crafted tools, egress and browsers as the share's, never as the owner's own. One principal,
+   * one policy (shared-server.ts).
+   */
   readonly viewer?: true;
   /**
    * Each member a call reaches inside itself, as a crafted tool's program does, before it runs: recorded for its
@@ -70,6 +74,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   ownerUserId?(): string | null;
   /** The workspace's one queue of actions parked on its owner, where `owner` shares' effects wait (deferred-approval.ts). */
   readonly ownerEffects?: NonNullable<SlateControllerPorts<SlateSource, ResidentSlateProcess>['ownerEffects']>;
+  /** What the owner's MCP catalog knows of a connection's tool (share-policy.ts `ToolContract`). */
+  toolContract?(namespace: string, member: string): Promise<ToolContract | null>;
   /** A live share's Gallery listing changed where its owner waits: the Gallery is told now, a failure logged. */
   listingChanged?(share: LiveShareRecord): Promise<void>;
   /** The Gallery told again of these listed shares, in the background. */
@@ -164,6 +170,7 @@ export class SlateHost {
       ...(deps.sharesChanged !== undefined && { sharesChanged: deps.sharesChanged.bind(deps) }),
       ...(deps.ownerTitle !== undefined && { ownerTitle: deps.ownerTitle.bind(deps) }),
       ...(deps.ownerEffects !== undefined && { ownerEffects: deps.ownerEffects }),
+      ...(deps.toolContract !== undefined && { toolContract: deps.toolContract.bind(deps) }),
       ...(deps.listingChanged !== undefined && { listingChanged: deps.listingChanged.bind(deps) }),
       ...(deps.relisted !== undefined && { relisted: deps.relisted.bind(deps) }),
       shareChanged: async (slate) => { await this.shareChanged(slate); },
@@ -349,7 +356,9 @@ export class SlateHost {
 
       // Answered here, not dispatched: it carries no actor capability.
       if (name === SLATE_STORAGE_BINDING) return slateStorageCall(this.controller.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
-      const chain = issued?.chain ?? [];
+      // The shared slates this process runs under (`SlateCaller.via`, minted into its bindings) bound it whatever request it
+      // names, or none: a callee cannot drop the authority it inherited by dropping the record that names it.
+      const chain = [...new Set([...caller.via ?? [], ...issued?.chain ?? []])];
       const shared = [...chain, id].some((slate) => servers.authorityOf(slate).kind !== 'owner');
 
       // A shared server acts only under a request this host issued; a call naming none is no one's, and refused.
@@ -358,7 +367,7 @@ export class SlateHost {
       const reportOnly = parsed.output.authorize !== true;
 
       const gate = (call: { readonly address: { readonly namespace: string; readonly member: string }; readonly effect: boolean }, on: string) => servers.gate({
-        slate: id, chain, address: call.address, effect: call.effect, args: parsed.output.args, on,
+        slate: id, chain, address: call.address, effect: call.effect, args: parsed.output.args, on, fence: { lineage, record: issued },
       });
 
       // What a call reaches inside itself meets every shared server's bound as it stands then.
@@ -372,6 +381,7 @@ export class SlateHost {
           run: (route, nested, admit) => this.run(shareCaller(viewer.share), route, {
             nested: (namespace, member) => { within(namespace, member); nested(namespace, member); },
             admit,
+            viewer: true,
             ...(parsed.output.authorize && { authorizeOnly: true }),
           }, viewer),
         });
@@ -396,11 +406,13 @@ export class SlateHost {
       record(call.address.namespace, call.address.member);
 
       // Shared, the owner's own request is the server's like any other: bounded, and every effect asks them.
+      // Unbounded or not, its send reads again where it acts, as does each member it reaches inside itself.
       return await this.gatedRun({
         gate: gate({ address: call.address, effect: impact !== 'observe' && !driven }, 'the owner'),
         run: (bounded, admit) => this.run(callsAs, call.route, {
-          nested: bounded ? (namespace, member) => { within(namespace, member); record(namespace, member); } : record,
-          ...(admit !== undefined && { admit }),
+          nested: (namespace, member) => { within(namespace, member); record(namespace, member); },
+          admit,
+          ...(bounded && { viewer: true }),
           ...(parsed.output.authorize && { authorizeOnly: true }),
         }),
       });
@@ -412,21 +424,22 @@ export class SlateHost {
   /**
    * A call the shared servers on its way weighed (`gate`), run with their word taken again where it acts, and the
    * owner's approval it took settled once it was handed on: a failure after that may have acted, so one approval never
-   * runs a call twice. Unbounded (no shared server on its way), it runs as its owner's own app always did.
+   * runs a call twice. Unbounded (no shared server on its way), it runs as its owner's own app always did, its send read
+   * again all the same: unbounded when it began is no permission once it is shared.
    */
   gatedRun(input: {
     readonly gate: Effect.Effect<ServerSend, KinuError>;
-    readonly run: (bounded: boolean, admit: (() => void) | undefined) => Promise<SlateSurfaceResult>;
+    readonly run: (bounded: boolean, admit: () => void) => Promise<SlateSurfaceResult>;
   }): Promise<SlateSurfaceResult> {
     return settle(Effect.gen({ self: this }, function* () {
       const send = yield* input.gate;
       const taken: ApprovalSpend[] = [];
 
-      const admit = send.bounded ? (): void => {
+      const admit = (): void => {
         const spend = send.admit();
 
         if (spend !== null) taken.push(spend);
-      } : undefined;
+      };
 
       const settled = Effect.promise(async () => {
         const [spend] = taken;
@@ -456,9 +469,22 @@ export class SlateHost {
       case 'ai': return { ok: true, value: await this.deps.dispatch(caller, route, context) };
       // The hop keeps the caller's authority, never the author's; the viewer follows the chain.
       case 'app': return this.call({
-        caller, id: route.id, method: route.method, args: [...route.args], chain: route.chain, viewer, ...(context.admit !== undefined && { admit: context.admit }),
+        caller: this.inheriting(caller, route.chain), id: route.id, method: route.method, args: [...route.args], chain: route.chain, viewer,
+        ...(context.admit !== undefined && { admit: context.admit }),
       });
     }
+  }
+
+  /**
+   * The caller a hop's callee runs as: an owner's request that came through a shared slate runs the callee in a process
+   * of its own, bounded by those slates whatever it names (`SlateCaller.via`). A viewer's runs as its share already.
+   */
+  private inheriting(caller: SlateCaller, chain: readonly string[]): SlateCaller {
+    if (caller.share !== undefined) return caller;
+
+    const via = [...new Set([...caller.via ?? [], ...chain.filter((slate) => this.controller.servers.authorityOf(slate).kind !== 'owner')])];
+
+    return via.length === 0 ? caller : { ...caller, via };
   }
 
   /** One Cap'n Web HTTP-batch RPC; the invocation id lives exactly as long as the call. */
@@ -589,7 +615,7 @@ export class SlateHost {
     await this.servable(id, source.kind === 'message' || image.scope === 'tree');
 
     // Shared, the slate's server drives no browser of the owner's: only one its own call opened (Kitesurf).
-    const unshared = caller.share === undefined && this.controller.servers.authorityOf(id).kind === 'owner';
+    const unshared = caller.share === undefined && caller.via === undefined && this.controller.servers.authorityOf(id).kind === 'owner';
     // What the slate's sharing was when this launch chose its network: changed before it is running, it starts again.
     const lineage: SlateLineage = { incarnation: crypto.randomUUID(), generation: this.controller.generation(id) };
     const actor = unshared ? await this.deps.browserActor(caller) : null;

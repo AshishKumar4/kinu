@@ -87,7 +87,7 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   // The hop into the digest is walked once: its way back names the slate and walks nothing more.
   expect(graph.slates).toEqual(['issues', 'triage-digest']);
   expect(impacts('triage-digest:slates.issues')).toEqual([['refresh', 'observe']]);
-  expect(impacts('issues:mcp.github')).toEqual([['create_issue', 'externalSend'], ['read_issue', 'observe']]);
+  expect(impacts('issues:mcp.github')).toEqual([['add_issue_comment', 'externalSend'], ['issue_read', 'observe']]);
   expect(impacts('issues:workspace')).toEqual([['readFile', 'observe'], ['writeFile', 'mutate']]);
 
   const ShareSchema = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
@@ -97,7 +97,7 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   ).share.grant.members.map((member) => `${member.slate}:${member.namespace}.${member.member}`).sort();
 
   expect(await granted('public', [])).toEqual([
-    'issues:mcp.github.read_issue', 'issues:memory.recall', 'issues:slates.triage-digest.summary', 'issues:workspace.readFile',
+    'issues:mcp.github.issue_read', 'issues:memory.recall', 'issues:slates.triage-digest.summary', 'issues:workspace.readFile',
     'triage-digest:slates.issues.refresh', 'triage-digest:workspace.readFile',
   ]);
   expect(await granted('users', [{ slate: 'issues', namespace: 'agent', member: 'send' }])).toContain('issues:agent.send');

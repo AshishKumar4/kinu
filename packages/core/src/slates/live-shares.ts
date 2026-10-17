@@ -93,8 +93,25 @@ const LIVE_SHARES: ShareTable<v.InferOutput<typeof LiveShareRow>, LiveShareRecor
 };
 
 export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveShareRow>, LiveShareRecord> {
+  /**
+   * Each slate's sharing generation in this object's life: how many times a live share of it began, ended or changed
+   * mode. Every such change advances it in the same synchronous call that writes the row, so no await ever separates a
+   * sharing change from its fence (shared-server.ts `SlateLineage`): a process or request of an older generation is
+   * refused from the moment the row says otherwise.
+   */
+  private readonly generations = new Map<string, number>();
+
   constructor(db: SqlExec, now: () => number = () => Date.now()) {
     super(db, now, LIVE_SHARES);
+  }
+
+  /** `slate`'s sharing generation now. */
+  generation(slate: string): number {
+    return this.generations.get(slate) ?? 0;
+  }
+
+  private fence(slate: string): void {
+    this.generations.set(slate, this.generation(slate) + 1);
   }
 
   add(share: { id: string; slate: string; visibility: 'users' | 'public'; handle: string; grant: ShareGrant; authority?: ShareAuthority }): LiveShareRecord {
@@ -106,12 +123,23 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       share.id, share.slate, share.visibility, share.handle, JSON.stringify(share.grant), createdAt, authority.mode, authority.grantRevision,
     );
+    this.fence(share.slate);
     markStoreChanged(this.db);
 
     return {
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,
       grant: share.grant, createdAt, revokedAt: null, users: [], editors: [], mode: authority.mode, grantRevision: authority.grantRevision, editedBy: this.editMark(share.slate)?.editor ?? null, gallery: null,
     };
+  }
+
+  /** A live share revoked: its slate's fence advances with the row, in this same call. */
+  override revoke(id: string): LiveShareRecord {
+    const live = this.get(id)?.revokedAt === null;
+    const revoked = super.revoke(id);
+
+    if (live) this.fence(revoked.slate);
+
+    return revoked;
   }
 
   /** People added to a live share, each to use the slate or to edit it too: one added again takes the role named now. */
@@ -195,10 +223,14 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   /** A live share's mode set: `own`, its grant kept for a later `owner`; `owner`, with the grant its owner approved
    *  now and the revision they approved it at. A revoked share keeps what it had. */
   setAuthority(id: string, authority: ShareAuthority, grant: ShareGrant): void {
+    const held = this.get(id);
+
     this.db.exec(
       'UPDATE slate_live_shares SET mode = ?, grant_revision = ?, grant_json = ? WHERE id = ? AND revoked_at IS NULL',
       authority.mode, authority.grantRevision, JSON.stringify(grant), id,
     );
+
+    if (held?.revokedAt === null && held.mode !== authority.mode) this.fence(held.slate);
     markStoreChanged(this.db);
   }
 

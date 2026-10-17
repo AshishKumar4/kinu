@@ -14,6 +14,12 @@ export interface SlateCaller {
   readonly workMode: WorkMode;
   /** Share callers only: the id travels on the reference, never on the wire. */
   readonly share?: string;
+  /**
+   * The shared slates whose call this process runs under (shared-server.ts): a callee an owner's request reached through
+   * a shared slate. Minted by the host into the process's bindings, so every call it makes, naming a request or not, is
+   * bounded by them; and it is a process of its own, never the callee's durable app.
+   */
+  readonly via?: readonly string[];
 }
 
 /** Dispatches as the owner (S2); the share id keeps the process key distinct from the owner's own. */
@@ -25,5 +31,5 @@ export const ROOT_SLATE_CALLER: SlateCaller = { path: [], cred: CRED_SESSION_USE
 
 /** The share is in the key so a share's process never coalesces with the owner's private preview. */
 export function slateCallerKey(caller: SlateCaller): string {
-  return JSON.stringify([slateAuthority(caller.cred), caller.path, caller.workMode, caller.share ?? null]);
+  return JSON.stringify([slateAuthority(caller.cred), caller.path, caller.workMode, caller.share ?? null, ...caller.via === undefined ? [] : [caller.via]]);
 }

@@ -17,7 +17,7 @@ const IDENTITY = { userId: VIEWER, email: 'viewer@example.test', sub: 'viewer-su
 
 const CONSENT: SlateConsent = {
   workspace: 'another-persons-workspace', slate: 'issues', server: 'mcp.github', root: { owner: 'viewer', repo: 'kinu' },
-  tools: ['list_issues', 'create_issue'], effects: true, revision: 'source-a',
+  tools: ['list_issues', 'add_issue_comment'], effects: true, revision: 'source-a',
 };
 
 const PATH = slateConsentsPath(CONSENT.workspace, CONSENT.slate);
@@ -135,11 +135,11 @@ describe('the viewer\'s slate consent routes', () => {
     const { serve, env, viewer, selected } = fixture();
     const caller = await testOwner();
     await viewer.userDO.userMcp_list(caller);
-    seedConfiguredMcpServer(viewer.sql, 'viewer-connection', { name: 'github', url: 'https://viewer-github.example/sse', transport: 'auto' });
+    seedConfiguredMcpServer(viewer.sql, 'viewer-connection', { name: 'github', url: 'https://viewer-github.example/sse', transport: 'auto', presetId: 'github' });
     await viewer.userDO.userMcp_list(caller);
-    seedMcpTools('viewer-connection', [{ name: 'create_issue', inputSchema: { type: 'object' } }]);
+    seedMcpTools('viewer-connection', [{ name: 'add_issue_comment', inputSchema: { type: 'object' } }]);
     await viewer.userDO.consentSlate(caller, CONSENT);
-    const effect = { ...CONSENT, tool: 'create_issue', args: [{ ...CONSENT.root, title: 'one effect' }] };
+    const effect = { ...CONSENT, tool: 'add_issue_comment', args: [{ ...CONSENT.root, title: 'one effect' }] };
     const answer = await viewer.userDO.slatePartTool(caller, effect);
     expect(answer.kind).toBe('needs-approval');
     const ask = v.parse(v.object({ id: v.string() }), 'ask' in answer ? answer.ask : null);

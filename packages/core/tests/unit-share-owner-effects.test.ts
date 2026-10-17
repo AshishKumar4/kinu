@@ -51,11 +51,10 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 
   if (mode === 'owner') live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, grant);
 
-  const generations = new Map<string, number>();
   const ownerEffects = { ask: queue.slateEffect.bind(queue), take: queue.takeSlateEffect.bind(queue), settle: async (...settled: Parameters<typeof queue.settle>) => queue.settle(...settled) };
 
   const servers = new SharedServers({
-    authoritiesOf: (slate) => live.authoritiesOf(slate), revision: (slate) => revisions[slate] ?? null, generation: (slate) => generations.get(slate) ?? 0, ownerEffects,
+    authoritiesOf: (slate) => live.authoritiesOf(slate), revision: (slate) => revisions[slate] ?? null, generation: (slate) => live.generation(slate), ownerEffects,
   }, async () => 'Sam');
 
   const viewers = new SlateShareViewers({ live, shareEntry: () => null, ownerUserId: () => 'sam', ownerEffects });
@@ -103,7 +102,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
   const asked = () => queue.list().map((row) => approvalKindOf(row));
   const approveAll = async (answer: 'approved' | 'always' = 'approved') => queue.decide(queue.list().map((row) => row.id), answer);
 
-  return { call, ownersCall, ran, asked, approveAll, live, queue, servers, generations, remembered };
+  return { call, ownersCall, ran, asked, approveAll, live, queue, servers, remembered };
 }
 
 test('an owner share\'s acting call waits for the owner, then runs once on their approval', async () => {
@@ -242,14 +241,41 @@ test('a pre-approved tool and root run unasked at that revision only; another ro
 });
 
 test('a server started, or a request made, under other sharing of its slate acts no more', () => {
-  const { servers, generations } = world('owner');
-  const record = { id: 'board', chain: [], incarnation: 'p1', generations: { board: 0 } };
+  const { servers, live } = world('owner');
+  const then = live.generation('board');
+  const record = { id: 'board', chain: [], incarnation: 'p1', generations: { board: then } };
 
-  expect(servers.lineage('board', { incarnation: 'p1', generation: 0 }, record)).toBeNull();
-  expect(servers.lineage('board', { incarnation: 'p2', generation: 0 }, record)?.message).toContain('another of its servers');
-  generations.set('board', 1);
-  expect(servers.lineage('board', { incarnation: 'p1', generation: 0 }, null)?.message).toContain('started before its sharing changed');
-  expect(servers.lineage('board', { incarnation: 'p1', generation: 1 }, record)?.message).toContain("sharing changed since this request began");
+  expect(servers.lineage('board', { incarnation: 'p1', generation: then }, record)).toBeNull();
+  expect(servers.lineage('board', { incarnation: 'p2', generation: then }, record)?.message).toContain('another of its servers');
+  live.setAuthority('s1', { mode: 'own', grantRevision: null }, grant);
+  expect(servers.lineage('board', { incarnation: 'p1', generation: then }, null)?.message).toContain('started before its sharing changed');
+  expect(servers.lineage('board', { incarnation: 'p1', generation: live.generation('board') }, record)?.message).toContain("sharing changed since this request began");
+});
+
+test('R3-P1 fence. a sharing change fences its slate in the same call that writes the row, before anything can await', () => {
+  const { servers, live } = world('own');
+  const ownServer = { incarnation: 'p1', generation: live.generation('board') };
+
+  // The last share revoked: in that very call its server, started on each person's own access, is fenced. Nothing
+  // awaited afterwards (unlisting it from the Gallery, stopping it) can leave it running with the owner's authority.
+  live.revoke('s1');
+  expect(servers.authorityOf('board')).toEqual({ kind: 'owner' });
+  expect(servers.lineage('board', ownServer, null)?.message).toContain('started before its sharing changed');
+
+  // Shared again, and turned to the owner's access: each fences what ran before it.
+  const unshared = { incarnation: 'p2', generation: live.generation('board') };
+
+  live.add({ id: 's2', slate: 'board', visibility: 'public', handle: '9876543210', grant });
+  expect(servers.lineage('board', unshared, null)?.message).toContain('started before its sharing changed');
+  const shared = { incarnation: 'p3', generation: live.generation('board') };
+
+  live.setAuthority('s2', { mode: 'owner', grantRevision: 'rev-1' }, grant);
+  expect(servers.lineage('board', shared, null)?.message).toContain('started before its sharing changed');
+  // Revoking what is already revoked changes nothing, so it fences nothing.
+  const now = live.generation('board');
+
+  live.revoke('s1');
+  expect(live.generation('board')).toBe(now);
 });
 
 test("'Always for this slate' runs the asked call, then that tool on that root unasked at this revision; another root asks", async () => {

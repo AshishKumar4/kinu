@@ -17,7 +17,7 @@ async function started(name: string, readers: readonly string[] = ['alice']): Pr
   const probe = subject(name);
   const revision = await probe.startParts();
 
-  for (const reader of readers) await probe.consent(reader, { server: 'mcp.GitHub', root: REPO, tools: ['read_issue'], effects: false, revision });
+  for (const reader of readers) await probe.consent(reader, { server: 'mcp.GitHub', root: REPO, tools: ['issue_read'], effects: false, revision });
 
   return { probe, revision };
 }
@@ -40,7 +40,7 @@ it("a viewer's part shows them their own data, drawn by Kinu with no script, lin
   expect(alice.show).toEqual({ label: 'My issue', value: ALICES });
 
   // Bob has not let the slate read his issue: he is asked, and sees nothing of Alice's.
-  expect(await probe.runPart('bob', 'mine')).toMatchObject({ kind: 'needs-consent', ask: { server: 'mcp.GitHub', root: REPO, tools: ['read_issue'] } });
+  expect(await probe.runPart('bob', 'mine')).toMatchObject({ kind: 'needs-consent', ask: { server: 'mcp.GitHub', root: REPO, tools: ['issue_read'] } });
   // Carol is not shared the slate: nothing at all, as for a slate that does not exist. Signed out: sign in.
   expect(await probe.runPart('carol', 'mine')).toBeNull();
   expect(await probe.runPart(null, 'mine')).toMatchObject({ kind: 'stub', reason: 'signed-out' });
@@ -92,11 +92,11 @@ it('H2, H3. a send with her grant runs only once she approves that payload, once
   const { probe, revision } = await started('parts-act');
 
   // Read-only consent: a send is asked for, as a send.
-  expect(await probe.runPart('alice', 'act', ['hello'])).toMatchObject({ kind: 'needs-consent', ask: { tools: ['read_issue', 'create_issue'], effects: true } });
-  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['read_issue', 'create_issue'], effects: true, revision });
+  expect(await probe.runPart('alice', 'act', ['hello'])).toMatchObject({ kind: 'needs-consent', ask: { tools: ['issue_read', 'add_issue_comment'], effects: true } });
+  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['issue_read', 'add_issue_comment'], effects: true, revision });
   const asked = await probe.runPart('alice', 'act', ['hello']);
 
-  expect(asked).toMatchObject({ kind: 'needs-approval', ask: { tool: 'create_issue', payload: { ...REPO, title: 'hello' } } });
+  expect(asked).toMatchObject({ kind: 'needs-approval', ask: { tool: 'add_issue_comment', payload: { ...REPO, title: 'hello' } } });
 
   if (asked?.kind !== 'needs-approval') return;
   await probe.decide('alice', asked.ask.id, true);
@@ -104,7 +104,7 @@ it('H2, H3. a send with her grant runs only once she approves that payload, once
   expect(await probe.runPart('alice', 'act', ['other'])).toMatchObject({ kind: 'needs-approval' });
   expect(shown(await probe.runPart('alice', 'act', ['hello'])).html).toContain('acted');
   expect(await probe.runPart('alice', 'act', ['hello'])).toMatchObject({ kind: 'needs-approval' });
-  expect((await probe.dispatched()).filter((call) => call.includes('create_issue'))).toHaveLength(1);
+  expect((await probe.dispatched()).filter((call) => call.includes('add_issue_comment'))).toHaveLength(1);
 });
 
 it('H4. a consent names the revision it was given for: an edit asks again', async () => {
@@ -179,7 +179,7 @@ it('R2-P1 consent decision. an approved effect runs once across a later consent 
   const consent = await probe.resumePart('alice', 'mixed', asked.continuation);
 
   if (consent?.kind !== 'needs-consent') return expect.unreachable(`asked for the read, not ${JSON.stringify(consent)}`);
-  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['read_issue'], effects: false, revision });
+  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['issue_read'], effects: false, revision });
   expect(shown(await probe.resumePart('alice', 'mixed', consent.continuation)).html).toContain(`get done then ${ALICES}`);
   expect((await probe.dispatched()).filter((call) => call.includes('mcp.Fetch'))).toHaveLength(1);
 });
@@ -200,7 +200,7 @@ it('R2-P1 bound continuation. a continuation runs at its revision only, while it
   expect(await probe.resumePart('alice', 'mixed', asked.continuation)).toMatchObject({ kind: 'failed', message: expect.stringContaining('run it again') });
   // Her consent to the effect it already ran, withdrawn meanwhile: the journal is not replayed.
   await probe.withdrawConsent('alice', 'mcp.Fetch', {});
-  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['read_issue'], effects: false, revision });
+  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['issue_read'], effects: false, revision });
   expect(await probe.resumePart('alice', 'mixed', consent.continuation)).toMatchObject({ kind: 'failed', message: expect.stringContaining('run it again') });
 
   // And an edit while she decided: refused, never run as the new code; nor can Bob resume her run.
@@ -256,5 +256,25 @@ it('R2-P1 fenced send. a call whose viewer\'s access ended while it was prepared
 
   await probe.revokeBeforeNextSend();
   expect(await probe.runPart('alice', 'mine')).toBeNull();
-  expect((await probe.dispatched()).filter((call) => call.includes('read_issue'))).toEqual([]);
+  expect((await probe.dispatched()).filter((call) => call.includes('issue_read'))).toEqual([]);
+});
+
+it("R3-P1 parallel journal. calls made at once are journaled in the order made, so a resumed run asks its model once", async () => {
+  const { probe, revision } = await started('parts-parallel');
+
+  await probe.consent('alice', { ...FETCH, revision });
+  await probe.consent('alice', { server: 'ai', root: {}, tools: ['stream'], effects: false, revision });
+  // Her model is asked first and answers last; her issue is read second and answered first.
+  await probe.holdModelForNextTool();
+  const asked = await probe.runPart('alice', 'parallel');
+
+  if (asked?.kind !== 'needs-approval') return expect.unreachable(`asked for the effect, not ${JSON.stringify(asked)}`);
+  await probe.decide('alice', asked.ask.id, true);
+  // Resumed, both are answered from the journal at their own slots: the same reply, so the approved payload is sent.
+  expect(shown(await probe.resumePart('alice', 'parallel', asked.continuation)).html).toContain("alice@probe.test's own model, reply 1 / ");
+  const dispatched = await probe.dispatched();
+
+  expect(dispatched.filter((call) => call.includes(' ai '))).toHaveLength(1);
+  expect(dispatched.filter((call) => call.includes('issue_read'))).toHaveLength(1);
+  expect(dispatched.filter((call) => call.includes('mcp.Fetch'))).toHaveLength(1);
 });

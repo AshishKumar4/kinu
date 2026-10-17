@@ -36,12 +36,12 @@ import { asFetchFunction, callCodemodeMember, createDefaultWebSearchProvider, cr
 export * from '../../src/server';
 
 /** The owner's connections as a graph reads them: one MCP server with a read-only tool and one that writes. */
-const MCP = [{ server: 'github', title: 'github', tools: [{ name: 'read_issue', readOnly: true }, { name: 'create_issue', readOnly: false }] }];
+const MCP = [{ server: 'github', title: 'github', tools: [{ name: 'issue_read', readOnly: true }, { name: 'add_issue_comment', readOnly: false }] }];
 
 /** The triage slates, and what each calls as its owner runs it: `issues` hops into `triage-digest`, which hops back. */
 const TRIAGE = {
   issues: [
-    ['mcp', 'github', 'read_issue'], ['mcp', 'github', 'create_issue'], ['readFile'], ['writeFile'],
+    ['mcp', 'github', 'issue_read'], ['mcp', 'github', 'add_issue_comment'], ['readFile'], ['writeFile'],
     ['memory', 'recall'], ['memory', 'remember'], ['agent', 'send'], ['slates', 'triage-digest', 'summary'],
   ],
   'triage-digest': [['readFile'], ['slates', 'issues', 'refresh']],
@@ -164,6 +164,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly galleryTold: string[] = [];
   /** The writes a viewer's call made, past its admission. */
   #writes = 0;
+  /** Each namespace call's environment: the shared server's, or the owner's own. */
+  readonly #environments: string[] = [];
   /** A write held between its preparation and its send, while a test changes its share. */
   #heldWrite: { readonly reached: { resolve: () => void }; readonly release: { readonly promise: Promise<void> } } | null = null;
   /** Each viewer's own account, as their parts reach it. */
@@ -237,6 +239,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         }
 
         if (route.kind !== 'namespace') throw new Error(`probe dispatch answers namespace only, got ${route.kind}`);
+
+        this.#environments.push(`${route.member}:${context.viewer === true ? 'shared' : 'owner'}`);
 
         // The actor's half of authorizing a browser member: it is within reach, so the class may run it.
         if (route.namespace === 'web' && context.authorizeOnly) {
@@ -339,6 +343,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       '  async hop() { return await this.env.workspace.slates.digest.digest(); }',
       // Into the digest, which writes: a leaf of a slate the board's call hops to, held to the board's own bound.
       '  async hopWrite() { return await this.env.workspace.slates.digest.scribble(); }',
+      // Into the digest, whose own code then calls its binding naming no request: the board's bound must still hold it.
+      '  async hopRaw() { return await this.env.workspace.slates.digest.rawWrite(); }',
       // Straight to its binding, naming no request: the runner's wrapper is the slate's own code, never a boundary.
       '  async raw() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["writeFile"], ["/x", "raw"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
       '  async fetch() { return new Response("share-ok"); }',
@@ -354,6 +360,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       'export class Slate extends SlateObject {',
       '  async digest() { return "digest-ok"; }',
       '  async scribble() { return await this.env.workspace.writeFile("/x", "from digest"); }',
+      '  async rawWrite() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["writeFile"], ["/x", "raw from digest"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
       '}',
     ].join('\n'));
     files.writeFile('/x', 'fixture-bytes');
@@ -559,10 +566,53 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /** The board's hop into the digest's writer, called once by its owner before any share: its graph then names it. */
-  async exerciseHop(): Promise<void> {
+  async exerciseHop(member = 'scribble'): Promise<void> {
     await this.host.surfaceCall({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, {
-      path: ['slates', 'digest', 'scribble'], args: [], invocation: null,
+      path: ['slates', 'digest', member], args: [], invocation: null,
     });
+  }
+
+  /**
+   * The owner's own request into their shared board, which hops into the digest (theirs, unshared), whose code then
+   * calls its binding naming no request: what it answered, and whether anything was written.
+   */
+  async inheritedRaw(): Promise<{ answered: string; written: boolean }> {
+    const before = this.#writes;
+    const answered = await this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'hopRaw', args: [] });
+
+    return { answered: answered.ok ? JSON.stringify(answered.value) : answered.error, written: this.#writes > before };
+  }
+
+  /**
+   * The owner's own write to the board while it is shared with no one, held where its dispatch prepares it; the board
+   * shared meanwhile, on each person's own access; then let go: what it answered, and whether it was written.
+   */
+  async ownersHeldWrite(): Promise<{ answered: string; written: boolean }> {
+    const hold = { reached: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+    const before = this.#writes;
+
+    this.#heldWrite = hold;
+    const call = this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'mutate', args: [] });
+
+    await hold.reached.promise;
+    await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'share', id: SLATE_ID, visibility: 'public', approved: [] });
+    this.#heldWrite = null;
+    hold.release.resolve();
+    const answered = await call;
+
+    return { answered: answered.ok ? JSON.stringify(answered.value) : answered.error, written: this.#writes > before };
+  }
+
+  /** One method of the board, called by its owner as their preview or agent does: its answer, or its refusal. */
+  async ownerCall(method: string): Promise<string> {
+    const answered = await this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method, args: [] });
+
+    return answered.ok ? JSON.stringify(answered.value) : answered.error;
+  }
+
+  /** The environment each namespace call ran in, as its dispatch was told it (`SlateDispatchContext.viewer`). */
+  environments(): string[] {
+    return [...this.#environments];
   }
 
   /** The owner answers everything their shares asked of them "Always for this slate"; how many they answered. */
@@ -879,7 +929,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         title: 'Notes', runtime: 'worker',
         parts: {
           mine: { fn: 'mine', show: 'showed' }, leaky: { fn: 'leaky' }, egress: { fn: 'egress' }, stash: { fn: 'stash' }, two: { fn: 'two' },
-          mixed: { fn: 'mixed' }, twice: { fn: 'twice' }, fetchArg: { fn: 'fetchArg', input: { kind: 'text', maxLength: 100 } }, streamed: { fn: 'streamed' },
+          mixed: { fn: 'mixed' }, twice: { fn: 'twice' }, parallel: { fn: 'parallel' }, fetchArg: { fn: 'fetchArg', input: { kind: 'text', maxLength: 100 } }, streamed: { fn: 'streamed' },
           act: { fn: 'act', input: { kind: 'text', maxLength: 100 } },
         },
       },
@@ -930,6 +980,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     this.host.controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: this.revision() }, share.grant);
   }
 
+  holdModelForNextTool(): void {
+    this.accounts.holdModelForNextTool();
+  }
+
   /** The notes share revoked while the next connection call is prepared, after the run checked it and before it is sent. */
   revokeBeforeNextSend(): void {
     this.accounts.beforeNextSend = () => { this.host.controller.live.revoke(this.notesShare); };
@@ -963,7 +1017,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** A call as a part's process would make it after its run ended: the last run's own name, replayed. */
   async lateCall(): Promise<SlateSurfaceResult> {
-    return await this.host.parts.call(NOTES, this.lastPartRun ?? crypto.randomUUID(), 'workspace', { path: ['mcp', 'GitHub', 'read_issue'], args: [{ owner: 'acme', repo: 'notes' }] });
+    return await this.host.parts.call(NOTES, this.lastPartRun ?? crypto.randomUUID(), 'workspace', { path: ['mcp', 'GitHub', 'issue_read'], args: [{ owner: 'acme', repo: 'notes' }] });
   }
 
   /** Whether any row of this workspace's own storage holds `text`: every table, every column. */
@@ -1013,7 +1067,7 @@ const NOTES_SOURCE = [
   'import { SlateObject } from "kinu:slate";',
   // What a run left at module level: the next run of the image must never see it.
   'let kept = "none";',
-  'const issue = (env) => env.workspace.mcp.GitHub.read_issue({ owner: "acme", repo: "notes" });',
+  'const issue = (env) => env.workspace.mcp.GitHub.issue_read({ owner: "acme", repo: "notes" });',
   'const tried = (promise) => promise.then(() => "done", () => "refused");',
   'export class Slate extends SlateObject {',
   // Her issue, drawn with what a page script would do with it: none of it survives the cut.
@@ -1044,6 +1098,15 @@ const NOTES_SOURCE = [
   '  async stash() { const before = kept; kept = (await issue(this.env)).secret; return { html: "<p>" + before + "</p>" }; }',
   // Her issue read twice, the first refusal or answer kept: a call after her access ended is never sent.
   '  async twice() { const first = await tried(issue(this.env)); const second = await tried(issue(this.env)); return { html: "<p>" + first + " " + second + "</p>" }; }',
+  // Its viewer's model and her issue at once, then an effect naming the reply: answered in another order than made.
+  '  async parallel() {',
+  '    const [reply, read] = await Promise.all([',
+  '      (async () => { let text = ""; for await (const piece of await this.env.workspace.ai.stream({ prompt: "summarize" })) text += piece; return text; })(),',
+  '      issue(this.env),',
+  '    ]);',
+  '    const sent = await this.env.workspace.mcp.Fetch.get({ url: "https://b.example/?r=" + encodeURIComponent(reply) });',
+  '    return { html: "<p>" + reply + " / " + read.secret + " / " + sent + "</p>" };',
+  '  }',
   // An effect, then a read it has no consent for yet: the journal carries the effect across the consent decision.
   '  async mixed() {',
   '    const sent = await this.env.workspace.mcp.Fetch.get({ url: "https://a.example/" });',
@@ -1064,7 +1127,7 @@ const NOTES_SOURCE = [
   '    const second = await this.env.workspace.mcp.Fetch.get({ url: "https://b.example/" });',
   '    return { html: "<p>" + first + " then " + second + "</p>" };',
   '  }',
-  '  async act(title) { await this.env.workspace.mcp.GitHub.create_issue({ owner: "acme", repo: "notes", title }); return { html: "<p>acted</p>" }; }',
+  '  async act(title) { await this.env.workspace.mcp.GitHub.add_issue_comment({ owner: "acme", repo: "notes", title }); return { html: "<p>acted</p>" }; }',
   // The shared server: what was shown, and its own SQL, which no part ever wrote.
   '  async board() { return (await this.storage.get("shown")) ?? null; }',
   '  async showed(value, from) { await this.storage.put("shown", { value, by: from.email }); return "kept"; }',

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { JsonValue } from '../src/utils/json';
-import { containedTool, EffectApprovals, partCallVerdict, plainData, serverAuthority, type EffectCall, type LiveShareAuthority } from '../src/slates/share-policy';
+import { containedTool, EffectApprovals, partCallRoot, partCallVerdict, plainData, serverAuthority, type EffectCall, type LiveShareAuthority } from '../src/slates/share-policy';
 import type { ShareGrant } from '../src/slates/sharing';
 import type { SlateConsent } from '../src/slates/share-modes';
 
@@ -117,5 +117,20 @@ describe('plain data', () => {
     expect(() => plainData([Number.NaN])).toThrow('not a finite number');
     // Plain data is copied as it is.
     expect(plainData({ at: '1970-01-01T00:00:00.000Z', n: [1, { b: null }] })).toEqual({ at: '1970-01-01T00:00:00.000Z', n: [1, { b: null }] });
+  });
+});
+
+describe('a call\'s root', () => {
+  test('R3-P1 roots. is a repository only where its tool\'s own contract chooses by owner and repo; else its whole connection', () => {
+    const named = { owner: 'acme', repo: 'notes', query: 'anything at all' };
+
+    expect(partCallRoot({ preset: 'github', tool: 'issue_read' }, named)).toEqual({ owner: 'acme', repo: 'notes' });
+    // A search chooses by its query: the owner and repo it is handed are decoration.
+    expect(partCallRoot({ preset: 'github', tool: 'search_issues' }, named)).toEqual({});
+    // Another connection, or one no preset made, with the same fields: the whole connection.
+    expect(partCallRoot({ preset: null, tool: 'issue_read' }, named)).toEqual({});
+    expect(partCallRoot({ preset: 'cloudflare', tool: 'issue_read' }, named)).toEqual({});
+    expect(partCallRoot(null, named)).toEqual({});
+    expect(partCallRoot({ preset: 'github', tool: 'issue_read' }, { owner: 'acme' })).toEqual({});
   });
 });

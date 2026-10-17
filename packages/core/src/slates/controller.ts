@@ -40,7 +40,7 @@ import {
 import { WorkspaceSlates } from './runtime';
 import { SlateShareViewers } from './share-viewers';
 import { SharedServers, type OwnerEffects } from './shared-server';
-import { slateRevision } from './share-policy';
+import { slateRevision, type ToolContract } from './share-policy';
 import { confinedTo } from './scoped-reader';
 import { rollbackSlateBatch, writeSlateBatch, type SlateFileBatch } from './slate-writer';
 import type {
@@ -115,6 +115,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   ownerTitle?(): Promise<string>;
   /** Where `owner` shares' effects wait for the owner, and how a share's open ones retire with it. */
   readonly ownerEffects?: OwnerEffects & { retire(slate: string): void };
+  /** What the owner's catalog knows of a connection's tool: what a shared server's approvals name its root by. */
+  toolContract?(namespace: string, member: string): Promise<ToolContract | null>;
   /** The Gallery's copy of a live share's listing is behind it, where its owner waits on the change: told now. The host
    *  logs its own failure, which the next start's {@link SlateController.relist} mends. */
   listingChanged?(share: LiveShareRecord): Promise<void>;
@@ -146,8 +148,6 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   readonly viewers: SlateShareViewers;
   /** Each shared slate's server, as the one principal it is (shared-server.ts). */
   readonly servers: SharedServers;
-  /** How many times each slate's sharing changed in this object's life: a process or request of an older one acts no more. */
-  private readonly generations = new Map<string, number>();
   readonly builds: SlateBuilds;
   readonly live: SlateLiveShareStore;
   readonly state: SqliteSlateStateStore;
@@ -181,8 +181,9 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     this.servers = new SharedServers({
       authoritiesOf: (slate) => this.live.authoritiesOf(slate),
       revision: (slate) => slateRevision(this.builds, slate),
-      generation: (slate) => this.generations.get(slate) ?? 0,
+      generation: (slate) => this.live.generation(slate),
       ...(ports.ownerEffects !== undefined && { ownerEffects: ports.ownerEffects }),
+      ...(ports.toolContract !== undefined && { toolContract: ports.toolContract.bind(ports) }),
     }, async () => (await ports.ownerTitle?.()) ?? 'Its owner');
     this.processes = new SlateProcesses({
       workspace: ports.workspace, builds: this.builds, pages: new EphemeralSlates(ports.sql), apps: ports.apps,
@@ -535,14 +536,17 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
   /** How many times `slate`'s sharing changed in this object's life (shared-server.ts `SlateLineage`). */
   generation(slate: string): number {
-    return this.generations.get(slate) ?? 0;
+    return this.live.generation(slate);
   }
 
-  /** `slate`'s sharing changed (a share began, ended or changed mode): its generation moves, and its running app ends. */
+  /**
+   * `slate`'s sharing changed (a share began, ended or changed mode): its running app ends. Its fence already advanced,
+   * in the store's own write of the row (`SlateLiveShareStore.generation`), before anything here awaited.
+   */
   private async sharingChanged(slate: string): Promise<void> {
-    this.generations.set(slate, (this.generations.get(slate) ?? 0) + 1);
     await this.ports.shareChanged?.(slate);
   }
+
 
   /** `slate` shared live as the op asks, in `own` mode. */
   private async shareSlateLive(operation: Extract<SlateOperation, { op: 'share' }>, slate: string): Promise<SlateCallResult> {

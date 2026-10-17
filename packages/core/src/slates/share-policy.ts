@@ -29,6 +29,8 @@ export interface LiveShareAuthority {
   readonly grant: ShareGrant;
   /** `owner` mode: the revision whose reach the owner approved; null in `own` mode. */
   readonly grantRevision: string | null;
+  /** Someone the owner added to edit changed the slate, and the owner has not approved what it reaches since: who. */
+  readonly editedBy?: string;
 }
 
 /**
@@ -95,9 +97,41 @@ function plain(value: JsonValue, at: string): Effect.Effect<JsonValue, KinuError
   );
 }
 
-/** The root a part's call is consented for: a GitHub call's repository, nothing for any other. */
-export function partCallRoot(server: string, args: JsonValue): Record<string, string> {
-  if (!server.startsWith('mcp.') || args === null || typeof args !== 'object' || Array.isArray(args)) return {};
+/** A connection's tool as its catalog knows it: the preset the connection was made from, if any, and the tool's name. */
+export interface ToolContract {
+  readonly preset: string | null;
+  readonly tool: string;
+}
+
+/**
+ * Tools whose resource is chosen by `owner` and `repo` alone, both required, and which reach nothing outside that
+ * repository: no free query, no other repository (`head`, `parent_repo`, `item_repo`, an organization), no URL. Read
+ * off the GitHub MCP server's own tool reference (github/github-mcp-server README, 2026-10). A tool not named here is
+ * scoped to its whole connection, however its arguments look.
+ */
+const REPOSITORY_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map([['github', new Set([
+  // Reads.
+  'get_file_contents', 'get_repository_tree', 'get_commit', 'list_commits', 'list_branches', 'list_tags', 'get_tag',
+  'list_releases', 'get_latest_release', 'get_release_by_tag', 'issue_read', 'list_issues', 'list_issue_fields', 'list_issue_types',
+  'get_label', 'list_label', 'pull_request_read', 'list_pull_requests', 'get_discussion', 'get_discussion_comments', 'list_discussions',
+  'list_discussion_categories', 'actions_get', 'actions_list', 'get_job_logs', 'get_code_scanning_alert', 'list_code_scanning_alerts',
+  'get_code_quality_finding', 'get_dependabot_alert', 'list_dependabot_alerts', 'get_secret_scanning_alert', 'list_secret_scanning_alerts',
+  'list_repository_security_advisories', 'list_repository_collaborators',
+  // Writes to that repository alone.
+  'add_issue_comment', 'update_issue_comment', 'label_write', 'create_branch', 'create_or_update_file', 'delete_file', 'push_files',
+  'merge_pull_request', 'update_pull_request', 'update_pull_request_branch', 'pull_request_review_write', 'add_comment_to_pending_review',
+  'add_reply_to_pull_request_comment', 'discussion_comment_write',
+])]]);
+
+/**
+ * The root a call is consented, approved or pre-approved for: the repository a known repository-scoped tool's `owner`
+ * and `repo` name (`REPOSITORY_TOOLS`); else nothing, which is its whole connection. A root is never inferred from
+ * fields a tool may ignore.
+ */
+export function partCallRoot(contract: ToolContract | null, args: JsonValue): Record<string, string> {
+  const scoped = contract?.preset === null || contract === null ? false : REPOSITORY_TOOLS.get(contract.preset)?.has(contract.tool) === true;
+
+  if (!scoped || args === null || typeof args !== 'object' || Array.isArray(args)) return {};
   const { owner, repo } = args;
 
   return typeof owner === 'string' && typeof repo === 'string' ? { owner, repo } : {};

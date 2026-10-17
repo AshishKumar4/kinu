@@ -20,7 +20,7 @@ const ADDRESS = { workspace: 'someone-elses-workspace', slate: 'issues', revisio
 
 const ROOT = { owner: 'viewer', repo: 'kinu' };
 
-const CONSENT: SlateConsent = { ...ADDRESS, server: 'mcp.github', root: ROOT, tools: ['list_issues', 'create_issue'], effects: true };
+const CONSENT: SlateConsent = { ...ADDRESS, server: 'mcp.github', root: ROOT, tools: ['list_issues', 'add_issue_comment'], effects: true };
 
 function account() {
   const user = createTestUserDO();
@@ -34,16 +34,17 @@ async function connection() {
   const user = account();
   const caller = await testOwner();
   await user.userDO.userMcp_list(caller);
-  seedConfiguredMcpServer(user.sql, 'viewer-connection', { name: 'github', url: 'https://viewer-github.example/sse', transport: 'auto' });
+  // Made from the GitHub preset, whose repository-scoped tools name their root by owner and repo (share-policy.ts).
+  seedConfiguredMcpServer(user.sql, 'viewer-connection', { name: 'github', url: 'https://viewer-github.example/sse', transport: 'auto', presetId: 'github' });
   await user.userDO.userMcp_list(caller);
   seedMcpTools('viewer-connection', [
     { name: 'list_issues', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true, openWorldHint: false } },
-    { name: 'create_issue', inputSchema: { type: 'object' } },
+    { name: 'add_issue_comment', inputSchema: { type: 'object' } },
   ]);
   const answer = { content: [{ type: 'text' as const, text: 'viewer-only issue' }], structuredContent: { issue: 3 } };
   seedMcpAnswer(answer);
   const read = { ...ADDRESS, server: CONSENT.server, tool: 'list_issues', args: [{ ...ROOT }] };
-  const effect = { ...read, tool: 'create_issue', args: [{ ...ROOT, title: 'Approved title' }] };
+  const effect = { ...read, tool: 'add_issue_comment', args: [{ ...ROOT, title: 'Approved title' }] };
 
   return { user, caller, read, effect, answer };
 }
@@ -55,7 +56,7 @@ describe('personal part calls on the viewer\'s own account', () => {
     // Named as the person knows the connection and the tool: their own server name, the tool's.
     const ask = {
       kind: 'needs-consent' as const,
-      ask: { server: CONSENT.server, root: ROOT, tools: ['list_issues'], effects: false, revision: ADDRESS.revision, serverTitle: 'github', toolTitle: 'list_issues' },
+      ask: { server: CONSENT.server, root: ROOT, tools: ['list_issues'], effects: false, revision: ADDRESS.revision, serverTitle: 'GitHub', toolTitle: 'list_issues' },
     };
 
     expect(await user.userDO.slatePartTool(caller, read)).toEqual(ask);
@@ -81,7 +82,7 @@ describe('personal part calls on the viewer\'s own account', () => {
     const { user, caller, effect, answer } = await connection();
     await user.userDO.consentSlate(caller, CONSENT);
     const asked = await user.userDO.slatePartTool(caller, effect);
-    expect(asked).toMatchObject({ kind: 'needs-approval', ask: { server: CONSENT.server, tool: 'create_issue', root: ROOT, payload: effect.args[0] } });
+    expect(asked).toMatchObject({ kind: 'needs-approval', ask: { server: CONSENT.server, tool: 'add_issue_comment', root: ROOT, payload: effect.args[0] } });
     expect(recordedMcpToolCalls()).toEqual([]);
 
     if (asked.kind !== 'needs-approval') return;
@@ -90,7 +91,7 @@ describe('personal part calls on the viewer\'s own account', () => {
     expect(await user.userDO.slatePartTool(caller, effect)).toEqual({ kind: 'ran', value: answer });
     expect(await user.userDO.decideSlateEffect(caller, { id: asked.ask.id, decision: 'approve' })).toBe(false);
     expect(await user.userDO.slatePartTool(caller, effect)).toMatchObject({ kind: 'needs-approval', ask: { id: asked.ask.id } });
-    expect(recordedMcpToolCalls()).toEqual([{ serverId: 'viewer-connection', name: 'create_issue', arguments: effect.args[0] }]);
+    expect(recordedMcpToolCalls()).toEqual([{ serverId: 'viewer-connection', name: 'add_issue_comment', arguments: effect.args[0] }]);
   });
 
   test('an approved payload cannot approve a different payload, slate, workspace or revision', async () => {
@@ -167,7 +168,7 @@ describe('personal part calls on the viewer\'s own account', () => {
     const { user, caller, read, effect } = await connection();
     await user.userDO.consentSlate(caller, { ...CONSENT, tools: ['list_issues'], effects: false });
 
-    expect(await user.userDO.slatePartTool(caller, effect)).toMatchObject({ kind: 'needs-consent', ask: { tools: ['list_issues', 'create_issue'], effects: true } });
+    expect(await user.userDO.slatePartTool(caller, effect)).toMatchObject({ kind: 'needs-consent', ask: { tools: ['list_issues', 'add_issue_comment'], effects: true } });
     await user.userDO.consentSlate(caller, { ...CONSENT, effects: false });
     expect(await user.userDO.slatePartTool(caller, effect)).toMatchObject({ kind: 'needs-consent', ask: { effects: true } });
     expect(await user.userDO.slatePartTool(caller, { ...read, args: [{ ...ROOT, repo: 'not-consented' }] })).toMatchObject({ kind: 'needs-consent' });
@@ -190,7 +191,8 @@ describe('personal part calls on the viewer\'s own account', () => {
     ];
 
     seedMcpTools('viewer-connection', tools);
-    const consent = { ...CONSENT, tools: tools.map((tool) => tool.name) };
+    // None of them is a GitHub tool scoped by owner and repo: each is consented for the whole connection.
+    const consent = { ...CONSENT, root: {}, tools: tools.map((tool) => tool.name) };
 
     for (const tool of tools) {
       const call = { ...read, tool: tool.name, args: [{ ...ROOT, private: 'viewer-only input' }] };
@@ -267,6 +269,18 @@ describe('personal part calls on the viewer\'s own account', () => {
 
     await expect(user.userDO.slatePartTool(caller, read)).rejects.toThrow();
     await expect(user.userDO.slatePartAi(caller, { ...ADDRESS, route: { kind: 'ai', prompt: 'private' } })).rejects.toThrow();
+    expect(recordedMcpToolCalls()).toEqual([]);
+  });
+
+  test('R3-P1 roots. a tool its contract does not scope by owner and repo is consented for its whole connection, whatever it is passed', async () => {
+    const { user, caller } = await connection();
+
+    // Search reads read-only and closed-world, but its query chooses what it reads, not the owner and repo it is handed.
+    seedMcpTools('viewer-connection', [{ name: 'search_issues', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true, openWorldHint: false } }]);
+    await user.userDO.consentSlate(caller, { ...CONSENT, tools: ['search_issues'], effects: false });
+    const search = { ...ADDRESS, server: CONSENT.server, tool: 'search_issues', args: [{ ...ROOT, query: 'is:private secrets' }] };
+
+    expect(await user.userDO.slatePartTool(caller, search)).toMatchObject({ kind: 'needs-consent', ask: { root: {}, tools: ['search_issues'] } });
     expect(recordedMcpToolCalls()).toEqual([]);
   });
 });

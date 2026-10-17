@@ -91,3 +91,43 @@ it("R2-P1 hop lineage. a slate the shared one hops to is held to the shared serv
   expect(seen.owner).toContain('does not reach workspace.writeFile');
   expect(seen.asked).toBe(0);
 });
+
+// Third review of 451b3cd58 (MechanicalToad, 2026-10-17).
+it('R3-P1 unbounded send. an owner\'s call that began unshared is not sent once its slate is shared while it prepared', async () => {
+  const probe = subject('review3-unbounded');
+
+  await probe.start();
+  const seen = await probe.ownersHeldWrite();
+
+  // Its process ends with the share, and the write it was preparing is not sent: unshared when it began is no permission.
+  expect(seen.answered).not.toContain('null');
+  expect(seen.written).toBe(false);
+});
+
+it('R3-P1 inherited bound. a slate the shared one hops to stays bounded by it when its own code names no request', async () => {
+  const probe = subject('review3-inherited');
+
+  await probe.start();
+  await probe.exerciseHop('rawWrite');
+  await probe.share();
+  const seen = await probe.inheritedRaw();
+
+  expect(seen.answered).toContain('called out under no request');
+  expect(seen.written).toBe(false);
+});
+
+it('R3-P2 one environment. a call the shared server makes runs in its environment whoever asked; unshared, in the owner\'s', async () => {
+  const probe = subject('review3-environment');
+
+  await probe.start();
+  await probe.ownerCall('probe');
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+  const shared = (await probe.environments()).length;
+
+  await probe.ownerCall('probe');
+  await probe.viewerCall(created.share.handle, CLAIM, 'probe');
+  const environments = await probe.environments();
+
+  expect(environments[0]).toBe('readFile:owner');
+  expect(environments.slice(shared)).toEqual(['readFile:shared', 'readFile:shared']);
+});

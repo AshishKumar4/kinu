@@ -289,7 +289,7 @@ export class UserDO extends Agent<Env> {
         return yield* new KinuError('bad_input', `${server}.${tool} takes one JSON object argument.`);
       }
 
-      const root = partCallRoot(server, payload);
+      const root = partCallRoot({ preset: descriptor.presetId ?? null, tool }, payload);
       const verdict = partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, false);
       // What its asks call the connection and the tool: the catalog's own name for a preset server, else the person's.
       const titles = { serverTitle: mcpPresetById(descriptor.presetId ?? '')?.title ?? descriptor.serverName, toolTitle: descriptor.title ?? descriptor.name };
@@ -323,7 +323,7 @@ export class UserDO extends Agent<Env> {
     return calls.map(({ workspace, slate, revision, server, tool, args }) => {
       if (server === 'ai') return partCallVerdict(this.slateConsentStore.find(workspace, slate, 'ai', {}), { server, root: {}, tool, contained: true }, revision, true).kind === 'run';
       const descriptor = mcp.find((item) => `mcp.${item.serverName}` === server && item.name === tool);
-      const root = partCallRoot(server, args.length === 1 ? args[0] ?? null : args);
+      const root = partCallRoot(descriptor === undefined ? null : { preset: descriptor.presetId ?? null, tool }, args.length === 1 ? args[0] ?? null : args);
 
       return descriptor !== undefined
         && partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, true).kind === 'run';

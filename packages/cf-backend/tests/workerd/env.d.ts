@@ -377,7 +377,11 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   viewerRefusals(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string; mutate: string }>;
   viewerCall(handle: string, claim: { userId: string | null; source: string; consented: boolean }, method: string): Promise<string>;
   ownersOwnWrite(): Promise<{ first: string; asked: string[]; second: string; after: number }>;
-  exerciseHop(): Promise<void>;
+  exerciseHop(member?: string): Promise<void>;
+  inheritedRaw(): Promise<{ answered: string; written: boolean }>;
+  ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;
+  environments(): Promise<string[]>;
+  ownerCall(method: string): Promise<string>;
   hopWrites(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ viewer: string; owner: string; asked: number }>;
   viewerAfterLastRevoke(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string): Promise<ProbeAnswer>;
   launchAcrossShare(): Promise<{ actors: number; afterShare: number; refused: string; running: number }>;
@@ -413,6 +417,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   notesOnOwnerAccess(): Promise<void>;
   revokeDuringNextCall(): Promise<void>;
   revokeBeforeNextSend(): Promise<void>;
+  holdModelForNextTool(): Promise<void>;
   resumePart(viewer: string, part: string, continuation: string, args?: import('@kinu.run/core').JsonValue[]): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
   withdrawConsent(viewer: string, server: string, root: Record<string, string>): Promise<void>;
 }
