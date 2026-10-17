@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { MINECRAFT_CONTROL, MINECRAFT_CONTROL_TRIES, minecraftControlScript } from '../../scripts/minecraft-control-script';
-import type { ScriptedRequest } from '../../scripts/scripted-protocol';
+import { readScriptedRequest, type ScriptedRequest } from '../../scripts/scripted-protocol';
+import { TOOL_IMAGES_OPENING } from '../../packages/core/src/utils/prompt-sections';
 import { boxBreaches, browserBreaches, controlShortfalls, playedByHand, tallestColumn, type ClosedBox, type LiveBox } from '../tasks/minecraft';
 import type { EvalCheck } from './task';
 
@@ -129,6 +130,31 @@ describe('the control trial', () => {
       .toEqual(MINECRAFT_CONTROL_TRIES.map((code) => ({ name: 'eval', arguments: { code } })));
     expect(minecraftControlScript(asked(system, MINECRAFT_CONTROL_TRIES.length))).toEqual({ text: 'done' });
     expect([minecraftControlScript(asked('A computer-use benchmark.', 0)), minecraftControlScript(asked(system, 0, []))]).toEqual([null, null]);
+  });
+
+  test('counts its tries across the screenshots the product attaches as their own user message', () => {
+    // On staging (2026-10-17) every screenshot's image came back as a user message after its tool result, read as a
+    // new ask, and the control took its first screenshot 56 times until the request passed the model's 8 MB.
+    const call = (id: string, code: string) => [
+      { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name: 'eval', arguments: JSON.stringify({ code }) } }] },
+      { role: 'tool', tool_call_id: id, content: '(image attached in the next message)' },
+      { role: 'user', content: [{ type: 'text', text: TOOL_IMAGES_OPENING }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } }] },
+    ];
+
+    const read = readScriptedRequest(JSON.stringify({
+      messages: [
+        { role: 'system', content: `A benchmark. ${MINECRAFT_CONTROL}` },
+        { role: 'user', content: 'Build a tower.' },
+        ...call('c1', MINECRAFT_CONTROL_TRIES[0]),
+        ...call('c2', MINECRAFT_CONTROL_TRIES[1]),
+      ],
+      tools: [{ type: 'function', function: { name: 'eval' } }],
+      stream: true,
+    }));
+
+    if ('refusal' in read) throw new Error(read.refusal.body);
+    expect([read.request.ask, minecraftControlScript(read.request)?.toolCall])
+      .toEqual(['Build a tower.', { name: 'eval', arguments: { code: MINECRAFT_CONTROL_TRIES[2] } }]);
   });
 
   test('every try the grader and the box must stop is one the rule refuses', () => {

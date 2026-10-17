@@ -13,7 +13,7 @@
 import * as v from 'valibot';
 import type { ExpectedFailure } from '../packages/core/src/obs/expected-failure';
 import {
-  DYNAMIC_CONTEXT_OPEN_TAG, MID_TURN_DELIVERY_OPENING, STEER_SKILLS_HEADING, SYSTEM_REMINDER_TAG, WORKSPACE_INSTRUCTIONS_TAG,
+  DYNAMIC_CONTEXT_OPEN_TAG, MID_TURN_DELIVERY_OPENING, STEER_SKILLS_HEADING, SYSTEM_REMINDER_TAG, TOOL_IMAGES_OPENING, WORKSPACE_INSTRUCTIONS_TAG,
 } from '../packages/core/src/utils/prompt-sections';
 import { SCRIPTED_MODEL_ID } from '../packages/test-utils/src/scripted-model-spec';
 
@@ -142,9 +142,10 @@ const OutboundBodySchema = v.object({
   stream: v.optional(v.boolean()),
 });
 
-/** Runtime context uses the user role too; it must not replace the latest ask or reset its tool-call cursor. */
+/** Runtime context uses the user role too, and so do the images a batch of tool results returned; neither may replace
+ *  the latest ask or reset its tool-call cursor. */
 function isRuntimeState(text: string): boolean {
-  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || text.startsWith(STEER_SKILLS_HEADING)
+  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || text.startsWith(STEER_SKILLS_HEADING) || text.startsWith(TOOL_IMAGES_OPENING)
     || [WORKSPACE_INSTRUCTIONS_TAG, SYSTEM_REMINDER_TAG].some((tag) => text.startsWith(`<${tag}>`));
 }
 
