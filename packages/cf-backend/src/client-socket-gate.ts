@@ -68,46 +68,13 @@ export function gatedClientHandlers(host: ClientSocketGateHost, base: ClientHand
   };
 }
 
-/** One turn of the event loop: whatever a frame's handler does before its first wait on I/O has run by then. */
-function nextTask(): Promise<void> {
-  return new Promise((resolve) => { setTimeout(resolve, 0); });
-}
-
 class ClientSocketGate {
   constructor(private readonly host: ClientSocketGateHost) {}
 
-  /** Per socket, its newest frame's place: settled once that frame has gone on, so the frame after it may. */
-  private readonly lines = new Map<string, Promise<void>>();
-
-  /**
-   * A frame from a socket whose authority still holds goes on; one whose authority ended is refused and closed. Its
-   * authority is asked at once, but it goes on only after the socket's frame before it has taken its place: those
-   * answers come back in any order, and a Continue let in ahead of the Stop RPC sent before it was handed back by that
-   * Stop (staging rc12). A chat frame takes its place in the room's order by the path every chat frame takes, so the
-   * next follows at once; any other frame (an RPC: the Stop's is one) may reach the room by a longer one, which it has
-   * walked by the next task turn, before its first wait on I/O. Waiting for a frame's whole handling instead would
-   * hold a Stop behind the send it stops.
-   */
+  /** A frame from a socket whose authority still holds goes on; one whose authority ended is refused and closed. */
   message(connection: Connection, message: WSMessage, base: ClientHandlers): Promise<void> {
-    const before = this.lines.get(connection.id) ?? Promise.resolve();
-    const { promise: placed, resolve: place } = Promise.withResolvers<void>();
-    const roomFrame = typeof message === 'string' && parseProtocolMessage(message) !== null;
-
-    this.lines.set(connection.id, placed);
-
-    const checked = Effect.all([this.refuseRevokedAuthority(connection, message), Effect.promise(() => before)], { concurrency: 'unbounded' });
-
-    const goneOn = Effect.flatMap(checked, ([refused]) => (refused
-      ? Effect.sync(place)
-      : Effect.promise(async () => {
-        const handled = this.admittedMessage(connection, message, base);
-
-        await Promise.all([handled, (roomFrame ? Promise.resolve() : nextTask()).then(place)]);
-      })));
-
-    return settle(Effect.ensuring(goneOn, Effect.sync(() => {
-      if (this.lines.get(connection.id) === placed) this.lines.delete(connection.id);
-    })));
+    return settle(Effect.flatMap(this.refuseRevokedAuthority(connection, message),
+      (refused) => (refused ? Effect.void : Effect.promise(async () => { await this.admittedMessage(connection, message, base); }))));
   }
 
   private async admittedMessage(connection: Connection, message: WSMessage, base: ClientHandlers): Promise<void> {
@@ -209,8 +176,6 @@ class ClientSocketGate {
 
   async close(connection: Connection, closed: { code: number; reason: string; wasClean: boolean }, base: ClientHandlers): Promise<void> {
     const { code, reason, wasClean } = closed;
-
-    this.lines.delete(connection.id);
 
     if (this.host.storageRefusal() !== undefined) {
       await base.onClose(connection, code, reason, wasClean);
