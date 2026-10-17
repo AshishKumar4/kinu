@@ -318,6 +318,9 @@ const ORCHESTRATOR_METHODS = [
   'slateBuildAs',
   'slateCallAs',
   // A personal part's run, its process's calls, and what its viewer showed: DO-to-DO only, from the app's routes and PartBinding.
+  // A slate shared to edit: its files read, and changed, for the editor another workspace names (its owner).
+  'slateFilesFor',
+  'editSlateAs',
   'runSlatePart',
   'slatePartCall',
   'showSlatePart',

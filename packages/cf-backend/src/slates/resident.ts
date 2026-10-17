@@ -44,6 +44,12 @@ export interface SlateBuildInput {
   readonly read: (entry: string) => string | null;
   /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
   readonly cred: VfsCred;
+  /**
+   * `tree`: the compile reads the slate's own tree alone, its own node_modules included, and the runtime's generated
+   * files. A shared slate is built so (docs/SLATE-SHARING-NIMBUS.md §5): its image holds nothing of the owner's workspace
+   * outside it, whoever wrote what imports it, an editor included. Absent for a slate shared with no one.
+   */
+  readonly scope?: 'tree';
 }
 
 /** What a launch runs an image as. */
@@ -465,7 +471,41 @@ interface SlateBuild {
  * still one this compile made. The resolver's own reads count as the bundled files' do, so a package.json whose
  * `exports` moves is a change.
  */
-function looking(fs: NamespaceFs, looked: Set<string>): EsbuildReadFs {
+/** An absolute path with every `.` and `..` resolved, as the compiler's resolution resolves them. */
+function normalPath(path: string): string {
+  const parts: string[] = [];
+
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue;
+
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+
+  return `/${parts.join('/')}`;
+}
+
+/**
+ * The file plane a scoped build reads: inside `roots` (each a directory, its subtree included) or one of `files`, by the
+ * path a symlink finally names. Anything else is not there, so an import of it does not resolve and the build fails.
+ */
+function confinedTo(fs: NamespaceFs, roots: readonly string[], files: readonly string[]): EsbuildReadFs {
+  const inside = (path: string): boolean => {
+    const real = normalPath(fs.resolveSymlink(normalPath(path)) ?? normalPath(path));
+
+    return files.includes(real) || roots.some((root) => real === root || real.startsWith(`${root}/`));
+  };
+
+  // A path outside is never there: resolution, which asks first, finds nothing, and a read of one is read as empty.
+  return {
+    exists: (path) => inside(path) && fs.exists(path),
+    isDirectory: (path) => inside(path) && fs.isDirectory(path),
+    readFile: (path) => (inside(path) ? fs.readFile(path) : new Uint8Array()),
+    readFileString: (path) => (inside(path) ? fs.readFileString(path) : ''),
+  };
+}
+
+function looking(fs: EsbuildReadFs, looked: Set<string>): EsbuildReadFs {
   const seen = (path: string) => { looked.add(path.startsWith('/') ? path : `/${path}`); };
 
   return {
@@ -649,7 +689,10 @@ export class ResidentSlateProcesses {
         }
       };
 
-      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(session.filesystem.namespaceFs(input.cred), looked) };
+      const files = session.filesystem.namespaceFs(input.cred);
+      const runtime = Object.keys(runtimeFiles(slateVendor.reactStub)).map((name) => `${RUNTIME_DIR}/${name}`);
+      const read = input.scope === 'tree' ? confinedTo(files, [input.root, entriesDir], runtime) : files;
+      const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(read, looked) };
       const application = yield* serverModule(build, input.project);
       const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
 
@@ -685,7 +728,7 @@ export class ResidentSlateProcesses {
       for (const [name, contents] of Object.entries(modules)) digests[name] = yield* held(contents);
       const { inputs } = yield* trace;
 
-      return { modules: digests, inputs };
+      return { modules: digests, inputs, ...(input.scope === 'tree' && { scope: 'tree' as const }) };
     }), (error): error is KinuError => error instanceof KinuError && error.code === 'bad_input', (error) => Effect.map(trace, ({ inputs, unwatched }) => ({
       failed: renderCauseChain(error), inputs, ...(unwatched && { unobserved: true as const }),
     }))));

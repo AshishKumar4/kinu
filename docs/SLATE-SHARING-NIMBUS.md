@@ -62,6 +62,11 @@ CHECK (listing_line IS NULL OR mode = 'own')
 
 **Existing state (H7), chosen at first share.** "Share as-is" shares the slate's durable app as it is. "Start the shared copy empty" (`start: 'empty'` on `POST /api/shared/live`) commits and forks the slate into the same workspace (code only, empty state, the fork path), titles it "(shared copy)" and shares the fork. It is one path: no column, and no second store per share. A copy has run nothing, so it is shared on each viewer's own access with nothing approved.
 
+**Edit and Use.** Each person a `users` share adds is added to use the slate or to edit it too (`slate_live_share_users.role`, `'use' | 'edit'`, default `'use'`; `editors` on `POST /api/shared/live`). An editor's own agent reads and changes the slate's files from their own workspace (`workspace.slates.$sharedFiles(workspace, slate)`, `$sharedEdit(workspace, slate, files)`), which names them to the owner's workspace (`slateFilesFor`, `editSlateAs`); the owner's workspace decides, on every call, whether a live share adds them to edit it now.
+- The change is written into the slate's tree in the owner's workspace (text files of the tree only), then built. A change that does not build is taken back whole and says why.
+- **A shared slate builds from its own tree alone** (`SlateBuildInput.scope: 'tree'`): nothing of the owner's workspace outside it, whoever wrote the import. Its image says so (`SlateImage.scope`), and a shared slate runs no image that does not: one built before it was shared never reaches anyone it is shared with (`SlateHost.servable`).
+- An editor's change suspends every `owner` share of the slate: its approved revision becomes `edited-by:<editor>`, which no build has, so the server lends nothing until the owner approves the reach again; no later build, the owner's own included, carries it forward (`reapproveOnBuild`).
+
 Viewer consents live in the viewer's `UserDO` (schema review approved):
 
 ```sql
@@ -153,6 +158,8 @@ The shared page learns nothing from a part's size, because it fixes the size.
 | H12: attribution | Only `show(value, from)` carries a viewer, and Kinu sets it |
 
 ## 6. Evidence
+
+- **Editors** (workerd, real orchestrators for the owner, the editor and a Use person): `packages/cf-backend/tests/workerd/slate-editors.test.ts`: the editor reads and changes the slate through their own workspace; the change runs; the owner's access stays suspended through the owner's own next build until approved again; an import of the owner's other file does not build and is taken back whole; a Use person and a revoked editor change nothing; a shared slate never runs the image built before it was shared. Mutations `e1`–`e6` in the mutations directory, each red.
 
 - **Attack replays** (workerd, real host, real confined Nimbus processes; the viewer's account faked with the real
   `partCallVerdict`, `containedTool` and `EffectApprovals`): `packages/cf-backend/tests/workerd/personal-parts.test.ts`,

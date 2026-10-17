@@ -35,7 +35,7 @@ test('a live share round-trips its grant and refuses viewers once revoked', () =
     const added = shares.add(liveShare());
     expect(added).toEqual({
       id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789',
-      grant, createdAt: 1_000, revokedAt: null, users: [], mode: 'own', grantRevision: null, gallery: null,
+      grant, createdAt: 1_000, revokedAt: null, users: [], editors: [], mode: 'own', grantRevision: null, gallery: null,
     });
 
     expect(shares.get('s1')).toMatchObject({ id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789', grant });
@@ -271,6 +271,31 @@ test('a live share is listed with its card\'s words while on its viewers\' own a
     shares.revoke('s2');
     expect(shares.get('s2')?.gallery).toBeNull();
     expect(shares.setListing('s2', card)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+test('people are added to use a slate or to edit it too, a role named again replaces the last, and a revoked share edits nothing', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    shares.add(liveShare());
+    expect(shares.isShared('issues')).toBe(true);
+    expect(shares.hasEditors('issues')).toBe(false);
+
+    const added = shares.addUsers('s1', [{ userId: 'u-pat', email: 'pat@example.test', role: 'edit' }, { userId: 'u-sam', email: 'sam@example.test' }]);
+
+    expect(added).toMatchObject({ users: ['pat@example.test', 'sam@example.test'], editors: ['pat@example.test'] });
+    expect([shares.editsSlate('issues', 'u-pat'), shares.editsSlate('issues', 'u-sam'), shares.editsSlate('other', 'u-pat')]).toEqual([true, false, false]);
+
+    // Named again to use it: Pat no longer edits it.
+    expect(shares.addUsers('s1', [{ userId: 'u-pat', email: 'pat@example.test', role: 'use' }]).editors).toEqual([]);
+    expect(shares.editsSlate('issues', 'u-pat')).toBe(false);
+
+    shares.addUsers('s1', [{ userId: 'u-pat', email: 'pat@example.test', role: 'edit' }]);
+    shares.revoke('s1');
+    expect([shares.editsSlate('issues', 'u-pat'), shares.hasEditors('issues'), shares.isShared('issues')]).toEqual([false, false, false]);
   } finally {
     db.close();
   }

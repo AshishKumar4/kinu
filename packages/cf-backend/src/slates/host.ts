@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateController, type SlateControllerPorts, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
-  ROOT_SLATE_CALLER, serverAuthority, shareCaller, slateRevision,
+  ROOT_SLATE_CALLER, serverAuthority, shareCaller, slateAnswer, slateRevision,
   type LiveShareAuthority, type ServerAuthority, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateLaunch,
 } from '@kinu.run/core/slates';
 import {
@@ -13,9 +13,11 @@ import {
   escapeHtml, publicPage, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim, type MissionGovernor, type EphemeralSlateAddress,
+  type SlateFileChange, type SlateOperation,
 } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { ERROR_CODES, KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { attempt, ERROR_CODES, KinuError, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
@@ -70,6 +72,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
   previewed?(slate: string): void;
+  /** This workspace's owner reading or changing a slate another workspace shared with them to edit (orchestrator). */
+  shared?(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateCallResult>;
   /** The block an ephemeral slate's id names, and the author whose authority its page runs with; refused when no stored
    *  answer holds it. */
   messageBlock?(address: EphemeralSlateAddress): Promise<MessageBlock>;
@@ -117,7 +121,7 @@ export class SlateHost {
 
   constructor(private readonly deps: SlateHostDeps) {
     const sql = deps.ctx.storage.sql;
-    const kv = deps.kv;
+    const { kv } = deps;
 
     initSlateLiveShareTables((ddl) => { sql.exec(ddl); });
     initEphemeralSlateTable((ddl) => { sql.exec(ddl); });
@@ -126,9 +130,12 @@ export class SlateHost {
       workspace: deps.workspace, sql, builds: deps.builds, transaction: (body) => deps.ctx.storage.transactionSync(body),
       session: deps.session, apps: deps.apps,
       resolve: (cred, id) => this.slateSources.resolve(cred, id),
-      digest: (cred, id, source) => this.slateSources.digest(cred, id, source),
+      // A shared slate builds from its own tree alone (`SlateBuildInput.scope`), so its build is told apart from the same
+      // source built unshared: sharing it builds it anew, and no image built before reaches anyone it is shared with.
+      digest: async (cred, id, source) => `${await this.slateSources.digest(cred, id, source)}${this.controller.live.isShared(id) ? ':tree' : ''}`,
       build: async (caller, id, source) => this.resident.build({
         owner: id, root: source.root, project: source.project, read: await this.slateSources.reader(caller.cred, source), cred: caller.cred,
+        ...(this.controller.live.isShared(id) && { scope: 'tree' as const }),
       }),
       launch: (launch) => this.launch(launch),
       // A socket-held invocation dies with the process that held it.
@@ -151,6 +158,7 @@ export class SlateHost {
       ...(deps.relisted !== undefined && { relisted: deps.relisted.bind(deps) }),
       shareChanged: async (slate) => { await this.shareChanged(slate); },
       ...(deps.previewed !== undefined && { previewed: deps.previewed.bind(deps) }),
+      ...(deps.shared !== undefined && { shared: async (_caller: SlateCaller, operation: Parameters<NonNullable<SlateHostDeps['shared']>>[0]) => this.shared(operation) }),
     });
     this.resident = new ResidentSlateProcesses({
       session: deps.session, facetManager: deps.facetManager, bundler: deps.bundler, retained: () => this.controller.builds.retained(),
@@ -309,7 +317,7 @@ export class SlateHost {
       // The slate's own server, shared: it acts as its shares allow now, whoever called it (the owner too).
       const shared = caller.path.length === 0 && caller.share === undefined ? this.sharedAuthority(id) : ({ kind: 'owner' } satisfies ServerAuthority);
 
-      if (shared.kind === 'none') return { ok: false, ...refusalOf(await this.ownAccessRefusal(id)) };
+      if (shared.kind === 'none') return await settle(slateAnswer(`slate ${id} ${name}`, Effect.fail(await this.ownAccessRefusal(id))));
 
       if (shared.kind === 'grant') {
         if (issued?.viewer !== undefined) {
@@ -324,7 +332,9 @@ export class SlateHost {
         const bounded = routeSlateCall({ id, request: parsed.output, chain, hosted: false });
 
         if (grantAdmits(shared.grant, id, bounded.address.namespace, bounded.address.member) === null) {
-          return { ok: false, ...refusalOf(new KinuError('denied', `Slate ${id} is shared with the owner's access, which does not reach ${bounded.address.namespace}.${bounded.address.member}`)) };
+          const beyond = new KinuError('denied', `Slate ${id} is shared with the owner's access, which does not reach ${bounded.address.namespace}.${bounded.address.member}`);
+
+          return await settle(slateAnswer(`slate ${id} ${name}`, Effect.fail(beyond)));
         }
       }
 
@@ -448,6 +458,69 @@ export class SlateHost {
     await this.controller.processes.stopWhere((running) => running.id === id && running.caller.share === undefined && running.caller.path.length === 0);
   }
 
+  /**
+   * An editor's change to one of this workspace's slates (docs/SLATE-SHARING-NIMBUS.md §2): refused unless a live share
+   * adds `editor` to edit it now. Its files are written, every `owner` share of it suspended until its owner approves
+   * the reach again, and it is built from its own tree; a change that does not build is taken back whole, the shares'
+   * approvals with it, and says why.
+   */
+  editAs(id: string, editor: { readonly userId: string; readonly email: string }, files: SlateFileChange): Promise<SlateCallResult> {
+    return settle(slateAnswer(`${editor.email}'s edit of slate ${id}`, Effect.gen({ self: this }, function* () {
+      if (!this.controller.live.editsSlate(id, editor.userId)) return yield* new KinuError('denied', `Slate ${id} is not shared with ${editor.email} to edit`);
+      const written = yield* Effect.promise(async () => this.controller.writeShared(id, files));
+
+      if (!written.ok) return yield* new KinuError(written.reason, written.error);
+      const suspended = this.controller.suspendForEdit(id, editor.email);
+
+      const built = yield* Effect.result(Effect.flatMap(
+        attempt({ doing: `building slate ${id}`, otherwise: 'io' }, async () => this.controller.processes.booted(ROOT_SLATE_CALLER, id)),
+        (running) => (running.broken === null ? Effect.void : Effect.fail(new KinuError('bad_input', running.broken))),
+      ));
+
+      if (built._tag === 'Failure') {
+        const undone = yield* Effect.promise(async () => this.controller.writeShared(id, written.value.before));
+
+        if (!undone.ok) return yield* new KinuError(undone.reason, `${built.failure.message}; taking the change back failed too: ${undone.error}`);
+        this.controller.restoreAuthorities(suspended, editor.email);
+
+        return yield* Effect.fail(built.failure);
+      }
+
+      return [...written.value.paths];
+    })));
+  }
+
+  /** One of this workspace's slates' files, for someone a live share adds to edit it now. */
+  filesFor(id: string, editor: { readonly userId: string; readonly email: string }): Promise<SlateCallResult> {
+    return settle(slateAnswer(`reading slate ${id} for ${editor.email}`, Effect.gen({ self: this }, function* () {
+      if (!this.controller.live.editsSlate(id, editor.userId)) return yield* new KinuError('denied', `Slate ${id} is not shared with ${editor.email} to edit`);
+      const read = yield* Effect.promise(async () => this.controller.sharedFiles(id));
+
+      return read.ok ? read.value : yield* new KinuError(read.reason, read.error);
+    })));
+  }
+
+  /** This workspace's owner reading or changing a slate another workspace shared with them to edit. */
+  shared(operation: Parameters<NonNullable<SlateHostDeps['shared']>>[0]): Promise<SlateCallResult> {
+    return settle(slateAnswer(`slate ${operation.workspace}/${operation.slate}`, Effect.gen({ self: this }, function* () {
+      const answered = yield* attempt({ doing: 'asking its workspace', otherwise: 'unavailable' }, async () => this.deps.shared?.(operation) ?? null);
+
+      if (answered === null) return yield* new KinuError('unsupported', 'This workspace edits no shared slate');
+
+      return answered.ok ? answered.value : yield* new KinuError(answered.reason, answered.error);
+    })));
+  }
+
+  /**
+   * Refused when `id` is shared and its image was not built from its own tree alone: a shared slate never runs one built
+   * before it was shared, which its last build that worked may be when its own tree alone does not build.
+   */
+  servable(id: string, ownTree: boolean): Promise<void> {
+    return settle(Effect.suspend(() => (ownTree || !this.controller.live.isShared(id)
+      ? Effect.void
+      : Effect.fail(new KinuError('bad_input', `Slate ${id} is shared, so it runs only as its own files build; they do not build alone yet`)))));
+  }
+
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
     return (await this.controller.processes.booted(caller, id)).process;
   }
@@ -455,6 +528,9 @@ export class SlateHost {
   /** A process for `launch`: the slate's bindings as its caller, and its outbound mediated as that caller's eval is. */
   private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
     const { id, caller, source, image, app } = launch;
+
+    await this.servable(id, source.kind === 'message' || image.scope === 'tree');
+
     // Shared, the slate's server drives no browser of the owner's: only one its own call opened (Kitesurf).
     const unshared = caller.share === undefined && this.sharedAuthority(id).kind === 'owner';
     const actor = unshared ? await this.deps.browserActor(caller) : null;

@@ -263,6 +263,23 @@ const HELPER = [
 ].join('\n');
 
 /** A slate whose class runs the crafted tool: as its `run` method for a program, as its page for a visitor. */
+/** The board an editor changes: one method saying which version of it runs. */
+const BOARD = (version: string) => [
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject {',
+  `  async version() { return "${version}"; }`,
+  '}',
+].join('\n');
+
+/** An editor's change that reaches for the owner's file outside the slate: the build must not find it. */
+const REACHING = [
+  'import { SlateObject } from "kinu:slate";',
+  'import { SECRET } from "../notes/secret";',
+  'export class Slate extends SlateObject {',
+  '  async version() { return SECRET; }',
+  '}',
+].join('\n');
+
 const RUNNER = [
   'import { SlateObject } from "kinu:slate";',
   'export class Slate extends SlateObject {',
@@ -445,6 +462,127 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const approved = await target.approveWaitingEffects();
 
     return { owner, reached, waited, approved, viewer: await page() };
+  }
+
+  /**
+   * Editors (docs/SLATE-SHARING-NIMBUS.md §2): the owner's board is shared on their access with one person to edit it
+   * and one to use it, each in a workspace of their own; each asks through their own workspace, which names them.
+   */
+  async editorsEdit(input: { owner: string; workspace: string; editor: string; user: string }): Promise<{
+    files: string; edited: string; runs: string; afterEdit: string | null; afterOwnBuild: string | null; reapproved: string | null;
+    reached: string; runsAfter: string; filesAfter: string; afterRefused: string | null; used: string; revoked: string;
+  }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/board/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Board' } }));
+    await this.writeSlateFile(target, '/slates/board/server.ts', BOARD('v1'));
+    // The owner's file outside the board: another of their slates' trees, which the board's share gives no one.
+    await this.writeSlateFile(target, '/slates/notes/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Notes' } }));
+    await this.writeSlateFile(target, '/slates/notes/secret.ts', 'export const SECRET = "the owner\'s secret";');
+    const owned = workspaceOwner(this.env, input.workspace);
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'board', visibility: 'users', approved: [] });
+
+    if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
+    const { id } = v.parse(SharedValueSchema, shared.value).share;
+
+    const people = await owned.shareLiveWith(id, [
+      { userId: input.editor, email: `${input.editor}@probe.test`, role: 'edit' }, { userId: input.user, email: `${input.user}@probe.test`, role: 'use' },
+    ]);
+
+    if (!people.ok) throw new Error(`adding people refused: ${people.reason}: ${people.error}`);
+    // Built as shared, then on the owner's access at that revision.
+    await target.runProgram('return await workspace.slates.board.version();');
+
+    const approve = async () => {
+      const graph = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'graph', id: 'board' });
+      const revision = graph.ok ? v.parse(GraphValueSchema, graph.value).revision ?? '' : '';
+      const mode = await target.setLiveShareMode({ workspace: input.workspace, share: id, mode: 'owner', revision, approved: [] });
+
+      if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
+    };
+
+    const approvedAt = async () => {
+      const listed = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
+
+      return listed.ok ? v.parse(v.array(v.object({ id: v.string(), grantRevision: v.nullable(v.string()) })), listed.value).find((share) => share.id === id)?.grantRevision ?? null : null;
+    };
+
+    await approve();
+    const editorTarget = await this.workspaceTarget(`${input.workspace}-editor`);
+    const userTarget = await this.workspaceTarget(`${input.workspace}-user`);
+
+    for (const [person, at] of [[input.editor, editorTarget], [input.user, userTarget]] as const) {
+      await this.claimWorkspace(at, `${input.workspace}-${person === input.editor ? 'editor' : 'user'}`, person);
+      await this.env.UserDO.get(this.env.UserDO.idFromName(person)).ensureProfile(await ownerCaller(this.env), `${person}@probe.test`);
+    }
+
+    // What the program was answered, a refusal included, in its words.
+    const ask = async (at: SlateTarget, call: string): Promise<string> => {
+      try {
+        return await at.runProgram(`return await workspace.slates.${call};`);
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    const change = (text: string) => JSON.stringify({ 'server.ts': text });
+    const files = await ask(editorTarget, `$sharedFiles(${JSON.stringify(input.workspace)}, "board")`);
+    const edited = await ask(editorTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(BOARD('v2'))})`);
+    const runs = await target.runProgram('return await workspace.slates.board.version();');
+    const afterEdit = await approvedAt();
+
+    // The owner's own change after it builds: the reach the editor's change suspended stays suspended.
+    await target.executeInExecutor('workspace', `cat > /slates/board/server.ts <<'END'\n${BOARD('v3')}\nEND`);
+    const ownBuild = await target.runProgram('return await workspace.slates.board.version();');
+
+    if (!ownBuild.includes('v3')) throw new Error(`the owner's change did not run: ${ownBuild}`);
+    const afterOwnBuild = await approvedAt();
+
+    await approve();
+    const reapproved = await approvedAt();
+    const reached = await ask(editorTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(REACHING)})`);
+    const runsAfter = await target.runProgram('return await workspace.slates.board.version();');
+    const filesAfter = await ask(editorTarget, `$sharedFiles(${JSON.stringify(input.workspace)}, "board")`);
+    const afterRefused = await approvedAt();
+    const used = await ask(userTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(BOARD('mine'))})`);
+
+    await owned.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: id });
+    const revoked = await ask(editorTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(BOARD('late'))})`);
+
+    return { files, edited, runs, afterEdit, afterOwnBuild, reapproved, reached, runsAfter, filesAfter, afterRefused, used, revoked };
+  }
+
+  /**
+   * A slate of the owner's that imports another slate's file: the owner's own preview runs it; shared, it runs only as
+   * its own tree builds, so the image built before it was shared never reaches anyone it is shared with.
+   */
+  async sharedRunsOwnTree(input: { owner: string; workspace: string }): Promise<{ unshared: string; shared: string; afterUnshare: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    const run = async (): Promise<string> => {
+      try {
+        return await target.runProgram('return await workspace.slates.reacher.version();');
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/notes/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Notes' } }));
+    await this.writeSlateFile(target, '/slates/notes/secret.ts', 'export const SECRET = "the owner\'s secret";');
+    await this.writeSlateFile(target, '/slates/reacher/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Reacher' } }));
+    await this.writeSlateFile(target, '/slates/reacher/server.ts', REACHING);
+    const unshared = await run();
+    const owned = workspaceOwner(this.env, input.workspace);
+    const made = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'reacher', visibility: 'public', approved: [] });
+
+    if (!made.ok) throw new Error(`slate share refused: ${made.reason}: ${made.error}`);
+    const shared = await run();
+
+    await owned.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: v.parse(SharedValueSchema, made.value).share.id });
+
+    return { unshared, shared, afterUnshare: await run() };
   }
 
   async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {

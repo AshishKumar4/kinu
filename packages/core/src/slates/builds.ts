@@ -26,6 +26,8 @@ export interface SlateBuildRead {
 /** A compiled slate: each module's content digest; the runner module carries the client bundle and page shell. */
 export interface SlateImage {
   readonly modules: Readonly<Record<string, string>>;
+  /** `tree`: compiled from the slate's own tree alone (cf `SlateBuildInput.scope`), as a shared slate's image must be. */
+  readonly scope?: 'tree';
   /** What the compile looked at outside the slate's own tree; kept beside the image, not in it. */
   readonly inputs?: readonly SlateBuildRead[];
 }
@@ -64,7 +66,7 @@ export function initSlateBuildTable(execRaw: RawSqlExec): void {
   execRaw('CREATE INDEX IF NOT EXISTS slate_build_inputs_path ON slate_build_inputs (path)');
 }
 
-const SlateImageSchema = v.object({ modules: v.record(v.string(), v.string()) });
+const SlateImageSchema = v.object({ modules: v.record(v.string(), v.string()), scope: v.optional(v.literal('tree')) });
 
 const RowSchema = v.object({
   good_key: v.nullable(v.string()), good_image: v.nullable(v.string()), failed_key: v.nullable(v.string()), failure: v.nullable(v.string()),

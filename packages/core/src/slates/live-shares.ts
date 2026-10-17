@@ -5,7 +5,7 @@ import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import { ShareStore, type ShareTable } from './shares';
+import { ShareStore, type ShareTable, type ShareUser } from './shares';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 import { ShareModeSchema } from './share-modes';
 import type { LiveShareAuthority } from './share-policy';
@@ -30,8 +30,11 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
     CHECK ((listing_line IS NULL) = (listing_category IS NULL)),
     CHECK (listing_line IS NULL OR mode = 'own')
   )`);
+  // `role`: `use`, the slate as it is; `edit`, its files too (docs/SLATE-SHARING-NIMBUS.md §2), written in this workspace
+  // and built from the slate's own tree. Every person added before the column uses it.
   execRaw(`CREATE TABLE IF NOT EXISTS slate_live_share_users (
     share_id TEXT NOT NULL, user_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'use' CHECK (role IN ('use', 'edit')),
     PRIMARY KEY (share_id, user_id)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_viewer_requests (
@@ -66,7 +69,7 @@ const LIVE_SHARES: ShareTable<v.InferOutput<typeof LiveShareRow>, LiveShareRecor
   record: (row, users) => ({
     id: row.id, slate: row.slate_id, visibility: row.visibility, handle: row.handle,
     grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)),
-    createdAt: row.created_at, revokedAt: row.revoked_at, users, mode: row.mode, grantRevision: row.grant_revision,
+    createdAt: row.created_at, revokedAt: row.revoked_at, users, editors: [], mode: row.mode, grantRevision: row.grant_revision,
     // A revoked share is listed nowhere, whatever its row still holds.
     gallery: row.revoked_at === null && row.listing_line !== null && row.listing_category !== null ? { line: row.listing_line, category: row.listing_category } : null,
   }),
@@ -90,8 +93,48 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
 
     return {
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,
-      grant: share.grant, createdAt, revokedAt: null, users: [], mode: authority.mode, grantRevision: authority.grantRevision, gallery: null,
+      grant: share.grant, createdAt, revokedAt: null, users: [], editors: [], mode: authority.mode, grantRevision: authority.grantRevision, gallery: null,
     };
+  }
+
+  /** People added to a live share, each to use the slate or to edit it too: one added again takes the role named now. */
+  override addUsers(id: string, users: readonly ShareUser[]): LiveShareRecord {
+    super.addUsers(id, users);
+
+    for (const user of users) this.db.exec('UPDATE slate_live_share_users SET role = ? WHERE share_id = ? AND user_id = ?', user.role ?? 'use', id, user.userId);
+    markStoreChanged(this.db);
+
+    return this.live(id);
+  }
+
+  /** Whether `userId` may edit `slate` now: a live share of it adds them to edit. */
+  editsSlate(slate: string, userId: string): boolean {
+    return this.db.exec(
+      `SELECT 1 AS x FROM slate_live_share_users AS person JOIN slate_live_shares AS share ON share.id = person.share_id
+       WHERE share.slate_id = ? AND share.revoked_at IS NULL AND person.user_id = ? AND person.role = 'edit'`,
+      slate, userId,
+    ).toArray().length > 0;
+  }
+
+  /** Whether any live share of `slate` adds someone to edit it. */
+  hasEditors(slate: string): boolean {
+    return this.db.exec(
+      `SELECT 1 AS x FROM slate_live_share_users AS person JOIN slate_live_shares AS share ON share.id = person.share_id
+       WHERE share.slate_id = ? AND share.revoked_at IS NULL AND person.role = 'edit'`,
+      slate,
+    ).toArray().length > 0;
+  }
+
+  /** Whether `slate` is shared now, by any live share. */
+  isShared(slate: string): boolean {
+    return this.db.exec('SELECT 1 AS x FROM slate_live_shares WHERE slate_id = ? AND revoked_at IS NULL', slate).toArray().length > 0;
+  }
+
+  protected override record(row: v.InferOutput<typeof LiveShareRow>, users: Parameters<ShareStore<v.InferOutput<typeof LiveShareRow>, LiveShareRecord>['record']>[1]): LiveShareRecord {
+    const editors = this.db.exec(`SELECT email FROM slate_live_share_users WHERE share_id = ? AND role = 'edit' ORDER BY created_at, email`, row.id).toArray()
+      .map((each) => v.parse(v.object({ email: v.string() }), each).email);
+
+    return { ...super.record(row, users), editors };
   }
 
   /** A live share listed in the Gallery with its card's words, or taken off it (null). A slate is listed once, so

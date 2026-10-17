@@ -262,7 +262,9 @@ const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
 async function shareLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, LiveShareBodySchema);
 
-  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork?, mode?, revision?, start? }');
+  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, editors?, approved?, fork?, mode?, revision?, start? }');
+
+  if (body.visibility === 'public' && (body.editors ?? []).length > 0) return err(400, 'A link anyone may open adds no one to edit: share it with the people who edit it');
 
   if (body.mode === 'owner' && body.revision === undefined) return err(400, 'Sharing on your access names the revision whose reach you reviewed');
 
@@ -284,13 +286,14 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   const owning = await ownerMode(owned, { workspace: body.workspace, share, body });
 
   if (owning instanceof Response) return owning;
-  const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
+  const editors = new Set((body.editors ?? []).map((email) => email.toLowerCase()));
+  const emails = [...new Set([...body.emails ?? [], ...editors].map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
   const writes: Array<{ readonly listing?: 'pending' }> = [created];
   // Answered as it stands once the people it names are recorded, so the answer names them.
   let answered = owning;
 
   if (share.visibility === 'users' && emails.length > 0) {
-    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email, role: editors.has(email) ? 'edit' as const : 'use' as const })));
     const recorded = await owned.shareLiveWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);

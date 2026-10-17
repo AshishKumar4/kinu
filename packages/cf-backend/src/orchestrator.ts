@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, ownerCaller, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
-import { ROOT_SLATE_CALLER, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, slateAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -127,7 +127,7 @@ import {
   ForkNotices, forkNoticeDeliveries, initForkNoticeTable,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
+  type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type LiveShareRecord, type LiveShareModeBody, type LiveShareListingBody, type RoomService,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
@@ -224,7 +224,7 @@ import { Hono } from 'hono';
 import { beneath, rawPath, rethrow } from './api/context';
 import { experienceLibraryOver } from './user/experience-library';
 import { ownedByAnotherAccount } from './user/workspace-ownership';
-import type { LiveShareReading, WorkspaceOwnerRpc } from './workspace-owner-rpc';
+import { workspaceOwner, type LiveShareReading, type SlateEditor, type WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
   EVOLUTION_LANE_FIBER,
@@ -5779,6 +5779,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.detachOwned(logged('gallery.listing_sync_failed', { doing: "telling the Gallery this workspace's listings again", otherwise: 'unavailable' },
           async () => { await Promise.all(shares.map(async (share) => this.syncListing(share))); }, { workspace: this.name }));
       },
+      shared: (operation) => this.editShared(operation),
       // Each viewer's own account answers their parts' calls, with their consents and connections: never this workspace.
       partConnections: {
         tool: async (viewer, call) => objectNamed(this.env.UserDO, viewer.userId).slatePartTool(await ownerCaller(this.env), call),
@@ -5825,6 +5826,39 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult> {
     return (await this.slates()).surfaceCall(caller, id, name, request);
+  }
+
+  /**
+   * This workspace's owner reading or changing a slate another workspace shared with them to edit: its owner's workspace
+   * decides whether they may, by who they are, which this object names and never the program that asked.
+   */
+  editShared(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateCallResult> {
+    return settle(slateAnswer(`editing ${operation.workspace}/${operation.slate}`, Effect.gen({ self: this }, function* () {
+      const userId = this.getOwnerUserId();
+      const email = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.email.ownerEmail());
+
+      if (userId === null || email === null) return yield* new KinuError('denied', 'This workspace has no owner to edit as');
+      const editor = { userId, email: email.trim().toLowerCase() };
+      const owner = workspaceOwner(this.env, operation.workspace);
+
+      const answered = yield* attempt({ doing: `asking ${operation.workspace}`, otherwise: 'unavailable' },
+        async () => (operation.op === 'sharedFiles' ? owner.slateFilesFor(operation.slate, editor) : owner.editSlateAs(operation.slate, editor, operation.files)));
+
+      if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
+
+      // Its files cross from another workspace's object: held to their shape as every reader of them holds them.
+      return operation.op === 'sharedFiles' ? v.parse(SharedSlateFilesSchema, answered.value) : v.parse(v.array(v.string()), answered.value);
+    })));
+  }
+
+  /** DO-only: one of this workspace's slates' files, for someone one of its live shares adds to edit it now. */
+  async slateFilesFor(slate: string, editor: SlateEditor): Promise<SlateCallResult> {
+    return (await this.slates()).filesFor(slate, editor);
+  }
+
+  /** DO-only: a change to one of this workspace's slates by someone one of its live shares adds to edit it now. */
+  async editSlateAs(slate: string, editor: SlateEditor, files: SlateFileChange): Promise<SlateCallResult> {
+    return (await this.slates()).editAs(slate, editor, files);
   }
 
   async runSlatePart(viewer: PartViewer | null, slate: string, part: string, request: PartRunRequest): Promise<PartRunAnswer | null> {

@@ -103,6 +103,12 @@ export class PersonalParts {
       const good = controller.builds.good(slate, slateAuthority(ROOT_SLATE_CALLER.cred));
 
       if (revision === null || good === null) return { kind: 'failed', message: `Slate ${slate} has not built yet` } satisfies PartRunAnswer;
+
+      // A shared slate's parts run only an image built from its own tree, as its server does (`SlateHost.launch`).
+      if (controller.live.isShared(slate) && good.image.scope !== 'tree') {
+        return { kind: 'failed', message: `${slate} is shared, so it runs only as its own files build; they do not build alone yet` } satisfies PartRunAnswer;
+      }
+
       const id = crypto.randomUUID();
       const run: PartRun = { slate, viewer, revision, needed: null };
       const bindings = Object.fromEntries(PART_SURFACES.map((name) => [name, exports.PartBinding({ props: { workspace, slate, run: id, name } })]));

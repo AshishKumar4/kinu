@@ -702,6 +702,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const share = v.parse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ id: v.string() }) }) }), shared).value.share.id;
 
     this.host.controller.live.addUsers(share, ['alice', 'bob'].map(viewerNamed).map((viewer) => ({ userId: viewer.userId, email: viewer.email })));
+    // Shared, it is built from its own tree: that build is the revision its viewers consent at.
+    await this.host.call({ caller: ROOT_SLATE_CALLER, id: NOTES, method: 'board', args: [] });
 
     return this.revision();
   }

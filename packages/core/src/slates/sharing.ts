@@ -82,6 +82,8 @@ export const LiveShareRecordSchema = v.object({
   createdAt: v.number(),
   revokedAt: v.nullable(v.number()),
   users: v.array(v.string()),
+  /** Of `users`, those added to edit the slate too. */
+  editors: v.optional(v.array(v.string()), []),
   /** Whose access its server acts with (docs/SLATE-SHARING-NIMBUS.md §2). */
   mode: ShareModeSchema,
   /** `owner` mode: the revision whose reach the owner approved; null in `own` mode. */
@@ -106,6 +108,8 @@ export const LiveShareBodySchema = v.object({
   slate: v.string(),
   visibility: v.picklist(['users', 'public']),
   emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
+  /** Of the people a `users` share names, those added to edit the slate too; each is added if `emails` left them out. */
+  editors: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
   approved: v.optional(ApprovedMembersSchema),
   fork: v.optional(v.boolean()),
   mode: v.optional(ShareModeSchema),

@@ -41,3 +41,20 @@ test('a workspace\'s live shares made before share modes repair to their viewers
   expect(db.query('SELECT id, handle, mode, grant_revision, listing_line, listing_category FROM slate_live_shares').all())
     .toEqual([{ id: 's-1', handle: '0123456789', mode: 'own', grant_revision: null, listing_line: null, listing_category: null }]);
 });
+
+test('a workspace\'s share people added before roles repair to using the slate, none of them to edit it', () => {
+  const db = new Database(':memory:');
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+  db.exec(`DROP TABLE slate_live_share_users; CREATE TABLE slate_live_share_users (
+    share_id TEXT NOT NULL, user_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL,
+    PRIMARY KEY (share_id, user_id)
+  ); INSERT INTO slate_live_share_users VALUES ('s-1', 'u-pat', 'pat@example.test', 1)`);
+  kvOf(db).set('kinu.schema_stamp', 1);
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+
+  expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.workspace);
+  expect(db.query('SELECT share_id, user_id, email, role FROM slate_live_share_users').all())
+    .toEqual([{ share_id: 's-1', user_id: 'u-pat', email: 'pat@example.test', role: 'use' }]);
+});

@@ -1292,6 +1292,7 @@
     "user_id TEXT NOT NULL",
     "email TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
+    "role TEXT NOT NULL DEFAULT 'use' CHECK (role IN ('use', 'edit'))",
     "PRIMARY KEY (share_id, user_id)"
   ],
   "slate_live_shares@packages/core/src/slates/live-shares.ts": [
