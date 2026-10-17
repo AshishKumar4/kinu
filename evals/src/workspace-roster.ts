@@ -1,8 +1,8 @@
 /** Browser account authority and roster lifecycle, independent of the CLI turn transport. */
 import * as v from 'valibot';
 import {
-  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, parseJsonValue, ProfileCatalogEnvelopeSchema, type EvalAccount, type JsonValue,
-  type ProfileCatalog,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS, parseJsonValue, ProfileCatalogEnvelopeSchema, type EvalAccount,
+  type JsonValue, type ProfileCatalog,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalAccount, evalWebIdentityEnv, infraBoundary } from '@kinu.run/test-utils';
@@ -76,15 +76,6 @@ const RosterPageSchema = v.object({ entries: v.array(RosterRowSchema), nextCurso
 /** A workspace as the account's roster lists it: `lastVisited` is the last mark any run or visit put on it. */
 export type RosterRow = v.InferOutput<typeof RosterRowSchema>;
 
-/**
- * How often a run marks its workspace live on the deployment, through `touch` (the roster's
- * `last_visited`, which every machine reads). The eval sweep deletes an `eval-` workspace whose mark
- * is older than its lease (`sweep.ts`), so a run on any machine keeps its workspaces by beating.
- */
-export const WORKSPACE_BEAT_MS = 60_000;
-
-/** Ten missed beats: long past any live run's last mark, and past any skew between two machines' clocks. */
-export const WORKSPACE_LEASE_MS = 10 * WORKSPACE_BEAT_MS;
 
 /**
  * Why a trial's own workspace answering 404 measured nothing of the build, or undefined when it may have: its last
@@ -92,10 +83,10 @@ export const WORKSPACE_LEASE_MS = 10 * WORKSPACE_BEAT_MS;
  * stops beating, and the trial wakes to a workspace that is gone.
  */
 export function sweptAway(answer: DeploymentAnswer, lastMarked: number, now: number): string | undefined {
-  if (answer.status !== 404 || now - lastMarked < WORKSPACE_LEASE_MS) return undefined;
+  if (answer.status !== 404 || now - lastMarked < EVAL_WORKSPACE_LEASE_MS) return undefined;
 
   return `the workspace was swept: its last mark is ${String(Math.floor((now - lastMarked) / 60_000))} min old, past the `
-    + `${String(WORKSPACE_LEASE_MS / 60_000)} min lease after which a run's sweep deletes it, so this 404 measured nothing of the build`;
+    + `${String(EVAL_WORKSPACE_LEASE_MS / 60_000)} min lease after which its account tears it down, so this 404 measured nothing of the build`;
 }
 
 /** The POST /api/user/workspaces body, the fields `handleCreateWorkspaceRequest` parses (user/workspace-access.ts):

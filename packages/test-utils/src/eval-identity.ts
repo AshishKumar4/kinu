@@ -6,7 +6,7 @@
 import { Cause, Effect } from 'effect';
 import { homedir } from 'node:os';
 import * as v from 'valibot';
-import { EVAL_ACCOUNTS, USER_AI_PROXY_PATH, type EvalAccount } from '@kinu.run/core';
+import { EVAL_ACCOUNTS, EVAL_WORKSPACE_PREFIX, USER_AI_PROXY_PATH, type EvalAccount } from '@kinu.run/core';
 import { renderThrownChain, settleSync, tolerated } from '@kinu.run/core/obs';
 import { ambientByName, LIVE_MODEL_ENV } from './ambient-env';
 
@@ -87,9 +87,6 @@ export function evalWebIdentityEnv(origin: string): string {
 
 /** Hosts that can only be the developer's machine. `[::1]` keeps its brackets because `URL.hostname` does. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
-
-/** The prefix every eval-created workspace carries: makes stray rows attributable and `scripts/eval-workspaces.ts` cleanup one glob. */
-export const EVAL_WORKSPACE_PREFIX = 'eval-';
 
 type EnvSource = Record<string, string | undefined>;
 

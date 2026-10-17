@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
-import { WORKSPACE_LEASE_MS } from './workspace-roster';
+import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, EVAL_WORKSPACE_LEASE_MS, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
 import { evalMatrix } from './config';
 import { prepareTrialAccount, trialAccounts, trialSlot } from './slot';
 import type { EvalTarget } from './workspace-roster';
@@ -108,7 +107,7 @@ afterEach(async () => {
 });
 
 describe('opening on a trial account', () => {
-  const now = 10 * WORKSPACE_LEASE_MS;
+  const now = 10 * EVAL_WORKSPACE_LEASE_MS;
 
   test('a provisioned model catalog survives opening the trial; another configuration row still stops it', async () => {
     const configured = deployment({ workspaces: [], held: { user_config: 1 }, catalogVersion: 1 });
