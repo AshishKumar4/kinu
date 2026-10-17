@@ -37,6 +37,12 @@ export type GalleryListing = v.InferOutput<typeof GalleryListingSchema>;
 
 export const GALLERY_SORTS = ['trending', 'new', 'stars'] as const;
 
+/** Listings a Gallery page holds. */
+export const GALLERY_PAGE_SIZE = 24;
+
+/** The last page whose offset (`page * GALLERY_PAGE_SIZE`) is still a safe integer: the index has no other bound. */
+export const GALLERY_LAST_PAGE = Math.floor(Number.MAX_SAFE_INTEGER / GALLERY_PAGE_SIZE);
+
 export type GallerySort = (typeof GALLERY_SORTS)[number];
 
 /** One page of the Gallery: `next` is the page after it, null at the end. */
