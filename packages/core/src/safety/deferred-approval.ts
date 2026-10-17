@@ -451,7 +451,7 @@ export interface DeferredApprovalQueueDeps {
   /**
    * An 'always' answer to a shared slate's effect: that tool on that root stands pre-approved on the slate's `owner`
    * shares at its revision ("Always for this slate"), not as a standing grant of the environment's. Absent, 'always'
-   * on one is an approval of that call alone.
+   * on one is an approval of that call alone. Cloudflare only: the CLI hosts no shared slates, so none asks it.
    */
   preapprove?(effect: SlateEffect): Promise<void>;
   /** Durable `approval_consumed` sink; optional only for tests. */
