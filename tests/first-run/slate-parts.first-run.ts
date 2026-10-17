@@ -13,7 +13,7 @@ import { safeJsonParse, slatePartFramePath } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { openBrowser, signedInPage } from '../../evals/src/browser';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
-import type { PublicSessionPlan } from '../../evals/src/session';
+import type { KinuPublicSession, PublicSessionPlan } from '../../evals/src/session';
 
 const SUITE = 'First-run · slate-parts';
 
@@ -50,6 +50,8 @@ const Answered = v.object({ ok: v.literal(true), value: v.unknown() });
 const Profile = v.object({ email: v.string() });
 
 const Board = v.object({ value: v.string(), by: v.string() });
+
+const Preview = v.object({ url: v.string(), broken: v.optional(v.string()) });
 
 /**
  * The slate: a part whose markup carries a script and an image Kinu must cut, a control that runs it again, and a note
@@ -165,6 +167,15 @@ async function walkPart(page: Page, origin: string, workspace: string, budget: A
   return { drawn, again, payload, confirmed, stopped: confirmed ? '' : 'the decision never closed once confirmed' };
 }
 
+/** Why the slate's own files do not build, its part with them; null when they do. */
+async function brokenSlate(session: KinuPublicSession): Promise<string | null> {
+  const answered = await session.slateOp({ op: 'preview', id: SLATE });
+  const preview = v.safeParse(Answered, answered);
+  const shown = preview.success ? v.safeParse(Preview, preview.output.value) : null;
+
+  return shown?.success === true ? shown.output.broken ?? null : JSON.stringify(answered);
+}
+
 /** The walk in a signed-in Chrome of its own, closed after. */
 async function ownersWalk(plan: PublicSessionPlan, workspace: string, budget: AbortSignal): Promise<PartSeen> {
   const chrome = await openBrowser();
@@ -192,13 +203,16 @@ describe(SUITE, () => {
         if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the parts slate: ' + (setup.error ?? setup.stdout ?? ''));
 
         const email = await accountEmail(plan.origin, plan.identity);
-        const seen = await ownersWalk(plan, session.workspace, budget);
+        // A build that cannot read the part's declaration has no page to walk: it says why at once.
+        const broken = await brokenSlate(session);
+        const seen = broken === null ? await ownersWalk(plan, session.workspace, budget) : { ...NOT_YET, stopped: `the slate does not build: ${broken}` };
         const answered = await session.slateOp({ op: 'call', id: SLATE, method: 'board', args: [] });
         const called = v.safeParse(Answered, answered);
         const board = called.success ? v.safeParse(Board, called.output.value) : null;
         const { drawn } = seen;
 
         const goals: EvalSubgoal[] = [
+          { what: 'the-slate-builds-with-its-part', reached: broken === null, detail: broken ?? 'builds' },
           {
             what: 'the-part-draws-sealed-in-the-slates-page',
             reached: drawn !== null && drawn.sandbox === '' && drawn.text.includes('drawn for you'),
