@@ -14,6 +14,7 @@ import { observeIdentity } from '../control-plane/index-feed';
 import { controlRoutes } from '../control-plane/routes';
 import { cliRoutes } from '../cli/routes';
 import { aiProxyRoutes } from '../user/ai-proxy';
+import { webSearchRoutes } from '../user/web-search-route';
 import { providerProxyRoutes } from '../user/provider-proxy';
 import { accountRoutes } from '../user/account-routes';
 import { userRoutes } from '../user/routes';
@@ -48,6 +49,9 @@ mount(authApiRoutes);
 mount(builtinAuthRoutes);
 
 mount(aiProxyRoutes);
+
+// The deployment's own web search, behind the same CLI bearer gate as the inference proxy.
+mount(webSearchRoutes);
 
 mount(providerProxyRoutes);
 

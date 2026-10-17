@@ -54,7 +54,7 @@ function contentFor(step: SurfaceStep): LanguageModelV4Content[] {
 }
 
 const stubWeb: WebSearchProvider = {
-  search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
+  search: async (query: string) => ({ query, results: [], source: 'ceramic' as const }),
   fetch: async (url: string) => ({ url, retrievedAt: '', markdown: '' }),
   render: async (url: string) => ({ url, retrievedAt: '', markdown: '' }),
   screenshot: async (url: string) => ({ url, retrievedAt: '', bytes: new Uint8Array() }),

@@ -12,8 +12,8 @@
  *
  * WHY `every-tool` DOES NOT COVER IT. Its web call is a fetch of the product's
  * own health route. Search is the other action, and its provider (Tavily with
- * a key, DuckDuckGo without, packages/core/src/web/provider.ts) is reached by
- * no other row.
+ * a key, Cloudflare's Web Search API without, packages/core/src/web/provider.ts)
+ * is reached by no other row.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -30,7 +30,7 @@ const CASE = firstRunCaseId(import.meta.url);
 const DEFECT: FirstRunDefect = {
   found: 'The owner asked for an end-to-end pass of the web search capability, and no deployed row '
     + 'ever asked the agent to search: `every-tool` fetches the product\'s own health route.',
-  missedBecause: 'the search provider (Tavily with a key, DuckDuckGo without) is unit-tested over '
+  missedBecause: 'the search provider (Tavily with a key, then DuckDuckGo without) was unit-tested over '
     + 'fixture pages, so a provider the deployment cannot reach, or a layout it no longer parses, '
     + 'is invisible until a user asks the agent to look something up.',
   provedRedAt: 'b220f59f8',

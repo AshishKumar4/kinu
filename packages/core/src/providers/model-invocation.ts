@@ -155,6 +155,32 @@ export function createWorkersAIEmbedder(opts: {
   };
 }
 
+/** The binding's web search (`Ai.websearch`, @cloudflare/workers-types): Cloudflare's Web Search API on a gateway. */
+export interface WorkersAiWebSearch {
+  websearch(request: { gatewayId: string; query: string; limit?: number; provider?: string }): Promise<Response>;
+}
+
+/**
+ * Each search files one unmeasured `platform` row, as an HTML conversion does; its price is the gateway's to log
+ * (Ceramic.ai at $0.25 per 1,000, developers.cloudflare.com/web-search/providers).
+ */
+export function workersAiWebSearch(
+  env: { readonly AI?: Partial<WorkersAiWebSearch> },
+  report: ModelCallSink,
+): WorkersAiWebSearch['websearch'] | undefined {
+  const ai = env.AI;
+  const websearch = ai?.websearch?.bind(ai);
+
+  if (websearch === undefined) return undefined;
+
+  return async (request) => {
+    const answered = await websearch(request);
+    report({ source: 'platform', usage: {}, modelId: `websearch/${request.provider ?? 'ceramic'}` });
+
+    return answered;
+  };
+}
+
 /** Each conversion files one unmeasured `platform` row. */
 export function workersAiHtmlToMarkdown(
   env: { readonly AI?: WorkersAiMarkdown },

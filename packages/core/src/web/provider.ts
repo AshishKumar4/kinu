@@ -1,6 +1,7 @@
 /**
- * Web search/fetch provider shared by both backends; key-less by default (DuckDuckGo), Tavily when a `tavily`
- * credential is stored. Rendered fetches and screenshots go through Browser Run (`browser-run.ts`).
+ * Web search/fetch provider shared by both backends. Search is Tavily when a `tavily` credential is stored, else the
+ * deployment's own: Cloudflare's Web Search API ({@link FirstPartySearch}). Rendered fetches and screenshots go through
+ * Browser Run (`browser-run.ts`).
  */
 
 import * as v from 'valibot';
@@ -34,7 +35,8 @@ export interface WebSearchResponse {
   /** Tavily only. */
   answer?: string;
   results: WebSearchResult[];
-  source: 'tavily' | 'duckduckgo';
+  /** The index the results came from: Tavily's, or Ceramic.ai's through Cloudflare's Web Search API. */
+  source: 'tavily' | 'ceramic';
 }
 
 export interface WebFetchResult {
@@ -60,10 +62,23 @@ export interface WebSearchProvider {
   screenshot(url: string, opts?: { engine?: QuickActionEngine; fullPage?: boolean; signal?: AbortSignal }): Promise<WebScreenshot>;
 }
 
+/**
+ * The deployment's own web search: Cloudflare's Web Search API on its default index (Ceramic.ai), through the AI
+ * binding on a Worker (`first-party-search.ts`) or through the signed-in account's gated route from the CLI. Answers
+ * the API's own response, read here once whichever way it came. Key-less scraping of a search engine is not a backend:
+ * DuckDuckGo's HTML endpoint answered results to 3 of 72 queries from Workers in six regions (2026-10-17), a challenge
+ * page or a 19.5 s timeout to the rest, and a challenge page to this machine's second query.
+ */
+export interface FirstPartySearch {
+  search(input: { readonly query: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<Response>;
+}
+
 export interface DefaultWebSearchProviderDeps {
   fetch: typeof fetch;
-  /** Absent: search is always DuckDuckGo. */
+  /** Reads the `tavily` credential, which wins over {@link firstParty}: the person chose it. */
   getAuth?: AuthResolver;
+  /** Absent (a CLI signed out of its Kinu account): search needs a Tavily key. */
+  firstParty?: FirstPartySearch;
   /** Falls back to the local converter when absent or throwing. */
   htmlToMarkdown?: (html: string, opts?: { url?: string }) => Promise<string>;
   /** Absent on a Worker, whose platform refuses a name resolving inward (`url-safety.ts`). */
@@ -85,6 +100,18 @@ export interface BrowserCookie {
 const DEFAULT_SEARCH_LIMIT = 5;
 
 const MAX_SEARCH_LIMIT = 20;
+
+/** What a result's snippet keeps, Tavily's or Cloudflare's: the clip Tavily snippets had. Unmeasured for Ceramic.ai,
+ *  whose descriptions run to 8,000 characters; sized once its results can be read. */
+const SNIPPET_CHARS = 600;
+
+/** Cloudflare's Web Search API answer (developers.cloudflare.com/web-search/how-to-use, 2026-10-12). */
+const WebSearchApiSchema = v.object({
+  items: v.array(v.object({ url: v.string(), title: v.optional(v.string()), description: v.optional(v.string()) })),
+});
+
+/** Its refusal: `web_search_payment_required` (402) when the account's AI Gateway credits are spent, measured 2026-10-17. */
+const WebSearchApiErrorSchema = v.object({ error: v.object({ code: v.optional(v.string()), message: v.optional(v.string()) }) });
 
 const TavilyResponseSchema = v.object({
   answer: v.optional(v.string()),
@@ -189,7 +216,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
             return {
               title: title === undefined || title === '' ? r.url : title,
               url: r.url,
-              snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
+              snippet: stripBase64Images((r.content ?? '').trim()).slice(0, SNIPPET_CHARS),
               date: r.published_date === '' ? undefined : r.published_date,
               position: i + 1,
             };
@@ -207,26 +234,35 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       : new WebFetchError('Tavily search returned an unreadable response', { cause: failed.cause })));
   });
 
-  const duckDuckGoSearch = (query: string, limit: number, signal: AbortSignal | undefined): Effect.Effect<WebSearchResponse> => Effect.gen(function* () {
-    const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const firstPartySearch = (search: FirstPartySearch, query: string, limit: number, signal: AbortSignal | undefined): Effect.Effect<WebSearchResponse> => Effect.gen(function* () {
+    const res = yield* Effect.promise(() => search.search({ query, limit, ...(signal !== undefined && { signal }) }));
+    const body = yield* Effect.promise(() => res.text());
 
-    const res = yield* Effect.promise(() => fetchImpl(endpoint, {
-      headers: {
-        'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
-        accept: 'text/html',
-      },
-      signal,
-    }));
+    if (!res.ok) {
+      const refusal = tolerate(() => v.parse(WebSearchApiErrorSchema, JSON.parse(body)), 'malformed-input');
 
-    if (res.status === 429 || res.status === 202) {
-      return yield* Effect.die(new WebFetchError('DuckDuckGo rate-limited the request: retry shortly, or connect a Tavily key for reliable search'));
+      // Not this person's to fix: the deployment pays for its own search.
+      if (res.status === 402) return yield* Effect.die(new WebFetchError('Web search is not available on this deployment right now'));
+
+      return yield* Effect.die(new WebFetchError(`Web search failed (${res.status}): ${refusal?.error.message ?? body.slice(0, 200)}`));
     }
 
-    if (!res.ok) return yield* Effect.die(new WebFetchError(`web search failed (${res.status})`));
-    const html = yield* Effect.promise(() => res.text());
-    const results = parseDuckDuckGoHtml(html, limit);
+    const answered = yield* Effect.try({ try: () => v.parse(WebSearchApiSchema, JSON.parse(body)), catch: (cause) => ({ cause }) }).pipe(
+      Effect.catch((failed) => Effect.die(new WebFetchError('Web search returned an unreadable response', { cause: failed.cause }))),
+    );
 
-    return { query, results, source: 'duckduckgo' };
+    const results = answered.items.filter((item) => isSafeUrl(item.url)).slice(0, limit).map((item, i): WebSearchResult => {
+      const title = item.title?.trim();
+
+      return {
+        title: title === undefined || title === '' ? item.url : title,
+        url: item.url,
+        snippet: (item.description ?? '').trim().slice(0, SNIPPET_CHARS),
+        position: i + 1,
+      };
+    });
+
+    return { query, results, source: 'ceramic' };
   });
 
   const judged = (url: string): Effect.Effect<URL> => Effect.gen(function* () {
@@ -317,7 +353,9 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
         if (auth) return yield* tavilySearch(q, limit, auth, opts?.signal);
 
-        return yield* duckDuckGoSearch(q, limit, opts?.signal);
+        if (deps.firstParty === undefined) return yield* Effect.die(new WebFetchError('Web search is not available here: connect a Tavily key to search'));
+
+        return yield* firstPartySearch(deps.firstParty, q, limit, opts?.signal);
       }));
     },
 
@@ -453,53 +491,6 @@ export interface BrowserSessions {
 
 function clampLimit(limit: number | undefined): number {
   return boundedInt(limit, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT);
-}
-
-function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResult[] {
-  const results: WebSearchResult[] = [];
-  const linkRe = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-  const snippetRe = /<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-
-  const snippets: string[] = [];
-  let sm: RegExpExecArray | null;
-
-  while ((sm = snippetRe.exec(html)) !== null) snippets.push(decodeEntities(stripTags(sm[1]), HTML_ENTITIES));
-
-  let m: RegExpExecArray | null;
-  let i = 0;
-
-  while ((m = linkRe.exec(html)) !== null && results.length < limit) {
-    const url = unwrapDuckUrl(decodeEntities(m[1], HTML_ENTITIES));
-    const title = decodeEntities(stripTags(m[2]), HTML_ENTITIES).trim();
-
-    if (!url || !title || !isSafeUrl(url)) {
-      i++;
-      continue;
-    }
-
-    results.push({
-      title,
-      url,
-      snippet: (snippets[i] ?? '').trim(),
-      position: results.length + 1,
-    });
-    i++;
-  }
-
-  return results;
-}
-
-/** DuckDuckGo wraps targets in `//duckduckgo.com/l/?uddg=<encoded>&...`. */
-function unwrapDuckUrl(href: string): string {
-  const abs = href.startsWith('//') ? `https:${href}` : href;
-  const parsed = tolerate(() => new URL(abs, 'https://duckduckgo.com'), 'malformed-input');
-
-  if (!parsed) return '';
-  const uddg = parsed.searchParams.get('uddg');
-
-  if (uddg) return uddg;
-
-  return /^https?:/.test(abs) ? abs : '';
 }
 
 function extractTitle(html: string): string {
