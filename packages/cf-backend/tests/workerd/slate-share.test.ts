@@ -215,6 +215,24 @@ it("a mutating member is granted by approval only, and on its owner's access eac
   expect((await probe.viewerBatch(created.share.handle, CLAIM)).mutateError).toContain('The owner declined this call');
 });
 
+it("a viewer's approved write held while its dispatch prepares is never made once its share is revoked or turned to each viewer's own access", async () => {
+  for (const change of ['revoke', 'own'] as const) {
+    const probe = subject(`live-held-${change}`);
+    await probe.start();
+
+    const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+      await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+
+    await probe.viewerBatch(created.share.handle, CLAIM);
+    expect(await probe.ownerDecides(true)).toBe(1);
+
+    // Approved and dispatched; the share changes before the write is sent, so the write is never made.
+    const held = await probe.heldWrite(created.share.handle, CLAIM, created.share.id, change);
+
+    expect({ change, written: held.written, answered: held.mutateError === 'mutate answered' }).toEqual({ change, written: false, answered: false });
+  }
+});
+
 it("an owner share's approval moves with its owner's own edit, and a review read at the old revision turns nothing on", async () => {
   const probe = subject('live-owner-edit');
   await probe.start();

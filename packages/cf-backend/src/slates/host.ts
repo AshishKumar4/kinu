@@ -38,6 +38,11 @@ export interface SlateDispatchContext {
    * owner's slate, held to the grant and the share's life for a viewer. It throws to refuse.
    */
   readonly nested: (namespace: string, member: string) => void;
+  /**
+   * A viewer's call: the share's word on it read again where it acts (share-viewers.ts `ViewerRun`). The dispatch calls
+   * it synchronously immediately before the call acts, with nothing awaited between; it throws to refuse.
+   */
+  readonly admit?: () => void;
 }
 
 export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
@@ -335,9 +340,10 @@ export class SlateHost {
         return await this.controller.viewers.call({
           share: viewer.share, id, request: parsed.output, chain, issued,
           bound: (address) => this.boundedBy(this.sharedAuthority(id), id, address),
-          run: (route, nested) => this.run(shareCaller(viewer.share), route, {
+          run: (route, nested, admit) => this.run(shareCaller(viewer.share), route, {
             // What it reaches inside itself meets every share's bound as it stands then, as well as its own share's grant.
             nested: (namespace, member) => { this.nestedBound(id, { namespace, member }); nested(namespace, member); },
+            admit,
             ...(parsed.output.authorize && { authorizeOnly: true }),
           }, viewer),
         });
@@ -353,7 +359,7 @@ export class SlateHost {
       if (caller.share !== undefined) {
         return await this.controller.viewers.call({
           share: caller.share, id, request: parsed.output, chain, issued,
-          run: (route, nested) => this.run(caller, route, { nested, ...(parsed.output.authorize && { authorizeOnly: true }) }, issued?.viewer),
+          run: (route, nested, admit) => this.run(caller, route, { nested, admit, ...(parsed.output.authorize && { authorizeOnly: true }) }, issued?.viewer),
         });
       }
 

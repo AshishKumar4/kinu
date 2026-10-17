@@ -94,7 +94,8 @@ export type DeferredApprovalVerdict =
 
 /** A shared slate's effect, as its owner's queue answers it ({@link DeferredApprovalQueue.slateEffect}). */
 export type SlateEffectVerdict =
-  | { readonly outcome: 'run'; readonly spend: ApprovalSpend }
+  /** The owner approved this exact call; it is taken where the call is sent ({@link DeferredApprovalQueue.takeSlateEffect}). */
+  | { readonly outcome: 'approved' }
   | { readonly outcome: 'asked'; readonly action: DeferredApproval }
   | { readonly outcome: 'denied'; readonly action: DeferredApproval };
 
@@ -811,11 +812,7 @@ export class DeferredApprovalQueue {
     const store = this.deps.store;
     const held = store.get(id);
 
-    if (held?.status === 'approved') {
-      const spent = store.spend(id);
-
-      return spent === null ? { outcome: 'asked', action: held } : { outcome: 'run', spend: spent.spend };
-    }
+    if (held?.status === 'approved') return { outcome: 'approved' };
 
     if (held?.status === 'queued' || held?.status === 'spent') return { outcome: 'asked', action: held };
 
@@ -830,6 +827,15 @@ export class DeferredApprovalQueue {
     this.notify({ kind: 'queued', action });
 
     return { outcome: 'asked', action };
+  }
+
+  /**
+   * The owner's approval of this exact call taken, where the call is sent: one synchronous write, so nothing between it
+   * and the send can take it back. The spend the call settles, or null where it is no longer approved (retired, or
+   * already taken).
+   */
+  takeSlateEffect(id: string): ApprovalSpend | null {
+    return this.deps.store.spend(id)?.spend ?? null;
   }
 
   /** A share's open effects retired: it was revoked, left `owner` mode, or its slate was built anew. */

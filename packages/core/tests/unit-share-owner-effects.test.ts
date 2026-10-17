@@ -43,19 +43,22 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 
   const viewers = new SlateShareViewers({
     live, shareEntry: () => null, ownerUserId: () => 'sam', revision: (slate) => revisions[slate] ?? null,
-    ownerEffects: { ask: (id, effect) => queue.slateEffect(id, effect), settle: async (spend, outcome) => queue.settle(spend, outcome) },
+    ownerEffects: { ask: (id, effect) => queue.slateEffect(id, effect), take: (id) => queue.takeSlateEffect(id), settle: async (spend, outcome) => queue.settle(spend, outcome) },
   });
 
   const ran: string[] = [];
 
-  const call = (member: string, options: { subject?: string; authorize?: true; slate?: string; args?: JsonValue[]; fails?: true } = {}) => {
+  /** `meanwhile`: what changes while the dispatch prepares, before it sends; the dispatch admits the call just before it acts. */
+  const call = (member: string, options: { subject?: string; authorize?: true; slate?: string; args?: JsonValue[]; fails?: true; meanwhile?: () => void } = {}) => {
     const subject = options.subject ?? 'user:ana';
 
     return viewers.call({
       share: 's1', id: options.slate ?? 'board', chain: [],
       request: { path: member.split('.'), args: options.args ?? [{ path: 'notes.md', text: 'hello' }], invocation: null, ...(options.authorize && { authorize: options.authorize }) },
       issued: { id: 'inv', chain: [], viewer: { share: 's1', subject, request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
-      run: async () => {
+      run: async (_route, _nested, admit) => {
+        options.meanwhile?.();
+        admit?.();
         ran.push(`${subject}:${member}`);
 
         if (options.fails) throw new Error('the call failed after it was handed on');
@@ -69,7 +72,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
   const asked = () => queue.list().map((row) => approvalKindOf(row));
   const approveAll = async () => queue.decide(queue.list().map((row) => row.id), 'approved');
 
-  return { call, ran, asked, approveAll };
+  return { call, ran, asked, approveAll, live, queue };
 }
 
 test('an owner share\'s acting call waits for the owner, then runs once on their approval', async () => {
@@ -145,4 +148,30 @@ test("a browser member the class runs waits on the owner when the host is asked 
   // What the class hands its host member when its own run failed: no effect, so nothing is asked.
   expect(await call('web.connectBrowser', { args: [{ refused: 'no socket', reason: 'unavailable' }] })).toMatchObject({ ok: true });
   expect({ ran, asked: asked().length }).toEqual({ ran: ['user:ana:web.connectBrowser', 'user:ana:web.connectBrowser'], asked: 0 });
+});
+
+test('a call whose share stops lending while its dispatch prepares never acts, and takes no approval', async () => {
+  const revoked = world('owner');
+
+  await expect(revoked.call('writeFile')).rejects.toThrow('waits for the owner');
+  await revoked.approveAll();
+  await expect(revoked.call('writeFile', { meanwhile: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
+  await expect(revoked.call('readFile', { meanwhile: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
+  expect({ ran: revoked.ran, approved: revoked.queue.list().length }).toEqual({ ran: [], approved: 0 });
+
+  // Turned back to each viewer's own access mid-call: what was admitted on the owner's access is not sent on it.
+  const turned = world('owner');
+
+  await expect(turned.call('writeFile')).rejects.toThrow('waits for the owner');
+  await turned.approveAll();
+  await expect(turned.call('writeFile', { meanwhile: () => { turned.live.setAuthority('s1', { mode: 'own', grantRevision: null }, grant); } })).rejects.toThrow('stopped lending');
+  expect(turned.ran).toEqual([]);
+
+  // Its approval retired mid-call (the share's revision moved, or its owner took it back).
+  const retired = world('owner');
+
+  await expect(retired.call('writeFile')).rejects.toThrow('waits for the owner');
+  await retired.approveAll();
+  await expect(retired.call('writeFile', { meanwhile: () => { retired.queue.retireSlateEffects('s1'); } })).rejects.toThrow('taken back');
+  expect(retired.ran).toEqual([]);
 });

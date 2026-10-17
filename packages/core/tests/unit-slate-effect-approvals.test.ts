@@ -5,7 +5,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Effect } from 'effect';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
 import {
   approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, slateEffectExecutor, slateEffectText, type AgentSignal,
   type SlateEffect,
@@ -43,20 +43,22 @@ test('an owner-mode effect is asked once, runs once on approval, and asks again 
   expect(queue.list().map((row) => row.id)).toEqual(['call-1']);
 
   await queue.decide(['call-1'], 'approved');
-  const run = queue.slateEffect('call-1', EFFECT);
+  // Asking finds it approved and takes nothing: the approval is taken where the call is sent, once.
+  expect(queue.slateEffect('call-1', EFFECT).outcome).toBe('approved');
+  const spend = present(queue.takeSlateEffect('call-1'), 'the approval taken at the send');
 
-  expect(run.outcome).toBe('run');
+  expect(queue.takeSlateEffect('call-1')).toBeNull();
 
   // Taken and running: the same call made meanwhile waits, and is not asked twice.
   expect(queue.slateEffect('call-1', EFFECT).outcome).toBe('asked');
   expect(queue.list()).toEqual([]);
 
-  if (run.outcome === 'run') await queue.settle(run.spend, 'spent');
+  await queue.settle(spend, 'spent');
   // The approval is used: the same call made again is asked of the owner again, and runs once more on their word.
   expect(queue.slateEffect('call-1', EFFECT).outcome).toBe('asked');
   expect(queue.list().map((row) => [row.id, row.status])).toEqual([['call-1', 'queued']]);
   await queue.decide(['call-1'], 'approved');
-  expect(queue.slateEffect('call-1', EFFECT).outcome).toBe('run');
+  expect(queue.slateEffect('call-1', EFFECT).outcome).toBe('approved');
   // No agent asked it, so none is woken by its decision.
   expect(woken).toEqual([]);
 });
@@ -66,10 +68,8 @@ test('an effect whose run did not happen keeps its approval for the next', async
 
   queue.slateEffect('call-1', EFFECT);
   await queue.decide(['call-1'], 'approved');
-  const first = queue.slateEffect('call-1', EFFECT);
-
-  if (first.outcome === 'run') await queue.settle(first.spend, 'did-not-run');
-  expect(queue.slateEffect('call-1', EFFECT).outcome).toBe('run');
+  await queue.settle(present(queue.takeSlateEffect('call-1'), 'the approval taken'), 'did-not-run');
+  expect(queue.slateEffect('call-1', EFFECT).outcome).toBe('approved');
 });
 
 test('a declined effect stands, and a share\'s open effects retire with it', async () => {

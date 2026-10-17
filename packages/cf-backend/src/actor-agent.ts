@@ -348,12 +348,22 @@ interface WorkspaceTitleInputs {
  * unreachable; every other class is the turn's own fault. */
 const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
-/** A namespace member a slate calls: run it, or, when the host asks only whether it may, refuse as running it would. */
+/**
+ * A namespace member a slate calls: run it, or, when the host asks only whether it may, refuse as running it would. A
+ * viewer's call is admitted (`context.admit`) at the last moment before it acts: an authorization is the act of a member
+ * the class runs itself.
+ */
 async function slateMember(
   providers: readonly CodemodeProvider[], route: Extract<SlateRoute, { kind: 'namespace' }>, context: SlateDispatchContext,
 ): Promise<JsonValue> {
-  if (!context.authorizeOnly) return await callCodemodeMember(providers, route.namespace, route.member, route.args) ?? null;
+  if (!context.authorizeOnly) {
+    context.admit?.();
+
+    return await callCodemodeMember(providers, route.namespace, route.member, route.args) ?? null;
+  }
+
   requireCodemodeMember(providers, route.namespace, route.member);
+  context.admit?.();
 
   return null;
 }
@@ -2453,6 +2463,9 @@ export abstract class ActorAgent extends Agent<Env> {
         case 'tool': {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
 
+          // A viewer's call is admitted as the tool starts; each member its program reaches meets `nested` as it runs.
+          context.admit?.();
+
           return yield* Effect.promise(async () => this.callSlateTool({
             rt: this.rt, actor: this.surfaceActor(mode, context.viewer ? 'viewer' : 'owner'), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
@@ -2486,6 +2499,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (!authority.reach.allowsTool(descriptor.toolKey)) return yield* new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
 
+          // A viewer's call is admitted here, after every wait to prepare it and with none between it and the send.
+          context.admit?.();
           const answered = yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined));
 
           // A slate calls on its viewer's behalf, not any agent's.
@@ -2502,6 +2517,8 @@ export abstract class ActorAgent extends Agent<Env> {
           if (route.viewer !== undefined) metadata.viewer = route.viewer;
 
           const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
+
+          context.admit?.();
 
           if (route.ask !== true) return { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
 
@@ -2521,9 +2538,14 @@ export abstract class ActorAgent extends Agent<Env> {
           return { reply };
         }
 
-        case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route));
+        case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route, undefined, context.admit));
 
-        case 'rpc': return yield* Effect.promise(async () => this.slateReadModel(route.method));
+        case 'rpc': {
+          context.admit?.();
+
+          return yield* Effect.promise(async () => this.slateReadModel(route.method));
+        }
+
         case 'app': return yield* new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
       }
     }));
@@ -2541,6 +2563,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async slateAiRun(
     route: Extract<SlateRoute, { kind: 'ai' }>,
     actor?: ActorHandle,
+    admit?: () => void,
   ): Promise<SlateSurfaceValue> {
     let profile: ResolvedTurnProfile;
 
@@ -2559,6 +2582,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     // Priced as every call is: its model's rate, warmed when it is not the turn's own.
     await this.modelCatalog.warm([profile.tier.model]);
+    // A viewer's call is admitted once the model is ready, as it is asked.
+    admit?.();
 
     return slateAiAnswer(route, { spec: profile.tier.model, tier: profile.tier.id }, {
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.reportModelCall(report); }, operations: this.modelOperations,
