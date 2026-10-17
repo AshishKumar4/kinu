@@ -4,11 +4,11 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { Button, Loader } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, UserCircleIcon, UsersIcon, WarningIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { editedBy, LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
+import { editedBy, LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { listShare, revokeShare, setShareMode, shareLive } from "@/lib/shared-api";
+import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
 import { ShareListing, type ListShare } from "./ShareListing";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, StopButton, type AccessOption } from "./ShareParts";
@@ -19,6 +19,8 @@ export interface LiveShareFixture {
   liveShares: LiveShareRecord[];
   /** Why the shared slate does not run, as its preview would refuse it. */
   refused?: string;
+  /** What the owner answered "Always for this slate" to, standing now. */
+  preapproved?: SharePreapproval[];
 }
 
 /** The ticked members, as the share route takes them. */
@@ -437,6 +439,72 @@ function SharedNow({ shares, onStop, onOwnAccess, onReview, onList, disabled }: 
   );
 }
 
+/** A standing approval's key: the slate that makes the call, the member, and its root. */
+const standingKey = (entry: SharePreapproval) => `${entry.slate}/${entry.namespace}.${entry.member}`;
+
+/** The root a standing approval holds to, as a person reads it; none when it holds to no one root. */
+const rootWords = (root: Readonly<Record<string, string>>) => Object.entries(root).map(([key, value]) => `${key} ${value}`).join(" · ");
+
+/**
+ * What the owner answered "Always for this slate" to, standing now: each change named as the reach names it, and taken
+ * back from every share of the slate on their access in one press.
+ */
+function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
+  standing: readonly SharePreapproval[];
+  graph: SlateReach | null;
+  onWithdraw: (entry: SharePreapproval) => void;
+  disabled: boolean;
+}) {
+  if (standing.length === 0) return null;
+
+  const titleOf = (entry: SharePreapproval) => graph?.namespaces.find((row) => row.slate === entry.slate && row.namespace === entry.namespace)?.title ?? entry.namespace;
+
+  return (
+    <div data-share-always className="space-y-1.5">
+      <p className="p-meta font-medium p-text-3">Always allowed</p>
+      <ul className="p-group">
+        {standing.map((entry) => (
+          <li key={JSON.stringify([standingKey(entry), entry.root])} data-share-always-entry={standingKey(entry)} className="flex items-center gap-3 px-3.5 py-2">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate p-meta p-text-2"><span className="font-mono">{entry.member}</span> on {titleOf(entry)}</span>
+              {Object.keys(entry.root).length > 0 && <span className="block truncate p-meta p-text-3">{rootWords(entry.root)}</span>}
+            </span>
+            <Button size="xs" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
+          </li>
+        ))}
+      </ul>
+      <p className="p-meta p-text-3">These go ahead without asking you, on every share of it on your access, until its code changes.</p>
+    </div>
+  );
+}
+
+/** The slate's standing approvals, read with the sheet, and each taken back from every share of it. */
+function useStanding(workspace: string, slate: string, fixture: LiveShareFixture | undefined, failed: (chain: string) => void) {
+  const [standing, setStanding] = useState<readonly SharePreapproval[]>(fixture?.preapproved ?? []);
+
+  useEffect(() => {
+    if (fixture !== undefined) return;
+    let live = true;
+
+    detach(Effect.catchCause(
+      Effect.map(Effect.promise(() => readPreapprovals({ workspace, slate })), (read) => { if (live) setStanding(read.preapproved); }),
+      showing((chain) => { if (live) failed(chain); }),
+    ));
+
+    return () => { live = false; };
+  }, [fixture, workspace, slate, failed]);
+
+  const withdraw = useCallback((entry: SharePreapproval) => detach(Effect.catchCause(
+    Effect.map(
+      Effect.promise(() => withdrawPreapproval({ workspace, slate, entry: { slate: entry.slate, namespace: entry.namespace, member: entry.member, root: entry.root } })),
+      (left) => setStanding(left.preapproved),
+    ),
+    showing(failed),
+  )), [workspace, slate, failed]);
+
+  return { standing, withdraw };
+}
+
 /** The people typed in, and of them those who edit too; only people added by name edit: a link opens it for use alone. */
 function usePeopleRoles(emails: string, visibility: LiveShareVisibility) {
   const [editing, setEditing] = useState<ReadonlySet<string>>(new Set());
@@ -526,6 +594,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   }, []);
 
   const { emailList, editing, editors, setRole } = usePeopleRoles(emails, visibility);
+  const { standing, withdraw } = useStanding(workspace, slate, fixture, setErr);
 
   // The owner's access is approved at a revision of the slate: none before it has been opened once.
   const revision = graph?.revision ?? null;
@@ -657,6 +726,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
           <SharedNow shares={shares} onStop={(id) => revoke(id)} onOwnAccess={ownAccess} onList={list} disabled={busy}
             onReview={(id) => { setMode("owner"); setReviewing(id); }} />
         )}
+        <AlwaysAllowed standing={standing} graph={graph} onWithdraw={withdraw} disabled={busy} />
         <Failure message={err} />
       </div>
       <div className="flex justify-end gap-2 border-t p-border pt-4">

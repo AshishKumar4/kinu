@@ -2,7 +2,8 @@
 import { Effect } from 'effect';
 import {
   BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH,
-  LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
+  LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema,
+  type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareListingBody, type LiveShareModeBody, type LiveShareRecord,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
@@ -98,6 +99,16 @@ export function openLiveShare(input: { workspace: string; share: string }): Prom
 
     return v.parse(LiveShareOpenSchema, yield* Effect.promise(async () => res.json()));
   }));
+}
+
+/** What the owner answered "Always for this slate" to that stands now, at the slate's revision. */
+export function readPreapprovals(input: { workspace: string; slate: string }): Promise<SlatePreapprovals> {
+  return settle(api(SlatePreapprovalsSchema, 'POST', LIVE_SHARE_PREAPPROVALS_PATH, input));
+}
+
+/** One standing approval taken back from every share of the slate: those that stand after. */
+export function withdrawPreapproval(input: SlatePreapprovalWithdraw): Promise<SlatePreapprovals> {
+  return settle(api(SlatePreapprovalsSchema, 'POST', LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, { ...input, entry: { ...input.entry, root: { ...input.entry.root } } }));
 }
 
 /** Switches a share's mode, or approves the reach again at the slate's new revision: the share as it now is. */
