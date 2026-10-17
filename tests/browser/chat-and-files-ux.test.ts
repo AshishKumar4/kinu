@@ -780,6 +780,43 @@ describe("a turn's runs of tool calls, in the real chat", () => {
     });
   });
 
+  // Main, 2026-10-17: the line reads as the thinking block's does, a quiet chevron mark, not a word like a link; the
+  // shots show it turning.
+  test("a run's line is one control: no word but what it says, a chevron mark, and anywhere on it opens it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      const line = '.p-thread-column [data-tool-run-calls="6"] > button';
+
+      const read = () => page.$eval(line, (button) => ({
+        open: button.getAttribute('aria-expanded'),
+        extra: (button.textContent ?? '').replace(button.querySelector('[data-disclosure-label]')?.textContent ?? '', '')
+          .replace(button.querySelector('[data-disclosure-after]')?.textContent ?? '', '').trim(),
+        mark: button.querySelector('[data-disclosure-turn]') !== null,
+      }));
+
+      expect(await read()).toEqual({ open: 'false', extra: '', mark: true });
+
+      // Pressed past its words and its mark, at the line's far end: the line is the control, not its words.
+      await page.$eval(line, (button) => { button.scrollIntoView({ block: 'center' }); });
+
+      const far = await page.$eval(line, (button) => {
+        const whole = button.getBoundingClientRect();
+        const mark = button.querySelector('[data-disclosure-turn]')?.getBoundingClientRect();
+
+        return { x: whole.right - 2, y: whole.top + whole.height / 2, pastMark: mark === undefined ? false : whole.right - 2 > mark.right };
+      });
+
+      expect(far.pastMark).toBe(true);
+      await page.mouse.click(far.x, far.y);
+      await page.waitForFunction((selector: string) => document.querySelector(selector)?.getAttribute('aria-expanded') === 'true', {}, line);
+      expect(await read()).toEqual({ open: 'true', extra: '', mark: true });
+      await page.close();
+    });
+  });
+
   test("a hired agent's chat and a search node's transcript draw their runs the same way", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
