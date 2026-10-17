@@ -5,11 +5,13 @@
  *
  * - `standup` asks to use the viewer's GitHub, then shows their open pull requests, with a refresh and a "Show to
  *   everyone" the viewer can confirm. Its consent was given for an earlier revision of the code, so it says it changed.
- * - `deploy` shows a deploy button whose run asks the viewer to approve one effect, with its payload, then shows done.
+ * - `deploy` shows a field for what to deploy and its button. That run asks to use the viewer's Vercel, then for their
+ *   approval of one effect with its payload, then shows done; each decision resumes it with what the viewer typed.
  * - `team` is a part the slate does not declare for this share: a stub that says what to do.
  *
  * `shared-live` is the same slate entered as a share: the share's page opens it (`/api/shared/live/open`) and frames it
- * under Kinu's bar, hosting its parts as the visitor.
+ * under Kinu's bar, hosting its parts as the visitor. `part-previews` is the owner's own two previews of it, in the
+ * workspace's column and in an answer in the chat; their page is the slate's server's, served by a test.
  *
  * What the page asked is on the root for a test to read; the slate's page is drawn here, as its own author would.
  */
@@ -18,10 +20,14 @@ import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
   APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareBodySchema, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
-  type PartRunAnswer, type SlateConsent,
+  type PartRunAnswer, type PartRunRequest, type SlateConsent,
 } from "@kinu.run/core";
+import { InlineSlate } from "@/components/slates/InlineSlate";
+import { SlateInlineContext } from "@/components/slates/context";
 import { PartView } from "@/components/sharing/PartView";
+import { SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import { usePartHost } from "@/hooks/use-part-host";
+import { workspaceRpc } from "@/lib/workspace-rpc";
 import LiveSharePage from "@/pages/LiveSharePage";
 import PartFramePage from "@/pages/PartFramePage";
 
@@ -59,14 +65,14 @@ function slatePage(gallery: string): string {
 
 /** The part routes, answered at the top as the server answers its one viewer. */
 export function installPartsFixture(frame: string): void {
-  if (frame !== "part-host" && frame !== "shared-live") return;
+  if (frame !== "part-host" && frame !== "shared-live" && frame !== "part-previews") return;
 
   const next = window.fetch.bind(window);
   const consents: SlateConsent[] = [{ workspace: WORKSPACE, slate: SLATE, ...GITHUB, revision: "r1" }];
   const approved = new Set<string>();
   const asked: { path: string; body: string | null }[] = [];
 
-  const answerFor = (part: string, approval: string | null): PartRunAnswer => {
+  const answerFor = (part: string, { action, approval }: PartRunRequest): PartRunAnswer => {
     if (part === "standup") {
       return consents.some((given) => given.server === GITHUB.server && given.revision === REVISION)
         ? { kind: "shown", revision: REVISION, html: STANDUP.html, actions: [{ id: "refresh", label: "Refresh" }], show: STANDUP.show }
@@ -74,11 +80,17 @@ export function installPartsFixture(frame: string): void {
     }
 
     if (part === "deploy") {
+      const ref = action?.id === "deploy" && typeof action.input === "string" ? action.input : null;
+
+      if (ref === null) {
+        return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#1f2937">site is on main in production.</p>`, actions: [{ id: "deploy", label: "Deploy", input: { kind: "text", maxLength: 64 } }], show: null };
+      }
+
       if (!consents.some((given) => given.server === VERCEL.server)) return { kind: "needs-consent", ask: VERCEL };
 
-      if (approval !== null && approved.has(approval)) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed site to production.</p>`, actions: [], show: null };
+      if (approval !== null && approved.has(approval)) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed ${ref} to production.</p>`, actions: [], show: null };
 
-      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref: "main" } } };
+      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref } } };
     }
 
     return { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." };
@@ -104,9 +116,7 @@ export function installPartsFixture(frame: string): void {
     document.documentElement.setAttribute("data-gallery-asked", JSON.stringify(asked));
 
     if (kind === "parts" && verb === "run") {
-      const run = v.parse(PartRunRequestSchema, JSON.parse(body ?? "{}"));
-
-      return Response.json(answerFor(decodeURIComponent(part ?? ""), run.approval));
+      return Response.json(answerFor(decodeURIComponent(part ?? ""), v.parse(PartRunRequestSchema, JSON.parse(body ?? "{}"))));
     }
 
     if (kind === "consents" && request.method === "GET") return Response.json({ consents });
@@ -203,6 +213,35 @@ export function SharedLiveFrame() {
 }
 
 export const SHARED_LIVE_ENTRY = `/shared/live/${WORKSPACE}/share-1`;
+
+/** The workspace's previews ask where the slate's page is served; its preview host answers there. */
+const previewRpc = workspaceRpc(async <T,>(method: string): Promise<T> => {
+  if (method !== "previewSlate") throw new Error(`The previews fixture answers previewSlate alone, not ${method}`);
+
+  return new Response(JSON.stringify({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } })).json<T>();
+});
+
+/** The owner's own previews of the slate, in its workspace: in the column, and in an answer in the chat. */
+export function PartPreviewsFrame() {
+  return (
+    <Routes>
+      <Route path={APP_ROUTES.workspace} element={
+        <SlateInlineContext.Provider value={{ rpc: previewRpc }}>
+          <div className="grid h-dvh grid-cols-2 gap-4 p-bg p-4 p-text">
+            <section data-slate-preview-display="pane" className="flex min-h-0 flex-col">
+              <InlineSlate id={SLATE} rpc={previewRpc} display="pane" />
+            </section>
+            <section data-slate-preview-display="inline" className="min-h-0 overflow-y-auto p-row-text">
+              <p>Here is the board.<span className="block my-2"><InlineSlate id={SLATE} rpc={previewRpc} display="inline" /></span></p>
+            </section>
+          </div>
+        </SlateInlineContext.Provider>
+      } />
+    </Routes>
+  );
+}
+
+export const PART_PREVIEWS_ENTRY = `/workspace/${WORKSPACE}`;
 
 /** One part frame, at its route as the slate's page addresses it. */
 export function PartFrameFrame() {

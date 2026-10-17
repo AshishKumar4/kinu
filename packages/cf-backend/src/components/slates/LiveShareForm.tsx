@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { Button, Loader } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, UserCircleIcon, UsersIcon, WarningIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
+import { editedBy, LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -17,6 +17,8 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 export interface LiveShareFixture {
   graph: SlateReach;
   liveShares: LiveShareRecord[];
+  /** Why the shared slate does not run, as its preview would refuse it. */
+  refused?: string;
 }
 
 /** The ticked members, as the share route takes them. */
@@ -309,7 +311,84 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
 function modeWords(row: LiveShareRecord): ReactNode {
   if (row.mode === "own") return "Their own access";
 
-  return row.stale === true ? <span className="p-warning">Stopped: its code changed since you approved its reach</span> : "Your access";
+  if (row.stale !== true) return "Your access";
+
+  const editor = editedBy(row.grantRevision);
+
+  return <span className="p-warning">Stopped: {editor === null ? "its code changed" : <>changed by {editor}</>} since you approved its reach</span>;
+}
+
+/** Each person a share names, and whether they edit it or use it. */
+function SharedPeople({ row }: { row: LiveShareRecord }) {
+  return (
+    <ul className="mt-0.5 space-y-0.5">
+      {row.users.map((email) => {
+        const edits = row.editors.includes(email);
+
+        return (
+          <li key={email} data-live-share-person={email} data-live-share-role={edits ? "edit" : "use"} className="flex items-center gap-2 p-meta">
+            <span className="min-w-0 flex-1 truncate p-text-2">{email}</span>
+            <span className={`shrink-0 ${edits ? "p-accent" : "p-text-3"}`}>{edits ? "Edits" : "Uses"}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/**
+ * The people being added, each to use it or also to edit it: an editor changes the slate from their own workspace's
+ * agent, in the owner's workspace (docs/SLATE-SHARING-NIMBUS.md, editors). Only people added by name can edit.
+ */
+function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
+  people: readonly string[];
+  editors: ReadonlySet<string>;
+  onRole: (email: string, edits: boolean) => void;
+  /** On the owner's access, an editor's change stops the share until its reach is approved again. */
+  ownerAccess: boolean;
+  disabled: boolean;
+}) {
+  if (people.length === 0) return null;
+
+  const anyEditor = people.some((email) => editors.has(email));
+
+  return (
+    <div className="space-y-1.5">
+      <ul className="p-group">
+        {people.map((email) => (
+          <li key={email} data-share-person={email} className="flex items-center gap-3 px-3.5 py-2">
+            <span className="min-w-0 flex-1 truncate p-meta p-text-2">{email}</span>
+            <div role="radiogroup" aria-label={`What ${email} can do`} className="flex shrink-0 rounded-md p-fill p-0.5">
+              {([["use", "Use"], ["edit", "Edit"]] as const).map(([role, label]) => {
+                const on = (role === "edit") === editors.has(email);
+
+                return (
+                  <button key={role} type="button" role="radio" aria-checked={on} data-share-person-role={role} disabled={disabled} onClick={() => onRole(email, role === "edit")}
+                    className={`rounded px-2.5 py-0.5 text-xs ${on ? "p-surface font-medium p-text shadow-sm" : "p-text-3"}`}>{label}</button>
+                );
+              })}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {anyEditor && (
+        <p data-share-editors-note className="p-meta p-text-3">
+          People who edit change it from their own workspace&apos;s agent, here in yours.
+          {ownerAccess && " Each change stops it on your access until you approve its reach again."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Why the shared slate does not run, as its preview refused it: its own files must build alone once it is shared. Nothing
+ * while it is shared with no one, or runs.
+ */
+function NotRunning({ reason, shared }: { reason: string | null; shared: boolean }) {
+  if (reason === null || !shared) return null;
+
+  return <p role="status" data-share-broken className="flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-meta p-text"><WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" /><span>{reason}</span></p>;
 }
 
 function SharedNow({ shares, onStop, onOwnAccess, onReview, onList, disabled }: {
@@ -333,10 +412,11 @@ function SharedNow({ shares, onStop, onOwnAccess, onReview, onList, disabled }: 
               <span className="flex shrink-0 pt-0.5 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate p-meta p-text-2">
-                  {row.visibility === "public" ? "Anyone with the link" : row.users.join(", ") || "People you added"}
+                  {row.visibility === "public" ? "Anyone with the link" : "People you added"}
                   {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
                 </span>
                 <span data-live-share-mode={row.mode} className="block p-meta p-text-3">{modeWords(row)}</span>
+                {row.visibility === "users" && <SharedPeople row={row} />}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-1.5 pl-[26px]">
@@ -357,6 +437,41 @@ function SharedNow({ shares, onStop, onOwnAccess, onReview, onList, disabled }: 
   );
 }
 
+/** The people typed in, and of them those who edit too; only people added by name edit: a link opens it for use alone. */
+function usePeopleRoles(emails: string, visibility: LiveShareVisibility) {
+  const [editing, setEditing] = useState<ReadonlySet<string>>(new Set());
+  const emailList = useMemo(() => emailsOf(emails), [emails]);
+  const editors = visibility === "users" ? emailList.filter((email) => editing.has(email)) : [];
+
+  const setRole = useCallback((email: string, edits: boolean) => setEditing((previous) => {
+    const next = new Set(previous);
+
+    if (edits) next.add(email); else next.delete(email);
+
+    return next;
+  }), []);
+
+  return { emailList, editing, editors, setRole };
+}
+
+/** A shared slate runs only as its own files build: why its preview refuses it, when it does. */
+function useSharedRefusal(rpc: WorkspaceRpc, slate: string, fixture: LiveShareFixture | undefined): string | null {
+  const [refused, setRefused] = useState<string | null>(fixture?.refused ?? null);
+
+  useEffect(() => {
+    if (fixture !== undefined) return;
+    let live = true;
+
+    detach(Effect.map(Effect.promise(() => rpc("slate", [{ op: "preview", id: slate }])), (shown) => {
+      if (live && !shown.ok && shown.reason === "bad_input") setRefused(shown.error);
+    }));
+
+    return () => { live = false; };
+  }, [fixture, rpc, slate]);
+
+  return refused;
+}
+
 export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending, fixture }: {
   workspace: string;
   slate: string;
@@ -375,6 +490,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   // A stopped owner share whose new reach the form shows, for the owner to approve instead of making a share.
   const [reviewing, setReviewing] = useState<string | null>(null);
   const [emails, setEmails] = useState("");
+  const refused = useSharedRefusal(rpc, slate, fixture);
   const [approved, setApproved] = useState<ReadonlySet<string>>(new Set());
   const [fork, setFork] = useState(true);
   const [busy, setBusyState] = useState(false);
@@ -394,6 +510,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
       setShares(answered(rows, v.array(LiveShareRecordSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
     }), showing((chain) => { if (live) setErr(chain); })));
 
+
     return () => { live = false; };
   }, [fixture, rpc, slate]);
 
@@ -408,7 +525,8 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     });
   }, []);
 
-  const emailList = useMemo(() => emailsOf(emails), [emails]);
+  const { emailList, editing, editors, setRole } = usePeopleRoles(emails, visibility);
+
   // The owner's access is approved at a revision of the slate: none before it has been opened once.
   const revision = graph?.revision ?? null;
   const canShare = graph !== null && !busy && (visibility === "public" || emailList.length > 0) && (mode === "own" || revision !== null);
@@ -421,7 +539,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       // Their own access acts with nothing of the owner's: no change is allowed, whatever was ticked before switching.
       const result = yield* Effect.promise(async () => shareLive({
-        workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, fork, start,
+        workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, editors, fork, start,
         ...(mode === "owner" && revision !== null ? { mode, revision, approved: approvalsOf(approved) } : { mode: "own", approved: [] }),
       }));
 
@@ -432,7 +550,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     }), showing(setErr)), Effect.sync(() => {
       setBusy(false);
     }));
-  })), [canShare, approved, workspace, slate, visibility, emailList, mode, revision, fork, start, setBusy, onListingPending]);
+  })), [canShare, approved, workspace, slate, visibility, emailList, editors, mode, revision, fork, start, setBusy, onListingPending]);
 
   // Lists a share in the Gallery, or takes it off.
   const list = useCallback((shareId: string, listing: Parameters<ListShare>[0]) => detach(Effect.catchCause(Effect.gen(function* () {
@@ -510,7 +628,13 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     <>
       <div className="space-y-4">
         <Lead>People open your slate and use it, in your workspace.</Lead>
-        {visibility === "users" && <EmailsField value={emails} onChange={setEmails} disabled={busy} placeholder="Add people by email" />}
+        <NotRunning reason={refused} shared={shares.length > 0} />
+        {visibility === "users" && (
+          <>
+            <EmailsField value={emails} onChange={setEmails} disabled={busy} placeholder="Add people by email" />
+            <PeopleRoles people={emailList} editors={editing} onRole={setRole} ownerAccess={mode === "owner"} disabled={busy} />
+          </>
+        )}
         <AccessPicker options={ACCESS} value={visibility} onChange={setVisibility} disabled={busy} />
         <label className="flex items-start gap-3">
           <span className="flex w-7 shrink-0 justify-center pt-1">
