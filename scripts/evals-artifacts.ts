@@ -14,8 +14,9 @@ export type TrialItem = v.InferOutput<typeof TrialItemSchema>;
 export const EvalRunSchema = v.object({
   definitions: v.string(), candidateBuild: v.string(), baselineBuild: v.string(),
   taskFiles: v.array(v.string()), models: v.array(v.string()), arms: v.array(v.string()), trials: v.number(),
-  startedAt: v.number(), jobs: v.array(v.string()), pool: v.number(),
-  queues: v.array(v.object({ calls: v.number(), pool: v.number(), job: v.string(), tasks: v.array(v.string()) })),
+  startedAt: v.number(), jobs: v.array(v.string()),
+  /** The calls its trials make at once, at most: armada's budget, each trial's cost its task's peak. */
+  budget: v.number(),
   wallSeconds: v.optional(v.number()), pass: v.boolean(),
 });
 

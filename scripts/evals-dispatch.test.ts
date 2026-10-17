@@ -3,11 +3,11 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
-import { EVAL_TASK_TIMEOUT_SECONDS, MUSE_CALLS_AT_ONCE, evalMatrix } from '../evals/src/config';
+import { MUSE_CALLS_AT_ONCE, evalMatrix } from '../evals/src/config';
 import { collectEvalTasks } from '../evals/src/eval';
 import { parseResults, trials } from '../evals/src/results';
 import { whyIncomplete } from '../evals/src/comparison';
-import { evalItems, evalMapArgv, evalTaskFiles, evalWidthQueues } from './evals-map';
+import { evalItems, evalMapArgv, evalQueue, evalTaskFiles } from './evals-map';
 import { joinTrialReports, selectTrialReport, type TrialItem } from './evals-artifacts';
 import { ciVerdictRow } from './ci-verdicts';
 
@@ -54,39 +54,39 @@ describe('parallel armada evaluations', () => {
     }
   });
 
-  test('the full matrix reserves each task peak across both legs, twelve trials within one twenty-call budget', async () => {
+  test('the full matrix is one queue: each trial spends its task\'s recorded peak, a cell\'s legs side by side and alike', async () => {
     const tasks = await collectEvalTasks();
     const full = evalMatrix({ KINU_EVAL_TRIALS: '5' }, ['product']);
     const files = tasks.map((task) => `evals/tasks/${task.id}.eval.ts`);
     const items = evalItems(files, full, ORIGINS, false);
-    const queues = evalWidthQueues(items, tasks);
+    const queue = evalQueue(items, tasks);
+    const peak = (task: string) => tasks.find((each) => each.id === task)?.modelCallPeak?.calls;
 
-    expect(items).toHaveLength(80);
-    expect(queues.map(({ calls, pool }) => ({ calls, pool }))).toEqual([
-      { calls: 1, pool: 9 }, { calls: 2, pool: 1 }, { calls: 3, pool: 1 }, { calls: 6, pool: 1 },
-    ]);
-    expect(queues.reduce((sum, queue) => sum + queue.pool, 0)).toBe(12);
-    expect(queues.reduce((sum, queue) => sum + queue.pool * queue.calls, 0)).toBeLessThanOrEqual(MUSE_CALLS_AT_ONCE);
-    expect(queues.flatMap(({ cells }) => cells.map(({ index }) => index)).sort((a, b) => a - b))
-      .toEqual(Array.from({ length: 80 }, (_, index) => index));
+    expect(queue.map(({ cost, weight }) => [cost, weight]).every(([cost, weight], index) => cost === peak(items[index]?.task ?? '') && weight === cost))
+      .toBe(true);
+    expect(queue.every((trial) => trial.cost >= 1 && trial.cost <= MUSE_CALLS_AT_ONCE)).toBe(true);
 
-    for (const queue of queues) {
-      expect(new Set(queue.cells.map(({ item }) => item.leg))).toEqual(new Set(['candidate', 'baseline']));
-      expect(queue.cells.every(({ item }) => tasks.find((task) => task.id === item.task)?.modelCallPeak?.calls === queue.calls)).toBe(true);
+    // Candidate then baseline of each cell, next to each other and weighing alike, so they start together.
+    for (let index = 0; index < queue.length; index += 2) {
+      const [candidate, baseline] = [queue[index], queue[index + 1]];
+
+      expect([candidate?.leg, baseline?.leg, candidate?.task === baseline?.task, candidate?.trial === baseline?.trial, candidate?.weight === baseline?.weight])
+        .toEqual(['candidate', 'baseline', true, true, true]);
     }
 
-    expect(() => evalWidthQueues(items, tasks.map((task) => ({ ...task, modelCallPeak: undefined })))).toThrow('measured model-call peak');
-    expect(EVAL_TASK_TIMEOUT_SECONDS).toBe(6 * 60 * 60);
+    expect(() => evalQueue(items, tasks.map((task) => ({ ...task, modelCallPeak: undefined })))).toThrow('measured model-call peak');
+    expect(() => evalQueue(items, tasks.map((task) => ({ ...task, modelCallPeak: { calls: MUSE_CALLS_AT_ONCE + 1, source: 'too wide' } })))).toThrow('measured model-call peak');
   });
 
-  test('the supported CLI names Kinu\'s connection and its sole artifact extraction path', () => {
-    const argv = evalMapArgv('abcdef123456', '/tmp/evals', ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_EVAL_WEB_IDENTITY'], { calls: 1, pool: 9 });
+  test('the supported CLI names Kinu\'s connection, one budget and no elapsed limit, and its sole artifact extraction path', () => {
+    const argv = evalMapArgv('abcdef123456', '/tmp/evals', ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_EVAL_WEB_IDENTITY'], 70);
 
     expect(argv[0]).toContain('node_modules/.bin/armada');
     expect(argv[1]).toBe('map');
     expect(argv).toContain('--commit=abcdef123456');
-    expect(argv).toContain('--pool=9');
-    expect(argv).toContain('--timeout=21600');
+    expect(argv).toContain(`--pool=${String(MUSE_CALLS_AT_ONCE)}`);
+    expect(argv).toContain(`--budget=${String(MUSE_CALLS_AT_ONCE)}`);
+    expect([argv.includes('--deadline=none'), argv.includes('--timeout=none')]).toEqual([true, true]);
     expect(argv).toContain('--json');
     expect(argv).toContain('--artifacts=/tmp/evals/trials');
     expect(argv.find((word) => word.startsWith('--connection='))).toMatch(/armada-kinu\.json$/u);
