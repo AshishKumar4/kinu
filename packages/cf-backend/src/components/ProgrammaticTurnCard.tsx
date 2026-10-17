@@ -5,7 +5,7 @@ import {
   type Icon,
 } from "@phosphor-icons/react";
 import {
-  ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, MAIN_AGENT, parseDrainedEvents,
+  ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, keptAdvisorNote, MAIN_AGENT, parseDrainedEvents,
   type AdvisorSeverity, type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
 } from "@kinu.run/core";
 
@@ -38,6 +38,8 @@ interface EventRowProps {
   readonly source?: ReactNode;
   /** The event's words: one line until opened. */
   readonly body: string;
+  /** More words, shown only once opened: what a person wrote that came with it. */
+  readonly detail?: string | undefined;
   readonly state?: CardState;
   /** The same event this many times in a row, drawn once. */
   readonly count?: number;
@@ -51,7 +53,7 @@ interface EventRowProps {
 
 /** One event where it happened: a quiet pill with what happened, from whom, its words on one line, and whether the
  *  agent has seen it. A click opens it in place into a card of the same edge. */
-export function EventRow({ icon: Mark, tone, label, source, body, state, count = 1, badge, open: opened = false, action, hooks }: EventRowProps) {
+export function EventRow({ icon: Mark, tone, label, source, body, detail, state, count = 1, badge, open: opened = false, action, hooks }: EventRowProps) {
   const [open, setOpen] = useState(opened);
 
   const tail = (
@@ -81,10 +83,11 @@ export function EventRow({ icon: Mark, tone, label, source, body, state, count =
             </button>
           </div>
           <p data-event-brief className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-2">{body}</p>
+          {detail !== undefined && <p className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-3">{detail}</p>}
           {action !== undefined && <div className="mt-2 ml-6">{action}</div>}
         </div>
       ) : (
-        <span className="flex min-w-0 max-w-full items-center gap-1">
+        <span className="p-pill-line">
           <button type="button" className="p-pill" data-history aria-expanded={false} onClick={() => setOpen(true)}>
             <span className="p-pill-mark"><Mark size={14} weight="fill" className={tone} aria-hidden /></span>
             <span className="p-pill-body">
@@ -130,9 +133,9 @@ const drainedKey = (event: DrainedEvent): string => JSON.stringify([event.varian
 function DrainedEvents({ text, state, count }: { text: string; state: CardState; count: number }) {
   const events = parseDrainedEvents(text);
 
-  // Format drift: show what the agent was given rather than nothing.
+  // Format drift: what the agent was given is its own to read, so the person is told only that events came.
   if (events.length === 0) {
-    return <EventRow icon={LightningIcon} tone="p-accent" label="System" body={text} state={state} count={count} />;
+    return <EventRow icon={LightningIcon} tone="p-accent" label="Events" body="Events delivered to the agent" state={state} count={count} />;
   }
 
   return foldRepeats(events, drainedKey).map(({ item: event, count: repeats }, index) => (
@@ -176,7 +179,10 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
   if (turn.kind === "background_job") {
     const meta = backgroundEventMeta(turn.status);
 
-    return <EventRow icon={meta.icon} tone={meta.tone} label="Background job" body={`${turn.jobKind} task ${meta.verb}`} state={state} count={count} />;
+    // A job of no named kind is classified as kind `task`: said once, not "task task".
+    const what = turn.jobKind === "task" ? "The task" : `The ${turn.jobKind} task`;
+
+    return <EventRow icon={meta.icon} tone={meta.tone} label="Background job" body={`${what} ${meta.verb}`} state={state} count={count} />;
   }
 
   if (turn.kind === "deferred_approval") {
@@ -208,7 +214,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
         tone={tone.icon}
         label="Advisor"
         badge={<span className={`shrink-0 px-1.5 p-meta ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
-        body={text}
+        body={turn.note ?? keptAdvisorNote(text, turn.severity) ?? "A second model reviewed the turn"}
         state={state}
         count={count}
         open={turn.severity !== "nit"}
@@ -217,22 +223,34 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
     );
   }
 
-  if (turn.kind === "system_event" || turn.kind === "delegated_task") {
-    const task = turn.kind === "delegated_task";
-    const event = task ? `from ${turn.from === MAIN_AGENT ? "Main" : turn.from}` : turn.event;
+  // A hirer's task is its message, written for the agent to do: the person reads it as sent.
+  if (turn.kind === "delegated_task") {
+    const from = `from ${turn.from === MAIN_AGENT ? "Main" : turn.from}`;
+
+    return <EventRow icon={GearSixIcon} tone="p-accent" label="Task" source={from} body={text} state={state} count={count} hooks={{ "data-system-event": from }} />;
+  }
+
+  if (turn.kind === "system_event") {
+    const { label, about, line, detail } = turn.summary;
 
     return (
       <EventRow
         icon={GearSixIcon}
         tone="p-accent"
-        label={task ? "Task" : "System"}
-        source={event.replace(/_/g, " ")}
-        body={text}
+        label={label}
+        source={about}
+        body={line}
+        detail={detail}
         state={state}
         count={count}
-        hooks={{ "data-system-event": event }}
+        hooks={{ "data-system-event": turn.event }}
       />
     );
+  }
+
+  // The owner's answers in a line written for the transcript (`answeredSummary`), which the model never reads.
+  if (turn.kind === "owner_answer") {
+    return <EventRow icon={CheckCircleIcon} tone="p-success" label="You answered" body={text} state={state} count={count} />;
   }
 
   return <DrainedEvents text={text} state={state} count={count} />;

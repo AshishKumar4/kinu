@@ -1603,6 +1603,8 @@ export {
   taskReminderIdempotencyKey,
 } from './tasks/reminder';
 
+export { cardWords, TASK_REMINDER_OPEN_KEY } from './read-models/event-summary';
+
 export {
   TurnAccumulator,
   type StepLike, type TurnSinks,
@@ -2047,7 +2049,9 @@ export {
   AdvisorRowDataSchema,
   ADVISOR_SEVERITY_LABEL,
   ADVISOR_SEVERITY_METADATA_KEY,
+  ADVISOR_NOTE_METADATA_KEY,
   ADVISOR_SIGNAL_KIND,
+  keptAdvisorNote,
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
@@ -2224,7 +2228,7 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, slatesToPreview, applySignalCard,
+  classifyProgrammaticTurn, systemEventTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, slatesToPreview, applySignalCard,
   splicesSeenOn, SIGNALS_SEEN_METADATA_KEY, type SeenSplice,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,

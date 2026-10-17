@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { executorLabel, FILES_PAGE_ENTRIES, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
+import { ADVISOR_HEADER, executorLabel, FILES_PAGE_ENTRIES, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_TEXT, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { evidenceDir, present } from '@kinu.run/test-utils';
 
 
@@ -71,9 +71,10 @@ interface ChatRow {
   readonly userBubbles: number;
   /** The generic harness-event card's event name, or null when there is none. */
   readonly systemEvent: string | null;
-  /** The card body clipped to one line — "collapsed by default", measured as
-   *  content that does not fit rather than as a class name. */
-  readonly folded: boolean;
+  /** All the card says, its words and its controls'. */
+  readonly said: string;
+  /** Opened by the person: its control says so. */
+  readonly open: boolean;
 }
 
 /** One Exploration run-node row, as the browser drew it. */
@@ -167,16 +168,16 @@ const ABORTED_NODE = 'lv005';
 async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
   return page.$$eval('[data-chat-row]', (rows) => {
     const measured: Record<string, {
-      userBubbles: number; systemEvent: string | null; folded: boolean;
+      userBubbles: number; systemEvent: string | null; said: string; open: boolean;
     }> = {};
 
     for (const row of rows) {
       const card = row.querySelector('[data-system-event]');
-      const body = card?.querySelector('.truncate, .whitespace-pre-wrap') ?? null;
       measured[row.getAttribute('data-chat-row') ?? ''] = {
         userBubbles: row.querySelectorAll('.p-user-bubble').length,
         systemEvent: card?.getAttribute('data-system-event') ?? null,
-        folded: body === null ? false : body.scrollWidth > body.clientWidth,
+        said: card?.textContent ?? '',
+        open: (card?.querySelector('[aria-expanded="true"]') ?? null) !== null,
       };
     }
 
@@ -862,12 +863,14 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     expect(gate.systemEvent).toBe('completion_gate');
   });
 
-  test('the harness\'s words are folded away, and open when asked', () => {
-    // Collapsed by default is a measurement here, not a class name: the body
-    // holds more than it shows. Clicking it makes the row taller and stops it
-    // overflowing, which is the difference between folded and truncated.
-    expect(observed.chat[UNSTAMPED_FORK_ROW].folded).toBe(true);
-    expect(observed.forkInterruptedAfterClick.folded).toBe(false);
+  test('the harness\'s words never show, folded or opened: the card says what happened', () => {
+    // What the agent was handed is written for the model, in its terms; the
+    // person reads what happened, from the event's fields, whether the card is
+    // folded or opened.
+    const handed = 'still marked running from an activation that has ended';
+    expect(observed.chat[UNSTAMPED_FORK_ROW].said).not.toContain(handed);
+    expect(observed.forkInterruptedAfterClick.open).toBe(true);
+    expect(observed.forkInterruptedAfterClick.said).not.toContain(handed);
   });
 
   test('an event kind that HAS a card keeps it — the fallback did not swallow them', () => {
@@ -1310,6 +1313,31 @@ function readProvenance(page: Page) {
   }])));
 }
 
+/** Each provenance row said by its summary (gallery.tsx SYSTEM_EVENT_ROWS), by words only the text it handed the agent has. */
+const HANDED = new Map([
+  ['event-task-reminder', 'system-reminder'],
+  ['event-task-reminder-kept', 'system-reminder'],
+  ['event-continuation', OUTPUT_CONTINUATION_TEXT.slice(0, 40)],
+  ['event-overflow', OVERFLOW_RETRY_TEXT.slice(0, 40)],
+  ['event-gate', 'a mechanical gate'],
+  ['event-consent', 'Re-issue the approved commands'],
+  ['event-proposal', 'Your owner approved'],
+  ['event-proposal-declined', 'Your owner declined'],
+  ['event-sandbox', 'Incident id'],
+  ['event-plan-approved', 'approved-plan'],
+  ['event-plan-feedback', 'submit_plan'],
+  ['event-slate', 'streams to slate'],
+  ['event-waits', 'Your owner has handled'],
+  ['event-take', 'parallel branch'],
+  ['event-fork', 'still marked running'],
+  ['event-unknown', 'only the agent should read'],
+  ['invented', 'Something new happened'],
+  ['harness', 'The tree is clean'],
+  ['adv-nit', ADVISOR_HEADER.slice(0, 60)],
+  ['adv-concern', ADVISOR_HEADER.slice(0, 60)],
+  ['adv-blocker', ADVISOR_HEADER.slice(0, 60)],
+]);
+
 /** The loose cards in the workspace's thread, each by its state and the briefs it lists. */
 function threadCards(page: Page): Promise<{ state: string | null; briefs: string[] }[]> {
   return page.$$eval('.p-thread-column [data-signal-card]', (cards) => cards.map((card) => ({
@@ -1535,6 +1563,35 @@ describe('whose words a turn is', () => {
       await page.click('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"]');
       expect(await page.$eval('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"] [data-event-brief]', (brief) => (brief instanceof HTMLElement ? brief.innerText : '')))
         .toContain('Report line one.\nReport line two.');
+      await page.close();
+    });
+  });
+
+  test('an event with no card of its own says what happened, never the words the agent was handed', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 900, height: 2400 });
+      await page.goto(`${origin}/gallery.html?frame=provenance`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-chat-row="event-task-reminder"] [data-system-event]');
+      const folded = await readProvenance(page);
+
+      await page.$$eval('[data-system-event] button[aria-expanded="false"]', (buttons) => {
+        for (const button of buttons) if (button instanceof HTMLElement) button.click();
+      });
+      await page.waitForFunction(() => document.querySelector('[data-system-event] button[aria-expanded="false"]') === null);
+      const opened = await readProvenance(page);
+
+      for (const [id, handed] of HANDED) {
+        for (const rows of [folded, opened]) {
+          const row = present(rows[id], `the ${id} row`);
+          expect([id, row.card, row.text.includes(handed)]).toEqual([id, true, false]);
+        }
+      }
+
+      // The owner's reminder names its open task, from the task's title kept beside the reminder.
+      expect(present(folded['event-task-reminder'], 'the reminder row').text).toContain('Store the full export in account-level memory');
+      // An advisor row written before its note was kept still reads its note.
+      expect(present(opened['adv-blocker'], 'the blocker row').text).toContain('Roll the worker first');
       await page.close();
     });
   });

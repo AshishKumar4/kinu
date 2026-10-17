@@ -210,6 +210,7 @@ export function acceptSandboxLifecycleIncident(
     const metadata: JsonObject = {
       incidentId: incident.incidentId,
       stage: incident.stage,
+      reason: incident.reason,
     };
 
     if (incident.processId !== undefined) metadata.processId = incident.processId;
