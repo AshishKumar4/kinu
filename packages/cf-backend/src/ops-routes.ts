@@ -9,13 +9,12 @@ import { Hono } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
-  err, EVAL_ACCOUNTS, json, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, safeJson, sha256Hex, type OpsCaller, type TablesAnswer,
+  err, EVAL_ACCOUNTS, evalAccountEmail, json, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, safeJson, sha256Hex, type OpsCaller, type TablesAnswer,
 } from '@kinu.run/core';
 import { BUILTIN_ACCOUNTS_OBJECT, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import { attempt, renderThrownChain, settle } from '@kinu.run/core/obs';
 import type { FamilyEnv } from './api/context';
 import { accountIdFor } from './auth/store';
-import { evalAccountEmail } from './auth/session';
 import { CONTROL_PLANE_SINGLETON, controlPlaneStub, hasControlPlane } from './control-plane/stub';
 
 /** The classes the walk reaches. */

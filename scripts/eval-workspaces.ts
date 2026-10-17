@@ -30,18 +30,15 @@
  *
  * It never deletes, for the same reason it never guesses. A workspace holds an
  * agent's whole history, the list above was 82% debris and 18% real work, and no
- * heuristic is worth the 18%. The eval runner's sweep (`evals/src/sweep.ts`) does
- * delete, by rule rather than by guess: an `eval-` workspace on the eval account
- * whose run stopped marking it live, and that `evals/held-workspaces.json` does not
- * hold. A held row here says so, with its reason.
+ * heuristic is worth the 18%. The eval account does delete, by rule rather than
+ * by guess: an `eval-` workspace whose run stopped marking it live (the account's
+ * `EvalLeaseJobs`, and the eval runner's sweep, `evals/src/sweep.ts`).
  */
 import { listCloudAgents, type CloudAgent } from '../packages/cli/src/cloud-api';
-import {
-  EVAL_WORKSPACE_PREFIX, resolveEvalIdentity, type EvalIdentity,
-} from '../packages/test-utils/src/eval-identity';
+import { EVAL_WORKSPACE_PREFIX } from '@kinu.run/core';
+import { resolveEvalIdentity, type EvalIdentity } from '../packages/test-utils/src/eval-identity';
 import { parseArgs } from 'node:util';
 import { resolveCloudSession } from '../packages/cli/src/config';
-import { heldWorkspaces } from '../evals/src/sweep';
 
 interface Options {
   readonly origin: string | null;
@@ -117,12 +114,8 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   lines.push(`${String(evalRows.length)} of ${String(agents.length)} workspace(s) match `
     + `${options.prefixes.map((p) => `\`${p}\``).join(' or ')}:`);
 
-  const held = heldWorkspaces(origin);
-
   for (const agent of [...evalRows].sort((a, b) => a.createdAt - b.createdAt)) {
-    const reason = held.get(agent.name);
-
-    lines.push(`  ${agent.name}  ${when(agent.createdAt)}  ${agent.displayName}${reason === undefined ? '' : `  (held: ${reason})`}`);
+    lines.push(`  ${agent.name}  ${when(agent.createdAt)}  ${agent.displayName}`);
   }
 
   if (evalRows.length === 0) lines.push('  (none)');
@@ -141,9 +134,8 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   }
 
   lines.push('');
-  const removable = evalRows.filter((agent) => !held.has(agent.name));
 
-  if (removable.length === 0) {
+  if (evalRows.length === 0) {
     lines.push('Nothing to clean.');
 
     return lines;
@@ -155,7 +147,7 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   // origin is carried explicitly so the command cannot land on a different
   // account than the list above was read from.
   lines.push('To remove them, run:');
-  lines.push(`  KINU_ORIGIN=${origin} sh -c 'for w in ${removable.map((a) => a.name).join(' ')};`
+  lines.push(`  KINU_ORIGIN=${origin} sh -c 'for w in ${evalRows.map((a) => a.name).join(' ')};`
     + " do kinu workspace delete -y \"$w\"; done'");
 
   return lines;

@@ -31,6 +31,38 @@ export function parseEvalAccount(name: string): EvalAccount | null {
   return slot <= EVAL_TRIAL_ACCOUNTS ? `trial-${slot}` : null;
 }
 
+/** The address eval account `account` is under the deployment's eval identity `devEmail`: plus-addressed. */
+export function evalAccountEmail(devEmail: string, account: EvalAccount): string {
+  const at = devEmail.lastIndexOf('@');
+
+  return `${devEmail.slice(0, at)}+${account}${devEmail.slice(at)}`;
+}
+
+/** Whether `email` is an eval account's under `devEmail`: the identity's own (`eval-service`), or one it names. */
+export function isEvalAccountEmail(devEmail: string, email: string): boolean {
+  if (devEmail === '') return false;
+
+  if (email === devEmail) return true;
+  const at = devEmail.lastIndexOf('@');
+  const named = `${devEmail.slice(0, at)}+`;
+
+  if (!email.startsWith(named) || !email.endsWith(devEmail.slice(at))) return false;
+
+  return parseEvalAccount(email.slice(named.length, email.length - (devEmail.length - at))) !== null;
+}
+
+/** The prefix every eval-made workspace's name carries: its rows are attributable, and its account leases it. */
+export const EVAL_WORKSPACE_PREFIX = 'eval-';
+
+/** How often an eval run marks its workspace live on the deployment (the roster's `last_visited`, `touchWorkspace`). */
+export const EVAL_WORKSPACE_BEAT_MS = 60_000;
+
+/**
+ * Ten missed beats: past any live run's last mark, and any skew between two machines' clocks. An eval account tears down
+ * an `eval-` workspace whose mark is older (the account's `EvalLeaseJobs`), so a run that died leaves nothing running.
+ */
+export const EVAL_WORKSPACE_LEASE_MS = 10 * EVAL_WORKSPACE_BEAT_MS;
+
 /**
  * The tables a trial account may hold rows in when its trial opens: its provider keys and what keeps them (the
  * revision counters), and the account's own bookkeeping (its profile,

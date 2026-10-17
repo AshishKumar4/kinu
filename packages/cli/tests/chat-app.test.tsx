@@ -895,7 +895,12 @@ test('the header shows the size the gate measured the last request at, not the s
   expect(displayedContext(screen.frame())).toEqual({ tokens: 1_500, window: 200_000 });
 });
 
+// The root renders concurrently and yields to the event loop as it goes, so one turn of it does not commit a state
+// change: 2026-10-14 and 10-15, a frame read one setImmediate after the failed fold still showed the spinner, and not
+// the failure, on a loaded runner. The case waits for each state it reads on screen.
 test('/compact shows its progress while the fold runs, and a failed fold says why', async () => {
+  const spinning = (frame: string) => /\p{Script=Braille}/u.test(frame);
+
   for (const ends of ['folded', 'failed'] as const) {
     const fold = Promise.withResolvers<'folded'>();
     const sent: Parameters<AgentClient['send']>[0][] = [];
@@ -921,9 +926,7 @@ test('/compact shows its progress while the fold runs, and a failed fold says wh
     await screen.mockInput.typeText('/compact');
     flushSync(() => screen.mockInput.pressEnter());
     await screen.waitFor('the fold in progress', () => compacting);
-    await new Promise<void>((resolve) => { setImmediate(resolve); });
-    await screen.renderOnce();
-    expect(screen.frame()).toMatch(/\p{Script=Braille}/u);
+    await screen.waitFor('the fold\'s progress on screen', () => spinning(screen.frame()));
     screen.mockInput.pressKey('l', { ctrl: true });
     await new Promise<void>((resolve) => { setImmediate(resolve); });
     await screen.renderOnce();
@@ -934,13 +937,12 @@ test('/compact shows its progress while the fold runs, and a failed fold says wh
     if (ends === 'folded') fold.resolve('folded');
     else fold.reject(new Error('the summarizer is out of credit'));
 
-    if (ends === 'folded') await fold.promise;
-    else await expect(fold.promise).rejects.toThrow();
-    await new Promise<void>((resolve) => { setImmediate(resolve); });
-    await screen.renderOnce();
-    expect(screen.frame()).not.toMatch(/\p{Script=Braille}/u);
+    // The fold's outcome and the spinner's end are one commit: the outcome on screen with the spinner still there is a
+    // spinner the settled command left behind.
+    const outcome = ends === 'folded' ? 'Folded this conversation into a summary' : 'the summarizer is out of credit';
 
-    if (ends === 'failed') expect(screen.frame()).toContain('the summarizer is out of credit');
+    await screen.waitFor('the fold\'s outcome on screen', () => screen.frame().includes(outcome));
+    expect(spinning(screen.frame())).toBe(false);
     await screen.mockInput.typeText('continue after compaction');
     flushSync(() => screen.mockInput.pressEnter());
     await screen.waitFor('the next prompt after compaction', () => sent.length === 1);

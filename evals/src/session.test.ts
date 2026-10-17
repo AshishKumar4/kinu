@@ -30,8 +30,8 @@ import * as v from 'valibot';
 import type { UIMessageChunk } from 'ai';
 
 import {
-  BUILTIN_PROFILE_CATALOG, isAgentRpcMethod, JOB_OUTPUT_EVENT, JsonValueSchema, profileCatalogDigest, READS_CHANGED_EVENT, renderSoulMarkdown,
-  type ProfileCatalog, type RunEvent, type JsonValue,
+  BUILTIN_PROFILE_CATALOG, EVAL_WORKSPACE_LEASE_MS, isAgentRpcMethod, JOB_OUTPUT_EVENT, JsonValueSchema, profileCatalogDigest, READS_CHANGED_EVENT,
+  renderSoulMarkdown, type ProfileCatalog, type RunEvent, type JsonValue,
 } from '../../packages/core/src/index';
 import { DeploymentAnswer, EVAL_WEB_IDENTITY_ENV, INFRA_FAILURE_MARKER, runToExit } from '@kinu.run/test-utils';
 import {
@@ -39,7 +39,7 @@ import {
   recordPublicTurn, HeardStreams, type PublicResponseFrame, type PublicTurnRecorder,
 } from './session-protocol';
 import { resolvePublicSessionPlan, KinuPublicSession, openPublicSession, type InspectionAnswer } from './session';
-import { resolveWebIdentity, WORKSPACE_LEASE_MS } from './workspace-roster';
+import { resolveWebIdentity } from './workspace-roster';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { SubordinateInspectionRequestSchema } from '../../packages/core/src/subordinates/inspection';
 import { measurePromptUsage } from './results';
@@ -1252,7 +1252,7 @@ test('the workspace answering 404 once its own mark is a lease old is a sweep\'s
 
   try {
     await expect(session.readFile('notes.txt')).rejects.toBeInstanceOf(DeploymentAnswer);
-    session.lastMarked = Date.now() - WORKSPACE_LEASE_MS;
+    session.lastMarked = Date.now() - EVAL_WORKSPACE_LEASE_MS;
     await expect(session.readFile('notes.txt')).rejects.toThrow(`${INFRA_FAILURE_MARKER} — GET files notes.txt: the workspace was swept`);
     status = 500;
     await expect(session.readFile('notes.txt')).rejects.toBeInstanceOf(DeploymentAnswer);
@@ -1272,7 +1272,7 @@ test('a beat on a workspace a sweep took marks nothing, so the next 404 is still
   }, 'probe');
 
   try {
-    const asleepSince = Date.now() - WORKSPACE_LEASE_MS;
+    const asleepSince = Date.now() - EVAL_WORKSPACE_LEASE_MS;
     session.lastMarked = asleepSince;
 
     expect(await session.markLive()).toBe(false);
