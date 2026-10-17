@@ -250,3 +250,11 @@ it('R2-P1 stream snapshot. a resumed run is answered the very reply its viewer\'
   expect(shown(await probe.resumePart('alice', 'streamed', asked.continuation)).html).toContain("alice@probe.test's own model, reply 1 / get done");
   expect((await probe.dispatched()).filter((call) => call.includes(' ai '))).toEqual(['alice@probe.test ai stream']);
 });
+
+it('R2-P1 fenced send. a call whose viewer\'s access ended while it was prepared is never sent to their account', async () => {
+  const { probe } = await started('parts-fenced-send');
+
+  await probe.revokeBeforeNextSend();
+  expect(await probe.runPart('alice', 'mine')).toBeNull();
+  expect((await probe.dispatched()).filter((call) => call.includes('read_issue'))).toEqual([]);
+});

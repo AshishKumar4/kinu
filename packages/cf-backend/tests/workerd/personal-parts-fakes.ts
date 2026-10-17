@@ -31,6 +31,8 @@ export class FakeViewerAccounts implements PartConnections {
   readonly dispatched: string[] = [];
   /** Run once, while the next call is out at its viewer's account: what happens meanwhile (a revoke, say). */
   duringNext: (() => void) | null = null;
+  /** Run once, while the next call is being prepared, before the run's word is read again at the send. */
+  beforeNextSend: (() => void) | null = null;
   private readonly consents = new Map<string, SlateConsent>();
   private readonly approvals = new Map<string, EffectApprovals>();
 
@@ -53,21 +55,27 @@ export class FakeViewerAccounts implements PartConnections {
   /** How many times each viewer's own model was asked: each reply is new text, so a replay shows whether it was asked again. */
   private modelAsked = 0;
 
-  tool(viewer: PartViewer, call: Parameters<PartConnections['tool']>[1], admit: () => void): Promise<PartConnectionAnswer<JsonValue>> {
+  async tool(viewer: PartViewer, call: Parameters<PartConnections['tool']>[1], admit: () => void): Promise<PartConnectionAnswer<JsonValue>> {
+    // Prepared as the orchestrator prepares the viewer's account (its caller awaited), then the send's word.
+    const before = this.beforeNextSend;
+
+    this.beforeNextSend = null;
+    await Promise.resolve();
+    before?.();
     admit();
     const descriptor = TOOLS.get(call.server)?.get(call.tool);
 
-    if (descriptor === undefined) return Promise.resolve({ kind: 'missing', message: `${viewer.email}'s ${call.server} offers no ${call.tool}` });
+    if (descriptor === undefined) return { kind: 'missing', message: `${viewer.email}'s ${call.server} offers no ${call.tool}` };
     const payload: JsonValue = call.args.length === 1 ? call.args[0] ?? null : call.args;
     const root = partCallRoot(call.server, payload);
     const consent = this.consents.get(JSON.stringify([viewer.email, call.workspace, call.slate, call.server, canonicalRoot(root)])) ?? null;
     const verdict = partCallVerdict(consent, { server: call.server, root, tool: call.tool, contained: containedTool(descriptor) }, call.revision, false);
 
-    if (verdict.kind === 'needs-consent') return Promise.resolve(verdict);
+    if (verdict.kind === 'needs-consent') return verdict;
     const effect: EffectCall = { workspace: call.workspace, slate: call.slate, revision: call.revision, server: call.server, tool: call.tool, root, payload };
 
     if (verdict.kind === 'needs-approval' && !this.book(viewer.email).take(effect)) {
-      return Promise.resolve({ kind: 'needs-approval', ask: this.book(viewer.email).ask(effect) });
+      return { kind: 'needs-approval', ask: this.book(viewer.email).ask(effect) };
     }
 
     this.dispatched.push(`${viewer.email} ${call.server}.${call.tool} ${JSON.stringify(payload)}`);
@@ -76,7 +84,7 @@ export class FakeViewerAccounts implements PartConnections {
     this.duringNext = null;
     during?.();
 
-    return Promise.resolve({ kind: 'ran', value: call.tool === 'read_issue' ? { secret: privateIssue(viewer.email) } : `${call.tool} done` });
+    return { kind: 'ran', value: call.tool === 'read_issue' ? { secret: privateIssue(viewer.email) } : `${call.tool} done` };
   }
 
   ai(viewer: PartViewer, call: Parameters<PartConnections['ai']>[1], admit: () => void): Promise<PartAiAnswer> {

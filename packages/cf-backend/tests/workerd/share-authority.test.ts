@@ -62,3 +62,32 @@ it("R-P1 in-flight launch. a launch that chose the owner's network before the sl
   expect(raced.refused).toContain('runs only as its own files build');
   expect(raced.running).toBe(0);
 });
+
+// Re-review of ccbb85a8d (MechanicalToad, 2026-10-17): the shared server is one principal.
+it("R2-P1 one principal. the owner's own call of their shared slate asks them for its effect, and runs once they approve", async () => {
+  const probe = subject('review2-owner-own');
+
+  await probe.start();
+  await probe.share([{ namespace: 'workspace', member: 'writeFile' }]);
+  const seen = await probe.ownersOwnWrite();
+
+  expect(seen.first).toContain('waits for the owner to approve it: writeFile on workspace');
+  expect(seen.asked).toEqual(['the owner:writeFile']);
+  expect(seen.second).not.toContain('waits for the owner');
+  expect(seen.after).toBe(0);
+});
+
+it("R2-P1 hop lineage. a slate the shared one hops to is held to the shared server's bound, for a viewer and the owner alike", async () => {
+  const probe = subject('review2-hop');
+
+  await probe.start();
+  // The hop is in the board's graph, so its share grants it; the digest's write under it the board's share does not.
+  await probe.exerciseHop();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+  const seen = await probe.hopWrites(created.share.handle, CLAIM);
+
+  // The hop runs; its write, a leaf of the digest under the board's request, meets the board's bound and is refused.
+  expect(seen.viewer).toContain('does not reach workspace.writeFile');
+  expect(seen.owner).toContain('does not reach workspace.writeFile');
+  expect(seen.asked).toBe(0);
+});

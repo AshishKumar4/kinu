@@ -198,11 +198,11 @@ describe("a slate's personal parts", () => {
           const pressed = { id: 'deploy', input: 'release-7' };
 
           expect(after.some((each) => each.path.endsWith('/approvals/approval-1') && JSON.parse(each.body ?? '{}').decision === 'approve')).toBe(true);
-          // The press, its resumption once allowed, and once approved.
+          // The press, then its own run resumed once allowed and once approved: the continuation the top was answered.
           expect(after.filter((each) => each.path.endsWith('/parts/deploy/run')).slice(-3).map((each) => JSON.parse(each.body ?? '{}'))).toEqual([
-            { args: [], action: pressed, approval: null },
-            { args: [], action: pressed, approval: null },
-            { args: [], action: pressed, approval: 'approval-1' },
+            { args: [], action: pressed, continuation: null },
+            { args: [], action: pressed, continuation: 'run-deploy' },
+            { args: [], action: pressed, continuation: 'run-deploy' },
           ]);
 
           // Through every state each part showed, its frame held one nested frame, the same one.
