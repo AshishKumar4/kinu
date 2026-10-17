@@ -167,31 +167,31 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   }
 
   /**
-   * "Always for this slate": `entry` stands on every live `owner` share of its slate, beside the others at its revision;
+   * "Always for this slate": `entry` stands on every live `owner` share of `shared`, beside the others at its revision;
    * any at another revision is void, so it goes. The shares it now stands on.
    */
-  preapprove(entry: SharePreapproval): string[] {
-    return this.rewriteGrants(entry.slate, 'owner', (held) => [
+  preapprove(shared: string, entry: SharePreapproval): string[] {
+    return this.rewriteGrants(shared, 'owner', (held) => [
       ...held.filter((each) => each.revision === entry.revision && preapprovalKey(each) !== preapprovalKey(entry)),
       entry,
     ]);
   }
 
-  /** A standing approval taken back from every live share of its slate, at any revision. The shares it was taken from. */
-  withdrawPreapproval(entry: Omit<SharePreapproval, 'revision'>): string[] {
-    return this.rewriteGrants(entry.slate, null, (held) => {
+  /** A standing approval taken back from every live share of `shared`, at any revision. The shares it was taken from. */
+  withdrawPreapproval(shared: string, entry: Omit<SharePreapproval, 'revision'>): string[] {
+    return this.rewriteGrants(shared, null, (held) => {
       const kept = held.filter((each) => preapprovalKey(each) !== preapprovalKey(entry));
 
       return kept.length === held.length ? null : kept;
     });
   }
 
-  /** `slate`'s standing approvals at `revision`, one of each, whichever live `owner` share holds it; none where it has
-   *  no revision. */
-  preapprovalsOf(slate: string, revision: string | null): SharePreapproval[] {
+  /** `shared`'s standing approvals at its `revision`, one of each, whichever live `owner` share holds it; none where it
+   *  has no revision. */
+  preapprovalsOf(shared: string, revision: string | null): SharePreapproval[] {
     const found = new Map<string, SharePreapproval>();
 
-    for (const { mode, grant } of revision === null ? [] : this.authoritiesOf(slate)) {
+    for (const { mode, grant } of revision === null ? [] : this.authoritiesOf(shared)) {
       for (const each of mode === 'owner' ? grant.preapproved ?? [] : []) if (each.revision === revision) found.set(preapprovalKey(each), each);
     }
 

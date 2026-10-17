@@ -889,14 +889,14 @@ test("a slate's standing approvals are its owner's to list and take back, from e
 
   // Another account reaches no slate of this workspace's, to read or to take back.
   expect((await ask(stranger, LIVE_SHARE_PREAPPROVALS_PATH, { slate: 'issues' }))?.status).toBe(404);
-  expect((await ask(stranger, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, create))?.status).toBe(404);
+  expect((await ask(stranger, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, { slate: 'issues', entry: create }))?.status).toBe(404);
   expect(await held()).toEqual([[{ ...create, revision: 'rev-1' }], [{ ...create, revision: 'rev-1' }]]);
 
   // The slate is at no revision here, so none of them stands to list.
   expect(await jsonBody(present(await ask(owner, LIVE_SHARE_PREAPPROVALS_PATH, { slate: 'issues' }), 'the list'), SlatePreapprovalsSchema))
     .toEqual({ slate: 'issues', revision: null, preapproved: [] });
 
-  const withdrawn = present(await ask(owner, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, create), 'the withdrawal');
+  const withdrawn = present(await ask(owner, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, { slate: 'issues', entry: create }), 'the withdrawal');
 
   expect(await jsonBody(withdrawn, SlatePreapprovalsSchema)).toEqual({ slate: 'issues', revision: null, preapproved: [] });
   expect(await held()).toEqual([[], []]);

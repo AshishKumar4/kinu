@@ -678,7 +678,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
   /** Its owner takes one standing approval back, from their share sheet only: from every share of its slate at once. */
   withdrawSlatePreapproval(input: SlatePreapprovalWithdraw): Promise<SlateAnswer<SlatePreapprovals>> {
-    this.live.withdrawPreapproval({ slate: input.slate, namespace: input.namespace, member: input.member, root: input.root });
+    this.live.withdrawPreapproval(input.slate, input.entry);
 
     return this.slatePreapprovals(input.slate);
   }

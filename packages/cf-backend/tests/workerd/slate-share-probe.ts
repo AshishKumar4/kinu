@@ -566,7 +566,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   preapproveWrites(): string[] {
     const revision = slateRevision(this.host.controller.builds, SLATE_ID) ?? '';
 
-    return this.host.controller.live.preapprove({ slate: SLATE_ID, namespace: 'workspace', member: 'writeFile', root: {}, revision });
+    return this.host.controller.live.preapprove(SLATE_ID, { slate: SLATE_ID, namespace: 'workspace', member: 'writeFile', root: {}, revision });
   }
 
   /** The board's standing approvals, as its owner's share sheet lists them. */
