@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { parseSync, type Argument, type ArrayExpressionElement, type CallExpression, type Directive, type Expression, type Statement } from 'oxc-parser';
 import { JsonValueSchema, WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
+import { DESKTOP_MEMBERS } from '../../packages/core/src/execution/desktop';
 import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
 import type { EvalCheck, EvalPart, PrepareCommand } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
@@ -36,9 +37,6 @@ const GAME_KEYS = ['w', 'a', 's', 'd', 'b', 'f', 'r', 'e', '0', '1', '2', '3', '
 
 /** Names a model writes for a game key, as the desktop reads them (`desktopChord`). */
 const KEY_ALIASES = new Map([['esc', 'escape'], ['enter', 'return'], ['shift_l', 'shift'], ['shift_r', 'shift']]);
-
-/** The desktop's own members: looking, the pointer, the keys and the wheel. `type` is one, and is refused here. */
-const DESKTOP_MEMBERS = ['screenshot', 'watch', 'click', 'type', 'key', 'scroll', 'move', 'drag'] as const;
 
 /** The policy the game's browser starts under. */
 const BROWSER_POLICY = {
@@ -513,12 +511,8 @@ function literal(node: Argument | ArrayExpressionElement): JsonValue {
   }));
 }
 
-/** Whether a chord is the game's: shift and the keys it reads, nothing else. */
-function gameChord(keys: JsonValue | undefined): boolean {
-  return typeof keys === 'string' && keys.split('+').every((part) => GAME_KEYS.includes(KEY_ALIASES.get(part.toLowerCase()) ?? part.toLowerCase()));
-}
-
-/** The desktop action one call makes, or what it breaks. An argument that is no literal throws, naming what it is. */
+/** The desktop action one call makes, or what it breaks. An argument that is no literal throws, naming what it is. Which
+ *  keys it presses is the box's to judge (its gate): only the box sees what the product sent, a chord it refuses never. */
 function desktopAction(call: CallExpression): { readonly member: string } | { readonly breach: string } {
   const { callee } = call;
 
@@ -532,13 +526,8 @@ function desktopAction(call: CallExpression): { readonly member: string } | { re
   if (!DESKTOP_MEMBERS.some((desktop) => desktop === member)) return { breach: `computer.${member}, which is not a desktop action` };
 
   if (member === 'type') return { breach: 'computer.type: typing is off' };
-  const args = call.arguments.map(literal);
-  const options = v.safeParse(v.record(v.string(), JsonValueSchema), args.at(-1));
-  const hold: JsonValue | undefined = options.success ? options.output.hold : undefined;
 
-  if (member === 'key' && !gameChord(args[0])) return { breach: `computer.key(${JSON.stringify(args[0])}): not one of the game's keys` };
-
-  if (member === 'click' && hold !== undefined && !gameChord(hold)) return { breach: `computer.click holding ${JSON.stringify(hold)}: not one of the game's keys` };
+  for (const argument of call.arguments) literal(argument);
 
   return { member };
 }
@@ -738,10 +727,15 @@ async function verifyTower(verifier: EvalVerifier): Promise<void> {
   const played = playedByHand(await verifier.turnToolCalls());
   const box = boxReads(verifier);
 
-  await verifier.check('played-by-hand', async () => ({
-    pass: played.breaches.length === 0 && played.programs > 0,
-    evidence: { breaches: played.breaches.slice(0, 20), programs: played.programs, actions: played.actions },
-  }));
+  // By hand twice over: every call a program of desktop actions, and nothing it sent refused at the box.
+  await verifier.check('played-by-hand', async () => {
+    const { refused } = await box.closed();
+
+    return {
+      pass: played.breaches.length === 0 && refused.length === 0 && played.programs > 0,
+      evidence: { breaches: played.breaches.slice(0, 20), refusedAtTheBox: refused.slice(0, 20), programs: played.programs, actions: played.actions },
+    };
+  });
 
   await verifier.record('tower-in-frame', () => judged(verifier, box.frame,
     'This is a screenshot of the game Minecraft Classic. Does it show a single column of at least five blocks stacked '
