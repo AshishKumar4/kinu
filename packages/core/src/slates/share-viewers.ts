@@ -11,11 +11,8 @@ import type { MissionGovernor } from '../mission-budget';
 import type { JsonValue } from '../utils/json';
 import { shareCaller, type SlateCaller } from './caller';
 import type { SlateLiveShareStore } from './live-shares';
-import { partCallRoot } from './share-policy';
-import { sha256Hex } from '../safety/argument-digest';
-import { slateEffectText, type SlateEffect } from '../safety/approval-kind';
-import type { SlateEffectVerdict } from '../safety/deferred-approval';
-import type { ApprovalSpend, ApprovalSpendOutcome } from '../safety/approval-gate';
+import type { ApprovalSpend } from '../safety/approval-gate';
+import type { OwnerEffects, ServerSend } from './shared-server';
 import { slateAddressImpact } from './members';
 import { isJsonAnswer, type SlateCallResult, type SlateSurfaceResult } from './rpc';
 import {
@@ -33,18 +30,8 @@ export interface SlateShareViewersDeps {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerUserId?(): string | null;
-  /** The slate's revision now (share-policy.ts `slateRevision`): what an `owner` share's effect is approved at. */
-  revision(slate: string): string | null;
-  /** The owner's queue of share effects (deferred-approval.ts): absent, an `owner` share's effect is refused. */
-  readonly ownerEffects?: OwnerEffects;
-}
-
-/** Where an `owner` share's effects wait for its owner, how a send takes the approval, and how its run settles it. */
-export interface OwnerEffects {
-  ask(id: string, effect: SlateEffect): SlateEffectVerdict;
-  /** Synchronous: called where the call is sent. */
-  take(id: string): ApprovalSpend | null;
-  settle(spend: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<boolean>;
+  /** Settles a spent approval once its call was handed on (shared-server.ts takes it at the send). */
+  readonly ownerEffects?: Pick<OwnerEffects, 'settle'>;
 }
 
 /** What a request to a share's page is answered, before anything of the owner's runs. */
@@ -59,8 +46,8 @@ export type ViewerAdmission =
 
 /**
  * How a viewer's admitted call runs, as the caller it was admitted as, with what it reaches inside itself held to the
- * grant. `admit` is the share's word on the call read again where it acts: the dispatch calls it synchronously, with
- * nothing awaited between it and the send, and it throws when the share no longer lends the call.
+ * grant. `admit` is the share's and the server's word on the call read again where it acts: the dispatch calls it
+ * synchronously, with nothing awaited between it and the send, and it throws when either no longer lends the call.
  */
 export type ViewerRun = (route: SlateRoute, nested: (namespace: string, member: string) => void, admit: () => void) => Promise<SlateSurfaceResult>;
 
@@ -125,10 +112,12 @@ export class SlateShareViewers {
     readonly issued: SlateInvocation | null;
     readonly run: ViewerRun;
     /**
-     * Why a member is beyond the slate's server-wide bound now (every share of the one server it shares), null when it
-     * is within: met before the share's own grant and before any approval is asked, and audited as refused.
+     * The shared server's word on the routed call (shared-server.ts `SharedServers.gate`): refused where it lends nothing
+     * or does not reach it, or where its owner has not approved the effect; else the send, which weighs it again.
      */
-    readonly bound?: (address: { readonly namespace: string; readonly member: string }) => KinuError | null;
+    readonly gate: (call: { readonly address: { readonly namespace: string; readonly member: string }; readonly effect: boolean }) => Effect.Effect<ServerSend, KinuError>;
+    /** The shared server's bound alone, met first (it asks no one): why it lends nothing or no reach here, or null. */
+    readonly bound: (address: { readonly namespace: string; readonly member: string }) => Effect.Effect<KinuError | null>;
   }): Promise<SlateCallResult> {
     return settle(Effect.gen({ self: this }, function* () {
       const { id, request, chain, issued } = input;
@@ -147,23 +136,22 @@ export class SlateShareViewers {
           return yield* new KinuError('budget', 'This share is paused for today');
         }
 
-        const beyond = input.bound?.(named) ?? null;
+        const beyond = yield* input.bound(named);
 
         if (beyond !== null) return yield* beyond;
         const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
         row = { slate: id, ...call.address, impact: call.impact, ok: false };
-        // A browser member the class runs acts there once the host authorizes it, so that ask is what waits on the owner;
-        // its host member only ever reports the class's refusal (web-operations.ts), which acts on nothing.
+        // A browser member the class runs acts there once the host authorizes it, so that ask is what acts; its host
+        // member only ever reports the class's refusal (web-operations.ts), which acts on nothing.
         const reportOnly = request.authorize !== true && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
-        // Asked now, so a call the owner has not approved is refused before anything is prepared for it; taken at the send.
-        const approval = reportOnly ? null : yield* this.ownerApproval({ share, slate: id, call, args: request.args, viewer: viewer.subject });
-        const lends = share.mode === 'owner' && !this.ownersOwn(viewer.subject);
+        const send = yield* input.gate({ address: call.address, effect: call.impact !== 'observe' && !reportOnly });
         const taken: ApprovalSpend[] = [];
 
-        // The share's word read again where the call acts, the server-wide bound with it: a revoke, a mode change or an
-        // approval taken back while the dispatch prepared stops the call there, and nothing of the owner's is spent.
+        // The share's and the server's word read again where the call acts: a revoke, a mode change or an approval
+        // taken back while the dispatch prepared stops the call there, and nothing of the owner's is spent.
         const admit = (): void => {
-          const spend = this.admitted({ share, lends, approval, beyond: input.bound?.(call.address) ?? null });
+          this.stillLends(share);
+          const spend = send.admit();
 
           if (spend !== null) taken.push(spend);
         };
@@ -189,88 +177,15 @@ export class SlateShareViewers {
     }));
   }
 
-  /**
-   * An `owner` share lends its owner's access only at the revision whose reach they approved, and a call of it that acts
-   * (any member but an observing one) runs only on their approval of this exact call (docs/SLATE-SHARING-NIMBUS.md §2):
-   * the approval's id, taken at the send ({@link admitNow}), or null where it needs none (an `own` share, an observing
-   * call, or the owner's own call, who is the one who approves). Else refused, the ask waiting on the owner's decision stack.
-   */
-  private ownerApproval(input: {
-    readonly share: LiveShareRecord;
-    readonly slate: string;
-    readonly call: { readonly address: { readonly namespace: string; readonly member: string }; readonly impact: string };
-    readonly args: readonly JsonValue[];
-    readonly viewer: string;
-  }): Effect.Effect<string | null, KinuError> {
-    const { share, call } = input;
-
-    if (share.mode !== 'owner' || this.ownersOwn(input.viewer)) return Effect.succeed(null);
-    // The owner approved the shared slate's reach at its revision, whichever slate it hops to makes the call.
-    const revision = this.deps.revision(share.slate);
-
-    if (revision === null || revision !== share.grantRevision) {
-      return Effect.fail(new KinuError('denied', 'This slate changed since its owner approved what it reaches: it acts on their access again once they approve it'));
-    }
-
-    if (call.impact === 'observe') return Effect.succeed(null);
-    const queue = this.deps.ownerEffects;
-
-    if (queue === undefined) return Effect.fail(new KinuError('denied', 'This share cannot ask its owner to approve a call now'));
-    const payload: JsonValue = input.args.length === 1 ? input.args[0] ?? null : [...input.args];
-    const server = call.address.namespace;
-
-    const effect: SlateEffect = {
-      share: share.id, slate: input.slate, revision, server, tool: call.address.member, root: partCallRoot(server, payload), payload, viewer: input.viewer,
-    };
-
-    const id = sha256Hex(slateEffectText(effect), 32);
-    const verdict = queue.ask(id, effect);
-
-    switch (verdict.outcome) {
-      case 'approved': return Effect.succeed(id);
-      case 'denied': return Effect.fail(new KinuError('denied', `The owner declined this call: ${effect.tool} on ${server}`));
-      case 'asked': return Effect.fail(new KinuError('denied', `This call waits for the owner to approve it: ${effect.tool} on ${server}`));
-    }
-  }
-
-  /**
-   * A viewer's call admitted where it acts ({@link admitNow}), or refused by the throw its dispatch stops on: a member
-   * beyond the server-wide bound now, or the share no longer lending it. The approval it took, or null.
-   */
-  admitted(input: { readonly share: LiveShareRecord; readonly lends: boolean; readonly approval: string | null; readonly beyond: KinuError | null }): ApprovalSpend | null {
-    return settleSync(input.beyond === null ? this.admitNow(input) : Effect.fail(input.beyond));
-  }
-
-  /** Whether `viewer` is the share's owner, who approves what their own access does and asks no one. */
-  private ownersOwn(viewer: string): boolean {
-    const owner = this.deps.ownerUserId?.();
-
-    return owner != null && viewer === `user:${owner}`;
-  }
-
-  /**
-   * The share's word on a call, read again where it acts: still live, in the mode it was when the call was admitted,
-   * where it `lends` its owner's access still at the revision they approved, which must still be the slate's, and the
-   * owner's approval of the call, when it needs one, taken now. The spend the call settles, or null where it took none.
-   */
-  private admitNow(input: { readonly share: LiveShareRecord; readonly lends: boolean; readonly approval: string | null }): Effect.Effect<ApprovalSpend | null, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      const lent = input.share;
+  /** The viewer's share still as it lent the call: live, and in the mode it was in. Throws to refuse at the send. */
+  stillLends(lent: LiveShareRecord): void {
+    return settleSync(Effect.suspend(() => {
       const now = this.deps.live.get(lent.id);
 
-      if (now === undefined || now.revokedAt !== null) return yield* new KinuError('denied', 'This slate is no longer shared');
+      if (now === undefined || now.revokedAt !== null) return Effect.fail(new KinuError('denied', 'This slate is no longer shared'));
 
-      if (now.mode !== lent.mode || (input.lends && (now.grantRevision !== lent.grantRevision || this.deps.revision(now.slate) !== now.grantRevision))) {
-        return yield* new KinuError('denied', 'This share stopped lending what it lent this call before the call was made');
-      }
-
-      if (input.approval === null) return null;
-      const spend = this.deps.ownerEffects?.take(input.approval) ?? null;
-
-      if (spend === null) return yield* new KinuError('denied', "The owner's approval of this call was taken back before it was made");
-
-      return spend;
-    });
+      return now.mode === lent.mode ? Effect.void : Effect.fail(new KinuError('denied', 'This share changed how it lends before the call was made'));
+    }));
   }
 
   /** The label carries the UTC day, so the bound renews without a rollover job; unparented so no turn owns it. */

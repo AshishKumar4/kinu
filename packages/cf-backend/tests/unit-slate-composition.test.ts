@@ -20,6 +20,9 @@ import type { SqlDatabase, SqlRow, SqlValue as VendorSqlValue } from '@nimbus-sh
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
+/** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
+const UNSHARED = { incarnation: 'test', generation: 0 };
+
 /** The credential is the child's provisioned identity, looked up (hiring provisioned it), never allocated here. */
 async function childCaller(db: Database, agentName: string, actorName: string): Promise<SlateCaller> {
   // The vendor's `SqlDatabase` vocabulary has no boolean (SQLite has none): parse each binding into its union
@@ -50,7 +53,7 @@ async function childCaller(db: Database, agentName: string, actorName: string): 
 
 /** Calls on slate `id`'s surface, as `caller`. */
 function surface(agent: ReturnType<typeof orchestratorHarness>['agent'], caller: SlateCaller, id: string) {
-  return (path: string[], args: JsonValue[] = []): Promise<SlateSurfaceResult> => agent.slateCallAs(caller, id, 'workspace', { path, args, invocation: null });
+  return (path: string[], args: JsonValue[] = []): Promise<SlateSurfaceResult> => agent.slateCallAs({ caller, id, name: 'workspace', lineage: UNSHARED }, { path, args, invocation: null });
 }
 
 test('an MCP tool called through eval answers its data whole, fails on a protocol failure, and obeys the allowlist', async () => {
@@ -436,7 +439,7 @@ test("a class's browser member is authorized at the host by its caller's role as
   const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'driver');
 
   const authorize = (asCaller: SlateCaller, path: string[]) =>
-    parent.agent.slateCallAs(asCaller, 'driver', 'workspace', { path, args: [], invocation: null, authorize: true });
+    parent.agent.slateCallAs({ caller: asCaller, id: 'driver', name: 'workspace', lineage: UNSHARED }, { path, args: [], invocation: null, authorize: true });
 
   expect(await authorize(caller, ['web', 'connectBrowser'])).toEqual({ ok: true, value: null });
   parent.agent.harnessInstallCatalog({
@@ -713,7 +716,7 @@ test('the reserved __storage channel answers the slate\'s own durable KV, per sl
   await writeText(files, '/slates/peer-store/package.json', JSON.stringify({ main: 'server.ts' }));
 
   const storage = (id: string, member: string, args: JsonValue[] = []) =>
-    actor.agent.slateCallAs(ROOT_SLATE_CALLER, id, '__storage', { path: [member], args, invocation: null });
+    actor.agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: id, name: '__storage', lineage: UNSHARED }, { path: [member], args, invocation: null });
 
   expect(await storage('self-store', 'get', ['k'])).toEqual({ ok: true, value: null });
   expect(await storage('self-store', 'put', ['k', { n: 1 }])).toEqual({ ok: true, value: null });
@@ -729,9 +732,9 @@ test('the reserved __storage channel answers the slate\'s own durable KV, per sl
 
   const planning: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
 
-  expect(await actor.agent.slateCallAs(planning, 'self-store', '__storage', { path: ['get'], args: ['k'], invocation: null }))
+  expect(await actor.agent.slateCallAs({ caller: planning, id: 'self-store', name: '__storage', lineage: UNSHARED }, { path: ['get'], args: ['k'], invocation: null }))
     .toMatchObject({ ok: true });
-  expect(await actor.agent.slateCallAs(planning, 'self-store', '__storage', { path: ['put'], args: ['k', 1], invocation: null }))
+  expect(await actor.agent.slateCallAs({ caller: planning, id: 'self-store', name: '__storage', lineage: UNSHARED }, { path: ['put'], args: ['k', 1], invocation: null }))
     .toMatchObject({ ok: false, reason: 'denied' });
 });
 

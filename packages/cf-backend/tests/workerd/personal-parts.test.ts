@@ -152,14 +152,101 @@ it('R-P1 resumed step. each approval runs its own call once; the run resumed on 
   if (first?.kind !== 'needs-approval') return expect.unreachable(`asked for the first call, not ${JSON.stringify(first)}`);
   expect(first.ask.payload).toEqual({ url: 'https://a.example/' });
   await probe.decide('alice', first.ask.id, true);
-  const second = await probe.runPartApproved('alice', 'two', first.ask.id);
+  const second = await probe.resumePart('alice', 'two', first.continuation);
 
   if (second?.kind !== 'needs-approval') return expect.unreachable(`asked for the second call, not ${JSON.stringify(second)}`);
   expect(second.ask.payload).toEqual({ url: 'https://b.example/' });
   await probe.decide('alice', second.ask.id, true);
-  expect(shown(await probe.runPartApproved('alice', 'two', second.ask.id)).html).toContain('get done then get done');
+  expect(shown(await probe.resumePart('alice', 'two', second.continuation)).html).toContain('get done then get done');
   expect((await probe.dispatched()).filter((call) => call.includes('mcp.Fetch'))).toEqual([
     `alice@probe.test mcp.Fetch.get ${JSON.stringify({ url: 'https://a.example/' })}`,
     `alice@probe.test mcp.Fetch.get ${JSON.stringify({ url: 'https://b.example/' })}`,
   ]);
+});
+
+// Re-review of ccbb85a8d (MechanicalToad, 2026-10-17): one run-scoped continuation, bound to its revision and its
+// viewer's consent, whose journal survives both kinds of decision and keeps streams as their bytes.
+const FETCH = { server: 'mcp.Fetch', root: {}, tools: ['get'], effects: true };
+
+it('R2-P1 consent decision. an approved effect runs once across a later consent decision; the read it waited for runs after', async () => {
+  const { probe, revision } = await started('parts-mixed', []);
+
+  await probe.consent('alice', { ...FETCH, revision });
+  const asked = await probe.runPart('alice', 'mixed');
+
+  if (asked?.kind !== 'needs-approval') return expect.unreachable(`asked for the effect, not ${JSON.stringify(asked)}`);
+  await probe.decide('alice', asked.ask.id, true);
+  const consent = await probe.resumePart('alice', 'mixed', asked.continuation);
+
+  if (consent?.kind !== 'needs-consent') return expect.unreachable(`asked for the read, not ${JSON.stringify(consent)}`);
+  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['read_issue'], effects: false, revision });
+  expect(shown(await probe.resumePart('alice', 'mixed', consent.continuation)).html).toContain(`get done then ${ALICES}`);
+  expect((await probe.dispatched()).filter((call) => call.includes('mcp.Fetch'))).toHaveLength(1);
+});
+
+it('R2-P1 bound continuation. a continuation runs at its revision only, while its viewer still consents, and once', async () => {
+  const { probe, revision } = await started('parts-continuation', []);
+
+  await probe.consent('alice', { ...FETCH, revision });
+  // Edited while the viewer decided: the journal is never handed to the new code.
+  const asked = await probe.runPart('alice', 'mixed');
+
+  if (asked?.kind !== 'needs-approval') return expect.unreachable(`asked for the effect, not ${JSON.stringify(asked)}`);
+  await probe.decide('alice', asked.ask.id, true);
+  const consent = await probe.resumePart('alice', 'mixed', asked.continuation);
+
+  if (consent?.kind !== 'needs-consent') return expect.unreachable(`asked for the read, not ${JSON.stringify(consent)}`);
+  // Taken once: resuming the same continuation again is refused.
+  expect(await probe.resumePart('alice', 'mixed', asked.continuation)).toMatchObject({ kind: 'failed', message: expect.stringContaining('run it again') });
+  // Her consent to the effect it already ran, withdrawn meanwhile: the journal is not replayed.
+  await probe.withdrawConsent('alice', 'mcp.Fetch', {});
+  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['read_issue'], effects: false, revision });
+  expect(await probe.resumePart('alice', 'mixed', consent.continuation)).toMatchObject({ kind: 'failed', message: expect.stringContaining('run it again') });
+
+  // And an edit while she decided: refused, never run as the new code; nor can Bob resume her run.
+  await probe.consent('alice', { ...FETCH, revision });
+  const again = await probe.runPart('alice', 'mixed');
+
+  if (again?.kind !== 'needs-approval') return expect.unreachable(`asked for the effect, not ${JSON.stringify(again)}`);
+  expect(await probe.resumePart('bob', 'mixed', again.continuation)).toMatchObject({ kind: 'failed' });
+
+  const third = await probe.runPart('alice', 'mixed');
+
+  if (third?.kind !== 'needs-approval') return expect.unreachable(`asked for the effect, not ${JSON.stringify(third)}`);
+  await probe.decide('alice', third.ask.id, true);
+  await probe.editParts();
+  expect(await probe.resumePart('alice', 'mixed', third.continuation)).toMatchObject({ kind: 'failed', message: expect.stringContaining('run it again') });
+  expect((await probe.dispatched()).filter((call) => call.includes('mcp.Fetch'))).toHaveLength(1);
+});
+
+it("R2-P1 run token. two frames of one part keep their own inputs: approving one frame's effect never runs the other's", async () => {
+  const { probe, revision } = await started('parts-frames', []);
+
+  await probe.consent('alice', { ...FETCH, revision });
+  const one = await probe.runPart('alice', 'fetchArg', ['https://one.example/']);
+  const two = await probe.runPart('alice', 'fetchArg', ['https://two.example/']);
+
+  if (one?.kind !== 'needs-approval' || two?.kind !== 'needs-approval') return expect.unreachable('each frame asks its own effect');
+  expect(one.continuation).not.toBe(two.continuation);
+  await probe.decide('alice', one.ask.id, true);
+  await probe.decide('alice', two.ask.id, true);
+  expect(shown(await probe.resumePart('alice', 'fetchArg', two.continuation)).html).toContain('two.example');
+  expect(shown(await probe.resumePart('alice', 'fetchArg', one.continuation)).html).toContain('one.example');
+  expect((await probe.dispatched()).filter((call) => call.includes('mcp.Fetch'))).toEqual([
+    `alice@probe.test mcp.Fetch.get ${JSON.stringify({ url: 'https://two.example/' })}`,
+    `alice@probe.test mcp.Fetch.get ${JSON.stringify({ url: 'https://one.example/' })}`,
+  ]);
+});
+
+it('R2-P1 stream snapshot. a resumed run is answered the very reply its viewer\'s model streamed, which is asked once', async () => {
+  const { probe, revision } = await started('parts-stream', []);
+
+  await probe.consent('alice', { ...FETCH, revision });
+  await probe.consent('alice', { server: 'ai', root: {}, tools: ['stream'], effects: false, revision });
+  const asked = await probe.runPart('alice', 'streamed');
+
+  if (asked?.kind !== 'needs-approval') return expect.unreachable(`asked for the effect, not ${JSON.stringify(asked)}`);
+  await probe.decide('alice', asked.ask.id, true);
+  expect(shown(await probe.resumePart('alice', 'streamed', asked.continuation)).html).toContain("alice@probe.test's own model, reply 1 / get done");
+  expect((await probe.dispatched()).filter((call) => call.includes(' ai '))).toEqual(['alice@probe.test ai stream']);
 });

@@ -3,14 +3,14 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  codecAdmits, PartOutputSchema, ROOT_SLATE_CALLER, sealedPartDocument, slateAnswer, slateRevision, UNDECLARED,
+  codecAdmits, PartOutputSchema, plainData, ROOT_SLATE_CALLER, sealedPartDocument, slateAnswer, slateRevision, UNDECLARED,
   type PartAiAnswer, type PartConnectionAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateAppCall, type SlateController,
 } from '@kinu.run/core/slates';
 import {
   JsonValueSchema, routeSlateCall, slateAuthority, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateTitle,
-  type JsonValue, type SlateCallResult, type SlateRoute, type SlateSurfaceResult,
+  type JsonValue, type SlateCallResult, type SlateRoute, type SlateSurfaceResult, type SlateSurfaceValue,
 } from '@kinu.run/core';
-import { attempt, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
+import { attempt, KinuError, renderCauseChain, settle, settleSync } from '@kinu.run/core/obs';
 import type { ResidentSlateProcess, ResidentSlateProcesses } from './resident';
 import type { SlateSource } from './sources';
 import { slateBatchStub } from './rpc-transport';
@@ -22,14 +22,28 @@ export interface PartViewer {
   readonly name: string;
 }
 
-/** The viewer's own account, where every call of their part runs: their consents, connections and AI. */
+/** A call of a part's run with its viewer's connection, as their account answers or checks it. */
+export interface PartToolCall {
+  readonly workspace: string;
+  readonly slate: string;
+  readonly revision: string;
+  readonly server: string;
+  readonly tool: string;
+  readonly args: JsonValue[];
+}
+
+/**
+ * The viewer's own account, where every call of their part runs: their consents, connections and AI. `admit` is the
+ * run's word read again where the account is called, with nothing awaited between: it throws when the run, or its
+ * viewer's access, ended meanwhile.
+ */
 export interface PartConnections {
-  tool(viewer: PartViewer, call: {
-    readonly workspace: string; readonly slate: string; readonly revision: string; readonly server: string; readonly tool: string; readonly args: JsonValue[];
-  }): Promise<PartConnectionAnswer<JsonValue>>;
+  tool(viewer: PartViewer, call: PartToolCall, admit: () => void): Promise<PartConnectionAnswer<JsonValue>>;
   ai(viewer: PartViewer, call: {
     readonly workspace: string; readonly slate: string; readonly revision: string; readonly route: Extract<SlateRoute, { kind: 'ai' }>;
-  }): Promise<PartAiAnswer>;
+  }, admit: () => void): Promise<PartAiAnswer>;
+  /** Whether each call is still within its viewer's consent at the revision (none is run): what a resumed run replays. */
+  consented(viewer: PartViewer, calls: readonly PartToolCall[]): Promise<readonly boolean[]>;
 }
 
 export interface PersonalPartsDeps {
@@ -43,10 +57,14 @@ export interface PersonalPartsDeps {
   call(request: SlateAppCall): Promise<SlateCallResult>;
 }
 
-/** One call a part's run made with its viewer's connection, and what it was answered: a step of its journal. */
+/**
+ * One call a part's run made with its viewer's connection, and what it was answered, as data: a stream (their own
+ * model's text) is kept as the bytes it carried, so a resumed run is answered exactly that again, never a new reply.
+ */
 interface PartStep {
-  readonly call: string;
-  readonly value: JsonValue;
+  readonly key: string;
+  readonly call: PartToolCall | null;
+  readonly answer: { readonly kind: 'data'; readonly value: JsonValue } | { readonly kind: 'stream'; readonly bytes: ArrayBuffer };
 }
 
 /** A part's run while it runs: whose it is, at which revision, and what it was refused for want of. */
@@ -54,29 +72,41 @@ interface PartRun {
   readonly slate: string;
   readonly viewer: PartViewer;
   readonly revision: string;
-  needed: Extract<PartRunAnswer, { kind: 'needs-consent' | 'needs-approval' }> | null;
+  needed: Exclude<PartConnectionAnswer<JsonValue>, { kind: 'ran' | 'missing' }> | null;
   /** Each call it made and was answered, in order: what a run resumed after an approval is answered from. */
   readonly steps: PartStep[];
   /** What an earlier run of the same call answered, each consumed in order while the run makes the same calls. */
   readonly replay: PartStep[];
 }
 
-/** What a run of a part's function is given: its arguments, and the journal it is answered from first. */
+/** What a run of a part's function is given: its arguments, the journal it is answered from first, and its revision. */
 interface PartInput {
   readonly args: readonly JsonValue[];
   readonly replay: readonly PartStep[];
+  /** A resumed run's: the revision it began at, which it runs at or not at all. */
+  readonly revision: string | null;
 }
 
 /**
- * A run that stopped for its viewer's approval of one call: what it was given and what it was answered so far, so the
- * run resumed on that approval is answered the same up to that call, and runs nothing it already ran.
+ * A run that stopped for its viewer's decision (a consent or an approval): whose, which part, at which revision, what it
+ * was given and what it was answered so far. The run resumed on it (`PartRunRequest.continuation`, taken once) is
+ * answered the same up to where it stopped, at that revision only, while their consent to each call still holds.
  */
-interface PausedRun {
+interface Continuation {
   readonly viewer: string;
   readonly slate: string;
   readonly part: string;
+  readonly revision: string;
   readonly args: readonly JsonValue[];
   readonly steps: readonly PartStep[];
+}
+
+/** A run stopped for its viewer's decision: what it asks, what it was answered so far, and the revision it ran at. */
+interface PausedAnswer {
+  readonly kind: 'paused';
+  readonly needed: Exclude<PartConnectionAnswer<JsonValue>, { kind: 'ran' | 'missing' }>;
+  readonly steps: readonly PartStep[];
+  readonly revision: string;
 }
 
 /** The surface a run's process is given: its `workspace`, and the reserved names its runner reaches. */
@@ -89,8 +119,8 @@ const PART_SURFACES = ['workspace', SLATE_STORAGE_BINDING, SLATE_HOST_BINDING] a
  */
 export class PersonalParts {
   private readonly runs = new Map<string, PartRun>();
-  /** Runs stopped for an approval, by the approval's id; each is resumed once, on that approval (`run`). */
-  private readonly paused = new Map<string, PausedRun>();
+  /** Runs stopped for their viewer's decision, by an unguessable token of their own; each resumed once (`run`). */
+  private readonly continuations = new Map<string, Continuation>();
 
   constructor(private readonly deps: PersonalPartsDeps) {}
 
@@ -120,41 +150,61 @@ export class PersonalParts {
 
       if (declared === undefined) return { kind: 'stub', reason: 'no-part', message: `${title} has no part named ${part}.` } satisfies PartRunAnswer;
 
-      if (!codecAdmits(declared.input ?? UNDECLARED, request.args.length === 1 ? request.args[0] ?? null : request.args)) {
+      // A fresh run's input is held to what the part declares; a resumed run's was, when it began.
+      if (request.continuation === null && !codecAdmits(declared.input ?? UNDECLARED, request.args.length === 1 ? request.args[0] ?? null : request.args)) {
         return { kind: 'failed', message: `What the page passed ${title}'s part ${part} is not what it declares it takes` } satisfies PartRunAnswer;
       }
 
-      const { args, replay } = this.resumed(viewer, slate, part, request);
-      const answer = yield* this.runOnce(viewer, slate, { fn: declared.fn, args, replay });
+      const resumed = yield* this.resumed(viewer, { slate, part, title }, request);
 
-      if (answer.kind === 'needs-approval') this.paused.set(answer.ask.id, { viewer: viewer.userId, slate, part, args, steps: answer.steps });
+      if ('kind' in resumed) return resumed;
+      const answer = yield* this.runOnce(viewer, slate, { fn: declared.fn, args: resumed.args, replay: resumed.replay, revision: resumed.revision });
 
       // Delivered only to someone the slate is still shared with: removed meanwhile, they are answered nothing.
       if (!this.admitted(viewer, slate)) return null;
 
-      return answer.kind === 'needs-approval' ? { kind: answer.kind, ask: answer.ask } : answer;
+      if (answer.kind !== 'paused') return answer;
+      const continuation = crypto.randomUUID();
+
+      this.continuations.set(continuation, { viewer: viewer.userId, slate, part, revision: answer.revision, args: resumed.args, steps: answer.steps });
+
+      return answer.needed.kind === 'needs-consent'
+        ? { kind: 'needs-consent', ask: answer.needed.ask, continuation } satisfies PartRunAnswer
+        : { kind: 'needs-approval', ask: answer.needed.ask, continuation } satisfies PartRunAnswer;
     }));
   }
 
   /**
-   * What a run is given: resumed on the approval it stopped for, the same input, answered the same up to that call (the
-   * pause is taken once); else the request's own input, answered afresh.
+   * What a run is given. Resumed (`request.continuation`, taken once): the run it continues, answered the same up to
+   * where it stopped, if the slate is still at that revision and its viewer's consent still holds for each call it
+   * replays; else answered so, to run afresh.
    */
-  private resumed(viewer: PartViewer, slate: string, part: string, request: PartRunRequest): PartInput {
-    const paused = request.approval === null ? undefined : this.paused.get(request.approval);
+  private resumed(viewer: PartViewer, { slate, part, title }: { readonly slate: string; readonly part: string; readonly title: string }, request: PartRunRequest)
+    : Effect.Effect<PartInput | Extract<PartRunAnswer, { kind: 'failed' }>, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (request.continuation === null) return { args: request.action === null ? request.args : [...request.args, request.action], replay: [], revision: null };
 
-    if (request.approval !== null && paused?.viewer === viewer.userId && paused.slate === slate && paused.part === part) {
-      this.paused.delete(request.approval);
+      const held = this.continuations.get(request.continuation);
 
-      return { args: paused.args, replay: paused.steps };
-    }
+      this.continuations.delete(request.continuation);
+      const stale = { kind: 'failed', message: `${title} changed, or what you let it use did, since this ran: run it again` } as const;
 
-    return { args: request.action === null ? request.args : [...request.args, request.action], replay: [] };
+      if (held?.viewer !== viewer.userId || held.slate !== slate || held.part !== part) return stale;
+
+      if (slateRevision(this.deps.controller.builds, slate) !== held.revision) return stale;
+
+      const calls = held.steps.flatMap((step) => (step.call === null ? [] : [step.call]));
+
+      const still = calls.length === 0 || this.deps.connections === undefined ? [] : yield* attempt(
+        { doing: `reading ${viewer.email}'s consents`, otherwise: 'unavailable' }, async () => this.deps.connections?.consented(viewer, calls) ?? [],
+      );
+
+      return still.every(Boolean) ? { args: held.args, replay: held.steps, revision: held.revision } : stale;
+    });
   }
 
-  private runOnce(
-    viewer: PartViewer, slate: string, { fn, args, replay }: { readonly fn: string; readonly args: readonly JsonValue[]; readonly replay: readonly PartStep[] },
-  ): Effect.Effect<Exclude<PartRunAnswer, { kind: 'needs-approval' }> | (Extract<PartRunAnswer, { kind: 'needs-approval' }> & { readonly steps: readonly PartStep[] }), KinuError> {
+  private runOnce(viewer: PartViewer, slate: string, { fn, args, replay, revision: pinned }: PartInput & { readonly fn: string })
+    : Effect.Effect<Exclude<PartRunAnswer, { kind: 'needs-approval' | 'needs-consent' }> | PausedAnswer, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const { controller, resident, workspace } = this.deps;
       const running = yield* attempt({ doing: `building slate ${slate}`, otherwise: 'io' }, async () => controller.processes.booted(ROOT_SLATE_CALLER, slate));
@@ -162,6 +212,9 @@ export class PersonalParts {
       const good = controller.builds.good(slate, slateAuthority(ROOT_SLATE_CALLER.cred));
 
       if (revision === null || good === null) return { kind: 'failed', message: `Slate ${slate} has not built yet` } satisfies PartRunAnswer;
+
+      // A resumed run runs at the revision it began at, or not at all: its journal was answered to that code.
+      if (pinned !== null && pinned !== revision) return { kind: 'failed', message: `${slate} changed since this ran: run it again` } satisfies PartRunAnswer;
 
       // A shared slate's parts run only an image built from its own tree, as its server does (`SlateHost.launch`).
       if (controller.live.isShared(slate) && good.image.scope !== 'tree') {
@@ -183,9 +236,7 @@ export class PersonalParts {
         return yield* Effect.ensuring(this.called(process, fn, args), Effect.promise(async () => { await process.stop(); }));
       }), Effect.sync(() => { this.runs.delete(id); }));
 
-      if (run.needed?.kind === 'needs-approval') return { ...run.needed, steps: run.steps };
-
-      if (run.needed !== null) return run.needed;
+      if (run.needed !== null) return { kind: 'paused', needed: run.needed, steps: run.steps, revision };
 
       if (drawn.kind === 'failed') return drawn;
       const output = v.safeParse(PartOutputSchema, drawn.value);
@@ -211,6 +262,29 @@ export class PersonalParts {
     );
   }
 
+  /** The run `runId` still running, for someone still admitted to `slate`: where it is read, it throws to refuse. */
+  stillRunning(runId: string, slate: string): void {
+    const run = this.runs.get(runId);
+
+    return settleSync(run !== undefined && this.admitted(run.viewer, slate)
+      ? Effect.void : Effect.fail(new KinuError('denied', `Slate ${slate}'s part ended before its call was sent`)));
+  }
+
+  /** `viewer` still admitted to `slate`'s personal parts: where it is read, it throws to refuse. */
+  stillAdmitted(viewer: PartViewer, slate: string): void {
+    return settleSync(this.admitted(viewer, slate) ? Effect.void : Effect.fail(new KinuError('missing', `Slate ${slate} is not shared with ${viewer.email}`)));
+  }
+
+  /** A continuation its viewer let go (they declined what it asked): forgotten. Only its own viewer's. */
+  release(viewer: PartViewer, continuation: string): boolean {
+    const held = this.continuations.get(continuation);
+
+    if (held?.viewer !== viewer.userId) return false;
+    this.continuations.delete(continuation);
+
+    return true;
+  }
+
   /**
    * One call of a running part's process (`PartBinding`): its viewer's own connection or AI, while its run lasts and its
    * viewer is still admitted. Nothing else of anyone's: no shared state, no network, no namespace of the owner's.
@@ -226,29 +300,35 @@ export class PersonalParts {
       if (name === SLATE_HOST_BINDING) return null;
 
       if (name !== 'workspace') return yield* new KinuError('denied', 'A personal part keeps nothing and reads no shared state: what it shows goes only to its viewer');
-      const key = JSON.stringify([call.path, call.args]);
+      // Plain data, read once: what is replayed, consented, approved and sent is this one form.
+      const args = v.parse(v.array(JsonValueSchema), plainData([...call.args]));
+      const key = JSON.stringify([call.path, args]);
       const replayed = run.replay[0];
 
       // The same call an earlier run made before it stopped: answered as then, run no second time. A different one ends
       // the replay, and every call from there runs, and asks, afresh.
-      if (replayed?.call === key) {
+      if (replayed?.key === key) {
         run.replay.shift();
         run.steps.push(replayed);
 
-        return replayed.value;
+        return answerOf(replayed);
       }
 
       run.replay.length = 0;
-      const answer = yield* this.connected(run, call);
+      // The run's word read again where the viewer's account is called: ended, or its viewer removed, it sends nothing.
+      const admit = (): void => { this.stillRunning(runId, slate); };
+
+      const answer = yield* this.connected(run, { path: call.path, args }, admit);
 
       // Answered to a run still running for someone still admitted: else the run, or its viewer's access, ended meanwhile.
       if (this.runs.get(runId) !== run || !this.admitted(run.viewer, slate)) return yield* new KinuError('denied', `Slate ${slate}'s part ended for ${run.viewer.email} while it ran`);
 
       if (answer.kind === 'ran') {
-        // A value is journaled to be answered again; a stream (its viewer's own model, which acts on nothing) runs again.
-        if (v.is(JsonValueSchema, answer.value)) run.steps.push({ call: key, value: answer.value });
+        const step = yield* Effect.promise(async () => journaled(key, this.consentFor(run, call.path, args), answer.value));
 
-        return answer.value;
+        run.steps.push(step);
+
+        return answerOf(step);
       }
 
       if (answer.kind === 'missing') return yield* new KinuError('missing', answer.message);
@@ -260,17 +340,36 @@ export class PersonalParts {
     })));
   }
 
-  private connected(run: PartRun, call: { readonly path: readonly string[]; readonly args: readonly JsonValue[] }): Effect.Effect<PartConnectionAnswer, KinuError> {
+  /** A call as the viewer's account names it: an MCP tool's; null for anything else. */
+  private toolCall(run: PartRun, path: readonly string[], args: JsonValue[]): PartToolCall | null {
+    const [namespace, server, tool] = path;
+
+    return namespace === 'mcp' && server !== undefined && tool !== undefined && path.length === 3
+      ? { workspace: this.deps.workspace, slate: run.slate, revision: run.revision, server: `mcp.${server}`, tool, args }
+      : null;
+  }
+
+  /** What the viewer consented to for a call, as their account checks it again on resume: its tool, or their AI's. */
+  private consentFor(run: PartRun, path: readonly string[], args: JsonValue[]): PartToolCall | null {
+    const tool = this.toolCall(run, path, args);
+
+    if (tool !== null) return tool;
+    const routed = routeSlateCall({ id: run.slate, request: { path: [...path], args, invocation: null }, chain: [], hosted: false });
+
+    return routed.route.kind === 'ai'
+      ? { workspace: this.deps.workspace, slate: run.slate, revision: run.revision, server: 'ai', tool: routed.route.stream === true ? 'stream' : 'run', args: [] }
+      : null;
+  }
+
+  private connected(run: PartRun, call: { readonly path: readonly string[]; readonly args: JsonValue[] }, admit: () => void): Effect.Effect<PartConnectionAnswer, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const { connections, workspace } = this.deps;
-      const [namespace, server, tool] = call.path;
+      const tool = this.toolCall(run, call.path, call.args);
 
       if (connections === undefined) return yield* new KinuError('unavailable', 'This deployment runs no personal parts');
 
-      if (namespace === 'mcp' && server !== undefined && tool !== undefined && call.path.length === 3) {
-        return yield* attempt({ doing: `${server}.${tool} for ${run.viewer.email}`, otherwise: 'unavailable' }, async () => connections.tool(run.viewer, {
-          workspace, slate: run.slate, revision: run.revision, server: `mcp.${server}`, tool, args: [...call.args],
-        }));
+      if (tool !== null) {
+        return yield* attempt({ doing: `${tool.server}.${tool.tool} for ${run.viewer.email}`, otherwise: 'unavailable' }, async () => connections.tool(run.viewer, tool, admit));
       }
 
       const routed = routeSlateCall({ id: run.slate, request: { path: [...call.path], args: [...call.args], invocation: null }, chain: [], hosted: false });
@@ -280,7 +379,7 @@ export class PersonalParts {
 
         return yield* attempt({ doing: `${run.viewer.email}'s own AI`, otherwise: 'unavailable' }, async () => connections.ai(run.viewer, {
           workspace, slate: run.slate, revision: run.revision, route,
-        }));
+        }, admit));
       }
 
       return yield* new KinuError('denied', `${call.path.join('.')} is the slate owner's: a personal part reaches only its viewer's own connections`);
@@ -303,14 +402,30 @@ export class PersonalParts {
         return yield* new KinuError('denied', `${slateTitle(project, slate)} changed since this was drawn: draw it again before showing it`);
       }
 
-      // Checked again with nothing awaited between it and the call: removed while the slate was read, it shows nothing.
-      if (!this.admitted(viewer, slate)) return yield* new KinuError('missing', `Slate ${slate} is not shared with ${viewer.email}`);
+      // Read again where the shared method is sent, with nothing awaited between: removed meanwhile, it shows nothing.
+      const admit = (): void => { this.stillAdmitted(viewer, slate); };
 
       const shown = yield* attempt({ doing: `showing ${part} to everyone`, otherwise: 'io' }, async () => this.deps.call({
-        caller: ROOT_SLATE_CALLER, id: slate, method, args: [request.value, { email: viewer.email, name: viewer.name }],
+        caller: ROOT_SLATE_CALLER, id: slate, method, args: [plainData(request.value), { email: viewer.email, name: viewer.name }], admit,
       }));
 
       return shown.ok ? shown.value : yield* new KinuError(shown.reason, shown.error);
     })));
   }
+}
+
+/** A connection's answer as the journal keeps it: data copied, a stream read to its end and kept as its bytes. */
+async function journaled(key: string, call: PartToolCall | null, value: SlateSurfaceValue): Promise<PartStep> {
+  if (value instanceof ReadableStream) return { key, call, answer: { kind: 'stream', bytes: await new Response(value).arrayBuffer() } };
+
+  // An answer holding a stream (an agent's reply) is no part's: a part reaches its viewer's tools and model alone.
+  return { key, call, answer: { kind: 'data', value: plainData(v.parse(JsonValueSchema, value)) } };
+}
+
+/** What a journaled step answers its run: the data, or a fresh stream of the very bytes it carried. */
+function answerOf(step: PartStep): SlateSurfaceValue {
+  if (step.answer.kind === 'data') return step.answer.value;
+
+  // A byte stream of its own (a body's), as one sent across a binding must be.
+  return new Response(step.answer.bytes).body ?? new Response('').body ?? new ReadableStream<Uint8Array>();
 }

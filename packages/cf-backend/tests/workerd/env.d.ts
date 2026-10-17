@@ -400,7 +400,8 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   workspaceHolds(text: string): Promise<string[]>;
   notesOnOwnerAccess(): Promise<void>;
   revokeDuringNextCall(): Promise<void>;
-  runPartApproved(viewer: string, part: string, approval: string): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
+  resumePart(viewer: string, part: string, continuation: string, args?: import('@kinu.run/core').JsonValue[]): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
+  withdrawConsent(viewer: string, server: string, root: Record<string, string>): Promise<void>;
 }
 
 

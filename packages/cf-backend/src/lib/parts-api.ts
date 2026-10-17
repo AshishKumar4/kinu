@@ -5,7 +5,8 @@
  */
 import { Cause, Effect } from "effect";
 import {
-  PartRunAnswerSchema, slateApprovalPath, SlateConsentsAnswerSchema, slateConsentsPath, slatePartRunPath, slatePartShowPath, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateConsent,
+  PartRunAnswerSchema, slateApprovalPath, SlateConsentsAnswerSchema, slateConsentsPath, slatePartReleasePath, slatePartRunPath, slatePartShowPath,
+  type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateConsent,
 } from "@kinu.run/core";
 import * as v from "valibot";
 import { renderThrownChain, settle } from "@kinu.run/core/obs";
@@ -50,6 +51,11 @@ export function readConsents(workspace: string, slate: string): Promise<readonly
 
 export function giveConsent(consent: SlateConsent): Promise<void> {
   return settle(posted(slateConsentsPath(consent.workspace, consent.slate), { ...consent, root: { ...consent.root }, tools: [...consent.tools] }));
+}
+
+/** A paused run its viewer declined to continue, let go on the server. */
+export function releasePart(workspace: string, slate: string, part: string, continuation: string): Promise<void> {
+  return settle(posted(slatePartReleasePath(workspace, slate, part), { continuation }));
 }
 
 export function decideEffect(workspace: string, slate: string, approval: string, decision: "approve" | "decline"): Promise<void> {

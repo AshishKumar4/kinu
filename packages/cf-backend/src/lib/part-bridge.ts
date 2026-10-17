@@ -89,7 +89,9 @@ export function hostPartFrames(host: PartHost): () => void {
   const serve = (port: MessagePort, address: PartAddress, last: LastAnswer, request: Request): Effect.Effect<void> => {
     switch (request.op) {
       case "run": {
-        const asked: PartRunRequest = { args: [...address.args], action: request.action, approval: request.approval };
+        // A rerun after a decision resumes the run that asked it: the top attaches its continuation, never the frame.
+        const paused = last.answer?.kind === "needs-consent" || last.answer?.kind === "needs-approval" ? last.answer.continuation : null;
+        const asked: PartRunRequest = { args: [...address.args], action: request.action, continuation: paused };
 
         return Effect.map(Effect.promise(() => host.run(address, asked)), (answer) => {
           if (typeof answer === "string") return port.postMessage({ id: request.id, refused: answer } satisfies Reply);

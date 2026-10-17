@@ -6,7 +6,7 @@
 import { Hono } from 'hono';
 import { err, ERROR_STATUS, json, safeJson } from '@kinu.run/core';
 import * as v from 'valibot';
-import { PartRunAnswerSchema, PartRunRequestSchema, PartShowRequestSchema } from '@kinu.run/core/slates';
+import { PartReleaseRequestSchema, PartRunAnswerSchema, PartRunRequestSchema, PartShowRequestSchema } from '@kinu.run/core/slates';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { rawParam, type FamilyEnv } from '../api/context';
 import type { AuthIdentity } from '../auth/session';
@@ -40,6 +40,15 @@ partRoutes.post('/api/slates/:workspace/:slate/parts/:part/run', async (c) => {
 
   // Held to the answer's contract as the part frame parses it: a malformed one is the host's fault, never drawn.
   return json({ body: v.parse(PartRunAnswerSchema, answer) }, { headers: NO_STORE });
+});
+
+partRoutes.post('/api/slates/:workspace/:slate/parts/:part/release', async (c) => {
+  const { workspace } = addressOf(c);
+  const body = await safeJson(c.req.raw, PartReleaseRequestSchema);
+
+  if (body === null) return err(400, 'A release is { continuation }');
+
+  return json({ body: { released: await workspaceOwner(c.env, workspace).releaseSlatePart(viewerOf(c.get('identity')), body.continuation) } }, { headers: NO_STORE });
 });
 
 partRoutes.post('/api/slates/:workspace/:slate/parts/:part/show', async (c) => {

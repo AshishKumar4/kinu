@@ -96,11 +96,11 @@ export function installPartsFixture(frame: string): void {
   const approved = new Set<string>();
   const asked: { path: string; body: string | null }[] = [];
 
-  const answerFor = (part: string, { action, approval }: PartRunRequest): PartRunAnswer => {
+  const answerFor = (part: string, { action, continuation }: PartRunRequest): PartRunAnswer => {
     if (part === "standup") {
       return consents.some((given) => given.server === GITHUB.server && given.revision === REVISION)
         ? { kind: "shown", revision: REVISION, html: STANDUP.html, actions: [{ id: "refresh", label: "Refresh" }], show: STANDUP.show }
-        : { kind: "needs-consent", ask: GITHUB };
+        : { kind: "needs-consent", ask: GITHUB, continuation: "run-standup" };
     }
 
     if (part === "deploy") {
@@ -110,11 +110,11 @@ export function installPartsFixture(frame: string): void {
         return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#1f2937">site is on main in production.</p>`, actions: [{ id: "deploy", label: "Deploy", input: { kind: "text", maxLength: 64 } }], show: null };
       }
 
-      if (!consents.some((given) => given.server === VERCEL.server)) return { kind: "needs-consent", ask: VERCEL };
+      if (!consents.some((given) => given.server === VERCEL.server)) return { kind: "needs-consent", ask: VERCEL, continuation: "run-deploy" };
 
-      if (approval !== null && approved.has(approval)) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed ${ref} to production.</p>`, actions: [], show: null };
+      if (continuation !== null && approved.has("approval-1")) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed ${ref} to production.</p>`, actions: [], show: null };
 
-      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref } } };
+      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref } }, continuation: "run-deploy" };
     }
 
     return { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." };
@@ -285,9 +285,9 @@ export function partFrameEntry(search: URLSearchParams): string {
 
 /** Every state a personal part shows its viewer, side by side, as the slate's page frames each (`part-states`). */
 const STATES: readonly { name: string; answer: PartRunAnswer }[] = [
-  { name: "Asks to use a connection", answer: { kind: "needs-consent", ask: GITHUB } },
+  { name: "Asks to use a connection", answer: { kind: "needs-consent", ask: GITHUB, continuation: "run-1" } },
   { name: "Shown, with its own controls", answer: { kind: "shown", revision: REVISION, html: STANDUP.html, actions: [{ id: "refresh", label: "Refresh" }], show: STANDUP.show } },
-  { name: "An effect waits for approval", answer: { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production" } } } },
+  { name: "An effect waits for approval", answer: { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production" } }, continuation: "run-1" } },
   { name: "Signed out", answer: { kind: "stub", reason: "signed-out", message: "Sign in to see your own part of Team board." } },
   { name: "Not shared with this person", answer: { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." } },
   { name: "Its run failed", answer: { kind: "failed", message: "GitHub didn't answer in time. Your token is fine; try again." } },

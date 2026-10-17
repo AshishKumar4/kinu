@@ -2384,7 +2384,7 @@ export abstract class ActorAgent extends Agent<Env> {
       return yield* Effect.promise(async () => this.withHostedActor(this.hostedSlateCaller(name), async (actor) => {
         if (route.kind === 'ai') {
           // A hosted actor runs the model call through its own profile, resolved now.
-          return await this.slateAiRun(route, actor.handle);
+          return await this.slateAiRun(route, actor.handle, context.admit);
         }
 
         if (route.kind === 'agent') {
@@ -2406,6 +2406,9 @@ export abstract class ActorAgent extends Agent<Env> {
         const reach = slateToolReach(authority.reach);
 
         if (route.kind === 'tool') {
+          // The caller's word read again where the tool is sent, as the root's tools are.
+          context.admit?.();
+
           return this.callSlateTool({ rt: actor.runtime, actor: surface.actor, reach, route, mode: authority.mode, context });
         }
 
