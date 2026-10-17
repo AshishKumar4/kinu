@@ -118,6 +118,11 @@ export class SlateShareViewers {
     readonly chain: readonly string[];
     readonly issued: SlateInvocation | null;
     readonly run: ViewerRun;
+    /**
+     * Why a member is beyond the slate's server-wide bound now (every share of the one server it shares), null when it
+     * is within: met before the share's own grant and before any approval is asked, and audited as refused.
+     */
+    readonly bound?: (address: { readonly namespace: string; readonly member: string }) => KinuError | null;
   }): Promise<SlateCallResult> {
     return settle(Effect.gen({ self: this }, function* () {
       const { id, request, chain, issued } = input;
@@ -136,6 +141,9 @@ export class SlateShareViewers {
           return yield* new KinuError('budget', 'This share is paused for today');
         }
 
+        const beyond = input.bound?.(named) ?? null;
+
+        if (beyond !== null) return yield* beyond;
         const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
         row = { slate: id, ...call.address, impact: call.impact, ok: false };
         // A browser member the class runs acts there once the host authorizes it, so that ask is what waits on the owner;

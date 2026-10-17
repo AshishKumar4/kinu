@@ -761,3 +761,35 @@ test("a slate's first share can start empty: a copy made now, code only, named a
   expect(JSON.parse(await readText(files, `/slates/${copy}/package.json`))).toMatchObject({ slate: { title: 'Issue triage (shared copy)' }, description: 'Triage the open issues' });
   expect(await readText(files, `/slates/${copy}/src/server.ts`)).toBe(await readText(files, '/slates/issues/src/server.ts'));
 });
+
+test("a viewer's cookie acts on its share only from the share's own origin: a sibling host's post or socket is refused", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+
+  const created = await sharePublic(world, 'public');
+  const url = present(created.url === null ? null : await world.owner.agent.liveShareUrl(created.share.handle), 'the share host');
+  const minted = await visit(world, url, '203.0.113.4', { path: CONSENT_PATH });
+  const cookie = present(minted?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
+  const own = new URL(url).origin;
+
+  const send = async (init: { cookie?: string; origin?: string; upgrade?: true }) => {
+    const headers = new Headers({ 'cf-connecting-ip': '203.0.113.4', 'content-type': 'application/json' });
+
+    if (init.cookie !== undefined) headers.set('cookie', init.cookie);
+
+    if (init.origin !== undefined) headers.set('origin', init.origin);
+
+    if (init.upgrade) headers.set('upgrade', 'websocket');
+    const request = new Request(`${url}__rpc`, init.upgrade ? { headers } : { method: 'POST', headers, body: '[]' });
+
+    return present(await handleSlateShareHostRequest(request, world.env), 'the share host answer').status;
+  };
+
+  // A hostile sibling preview is same-site, so the victim's cookie rides along; only the share's own origin acts with it.
+  expect(await send({ cookie, origin: 'https://hostile-preview.share.test' })).toBe(403);
+  expect(await send({ cookie, origin: 'https://hostile-preview.share.test', upgrade: true })).toBe(403);
+  expect(await send({ cookie })).toBe(403);
+  expect(await send({ cookie, origin: own })).not.toBe(403);
+  // With no cookie a request acts as no one in particular, from wherever it comes.
+  expect(await send({ origin: 'https://hostile-preview.share.test' })).not.toBe(403);
+});

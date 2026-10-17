@@ -126,3 +126,40 @@ it("what she shows everyone is exactly the value she confirmed, into the slate's
   expect(drawn.revision).toBe(revision);
   expect(await probe.showPart('alice', 'stale', ALICES)).toMatchObject({ ok: false, error: expect.stringContaining('changed since') });
 });
+
+// Review of c4015d141 (MechanicalToad, 2026-10-17).
+it('R-P1 own mode. a share on the owner\'s access runs no one\'s personal part', async () => {
+  const { probe } = await started('parts-owner-mode');
+
+  shown(await probe.runPart('alice', 'mine'));
+  await probe.notesOnOwnerAccess();
+  expect(await probe.runPart('alice', 'mine')).toBeNull();
+});
+
+it('R-P1 fenced delivery. a share revoked while a part\'s call is out delivers nothing of it', async () => {
+  const { probe } = await started('parts-revoke-mid');
+
+  await probe.revokeDuringNextCall();
+  expect(await probe.runPart('alice', 'mine')).toBeNull();
+});
+
+it('R-P1 resumed step. each approval runs its own call once; the run resumed on it never runs an earlier one again', async () => {
+  const { probe, revision } = await started('parts-two-steps');
+
+  await probe.consent('alice', { server: 'mcp.Fetch', root: {}, tools: ['get'], effects: true, revision });
+  const first = await probe.runPart('alice', 'two');
+
+  if (first?.kind !== 'needs-approval') return expect.unreachable(`asked for the first call, not ${JSON.stringify(first)}`);
+  expect(first.ask.payload).toEqual({ url: 'https://a.example/' });
+  await probe.decide('alice', first.ask.id, true);
+  const second = await probe.runPartApproved('alice', 'two', first.ask.id);
+
+  if (second?.kind !== 'needs-approval') return expect.unreachable(`asked for the second call, not ${JSON.stringify(second)}`);
+  expect(second.ask.payload).toEqual({ url: 'https://b.example/' });
+  await probe.decide('alice', second.ask.id, true);
+  expect(shown(await probe.runPartApproved('alice', 'two', second.ask.id)).html).toContain('get done then get done');
+  expect((await probe.dispatched()).filter((call) => call.includes('mcp.Fetch'))).toEqual([
+    `alice@probe.test mcp.Fetch.get ${JSON.stringify({ url: 'https://a.example/' })}`,
+    `alice@probe.test mcp.Fetch.get ${JSON.stringify({ url: 'https://b.example/' })}`,
+  ]);
+});

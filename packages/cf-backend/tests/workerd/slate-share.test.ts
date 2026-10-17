@@ -32,12 +32,13 @@ it('a public share serves the slate, admits the granted member, refuses the rest
   // probe() reads the granted member; mutate() is refused at the grant, before the member runs.
   const batch = await probe.viewerBatch(handle, CLAIM);
   expect(batch.probe).toBe('fixture-bytes');
-  expect(batch.mutateError).toContain('does not grant');
+  // Refused at the slate's server-wide bound, which every share of it meets, before its own share's grant is read.
+  expect(batch.mutateError).toContain('does not reach workspace.writeFile');
 
   // The invocation retires on socket close; a replay refuses 'not running'.
   const socket = await probe.viewerSocket(handle, CLAIM);
   expect(socket.probe).toBe('fixture-bytes');
-  expect(socket.mutateError).toContain('does not grant');
+  expect(socket.mutateError).toContain('does not reach workspace.writeFile');
 
   // A call under a share must name the running invocation it rides.
   expect(await probe.unnamedShareCall(created.share.id)).toMatchObject({ ok: false, reason: 'denied' });
