@@ -13,7 +13,7 @@ import { ARMS, deployedBuild, openWorkspace, type EvalArm } from './target';
 import { type EvalTarget } from './workspace-roster';
 import {
   graded, taskTurns, type EvalCheck, type EvalRunInput, type EvalRunOutput, type EvalTask, type EvalTurn, type EvalTurnOutcome, type EvalTurnResult,
-  type HarnessError, type PrepareCommand, type TurnRun,
+  type HarnessError, type PrepareCommand, type TrialBox, type TurnRun,
 } from './task';
 import { redact } from './redact';
 import { cutButCompleted, measure, toolFailures, toTranscript, type StepMessages } from './transcript';
@@ -143,6 +143,27 @@ function partGate() {
   };
 }
 
+/** A part's closing, run before the trial's evidence is read. */
+type Closing = { readonly part: string; readonly closing: (box: TrialBox) => Promise<void> };
+
+/** Each part's closing in order, whatever the one before it came to; what each that failed said, by part. */
+export async function runClosings(box: TrialBox, closings: readonly Closing[]): Promise<string[]> {
+  const unclosed: string[] = [];
+
+  for (const { part, closing } of closings) {
+    try {
+      await closing(box);
+    } catch (error) {
+      unclosed.push(`closing ${part}: ${renderThrownChain({ cause: error })}`);
+    }
+  }
+
+  return unclosed;
+}
+
+/** What a closing trial does before its teardown: each part's closing, then the evidence reads. */
+type ClosingReads = { readonly evidence: readonly EvidenceReads[]; readonly closings: readonly Closing[] };
+
 /** A turn's executors prepared, each command in order as the Env pane runs one; the first refused or failing ends it. */
 export async function prepareExecutors(session: Pick<KinuPublicSession, 'execute'>, commands: readonly PrepareCommand[]): Promise<void> {
   for (const { executor, command } of commands) {
@@ -239,11 +260,11 @@ export async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeli
 
 /**
  * What a trial's workspace holds at its end, then its deletion: the ledger and spend, the evidence, the
- * teardown. A failure of any is recorded in `errors`, or, for the evidence, said in it, and never
- * thrown over the verdict the trial's checks gave. `evidence` is null for a trial the run's cancel
- * ended: nothing grades it, and the deploy's kill follows its cancel within seconds.
+ * teardown. A failure of any is recorded in `errors`, or, for the evidence and the parts' closings, said in it, and
+ * never thrown over the verdict the trial's checks gave. `reads` is null for a trial the run's cancel ended: nothing
+ * grades it, and the deploy's kill follows its cancel within seconds.
  */
-async function closeWorkspace(session: KinuPublicSession, evidence: readonly EvidenceReads[] | null, errors: HarnessError[], timeline: TrialTimeline): Promise<{
+async function closeWorkspace(session: KinuPublicSession, reads: ClosingReads | null, errors: HarnessError[], timeline: TrialTimeline): Promise<{
   events: RunEvent[]; ledgers: ActorLedger[]; output: StepMessages; costUsd: number | undefined; workspace: WorkspaceEvidence;
 }> {
   let events: RunEvent[] = [];
@@ -260,9 +281,13 @@ async function closeWorkspace(session: KinuPublicSession, evidence: readonly Evi
     errors.push({ name: 'InfraError', message: `the trial's ledger could not be read: ${renderThrownChain({ cause: error })}` });
   }
 
-  const workspace = evidence === null
+  const unclosed = await timeline.span('closing', () => runClosings(session, reads?.closings ?? []));
+
+  const read = reads === null
     ? { files: new Map(), slates: null, data: [], unread: ['the run was cancelled before the workspace was read'] }
-    : await timeline.span('evidence', () => gatherEvidence(session, evidence));
+    : await timeline.span('evidence', () => gatherEvidence(session, reads.evidence));
+
+  const workspace = { ...read, unread: [...unclosed, ...read.unread] };
 
   try {
     await timeline.span('teardown', () => session.teardown());
@@ -393,7 +418,10 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
       const { events, ledgers, output, costUsd, workspace } = session === undefined
         ? { events: [], ledgers: [], output: new Map(), costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
-        : await closeWorkspace(session, stop.aborted ? null : task.parts.flatMap((part) => part.evidence === undefined ? [] : [{ part: part.id, reads: part.evidence }]), errors, timeline);
+        : await closeWorkspace(session, stop.aborted ? null : {
+          evidence: task.parts.flatMap((part) => part.evidence === undefined ? [] : [{ part: part.id, reads: part.evidence }]),
+          closings: task.parts.flatMap((part) => part.closing === undefined ? [] : [{ part: part.id, closing: part.closing }]),
+        }, errors, timeline);
 
       try {
         const after = (await timeline.span('build', () => deployedBuild(target))).sha;

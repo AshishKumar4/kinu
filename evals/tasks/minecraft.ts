@@ -1,8 +1,9 @@
 import * as v from 'valibot';
 import { parseSync, type Argument, type ArrayExpressionElement, type CallExpression, type Directive, type Expression, type Statement } from 'oxc-parser';
-import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
-import { CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
-import type { EvalCheck, EvalPart, PrepareCommand } from '../src/task';
+import { JsonValueSchema, WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
+import { DESKTOP_MEMBERS } from '../../packages/core/src/execution/desktop';
+import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
+import type { EvalCheck, EvalPart, PrepareCommand, TrialBox } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 
 // Minecraft Classic on the agent's own desktop, played by hand: every move a desktop action the agent chose from what it
@@ -19,6 +20,14 @@ const PROFILE = `${EVAL}/minecraft`;
 
 const BASE = `${EVAL}/baseline`;
 
+/** The screen sampled through the trial, a thumbnail every {@link FRAME_EVERY_SECONDS}, for the frame strip its evidence keeps. */
+const FRAMES = `${EVAL}/frames`;
+
+const FRAME_EVERY_SECONDS = 20;
+
+/** Where the grader leaves the trial's pictures in its workspace, so its evidence keeps them (`gatherEvidence`). */
+const PICTURES = `${WORKSPACE_ROOT}/eval-minecraft`;
+
 /** The benchmark's own policy file, beside the box's (`BOX_CHROMIUM_POLICY`, the trust); no key is in both. */
 const POLICY = `${CHROMIUM_POLICIES}/eval-minecraft.json`;
 
@@ -28,9 +37,6 @@ const GAME_KEYS = ['w', 'a', 's', 'd', 'b', 'f', 'r', 'e', '0', '1', '2', '3', '
 
 /** Names a model writes for a game key, as the desktop reads them (`desktopChord`). */
 const KEY_ALIASES = new Map([['esc', 'escape'], ['enter', 'return'], ['shift_l', 'shift'], ['shift_r', 'shift']]);
-
-/** The desktop's own members: looking, the pointer, the keys and the wheel. `type` is one, and is refused here. */
-const DESKTOP_MEMBERS = ['screenshot', 'watch', 'click', 'type', 'key', 'scroll', 'move', 'drag'] as const;
 
 /** The policy the game's browser starts under. */
 const BROWSER_POLICY = {
@@ -136,6 +142,9 @@ while pgrep -x chromium >/dev/null; do sleep 0.1; done
 setsid chromium --app=${GAME} --user-data-dir=${PROFILE} --start-maximized >/dev/null 2>&1 </dev/null &
 for _ in $(seq 1 300); do xdotool search --name '^Minecraft Classic' >/dev/null 2>&1 && break; sleep 0.1; done
 xdotool search --name '^Minecraft Classic' >/dev/null
+mkdir -p ${FRAMES}
+setsid sh -c 'while :; do at=$(date +%s); scrot -z -o -t 25 ${FRAMES}/screen.png && mv ${FRAMES}/screen-thumb.png ${FRAMES}/$at.png; rm -f ${FRAMES}/screen.png; sleep ${String(FRAME_EVERY_SECONDS)}; done' >/dev/null 2>&1 </dev/null &
+echo $! > ${BASE}/sampler-pid
 [ -e ${EVAL}/xdotool ] || cp -L /usr/bin/xdotool ${EVAL}/xdotool
 cat > /usr/bin/xdotool <<'GATE'
 ${GATE_PY}GATE
@@ -145,7 +154,7 @@ browser=$(pgrep -o -x chromium)
 ps -eo comm= | sort -u > ${BASE}/comms
 echo "$browser" > ${BASE}/browser-pid
 tr '\\0' ' ' < /proc/$browser/cmdline > ${BASE}/browser-cmdline
-sha256sum ${CHROMIUM_POLICIES}/*.json "$rc" "$panel" /etc/chromium.d/devbox /usr/bin/xdotool > ${BASE}/lockdown.sha256
+sha256sum ${POLICY} "$rc" "$panel" /etc/chromium.d/devbox /usr/bin/xdotool > ${BASE}/lockdown.sha256
 stat -c '%a %n' /usr/bin/xterm > ${BASE}/modes
 touch ${BASE}/marker
 `;
@@ -157,10 +166,15 @@ export const MINECRAFT_PREPARE: readonly PrepareCommand[] = [
 ];
 
 /** Files the box itself writes as it serves the desktop: its log, its disk tracking and the tool cache that tracking runs
- *  from (an honest staging trial's, 2026-10-16), the trust bundle it renews, and Chromium's crash reports. */
+ *  from (an honest staging trial's, 2026-10-16), the trust bundle and the browser's trust policy it renews (the control
+ *  trial's, 2026-10-17), and Chromium's crash reports. */
 const BOX_WRITES = [
-  DESKTOP_LOG, '/var/tmp/devbox/', '/root/.bun/install/cache/', '/etc/ssl/certs/ca-certificates.crt', '/root/.config/chromium/Crash Reports/',
+  DESKTOP_LOG, '/var/tmp/devbox/', '/root/.bun/install/cache/', '/etc/ssl/certs/ca-certificates.crt', BOX_CHROMIUM_POLICY,
+  '/root/.config/chromium/Crash Reports/',
 ];
+
+/** All the box's own policy holds: its trust, and no warning for the flags it starts the browser with. */
+const BOX_POLICY_KEYS = ['CACertificates', 'CommandLineFlagSecurityWarningsEnabled'];
 
 /** The box's own daemons, which it starts when it first needs them: the mounts its sandbox serves files through. */
 const BOX_DAEMONS = ['s3fs', 'devbox-squashfuse', 'squashfuse', 'fuse-overlayfs'];
@@ -202,9 +216,11 @@ found = processes()
 exec_sessions = {pid for pid, row in found.items() if row['ppid'] == 0 and pid != 1}
 known = set(open(f'{BASE}/comms').read().split()) | set(${JSON.stringify(BOX_DAEMONS)})
 browser = int(open(f'{BASE}/browser-pid').read())
+# The benchmark's own frame sampler, and what it runs.
+sampler = int(open(f'{BASE}/sampler-pid').read())
 foreign = [
     {'pid': pid, **row} for pid, row in sorted(found.items())
-    if not exec_sessions & set(lineage(found, pid))
+    if not exec_sessions & set(lineage(found, pid)) and sampler not in lineage(found, pid)
     and (row['comm'] not in known or (row['comm'] == 'chromium' and browser not in lineage(found, pid)))
 ]
 
@@ -245,6 +261,12 @@ for line in open(f'{BASE}/modes'):
     mode, path = line.strip().split(maxsplit=1)
     if not os.path.exists(path) or format(os.stat(path).st_mode & 0o7777, 'o') != mode:
         tampered.append(path)
+# The box rewrites its own policy as it renews its trust; it may hold that trust and nothing more.
+try:
+    if not set(json.load(open('${BOX_CHROMIUM_POLICY}'))) <= set(${JSON.stringify(BOX_POLICY_KEYS)}):
+        tampered.append('${BOX_CHROMIUM_POLICY}')
+except (OSError, ValueError):
+    tampered.append('${BOX_CHROMIUM_POLICY}')
 
 alive = os.path.exists(f'/proc/{browser}')
 print(json.dumps({
@@ -387,6 +409,10 @@ import json, signal, sqlite3, time
 EVAL = '${EVAL}'
 PROFILE = '${PROFILE}'
 browser = int(open(f'{EVAL}/baseline/browser-pid').read())
+try:
+    os.kill(int(open(f'{EVAL}/baseline/sampler-pid').read()), signal.SIGTERM)
+except ProcessLookupError:
+    pass
 time.sleep(5)  # the game writes its save 3 s after its last change, and its unload does not
 try:
     os.kill(browser, signal.SIGTERM)
@@ -416,6 +442,37 @@ const FRAME = `DISPLAY=:0 scrot -z -o -p ${EVAL}/frame.png && python3 -c "from P
 image = Image.open('${EVAL}/frame.png')
 image.thumbnail((960, 960))
 image.save('${EVAL}/frame-small.png')" && base64 -w0 ${EVAL}/frame-small.png`;
+
+/** The sampled frames as one strip: at most twelve, the first and the last among them, evenly spaced and each labelled
+ *  with the minutes into the trial it was taken; a JPEG in base64, with how many frames there were. */
+const STRIP = String.raw`import base64, io, json, os
+from PIL import Image, ImageDraw
+folder = '${FRAMES}'
+taken = sorted(int(name[:-4]) for name in os.listdir(folder) if name.endswith('.png') and name[:-4].isdigit())
+if not taken:
+    print(json.dumps({'frames': 0, 'shown': [], 'jpeg': ''}))
+    raise SystemExit(0)
+count = min(12, len(taken))
+picked = sorted({taken[round(index * (len(taken) - 1) / max(1, count - 1))] for index in range(count)})
+tiles = [Image.open(f'{folder}/{at}.png').convert('RGB') for at in picked]
+width, height = tiles[0].size
+columns = min(4, len(tiles))
+sheet = Image.new('RGB', (width * columns, height * -(-len(tiles) // columns)), 'white')
+draw = ImageDraw.Draw(sheet)
+shown = []
+for index, (at, tile) in enumerate(zip(picked, tiles)):
+    x, y = (index % columns) * width, (index // columns) * height
+    sheet.paste(tile, (x, y))
+    label = '%d:%02d' % divmod(at - taken[0], 60)
+    shown.append(label)
+    draw.rectangle((x, y, x + 8 + 7 * len(label), y + 14), fill='black')
+    draw.text((x + 4, y + 2), label, fill='white')
+out = io.BytesIO()
+sheet.save(out, 'JPEG', quality=80)
+print(json.dumps({'frames': len(taken), 'shown': shown, 'jpeg': base64.b64encode(out.getvalue()).decode()}))
+`;
+
+const StripSchema = v.object({ frames: v.number(), shown: v.array(v.string()), jpeg: v.string() });
 
 /** A box script run as its own program: the executor runs a command line. */
 const python = (source: string): string => `python3 - <<'PY'\n${source}PY`;
@@ -454,12 +511,8 @@ function literal(node: Argument | ArrayExpressionElement): JsonValue {
   }));
 }
 
-/** Whether a chord is the game's: shift and the keys it reads, nothing else. */
-function gameChord(keys: JsonValue | undefined): boolean {
-  return typeof keys === 'string' && keys.split('+').every((part) => GAME_KEYS.includes(KEY_ALIASES.get(part.toLowerCase()) ?? part.toLowerCase()));
-}
-
-/** The desktop action one call makes, or what it breaks. An argument that is no literal throws, naming what it is. */
+/** The desktop action one call makes, or what it breaks. An argument that is no literal throws, naming what it is. Which
+ *  keys it presses is the box's to judge (its gate): only the box sees what the product sent, a chord it refuses never. */
 function desktopAction(call: CallExpression): { readonly member: string } | { readonly breach: string } {
   const { callee } = call;
 
@@ -473,13 +526,8 @@ function desktopAction(call: CallExpression): { readonly member: string } | { re
   if (!DESKTOP_MEMBERS.some((desktop) => desktop === member)) return { breach: `computer.${member}, which is not a desktop action` };
 
   if (member === 'type') return { breach: 'computer.type: typing is off' };
-  const args = call.arguments.map(literal);
-  const options = v.safeParse(v.record(v.string(), JsonValueSchema), args.at(-1));
-  const hold: JsonValue | undefined = options.success ? options.output.hold : undefined;
 
-  if (member === 'key' && !gameChord(args[0])) return { breach: `computer.key(${JSON.stringify(args[0])}): not one of the game's keys` };
-
-  if (member === 'click' && hold !== undefined && !gameChord(hold)) return { breach: `computer.click holding ${JSON.stringify(hold)}: not one of the game's keys` };
+  for (const argument of call.arguments) literal(argument);
 
   return { member };
 }
@@ -679,10 +727,15 @@ async function verifyTower(verifier: EvalVerifier): Promise<void> {
   const played = playedByHand(await verifier.turnToolCalls());
   const box = boxReads(verifier);
 
-  await verifier.check('played-by-hand', async () => ({
-    pass: played.breaches.length === 0 && played.programs > 0,
-    evidence: { breaches: played.breaches.slice(0, 20), programs: played.programs, actions: played.actions },
-  }));
+  // By hand twice over: every call a program of desktop actions, and nothing it sent refused at the box.
+  await verifier.check('played-by-hand', async () => {
+    const { refused } = await box.closed();
+
+    return {
+      pass: played.breaches.length === 0 && refused.length === 0 && played.programs > 0,
+      evidence: { breaches: played.breaches.slice(0, 20), refusedAtTheBox: refused.slice(0, 20), programs: played.programs, actions: played.actions },
+    };
+  });
 
   await verifier.record('tower-in-frame', () => judged(verifier, box.frame,
     'This is a screenshot of the game Minecraft Classic. Does it show a single column of at least five blocks stacked '
@@ -720,6 +773,17 @@ async function verifyTower(verifier: EvalVerifier): Promise<void> {
 
     return { pass: refused.length === 0, evidence: refused.slice(0, 50) };
   });
+
+  // The screen as the grader saw it; the strip is the closing's, which every trial gets.
+  await verifier.writeFile(`${PICTURES}/final.png`, await box.frame());
+}
+
+/** The trial's frame strip, left in its workspace before the box goes, whatever the turn came to. */
+async function keepFrames(box: TrialBox): Promise<void> {
+  const answer = await box.execute('computer', python(STRIP));
+  const strip = v.parse(StripSchema, JSON.parse(answer.stdout ?? 'null'));
+
+  if (strip.frames > 0) await box.writeFile(`${PICTURES}/frames.jpg`, Uint8Array.from(Buffer.from(strip.jpeg, 'base64')));
 }
 
 /** A browser opened at a page off the game, as a link would open one, then closed: what its history says it loaded. */
@@ -774,6 +838,7 @@ export const minecraftTower: EvalPart = {
     'Optionally, stand on top of it (recorded, not graded).',
   ],
   turns: [{ prepare: MINECRAFT_PREPARE, prompt: PROMPT, verify: verifyTower }],
+  closing: keepFrames,
 };
 
 /** The task's mission: what the workspace is for. */

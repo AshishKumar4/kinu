@@ -11,8 +11,8 @@ import { createCompactionExtension } from '../src/extension';
 import { KEEP_RECENT_IMAGES } from '../src/attachments';
 import { memoryArchive, memoryPorts, screenshot, screenshotSteps, sentScreens, type compactedScreenshots } from './helpers';
 
-/** The compaction extension over `rt`'s files, and its step pass over a turn that made `calls` screenshot calls. */
-function stepsOver(rt: Parameters<typeof compactedScreenshots>[0], calls = 20) {
+/** The compaction extension over `rt`'s files, and its step pass over a turn. */
+function stepsOver(rt: Parameters<typeof compactedScreenshots>[0]) {
   const extension = createCompactionExtension({
     ports: memoryPorts(), archive: memoryArchive(), ephemeral: { dropSuperseded: () => 0 },
     summarize: () => { throw new Error('a step summarizes nothing'); },
@@ -21,8 +21,6 @@ function stepsOver(rt: Parameters<typeof compactedScreenshots>[0], calls = 20) {
 
   const turn = async (): Promise<void> => {
     await extension.onTurnStart?.({ system: 'system prompt', history: [] });
-
-    for (let n = 0; n < calls; n += 1) await extension.onToolCall?.({ toolName: 'browser', toolCallId: `shot_${String(n)}`, args: {} });
   };
 
   const step = async (messages: ModelMessage[]): Promise<ModelMessage[]> => (await extension.prepareStep?.({ stepNumber: 1, messages })) ?? messages;
@@ -66,17 +64,24 @@ test('between batches a step\'s request extends the last: what moved is the same
   expect(JSON.stringify(again.slice(0, first.length))).toBe(JSON.stringify(first));
 });
 
-test('only what this turn\'s calls returned moves: an earlier turn\'s screenshots stay the ladder\'s to move', async () => {
+test('a turn restored after its host was lost keeps the latest few of the screenshots its earlier executions took', async () => {
   const { rt } = createTestRuntime();
-  const earlier = stepsOver(rt, 0);
-  const later = stepsOver(rt, 13);
+  // This execution made no call: all 13 came back with the restored history (a staging trial's carried 65).
+  const restored = stepsOver(rt);
 
-  await earlier.turn();
-  await later.turn();
+  await restored.turn();
+  const inline = (await restored.step(screenshotSteps(13)).then(sentScreens)).filter((entries) => entries.includes('image')).length;
 
-  // The same 13 screenshots: none from this turn's calls, then all of them.
-  const inline = async (steps: typeof earlier): Promise<number> => (await steps.step(screenshotSteps(13)).then(sentScreens)).filter((entries) => entries.includes('image')).length;
+  expect(inline).toBeLessThan(KEEP_RECENT_IMAGES + 4);
+});
 
-  expect(await inline(earlier)).toBe(13);
-  expect(await inline(later)).toBeLessThan(KEEP_RECENT_IMAGES + 4);
+test('an earlier turn\'s screenshots stay the ladder\'s to move: a step moves only the latest turn\'s', async () => {
+  const { rt } = createTestRuntime();
+  const { turn, step } = stepsOver(rt);
+
+  await turn();
+  const earlier = screenshotSteps(13);
+  const sent = await step([...earlier, { role: 'user', content: 'Thanks. Now the last one again.' }, ...screenshotSteps(1).slice(1)]).then(sentScreens);
+
+  expect(sent.filter((entries) => entries.includes('image')).length).toBe(14);
 });

@@ -11,6 +11,7 @@
 import { wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 import type { LanguageModelV4Message, LanguageModelV4ToolResultOutput } from '@ai-sdk/provider';
 import * as v from 'valibot';
+import { TOOL_IMAGES_OPENING } from '../utils/prompt-sections';
 import type { ModelInputModality } from './types';
 
 /** `LanguageModelV4.provider` ends with the wire API: `anthropic.messages`, `openai.responses`, `<name>.chat`. */
@@ -61,7 +62,7 @@ function chatToolResults(prompt: LanguageModelV4Message[], moveImages: boolean):
     out.push({
       role: 'user',
       content: [
-        { type: 'text', text: 'Attached image(s) from tool result:' },
+        { type: 'text', text: TOOL_IMAGES_OPENING },
         ...pending.map((image) => ({ type: 'file' as const, data: image.data, mediaType: image.mediaType })),
       ],
     });
