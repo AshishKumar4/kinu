@@ -17,6 +17,14 @@ import { TurnReasonSchema, type TurnAuthorship, type TurnReason, type WorkMode }
 /** Who wrote a turn's words, stamped at enqueue. Defaults to harness, so a new event kind never renders as the operator's. */
 export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
 
+/** Stamped by a terminal on each turn it opens (`kinuTurn`), whose reader sees `<slate-ui>` pages folded to a line. */
+export const TERMINAL_TURN_KEY = 'terminal';
+
+/** Whether a person reads this turn's answer where its pages are drawn: in the web chat, not a terminal that opened it. */
+export function answerDrawsPages(driving: JsonObject | undefined): boolean {
+  return driving?.[TERMINAL_TURN_KEY] !== true;
+}
+
 type TurnAuthor = 'harness' | 'operator';
 
 /** Where the admitting path stores whom a turn answers: written there by the path, never taken from a caller. */

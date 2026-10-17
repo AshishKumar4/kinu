@@ -1729,7 +1729,7 @@ export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead }
 export type { TurnAuthorship } from './types/turn';
 
 export {
-  turnTags, stampTurnAuthor, authoredTurnMetadata, stampAuthorship, TURN_AUTHOR_METADATA_KEY, MISSION_LABELS_METADATA_KEY,
+  turnTags, stampTurnAuthor, authoredTurnMetadata, stampAuthorship, TURN_AUTHOR_METADATA_KEY, MISSION_LABELS_METADATA_KEY, TERMINAL_TURN_KEY, answerDrawsPages,
   type TurnTags,
 } from './types/turn-metadata';
 
