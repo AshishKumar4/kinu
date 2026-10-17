@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-16",
-  "files": 3358,
-  "functions": 87990,
+  "measuredAt": "2026-10-17",
+  "files": 3366,
+  "functions": 88216,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -11,7 +11,7 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 57
+      "complexity": 53
     },
     {
       "key": "packages/devbox/bench/worker.ts#fetch",

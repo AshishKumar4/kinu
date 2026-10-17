@@ -101,7 +101,7 @@ import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
 import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { formatWorkspaceError, type WorkspaceErrors } from "@kinu.run/core";
-import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
@@ -7445,6 +7445,42 @@ function errorBoundaryFrame(): MountedFrame {
 }
 
 /** Leaves the address bar alone: recovery ends in `location.reload()`, and a rewritten path would get Vite's SPA fallback `index.html`. */
+declare global {
+  interface Window {
+    /** The reloads frame's loads waiting for an answer, oldest first: the test answers them in the order it chooses. */
+    __reloads?: ((count: number) => void)[];
+  }
+}
+
+/**
+ * A read reloaded faster than it answers, as the Work read is while a turn runs: each press asks again, and each load
+ * waits until the test answers it, with the count of tasks the server had when it read.
+ */
+function ReloadsFrame() {
+  const load = useCallback(() => new Promise<number>((answer) => {
+    (window.__reloads ??= []).push(answer);
+  }), []);
+
+  const tasks = useAsyncResource(load);
+
+  return (
+    <div className="p-6 flex items-center gap-3">
+      <button type="button" className="p-row-hover px-2 py-1 rounded border p-border" onClick={tasks.reload}>Reload</button>
+      <span data-reloads-shown>{lastValue(tasks.resource) ?? "none"}</span>
+    </div>
+  );
+}
+
+/** Frames that take no setting from the query: the design system's own, and the hooks' small stages. */
+const DESIGN_FRAMES = new Map([
+  ["reloads", <ReloadsFrame />],
+  ["palette", <Palette />],
+  ["marks", <MarksFrame />],
+  ["tabs", <TabsFrame />],
+  ["markdown", <MarkdownFrame />],
+  ["coderendering", <CodeRenderingFrame />],
+]);
+
 function lazyRouteFrame(): MountedFrame {
   return {
     entries: ["/workspace/checkout-fixes"],
@@ -7757,11 +7793,7 @@ async function mount() {
   else if (frame === "feedbackrouted") ({ node, entries } = feedbackRoutedFrame());
   else if (frame === "errorboundary") ({ node, entries } = errorBoundaryFrame());
   else if (frame === "lazyroute") ({ node, entries } = lazyRouteFrame());
-  else if (frame === "palette") node = <Palette />;
-  else if (frame === "marks") node = <MarksFrame />;
-  else if (frame === "tabs") node = <TabsFrame />;
-  else if (frame === "markdown") node = <MarkdownFrame />;
-  else if (frame === "coderendering") node = <CodeRenderingFrame />;
+  else if (DESIGN_FRAMES.has(frame)) node = DESIGN_FRAMES.get(frame);
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "chatsteer") node = <ChatSteerFrame />;
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
