@@ -22,7 +22,7 @@ import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
-  settleWorkspaceSlates, provisionWorkspaceSoul,
+  settleSharedRoots, provisionWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
 import * as v from 'valibot';
@@ -254,7 +254,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     for (const mounts of mountTables.values()) shellMountPoints.add(mounts);
     settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
     // Trusted host init, once per engine boot: a registration is not stored with the tree.
-    settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
+    settleSharedRoots(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
     provisionWorkspaceSoul(workspace.vfs.as(CRED_KERNEL));
 
     const root = workspace.vfs.as(CRED_KERNEL);

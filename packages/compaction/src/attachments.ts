@@ -45,7 +45,7 @@ export function attachmentStore(deps: AttachmentDeps): AttachmentStore {
 
       if (bytes === null) return null;
       const { storage, planes } = deps.files();
-      const path = await storeAttachment(storage.vfs, `${storage.home}/${SPILL_DIRS.attachments}`, bytes, attachment.mimeType);
+      const path = await storeAttachment(storage.vfs, `${storage.home}/${SPILL_DIRS.offloaded}`, bytes, attachment.mimeType);
 
       return formatPath(path, planes);
     },

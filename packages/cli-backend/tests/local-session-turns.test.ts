@@ -11,7 +11,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, sha256Hex, serializeContentForHeads,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, serializeContentForHeads, resolvePath,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, type CLIRuntime } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
@@ -365,7 +365,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(assistants.map((row) => row.content)).toEqual(['streamed answer']);
   });
 
-  test('attachments reach the model as [file…, text] user content parts', async () => {
+  test('attachments reach the model as [note, file…, text] user content parts, each note naming where its file was saved', async () => {
     let observed: PromptMessage[] = [];
     const { rt, session } = setup('a red square', historyCapturingModel('a red square', (messages) => { observed = messages; }));
 
@@ -385,18 +385,20 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     if (!user || user.role !== 'user') throw new Error('user attachment message was not captured');
     const parts = user.content;
-    expect(parts).toHaveLength(2);
-    expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'image/png', filename: 'square.png' });
-    expect(parts[1]).toMatchObject({ type: 'text', text: 'what is in this image?' });
+    const saved = resolvePath('vfs://uploads/square.png', rt.planes).absolute;
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toMatchObject({ type: 'text', text: `[Attachment square.png (image/png) saved to ${saved}, shown below]` });
+    expect(parts[1]).toMatchObject({ type: 'file', mediaType: 'image/png', filename: 'square.png' });
+    expect(parts[2]).toMatchObject({ type: 'text', text: 'what is in this image?' });
 
     const rows = await transcript(rt);
 
     expect(rows[0]).toMatchObject({ role: 'user', content: 'what is in this image?' });
   });
 
-  test('a PDF the model cannot accept is sanitized to a VFS reference before the model sees it', async () => {
-    // Workers AI's chat schema rejects type:"file" parts. The sanitizer swaps in a content-addressed VFS path and must run
-    // on every turn's assembly to heal already-poisoned history.
+  test('a PDF the model cannot accept is saved under its own name in /uploads, and the model sees that path', async () => {
+    // Workers AI's chat schema rejects type:"file" parts. The upload is saved once as the words are admitted, and the
+    // sanitizer, which runs on every turn's assembly, names where it was saved in place of the part.
     const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 9, 8, 7]);
     const captures: PromptMessage[][] = [];
     const { rt, session } = setup('reading it', historyCapturingModel('reading it', (messages) => { captures.push(messages); }));
@@ -418,7 +420,8 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(fileParts).toHaveLength(0);
 
     // The whole reference, so nothing else in the prompt (a worktree path, an instruction) can stand in for it.
-    const path = `attachments/${sha256Hex(pdfBytes)}.pdf`;
+    // The workspace's /uploads, which a local workspace keeps in its own space.
+    const path = resolvePath('vfs://uploads/resume.pdf', rt.planes).absolute;
     const reference = `[Attachment resume.pdf (application/pdf, ${pdfBytes.length} bytes) saved to ${path} (read it with your file tools)]`;
 
     const carriesReference = (message: PromptMessage): boolean => message.role === 'user'

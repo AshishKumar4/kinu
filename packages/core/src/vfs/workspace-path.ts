@@ -6,6 +6,15 @@ export const WORKSPACE_ROOT = '/home/main';
 /** Every agent's. */
 export const SLATES_ROOT = '/slates';
 
+/** What the owner uploads in a chat, under the names it came with: every agent's. */
+export const UPLOADS_ROOT = '/uploads';
+
+/**
+ * The workspace's shared roots beside the homes, every agent's: the one list a host settles as group-shared, an archive
+ * carries whole, a change-set reviews and a local archive stages.
+ */
+export const SHARED_ROOTS: readonly string[] = [SLATES_ROOT, UPLOADS_ROOT];
+
 /** Platform state, not anyone's work: Nimbus runtimes, bindings and images; Kinu agent state. */
 const SYSTEM_MANAGED_DIRECTORIES: ReadonlySet<string> = new Set(['.nimbus', '.kinu']);
 

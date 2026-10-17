@@ -41,6 +41,7 @@ import type { TemporaryAgentPort } from '../types/subordinates';
 import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
+import { saveUploads } from '../prompting/attachment-sanitizer';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
 import { scaffoldSource } from '../scaffold/versions';
@@ -270,6 +271,11 @@ export class ActorSession {
     });
   }
 
+  /** The owner's words as they are admitted, each file they came with saved under its own name in /uploads, once. */
+  withUploads(message: ModelMessage): Promise<ModelMessage> {
+    return saveUploads(message, { vfs: this.runtime.storage.vfs, planes: this.runtime.planes });
+  }
+
   private async landSteers(steers: readonly UserSteer[], atStep: number, prepareDrain?: (rows: readonly LandedSteerRow[], atStep: number, reference: MessageReference) => Promise<(selection: ContextSelection) => void>): Promise<ModelMessage> {
     const rows = describeLandedSteers(steers, atStep);
     const claim = this.active?.claim;
@@ -281,7 +287,7 @@ export class ActorSession {
     let reference: MessageReference;
 
     if (existing === null) {
-      prepared = await this.canonical.messages.prepare(steerUserMessage(steers), id);
+      prepared = await this.canonical.messages.prepare(await this.withUploads(steerUserMessage(steers)), id);
       reference = { messageId: id };
     } else {
       reference = existing;

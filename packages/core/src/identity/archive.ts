@@ -17,7 +17,7 @@ import { settle } from '../obs/effect';
 import { KinuError } from '../obs/error';
 import { VfsExportPageSchema } from '../vfs/export-page';
 import { isNimbusTable } from '../vfs/nimbus-tables';
-import { isTreeRelativePath, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { isTreeRelativePath, SHARED_ROOTS, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { FOLDER_SUBTREE } from '../vfs/resolve';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
@@ -671,7 +671,7 @@ function carriedRoots(pinned: ArchivePinnedStore): string[] {
   return [
     ...under(WORKSPACE_ROOT, (name) => !Object.hasOwn(MAIN_HOME_NOT_CARRIED, name)),
     ...under('/home', (name) => `/home/${name}` !== WORKSPACE_ROOT),
-    ...under(SLATES_ROOT, () => true),
+    ...SHARED_ROOTS.flatMap((root) => under(root, () => true)),
     // A local workspace's folder, whole, once it holds anything; a cloud workspace has none.
     ...(pinned.readdir(FOLDER_SUBTREE).length > 0 ? [FOLDER_SUBTREE] : []),
   ];
@@ -690,7 +690,7 @@ function isCarriedRoot(stored: string): boolean {
 
   if (parent === WORKSPACE_ROOT) return !Object.hasOwn(MAIN_HOME_NOT_CARRIED, name);
 
-  return parent === SLATES_ROOT || (parent === '/home' && root !== WORKSPACE_ROOT);
+  return SHARED_ROOTS.includes(parent) || (parent === '/home' && root !== WORKSPACE_ROOT);
 }
 
 function storePhase(source: ArchiveStoreSource, { sink, walk }: PageState, page: {

@@ -291,7 +291,7 @@ that stopped the loop. Every other clean end is `completed`.
   85% of the model context window (`COMPACTION_PRESETS.light`), measured against
   provider-reported prompt tokens floored by the history estimate plus the
   system prompt. Rungs run cheapest first: superseded ephemeral context, then
-  older images and files (moved to `<home>/attachments/<sha256>.<ext>`, priced
+  older images and files (moved to `<home>/.offloaded/<sha256>.<ext>`, priced
   for the model serving the request, a fallback once one takes over, the newest
   three images kept, as within a turn; the stub names the file as `vfs://…`, and a `file` read of an
   image shows it again; a plan belongs to the history, not the model it was
