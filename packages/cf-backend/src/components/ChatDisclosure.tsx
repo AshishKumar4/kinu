@@ -5,6 +5,7 @@
  * never does.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { CaretRightIcon } from "@phosphor-icons/react";
 import { toolRunSummary, type RunStep } from "@kinu.run/core";
 
 /** The dot and words a piece of work is headed by: pulsing and shimmering while it runs. */
@@ -79,11 +80,17 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
 
   return (
     <div className="py-0.5 p-row-text p-text-4" {...data}>
+      {/* The whole line is the control, its chevron turning as it opens: a quiet mark, as a tool row's is. */}
       <button type="button" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}
-        className="flex max-w-full items-center gap-2 text-left enabled:cursor-pointer">
-        <span className="min-w-0" {...(live && liveIndicator !== undefined ? { "data-live-indicator": liveIndicator } : {})}><WorkLabel live={live} failed={failed}>{label}</WorkLabel></span>
-        {after}
-        {canOpen && <span className="shrink-0 font-medium p-accent">{open ? "collapse" : "expand"}</span>}
+        className="group/disclosure flex w-full items-center gap-2 text-left enabled:cursor-pointer">
+        <span className="min-w-0" data-disclosure-label {...(live && liveIndicator !== undefined ? { "data-live-indicator": liveIndicator } : {})}>
+          <WorkLabel live={live} failed={failed}>{label}</WorkLabel>
+        </span>
+        {after !== undefined && <span className="flex shrink-0" data-disclosure-after>{after}</span>}
+        {canOpen && (
+          <CaretRightIcon size={11} aria-hidden data-disclosure-turn
+            className={`shrink-0 p-text-4 p-fold-turn group-hover/disclosure:p-text-2 ${open ? "rotate-90" : ""}`} />
+        )}
       </button>
       <div ref={body} className={`mt-1 ml-3.5 ${bodyClass} ${shown}`} data-disclosure-body={bodyState}
         data-folded={!live && !open && folded === "preview" ? "" : undefined} data-overflows={long ? "" : undefined}>

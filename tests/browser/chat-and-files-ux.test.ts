@@ -780,6 +780,49 @@ describe("a turn's runs of tool calls, in the real chat", () => {
     });
   });
 
+  // Main, 2026-10-17: the line reads as the thinking block's does, a quiet chevron that turns, not a word like a link.
+  test("a run's line is one control: no word but what it says, a chevron that turns as it opens, and anywhere on it opens it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      const line = '.p-thread-column [data-tool-run-calls="6"] > button';
+
+      const read = () => page.$eval(line, (button) => ({
+        open: button.getAttribute('aria-expanded'),
+        extra: (button.textContent ?? '').replace(button.querySelector('[data-disclosure-label]')?.textContent ?? '', '')
+          .replace(button.querySelector('[data-disclosure-after]')?.textContent ?? '', '').trim(),
+        turn: (() => {
+          const mark = button.querySelector('[data-disclosure-turn]');
+
+          // A turn is either property's: `rotate` or `transform`.
+          return mark === null ? null : `${getComputedStyle(mark).rotate} ${getComputedStyle(mark).transform}`;
+        })(),
+      }));
+
+      const closed = await read();
+
+      expect([closed.open, closed.extra, closed.turn === null]).toEqual(['false', '', false]);
+
+      // Pressed at its far end, past its words: the line is one control the width of the chat.
+      await page.$eval(line, (button) => { button.scrollIntoView({ block: 'center' }); });
+      const box = await (await page.$(line))?.boundingBox();
+
+      if (box === null || box === undefined) throw new Error('the run line has no box');
+      expect(box.width).toBeGreaterThan(600);
+      await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+      await page.waitForFunction((selector: string) => document.querySelector(selector)?.getAttribute('aria-expanded') === 'true', {}, line);
+      await page.waitForFunction((selector: string, before: string | null) => {
+        const turn = document.querySelector(`${selector} [data-disclosure-turn]`);
+
+        return turn !== null && `${getComputedStyle(turn).rotate} ${getComputedStyle(turn).transform}` !== before;
+      }, {}, line, closed.turn);
+      expect((await read()).extra).toBe('');
+      await page.close();
+    });
+  });
+
   test("a hired agent's chat and a search node's transcript draw their runs the same way", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
