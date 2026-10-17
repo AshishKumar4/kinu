@@ -540,7 +540,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const before = this.#writes;
 
     this.#heldWrite = hold;
-    const batch = this.viewerBatch(handle, claim);
+
+    // The write alone: the share's change stops the slate's process under it, which any other call in flight would meet.
+    const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(
+      { request: (request) => this.host.routeShare(handle, claim, request, '/__rpc') }, 'ignored',
+    );
+
+    const answered = refusedText(stub.mutate());
 
     await hold.reached.promise;
 
@@ -548,7 +554,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     else await this.host.controller.setLiveShareMode({ workspace: this.ctx.id.name ?? this.ctx.id.toString(), share, mode: 'own' });
     this.#heldWrite = null;
     hold.release.resolve();
-    const { mutateError } = await batch;
+    const mutateError = await answered;
+
+    stub[Symbol.dispose]();
 
     return { mutateError, written: this.#writes > before };
   }

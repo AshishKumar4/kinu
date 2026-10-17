@@ -48,8 +48,8 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 
   const ran: string[] = [];
 
-  /** `between`: what changes while the dispatch prepares, before it sends; the dispatch admits the call just before it acts. */
-  const call = (member: string, options: { subject?: string; authorize?: true; slate?: string; args?: JsonValue[]; fails?: true; between?: () => void } = {}) => {
+  /** `meanwhile`: what changes while the dispatch prepares, before it sends; the dispatch admits the call just before it acts. */
+  const call = (member: string, options: { subject?: string; authorize?: true; slate?: string; args?: JsonValue[]; fails?: true; meanwhile?: () => void } = {}) => {
     const subject = options.subject ?? 'user:ana';
 
     return viewers.call({
@@ -57,7 +57,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
       request: { path: member.split('.'), args: options.args ?? [{ path: 'notes.md', text: 'hello' }], invocation: null, ...(options.authorize && { authorize: options.authorize }) },
       issued: { id: 'inv', chain: [], viewer: { share: 's1', subject, request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
       run: async (_route, _nested, admit) => {
-        options.between?.();
+        options.meanwhile?.();
         admit?.();
         ran.push(`${subject}:${member}`);
 
@@ -155,8 +155,8 @@ test('a call whose share stops lending while its dispatch prepares never acts, a
 
   await expect(revoked.call('writeFile')).rejects.toThrow('waits for the owner');
   await revoked.approveAll();
-  await expect(revoked.call('writeFile', { between: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
-  await expect(revoked.call('readFile', { between: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
+  await expect(revoked.call('writeFile', { meanwhile: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
+  await expect(revoked.call('readFile', { meanwhile: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
   expect({ ran: revoked.ran, approved: revoked.queue.list().length }).toEqual({ ran: [], approved: 0 });
 
   // Turned back to each viewer's own access mid-call: what was admitted on the owner's access is not sent on it.
@@ -164,7 +164,7 @@ test('a call whose share stops lending while its dispatch prepares never acts, a
 
   await expect(turned.call('writeFile')).rejects.toThrow('waits for the owner');
   await turned.approveAll();
-  await expect(turned.call('writeFile', { between: () => { turned.live.setAuthority('s1', { mode: 'own', grantRevision: null }, grant); } })).rejects.toThrow('stopped lending');
+  await expect(turned.call('writeFile', { meanwhile: () => { turned.live.setAuthority('s1', { mode: 'own', grantRevision: null }, grant); } })).rejects.toThrow('stopped lending');
   expect(turned.ran).toEqual([]);
 
   // Its approval retired mid-call (the share's revision moved, or its owner took it back).
@@ -172,6 +172,6 @@ test('a call whose share stops lending while its dispatch prepares never acts, a
 
   await expect(retired.call('writeFile')).rejects.toThrow('waits for the owner');
   await retired.approveAll();
-  await expect(retired.call('writeFile', { between: () => { retired.queue.retireSlateEffects('s1'); } })).rejects.toThrow('taken back');
+  await expect(retired.call('writeFile', { meanwhile: () => { retired.queue.retireSlateEffects('s1'); } })).rejects.toThrow('taken back');
   expect(retired.ran).toEqual([]);
 });

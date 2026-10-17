@@ -19,7 +19,7 @@ import {
   APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
-import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH } from '@kinu.run/core';
+import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
 import { crossSiteRejection } from '../src/auth/session';
 import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
@@ -1190,6 +1190,7 @@ const PUBLIC_API = [
   `${DEPLOY_API}/`, // the deploy door's run key
   '/api/health', // the build stamp
   '/api/shared/blueprint/', // a signed blueprint id
+  LIVE_SHARE_OPEN_PATH, // a public share opens signed out; a named one reads its session itself, the cross-site rule with it
   '/api/workspaces/:name/webhook/', // a signed delivery URL
   '/api/gallery', // read by anyone; a star or report reads its session itself
 ];
