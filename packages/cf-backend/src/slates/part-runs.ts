@@ -61,6 +61,12 @@ interface PartRun {
   readonly replay: PartStep[];
 }
 
+/** What a run of a part's function is given: its arguments, and the journal it is answered from first. */
+interface PartInput {
+  readonly args: readonly JsonValue[];
+  readonly replay: readonly PartStep[];
+}
+
 /**
  * A run that stopped for its viewer's approval of one call: what it was given and what it was answered so far, so the
  * run resumed on that approval is answered the same up to that call, and runs nothing it already ran.
@@ -118,21 +124,32 @@ export class PersonalParts {
         return { kind: 'failed', message: `What the page passed ${title}'s part ${part} is not what it declares it takes` } satisfies PartRunAnswer;
       }
 
-      const args = request.action === null ? request.args : [...request.args, request.action];
-      // Resumed on the approval it stopped for: the same input, answered the same up to that call. Taken once.
-      const paused = request.approval === null ? undefined : this.paused.get(request.approval);
-      const resumed = paused?.viewer === viewer.userId && paused.slate === slate && paused.part === part ? paused : undefined;
+      const { args, replay } = this.resumed(viewer, slate, part, request);
+      const answer = yield* this.runOnce(viewer, slate, { fn: declared.fn, args, replay });
 
-      if (request.approval !== null && resumed !== undefined) this.paused.delete(request.approval);
-      const answer = yield* this.runOnce(viewer, slate, { fn: declared.fn, args: resumed?.args ?? args, replay: resumed?.steps ?? [] });
-
-      if (answer.kind === 'needs-approval') this.paused.set(answer.ask.id, { viewer: viewer.userId, slate, part, args: resumed?.args ?? args, steps: answer.steps });
+      if (answer.kind === 'needs-approval') this.paused.set(answer.ask.id, { viewer: viewer.userId, slate, part, args, steps: answer.steps });
 
       // Delivered only to someone the slate is still shared with: removed meanwhile, they are answered nothing.
       if (!this.admitted(viewer, slate)) return null;
 
       return answer.kind === 'needs-approval' ? { kind: answer.kind, ask: answer.ask } : answer;
     }));
+  }
+
+  /**
+   * What a run is given: resumed on the approval it stopped for, the same input, answered the same up to that call (the
+   * pause is taken once); else the request's own input, answered afresh.
+   */
+  private resumed(viewer: PartViewer, slate: string, part: string, request: PartRunRequest): PartInput {
+    const paused = request.approval === null ? undefined : this.paused.get(request.approval);
+
+    if (request.approval !== null && paused?.viewer === viewer.userId && paused.slate === slate && paused.part === part) {
+      this.paused.delete(request.approval);
+
+      return { args: paused.args, replay: paused.steps };
+    }
+
+    return { args: request.action === null ? request.args : [...request.args, request.action], replay: [] };
   }
 
   private runOnce(
