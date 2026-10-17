@@ -166,6 +166,7 @@ function actorWith(account: AccountMemory | undefined): SurfaceActor {
     programState: rt.actor.programState,
     agents: () => ({ mode: 'build', swarms: false }),
     self: null,
+    ownerWaits: null,
   };
 }
 

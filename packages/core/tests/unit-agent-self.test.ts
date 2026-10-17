@@ -104,6 +104,18 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
 
       return [];
     },
+    ownerWaits: {
+      list: async () => {
+        calls.push('waitingOnOwner');
+
+        return [];
+      },
+      wakeWhenDone: async (key) => {
+        calls.push(`wakeWhenOwnerDone:${key ?? 'all'}`);
+
+        return { already: true };
+      },
+    },
     ...over,
   };
 }

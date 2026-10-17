@@ -114,6 +114,7 @@ export const agentSelfRest = {
   getQuality: async () => [],
   budget: new MissionGovernor(governorDeps()),
   armCompactNow: async () => {},
+  ownerWaits: { list: async () => [], wakeWhenDone: async () => ({ already: true as const }) },
 };
 
 export const DUMMY_LLM: LLMProviderConfig = {

@@ -20,6 +20,7 @@ import type { WorkspaceProposalInput, WorkspaceProposalReceipt } from '../safety
 import { serve } from '../operations/operation';
 import { AGENT } from '../operations/agent';
 import { codemodeNamespace } from './operation-surfaces';
+import type { OwnerWait } from '../types/owner-waits';
 
 type CurriculumStatus = (typeof PROPOSED_TASK_STATUSES)[number];
 
@@ -51,6 +52,18 @@ export interface AgentSelfHost {
   armCompactNow(): Promise<void>;
   /** Parks a proposed workspace for the owner; absent where no owner account can hold one (a local session). */
   readonly proposeWorkspace?: (proposal: WorkspaceProposalInput) => Effect.Effect<WorkspaceProposalReceipt, KinuError>;
+  /** What waits on the owner, every row of it, and this agent's wake. */
+  readonly ownerWaits: OwnerWaitsHost;
+}
+
+/**
+ * What waits on the owner, as one agent reads it, and its one-shot wake (read-models/owner-waits.ts): the workspace's
+ * own agent's, over every row; a hire's, over its own. Both backends build it over the queue and reads they already hold.
+ */
+export interface OwnerWaitsHost {
+  list(): Promise<OwnerWait[]>;
+  /** Armed unless it is already met; replaces an earlier wait. */
+  wakeWhenDone(key: string | null): Promise<{ readonly armed: true } | { readonly already: true }>;
 }
 
 /** A running job reads as the wake contract, not an empty row, so a poll loop has nothing to spin on. */
@@ -77,8 +90,25 @@ function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRea
   };
 }
 
+/** The two members a program reads its owner's waits through, with whichever host it is. */
+function ownerWaitMembers(waits: OwnerWaitsHost) {
+  return [
+    serve(AGENT.waitingOnOwner, async () => await waits.list()),
+    serve(AGENT.wakeWhenOwnerDone, async ({ key }) => await waits.wakeWhenDone(key ?? null)),
+  ];
+}
+
+/**
+ * `agent.*` for a hire: what waits on its owner from its own work, and the wake, and nothing else of the workspace's
+ * agent's (a hire is confined: delegation-turn-reach.ts `ActorReach`).
+ */
+export function createHireOwnerWaitsProvider(waits: OwnerWaitsHost): CodemodeProvider {
+  return codemodeNamespace('agent', 'You yourself: what waits on your owner from your own work.', ownerWaitMembers(waits));
+}
+
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
-  return codemodeNamespace('agent', 'You yourself: schedules, background jobs, budget, scaffolds, curriculum and new workspaces.', [
+  return codemodeNamespace('agent', 'You yourself: schedules, background jobs, budget, scaffolds, curriculum, new workspaces and what waits on your owner.', [
+    ...ownerWaitMembers(host.ownerWaits),
     serve(AGENT.proposeCurriculum, async ({ count }) => await host.proposeCurriculumTasks(count)),
     serve(AGENT.listCurriculum, async ({ status }) => await host.listCurriculumTasks(status)),
     serve(AGENT.acceptCurriculumTask, async ({ id }) => await host.setCurriculumTaskStatus(id, 'accepted')),

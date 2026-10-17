@@ -603,7 +603,7 @@ export { actorReach, surfaceReach, turnLane, turnReach, type ActorReach, type Su
 
 export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
-export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
+export { createAgentSelfProvider, type AgentSelfHost, type OwnerWaitsHost } from './tools/agent-self';
 
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
@@ -1963,6 +1963,12 @@ export type {
 } from './read-models/node-transcript';
 
 export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
+
+export {
+  ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
+} from './read-models/owner-waits';
+
+export { OwnerWaitSchema, type OwnerWait } from './types/owner-waits';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 

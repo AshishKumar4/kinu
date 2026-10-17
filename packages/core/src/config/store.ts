@@ -1,7 +1,8 @@
 import { markStoreChanged } from '@kinu.run/agent-utils';
 // AgentConfigStore: typed accessors over the `actor_config` key/value table.
 import { Effect } from 'effect';
-import { settleSync } from '../obs/effect';
+import { settleSync, tolerate } from '../obs/effect';
+import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { Holds } from '../utils/held-reads';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
@@ -12,6 +13,7 @@ import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../providers/types';
 import { formatApprovalGrant, parseApprovalGrant, type ApprovalGrant } from '../safety/approval-gate';
+import { OwnerWaitWatchSchema, type OwnerWaitWatch } from '../types/owner-waits';
 import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
 } from '../types/advisor';
@@ -68,6 +70,9 @@ export const AGENT_CONFIG_KEYS = {
   isolateGen: 'isolate_gen',
   /** The root's chat title as the person set it; the workspace keeps its own name. */
   chatTitle: 'chat_title',
+  /** A one-shot wait this agent armed on its owner (`agent.wakeWhenOwnerDone`), JSON `OwnerWaitWatch`: met, it wakes the
+   *  agent once and the row goes. Read on each change to what waits on the owner, only while one is armed. */
+  ownerWaitsWatch: 'owner_waits_watch',
 } as const;
 
 /** Keys the shell-approval gate reads as authorization; a fork must not inherit them. Add any new gate key here. */
@@ -149,6 +154,10 @@ export interface AgentConfigStore {
   setEmailNotificationsEnabled(enabled: boolean): void;
   getChatTitle(): string | null;
   setChatTitle(title: string): void;
+  /** Unset, or a row that no longer parses, reads as none. */
+  getOwnerWaitsWatch(): OwnerWaitWatch | null;
+  /** Null clears it. */
+  setOwnerWaitsWatch(watch: OwnerWaitWatch | null): void;
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -416,6 +425,15 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     setChatTitle(title) {
       set(AGENT_CONFIG_KEYS.chatTitle, title);
+    },
+    getOwnerWaitsWatch() {
+      const stored = get(AGENT_CONFIG_KEYS.ownerWaitsWatch);
+
+      return stored === null ? null : tolerate(() => v.parse(OwnerWaitWatchSchema, JSON.parse(stored)), 'malformed-input') ?? null;
+    },
+    setOwnerWaitsWatch(watch) {
+      if (watch === null) remove(AGENT_CONFIG_KEYS.ownerWaitsWatch);
+      else set(AGENT_CONFIG_KEYS.ownerWaitsWatch, JSON.stringify(watch));
     },
   };
 }

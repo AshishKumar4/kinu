@@ -7,6 +7,7 @@ import { PROPOSED_TASK_STATUSES } from '../types/proposals';
 import { BACKGROUND_POLICY } from '../types/jobs';
 import { JsonObjectSchema } from '../utils/json';
 import { described, namespace } from './operation';
+import { OwnerWaitSchema } from '../types/owner-waits';
 
 const Count = (text: string) => v.optional(described(v.pipe(v.number(), v.integer(), v.minValue(1)), text));
 
@@ -92,6 +93,22 @@ export const AGENT = {
     help: 'Compact the conversation when the next turn is assembled, rather than waiting for the token trigger; use it at a '
       + 'phase boundary. The folded range stays archived.',
     input: v.strictObject({}), output: v.strictObject({ armed: v.literal(true), appliesAt: v.literal('next-turn-assembly') }),
+  }),
+  waitingOnOwner: agentOp({
+    name: 'waitingOnOwner', impact: 'observe',
+    help: 'What waits on your owner now, newest first: parked commands and file writes, plans to approve, proposed '
+      + 'workspaces, device consents and open questions, each with its `key`, what it is, since when and which agent '
+      + 'asked. The workspace agent reads them all; a hire, only its own. Account-memory proposals are not listed: '
+      + 'your owner\'s account holds them, and this workspace is never told when they are decided.',
+    input: v.strictObject({}), output: v.array(OwnerWaitSchema),
+  }),
+  wakeWhenOwnerDone: agentOp({
+    name: 'wakeWhenOwnerDone', impact: 'mutate',
+    help: 'Be woken once your owner has handled everything `waitingOnOwner` lists for you, or, with `key`, that one '
+      + 'item: the wake arrives as a system event in your chat, once. Answers { armed: true } and you end your turn, '
+      + 'or { already: true } when nothing waits. Arming again replaces the earlier wait.',
+    input: v.strictObject({ key: v.optional(described(v.pipe(v.string(), v.nonEmpty()), 'One item\'s key, from waitingOnOwner.')) }),
+    output: v.union([v.strictObject({ armed: v.literal(true) }), v.strictObject({ already: v.literal(true) })]),
   }),
   quality: agentOp({
     name: 'quality', impact: 'observe',

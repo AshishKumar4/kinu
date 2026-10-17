@@ -75,6 +75,8 @@ export function hostedCodemodeTool(
     conversations: actor.stores.conversationSearch,
     vectorStore: null,
     ledgers,
+    // A head or a swarm node, whose run ends with it, holds no wait on its owner.
+    ownerWaits: null,
   });
 
   return (codemode, reach) => createNodeCodemodeToolFactory({ namespaces: actorNamespaces(surface, SURFACE_POLICY.confined), reach })(codemode);

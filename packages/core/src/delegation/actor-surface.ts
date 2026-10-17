@@ -15,7 +15,7 @@ import type { TurnLedgers } from '../orchestrator/turn-accumulator';
 import type { Storage } from '../types/primitives';
 import type { CodemodeProvider } from '../types/codemode';
 import type { BrowserSessions, WebSearchProvider } from '../web/provider';
-import { createAgentSelfProvider, type AgentSelfHost } from '../tools/agent-self';
+import { createAgentSelfProvider, createHireOwnerWaitsProvider, type AgentSelfHost, type OwnerWaitsHost } from '../tools/agent-self';
 import { createDbCodemodeProvider, type AppDataStore } from '../tools/db-codemode';
 import { executorNamespace } from '../tools/executor-operations';
 import { createFileCodemodeProvider, type FileDeps } from '../tools/file-operations';
@@ -52,6 +52,8 @@ export interface SurfaceActor {
   readonly agents: (() => AgentsToolDeps) | null;
   /** `agent.*`, its own lifecycle: the workspace's main actor only. */
   readonly self: AgentSelfHost | null;
+  /** A hire's `agent.*`: what waits on its owner from its own work, and its wake; null for an actor with neither. */
+  readonly ownerWaits: OwnerWaitsHost | null;
 }
 
 /** How a caller's namespaces differ from the actor's own programs'. */
@@ -120,6 +122,13 @@ function webFor(web: SurfaceWeb, policy: SurfacePolicy): CodemodeProvider {
   });
 }
 
+/** `agent.*`: the workspace agent's whole lifecycle, else a hire's own waits on its owner, else none. */
+function agentNamespace(self: AgentSelfHost | null, ownerWaits: OwnerWaitsHost | null): CodemodeProvider[] {
+  if (self !== null) return [createAgentSelfProvider(self)];
+
+  return ownerWaits === null ? [] : [createHireOwnerWaitsProvider(ownerWaits)];
+}
+
 export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call: SurfaceCall = {}): CodemodeProvider[] {
   const { agents, self } = actor;
   const executor = call.executor ?? ((provider) => provider);
@@ -134,7 +143,7 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
       createTasksCodemodeProvider(tasks.list, tasks.config, tasks.roleSwitch ?? undefined),
     ]),
     createDbCodemodeProvider(actor.db),
-    ...(self === null ? [] : [createAgentSelfProvider(self)]),
+    ...agentNamespace(self, actor.ownerWaits),
     ...(call.report === undefined ? [] : [createReportCodemodeProvider(call.report)]),
     webFor(actor.web, policy),
     ...actor.executors().map((provider) => executorNamespace(executor(provider))),
@@ -146,6 +155,8 @@ export function hostedSurfaceActor(
   actor: SeatedActor,
   inputs: {
     readonly web: SurfaceWeb; readonly conversations: ConversationRecall; readonly vectorStore: VectorStore | null; readonly account?: AccountMemory;
+    /** Its `agent.*` of what waits on its owner from its own work; null where none is held for it. */
+    readonly ownerWaits: OwnerWaitsHost | null;
     /** The turn a program's files account into: read as its namespaces are built. */
     readonly ledgers: () => Pick<TurnLedgers, 'files' | 'context'>;
   },
@@ -170,5 +181,6 @@ export function hostedSurfaceActor(
     programState: runtime.actor.programState,
     agents: null,
     self: null,
+    ownerWaits: inputs.ownerWaits,
   };
 }
