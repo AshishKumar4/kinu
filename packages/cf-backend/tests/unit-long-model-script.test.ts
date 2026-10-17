@@ -22,7 +22,7 @@ describe('probe-long answers the lanes around its streamed turns in the shape ea
       expect(answer.headers.get('content-type')).toBe('application/json');
 
       return v.parse(CompletionSchema, await answer.json()).choices[0].message.content;
-    }, 'A checkout maintenance workspace');
+    }, { subject: 'A checkout maintenance workspace', name: 'brisk-kiln-c3cc0b30' });
 
     expect(logo).not.toBeNull();
   });

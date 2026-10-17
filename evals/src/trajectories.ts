@@ -92,7 +92,9 @@ export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'fail
     lines.push('', `Turn ${String(turn)} (${part}): ${outcome.status}${outcome.message === undefined ? '' : ` \u2014 ${value(outcome.message)}`}`);
 
     for (const check of checks) {
-      lines.push(`- ${check.pass ? 'pass' : 'FAIL'} \`${check.id}\`${check.pass || check.evidence === undefined ? '' : `: ${value(check.evidence)}`}`);
+      lines.push(check.graded === false
+        ? `- recorded \`${check.id}\` (${check.pass ? 'yes' : 'no'})${check.evidence === undefined ? '' : `: ${value(check.evidence)}`}`
+        : `- ${check.pass ? 'pass' : 'FAIL'} \`${check.id}\`${check.pass || check.evidence === undefined ? '' : `: ${value(check.evidence)}`}`);
     }
   }
 

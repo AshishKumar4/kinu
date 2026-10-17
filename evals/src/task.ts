@@ -5,10 +5,16 @@ import type { EvalVerifier } from './verifier';
 /** A file the harness writes into the workspace before a prompt: data a person would drop in, text or bytes. */
 export type SeedFile = { readonly path: string; readonly content: string | Uint8Array<ArrayBuffer> };
 
+/** A command the harness runs on one of the workspace's executors before a prompt, as the Env pane runs one: what a
+ *  person sets up on a machine before asking. One refused or exiting non-zero fails the trial before the prompt. */
+export type PrepareCommand = { readonly executor: string; readonly command: string };
+
 export type EvalTurn = {
   /** Before the prompt, end the workspace's activation and clear its chat: what the agent knows here, it kept. */
   readonly fresh?: true;
   readonly seed?: readonly SeedFile[];
+  /** Run in order after the seed. */
+  readonly prepare?: readonly PrepareCommand[];
   readonly prompt: string;
   /** Absent on a turn that only sets up what a later turn asks. */
   readonly verify?: (verifier: EvalVerifier) => Promise<void>;
@@ -44,7 +50,13 @@ export type EvalTask = {
   readonly modelCallPeak?: { readonly calls: EvalCallWidth; readonly source: string };
 };
 
-export type EvalCheck = { id: string; pass: boolean; evidence?: JsonValue };
+/** `graded: false`: recorded with the trial for its reader, and never a reason it fails (`EvalVerifier.record`). */
+export type EvalCheck = { id: string; pass: boolean; evidence?: JsonValue; graded?: false };
+
+/** Whether a check judges its trial. */
+export function graded(check: EvalCheck): boolean {
+  return check.graded !== false;
+}
 
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -80,13 +92,14 @@ export function defineEvalTask(task: EvalTask): EvalTask {
   return task;
 }
 
-/** Hash what the agent is given: the mission, every prompt and every seeded file. */
+/** Hash what the agent is given: the mission, every prompt, every seeded file and every command that prepared it. */
 export function taskVersion(task: EvalTask): string {
   const given = {
     mission: task.mission,
     turns: taskTurns(task).map(({ spec: turn }) => ({
       ...(turn.fresh && { fresh: true }),
       seed: (turn.seed ?? []).map((file) => (file.content instanceof Uint8Array ? { ...file, content: { base64: Buffer.from(file.content).toString('base64') } } : file)),
+      ...(turn.prepare && { prepare: turn.prepare }),
       prompt: turn.prompt,
     })),
   };
@@ -151,7 +164,7 @@ export function failureRationale(output: EvalRunOutput): string {
   const turn = output.turns.find((each) => each.outcome.status !== 'completed');
 
   if (turn === undefined) {
-    return `failed: ${output.turns.flatMap((each) => each.checks).filter((check) => !check.pass).map((check) => check.id).join(', ') || 'a turn did not complete'}`;
+    return `failed: ${output.turns.flatMap((each) => each.checks).filter((check) => graded(check) && !check.pass).map((check) => check.id).join(', ') || 'a turn did not complete'}`;
   }
 
   const { status, message, heldBy } = turn.outcome;

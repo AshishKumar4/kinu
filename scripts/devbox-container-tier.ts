@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-/** Real-container contracts at the staging deploy tier (m282, D72). Each run owns its Worker, bucket and snapshots. */
+/** Real-container contracts at the staging deploy tier (m282, D72). Each run deploys the lasting fixture Worker again and
+ *  owns its bucket, boxes, snapshots and containers (`fixtures/devbox-e2e/fixture.ts`). */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,14 +11,15 @@ import * as v from 'valibot';
 import { copyPinnedTools, uploadPinnedTools } from './devbox-tools';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
-import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
+import { CONTRACT_TEARDOWN_BUCKET, ContractTeardownSchema, contractLedger, contractOwner, contractOwnerEnded, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
+import { dropLease, fixtureNames, takeLease } from './fixtures/devbox-e2e/fixture';
 import type { ContractLedger } from './fixtures/devbox-e2e/ledger';
-import { containerApplicationsNamed, deleteContainerApplication, r2, requireCloudflareAccountId } from './infra-cloudflare';
+import { containerApplicationsNamed, r2, requireCloudflareAccountId } from './infra-cloudflare';
 import { deployedConfig } from './infra-manifest';
 import { r2ResiduePlane, drainBucketResidue } from './bench-devbox-fixture';
 import { deleteR2Prefix } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
-import { runWrangler, wranglerProvesAbsence, publishTeardown, runTeardownOnce, delay } from './ephemeral-deployment';
+import { runWrangler, publishTeardown, runTeardownOnce, delay } from './ephemeral-deployment';
 import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
@@ -25,7 +27,7 @@ import { shellQuote } from '../packages/core/src/utils/shell';
 import { endedNearSilence } from './row-verdicts';
 import { withTestChrome } from './test-chrome';
 import { contextSignedInAt } from '../evals/src/browser';
-import { BOX_CHROMIUM_POLICY, DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
+import { BOX_CHROMIUM_POLICY, CHROMIUM_PROFILES, DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
 import { CHORD, DISTINCT_PY, DOWN_PY, GRID, GRID_POINTS, HOLD, RANGE, RING_PY, SCROLL, SITE_TRUST_PY, TEXT, TICKER, sizeOf } from './fixtures/devbox-e2e/desktop-pages';
 import { REPO_ROOT as REPO } from './repo-root';
 
@@ -160,6 +162,9 @@ const AgentAnswer = v.union([Screen, v.null(), Refused]);
 
 const Commit = v.looseObject({ kind: v.string(), reason: v.optional(v.string()), movedBytes: v.optional(v.number()) });
 
+/** What a box holds once cleared (`ContractBox.clear`). */
+const Emptied = v.object({ running: v.boolean(), keys: v.number(), tables: v.number(), alarm: v.nullable(v.number()) });
+
 const State = v.looseObject({ chain: v.nullable(v.looseObject({ rev: v.number(), base: v.looseObject({ key: v.string() }), deltas: v.array(v.unknown()) })), snapshot: v.nullable(v.looseObject({ id: v.string() })) });
 
 /** A `--tools` file is uploaded as the pin's parts; without one, staging's are copied. */
@@ -209,7 +214,7 @@ async function fixtureFetch(url: string | URL, init?: RequestInit): Promise<Resp
   }
 }
 
-function writeFixtureConfig(worker: string, scratch: string, priorDeclared?: string) {
+function writeFixtureConfig(worker: string, bucket: string, scratch: string, priorDeclared?: string) {
   const config = join(scratch, 'wrangler.jsonc');
   const imageArgument = process.argv.indexOf('--declared-image');
   const productContainer = deployedConfig('staging').containers?.find(row => row.class_name === 'KinuDevbox');
@@ -227,9 +232,9 @@ function writeFixtureConfig(worker: string, scratch: string, priorDeclared?: str
     durable_objects: { bindings: [{ name: 'Box', class_name: 'ContractBox' }] },
     migrations: [{ tag: 'v1', new_sqlite_classes: ['ContractBox'] }],
     containers,
-    r2_buckets: [{ binding: 'STORE', bucket_name: worker }],
+    r2_buckets: [{ binding: 'STORE', bucket_name: bucket }],
     assets: { directory: join(REPO, 'packages/cf-backend/public'), binding: 'ASSETS', run_worker_first: true },
-    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: worker, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0', BOX_NAME },
+    vars: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, PROBE_BUCKET: bucket, PROBE_HTTP: process.argv.includes('--probe') ? '1' : '0', BOX_NAME },
   }));
 
   return { config, declared };
@@ -260,13 +265,14 @@ function fixtureTokens() {
 
 function fixturePlan(recovering: ReturnType<typeof recoveryReport>) {
   const run = recovering?.run ?? `dc${new Date().toISOString().replace(/\D/gu, '').slice(0, 14)}${crypto.randomUUID().slice(0, 5)}`;
-  const worker = recovering?.worker ?? `kinu-${run}`;
-  const bucket = recovering?.bucket ?? worker;
+  const named = fixtureNames(run);
+  const worker = recovering?.worker ?? named.worker;
+  const bucket = recovering?.bucket ?? named.bucket;
   const box = `eval-devbox-${run}`;
   // The fifth is a box only the desktop's check opens, so it opens on a fresh box; the sixth is the agent's desktop box;
   // the seventh fails every start (D94); the eighth stops and starts under an open terminal session (D97).
   const names = recovering?.boxes ?? [box, `${box}-native`, `${box}-disk`, 'devbox-golden', `${box}-desktop`, `${box}-agent`, `${box}-parked`, `${box}-sessions`];
-  const app = recovering?.app ?? `${worker}-contractbox`;
+  const app = recovering?.app ?? named.app;
   const owner = recovering?.owner ?? contractOwner(process.env);
   const { job, index, attempt, vessel, statusUrl } = owner;
   const reportedOwner = { job, index, attempt, vessel, statusUrl };
@@ -327,14 +333,14 @@ async function main(): Promise<void> {
   const steps: Step[] = recovering?.steps ?? [];
   const snapshots = new Set<string>(recovering?.snapshots);
   const cleanupErrors: string[] = [];
-  const { config, declared } = writeFixtureConfig(worker, scratch, recovering?.declared);
+  const { config, declared } = writeFixtureConfig(worker, bucket, scratch, recovering?.declared);
   let origin: string | undefined = recovering?.origin;
 
   const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).stdout.trim();
   const dirtyDigest = createHash('sha256').update(spawnSync('git', ['diff', 'HEAD'], { cwd: REPO }).stdout).digest('hex');
 
   const writeReport = async () => {
-    await ledger.put({ schema: 'devbox-contracts/teardown@2', run, worker, app, bucket, boxes: names, declared, origin, snapshots: [...snapshots], applicationIds: [...applicationIds], owner });
+    await ledger.put({ schema: 'devbox-contracts/teardown@3', run, worker, app, bucket, boxes: names, declared, origin, snapshots: [...snapshots], applicationIds: [...applicationIds], owner });
     const contents = JSON.stringify({ run, worker, app, bucket, boxes: names, box, declared, origin, revision, dirtyDigest, steps, snapshots: [...snapshots], applicationIds: [...applicationIds], owner: reportedOwner, cleanupErrors }, null, 2);
     writeFileSync(report, contents);
     const evidence = process.env['BENCH_ARTIFACTS'];
@@ -429,62 +435,50 @@ async function main(): Promise<void> {
   };
 
   const registry = snapshotRegistry({ account: ACCOUNT, token, fetch: (input, init) => fetch(input, init) });
-  // The application's ids, learnt once it exists and again before anything is deleted: deleting the Worker or the
-  // application leaves its snapshots, and only these ids find them after.
+  // The application's id, learnt once the deploy made it: its snapshots are found by it.
   const learnApplication = () => { for (const found of containerApplicationsNamed([app])) applicationIds.add(found.id); };
 
   publishTeardown(async () => {
     let recorded = false;
 
-    const finish = async <Evidence>(name: string, work: () => Promise<Evidence>) => {
-      const [outcome] = await Promise.allSettled([work()]);
-
-      if (outcome?.status === 'rejected') cleanupErrors.push(`${name}: ${String(outcome.reason)}`);
-    };
-
     const outcome = await completeTeardown({
       health: async () => origin === undefined ? null : (await fixtureFetch(`${origin}/health`, { headers: { authorization: `Bearer ${identity}` } })).status,
-      beforeDelete: async (health) => {
+      boxes: async (health) => {
       learnApplication();
       await writeReport();
       recorded = true;
+      const failed: string[] = [];
 
-      // A box's clear lists the store to discard it. When an earlier teardown deleted the bucket and then failed to delete
-      // the Worker (a 504, 2026-10-16), every replay's clear failed on the missing bucket and the run was never recovered,
-      // which refused every later run. There is nothing left to discard: the application's deletion ends the containers.
+      const each = async (name: string, work: () => Promise<void>) => {
+        const [settled] = await Promise.allSettled([work()]);
+
+        if (settled?.status === 'rejected') failed.push(`${name}: ${String(settled.reason)}`);
+      };
+
+      // The bucket goes only once every box is empty (`completeTeardown`), so with it gone there is nothing to clear,
+      // and a clear, which reads the store, would fail on its absence.
       const storeGone = r2(bucket).state === 'absent';
 
-      if (origin !== undefined && 'status' in health && health.status !== 404) for (const name of names) {
-        await finish(`snapshots ${name}`, () => collectSnapshots(name));
-
-        if (!storeGone) await finish(`cleanup ${name}`, () => call('/cleanup', Json, {}, name));
+      // `origin` is recorded once this run deployed the fixture: before that it made no box.
+      if (origin !== undefined && !storeGone && 'status' in health && health.status !== 404) for (const name of names) {
+        await each(`snapshots ${name}`, async () => { await collectSnapshots(name); });
+        // Each box answers what it holds once cleared: its container stopped, and no key, table or alarm left.
+        await each(`cleanup ${name}`, async () => { requireEqual(await call('/cleanup', Emptied, {}, name), { running: false, keys: 0, tables: 0, alarm: null }); });
       }
 
-    for (const id of snapshots) await finish(`snapshot ${id}`, async () => {
-      const removed = await registry.delete(id);
+      for (const id of snapshots) await each(`snapshot ${id}`, async () => {
+        const removed = await registry.delete(id);
 
-      if (removed.kind === 'refused') throw new Error(removed.reason);
-      requireEqual((await registry.delete(id)).kind, 'absent');
-    });
+        if (removed.kind === 'refused') throw new Error(removed.reason);
+        requireEqual((await registry.delete(id)).kind, 'absent');
+      });
+
+      if (failed.length > 0) throw new Error(failed.join('; '));
       },
-      worker: async () => {
-      if (!recorded) throw new Error('application identities were not persisted; Worker retained for recovery');
-      const deleted = runWrangler(REPO, ['delete', '--name', worker, '--force'], { allowFailure: true });
+      snapshots: async () => {
+      if (!recorded) throw new Error('application identities were not persisted; snapshots retained for recovery');
 
-      if (!wranglerProvesAbsence(deleted)) throw new Error(deleted);
-      },
-      application: async () => {
-      if (!recorded) throw new Error('application identities were not persisted; application retained for recovery');
-      learnApplication();
-      await writeReport();
-      const ids = [...applicationIds];
-
-      for (const found of containerApplicationsNamed([app])) await deleteContainerApplication(found);
-
-      requireEqual(containerApplicationsNamed([app]), []);
-
-      // Deleting the application leaves every snapshot it made, the ones no box still names included.
-      for (const applicationId of ids) {
+      for (const applicationId of applicationIds) {
         const swept = await registry.deleteApplication(applicationId);
 
         if (swept.kind === 'refused') throw new Error(`${app}'s snapshots were not deleted: ${swept.reason}`);
@@ -515,6 +509,13 @@ async function main(): Promise<void> {
     await writeReport();
 
     if (cleanupErrors.length === 0) await ledger.remove(run);
+
+    // A replay runs under the lease of the run that replays it.
+    if (recovering === undefined) {
+      const [dropped] = await Promise.allSettled([dropLease(ledger.lease(worker), run)]);
+
+      if (dropped?.status === 'rejected') cleanupErrors.push(`lease: ${String(dropped.reason)}`);
+    }
   });
 
   for (const [signal, status] of [['SIGTERM', 143], ['SIGINT', 130]] as const) process.once(signal, () => {
@@ -525,7 +526,13 @@ async function main(): Promise<void> {
     });
   });
 
-  if (recovering === undefined) steps.push(...await recoverContracts(ledger, scratch));
+  if (recovering === undefined) {
+    await takeLease(ledger.lease(worker), { schema: 'devbox-contracts/lease@1', worker, run, owner }, async (holder) => await contractOwnerEnded(holder));
+
+    // The teardown gives the lease up, with nothing of this run's made yet.
+    try { steps.push(...await recoverContracts(ledger, scratch)); }
+    catch (cause) { await runTeardownOnce(); throw cause; }
+  }
 
   // Durable before the first fixture bucket, Worker or application exists.
   await writeReport();
@@ -722,7 +729,8 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
         requireEqual(await shell(`python3 -c ${shellQuote(policyNamesCa)}`, name), 'exact');
         await shell(`rm -rf /tmp/kinu-trust && (DISPLAY=:0 setsid chromium --remote-debugging-port=${String(port)} --user-data-dir=/tmp/kinu-trust --disable-quic --new-window about:blank `
-          + `>/tmp/kinu-trust.log 2>&1 </dev/null &) && timeout 60 sh -c 'until curl -sf http://127.0.0.1:${String(port)}/json/version >/dev/null; do sleep 0.2; done'`, name);
+          + `>/tmp/kinu-trust.log 2>&1 </dev/null &) && timeout 60 sh -c 'until curl -sf http://127.0.0.1:${String(port)}/json/version >/dev/null; do sleep 0.2; done' `
+          + `|| { tail -n 20 /tmp/kinu-trust.log; ps -eo pid,etimes,args | grep -c '[c]hromium'; exit 1; } >&2`, name);
         // The pattern's bracket keeps pkill from matching the shell that runs it, whose command line names the port too.
         const read = await shell(`PORT=${String(port)} timeout 150 python3 -c ${shellQuote(SITE_TRUST_PY)} ${TRUSTED_SITES.map(([url]) => url).join(' ')}; pkill -f 'remote-debugging-por[t]=${String(port)}'; true`, name);
         const seen = read.split('\n').map((line) => v.parse(Seen, JSON.parse(line)));
@@ -745,7 +753,14 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
       requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
       // An agent's look opens the desktop again on the new start, as the person's first open would.
-      await call('/agent-desktop', AgentAnswer, { driver: 'trust', member: 'screenshot', args: '[]' }, name);
+      const looked = await call('/agent-desktop', AgentAnswer, { driver: 'trust', member: 'screenshot', args: '[]' }, name);
+
+      if (typeof looked !== 'string') throw new Error(`an agent's look did not open the second start's desktop: ${JSON.stringify(looked)}`);
+      // The stop ended the person's browser with the container; the start marked its exit clean, so it reopens with no
+      // "Restore pages?" (the second start's shots show its window).
+      const exited = `import json; print(json.load(open('${CHROMIUM_PROFILES}/Default/Preferences'))['profile']['exit_type'])`;
+
+      requireEqual(await shell(`python3 -c ${shellQuote(exited)}`, name), 'Normal');
       const second = await judged('second');
 
       if (second.ca === first.ca) throw new Error(`the restart kept its CA ${first.ca}: the second start proves nothing`);
@@ -1134,9 +1149,9 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
   };
 
   try {
-    runWrangler(REPO, ['r2', 'bucket', 'create', worker]);
+    runWrangler(REPO, ['r2', 'bucket', 'create', bucket]);
     const toolsArgument = process.argv.indexOf('--tools');
-    await installTools(worker, toolsArgument === -1 ? undefined : process.argv[toolsArgument + 1]);
+    await installTools(bucket, toolsArgument === -1 ? undefined : process.argv[toolsArgument + 1]);
     const secrets = join(scratch, 'secrets.json');
     // Wrangler's secret file exists only in the run's private scratch directory and is removed immediately.
     const authority: FixtureSecrets = { EVAL_IDENTITY: identity, DEVBOX_REGISTRY_TOKEN: token };

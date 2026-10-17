@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 
-import { BOX_CHROMIUM_POLICY } from '../src/desktop';
+import { BOX_CHROMIUM_POLICY, CHROMIUM_PROFILES } from '../src/desktop';
 import { TRUST } from '../src/processes';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
@@ -23,7 +23,7 @@ test('a started container trusts the intercept CA once, after its HTTPS intercep
 /** Runs the trust step as the box does, its absolute paths moved under `root`. */
 function trustIn(root: string): void {
   const [shell, flag, script] = TRUST;
-  const moved = script.replaceAll('/etc/', `${root}/etc/`);
+  const moved = script.replaceAll('/etc/', `${root}/etc/`).replaceAll('/root/', `${root}/root/`);
   const ran = spawnSync(shell, [flag, moved, 'devbox-trust'], { encoding: 'utf8' });
 
   if (ran.status !== 0) throw new Error(`the trust step failed: ${ran.stderr}`);
@@ -73,6 +73,36 @@ test("each start's trust names exactly its own CA to Chromium, and leaves a host
     expect(readFileSync(join(root, 'etc/ssl/certs/ca-certificates.crt'), 'utf8')).toBe(`# the image's roots\n${second}`);
     expect([...readdirSync(policies)].sort()).toEqual(['eval.json', 'kinu-box.json']);
     expect(readFileSync(join(policies, 'eval.json'), 'utf8')).toBe('{"DeveloperToolsAvailability": 2}\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A box's stop ends Chromium with the container, and the next start showed "Restore pages? Chromium didn't shut down
+// correctly" (the container tier's restart shot, 2026-10-16). Each profile's last exit is marked clean before it runs.
+test('each start marks every Chromium profile as having exited cleanly, and a profile it cannot read stops nothing', () => {
+  const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}clean-exit-`));
+  const profiles = join(root, CHROMIUM_PROFILES.replace('/root/', 'root/'));
+
+  try {
+    mkdirSync(join(root, 'etc/cloudflare/certs'), { recursive: true });
+    mkdirSync(join(root, 'etc/ssl/certs'), { recursive: true });
+    writeFileSync(join(root, 'etc/ssl/certs/ca-certificates.crt'), '');
+    writeFileSync(join(root, 'etc/cloudflare/certs/cloudflare-containers-ca.crt'), freshCa(root, 'a-start'));
+    mkdirSync(join(profiles, 'Default'), { recursive: true });
+    mkdirSync(join(profiles, 'Profile 1'), { recursive: true });
+    mkdirSync(join(profiles, 'Torn'), { recursive: true });
+    writeFileSync(join(profiles, 'Default/Preferences'), JSON.stringify({ profile: { exit_type: 'Crashed', exited_cleanly: false, name: 'Person' }, homepage: 'https://kinu.run' }));
+    writeFileSync(join(profiles, 'Profile 1/Preferences'), JSON.stringify({ browser: { window_placement: { maximized: true } } }));
+    writeFileSync(join(profiles, 'Torn/Preferences'), '{"profile": ');
+
+    trustIn(root);
+
+    const read = (profile: string) => v.parse(v.record(v.string(), v.unknown()), JSON.parse(readFileSync(join(profiles, profile, 'Preferences'), 'utf8')));
+
+    expect(read('Default')).toEqual({ profile: { exit_type: 'Normal', exited_cleanly: true, name: 'Person' }, homepage: 'https://kinu.run' });
+    expect(read('Profile 1')).toEqual({ browser: { window_placement: { maximized: true } }, profile: { exit_type: 'Normal', exited_cleanly: true } });
+    expect(readFileSync(join(profiles, 'Torn/Preferences'), 'utf8')).toBe('{"profile": ');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

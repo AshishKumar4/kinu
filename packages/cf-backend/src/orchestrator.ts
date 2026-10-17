@@ -210,7 +210,7 @@ import {
   setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
-  getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -4723,19 +4723,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private pendingActions(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): PendingAction[] {
-    // The queue row needs the unseen count, newest time, and how many entries offer keep/revert.
-    const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
+    const awaiting = getChangesAwaitingTheOwner(this.boundSql, this.rt.actor);
 
     return buildPendingActions({
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
       workspaceProposals: this.proposals.open(),
-      unseenChanges: {
-        count: unseen.length,
-        revertable: unseen.filter((entry) => entry.revert !== undefined).length,
-        latestAt: unseen[0]?.at ?? Date.now(),
-      },
-      curriculum: listProposedTasks(this.rt, 'pending'),
+      changeApprovals: { count: awaiting.length, latestAt: awaiting[0]?.at ?? Date.now() },
       // Each agent's plans are its own isolate's (main's included).
       pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),
     });
@@ -6053,7 +6047,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async drawLogo(subject: string): Promise<boolean> {
-    const svg = await drawWorkspaceLogo(await this.oneShotOn('logo'), subject);
+    const svg = await drawWorkspaceLogo(await this.oneShotOn('logo'), { subject, name: this.name });
 
     if (svg === null) return false;
     const { stub, caller } = await this.userHub();

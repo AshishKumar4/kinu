@@ -250,6 +250,10 @@ Eleven stash entries were tagged `archive/stash-<n>-<slug>-20260918` on their st
 
 Remote: `origin/fix/devbox-decision` is a `main` ancestor and is deleted on the next push of `main`, which carries the new tags. `origin/feat/devbox-durability-next` is not the archived tip: on 2026-09-22 it points at `4f93d0507` (2026-09-07), whose 15 commits `main` lacks include 10 with no patch-equivalent in `archive/devbox-durability-next`. On 2026-10-11 that tip became the tag `archive/devbox-durability-next-remote` and the remote branch was deleted; its residue belongs to the storage strategy `46c320bc1` retired. `origin/takeover/stabilize` was assessed the same day: its nine commits are in `main` as the squash commits `0aae49f08` and `2f0afadf4`, and the remote branch was deleted untagged. As of 2026-09-22 origin holds one `archive/*` tag, so the local tags above are the only copies.
 
+### The 2026-10-16 prune wave
+
+`next-rc` at `ca686fbc2`. Forty-six local branches that were `next-rc` ancestors went untagged. Sixty-two branches older than 36 hours that carried commits `next-rc` lacks each got a tag first, named `archive/<branch>` with `/` as `-` (`perf/admission` becomes `archive/perf-admission`), checked to point at the branch tip before the branch was deleted. The list (branch, tag, commit) is at `~/kinu-wip/prune-2026-10-16/archived-branches.tsv`; blob counts were not measured. Forty-five clean worktrees went, and none held residue (`git worktree remove` refuses a dirty one). Each release worktree's `bench-artifacts/deploys` was first copied to `/mnt/local/kinu/logs/deploy-reports/<sha>/`.
+
 ## Reproduce the test
 
 `git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none of the nine tags is a `main` ancestor. Tree and blob SHAs remain comparable.

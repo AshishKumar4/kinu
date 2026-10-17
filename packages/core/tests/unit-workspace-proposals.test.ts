@@ -73,8 +73,8 @@ describe("a proposed workspace", () => {
     expect(h.created).toEqual([]);
 
     const [row] = buildPendingActions({
-      scaffoldVersions: [], deferredActions: [], curriculum: [], pendingPlans: [],
-      unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, workspaceProposals: h.proposals.open(),
+      scaffoldVersions: [], deferredActions: [], pendingPlans: [],
+      changeApprovals: { count: 0, latestAt: 0 }, workspaceProposals: h.proposals.open(),
     });
 
     expect(row).toMatchObject({ id: "wsp-1", kind: "workspace_proposal", title: expect.stringContaining(ASK.name), detail: ASK.brief });

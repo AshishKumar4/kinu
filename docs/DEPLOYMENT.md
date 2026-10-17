@@ -469,6 +469,24 @@ No compatibility flag changes default between 2026-09-28 and 2026-09-30. This is
 
 The next default is `durable_object_io_tasks_prevent_eviction`, on 2026-10-01; it is not enabled here. Cloudflare's [compatibility-flag docs](https://developers.cloudflare.com/workers/configuration/compatibility-flags/), read 2026-09-30, say: “pending I/O keeps a Durable Object in memory after the client disconnects or drops its reference to the object,” including service requests, DO RPC, `container.monitor()` and `ctx.waitUntil()`, until completion or up to 15 minutes. The code review found no correctness dependency on that eviction: long work has SDK keepalives and durable recovery, cancellation is explicit, and eviction-recovery tests force `abortAllDurableObjects()` rather than await idle eviction. Nimbus's detached slate redrive and scheduled `waitUntil` work, model/RPC waits and devbox's awaited monitor could stay resident longer. That occupancy change is unmeasured on Kinu and requires a separate decision; no keepalive or recovery path is deleted for it.
 
+### A new Durable Object namespace
+
+For up to 45 s after `wrangler deploy` returns, a Durable Object class the deploy creates (`migrations: new_sqlite_classes`) answers some calls with `internal error; reference = …`. The object never runs: Workers Logs records no invocation for those calls. Failures come between successes, including on an object that already answered. A deploy of a class that already exists shows none. Measured 2026-10-16 with Wrangler 4.145.0: a probe Worker made a trivial call to four objects every 250 ms for 60 s after its deploy returned.
+
+| Deploy | Runs | Runs with the error | Calls | Errors | Latest |
+|---|---|---|---|---|---|
+| New class | 9 | 9 | 3,836 | 93 | 44.5 s |
+| New class with `containers` | 9 | 8 | 3,768 | 25 | 22.9 s |
+| Existing class, redeployed | 6 | 0 | 2,696 | 0 | |
+
+Nothing tells a deployer when the namespace is ready. Cloudflare's container docs say to wait several minutes after a first deploy and name no status. The namespace, application and deployment records have no readiness field. A success is no signal either: in 16 of the 17 runs with errors, an error followed an earlier success. The probe, its answers and a report for Cloudflare are in `kinu-logs/do-namespace-window-2026-10-16`.
+
+What meets it:
+
+- A full-reset deploy, which recreates the product's classes.
+- The promote that first creates sharing's classes, `SlateRoom` and `GalleryDO`.
+- Any fixture that creates its own Worker. The devbox contract fixture is created once, as `kinu-devbox-contracts-staging`, and each run deploys it again (`scripts/fixtures/devbox-e2e/fixture.ts`). The per-run Workers it replaced met this window in 8 of 153 runs from 2026-10-09 to 2026-10-16.
+
 ## Deploy script
 
 `scripts/deploy.sh` is the one deploy path. `bun run deploy` publishes `kinu-staging` to https://staging.kinu.run; `bun run deploy --promote` publishes `kinu` to https://kinu.run, and only the build staging verified; `bun run deploy --rollback` returns production to the build it took before (§ Rollback). Nimbus is held as a library inside the `OrchestratorAgent` that owns each workspace, so there is no separate Nimbus deploy.

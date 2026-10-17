@@ -8,7 +8,7 @@ import {
   parseResults, steadyCacheP5, steadyCacheShare, trials, type Assertion, type EvalFile, type HarnessRun, type PlanUsage, type ToolFailure,
 } from './results';
 import { MEASURE_NAMES, shifts, type Measure, type Shift, type Spread } from './shifts';
-import { HARNESS_ERRORS } from './task';
+import { graded, HARNESS_ERRORS } from './task';
 
 export type EvalStats = {
   trials: number;
@@ -333,7 +333,7 @@ function stats({ assertions }: Pick<Cohort, 'assertions'>): EvalStats {
       ? [{ id: `deployment.${turn.outcome.status}${turn.outcome.heldBy === undefined ? '' : ` (held by ${turn.outcome.heldBy.join(', ')})`}`,
         evidence: turn.outcome.message }]
       : [],
-    ...turn.checks.filter((check) => !check.pass),
+    ...turn.checks.filter((check) => graded(check) && !check.pass),
   ].map((check) => ({
     check: `t${String(turn.turn)} ${check.id}`,
     evidence: check.evidence === undefined ? null : JSON.stringify(check.evidence),

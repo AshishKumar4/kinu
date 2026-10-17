@@ -4,7 +4,7 @@
  * auto-promoted trials are updates.
  */
 import * as v from 'valibot';
-import type { PendingAction, PendingActionKind } from './pending-actions';
+import type { PendingAction } from './pending-actions';
 import type { PendingDeviceConsent } from '../safety/device-consent';
 import type { PlanReviewStatus } from '../types/plans';
 import { workspaceDisplayTitle } from './workspace-title';
@@ -32,6 +32,7 @@ const WorkspaceOverviewSlateSchema = v.object({
 export const WorkspaceOverviewSchema = v.object({
   activity: v.picklist(['working', 'unfinished', 'idle']),
   decisionsWaiting: v.number(),
+  /** Always false: kept on the wire for a page or a stored tile of the build before, which require it. */
   hasUpdates: v.boolean(),
   latestRun: v.nullable(WorkspaceOverviewRunSchema),
   slates: v.array(WorkspaceOverviewSlateSchema),
@@ -61,25 +62,6 @@ export interface WorkspaceOverviewInputs {
   readonly shares: readonly WorkspaceOverviewShare[];
 }
 
-type QueueEffect = 'decision' | 'update' | 'ignore';
-
-function pendingActionEffect(kind: PendingActionKind): QueueEffect {
-  switch (kind) {
-    case 'deferred_action':
-      return 'decision';
-    case 'workspace_proposal':
-      return 'decision';
-    case 'unseen_changes':
-      return 'update';
-    case 'scaffold_version':
-      return 'decision';
-    case 'curriculum_task':
-      return 'ignore';
-    case 'plan_review':
-      return 'decision';
-  }
-}
-
 function activityOf(working: boolean, unfinished: boolean): WorkspaceOverview['activity'] {
   if (working) return 'working';
 
@@ -89,23 +71,17 @@ function activityOf(working: boolean, unfinished: boolean): WorkspaceOverview['a
 }
 
 export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): WorkspaceOverview {
-  let decisionsWaiting = inputs.pendingConsents.length + (inputs.activePlan?.status === 'pending' ? 1 : 0) + inputs.openQuestions;
-  let hasUpdates = false;
-
-  for (const action of inputs.pendingActions) {
-    const effect = pendingActionEffect(action.kind);
-
-    if (effect === 'decision') decisionsWaiting += 1;
-
-    if (effect === 'update') hasUpdates = true;
-  }
+  // Every row the queue holds is a decision: what the agent did by itself never reaches it (`awaitingTheOwner`).
+  const decisionsWaiting = inputs.pendingConsents.length + (inputs.activePlan?.status === 'pending' ? 1 : 0) + inputs.openQuestions
+    + inputs.pendingActions.length;
 
   const task = inputs.latestRun?.task ?? null;
 
   return {
     activity: activityOf(inputs.working, inputs.unfinished),
     decisionsWaiting,
-    hasUpdates,
+    // Nothing is an update to look at any more; kept, false, for a page or a stored tile of the build before.
+    hasUpdates: false,
     awaitsSettings: inputs.awaitsSettings,
 
     latestRun: inputs.latestRun === null
@@ -144,7 +120,7 @@ export function rosterMatches(entry: { readonly name: string; readonly displayNa
 }
 
 /** `needs` waits on the owner; `failed`/`unfinished` are ends and durable leftovers; `updated`/`idle` are quiet. */
-export type WorkspaceStatus = 'needs' | 'working' | 'failed' | 'unfinished' | 'updated' | 'idle' | 'unreported';
+export type WorkspaceStatus = 'needs' | 'working' | 'failed' | 'unfinished' | 'idle' | 'unreported';
 
 export interface WorkspaceHeadline {
   readonly label: string;
@@ -174,8 +150,6 @@ function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
   if (o.latestRun?.status === 'error') return { label: 'Last run failed', status: 'failed' };
 
   if (o.activity === 'unfinished') return { label: 'Unfinished', status: 'unfinished' };
-
-  if (o.hasUpdates) return { label: 'Updated', status: 'updated' };
 
   return { label: 'Idle', status: 'idle' };
 }

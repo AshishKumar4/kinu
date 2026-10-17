@@ -11,7 +11,6 @@ export function workspaceStatusTone(status: WorkspaceStatus): StatusTone {
     case "failed":
     case "unfinished":
       return "danger";
-    case "updated":
     case "idle":
     case "unreported":
       return "neutral";

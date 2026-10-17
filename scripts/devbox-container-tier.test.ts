@@ -4,6 +4,7 @@ import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
 import { contractOwner, contractOwnerEnded, contractRunEnded, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
 import type { ContractOwner, ContractTeardown } from './fixtures/devbox-e2e/ledger';
+import { dropLease, fixtureNames, takeLease, type Lease, type LeaseStore } from './fixtures/devbox-e2e/fixture';
 
 test('the real-container tier refuses missing staging authority even when production authority exists', () => {
   expect(() => tierIdentity({ KINU_EVAL_WEB_IDENTITY: 'production' })).toThrow('requires KINU_EVAL_STAGING_WEB_IDENTITY');
@@ -15,24 +16,102 @@ test('a changed recovery value fails the same oracle the live tier uses', () => 
   requireEqual({ bytes: 'kept', deleted: false }, { bytes: 'kept', deleted: false });
 });
 
-test('a throwing health check is recorded and never stops Worker, application or bucket deletion', async () => {
+test('a throwing health check is recorded and never stops the boxes, snapshots or bucket going', async () => {
   const deleted: string[] = [];
 
   const [outcome] = await Promise.allSettled([completeTeardown({
     health: async () => { throw new Error('DNS ETIMEOUT'); },
-    beforeDelete: async () => undefined,
-    worker: async () => { deleted.push('worker'); },
-    application: async () => { deleted.push('application'); },
+    boxes: async () => { deleted.push('boxes'); },
+    snapshots: async () => { deleted.push('snapshots'); },
     bucket: async () => { deleted.push('bucket'); },
   })]);
 
-  expect(deleted).toEqual(['worker', 'application', 'bucket']);
+  expect(deleted).toEqual(['boxes', 'snapshots', 'bucket']);
   expect(outcome).toEqual({ status: 'fulfilled', value: { health: { failure: 'DNS ETIMEOUT' }, errors: [] } });
+});
+
+// A box's clear reads its store: a bucket deleted under a box that was not emptied leaves a box no replay can clear.
+test('a box that was not emptied keeps the bucket for the replay, and the snapshots still go', async () => {
+  const deleted: string[] = [];
+
+  const outcome = await completeTeardown({
+    health: async () => 200,
+    boxes: async () => { throw new Error('cleanup eval-devbox-x: contract mismatch'); },
+    snapshots: async () => { deleted.push('snapshots'); },
+    bucket: async () => { deleted.push('bucket'); },
+  });
+
+  expect({ deleted, errors: outcome.errors }).toEqual({
+    deleted: ['snapshots'],
+    errors: ['boxes: cleanup eval-devbox-x: contract mismatch', 'bucket deletion: retained for the replay, as a box was not emptied'],
+  });
+});
+
+// 2026-10-16: a namespace new to the platform answered `internal error` for up to 45 s after its deploy, and a Worker of
+// each run's own met it in 8 of 153 runs; a deploy of an existing one met it in none of 6 probes.
+test('every run deploys the same fixture Worker, and binds a bucket of its own', () => {
+  const [first, second] = ['dc20261016140327aaaaa', 'dc20261016150327bbbbb'].map(fixtureNames);
+
+  expect({ worker: first?.worker === second?.worker, app: first?.app === second?.app, buckets: first?.bucket !== second?.bucket, bucketIsRuns: first?.bucket.includes('dc20261016140327aaaaa') })
+    .toEqual({ worker: true, app: true, buckets: true, bucketIsRuns: true });
+});
+
+/** A lease store as R2 keeps one: a write lands where none is held, or where the held one is still the version named. */
+function leaseStore(): LeaseStore & { held: () => Lease | null } {
+  let held: { lease: Lease; version: string } | null = null;
+  let versions = 0;
+
+  return {
+    held: () => held?.lease ?? null,
+    read: async () => held,
+    write: async (lease, version) => {
+      if ((held?.version ?? null) !== version) return false;
+      versions += 1;
+      held = { lease, version: String(versions) };
+
+      return true;
+    },
+    remove: async () => { held = null; },
+  };
+}
+
+const leaseOf = (run: string, job: string): Lease => ({
+  schema: 'devbox-contracts/lease@1', worker: 'kinu-devbox-contracts-staging', run,
+  owner: { job, index: 0, attempt: 1, vessel: 'v1', statusUrl: `https://armada.test/status/${job}`, statusToken: 'scoped' },
+});
+
+test('one run at a time deploys the fixture: a running holder refuses the next, naming it, and an ended one is taken over', async () => {
+  const store = leaseStore();
+  const first = leaseOf('dc20261016140327aaaaa', 'job-a');
+  const second = leaseOf('dc20261016150327bbbbb', 'job-b');
+
+  await takeLease(store, first, async () => false);
+  await expect(takeLease(store, second, async () => false)).rejects.toThrow('held by run dc20261016140327aaaaa (armada job job-a, task 0, attempt 1), which is still running');
+
+  const asked: string[] = [];
+
+  await takeLease(store, second, async (owner) => {
+    asked.push(owner.job);
+
+    return true;
+  });
+  expect({ asked, held: store.held() }).toEqual({ asked: ['job-a'], held: second });
+});
+
+test('a run gives up only its own lease', async () => {
+  const store = leaseStore();
+  const first = leaseOf('dc20261016140327aaaaa', 'job-a');
+
+  await takeLease(store, first, async () => false);
+  await expect(dropLease(store, 'dc20261016150327bbbbb')).rejects.toThrow('not run dc20261016150327bbbbb');
+  await dropLease(store, first.run);
+  await dropLease(store, first.run);
+  expect(store.held()).toBe(null);
 });
 
 /** An abandoned run's teardown record, as the ledger answers it. */
 const abandoned = (run: string): ContractTeardown => ({
-  schema: 'devbox-contracts/teardown@2', run, worker: `kinu-${run}`, app: `kinu-${run}-contractbox`, bucket: `kinu-${run}`,
+  schema: 'devbox-contracts/teardown@3', run, ...fixtureNames(run),
   boxes: [], declared: 'cloudflare/debian-trixie', snapshots: [], applicationIds: [],
   owner: { job: '20261015185143-44a621b9', index: 2, attempt: 1, vessel: 'v1', statusUrl: 'https://armada.invalid/status/20261015185143-44a621b9', statusToken: 'scoped' },
 });

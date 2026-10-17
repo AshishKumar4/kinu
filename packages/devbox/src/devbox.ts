@@ -2925,7 +2925,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   #diskChainPorts(bucket: R2Bucket): DiskChainPorts {
     const root = chainStoreRoot(this.#boxPrefix());
-    const exec = (command: string) => this.#rawExec(command, DEVBOX_RUNTIME_DIR);
+
+    // Each container call the chain makes, named by its command's first line, which holds paths and layer keys and no
+    // credential: a checkpoint that never returns names the call it waits on.
+    const exec = async (command: string) => {
+      const call = command.split('\n', 1)[0]?.slice(0, 80) ?? '';
+
+      this.#trace('chain.exec.enter', { call });
+      const result = await this.#rawExec(command, DEVBOX_RUNTIME_DIR);
+
+      this.#trace('chain.exec.exit', { call, exitCode: result.exitCode });
+
+      return result;
+    };
 
     return {
       exec,
@@ -2949,8 +2961,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       },
       mountStore: async () => {
         if ((await exec(`mountpoint -q ${STORE_MOUNT}`)).exitCode === 0) return;
+        this.#trace('chain.mount.unmount', {});
         await this.#routes().unmount(STORE_MOUNT);
+        this.#trace('chain.mount.mount', {});
         await this.#routes().mount(STORE_MOUNT);
+        this.#trace('chain.mount.exit', {});
       },
       excludes: () => this.archiveExcludes,
       now: () => Date.now(),

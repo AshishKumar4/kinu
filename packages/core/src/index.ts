@@ -235,7 +235,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog,
+  awaitingTheOwner, buildChangelog, countUnseenChangelog,
   revertChangelogEntryById, ChangelogEntrySchema, ChangelogRevertResultSchema,
   type ChangelogEntry, type ChangelogEntryKind,
   type ChangelogRevertResult,
@@ -2087,7 +2087,7 @@ export {
 export { isAdvisorSeverity } from './types/advisor';
 
 export {
-  getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
 
 export { EvolutionChangelogViewSchema, type EvolutionChangelogView } from './read-models/evolution-views';
