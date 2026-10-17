@@ -76,7 +76,10 @@ describe('the tower in the game\'s own save', () => {
 describe('the box at the end', () => {
   const clean: LiveBox = {
     foreign: [],
-    changed: ['/tmp/devbox-desktop.log', '/var/tmp/devbox/disk-changes.changed', '/etc/ssl/certs/ca-certificates.crt'],
+    changed: [
+      '/tmp/devbox-desktop.log', '/var/tmp/devbox/disk-changes.changed', '/etc/ssl/certs/ca-certificates.crt',
+      '/etc/chromium/policies/managed/kinu-box.json',
+    ],
     windows: ['Minecraft Classic', 'tint2'],
     tampered: [],
     browser: { alive: true, launched: '/usr/lib/chromium/chromium --app=https://classic.minecraft.net', cmdline: '/usr/lib/chromium/chromium --app=https://classic.minecraft.net' },
