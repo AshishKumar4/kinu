@@ -382,6 +382,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   ownerQueue(): Promise<{ tool: string; server: string; viewer: string; payload: import('@kinu.run/core').JsonValue; revision: string }[]>;
   ownerDecides(approve: boolean): Promise<number>;
   editBoard(): Promise<string>;
+  heldWrite(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string, change: 'revoke' | 'own'): Promise<{ mutateError: string; written: boolean }>;
   listShare(share: string): Promise<ProbeAnswer>;
   told(): Promise<string[]>;
   startParts(): Promise<string>;

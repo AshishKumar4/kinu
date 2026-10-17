@@ -162,6 +162,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly deferrals: DeferredApprovalQueue;
   /** Each live share whose listing the Gallery was told, in order, since this object started. */
   private readonly galleryTold: string[] = [];
+  /** The writes a viewer's call made, past its admission. */
+  #writes = 0;
+  /** A write held between its preparation and its send, while a test changes its share. */
+  #heldWrite: { readonly reached: { resolve: () => void }; readonly release: { readonly promise: Promise<void> } } | null = null;
   /** Each viewer's own account, as their parts reach it. */
   private readonly accounts = new FakeViewerAccounts();
   /** The notes slate's share (`startParts`). */
@@ -234,9 +238,21 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         // The actor's half of authorizing a browser member: it is within reach, so the class may run it.
         if (route.namespace === 'web' && context.authorizeOnly) {
           requireCodemodeMember([PROBE_WEB], 'web', route.member);
+          context.admit?.();
 
           return null;
         }
+
+        // A write a test holds where its dispatch prepares it, before the send, as an MCP call's credentials are read.
+        const hold = route.member === 'writeFile' ? this.#heldWrite : null;
+
+        if (hold !== null) {
+          hold.reached.resolve();
+          await hold.release.promise;
+        }
+
+        // As the actor does: a viewer's call is admitted immediately before it acts.
+        context.admit?.();
 
         if (route.namespace === 'web') return await callCodemodeMember([PROBE_WEB], 'web', route.member, route.args) ?? null;
 
@@ -245,6 +261,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
           return this.vfs.as(CRED_KERNEL).readFileString(path);
         }
+
+        if (route.member === 'writeFile') this.#writes += 1;
 
         return null;
       },
@@ -272,6 +290,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       partConnections: this.accounts,
       ownerEffects: {
         ask: (id, effect) => this.deferrals.slateEffect(id, effect),
+        take: (id) => this.deferrals.takeSlateEffect(id),
         settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
         retire: (share) => { this.deferrals.retireSlateEffects(share); },
       },
@@ -510,6 +529,28 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const asked = this.deferrals.list().filter((action) => approvalKindOf(action).kind === 'slate-effect').map((action) => action.id);
 
     return asked.length === 0 ? 0 : (await this.deferrals.decide(asked, approve ? 'approved' : 'denied')).length;
+  }
+
+  /**
+   * A viewer's write held where its dispatch prepares it while its share is revoked, or turned to each viewer's own
+   * access, then let go: what the write answered, and whether it was made.
+   */
+  async heldWrite(handle: string, claim: ShareViewerClaim, share: string, change: 'revoke' | 'own'): Promise<{ mutateError: string; written: boolean }> {
+    const hold = { reached: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+    const before = this.#writes;
+
+    this.#heldWrite = hold;
+    const batch = this.viewerBatch(handle, claim);
+
+    await hold.reached.promise;
+
+    if (change === 'revoke') await this.revoke(share);
+    else await this.host.controller.setLiveShareMode({ workspace: this.ctx.id.name ?? this.ctx.id.toString(), share, mode: 'own' });
+    this.#heldWrite = null;
+    hold.release.resolve();
+    const { mutateError } = await batch;
+
+    return { mutateError, written: this.#writes > before };
   }
 
   /** Its owner lists `share` in the Gallery, as their share sheet does. */
