@@ -4,6 +4,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { canaryActivations } from './durability-canary-telemetry';
 import {
   alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings, versionSignals,
+  workWindow,
 } from './prod-logs';
 
 const HOUR = 3_600_000;
@@ -207,6 +208,20 @@ describe('what one deployed version did, as a deploy reports it', () => {
       { what: 'idle wakes', finding: 'object storming woke 1620 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
       { what: 'idle wakes', finding: 'object turn-ended woke 4 time(s) with nothing to watch in the hour from 1970-01-01T01:00:00Z' },
     ]);
+  });
+
+  // Staging fdf995c70, 2026-10-17: the version's window ended at 04:54:12.9, 7 s after a devbox's heartbeat, and the
+  // workspace's agent called that box at 04:56; read only up to the window's end, the heartbeat had nothing to watch.
+  test("an alarm near its window's end is judged by the version's work in the minutes after it", () => {
+    const minute = 60_000;
+    const window = { from: Date.parse('2026-10-17T04:48:08Z'), to: Date.parse('2026-10-17T04:54:12.915Z') };
+    const heartbeat = [{ object: 'devbox', minute: Date.parse('2026-10-17T04:54:00Z'), count: 1 }];
+    const calls = [{ object: 'devbox', minute: Date.parse('2026-10-17T04:56:00Z'), count: 109 }];
+    const within = ({ from, to }: { readonly from: number; readonly to: number }) => calls.filter((row) => row.minute + minute > from && row.minute < to);
+
+    expect(workWindow(window)).toEqual({ from: window.from, to: window.to + 5 * minute });
+    expect(idleWakeHours(heartbeat, within(workWindow(window)))).toEqual([]);
+    expect(idleWakeHours(heartbeat, within(window))).toEqual([{ object: 'devbox', hour: Date.parse('2026-10-17T04:00:00Z'), count: 1 }]);
   });
 
   // Staging c6dc27da1, 2026-10-13: 13 deleted eval workspaces each got one alarm delivery 10 minutes after `destroyed`,
