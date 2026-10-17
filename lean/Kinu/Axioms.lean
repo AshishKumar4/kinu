@@ -195,6 +195,22 @@ import Kinu
 #print axioms Kinu.SharingNimbus.a_withdrawn_consent_refuses_every_later_call
 #print axioms Kinu.SharingNimbus.a_parts_value_reaches_only_its_consented_server_or_an_approved_destination
 
+/-! ## SharingNimbus launch-sharing fences -/
+
+#print axioms Kinu.SharingNimbus.Fence.every_sharing_change_advances_its_fence_in_the_same_step
+#print axioms Kinu.SharingNimbus.Fence.one_slates_fence_leaves_other_slates_unchanged
+#print axioms Kinu.SharingNimbus.Fence.a_sharing_generation_never_returns
+#print axioms Kinu.SharingNimbus.Fence.sharing_cannot_change_behind_an_unmoved_fence
+#print axioms Kinu.SharingNimbus.Fence.an_admitted_binding_keeps_its_launch_sharing
+#print axioms Kinu.SharingNimbus.Fence.owner_egress_and_browser_authority_stay_unshared
+#print axioms Kinu.SharingNimbus.Fence.a_changed_fence_permanently_refuses_an_old_binding
+#print axioms Kinu.SharingNimbus.Fence.an_invocation_keeps_its_incarnation_and_every_chain_fence
+#print axioms Kinu.SharingNimbus.Fence.another_incarnation_cannot_reuse_an_invocation
+#print axioms Kinu.SharingNimbus.Fence.a_stale_launch_is_restarted_with_current_sharing
+#print axioms Kinu.SharingNimbus.Fence.a_ready_launch_still_has_the_sharing_it_chose
+#print axioms Kinu.SharingNimbus.Fence.splitting_a_share_change_from_its_fence_admits_stale_owner_authority
+#print axioms Kinu.SharingNimbus.Fence.the_atomic_share_change_refuses_the_same_stale_binding
+
 /-! ## Kinu/Storage/FTS5Search.lean -/
 
 #print axioms Kinu.Storage.FTS5Search.index_includes_new

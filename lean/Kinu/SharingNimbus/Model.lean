@@ -373,4 +373,163 @@ def exec (env : Env) (world : World) : State → List Event → State
   | s, [] => s
   | s, e :: es => exec env world (step env world s e) es
 
+namespace Fence
+
+structure Slate where
+  generation : Nat := 0
+  shares : List Share := []
+  deriving DecidableEq, BEq, Inhabited
+
+-- A concrete result keeps Lean's evaluator from turning a partially applied
+-- transition into a lookup which replays the whole preceding history.
+structure Store where
+  lookup : String → Slate
+
+instance : CoeFun Store (fun _ => String → Slate) := ⟨Store.lookup⟩
+
+def emptyStore : Store := ⟨fun _ => {}⟩
+
+def put (store : Store) (slate : String) (value : Slate) : Store :=
+  ⟨fun name => if name = slate then value else store name⟩
+
+/-- Launch-relevant changes and their fence have one linearization point.
+    Grant-only edits need no fence: each send re-weighs those live grants. -/
+def write (store : Store) (slate : String) (shares : List Share) (advance : Bool) : Store :=
+  put store slate ⟨(store slate).generation + (if advance then 1 else 0), shares⟩
+
+def change (store : Store) (slate : String) (shares : List Share) : Store := write store slate shares true
+
+structure SharingView where
+  id : Nat
+  live : Bool
+  mode : ShareMode
+  deriving DecidableEq, BEq, Inhabited
+
+/-- Grants and grant revisions are re-weighed at each send, not frozen at launch. -/
+def sharingView (share : Share) : SharingView := ⟨share.id, share.live, share.authority.mode⟩
+
+def launchSharing (shares : List Share) : List SharingView := shares.map sharingView
+
+def liveId (shares : List Share) (id : Nat) : Bool :=
+  shares.any fun share => decide (share.id = id ∧ share.live = true)
+
+def modeMoves (shares : List Share) (id : Nat) (authority : LiveShareAuthority) : Bool :=
+  shares.any fun share => decide (share.id = id ∧ share.live = true ∧ share.authority.mode ≠ authority.mode)
+
+def rewriteAuthority (shares : List Share) (id : Nat) (authority : LiveShareAuthority) : List Share :=
+  shares.map fun share => if share.id = id ∧ share.live = true then { share with authority } else share
+
+inductive Event where
+  | add (slate : String) (share : Share)
+  | revoke (slate : String) (share : Nat)
+  | setAuthority (slate : String) (share : Nat) (authority : LiveShareAuthority)
+  | observe
+  deriving Inhabited
+
+def changedSlate : Event → Option String
+  | .add slate _ | .revoke slate _ | .setAuthority slate _ _ => some slate
+  | .observe => none
+
+/-- Successful store calls. Duplicate/missing ids rejected by the database are
+    outside these transitions; unrelated viewer/listing metadata is omitted. -/
+def step (store : Store) : Event → Store
+  | .add slate share => change store slate ((store slate).shares ++ [{ share with live := true }])
+  | .revoke slate id =>
+    if liveId (store slate).shares id then change store slate ((store slate).shares.map fun share =>
+      if share.id = id then { share with live := false } else share)
+    else store
+  | .setAuthority slate id authority => write store slate
+      (rewriteAuthority (store slate).shares id authority) (modeMoves (store slate).shares id authority)
+  | .observe => store
+
+def exec : Store → List Event → Store
+  | store, [] => store
+  | store, e :: es => exec (step store e) es
+
+def isShared (store : Store) (slate : String) : Bool := (launchSharing (store slate).shares).any (·.live)
+
+structure Lineage where
+  incarnation : String
+  generation : Nat
+  deriving DecidableEq, BEq, Inhabited
+
+structure Invocation where
+  incarnation : String
+  generations : List (String × Nat)
+  deriving DecidableEq, BEq, Inhabited
+
+/-- The boolean projection of SharedServers.lineage: null permits; an error
+    refuses. The host, not a caller, must mint bindings and invocation records. -/
+def lineage (store : Store) (slate : String) (token : Lineage) (record : Option Invocation) : Bool :=
+  token.generation == (store slate).generation &&
+    match record with
+    | none => true
+    | some issued => issued.incarnation == token.incarnation &&
+        issued.generations.all fun (name, generation) => (store name).generation == generation
+
+structure Launch where
+  slate : String
+  lineage : Lineage
+  sharing : List SharingView
+  ownerEgress : Bool
+  ownerBrowser : Bool
+  deriving DecidableEq, BEq, Inhabited
+
+/-- These choices precede asynchronous launch work and travel with the binding. -/
+def beginLaunch (store : Store) (slate incarnation : String) : Launch :=
+  ⟨slate, ⟨incarnation, (store slate).generation⟩, launchSharing (store slate).shares,
+    !(isShared store slate), !(isShared store slate)⟩
+
+inductive LaunchResult where
+  | ready (launch : Launch)
+  | restart (replacement : Launch)
+  deriving DecidableEq, BEq, Inhabited
+
+/-- A generation move during a launch ends that attempt. A replacement chooses
+    its egress and browser actor afresh, not from the obsolete attempt. -/
+def finishLaunch (store : Store) (launch : Launch) (replacementIncarnation : String) : LaunchResult :=
+  if launch.lineage.generation = (store launch.slate).generation then .ready launch
+  else .restart (beginLaunch store launch.slate replacementIncarnation)
+
+namespace Split
+
+inductive Event where
+  | change (slate : String) (shares : List Share)
+  | fence (slate : String)
+  | call (launch : Launch) (record : Option Invocation)
+
+structure Receipt where
+  launch : Launch
+  sharedNow : Bool
+  deriving DecidableEq, BEq, Inhabited
+
+structure State where
+  store : Store := emptyStore
+  admitted : List Receipt := []
+
+/-- Deliberately unsafe: an await between change and fence lets a call observe
+    changed sharing while its old lineage still compares current. -/
+def step (state : State) : Event → State
+  | .change slate shares => { state with store := put state.store slate { state.store slate with shares } }
+  | .fence slate => { state with store := put state.store slate { state.store slate with generation := (state.store slate).generation + 1 } }
+  | .call launch record =>
+    if lineage state.store launch.slate launch.lineage record then
+      { state with admitted := state.admitted ++ [⟨launch, isShared state.store launch.slate⟩] }
+    else state
+
+def exec : State → List Event → State
+  | state, [] => state
+  | state, e :: es => exec (step state e) es
+
+end Split
+
+def witnessShare : Share := ⟨0, "viewer", ⟨.own, {}, none⟩, true⟩
+
+def witnessLaunch : Launch := beginLaunch emptyStore "board" "before-sharing"
+
+def splitWitness : Split.State := Split.exec {} [
+  .change "board" [witnessShare], .call witnessLaunch none, .fence "board"]
+
+end Fence
+
 end Kinu.SharingNimbus

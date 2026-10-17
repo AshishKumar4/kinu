@@ -11,3 +11,4 @@ import Kinu.Refine.RecordsCases
 import Kinu.Refine.CredentialCases
 import Kinu.Refine.DeviceViewCases
 import Kinu.Refine.SharePolicyCases
+import Kinu.Refine.ShareFenceCases
