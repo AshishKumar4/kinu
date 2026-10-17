@@ -794,7 +794,7 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       await page.goto(`${origin}/gallery.html?frame=transcript`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-tool-run]');
       expect(await page.$$eval('[data-tool-run]', (runs) => runs.every((line) => line.getAttribute('data-tool-run') === 'settled'
-        && [...run.querySelectorAll('[data-tool-state]')].every((row) => row.getClientRects().length === 0)))).toBe(true);
+        && [...line.querySelectorAll('[data-tool-state]')].every((row) => row.getClientRects().length === 0)))).toBe(true);
       await page.close();
     });
   });
