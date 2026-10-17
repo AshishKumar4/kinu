@@ -102,6 +102,8 @@ The chat draws it in place once your answer is stored, called by its \`<title>\`
 
 ## A slate with files
 
+Its files are \`/slates/<id>/\`, written by that absolute path: a relative \`slates/<id>\` is under your home, where no slate is read. Its manifest is \`/slates/<id>/package.json\`, and no other file name:
+
 \`\`\`json
 { "main": "server.ts", "browser": "client.tsx", "slate": { "title": "Deploy checklist" } }
 \`\`\`
@@ -109,7 +111,7 @@ The chat draws it in place once your answer is stored, called by its \`<title>\`
 \`slate.title\` is what the user sees it called. \`browser\` is a React component, or an \`.html\` page written as a block's is. \`main\` exports a class named \`Slate\` extending \`SlateObject\` from \`kinu:slate\`; every public method is callable from the client, with JSON arguments and results, and functions passed by reference. Both may live in one \`slate.tsx\`; keep server code out of the component and React out of the class.
 
 \`\`\`ts
-// server.ts
+// /slates/<id>/server.ts
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
   async add(text: string) {
@@ -120,7 +122,7 @@ export class Slate extends SlateObject {
   }
   async list() { return (await this.storage.get("items")) ?? []; }
 }
-// client.tsx: the default export is mounted for you; Kinu provides React 19.
+// /slates/<id>/client.tsx: the default export is mounted for you; Kinu provides React 19.
 import { useEffect, useState } from "react";
 import { slate } from "kinu:slate";
 export default function App() {
@@ -130,7 +132,7 @@ export default function App() {
 }
 \`\`\`
 
-\`this.storage\` is a key-value store (\`get\`, \`put\`, \`delete\`, \`list({ prefix?, limit? })\`) and \`this.sql\` the slate's own SQLite (\`this.sql.exec(query, ...params).toArray()\`); what either holds persists across code edits, restarts and eviction. Memory on the class is a cache. Methods named \`_x\`, the constructor and \`fetch\` are not callable; define \`fetch(request)\` only to serve a download of your own. To push updates, take a callback: \`subscribe(callback)\` keeps \`callback.dup()\` and calls it, and \`held.onRpcBroken(...)\` forgets it; the client subscribes again when its socket drops. \`useHostContext()\` answers \`{ theme, display }\`.
+\`this.storage\` is a key-value store (\`get\`, \`put\`, \`delete\`, \`list({ prefix?, limit? })\`) and \`this.sql\` the slate's own SQLite (\`this.sql.exec(query, ...params).toArray()\`); what either holds persists across code edits, restarts and eviction. Memory on the class is a cache. Methods named \`_x\` (TypeScript's \`private\` hides nothing at run time), the constructor and \`fetch\` are not callable; define \`fetch(request)\` only to serve a download of your own. To push updates, take a callback: \`subscribe(callback)\` keeps \`callback.dup()\` and calls it, and \`held.onRpcBroken(...)\` forgets it; the client subscribes again when its socket drops. \`useHostContext()\` answers \`{ theme, display }\`.
 
 ## workspace: your reach, as you
 

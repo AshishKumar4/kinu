@@ -5,16 +5,16 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { EVAL_WIDTH_POOLS, EVAL_TASK_TIMEOUT_SECONDS, MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
+import { MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
 import { collectEvalTasks } from '../evals/src/eval';
-import type { EvalCallWidth, EvalTask } from '../evals/src/task';
+import type { EvalTask } from '../evals/src/task';
 import { ARMS, deployedBuild } from '../evals/src/target';
 import { evalTargetVerdict, evalWebIdentityEnv } from '../packages/test-utils/src/eval-identity';
 import { deploymentOf } from './infra-manifest';
 import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
-import { LOCAL_CHECK, processEvals } from './evals-post';
+import { NETWORK_SCOPE, processEvals } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
 import { REPO_ROOT as ROOT } from './repo-root';
 
@@ -34,50 +34,40 @@ export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, orig
   });
 }
 
-export interface EvalWidthQueue {
-  readonly calls: EvalCallWidth;
-  readonly pool: number;
-  readonly cells: readonly { readonly index: number; readonly item: TrialItem }[];
-}
+/** A trial as armada queues it: what each of its runs spends of the shared Muse budget (`cost`, its task's recorded
+ *  model-call peak), and its place in the one queue (`weight`, the same: the widest trials start while the budget is
+ *  whole, and narrower ones fill what they leave). A cell's two legs are adjacent and weigh alike, so they start
+ *  together and meet the provider at the same hour. */
+export type QueuedTrial = TrialItem & { readonly cost: number; readonly weight: number };
 
-/** Equal-width native queues reserve actual task peaks under one shared provider ceiling, across both legs. */
-export function evalWidthQueues(items: readonly TrialItem[], tasks: readonly EvalTask[]): EvalWidthQueue[] {
-  const definitions = new Map(tasks.map((task) => [task.id, task]));
-  const widths = new Map<EvalCallWidth, { index: number; item: TrialItem }[]>();
+/** Every trial in one work-conserving queue under one ceiling, both legs together: a trial starts whenever its cost
+ *  fits what the running trials leave of `MUSE_CALLS_AT_ONCE` (armada's `budget`), so no share of it waits idle on a
+ *  queue that drained. Replayed on the 51 trials 66938aa25 finished: 4,854 s against 10,268 s for the four fixed
+ *  width pools it replaces. */
+export function evalQueue(items: readonly TrialItem[], tasks: readonly EvalTask[]): QueuedTrial[] {
+  const peaks = new Map(tasks.map((task) => [task.id, task.modelCallPeak]));
 
-  for (const [index, item] of items.entries()) {
-    const peak = definitions.get(item.task)?.modelCallPeak;
+  return items.map((item) => {
+    const peak = peaks.get(item.task);
 
-    if (peak === undefined || peak.source.trim() === '' || !Object.hasOwn(EVAL_WIDTH_POOLS, peak.calls)) {
-      throw new Error(`${item.task} names no supported measured model-call peak with a source`);
+    if (peak === undefined || peak.source.trim() === '' || !Number.isSafeInteger(peak.calls) || peak.calls < 1 || peak.calls > MUSE_CALLS_AT_ONCE) {
+      throw new Error(`${item.task} names no measured model-call peak from 1 to ${String(MUSE_CALLS_AT_ONCE)} with a source`);
     }
 
-    const cells = widths.get(peak.calls) ?? [];
-
-    cells.push({ index, item });
-    widths.set(peak.calls, cells);
-  }
-
-  const queues = [...widths.entries()].sort(([a], [b]) => a - b).map(([calls, cells]) => {
-    const capacity = EVAL_WIDTH_POOLS[calls];
-
-    return { calls, pool: Math.min(capacity, cells.length), cells };
+    return { ...item, cost: peak.calls, weight: peak.calls };
   });
-
-  const reserved = queues.reduce((total, queue) => total + queue.calls * queue.pool, 0);
-
-  if (reserved > MUSE_CALLS_AT_ONCE) throw new Error(`native width queues reserve ${String(reserved)} calls, past ${String(MUSE_CALLS_AT_ONCE)}`);
-
-  return queues;
 }
 
-/** Only armada's supported CLI: a native uniform-width pool, commit checkout and per-task artifact extraction. */
-export function evalMapArgv(sha: string, out: string, identities: readonly string[], queue: Pick<EvalWidthQueue, 'calls' | 'pool'>): string[] {
+/** Only armada's supported CLI: one map of `trials` items under the shared budget, as many containers as the budget
+ *  can run trials at once, no elapsed limit on the job or a trial (each ends on its own; the job ends once this
+ *  command stops following it), the commit's checkout and per-task artifact extraction. */
+export function evalMapArgv(sha: string, out: string, identities: readonly string[], trials: number): string[] {
   return [join(ROOT, 'node_modules', '.bin', 'armada'), 'map',
     `--connection=${join(homedir(), '.config', 'armada', 'armada-kinu.json')}`, `--commit=${sha}`,
-    '--items=-', `--pool=${String(queue.pool)}`, `--timeout=${String(EVAL_TASK_TIMEOUT_SECONDS)}`,
+    '--items=-', `--pool=${String(Math.min(trials, MUSE_CALLS_AT_ONCE))}`, `--budget=${String(MUSE_CALLS_AT_ONCE)}`,
+    '--deadline=none', '--timeout=none',
     `--artifacts=${join(out, 'trials')}`, `--secrets=${identities.join(',')}`, '--json',
-    `--label=evals ${sha.slice(0, 12)} width ${String(queue.calls)}`, '--', 'bun', 'evals/scripts/trial.ts'];
+    `--label=evals ${sha.slice(0, 12)}`, '--', 'bun', 'evals/scripts/trial.ts'];
 }
 
 /** The explicitly selected matrix, from the one tracked task enumeration; unknown or repeated tasks never run. */
@@ -94,8 +84,9 @@ export function evalTaskFiles(allTasks: readonly string[], requested: string | u
   return files;
 }
 
-/** Decode the native JSON-lines contract while draining progress concurrently, without a pipe deadlock. */
-async function mapTrials(argv: string[], items: readonly TrialItem[]) {
+/** Decode the native JSON-lines contract while draining progress concurrently, without a pipe deadlock; `started` hears
+ *  the job's id as soon as armada names it, before any trial ends. */
+async function mapTrials(argv: string[], items: readonly QueuedTrial[], started: (job: string) => void) {
   const env = { ...process.env };
 
   delete env['ARMADA_URL'];
@@ -104,6 +95,7 @@ async function mapTrials(argv: string[], items: readonly TrialItem[]) {
   const child = Bun.spawn(argv, { cwd: ROOT, env, stdin: new Blob([JSON.stringify(items)]), stdout: 'pipe', stderr: 'pipe' });
 
   const outcomes: MapResult[] = [];
+  const began = Date.now();
   let pending = '';
   const decode = new TextDecoder();
 
@@ -118,7 +110,7 @@ async function mapTrials(argv: string[], items: readonly TrialItem[]) {
 
   try {
     [progress] = await Promise.all([
-      drainArmadaProgress(child.stderr),
+      drainArmadaProgress(child.stderr, started),
       (async () => {
         for await (const bytes of child.stdout) {
           pending += decode.decode(bytes, { stream: true });
@@ -135,7 +127,8 @@ async function mapTrials(argv: string[], items: readonly TrialItem[]) {
 
               if (item === undefined || outcomes.some((held) => held.index === outcome.index)) throw new Error(`unexpected armada task index ${String(outcome.index)}`);
               outcomes.push(outcome);
-              console.log(`${item.leg} ${item.task} trial ${String(item.trial)}: ${outcome.kind}, ${outcome.seconds.toFixed(1)}s`);
+              console.log(`${item.leg} ${item.task} trial ${String(item.trial)}: ${outcome.kind}, ${outcome.seconds.toFixed(1)}s, `
+                + `${String(outcomes.length)} of ${String(items.length)} in ${((Date.now() - began) / 1000).toFixed(0)}s`);
             }
 
             end = pending.indexOf('\n');
@@ -198,14 +191,13 @@ async function main(): Promise<number> {
 
   const taskFiles = evalTaskFiles(allTasks, values.tasks);
 
-  const items = evalItems(taskFiles, matrix, origins, values.pass);
-  const queues = evalWidthQueues(items, await collectEvalTasks());
+  const items = evalQueue(evalItems(taskFiles, matrix, origins, values.pass), await collectEvalTasks());
 
   // Standalone runs need the same actual credentials/catalog as deploy --evals. Only the operator's
   // provisioning step reads the existing key file; trial containers receive identities, never Muse keys.
   for (const { origin } of origins) {
-    const provision = Bun.spawn([LOCAL_CHECK, process.execPath, 'scripts/eval-provider-keys.ts', origin], {
-      cwd: ROOT, env: { ...process.env, LOCAL_CHECK_MEMORY: '4G', KINU_EVAL_MODELS: matrix.models.join(',') },
+    const provision = Bun.spawn([...NETWORK_SCOPE, process.execPath, 'scripts/eval-provider-keys.ts', origin], {
+      cwd: ROOT, env: { ...process.env, KINU_EVAL_MODELS: matrix.models.join(',') },
       stdout: 'inherit', stderr: 'inherit',
     });
 
@@ -216,34 +208,24 @@ async function main(): Promise<number> {
 
   mkdirSync(out, { recursive: true });
   const startedAt = Date.now();
+  const argv = evalMapArgv(sha, out, [...new Set(origins.map(({ origin }) => evalWebIdentityEnv(origin)))], items.length);
 
-  const pool = queues.reduce((total, queue) => total + queue.pool, 0);
-  const reserved = queues.reduce((total, queue) => total + queue.pool * queue.calls, 0);
-
-  console.log(`evals: ${String(items.length)} trials, ${String(pool)} simultaneous across ${String(queues.length)} native width queues, ${String(reserved)}/${String(MUSE_CALLS_AT_ONCE)} calls reserved`);
-
-  const identities = [...new Set(origins.map(({ origin }) => evalWebIdentityEnv(origin)))];
-
-  const mapped = await Promise.all(queues.map(async (queue) => ({ queue,
-    ...(await mapTrials(evalMapArgv(sha, join(out, `width-${String(queue.calls)}`), identities, queue), queue.cells.map(({ item }) => item))),
-  })));
-
-  const outcomes = mapped.flatMap(({ queue, outcomes: local }) => local.map((outcome) => {
-    const cell = queue.cells[outcome.index];
-
-    if (cell === undefined) throw new Error(`native width ${String(queue.calls)} returned unknown index ${String(outcome.index)}`);
-
-    return { ...outcome, index: cell.index };
-  }));
+  console.log(`evals: ${String(items.length)} trials in one queue under ${String(MUSE_CALLS_AT_ONCE)} calls at once, each spending its task's peak`);
 
   const run: EvalRun = {
     definitions: sha, candidateBuild, baselineBuild, taskFiles, models: [...matrix.models], arms: [...matrix.arms],
-    trials: matrix.trials, startedAt, jobs: mapped.map(({ job }) => job), pool, pass: values.pass,
-    queues: mapped.map(({ job, queue }) => ({ job, calls: queue.calls, pool: queue.pool, tasks: [...new Set(queue.cells.map(({ item }) => item.task))] })),
+    trials: matrix.trials, startedAt, jobs: [], budget: MUSE_CALLS_AT_ONCE, pass: values.pass,
   };
 
+  // Kept as soon as armada names the job, so a run cut short still says which job holds its trials.
+  const { job, outcomes } = await mapTrials(argv, items, (named) => {
+    run.jobs = [named];
+    writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
+  });
+
+  run.jobs = [job];
   writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
-  writeFileSync(join(out, 'trial-job.json'), `${JSON.stringify(mapped, null, 2)}\n`);
+  writeFileSync(join(out, 'trial-job.json'), `${JSON.stringify({ job, outcomes }, null, 2)}\n`);
 
   if (outcomes.some((outcome) => outcome.kind === 'cancelled')) return 130;
 
@@ -251,19 +233,19 @@ async function main(): Promise<number> {
 
   run.wallSeconds = (Date.now() - startedAt) / 1000;
   writeFileSync(join(out, 'evals', 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
-  console.log(`report: ${join(out, 'evals')}; wall ${run.wallSeconds.toFixed(1)}s, ${String(pool)} simultaneous, armada jobs ${run.jobs.join(', ')}`);
+  console.log(`report: ${join(out, 'evals')}; wall ${run.wallSeconds.toFixed(1)}s, armada job ${job}`);
 
   if (values.record) {
-    const recorded = Bun.spawn([LOCAL_CHECK, process.execPath, 'scripts/promote.ts', 'evals', join(out, 'evals')],
-      { cwd: ROOT, env: { ...process.env, LOCAL_CHECK_MEMORY: '4G' }, stdout: 'inherit', stderr: 'inherit' });
+    const recorded = Bun.spawn([...NETWORK_SCOPE, process.execPath, 'scripts/promote.ts', 'evals', join(out, 'evals')],
+      { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
 
     if (await recorded.exited !== 0) throw new Error('recording this eval verdict failed');
   }
 
   if (values.post !== undefined) {
     for (const [name, marker] of [['comparison', '<!-- kinu-evals-results -->'], ['why', '<!-- kinu-evals-why -->']] as const) {
-      const posted = Bun.spawn([LOCAL_CHECK, 'bash', 'evals/scripts/post-comment.sh', values.post, join(out, 'evals', name, 'comment.md'), marker],
-        { cwd: ROOT, env: { ...process.env, LOCAL_CHECK_MEMORY: '4G' }, stdout: 'inherit', stderr: 'inherit' });
+      const posted = Bun.spawn([...NETWORK_SCOPE, 'bash', 'evals/scripts/post-comment.sh', values.post, join(out, 'evals', name, 'comment.md'), marker],
+        { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
 
       if (await posted.exited !== 0) throw new Error(`posting the ${name} comment failed`);
     }

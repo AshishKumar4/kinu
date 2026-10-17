@@ -124,7 +124,7 @@ const CLASS_BOOT: readonly string[] = [
   '        if (!allowed.has(member)) {',
   '          // A member the slate never published refuses at call time, not',
   '          // at lookup: capnweb dispatches on the value.',
-  '          if (!(member in target)) return () => { throw new Error("Slate has no method " + member); };',
+  '          if (!(member in target)) return () => { throw new Error("Slate has no method " + member + "; its class publishes " + ([...allowed].join(", ") || "none")); };',
   '          return Reflect.get(target, member);',
   '        }',
   '        // One hop keeps the invocation of the REQUEST that carries it;',

@@ -1725,7 +1725,7 @@ CLI's `map --artifacts` extracts each trial's evidence; light compare/verdict/So
 The deploy serializes soak before statistics so their jobs share this budget; no armada API or dependency patch is added.
 The old-shape evidence is run 37880718948: seven file workers with serial trials per file;
 candidate wall 4 h 15 min, baseline cancelled at GitHub's 6 h cap. The armada shape removes
-per-file head-of-line blocking, but keeps the actual provider limit rather than promising CI-tier wall times. On 2026-10-08 the rest moved: Lean verification is a CI row (armada's
+per-file head-of-line blocking, but keeps the actual provider limit rather than promising CI-tier wall times. Amended 2026-10-17, reversing the width pools above: one `armada map` holds every trial of both legs under `--budget=20`, each item's `cost` its task's peak (armada#53), with no job deadline or task timeout (`--deadline=none --timeout=none`; the job ends with its lease). On 66938aa25 the pools stranded 85,570 of 215,348 call-seconds: the nine-slot queue drained at 3,064 s and its share could not move to the one-slot queues, and an external three-hour wrapper cancelled the run at 10,767 s with 19 trials unrun. Replaying its 51 finished trials' durations under both shapes at 20 calls: 10,267.7 s pooled, 4,853.7 s in one weighted queue (diagnose-evals-detail.mjs, `/mnt/local/kinu/tmp/evals-speed/REPORT.md`). On 2026-10-08 the rest moved: Lean verification is a CI row (armada's
 environment holds the Lean build), and the flake sweep and bench corpus validation are nightly `armada map` runs
 (scripts/nightly-sweeps.ts). armada is a pinned dev
 dependency, so the hook and the deploy run this checkout's `armada`, against `~/.config/armada/connection.json`.

@@ -4,7 +4,7 @@ import {
   createWorkersAIProvider, normalizeModelSpec,
   bindingDecisionRun, restDecisionRun, type DecisionRun,
   type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ModelAffinity, type ProviderDeps, type ProviderEnv,
-  type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
+  type ModelAttemptInfo, type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
   accountDeps, countRequestInputTokens, parseModelSpec, type TurnModelSources, type CredentialSummary,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
@@ -60,6 +60,8 @@ export interface AgentProviderDeps {
   fetch?: typeof fetch;
   /** Fires before a provider-mandated wait; the actor emits `provider_wait` so a rate-limited turn reads as waiting. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
+  /** Fires as each request to a provider ends; the actor records it as `model_attempt`. */
+  onModelAttempt?: (info: ModelAttemptInfo) => void;
   appTitle?: string;
   accountFor?: (providerId: string) => string | undefined;
   currentTurn?: (actor: ActorReference) => string | null;
@@ -153,6 +155,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     listCredentialKeys: credentialKeys,
     fetch: opts.fetch,
     onProviderWait: opts.onProviderWait,
+    onModelAttempt: opts.onModelAttempt,
     accountFor: opts.accountFor,
   };
 

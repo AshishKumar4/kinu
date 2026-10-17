@@ -3,7 +3,7 @@ import { JsonValueSchema, RunEventSchema } from '@kinu.run/core';
 import type { Page } from 'puppeteer';
 import { launchTestChrome } from '../../scripts/test-chrome';
 import { collectEvalTasks } from '../src/eval';
-import { SlateView, WorkspaceBrowser } from '../src/browser';
+import { recordSlateCalls, SlateView, WorkspaceBrowser } from '../src/browser';
 import { EvalVerifier, type EvalCheckOutcome, type HelperWork, type ReachedRun, type VerifierSession } from '../src/verifier';
 import { InspectionAnswerSchema, openPublicSession } from '../src/session';
 import { resolveWebIdentity, type WorkspaceWeb } from '../src/workspace-roster';
@@ -35,6 +35,9 @@ const Input = v.object({
 });
 
 const input = v.parse(Input, JSON.parse(process.argv[2] ?? ''));
+
+/** The saved replies as the chat stores them, each under an id of its own, so their slates are addressed as the chat's are. */
+const replies = input.replies.map((text, index) => ({ id: `replay-${String(index + 1)}`, text }));
 
 const task = (await collectEvalTasks()).find((candidate) => candidate.id === input.task);
 
@@ -75,7 +78,7 @@ async function live(): Promise<void> {
       console.log(JSON.stringify({ seeded: call.method, answered: redactJson(answered) }));
     }
 
-    const checks = await new SelectedVerifier(session, input.replies, 0, () => Promise.resolve()).collect(placed.spec.verify);
+    const checks = await new SelectedVerifier(session, replies, 0, () => Promise.resolve()).collect(placed.spec.verify);
 
     console.log(JSON.stringify({ task: input.task, part: input.part, checks }));
 
@@ -92,9 +95,7 @@ class TapeView extends SlateView {
 
   override read(): Promise<Sight> { return Promise.resolve(this.sight); }
 
-  override until(_names: readonly string[], done: (sight: Sight) => boolean): Promise<{ sight: Sight; held: boolean }> {
-    return Promise.resolve({ sight: this.sight, held: done(this.sight) });
-  }
+  override settled(): Promise<void> { return Promise.resolve(); }
 
   override press(): Promise<boolean> { return Promise.resolve(input.pressed); }
 
@@ -157,13 +158,14 @@ async function offline(): Promise<void> {
       pages.push(rendered);
       await rendered.setViewport({ width: 1100, height: 1800 });
       await rendered.setContent(html);
+      await recordSlateCalls(rendered);
       views.push(new SlateView(rendered.mainFrame()));
     }
 
     if (input.seen !== undefined) views.push(new TapeView(page, input.seen, 'light'));
     browser.open = () => Promise.resolve(page);
-    browser.answerSlates = (_page, least) => views.length >= least ? Promise.resolve(views)
-      : Promise.reject(new Error(`the saved answer holds ${String(views.length)} slate(s), not ${String(least)}`));
+    browser.answerSlates = (_page, ids) => views.length >= ids.length ? Promise.resolve(views)
+      : Promise.reject(new Error(`the saved answer holds ${String(views.length)} slate(s), not ${String(ids.length)}`));
     browser.workSurface = (_id, mode = 'light') => {
       if (input.seen === undefined) {
         const view = views[0];
@@ -178,7 +180,7 @@ async function offline(): Promise<void> {
 
     browser.alone = (view) => Promise.resolve(view);
 
-    const verifier = new SelectedVerifier(session, input.replies, 0, () => Promise.resolve());
+    const verifier = new SelectedVerifier(session, replies, 0, () => Promise.resolve());
 
     verifier.browse = <T>(body: (seen: WorkspaceBrowser) => Promise<T>) => body(browser);
 

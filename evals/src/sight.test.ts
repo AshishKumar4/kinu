@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Browser, Page } from 'puppeteer';
 import { recordScriptFailures } from '../../scripts/script-failures';
 import { launchTestChrome, type TestChrome } from '../../scripts/test-chrome';
-import { SlateView } from './browser';
+import { recordSlateCalls, SlateView } from './browser';
 import { shows, type Sight } from './sight';
 
 // The checks of what a person sees read pages an agent built, whose markup no check may assume. These pages lay the
@@ -27,6 +27,8 @@ async function pageOf(html: string, width = 800): Promise<Page> {
 
   await page.setViewport({ width, height: 600 });
   await page.setContent(`<!doctype html><html><body>${html}</body></html>`);
+  // A press reads what the page had asked and drawn, as every page a check presses records it.
+  await recordSlateCalls(page);
 
   return page;
 }

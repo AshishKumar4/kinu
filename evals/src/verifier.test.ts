@@ -91,7 +91,7 @@ describe('EvalVerifier', () => {
   test('a check\'s own evidence is stored scrubbed: what the agent built and said can carry a capability', async () => {
     const leaky = 'served at https://library-0000000000-fixture.kinu.run/ with x-kinu-dev-identity-secret: abc123';
 
-    const [check] = await new EvalVerifier(session({}), [leaky], 0, settledAtOnce).collect(async (verifier) => {
+    const [check] = await new EvalVerifier(session({}), [{ text: leaky }], 0, settledAtOnce).collect(async (verifier) => {
       await verifier.check('answers', () => Promise.resolve({ pass: false, evidence: { replies: verifier.recentReplies() } }));
     });
 
@@ -103,10 +103,10 @@ describe('EvalVerifier', () => {
       'Let me count the overdue loans in the library first.',
       '**3**',
       'Those open tasks are all finished now.',
-    ], 0, settledAtOnce);
+    ].map((text) => ({ text })), 0, settledAtOnce);
 
     expect(answered.bareAnswer(/^(\d+)$/)).toBe('3');
-    expect(new EvalVerifier(session({}), ['I could not reach the library.'], 0, settledAtOnce).bareAnswer(/^(\d+)$/)).toBeNull();
+    expect(new EvalVerifier(session({}), [{ text: 'I could not reach the library.' }], 0, settledAtOnce).bareAnswer(/^(\d+)$/)).toBeNull();
   });
 
   test('a call the deployment could not carry fails the trial as infrastructure, not the check', async () => {

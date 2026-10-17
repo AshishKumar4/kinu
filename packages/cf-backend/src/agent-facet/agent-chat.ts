@@ -9,7 +9,7 @@ import {
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
-  refusedRun, turnAttemptOf, endedStandingOf,
+  refusedRun, turnAttemptOf, endedStandingOf, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
 import { createCompactionStateStore, type CompactionStateStore } from '@kinu.run/compaction';
 import { attempt, diagnostics, hold, logged, settle, toKinuError, type KinuError } from '@kinu.run/core/obs';
@@ -220,7 +220,7 @@ export class FacetChat {
       },
     });
 
-    const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, epoch: turn.epoch, pacer });
+    const { sources: bundle } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live, runId: turn.runId, turnId: turn.id, epoch: turn.epoch, pacer, recordsIn: turn.runId });
 
     // A chat turn under a mission of its workspace's spends there, as each model call is guarded and charged.
     const { missionLabels } = prepared;
@@ -631,7 +631,13 @@ export class FacetChat {
     const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
     const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
-    const { sources } = facetTurnSources({ actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, openWork: null }, runId: prepared.runId, turnId: 'title', epoch: null, pacer });
+
+    // The title is no run of this agent's: its provider's words are the workspace's, as every actor's turnless call's are.
+    const { sources } = facetTurnSources({
+      actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, openWork: null }, runId: prepared.runId, turnId: 'title', epoch: null, pacer,
+      recordsIn: WORKSPACE_RUN_ID,
+    });
+
     const inputs = await sources.profileInputs();
     const profile = resolveTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
     const route = resolveModelRoute('fast', profile);

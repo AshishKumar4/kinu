@@ -44,16 +44,14 @@ export type TrialBox = Pick<VerifierSession, 'execute' | 'writeFile'>;
 /** A slate call as a trial's evidence makes it: `slate.method(input)`, answered with what the slate returned. */
 export type EvidenceCall = (slate: string, method: string, input?: JsonValue) => Promise<JsonValue>;
 
-/** Measured request widths admitted by the native Muse queues. */
-export type EvalCallWidth = 1 | 2 | 3 | 6;
-
 export type EvalTask = {
   readonly id: string;
   /** The workspace's mission, written to SOUL.md before the first prompt; no genesis turn runs. */
   readonly mission: string;
   readonly parts: readonly [EvalPart, ...EvalPart[]];
-  /** Recorded concurrent model-operation peak used by the shared Muse work budget, not an elapsed deadline. */
-  readonly modelCallPeak?: { readonly calls: EvalCallWidth; readonly source: string };
+  /** Recorded concurrent model-operation peak: what a trial spends of the shared Muse budget (`MUSE_CALLS_AT_ONCE`),
+   *  its armada item's `cost`. Never an elapsed deadline. */
+  readonly modelCallPeak?: { readonly calls: number; readonly source: string };
 };
 
 /** `graded: false`: recorded with the trial for its reader, and never a reason it fails (`EvalVerifier.record`). */
