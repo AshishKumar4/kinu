@@ -1092,13 +1092,13 @@ export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  isHiddenEntry, workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
+  isHiddenEntry, workspacePath, SHARED_ROOTS, SLATES_ROOT, UPLOADS_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
-  settleWorkspaceSlates,
+  settleSharedRoots,
   actorHomeName,
   MAIN_AGENT, SESSION_UID, AGENT_UID_FLOOR,
   type HomeRootVfs, type TmpConfiner,

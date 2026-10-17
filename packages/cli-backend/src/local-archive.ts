@@ -14,13 +14,13 @@ import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { Effect } from 'effect';
 import {
-  FOLDER_SUBTREE, SESSION_UID, SLATES_ROOT, workspaceArchiveStore, type ArchiveStoreSource, type WorkspaceBundle,
+  FOLDER_SUBTREE, SESSION_UID, SHARED_ROOTS, workspaceArchiveStore, type ArchiveStoreSource, type WorkspaceBundle,
 } from '@kinu.run/core';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 
 /** The own space's trees an archive carries (`identity/archive.ts`'s carried roots); the rest is never staged. */
-const SPACE_TREES: readonly string[] = ['home', SLATES_ROOT.slice(1)];
+const SPACE_TREES: readonly string[] = ['home', ...SHARED_ROOTS.map((root) => root.slice(1))];
 
 /** The kernel: no file's mode hides it from the copy, and the copy can set any owner. */
 type Kernel = ReturnType<SqliteVFS['as']>;

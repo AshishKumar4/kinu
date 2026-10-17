@@ -701,7 +701,7 @@ test('the file tool shows the agent a screenshot the rung moved out, from the li
   const file = present(buildBuiltinTools({ rt, conversations: rt.stores.conversationSearch }).file, 'the file tool');
   const read = await toolExecute(file)({ op: 'read', path: links[0] ?? '' });
 
-  expect(links[0]).toStartWith('vfs://home/main/attachments/');
+  expect(links[0]).toStartWith('vfs://home/main/.offloaded/');
   expect(existsSync(join(state, 'shots', (links[0] ?? '').slice('vfs://'.length)))).toBe(true);
   expect(await present(file.toModelOutput, 'the image output')({ toolCallId: 'reopen', input: {}, output: read })).toMatchObject({
     type: 'content',

@@ -16,7 +16,7 @@ import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
-  agentCred, bindActorHandle, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
+  agentCred, bindActorHandle, initWorkspaceSchema, MissionGovernor, provisionAgentHome, settleSharedRoots, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
@@ -178,7 +178,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     initSlateBuildTable((ddl: string) => ctx.storage.sql.exec(ddl));
     seedBaseFilesystem(this.vfs);
     // As the Kinu boot leaves every workspace: slates are the workspace's, not its main agent's.
-    settleWorkspaceSlates(this.vfs.as(CRED_KERNEL), (path) => { this.vfs.registerSharedDirectory(path); });
+    settleSharedRoots(this.vfs.as(CRED_KERNEL), (path) => { this.vfs.registerSharedDirectory(path); });
     // Pids are generation-scoped per boot so a re-spawned process never gets a pid with a live append writer. The
     // probe hosts no Kinu workspace, so it keeps its own counter, one atomic statement per construction.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS probe_generation (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)');

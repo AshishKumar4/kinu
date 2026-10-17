@@ -13,10 +13,10 @@ The cap covers the whole string the model receives. The truncation marker is pri
 | `shell`, `web` fetch, `eval` results | head + tail (8k chars) | `.kinu/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
 | `file` read of an oversize file | offset-bounded page (8k chars) | the file's own path, and the next offset in the marker | `core/src/tools/file-tool.ts` |
 | MCP / external tool results | head + tail (8k chars) | same | `withClampedToolResults` at each backend's MCP wiring |
-| Attachments the model cannot accept | reference text part | `attachments/<hash>.<ext>` | `core/src/prompting/attachment-sanitizer.ts` |
-| Text attachments over 8 KiB | reference text part | same | same |
-| Documents the model can accept, over 1 MiB | reference text part | same | same |
-| Pasted user text over 8 KiB | 2,000-char head + address | same | same |
+| Uploads the model cannot accept | reference text part | `/uploads/<name>`, saved once under the name it came with as the words are admitted | `core/src/prompting/attachment-sanitizer.ts` |
+| Text uploads over 8 KiB | reference text part | same | same |
+| Uploaded documents the model can accept, over 1 MiB | reference text part | same | same |
+| Pasted user text over 8 KiB | 2,000-char head + address | `.offloaded/<hash>.<ext>`, hidden in the Files tab | same |
 | Subordinate reports / peer replies | `EVENT_BRIEF_MAX_CHARS` brief, 600 chars | `.kinu/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
 | Compacted history ranges | checkpoint summary | `.kinu/compaction/<sessionKey>/<rangeHash>.md` | `packages/compaction/src/stores.ts` |
 

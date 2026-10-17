@@ -1677,7 +1677,8 @@ export class ChatSession {
     this.messageId = item.continuation?.messageId ?? this.mintAnswerId();
 
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
-    const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
+    const message = await this.actorSession.withUploads(turnInputMessage(item));
+    const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message, assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
     const { questions } = this.actorSession;
 
     // The owner wrote instead of choosing: their message answers the open questions, and the answers given ride it.
@@ -1828,7 +1829,7 @@ export class ChatSession {
 
     await this.actorSession.openTurnInput(lease, {
       item: input,
-      message: turnInputMessage(input),
+      message: await this.actorSession.withUploads(turnInputMessage(input)),
       birthContext: async (drainTurnId) => (await this.birthContext(drainTurnId)).map(inheritedAsModelMessage),
     });
 

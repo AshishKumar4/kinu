@@ -275,6 +275,17 @@ describe('workspace archive', () => {
 
 const OWNER_TEXT = '# the owner wrote this\n';
 
+  test('what the owner uploaded travels with the workspace, in /uploads beside the slates', async () => {
+    const source = await seeded();
+    await writeText(source.vfs, '/uploads/ashish profile.md', '# Ashish\n');
+
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', store: workspaceArchiveStore(source.bundle) });
+    const target = fresh();
+    await restoreWorkspaceArchive(target.archive, lines, { store: () => workspaceArchiveTarget(target.bundle) });
+
+    expect(await readText(target.vfs, '/uploads/ashish profile.md')).toBe('# Ashish\n');
+  });
+
   test('a restore carries SOUL.md as the workspace\'s agents left it', async () => {
     const source = await seeded();
     await writeWorkspaceSoul(source.bundle, OWNER_TEXT);

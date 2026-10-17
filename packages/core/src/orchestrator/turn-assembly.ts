@@ -256,7 +256,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     modelContext: { id: spec, contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, callsTools: models.catalog.callsTools(spec) },
     system: systemPromptText(system),
     systemShared: system.shared.length,
-    attachments: { accepts: models.catalog.acceptedMedia(spec), vfs: sources.rt.storage.vfs, budget: sources.attachmentBudget },
+    attachments: { accepts: models.catalog.acceptedMedia(spec), vfs: sources.rt.storage.vfs, planes: sources.rt.planes, budget: sources.attachmentBudget },
     tools,
     conversationKey: sources.conversationKey(),
     cache: { providerId: provider, modelId, retention: sources.config.getCacheRetention() },

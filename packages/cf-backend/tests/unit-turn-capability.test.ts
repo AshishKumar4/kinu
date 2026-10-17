@@ -52,7 +52,7 @@ test('a turn the workspace lost mid-run keeps the Build role and model it froze,
 
   workspace.agent.harnessInstallCatalog({ ...GATEWAY_CATALOG, availableModels: [GATEWAY_MODEL, OTHER_MODEL] });
   workspace.agent.harnessCatalogModels({ [OTHER_MODEL]: { contextWindow: 128_000 } });
-  const sent = sentTurn(workspace.agent, BUILD_ASK, crypto.randomUUID(), 'build');
+  const sent = sentTurn(workspace.agent, BUILD_ASK, crypto.randomUUID(), { mode: 'build' });
 
   await reached.promise;
   await workspace.agent.setRole('planner');

@@ -170,7 +170,7 @@ describe('an image follows the model each attempt calls', () => {
     expect(served.find((entry) => entry.model === 'primary')?.body).toContain(SCREENSHOT);
     const blind = served.find((entry) => entry.model === 'blind')?.body ?? '';
     expect(blind).not.toContain(SCREENSHOT);
-    expect(blind).toContain('attachments/');
+    expect(blind).toContain('.offloaded/');
   });
 
   test('a text-only primary that fails over to a vision model: a stored reference to the first, the attached picture to the second', async () => {
