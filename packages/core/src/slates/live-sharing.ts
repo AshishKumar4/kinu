@@ -5,6 +5,7 @@ import { settleSync } from '../obs/effect';
 import { cutShareGrant } from './capability-graph';
 import type { ShareAuthority, SlateLiveShareStore } from './live-shares';
 import type { ShareMode } from './share-modes';
+import type { SlateEffect } from '../safety/approval-kind';
 import type { LiveShareCreated, LiveShareVisibility, SlateCapabilityGraph } from './sharing';
 import { nanoid } from '../utils/nanoid';
 
@@ -62,4 +63,13 @@ function authorityAt(mode: ShareMode, revision: string | null): Effect.Effect<Sh
   if (revision === null) return Effect.fail(new KinuError('bad_input', 'This slate has not built yet, so there is no version of it to approve its reach for: build it first'));
 
   return Effect.succeed({ mode: 'owner', grantRevision: revision });
+}
+
+/**
+ * The owner's "Always for this slate" on one effect the shared server asked of them: that tool, on that root, by the
+ * slate that called it, stands on every `owner` share of the shared server at the revision it ran at. The shares it
+ * stands on.
+ */
+export function preapproveSlateEffect(live: SlateLiveShareStore, effect: SlateEffect): string[] {
+  return live.preapprove(effect.slate, { slate: effect.caller, namespace: effect.server, member: effect.tool, root: { ...effect.root }, revision: effect.revision });
 }

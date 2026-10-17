@@ -20,7 +20,7 @@ import {
   type ActorHandle, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
-import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
+import { initSlateLiveShareTables, preapproveSlateEffect, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCallFrom, type SlateCaller, type SlateConsent, type SlateLineage } from '@kinu.run/core/slates';
@@ -199,6 +199,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     // The owner's one queue of parked actions, as the orchestrator's: an `owner` share's acting calls wait in it.
     this.deferrals = new DeferredApprovalQueue({
       store: new DeferredApprovalStore(sql, this.mainAgent()), writes: null, remember: () => undefined, wake: () => Effect.void,
+      preapprove: async (effect) => { preapproveSlateEffect(this.host.controller.live, effect); },
     });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
     initSlateBuildTable((ddl: string) => ctx.storage.sql.exec(ddl));
@@ -524,6 +525,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
       return kind.kind === 'slate-effect' ? [{ tool: kind.effect.tool, server: kind.effect.server, viewer: kind.effect.viewer, payload: kind.effect.payload, revision: kind.effect.revision }] : [];
     });
+  }
+
+  /** The owner answers everything their shares asked of them "Always for this slate"; how many they answered. */
+  async ownerAlways(): Promise<number> {
+    const asked = this.deferrals.list().filter((action) => approvalKindOf(action).kind === 'slate-effect').map((action) => action.id);
+
+    return asked.length === 0 ? 0 : (await this.deferrals.decide(asked, 'always')).length;
   }
 
   /** The owner answers everything their shares asked of them; how many they answered. */

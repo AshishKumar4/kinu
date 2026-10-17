@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, ownerCaller, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
-import { ROOT_SLATE_CALLER, slateAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
+import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -4106,6 +4106,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       wake: this.ownerAnswerWake('decision'),
       // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
+      // "Always for this slate" on a shared slate's effect stands on that slate's owner shares, its sheet's to take back.
+      preapprove: async (effect) => { preapproveSlateEffect((await this.slates()).controller.live, effect); },
       // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
       // was. A hire's, or the root's outside any turn, falls back to the workspace run: the root's turn is not theirs.
       audit: (record) => {

@@ -448,6 +448,12 @@ export interface DeferredApprovalQueueDeps {
   wake(actorId: string, signal: AgentSignal): Effect.Effect<void, KinuError>;
   /** Record a standing grant from an 'always' answer; the host owns storage (actor_config). */
   remember(grants: readonly ApprovalGrant[]): void;
+  /**
+   * An 'always' answer to a shared slate's effect: that tool on that root stands pre-approved on the slate's `owner`
+   * shares at its revision ("Always for this slate"), not as a standing grant of the environment's. Absent, 'always'
+   * on one is an approval of that call alone.
+   */
+  preapprove?(effect: SlateEffect): Promise<void>;
   /** Durable `approval_consumed` sink; optional only for tests. */
   audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id; injected for host id vocabulary and deterministic tests. */
@@ -718,9 +724,14 @@ export class DeferredApprovalQueue {
     }
 
     if (answer === 'always' && decided.length > 0) {
+      const kinds = decided.map((action) => ({ action, kind: approvalKindOf(action) }));
+
       // Kept as the rows are decided, before any ask runs on them: one that runs settles its row and its hits.
-      // Not re-reviewed: that would lose the call's member and cwd.
-      this.deps.remember(decided.flatMap((a) => gatedGrants(this.storeOf(a.actor).hits(a.id), a.executor)));
+      // Not re-reviewed: that would lose the call's member and cwd. A shared slate's effect is no rule of the
+      // environment's: it stands for that slate alone.
+      this.deps.remember(kinds.flatMap(({ action, kind }) => (kind.kind === 'slate-effect' ? [] : gatedGrants(this.storeOf(action.actor).hits(action.id), action.executor))));
+
+      for (const { kind } of kinds) if (kind.kind === 'slate-effect') await this.deps.preapprove?.(kind.effect);
     }
 
     // An ask blocked on its row hears the answer there, at the moment it is recorded, and runs on it now; only an ask
