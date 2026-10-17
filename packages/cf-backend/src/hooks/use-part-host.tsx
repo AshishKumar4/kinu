@@ -4,6 +4,7 @@
  * at the top, where the slate's script cannot cover them.
  */
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";
@@ -112,7 +113,10 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
   return null;
 }
 
-/** The parts of a slate the owner's own workspace page shows in `slateFrame`: its workspace is the page's own. */
+/**
+ * The parts of a slate the owner's own workspace page shows in `slateFrame`: its workspace is the page's own. Its
+ * decisions open over the whole page, as the preview may sit in an answer's text.
+ */
 export function WorkspacePartHost({ slate, titled, slateFrame }: {
   slate: string;
   /** The slate's preview once read, which names its title. */
@@ -120,6 +124,7 @@ export function WorkspacePartHost({ slate, titled, slateFrame }: {
   slateFrame: RefObject<HTMLIFrameElement | null>;
 }) {
   const { agentId = null } = useParams();
+  const decision = usePartHost({ workspace: agentId, slate, title: titled?.title ?? slate, slateFrame });
 
-  return usePartHost({ workspace: agentId, slate, title: titled?.title ?? slate, slateFrame });
+  return decision === null ? null : createPortal(decision, document.body);
 }

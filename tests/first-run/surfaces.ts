@@ -42,7 +42,7 @@ export const PAGE_ROWS = {
   shared: ['blueprint-fork'],
   sharedBlueprint: ['blueprint-fork'],
   sharedLive: ['users-share'],
-  liveSlatePart: { unreachable: 'a personal part runs through slatePartRunPath, which the Nimbus sharing build serves next; until then no deployed slate declares a part' },
+  liveSlatePart: ['slate-parts'],
   gallery: ['gallery-listing'],
   gallerySlate: ['gallery-listing'],
   deploy: ['deploy-door'],
@@ -92,4 +92,5 @@ export const CAPABILITY_ROWS = {
   'a share on each viewer\'s own access reading nothing of its owner\'s': ['public-share'],
   'a slate listed in the Gallery and taken off it': ['gallery-listing'],
   'a first share started as an empty copy': ['start-empty'],
+  'a personal part drawn sealed in its slate\'s page, run again and shown to everyone': ['slate-parts'],
 } as const satisfies Record<string, Rows>;
