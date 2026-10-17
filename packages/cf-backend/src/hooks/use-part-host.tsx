@@ -4,6 +4,7 @@
  * at the top, where the slate's script cannot cover them.
  */
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";
@@ -32,16 +33,15 @@ function asks(kind: DecisionKind, answer: PartRunAnswer): boolean {
   }
 }
 
-/**
- * Hosts the part frames inside `slateFrame`, the frame that shows `workspace`/`slate`'s page, named `title` in what it
- * says; none while `workspace` is unknown. Returns the decision open now, to render anywhere on the page.
- */
-export function usePartHost({ workspace, slate, title, slateFrame }: {
-  workspace: string | null;
-  slate: string;
-  title: string;
-  slateFrame: RefObject<HTMLIFrameElement | null>;
-}): ReactNode {
+interface HostedSlate {
+  readonly workspace: string | null;
+  readonly slate: string;
+  readonly title: string;
+  readonly slateFrame: RefObject<HTMLIFrameElement | null>;
+}
+
+/** Hosts the part frames, and draws the decision open now, or why the last one was refused, where it renders. */
+function usePartDecision({ workspace, slate, title, slateFrame }: HostedSlate): ReactNode {
   const [open, setOpen] = useState<Open | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -110,6 +110,17 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
 
   // Unreachable: a decision opens only on an answer that asks it (`asks`).
   return null;
+}
+
+/**
+ * Hosts the part frames inside `slateFrame`, the frame that shows `workspace`/`slate`'s page, named `title` in what it
+ * says; none while `workspace` is unknown. Returns the decision open now, to render anywhere on the page: it opens over
+ * the whole page, as a preview may sit in an answer's text.
+ */
+export function usePartHost(hosted: HostedSlate): ReactNode {
+  const drawn = usePartDecision(hosted);
+
+  return drawn === null ? null : createPortal(drawn, document.body);
 }
 
 /** The parts of a slate the owner's own workspace page shows in `slateFrame`: its workspace is the page's own. */
