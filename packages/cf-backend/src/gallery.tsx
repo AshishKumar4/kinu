@@ -2962,7 +2962,30 @@ const MIXED_ASKS: PendingAction[] = [
   { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
-const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS]]);
+/** A change a share of issue-triage made on the owner's access, for Sam, as the queue lists it. */
+function effectAsk({ id, tool, server, root, payload, at }: {
+  id: string; tool: string; server: string; root: Record<string, string>; payload: JsonValue; at: number;
+}): PendingAction {
+  return {
+    id, kind: "deferred_action", at, title: `Approve: ${tool} on ${server}, for sam@example.com through a share of issue-triage`,
+    detail: JSON.stringify(payload, null, 2), effect: { slate: "issue-triage", caller: "issue-triage", server, tool, root },
+  };
+}
+
+/** `&asks=effect`: one change a shared slate asks on the owner's access; `&asks=effects`, two; `&asks=effect-mixed`, one beside a command. */
+const EFFECT_ASKS: PendingAction[] = [
+  effectAsk({ id: "effect-issue", tool: "create_issue", server: "mcp.github", root: { org: "acme" }, payload: { title: "Label sync is late" }, at: NOW - 20_000 }),
+];
+
+const EFFECTS_ASKS: PendingAction[] = [
+  ...EFFECT_ASKS,
+  effectAsk({ id: "effect-notes", tool: "writeFile", server: "workspace", root: {}, payload: { path: "notes/triage.md" }, at: NOW - 50_000 }),
+];
+
+const ASK_SETS = new Map([
+  ["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS],
+  ["effect", EFFECT_ASKS], ["effects", EFFECTS_ASKS], ["effect-mixed", [...EFFECT_ASKS, ...PARKED_ASKS.slice(0, 1)]],
+]);
 
 /** A proposal made after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
 const LATE_ASKS: PendingAction[] = [{

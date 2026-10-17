@@ -103,6 +103,46 @@ test('two parked commands are one card: some are chosen and decided, the rest st
   });
 });
 
+/** What each row of the open card says "always" stands for, by row. */
+function alwaysSaid(page: Page): Promise<(string | null)[][]> {
+  return page.$$eval('[data-attention-card] [data-parked-always]', (rows) => rows.map((row) => [row.getAttribute('data-parked-always'), row.textContent]));
+}
+
+test("a shared slate's change is always allowed for that slate, named on its card before it is pressed", async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    // One change: its card says what it is, whose share asks it, and what always would allow.
+    await opened(page, origin, '&asks=effect');
+    await page.waitForSelector('[data-attention-card="action:effect-issue"]');
+    const one = await alwaysSaid(page);
+
+    expect(one.map(([scope]) => scope)).toEqual(['slate']);
+    expect(one[0]?.[1]).toContain('create_issue');
+    expect(one[0]?.[1]).toContain('acme');
+    expect(one[0]?.[1]).toContain('issue-triage');
+    expect(await page.$eval('[data-attention-card]', (card) => card.textContent ?? '')).not.toContain('Run this command');
+    await answer(page, 'Always for this slate');
+    await page.waitForFunction(() => document.querySelector('[data-attention-stack]') === null);
+    expect(await decisions(page)).toEqual([['effect-issue', 'always']]);
+
+    // Two changes are one card, each naming what always allows of it.
+    await opened(page, origin, '&asks=effects');
+    await page.waitForSelector('[data-attention-card] [data-parked-command="effect-notes"]');
+    expect((await alwaysSaid(page)).map(([scope]) => scope)).toEqual(['slate', 'slate']);
+    await press(page, 'Always for this slate');
+    await page.waitForFunction(() => document.querySelector('[data-attention-stack]') === null);
+
+    // Beside a command, each row says where its always stands: the slate's shares, or this environment.
+    await opened(page, origin, '&asks=effect-mixed');
+    await page.waitForSelector('[data-attention-card] [data-parked-command="park-push"]');
+    expect((await alwaysSaid(page)).map(([scope]) => scope)).toEqual(['slate', 'environment']);
+    await press(page, 'Always allow');
+    await page.waitForFunction(() => document.querySelector('[data-attention-stack]') === null);
+    await page.close();
+  });
+});
+
 test('only what waits on the owner is stacked, newest first; an older card can be answered first', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
