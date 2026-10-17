@@ -1084,3 +1084,36 @@ requirements:
       - Requested destination means server, tool and root plus any URL in the payload; resolving URLs, redirects and an unseen ultimate network endpoint are not separately represented or proved approved
       - The fixture checks the containment classifier, uncontained-read verdicts and changed-payload or changed-URL approval keys, not the semantic ToolReach premise or remote egress behavior
       - Viewer-account routing, an exact and honest approval prompt, delegated dispatch, Workers and Nimbus isolation and adversarial workerd replays remain runtime evidence
+  PR-SHARE-NIMBUS-009:
+    statement: Every launch-relevant sharing change and its generation fence are one step, so an admitted minted lineage retains its launch's sharing projection and owner egress or browser authority only while unshared, stale launches restart, and splitting the change from its fence admits a stale-owner call.
+    status: proved-and-refined
+    theorems:
+      - Kinu.SharingNimbus.Fence.every_sharing_change_advances_its_fence_in_the_same_step
+      - Kinu.SharingNimbus.Fence.one_slates_fence_leaves_other_slates_unchanged
+      - Kinu.SharingNimbus.Fence.a_sharing_generation_never_returns
+      - Kinu.SharingNimbus.Fence.sharing_cannot_change_behind_an_unmoved_fence
+      - Kinu.SharingNimbus.Fence.an_admitted_binding_keeps_its_launch_sharing
+      - Kinu.SharingNimbus.Fence.owner_egress_and_browser_authority_stay_unshared
+      - Kinu.SharingNimbus.Fence.a_changed_fence_permanently_refuses_an_old_binding
+      - Kinu.SharingNimbus.Fence.an_invocation_keeps_its_incarnation_and_every_chain_fence
+      - Kinu.SharingNimbus.Fence.another_incarnation_cannot_reuse_an_invocation
+      - Kinu.SharingNimbus.Fence.a_stale_launch_is_restarted_with_current_sharing
+      - Kinu.SharingNimbus.Fence.a_ready_launch_still_has_the_sharing_it_chose
+      - Kinu.SharingNimbus.Fence.splitting_a_share_change_from_its_fence_admits_stale_owner_authority
+      - Kinu.SharingNimbus.Fence.the_atomic_share_change_refuses_the_same_stale_binding
+    tsRefs:
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.add
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.revoke
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.setAuthority
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.generation
+      - packages/core/src/slates/shared-server.ts#SharedServers.lineage
+    refinement:
+      - lean/fixtures/share-fence-cases.json :: packages/core/tests/refinement-share-fence.test.ts
+    remainingEvidence:
+      - The launch-sharing projection records share identities, liveness and modes; unchanged-mode grant and grantRevision edits do not move this fence and must still be re-weighed by the server gate at each send
+      - The fixture replays immediate post-write observations, stale process and chain generations, foreign incarnations, live and repeated revokes, mode and grant-only edits, listing, users and preapproval operations against SQLite and SharedServers.lineage
+      - Owner-mode fixture transitions explicitly clear the Gallery listing first, satisfying the existing SQLite constraint; failed duplicate inserts and other database-constraint failures are not modeled as successful sharing changes
+      - The atomic state machine has no yield between a launch-relevant sharing mutation and its fence; the split model is a kernel-checked counterexample, not a claim to exercise the Workers scheduler exhaustively
+      - beginLaunch and finishLaunch abstract launch-time egress and browser choices and stale-attempt restart; actual Nimbus launch, teardown, binding minting and restart are not driven by this fixture and need adversarial workerd launch interleavings
+      - Host-issued lineage and invocation records are trusted inputs, not caller-supplied authority; incarnation freshness, invalidation across object restarts and per-call checks immediately before dispatch remain runtime evidence
+      - Generations are unbounded naturals in the proof and sampled exact JavaScript integers in replay; numerical wraparound, persistent epochs across object lives and already dispatched remote work are outside the model

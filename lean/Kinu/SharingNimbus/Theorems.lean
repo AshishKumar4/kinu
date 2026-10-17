@@ -424,4 +424,190 @@ theorem a_parts_value_reaches_only_its_consented_server_or_an_approved_destinati
   | true => exact Or.inl ((sound call payload contained destination reachable).trans held.1.symm)
   | false => exact Or.inr ⟨taking_an_effect_requires_its_exact_approved_call _ _ (approved contained), reachable⟩
 
+namespace Fence
+
+private theorem authority_rewrite_keeps_the_launch_projection (shares : List Share) (id : Nat)
+    (authority : LiveShareAuthority) (no_move : modeMoves shares id authority = false) :
+    launchSharing (rewriteAuthority shares id authority) = launchSharing shares := by
+  have no_bad : ∀ share ∈ shares, ¬ (share.id = id ∧ share.live = true ∧ share.authority.mode ≠ authority.mode) := by
+    intro share member bad
+    have moved : modeMoves shares id authority = true :=
+      List.any_eq_true.mpr ⟨share, member, by simp [bad.1, bad.2.1, bad.2.2]⟩
+    rw [no_move] at moved
+    contradiction
+  simp only [launchSharing, rewriteAuthority, List.map_map]
+  apply List.map_congr_left
+  intro share member
+  by_cases held : share.id = id ∧ share.live = true
+  · have same_mode : share.authority.mode = authority.mode := by
+      by_cases same : share.authority.mode = authority.mode
+      · exact same
+      · exact False.elim (no_bad share member ⟨held.1, held.2, same⟩)
+    simp [held, sharingView, same_mode]
+  · simp [held]
+
+private theorem write_generation_is_unchanged_or_next (store : Store) (target slate : String)
+    (shares : List Share) (advance : Bool) :
+    (write store target shares advance slate).generation = (store slate).generation ∨
+    (write store target shares advance slate).generation = (store slate).generation + 1 := by
+  by_cases same : slate = target <;> cases advance <;> simp [write, put, same]
+
+private theorem step_generation_is_unchanged_or_next (store : Store) (event : Event) (slate : String) :
+    (step store event slate).generation = (store slate).generation ∨
+    (step store event slate).generation = (store slate).generation + 1 := by
+  cases event with
+  | add target share => exact write_generation_is_unchanged_or_next store target slate _ true
+  | revoke target id =>
+    by_cases live : liveId (store target).shares id = true
+    · simpa only [step, if_pos live, change] using write_generation_is_unchanged_or_next store target slate
+        ((store target).shares.map fun share => if share.id = id then { share with live := false } else share) true
+    · simp [step, live]
+  | setAuthority target id authority => exact write_generation_is_unchanged_or_next store target slate _ _
+  | observe => exact Or.inl rfl
+
+private theorem step_generation_never_falls (store : Store) (event : Event) (slate : String) :
+    (store slate).generation ≤ (step store event slate).generation := by
+  rcases step_generation_is_unchanged_or_next store event slate with same | next <;> omega
+
+private theorem write_keeps_the_launch_projection_if_its_generation_is_equal (store : Store)
+    (target slate : String) (shares : List Share) (advance : Bool)
+    (safe : advance = false → launchSharing shares = launchSharing (store target).shares)
+    (same_generation : (write store target shares advance slate).generation = (store slate).generation) :
+    launchSharing (write store target shares advance slate).shares = launchSharing (store slate).shares := by
+  by_cases same : slate = target
+  · subst slate
+    cases advance with
+    | false => simpa [write, put] using safe rfl
+    | true => simp [write, put] at same_generation
+  · simp [write, put, same]
+
+private theorem step_keeps_sharing_if_its_generation_is_equal (store : Store) (event : Event)
+    (slate : String) (same : (step store event slate).generation = (store slate).generation) :
+    launchSharing (step store event slate).shares = launchSharing (store slate).shares := by
+  cases event with
+  | add target share =>
+    exact write_keeps_the_launch_projection_if_its_generation_is_equal store target slate _ true (by simp) same
+  | revoke target id =>
+    by_cases live : liveId (store target).shares id = true
+    · simp only [step, if_pos live, change] at same ⊢
+      exact write_keeps_the_launch_projection_if_its_generation_is_equal store target slate _ true (by simp) same
+    · simp [step, live]
+  | setAuthority target id authority =>
+    exact write_keeps_the_launch_projection_if_its_generation_is_equal store target slate _ _
+      (authority_rewrite_keeps_the_launch_projection (store target).shares id authority) same
+  | observe => rfl
+
+theorem every_sharing_change_advances_its_fence_in_the_same_step (store : Store) (event : Event)
+    (slate : String) (changes : launchSharing (step store event slate).shares ≠ launchSharing (store slate).shares) :
+    (step store event slate).generation = (store slate).generation + 1 := by
+  rcases step_generation_is_unchanged_or_next store event slate with same | next
+  · exact False.elim (changes (step_keeps_sharing_if_its_generation_is_equal store event slate same))
+  · exact next
+
+theorem one_slates_fence_leaves_other_slates_unchanged (store : Store) (event : Event)
+    (slate : String) (other : changedSlate event ≠ some slate) : step store event slate = store slate := by
+  cases event with
+  | add target share =>
+    have different : slate ≠ target := by simpa [changedSlate, eq_comm] using other
+    simp [step, change, write, put, different]
+  | revoke target id =>
+    have different : slate ≠ target := by simpa [changedSlate, eq_comm] using other
+    by_cases live : liveId (store target).shares id = true <;> simp [step, live, change, write, put, different]
+  | setAuthority target id authority =>
+    have different : slate ≠ target := by simpa [changedSlate, eq_comm] using other
+    simp [step, write, put, different]
+  | observe => rfl
+
+theorem a_sharing_generation_never_returns (store : Store) (history : List Event) (slate : String) :
+    (store slate).generation ≤ (exec store history slate).generation := by
+  induction history generalizing store with
+  | nil => exact Nat.le_refl _
+  | cons event rest ih => exact Nat.le_trans (step_generation_never_falls store event slate) (ih (step store event))
+
+theorem sharing_cannot_change_behind_an_unmoved_fence (store : Store) (history : List Event)
+    (slate : String) (same : (exec store history slate).generation = (store slate).generation) :
+    launchSharing (exec store history slate).shares = launchSharing (store slate).shares := by
+  induction history generalizing store with
+  | nil => rfl
+  | cons event rest ih =>
+    have first_le := step_generation_never_falls store event slate
+    have later_le := a_sharing_generation_never_returns (step store event) rest slate
+    change (exec (step store event) rest slate).generation = (store slate).generation at same
+    have first_same : (step store event slate).generation = (store slate).generation := by omega
+    exact (ih (step store event) (same.trans first_same.symm)).trans
+      (step_keeps_sharing_if_its_generation_is_equal store event slate first_same)
+
+private theorem admitted_lineage_has_the_current_generation (store : Store) (slate : String)
+    (token : Lineage) (record : Option Invocation) (admitted : lineage store slate token record = true) :
+    token.generation = (store slate).generation := by
+  simp only [lineage, Bool.and_eq_true, beq_iff_eq] at admitted
+  exact admitted.1
+
+theorem an_admitted_binding_keeps_its_launch_sharing (store : Store) (history : List Event)
+    (slate incarnation : String) (record : Option Invocation)
+    (admitted : lineage (exec store history) slate (beginLaunch store slate incarnation).lineage record = true) :
+    launchSharing (exec store history slate).shares = (beginLaunch store slate incarnation).sharing := by
+  have same := admitted_lineage_has_the_current_generation _ slate _ record admitted
+  exact sharing_cannot_change_behind_an_unmoved_fence store history slate same.symm
+
+theorem owner_egress_and_browser_authority_stay_unshared (store : Store) (history : List Event)
+    (slate incarnation : String) (record : Option Invocation)
+    (admitted : lineage (exec store history) slate (beginLaunch store slate incarnation).lineage record = true)
+    (owner : (beginLaunch store slate incarnation).ownerEgress = true ∨
+      (beginLaunch store slate incarnation).ownerBrowser = true) : isShared (exec store history) slate = false := by
+  have same := an_admitted_binding_keeps_its_launch_sharing store history slate incarnation record admitted
+  rcases owner with owner | owner <;> simpa [beginLaunch, isShared, same] using owner
+
+theorem a_changed_fence_permanently_refuses_an_old_binding (store : Store) (event : Event)
+    (history : List Event) (slate incarnation : String) (record : Option Invocation)
+    (changed : launchSharing (step store event slate).shares ≠ launchSharing (store slate).shares) :
+    lineage (exec (step store event) history) slate (beginLaunch store slate incarnation).lineage record = false := by
+  have advanced := every_sharing_change_advances_its_fence_in_the_same_step store event slate changed
+  have later := a_sharing_generation_never_returns (step store event) history slate
+  have different : (store slate).generation ≠ (exec (step store event) history slate).generation := by omega
+  simp [lineage, beginLaunch, different]
+
+theorem an_invocation_keeps_its_incarnation_and_every_chain_fence (store : Store) (slate : String)
+    (token : Lineage) (record : Invocation) (admitted : lineage store slate token (some record) = true) :
+    record.incarnation = token.incarnation ∧
+    ∀ entry ∈ record.generations, (store entry.1).generation = entry.2 := by
+  simp only [lineage, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at admitted
+  exact admitted.2
+
+theorem another_incarnation_cannot_reuse_an_invocation (store : Store) (slate : String)
+    (token : Lineage) (record : Invocation) (different : record.incarnation ≠ token.incarnation) :
+    lineage store slate token (some record) = false := by
+  simp [lineage, different]
+
+theorem a_stale_launch_is_restarted_with_current_sharing (store : Store) (launch : Launch)
+    (incarnation : String) (moved : launch.lineage.generation ≠ (store launch.slate).generation) :
+    finishLaunch store launch incarnation = .restart (beginLaunch store launch.slate incarnation) ∧
+    (beginLaunch store launch.slate incarnation).sharing = launchSharing (store launch.slate).shares ∧
+    (beginLaunch store launch.slate incarnation).ownerEgress = !(isShared store launch.slate) ∧
+    (beginLaunch store launch.slate incarnation).ownerBrowser = !(isShared store launch.slate) := by
+  exact ⟨by simp [finishLaunch, moved], rfl, rfl, rfl⟩
+
+theorem a_ready_launch_still_has_the_sharing_it_chose (store : Store) (history : List Event)
+    (slate incarnation replacement : String)
+    (ready : finishLaunch (exec store history) (beginLaunch store slate incarnation) replacement =
+      .ready (beginLaunch store slate incarnation)) :
+    launchSharing (exec store history slate).shares = (beginLaunch store slate incarnation).sharing := by
+  by_cases current : (store slate).generation = (exec store history slate).generation
+  · apply an_admitted_binding_keeps_its_launch_sharing store history slate incarnation none
+    simp [lineage, beginLaunch, current]
+  · simp [finishLaunch, beginLaunch, current] at ready
+
+theorem splitting_a_share_change_from_its_fence_admits_stale_owner_authority :
+    splitWitness.admitted = [⟨witnessLaunch, true⟩] ∧ witnessLaunch.ownerEgress = true ∧
+    serverAuthority [witnessShare.authority] "r1" = .none := by
+  decide
+
+theorem the_atomic_share_change_refuses_the_same_stale_binding :
+    lineage (step emptyStore (.add "board" witnessShare)) "board" witnessLaunch.lineage none = false ∧
+    finishLaunch (step emptyStore (.add "board" witnessShare)) witnessLaunch "after-sharing" =
+      .restart (beginLaunch (step emptyStore (.add "board" witnessShare)) "board" "after-sharing") := by
+  decide
+
+end Fence
+
 end Kinu.SharingNimbus
