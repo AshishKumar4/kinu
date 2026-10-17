@@ -5,7 +5,8 @@
  *
  * - `standup` asks to use the viewer's GitHub, then shows their open pull requests, with a refresh and a "Show to
  *   everyone" the viewer can confirm. Its consent was given for an earlier revision of the code, so it says it changed.
- * - `deploy` shows a deploy button whose run asks the viewer to approve one effect, with its payload, then shows done.
+ * - `deploy` shows a field for what to deploy and its button. That run asks to use the viewer's Vercel, then for their
+ *   approval of one effect with its payload, then shows done; each decision resumes it with what the viewer typed.
  * - `team` is a part the slate does not declare for this share: a stub that says what to do.
  *
  * `shared-live` is the same slate entered as a share: the share's page opens it (`/api/shared/live/open`) and frames it
@@ -19,7 +20,7 @@ import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
   APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareBodySchema, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
-  type PartRunAnswer, type SlateConsent,
+  type PartRunAnswer, type PartRunRequest, type SlateConsent,
 } from "@kinu.run/core";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -71,7 +72,7 @@ export function installPartsFixture(frame: string): void {
   const approved = new Set<string>();
   const asked: { path: string; body: string | null }[] = [];
 
-  const answerFor = (part: string, approval: string | null): PartRunAnswer => {
+  const answerFor = (part: string, { action, approval }: PartRunRequest): PartRunAnswer => {
     if (part === "standup") {
       return consents.some((given) => given.server === GITHUB.server && given.revision === REVISION)
         ? { kind: "shown", revision: REVISION, html: STANDUP.html, actions: [{ id: "refresh", label: "Refresh" }], show: STANDUP.show }
@@ -79,11 +80,17 @@ export function installPartsFixture(frame: string): void {
     }
 
     if (part === "deploy") {
+      const ref = action?.id === "deploy" && typeof action.input === "string" ? action.input : null;
+
+      if (ref === null) {
+        return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#1f2937">site is on main in production.</p>`, actions: [{ id: "deploy", label: "Deploy", input: { kind: "text", maxLength: 64 } }], show: null };
+      }
+
       if (!consents.some((given) => given.server === VERCEL.server)) return { kind: "needs-consent", ask: VERCEL };
 
-      if (approval !== null && approved.has(approval)) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed site to production.</p>`, actions: [], show: null };
+      if (approval !== null && approved.has(approval)) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed ${ref} to production.</p>`, actions: [], show: null };
 
-      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref: "main" } } };
+      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref } } };
     }
 
     return { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." };
@@ -109,9 +116,7 @@ export function installPartsFixture(frame: string): void {
     document.documentElement.setAttribute("data-gallery-asked", JSON.stringify(asked));
 
     if (kind === "parts" && verb === "run") {
-      const run = v.parse(PartRunRequestSchema, JSON.parse(body ?? "{}"));
-
-      return Response.json(answerFor(decodeURIComponent(part ?? ""), run.approval));
+      return Response.json(answerFor(decodeURIComponent(part ?? ""), v.parse(PartRunRequestSchema, JSON.parse(body ?? "{}"))));
     }
 
     if (kind === "consents" && request.method === "GET") return Response.json({ consents });

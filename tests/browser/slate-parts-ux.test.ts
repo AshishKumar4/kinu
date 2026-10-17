@@ -127,7 +127,12 @@ describe("a slate's personal parts", () => {
 
           expect(JSON.parse(shown?.body ?? '{}')).toEqual({ revision: 'r2', label: 'Your open pull requests, as the team sees them', value: { author: 'you', open: [412, 409] } });
 
-          // A first consent says nothing changed; then its effect waits, payload shown, and runs once approved.
+          // Its own control, with what the viewer typed, needs a first consent, which says nothing changed; then its effect
+          // waits, payload shown, and runs once approved. Each decision resumes that same run, what was typed kept.
+          await reaches(deploy, 'shown');
+          await deploy.type('[data-part-action-input="deploy"]', 'release-7');
+          await deploy.click('[data-part-action="deploy"]');
+          await reaches(deploy, 'needs-consent');
           await deploy.click('[data-part-needs="consent"] button');
           await page.waitForSelector('[data-consent-allow]', SOON);
           expect(await page.$('[data-consent-changed]')).toBeNull();
@@ -135,17 +140,22 @@ describe("a slate's personal parts", () => {
           await reaches(deploy, 'needs-approval');
           await deploy.click('[data-part-needs="approval"] button');
           await page.waitForSelector('[data-approval-approve]', SOON);
-          expect(JSON.parse(await page.$eval('[data-approval-payload]', (node) => node.textContent ?? 'null'))).toEqual({ project: 'site', target: 'production', ref: 'main' });
+          expect(JSON.parse(await page.$eval('[data-approval-payload]', (node) => node.textContent ?? 'null'))).toEqual({ project: 'site', target: 'production', ref: 'release-7' });
           expect(await page.$eval('[data-approval-tool]', (node) => node.textContent)).toBe('Create deployment');
           await noDecisionIn(deploy);
           await page.click('[data-approval-approve]');
           await reaches(deploy, 'shown');
 
           const after = await asked(page);
-          const lastDeploy = after.filter((each) => each.path.endsWith('/parts/deploy/run')).at(-1);
+          const pressed = { id: 'deploy', input: 'release-7' };
 
           expect(after.some((each) => each.path.endsWith('/approvals/approval-1') && JSON.parse(each.body ?? '{}').decision === 'approve')).toBe(true);
-          expect(JSON.parse(lastDeploy?.body ?? '{}').approval).toBe('approval-1');
+          // The press, its resumption once allowed, and once approved.
+          expect(after.filter((each) => each.path.endsWith('/parts/deploy/run')).slice(-3).map((each) => JSON.parse(each.body ?? '{}'))).toEqual([
+            { args: [], action: pressed, approval: null },
+            { args: [], action: pressed, approval: null },
+            { args: [], action: pressed, approval: 'approval-1' },
+          ]);
         } finally {
           await page.close();
         }
