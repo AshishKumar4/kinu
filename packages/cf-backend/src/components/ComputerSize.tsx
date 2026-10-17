@@ -7,7 +7,7 @@ import { Card, Choice, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { getAccountComputerSize, setAccountComputerSize } from "../lib/user-api";
-import { ACCOUNT_DEFAULT, computerSizeText, sizeSpecs, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/computer-size-text";
+import { ACCOUNT_DEFAULT, computerSizeText, sizeSpecs, stalledNote, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/computer-size-text";
 import type { ComputerSizeState } from "../computer-size";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -18,7 +18,7 @@ export interface ComputerSizeControl {
   readonly state: ComputerSizeState | null;
   /** What the size it runs at, or will start at, gives: `2 vCPU · 8 GiB`. */
   readonly specs: string | null;
-  readonly pending: "resize" | "start" | null;
+  readonly pending: "resize" | "start" | "stop" | null;
   /** The size a resize under way starts it at. */
   readonly restartingTo: string | null;
   /** A refused start, a failure, or a size waiting for the next start: said under the head. */
@@ -26,7 +26,7 @@ export interface ComputerSizeControl {
   readonly choose: (value: BoxSize | typeof ACCOUNT_DEFAULT) => Effect.Effect<void>;
 }
 
-const startPending = (pending: "resize" | "start" | null) => (pending === "start" ? "start" : null);
+const startPending = (pending: "resize" | "start" | "stop" | null) => (pending === "resize" ? null : pending);
 
 /**
  * The workspace's computer size: read when shown, chosen from the head, restarted at by the RPC that sets it. A resize
@@ -36,12 +36,12 @@ const startPending = (pending: "resize" | "start" | null) => (pending === "start
 export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSizeControl {
   const load = useCallback(() => (enabled ? rpc("getComputerSize", []) : Promise.resolve(null)), [rpc, enabled]);
   const { resource, set } = useAsyncResource(load);
-  const [pending, setPending] = useState<"resize" | "start" | null>(null);
+  const [pending, setPending] = useState<"resize" | "start" | "stop" | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<BoxSize | null>(null);
   const state = lastValue(resource);
 
-  const act = (action: "resize" | "start", doing: string, change: () => Promise<ComputerSizeState | null>) => {
+  const act = (action: "resize" | "start" | "stop", doing: string, change: () => Promise<ComputerSizeState | null>) => {
     setPending(action);
     setFailure(null);
 
@@ -70,6 +70,13 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
           <span className="p-meta p-danger">{startRefusedNote(state.startRefused)}</span>
           <button type="button" data-env-start-again onClick={() => detach(act("start", "starting the computer", () => rpc("startComputer", [])))}
             disabled={pending !== null} className="p-env-action">{pending === "start" ? "Starting…" : "Start again"}</button>
+        </div>
+      )}
+      {state.stalled !== null && (
+        <div data-env-stalled className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1">
+          <span className="p-meta p-danger">{stalledNote(state.stalled)}</span>
+          <button type="button" data-env-stop-stalled onClick={() => detach(act("stop", "stopping the computer", () => rpc("stopStalledComputer", [])))}
+            disabled={pending !== null} className="p-env-action">{pending === "stop" ? "Stopping…" : "Stop"}</button>
         </div>
       )}
       {note !== null && <p className={`px-4 pb-1 p-meta ${failure === null ? "p-text-3" : "p-danger"}`}>{note}</p>}

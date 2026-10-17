@@ -56,6 +56,10 @@ export const DEADLINE_EXIT_CODE = 124;
 /** Names the file a run is told through that its silence nears the bound; one line is appended per silent stretch. */
 export const SILENCE_NOTICE_ENV = 'KINU_SILENCE_NOTICE';
 
+/** A file a row appends its notices to, one a line: what its verdict carries beside its exit, said in the report as a
+ *  notice and never a red (`rowNotice`). */
+export const ROW_NOTICES_ENV = 'KINU_ROW_NOTICES';
+
 /** How far into its bound of silence a run is told: late enough that a slow run is not, early enough to answer. */
 const NOTICE_AT = 0.75;
 

@@ -37,7 +37,8 @@ import * as v from 'valibot';
 import { EVAL_TASK_TIMEOUT_SECONDS } from '../evals/src/config';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
-import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully } from './deadline';
+import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, ROW_NOTICES_ENV, runUnderDeadline, writeFully } from './deadline';
+import { rowNotices } from './row-verdicts';
 import { recordMarkAt, recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
@@ -3759,6 +3760,8 @@ export const ArmadaReportSchema = v.object({
       /** Files in its task's artifacts directory the row names as its evidence. */
       artifacts: v.optional(v.array(v.string())),
       problem: v.optional(v.string()),
+      /** Known blind spots the row met (`rowNotice`), said in the report as notices beside its exit. */
+      notices: v.optional(v.array(v.string())),
     })),
   })),
   problems: v.optional(v.array(v.string()), []),
@@ -3825,7 +3828,12 @@ type ArmadaRow = NonNullable<ArmadaReport['verdicts']>['rows'][number];
 
 /** One armada row's verdict into the deploy's report, the evidence its task `kept` copied beside it; whether it is green:
  *  armada's own grade (`armadaRowVerdicts`), never its exit code alone. */
-function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly green: boolean; readonly found: string; readonly reproduce: string; readonly said: string; readonly kept?: string }): boolean {
+/** A row's notices (`rowNotice`), each a notice of its own in the report. */
+function recordRowNotices(report: string, phase: string, what: string, notices: readonly string[] | undefined): void {
+  if (report !== '') for (const notice of notices ?? []) recordNotice(report, { phase, what, notice });
+}
+
+export function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefined, why: { readonly green: boolean; readonly found: string; readonly reproduce: string; readonly said: string; readonly kept?: string }): boolean {
   if (report !== '' && gate.evidence !== undefined && why.kept !== undefined && verdict?.problem === undefined && (verdict?.artifacts?.length ?? 0) > 0) {
     cpSync(join(why.kept, gate.evidence), join(report, gate.evidence), { recursive: true });
   }
@@ -3834,6 +3842,8 @@ function recordArmadaRow(report: string, gate: Gate, verdict: ArmadaRow | undefi
 
   if (why.green && verdict !== undefined) {
     console.log(`ok  ${gate.run}  (${verdict.seconds.toFixed(1)}s on armada, ${why.found})`);
+
+    recordRowNotices(report, gate.phase ?? 'source', gate.label, verdict.notices);
 
     return true;
   }
@@ -3929,6 +3939,8 @@ export function reportCIVerdicts(file: CIVerdictFile, url: string, report: strin
 
   for (const row of file.rows) {
     if (report !== '') recordTiming(report, { phase: 'ci', what: row.name, command: row.run, seconds: row.seconds });
+
+    recordRowNotices(report, 'ci', row.name, row.notices);
 
     if (row.exitCode === 0) {
       console.log('CI proved ' + row.name + ' on ' + file.sha + ' (' + url + ')');
@@ -4432,8 +4444,10 @@ if (import.meta.main) {
   const live = deployPhase === undefined || report === '' ? undefined : openDeployLive(report, deployPhase.join(','));
 
   /** One row outcome: its wall for the report, its verdict for the terminal, and every red's evidence. */
-  const reportOutcome = (gate: (typeof pending)[number]['gate'], outcome: Awaited<ReturnType<typeof runUnderDeadline>>): boolean => {
+  const reportOutcome = (gate: (typeof pending)[number]['gate'], outcome: Awaited<ReturnType<typeof runUnderDeadline>>, notices: readonly string[]): boolean => {
     if (report !== '') recordTiming(report, { phase: gate.phase ?? 'source', what: gate.label, command: gate.run, seconds: outcome.seconds, silence: outcome.longestSilence });
+
+    recordRowNotices(report, gate.phase ?? 'source', gate.label, notices);
 
     if (outcome.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${outcome.seconds.toFixed(1)}s, silent at most ${outcome.longestSilence.toFixed(1)}s)`);
@@ -4504,9 +4518,13 @@ if (import.meta.main) {
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
     const timingPath = resolve(root, 'bench-artifacts/ci/file-' + String(index) + '.json');
+    const noticesPath = resolve(root, 'bench-artifacts/ci/notices-' + String(index) + '.txt');
     const argv = entry.argv === undefined ? rowArgv(gate, tracked, deployPhase !== undefined, verdictRows ? timingPath : undefined) : [...entry.argv];
 
-    const env = cacheRunEnvironment(closure, argv);
+    rmSync(noticesPath, { force: true });
+    mkdirSync(dirname(noticesPath), { recursive: true });
+    // A row with no derived closure runs in this process's environment, as it did before its notices had a file.
+    const env = { ...cacheRunEnvironment(closure, argv) ?? process.env, [ROW_NOTICES_ENV]: noticesPath };
 
     // Under the row's own silence bound: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
@@ -4522,12 +4540,14 @@ if (import.meta.main) {
     if (concurrent) await writeFully(process.stdout, `${[header, ...lines, `${outcome.stdout}${outcome.stderr}`.trimEnd()].join('\n')}\n`);
     const { seconds } = outcome;
 
+    const notices = rowNotices(noticesPath);
+
     if (verdictPath !== undefined) {
-      ciRows.push(ciVerdictRow(gate, { ...outcome, seconds }, readFileTimings(timingPath), evidence));
+      ciRows.push(ciVerdictRow(gate, { ...outcome, seconds, notices }, readFileTimings(timingPath), evidence));
       writeVerdicts(verdictPath, { sha: revision, part: 'all', rows: ciRows });
     }
 
-    if (reportOutcome(gate, outcome)) {
+    if (reportOutcome(gate, outcome, notices)) {
       if (proofs !== undefined) {
         const after = repoAt(root, (run, files) => claims(run, files));
 

@@ -4,6 +4,7 @@ import { Devbox, GOLDEN_NAME, type DevboxState } from '../../../devbox/src/index
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { DESKTOP_SIZE, WATCH_SHEET } from '../../../devbox/src/desktop';
+import { DISK_PROBE } from '../../../devbox/src/disk-stall';
 import { DevboxError, settle } from '../../../devbox/src/errors';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
@@ -196,6 +197,18 @@ export class ContractBox extends Devbox<Env> {
     await runContainerContract(kind, this, container, this.toolsPin);
   }
 
+  /** The box as the devbox reads a stop waiting on its disk (`DISK_PROBE`), by an exec of its own beside whatever the box
+   *  is doing: each process, and the root's reads in flight. Bash builtins alone, as a program not yet read from a disk
+   *  that stopped answering would wait on it too. Null with no container running. */
+  async processes(): Promise<string | null> {
+    const container = this.ctx.container;
+
+    if (container?.running !== true) return null;
+    const read = await (await container.exec(['/bin/bash', '-c', DISK_PROBE, 'devbox-disk-stall'])).output();
+
+    return new TextDecoder().decode(read.stdout) + new TextDecoder().decode(read.stderr);
+  }
+
   async inspection() {
     await this.ensureReady();
 
@@ -348,6 +361,7 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/view': return new Response(`<iframe src="${desktopClientUrl(url, name)}" style="width:1280px;height:800px;border:0"></iframe>`, { headers: { 'content-type': 'text/html' } });
     case '/golden': return Response.json({ id: await box.ensureGolden() });
     case '/inspection': return Response.json(await box.inspection());
+    case '/processes': return Response.json({ processes: await box.processes() });
     case '/file-contract': return Response.json(await box.fileContract());
     case '/contract': await box.contract(v.parse(v.picklist(CONTAINER_CONTRACTS), url.searchParams.get('kind')));
 
@@ -358,6 +372,9 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/exec': return Response.json(await box.exec(body.command ?? ''));
     case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]')), body.stop));
     case '/agent-desktop-stop': return Response.json({ stopped: await box.stopAgentDesktop(body.stop ?? '') });
+    // The computer's own status and its Stop there, as the owner's Environment card reads and presses them.
+    case '/box-size': return Response.json(await box.boxSize());
+    case '/stop-stalled': return Response.json({ stopped: await box.stopStalled() });
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
     default: return await lifecycleRoute(url, box) ?? new Response('no route', { status: 404 });
   }

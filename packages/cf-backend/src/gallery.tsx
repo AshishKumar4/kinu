@@ -1942,7 +1942,7 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
 
 /** The computer's size as its box reads it: running only while it is awake. */
 function galleryComputerSize(running: string | null): JsonValue {
-  return { account: null, chosen: null, size: running ?? "medium", running: computerAwake ? running ?? "medium" : null, startRefused: null };
+  return { account: null, chosen: null, size: running ?? "medium", running: computerAwake ? running ?? "medium" : null, startRefused: null, stalled: null };
 }
 
 /** A resize restarts the computer at the size asked for; `resize=held` answers it only at `__kinuEndResize()`. */

@@ -26,6 +26,11 @@ export function startRefusedNote(reason: string): string {
   return `The computer did not start: ${reason}. It stays stopped until you start it again or choose another size.`;
 }
 
+/** The computer's last stop, waiting on a disk that stopped answering: what Stop beside it does. */
+export function stalledNote(stalled: string): string {
+  return `${stalled.charAt(0).toUpperCase()}${stalled.slice(1)}. Stop restarts the computer: files stay as last saved, and what was running starts fresh.`;
+}
+
 export function workspaceSizeNote(state: ComputerSizeState, pending: boolean): string | null {
   if (pending) return state.running === null ? 'Saving…' : 'Restarting at the new size…';
 
