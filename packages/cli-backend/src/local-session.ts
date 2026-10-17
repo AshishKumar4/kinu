@@ -2042,10 +2042,12 @@ export class LocalAgentSession {
     return conversationKey(this.conversation(), this.sessionId);
   }
 
-  /** Key-less by default (DuckDuckGo + local HTML→markdown); a stored `tavily` credential upgrades search. */
+  /** Search through the signed-in account's own (Cloudflare's Web Search API), or a stored `tavily` credential, which
+   *  wins; local HTML→markdown. */
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
     const getAuth = this.modelResolver?.getAuth;
+    const firstParty = this.modelResolver?.firstPartySearch;
 
     const options: DefaultWebSearchProviderDeps = {
       fetch: globalThis.fetch,
@@ -2054,6 +2056,8 @@ export class LocalAgentSession {
     };
 
     if (getAuth) options.getAuth = getAuth;
+
+    if (firstParty !== undefined) options.firstParty = firstParty;
     this._webSearchProvider = createDefaultWebSearchProvider(options);
 
     return this._webSearchProvider;

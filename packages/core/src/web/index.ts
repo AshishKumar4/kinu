@@ -5,6 +5,7 @@ export {
   type WebSearchResponse,
   type WebFetchResult,
   type DefaultWebSearchProviderDeps,
+  type FirstPartySearch,
   type WebScreenshot,
   type BrowserSessions,
   type BrowserSessionView,
@@ -20,6 +21,8 @@ export {
 
 
 export { buildCfWebSearchProvider } from './provider-factory';
+
+export { USER_WEB_SEARCH_PATH, WebSearchRequestSchema, bindingWebSearch, routeWebSearch } from './first-party-search';
 
 export { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 

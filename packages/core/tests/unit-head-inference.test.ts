@@ -325,7 +325,7 @@ describe('buildHeadAccumulatorTools', () => {
     // The head's own surface, as both backends build it.
     const tools = buildHeadToolSet({
       input, capture, rt, conversations: conversationsFor(rt), jobs: actorJobsFor(rt),
-      webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
+      webSearch: { search: async (query) => ({ query, results: [], source: 'ceramic' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
       effectClaims: effectClaimsFor(rt),
     });
