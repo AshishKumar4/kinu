@@ -9,6 +9,9 @@
  *   approval of one effect with its payload, then shows done; each decision resumes it with what the viewer typed.
  * - `team` is a part the slate does not declare for this share: a stub that says what to do.
  *
+ * `part-host-refused` is the same page as its runs are refused: the viewer's session has ended for `standup`, the
+ * workspace fails `deploy`'s run, and `team`'s own code fails.
+ *
  * `shared-live` is the same slate entered as a share: the share's page opens it (`/api/shared/live/open`) and frames it
  * under Kinu's bar, hosting its parts as the visitor; `shared-live-signed-out` is a share that names people, entered
  * signed out. `part-previews` is the owner's own two previews of it, in the
@@ -64,9 +67,18 @@ function slatePage(gallery: string): string {
   </body>`;
 }
 
+/** Each part's run refused (`part-host-refused`), as the session gate, the workspace and the slate's own code refuse it. */
+function refusedRun(part: string): Response {
+  if (part === "standup") return Response.json({ error: "No Kinu session in request" }, { status: 401 });
+
+  if (part === "deploy") return Response.json({ error: "The workspace didn't answer in time." }, { status: 503 });
+
+  return Response.json({ kind: "failed", message: "Team board's code failed: digest is not a function." } satisfies PartRunAnswer);
+}
+
 /** The part routes, answered at the top as the server answers its one viewer. */
 export function installPartsFixture(frame: string): void {
-  if (frame !== "part-host" && frame !== "shared-live" && frame !== "shared-live-signed-out" && frame !== "part-previews") return;
+  if (!["part-host", "part-host-refused", "shared-live", "shared-live-signed-out", "part-previews"].includes(frame)) return;
 
   const next = window.fetch.bind(window);
   const consents: SlateConsent[] = [{ workspace: WORKSPACE, slate: SLATE, ...GITHUB, revision: "r1" }];
@@ -118,6 +130,8 @@ export function installPartsFixture(frame: string): void {
 
     asked.push({ path: url.pathname, body });
     document.documentElement.setAttribute("data-gallery-asked", JSON.stringify(asked));
+
+    if (kind === "parts" && verb === "run" && frame === "part-host-refused") return refusedRun(decodeURIComponent(part ?? ""));
 
     if (kind === "parts" && verb === "run") {
       return Response.json(answerFor(decodeURIComponent(part ?? ""), v.parse(PartRunRequestSchema, JSON.parse(body ?? "{}"))));

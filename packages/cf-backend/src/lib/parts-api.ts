@@ -7,13 +7,35 @@ import { Effect } from "effect";
 import {
   PartRunAnswerSchema, slateApprovalPath, SlateConsentsAnswerSchema, slateConsentsPath, slatePartRunPath, slatePartShowPath, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateConsent,
 } from "@kinu.run/core";
+import * as v from "valibot";
 import { renderThrownChain, settle } from "@kinu.run/core/obs";
-import { posted, request } from "./http";
+import { posted, refusal, request, respond } from "./http";
 
-/** The run's answer, or why it was refused, in the app's words. */
-export function runPart(workspace: string, slate: string, part: string, asked: PartRunRequest): Promise<PartRunAnswer | string> {
+/** The part of `title` to run, by its address. */
+interface RunPartAt {
+  readonly workspace: string;
+  readonly slate: string;
+  readonly part: string;
+  readonly title: string;
+}
+
+/**
+ * The run's answer, or why it was refused, in the app's words. Refused for want of a session, as when the viewer's has
+ * ended, it is the part's own signed-out state, which offers Sign in.
+ */
+export function runPart({ workspace, slate, part, title }: RunPartAt, asked: PartRunRequest): Promise<PartRunAnswer | string> {
+  const path = slatePartRunPath(workspace, slate, part);
+
   return settle(Effect.catchCause(
-    request(PartRunAnswerSchema, slatePartRunPath(workspace, slate, part), { method: "POST", json: asked }),
+    Effect.gen(function* () {
+      const res = yield* respond(path, { method: "POST", json: asked });
+
+      if (res.status === 401) return { kind: "stub", reason: "signed-out", message: `Sign in to see your own part of ${title}.` } satisfies PartRunAnswer;
+
+      if (!res.ok) return yield* Effect.die(yield* refusal(res, "POST", path));
+
+      return v.parse(PartRunAnswerSchema, yield* Effect.promise(async () => res.json()));
+    }),
     (cause) => Effect.succeed(renderThrownChain({ cause })),
   ));
 }

@@ -51,7 +51,7 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
     slate,
     title,
     slateWindow: () => slateFrame.current?.contentWindow ?? null,
-    run: (address, asked) => runPart(address.workspace, address.slate, address.part, asked),
+    run: (address, asked) => runPart({ ...address, title }, asked),
     decide: (address, kind, answer) => {
       if (!asks(kind, answer)) return Promise.resolve<Decided>({ kind: "declined" });
 

@@ -7698,6 +7698,7 @@ async function mount() {
     ["gallery-slate", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
     // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
     ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
+    ["part-host-refused", { node: <PartHostFrame />, entries: ["/"] }],
     ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
     ["shared-live", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
     ["shared-live-signed-out", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],

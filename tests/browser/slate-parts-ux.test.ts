@@ -163,6 +163,32 @@ describe("a slate's personal parts", () => {
     });
   });
 
+  test("a part whose viewer's session has ended offers Sign in, back to the same page; another refusal says why", async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'part-host-refused', 'light', 'desktop');
+
+      try {
+        const standup = await partFrame(page, 'standup');
+        const team = await partFrame(page, 'team');
+
+        expect(await stateOf(standup)).toBe('stub');
+        await standup.waitForSelector('[data-part-stub="signed-out"] button', SOON);
+        expect(await stateOf(team)).toBe('failed');
+
+        const here = new URL(page.url());
+
+        const [login] = await Promise.all([
+          page.waitForRequest((request) => new URL(request.url()).pathname === '/login', SOON),
+          standup.click('[data-part-stub="signed-out"] button'),
+        ]);
+
+        expect(new URL(login.url()).searchParams.get('return_to')).toBe(here.pathname + here.search);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test("a share's page frames the slate under Kinu's bar and hosts its parts for the visitor", async () => {
     await withGallery(async (gallery) => {
       for (const [theme, viewport] of [['light', 'desktop'], ['dark', 'mobile']] as const) {
