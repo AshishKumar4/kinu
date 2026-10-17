@@ -491,7 +491,9 @@ function normalPath(path: string): string {
  */
 function confinedTo(fs: NamespaceFs, roots: readonly string[], files: readonly string[]): EsbuildReadFs {
   const inside = (path: string): boolean => {
-    const real = normalPath(fs.resolveSymlink(normalPath(path)) ?? normalPath(path));
+    const at = normalPath(path);
+    // A path not there has no link to follow (and resolving one throws): its own name is all there is to check.
+    const real = fs.exists(at) ? normalPath(fs.resolveSymlink(at) ?? at) : at;
 
     return files.includes(real) || roots.some((root) => real === root || real.startsWith(`${root}/`));
   };

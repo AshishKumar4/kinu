@@ -8,7 +8,7 @@ import {
 } from '@kinu.run/core/slates';
 import {
   ingressAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
-  SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, grantAdmits,
+  SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, grantAdmits, admitNestedViewerCall,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, publicPage, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
@@ -117,6 +117,8 @@ export class SlateHost {
   private readonly slateSources: SlateSources;
   /** Each viewer's own parts of the slates this workspace shares (docs/SLATE-SHARING-NIMBUS.md §3). */
   readonly parts: PersonalParts;
+  /** How many times each slate's sharing changed: a launch started under an older count starts again. */
+  private readonly shareGenerations = new Map<string, number>();
 
   constructor(private readonly deps: SlateHostDeps) {
     const sql = deps.ctx.storage.sql;
@@ -312,29 +314,40 @@ export class SlateHost {
       if (name === SLATE_STORAGE_BINDING) return slateStorageCall(this.controller.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
       const issued = issuedSlateInvocation({ invocations: this.invocations, id, invocation: parsed.output.invocation });
       const chain = issued?.chain ?? [];
-      // The slate's own server, shared: it acts as its shares allow now, whoever called it (the owner too).
-      const shared = caller.path.length === 0 && caller.share === undefined ? this.sharedAuthority(id) : ({ kind: 'owner' } satisfies ServerAuthority);
+      const ownServer = caller.path.length === 0 && caller.share === undefined;
+
+      // Shared, its server acts as its shares allow now, whoever called it, the owner too.
+      const shared = ownServer ? this.sharedAuthority(id) : ({ kind: 'owner' } satisfies ServerAuthority);
+
+      // A shared slate's server acts only under a record this host issued: a viewer's request, or the owner's own (their
+      // preview, their agent's call). A call naming none is no one's, and is refused, never taken for the owner's.
+      if (ownServer && issued === null && shared.kind !== 'owner') {
+        return await settle(slateAnswer(`slate ${id} ${name}`, Effect.fail(new KinuError('denied', `Slate ${id} is shared, and called out under no request of this host's`))));
+      }
+
+      const viewer = ownServer ? issued?.viewer : undefined;
+
+      // A viewer's request is held to its own share as it stands now, whatever the slate's other shares say: revoked,
+      // it is refused there, never taken for the owner's own.
+      if (viewer !== undefined) {
+        if (shared.kind === 'none') return await settle(slateAnswer(`slate ${id} ${name}`, Effect.fail(await this.ownAccessRefusal(id))));
+
+        return await this.controller.viewers.call({
+          share: viewer.share, id, request: parsed.output, chain, issued,
+          bound: (address) => this.boundedBy(this.sharedAuthority(id), id, address),
+          run: (route, nested) => this.run(shareCaller(viewer.share), route, {
+            // What it reaches inside itself meets every share's bound as it stands then, as well as its own share's grant.
+            nested: (namespace, member) => { this.nestedBound(id, { namespace, member }); nested(namespace, member); },
+            ...(parsed.output.authorize && { authorizeOnly: true }),
+          }, viewer),
+        });
+      }
 
       if (shared.kind === 'none') return await settle(slateAnswer(`slate ${id} ${name}`, Effect.fail(await this.ownAccessRefusal(id))));
 
-      if (shared.kind === 'grant') {
-        if (issued?.viewer !== undefined) {
-          const { viewer } = issued;
+      const beyond = this.boundedBy(shared, id, routeSlateCall({ id, request: parsed.output, chain, hosted: false }).address);
 
-          return await this.controller.viewers.call({
-            share: viewer.share, id, request: parsed.output, chain, issued,
-            run: (route, nested) => this.run(shareCaller(viewer.share), route, { nested, ...(parsed.output.authorize && { authorizeOnly: true }) }, viewer),
-          });
-        }
-
-        const bounded = routeSlateCall({ id, request: parsed.output, chain, hosted: false });
-
-        if (grantAdmits(shared.grant, id, bounded.address.namespace, bounded.address.member) === null) {
-          const beyond = new KinuError('denied', `Slate ${id} is shared with the owner's access, which does not reach ${bounded.address.namespace}.${bounded.address.member}`);
-
-          return await settle(slateAnswer(`slate ${id} ${name}`, Effect.fail(beyond)));
-        }
-      }
+      if (beyond !== null) return await settle(slateAnswer(`slate ${id} ${name}`, Effect.fail(beyond)));
 
       // The share row is re-read now, so a revoked share refuses mid-flight.
       if (caller.share !== undefined) {
@@ -430,6 +443,22 @@ export class SlateHost {
     }
   }
 
+  /** Why `address` is beyond what the slate's server may reach under `shared` now; null when it is within. */
+  private boundedBy(shared: ServerAuthority, id: string, address: { readonly namespace: string; readonly member: string }): KinuError | null {
+    if (shared.kind !== 'grant' || grantAdmits(shared.grant, id, address.namespace, address.member) !== null) return null;
+
+    return new KinuError('denied', `Slate ${id} is shared with the owner's access, which does not reach ${address.namespace}.${address.member}`);
+  }
+
+  /** What a viewer's call reaches inside itself, held to every share's bound as it stands now: it throws to refuse. */
+  private nestedBound(id: string, address: { readonly namespace: string; readonly member: string }): void {
+    const now = this.sharedAuthority(id);
+
+    if (now.kind === 'none') admitNestedViewerCall({ slates: [], members: [] }, id, address);
+
+    if (now.kind === 'grant') admitNestedViewerCall(now.grant, id, address);
+  }
+
   /** What the slate's server acts with now (`serverAuthority`): its live shares, at its current revision. */
   private sharedAuthority(id: string): ServerAuthority {
     return serverAuthority(this.liveAuthorities(id), slateRevision(this.controller.builds, id) ?? '');
@@ -453,6 +482,7 @@ export class SlateHost {
    * network its shares now allow.
    */
   async shareChanged(id: string): Promise<void> {
+    this.shareGenerations.set(id, (this.shareGenerations.get(id) ?? 0) + 1);
     await this.controller.processes.stopWhere((running) => running.id === id && running.caller.share === undefined && running.caller.path.length === 0);
   }
 
@@ -531,6 +561,8 @@ export class SlateHost {
 
     // Shared, the slate's server drives no browser of the owner's: only one its own call opened (Kitesurf).
     const unshared = caller.share === undefined && this.sharedAuthority(id).kind === 'owner';
+    // What the slate's sharing was when this launch chose its network: changed before it is running, it starts again.
+    const generation = this.shareGenerations.get(id) ?? 0;
     const actor = unshared ? await this.deps.browserActor(caller) : null;
     // Shared, it reaches the network as no one: its own preview hosts too.
     const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: unshared });
@@ -546,6 +578,15 @@ export class SlateHost {
       bindings[name] = exports.SlateBinding({ props });
     }
 
-    return await this.resident.launch({ owner: id, root: source.root, bindings, globalOutbound, app: app === null ? null : { port: app.port } }, image);
+    const started = await this.resident.launch({ owner: id, root: source.root, bindings, globalOutbound, app: app === null ? null : { port: app.port } }, image);
+
+    // Shared or unshared while it started: its network was chosen for what no longer holds, so it never runs as it is.
+    if ((this.shareGenerations.get(id) ?? 0) !== generation) {
+      await started.stop();
+
+      return await this.launch(launch);
+    }
+
+    return started;
   }
 }

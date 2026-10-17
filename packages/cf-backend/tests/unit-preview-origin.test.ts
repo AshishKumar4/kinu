@@ -1104,17 +1104,18 @@ describe('the app document policy', () => {
     });
   });
 
-  // A personal part's frame sits in the slate's page, on its preview host (docs/SLATE-SHARING-NIMBUS.md §3): that
-  // route alone may be framed, by preview hosts alone; every other app page stays unframeable.
-  test('a part frame is framed by preview hosts alone, and no other app page by anyone', () => {
+  // A personal part's frame sits in the slate's page, on its preview host, under the app page at the top
+  // (docs/SLATE-SHARING-NIMBUS.md §3). CSP checks every ancestor, so that route alone admits the app's own origin and
+  // preview hosts; every other app page stays unframeable.
+  test('a part frame is framed by preview hosts under the app alone, and no other app page by anyone', () => {
     const framing = (path: string, previewOrigin: string | null) => {
       const res = withAppSecurityHeaders(new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }), new URL(`${APP}${path}`), previewOrigin);
 
       return { frame: res.headers.get('x-frame-options'), ancestors: /frame-ancestors [^;]*/.exec(res.headers.get('content-security-policy') ?? '')?.[0] };
     };
 
-    expect(framing('/s/acme/board/parts/notes', `https://*.${SUFFIX}`)).toEqual({ frame: null, ancestors: `frame-ancestors https://*.${SUFFIX}` });
-    expect(framing('/s/acme/a-room%2Fcard/parts/notes', `https://*.${SUFFIX}`)).toEqual({ frame: null, ancestors: `frame-ancestors https://*.${SUFFIX}` });
+    expect(framing('/s/acme/board/parts/notes', `https://*.${SUFFIX}`)).toEqual({ frame: null, ancestors: `frame-ancestors 'self' https://*.${SUFFIX}` });
+    expect(framing('/s/acme/a-room%2Fcard/parts/notes', `https://*.${SUFFIX}`)).toEqual({ frame: null, ancestors: `frame-ancestors 'self' https://*.${SUFFIX}` });
     // No preview host, nothing to frame it: it stays as every page is.
     expect(framing('/s/acme/board/parts/notes', null)).toEqual({ frame: 'DENY', ancestors: "frame-ancestors 'none'" });
 

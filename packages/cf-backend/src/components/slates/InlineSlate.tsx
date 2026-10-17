@@ -1,4 +1,5 @@
 import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { Loader } from "@cloudflare/kumo/components/loader";
 import { ArrowSquareOutIcon, CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -346,8 +347,9 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   const save = useMemo(() => (block === undefined ? undefined : async () => rpc("slate", [{ op: 'save', page: id }])), [block, rpc, id]);
 
   const notice = preview?.broken === undefined ? null : <BrokenNotice title={preview.title ?? id} />;
-  // The owner's own preview runs its personal parts as the owner, the decisions they lead to opening here.
-  const decision = <WorkspacePartHost slate={id} titled={preview} slateFrame={frame} />;
+  // The owner's own preview runs its personal parts as the owner, one host to a preview. The decisions they lead to open
+  // over the whole page, as an inline preview sits in an answer's text.
+  const decision = createPortal(<WorkspacePartHost slate={id} titled={preview} slateFrame={frame} />, document.body);
   let content: ReactNode = null;
 
   if (src !== null) {
@@ -376,7 +378,6 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     return (
       <div className="p-pane gap-2">
         {notice}
-      {decision}
         {decision}
         {refusal !== null && (
           <div className="p-notice-danger rounded-lg px-3 py-2 text-xs">
@@ -399,6 +400,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   return (
     <SlateCard id={id} block={block} measure={attach} save={save}>
       {notice}
+      {decision}
       {refusal !== null && (
         <span className="block p-notice-danger px-3 py-2 text-xs">
           <span className="block break-words m-0">{refusal}</span>

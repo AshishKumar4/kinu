@@ -29,6 +29,8 @@ export function privateIssue(email: string): string {
 
 export class FakeViewerAccounts implements PartConnections {
   readonly dispatched: string[] = [];
+  /** Run once, while the next call is out at its viewer's account: what happens meanwhile (a revoke, say). */
+  duringNext: (() => void) | null = null;
   private readonly consents = new Map<string, SlateConsent>();
   private readonly approvals = new Map<string, EffectApprovals>();
 
@@ -65,6 +67,10 @@ export class FakeViewerAccounts implements PartConnections {
     }
 
     this.dispatched.push(`${viewer.email} ${call.server}.${call.tool} ${JSON.stringify(payload)}`);
+    const during = this.duringNext;
+
+    this.duringNext = null;
+    during?.();
 
     return Promise.resolve({ kind: 'ran', value: call.tool === 'read_issue' ? { secret: privateIssue(viewer.email) } : `${call.tool} done` });
   }

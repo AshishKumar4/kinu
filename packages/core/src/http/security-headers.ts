@@ -44,7 +44,7 @@ export function publicHtmlHeaders() {
 
 /**
  * A personal part's frame, `/s/:workspace/:slate/parts/:part` (APP_ROUTES.liveSlatePart): the one app page a slate's own
- * page frames, from its preview host (docs/SLATE-SHARING-NIMBUS.md §3).
+ * page frames, from its preview host, under the app page at the top (docs/SLATE-SHARING-NIMBUS.md §3).
  */
 const PART_FRAME = /^\/s\/[^/]+\/[^/]+\/parts\/[^/]+$/u;
 
@@ -92,8 +92,9 @@ export function withAppSecurityHeaders(
   const headers = new Headers(response.headers);
 
   const desktopClient = url.pathname.startsWith(DESKTOP_CLIENT_ROOT);
-  // X-Frame-Options names no host, so a page preview hosts may frame carries none; its CSP names them.
-  const partFramedBy = previewOrigin !== null && PART_FRAME.test(url.pathname) ? previewOrigin : null;
+  // X-Frame-Options names no host, so a page preview hosts may frame carries none; its CSP names them. CSP checks every
+  // ancestor, and the app's own page is the top above the slate's.
+  const partFramedBy = previewOrigin !== null && PART_FRAME.test(url.pathname) ? `'self' ${previewOrigin}` : null;
 
   for (const [key, value] of Object.entries(BASE_HEADERS)) headers.set(key, value);
   // How long the shell is kept is the shell's (`cachePolicy`, app-shell.ts).

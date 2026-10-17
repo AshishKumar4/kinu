@@ -367,6 +367,9 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ status: number; body: string }>;
   viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
   viewerRefusals(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string; mutate: string }>;
+  viewerCall(handle: string, claim: { userId: string | null; source: string; consented: boolean }, method: string): Promise<string>;
+  viewerAfterLastRevoke(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string): Promise<ProbeAnswer>;
+  launchAcrossShare(): Promise<{ actors: number; afterShare: number; refused: string; running: number }>;
   viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
   replay(share: string): Promise<ProbeAnswer>;
   requests(share: string): Promise<ProbeAnswer>;
@@ -392,6 +395,9 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   notesCall(method: string): Promise<ProbeAnswer>;
   lateCall(): Promise<ProbeAnswer>;
   workspaceHolds(text: string): Promise<string[]>;
+  notesOnOwnerAccess(): Promise<void>;
+  revokeDuringNextCall(): Promise<void>;
+  runPartApproved(viewer: string, part: string, approval: string): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
 }
 
 

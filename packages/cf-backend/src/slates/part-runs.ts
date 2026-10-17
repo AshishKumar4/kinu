@@ -43,12 +43,40 @@ export interface PersonalPartsDeps {
   call(request: SlateAppCall): Promise<SlateCallResult>;
 }
 
+/** One call a part's run made with its viewer's connection, and what it was answered: a step of its journal. */
+interface PartStep {
+  readonly call: string;
+  readonly value: JsonValue;
+}
+
 /** A part's run while it runs: whose it is, at which revision, and what it was refused for want of. */
 interface PartRun {
   readonly slate: string;
   readonly viewer: PartViewer;
   readonly revision: string;
   needed: Extract<PartRunAnswer, { kind: 'needs-consent' | 'needs-approval' }> | null;
+  /** Each call it made and was answered, in order: what a run resumed after an approval is answered from. */
+  readonly steps: PartStep[];
+  /** What an earlier run of the same call answered, each consumed in order while the run makes the same calls. */
+  readonly replay: PartStep[];
+}
+
+/** What a run of a part's function is given: its arguments, and the journal it is answered from first. */
+interface PartInput {
+  readonly args: readonly JsonValue[];
+  readonly replay: readonly PartStep[];
+}
+
+/**
+ * A run that stopped for its viewer's approval of one call: what it was given and what it was answered so far, so the
+ * run resumed on that approval is answered the same up to that call, and runs nothing it already ran.
+ */
+interface PausedRun {
+  readonly viewer: string;
+  readonly slate: string;
+  readonly part: string;
+  readonly args: readonly JsonValue[];
+  readonly steps: readonly PartStep[];
 }
 
 /** The surface a run's process is given: its `workspace`, and the reserved names its runner reaches. */
@@ -61,14 +89,19 @@ const PART_SURFACES = ['workspace', SLATE_STORAGE_BINDING, SLATE_HOST_BINDING] a
  */
 export class PersonalParts {
   private readonly runs = new Map<string, PartRun>();
+  /** Runs stopped for an approval, by the approval's id; each is resumed once, on that approval (`run`). */
+  private readonly paused = new Map<string, PausedRun>();
 
   constructor(private readonly deps: PersonalPartsDeps) {}
 
-  /** Whether `viewer` may use the slate: its owner, or someone a live share of it admits now. */
+  /**
+   * Whether `viewer` may run the slate's personal parts now: its owner, in their own preview; or someone a live share
+   * of it on each person's own access admits. A share on the owner's access runs no one's personal parts.
+   */
   admitted(viewer: PartViewer, slate: string): boolean {
     if (viewer.userId === this.deps.ownerUserId?.()) return true;
 
-    return this.deps.controller.live.list().some((share) => share.slate === slate && share.revokedAt === null
+    return this.deps.controller.live.list().some((share) => share.slate === slate && share.revokedAt === null && share.mode === 'own'
       && (share.visibility === 'public' || this.deps.controller.live.hasUser(share.id, viewer.userId)));
   }
 
@@ -91,11 +124,37 @@ export class PersonalParts {
         return { kind: 'failed', message: `What the page passed ${title}'s part ${part} is not what it declares it takes` } satisfies PartRunAnswer;
       }
 
-      return yield* this.runOnce(viewer, slate, declared.fn, request.action === null ? request.args : [...request.args, request.action]);
+      const { args, replay } = this.resumed(viewer, slate, part, request);
+      const answer = yield* this.runOnce(viewer, slate, { fn: declared.fn, args, replay });
+
+      if (answer.kind === 'needs-approval') this.paused.set(answer.ask.id, { viewer: viewer.userId, slate, part, args, steps: answer.steps });
+
+      // Delivered only to someone the slate is still shared with: removed meanwhile, they are answered nothing.
+      if (!this.admitted(viewer, slate)) return null;
+
+      return answer.kind === 'needs-approval' ? { kind: answer.kind, ask: answer.ask } : answer;
     }));
   }
 
-  private runOnce(viewer: PartViewer, slate: string, fn: string, args: readonly JsonValue[]): Effect.Effect<PartRunAnswer, KinuError> {
+  /**
+   * What a run is given: resumed on the approval it stopped for, the same input, answered the same up to that call (the
+   * pause is taken once); else the request's own input, answered afresh.
+   */
+  private resumed(viewer: PartViewer, slate: string, part: string, request: PartRunRequest): PartInput {
+    const paused = request.approval === null ? undefined : this.paused.get(request.approval);
+
+    if (request.approval !== null && paused?.viewer === viewer.userId && paused.slate === slate && paused.part === part) {
+      this.paused.delete(request.approval);
+
+      return { args: paused.args, replay: paused.steps };
+    }
+
+    return { args: request.action === null ? request.args : [...request.args, request.action], replay: [] };
+  }
+
+  private runOnce(
+    viewer: PartViewer, slate: string, { fn, args, replay }: { readonly fn: string; readonly args: readonly JsonValue[]; readonly replay: readonly PartStep[] },
+  ): Effect.Effect<Exclude<PartRunAnswer, { kind: 'needs-approval' }> | (Extract<PartRunAnswer, { kind: 'needs-approval' }> & { readonly steps: readonly PartStep[] }), KinuError> {
     return Effect.gen({ self: this }, function* () {
       const { controller, resident, workspace } = this.deps;
       const running = yield* attempt({ doing: `building slate ${slate}`, otherwise: 'io' }, async () => controller.processes.booted(ROOT_SLATE_CALLER, slate));
@@ -110,7 +169,7 @@ export class PersonalParts {
       }
 
       const id = crypto.randomUUID();
-      const run: PartRun = { slate, viewer, revision, needed: null };
+      const run: PartRun = { slate, viewer, revision, needed: null, steps: [], replay: [...replay] };
       const bindings = Object.fromEntries(PART_SURFACES.map((name) => [name, exports.PartBinding({ props: { workspace, slate, run: id, name } })]));
 
       this.runs.set(id, run);
@@ -123,6 +182,8 @@ export class PersonalParts {
 
         return yield* Effect.ensuring(this.called(process, fn, args), Effect.promise(async () => { await process.stop(); }));
       }), Effect.sync(() => { this.runs.delete(id); }));
+
+      if (run.needed?.kind === 'needs-approval') return { ...run.needed, steps: run.steps };
 
       if (run.needed !== null) return run.needed;
 
@@ -165,9 +226,30 @@ export class PersonalParts {
       if (name === SLATE_HOST_BINDING) return null;
 
       if (name !== 'workspace') return yield* new KinuError('denied', 'A personal part keeps nothing and reads no shared state: what it shows goes only to its viewer');
+      const key = JSON.stringify([call.path, call.args]);
+      const replayed = run.replay[0];
+
+      // The same call an earlier run made before it stopped: answered as then, run no second time. A different one ends
+      // the replay, and every call from there runs, and asks, afresh.
+      if (replayed?.call === key) {
+        run.replay.shift();
+        run.steps.push(replayed);
+
+        return replayed.value;
+      }
+
+      run.replay.length = 0;
       const answer = yield* this.connected(run, call);
 
-      if (answer.kind === 'ran') return answer.value;
+      // Answered to a run still running for someone still admitted: else the run, or its viewer's access, ended meanwhile.
+      if (this.runs.get(runId) !== run || !this.admitted(run.viewer, slate)) return yield* new KinuError('denied', `Slate ${slate}'s part ended for ${run.viewer.email} while it ran`);
+
+      if (answer.kind === 'ran') {
+        // A value is journaled to be answered again; a stream (its viewer's own model, which acts on nothing) runs again.
+        if (v.is(JsonValueSchema, answer.value)) run.steps.push({ call: key, value: answer.value });
+
+        return answer.value;
+      }
 
       if (answer.kind === 'missing') return yield* new KinuError('missing', answer.message);
       run.needed = answer;
@@ -220,6 +302,9 @@ export class PersonalParts {
       if (request.revision !== slateRevision(this.deps.controller.builds, slate)) {
         return yield* new KinuError('denied', `${slateTitle(project, slate)} changed since this was drawn: draw it again before showing it`);
       }
+
+      // Checked again with nothing awaited between it and the call: removed while the slate was read, it shows nothing.
+      if (!this.admitted(viewer, slate)) return yield* new KinuError('missing', `Slate ${slate} is not shared with ${viewer.email}`);
 
       const shown = yield* attempt({ doing: `showing ${part} to everyone`, otherwise: 'io' }, async () => this.deps.call({
         caller: ROOT_SLATE_CALLER, id: slate, method, args: [request.value, { email: viewer.email, name: viewer.name }],

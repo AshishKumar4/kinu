@@ -3,7 +3,7 @@
  * (docs/SLATE-SHARING-NIMBUS.md §3). It runs and decides only through the app page at the top of its window
  * (lib/part-bridge.ts); opened any other way it shows nothing of its viewer.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import * as v from "valibot";
@@ -38,11 +38,16 @@ const argsOf = (raw: string | null) => {
   return args.success ? args.output : [];
 };
 
+/** One of the part's own controls, pressed, with what its viewer gave it. */
+type Pressed = { readonly id: string; readonly input: string | null };
+
 function PartFrame({ workspace, slate, part, args }: { workspace: string; slate: string; part: string; args: readonly v.InferOutput<typeof JsonValueSchema>[] }) {
   const [bridge, setBridge] = useState<PartBridge | null>(null);
   const [outside, setOutside] = useState(false);
   const [answer, setAnswer] = useState<PartRunAnswer | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // The press whose run waits on a decision: allowed or approved, that run resumes with it; declined, it is dropped.
+  const waiting = useRef<Pressed | null>(null);
 
   useEffect(() => {
     const stop = connectPartBridge({ workspace, slate, part, args }, setBridge);
@@ -52,12 +57,18 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
     return () => { stop?.(); };
   }, [workspace, slate, part, args]);
 
-  const run = useCallback((action: { id: string; input: string | null } | null, approval: string | null) => {
+  const run = useCallback((action: Pressed | null, approval: string | null) => {
     if (bridge === null) return;
     setFailure(null);
     detach(Effect.map(Effect.promise(() => bridge.run(action, approval)), (ran) => {
-      if (typeof ran === "string") setFailure(ran);
-      else setAnswer(ran);
+      if (typeof ran === "string") {
+        setFailure(ran);
+
+        return;
+      }
+
+      waiting.current = ran.kind === "needs-consent" || ran.kind === "needs-approval" ? action : null;
+      setAnswer(ran);
     }));
   }, [bridge]);
 
@@ -67,10 +78,12 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
   const decide = useCallback((kind: "consent" | "approval" | "show") => {
     if (bridge === null) return;
     detach(Effect.map(Effect.promise(() => bridge.decide(kind)), (decided) => {
-      // Allowed: the part runs again under the new consent; approved: again, with that one effect admitted.
-      if (decided.kind === "consented") run(null, null);
+      // Allowed: the waiting run resumes under the new consent; approved: again, with that one effect admitted.
+      if (decided.kind === "consented") run(waiting.current, null);
 
-      if (decided.kind === "approved") run(null, decided.approval);
+      if (decided.kind === "approved") run(waiting.current, decided.approval);
+
+      if (decided.kind === "declined") waiting.current = null;
     }));
   }, [bridge, run]);
 
