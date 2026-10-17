@@ -35,12 +35,13 @@ export async function builtItself(verifier: EvalVerifier, slates: readonly strin
   });
 }
 
-/** The slate's latest source built: the workspace shows no broken-build notice over it and nothing failed in its page. */
-export async function buildsClean(verifier: EvalVerifier, slate: DrawnSlate): Promise<void> {
-  await verifier.check(`${slate.id}-builds-clean`, () => verifier.browse(async (browser) => {
-    const view = await browser.workSurface(slate.id);
+/** The slate's latest source built: the workspace shows no broken-build notice over it and nothing failed in its page
+ *  once it has drawn. */
+export async function buildsClean(verifier: EvalVerifier, id: string): Promise<void> {
+  await verifier.check(`${id}-builds-clean`, () => verifier.browse(async (browser) => {
+    const view = await browser.workSurface(id);
 
-    await view.until(slate.names, slate.done);
+    await view.settled();
     const [broken, faults] = await Promise.all([view.broken(), view.faults()]);
 
     return { pass: broken === null && faults.errors.length === 0 && faults.scripts.length === 0, evidence: { broken, faults } };
@@ -51,7 +52,7 @@ export async function buildsClean(verifier: EvalVerifier, slate: DrawnSlate): Pr
  *  the turn was asked for, the slate among them. */
 export async function slateQuality(verifier: EvalVerifier, slate: DrawnSlate, slates: readonly string[] = [slate.id]): Promise<void> {
   await builtItself(verifier, slates);
-  await buildsClean(verifier, slate);
+  await buildsClean(verifier, slate.id);
 
   await verifier.check(`${slate.id}-follows-the-theme`, () => verifier.browse(async (browser) => {
     const modes = { light: await themed(browser, slate, 'light'), dark: await themed(browser, slate, 'dark') };
@@ -61,7 +62,8 @@ export async function slateQuality(verifier: EvalVerifier, slate: DrawnSlate, sl
 
   await verifier.check(`${slate.id}-fits-a-phone`, () => verifier.browse(async (browser) => {
     const phone = await browser.alone(await browser.workSurface(slate.id), PHONE);
-    const { sight, held } = await phone.until(slate.names, slate.done);
+    const sight = await phone.drawn(slate.names);
+    const held = slate.done(sight);
     const { overflow } = await phone.appearance();
 
     return { pass: held && overflow <= 1, evidence: { held, overflow, seen: sightEvidence(sight) } };
@@ -71,7 +73,7 @@ export async function slateQuality(verifier: EvalVerifier, slate: DrawnSlate, sl
 /** The slate drawn in the work surface in `mode`: what it shows, against the workspace's background, readably. */
 async function themed(browser: WorkspaceBrowser, slate: DrawnSlate, mode: 'light' | 'dark') {
   const view: SlateView = await browser.workSurface(slate.id, mode);
-  const { held } = await view.until(slate.names, slate.done);
+  const held = slate.done(await view.drawn(slate.names));
   const looks = await view.appearance();
   const matches = looks.hostLight !== null && Math.abs(looks.light - looks.hostLight) <= THEME_DISTANCE;
 

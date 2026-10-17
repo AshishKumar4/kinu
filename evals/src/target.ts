@@ -135,7 +135,7 @@ export async function askOnce(target: EvalTarget, request: {
       throw new KinuError('unavailable', terminal?.error ?? `The reviewer turn ended ${terminal?.reason ?? 'in error'} without a recorded cause.`);
     }
 
-    const reply = repliesTo(await session.history(), request.prompt).at(-1)?.trim();
+    const reply = repliesTo(await session.history(), request.prompt).at(-1)?.text.trim();
 
     if (reply === undefined || reply === '') throw new KinuError('unavailable', 'The reviewer finished without an answer to its prompt.');
 

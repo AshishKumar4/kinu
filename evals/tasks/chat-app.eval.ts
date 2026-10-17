@@ -213,14 +213,17 @@ A refused call changes nothing.`,
       await verifier.check('the-page-signs-in-and-shows-the-room', () => verifier.browse(async (browser) => {
         const view = await browser.workSurface(SLATE_ID);
 
-        await view.until([], SIGN_IN.done);
+        await view.settled();
         const signedIn = await signInOnPage(view, BOB);
-        const { sight, held } = await view.until([ROOM_TITLE], (seen) => (seen.regions[ROOM_TITLE] ?? []).length > 0 || seen.text.includes(ROOM_TITLE));
+        // Each read is of the page as the sign-in, then the press, left it once drawn.
+        const sight = await view.drawn([ROOM_TITLE]);
+        const held = (sight.regions[ROOM_TITLE] ?? []).length > 0 || sight.text.includes(ROOM_TITLE);
         // A room opened shows its messages: pressing its title opens it where the list does not already.
         const pressed = await view.press([ROOM_TITLE], { name: ROOM_TITLE, label: `^${ROOM_TITLE}\\b` });
-        const opened = await view.until([], (seen) => seen.text.includes('noon at the park'));
+        const opened = await view.drawn([]);
+        const shown = opened.text.includes('noon at the park');
 
-        return { pass: signedIn && held && opened.held, evidence: { signedIn, held, pressed, opened: opened.held, seen: sightEvidence(opened.sight), before: sightEvidence(sight) } };
+        return { pass: signedIn && held && shown, evidence: { signedIn, held, pressed, opened: shown, seen: sightEvidence(opened), before: sightEvidence(sight) } };
       }));
 
       await slateQuality(verifier, SIGN_IN);
@@ -284,7 +287,7 @@ Everything that already worked keeps working.`,
       });
 
       await builtItself(verifier, [SLATE_ID]);
-      await buildsClean(verifier, SIGN_IN);
+      await buildsClean(verifier, SIGN_IN.id);
     },
   }],
   evidence: async (call, workspace) => {

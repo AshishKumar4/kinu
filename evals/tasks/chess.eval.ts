@@ -550,7 +550,7 @@ pressing a piece and then a square plays that move.`,
       });
       await verifier.check('the-board-shows-the-game', () => verifier.browse(async (browser) => {
         const view = await browser.workSurface(SLATE_ID);
-        await view.waitForNamed(/^e1\s+white\s+king\b/iu);
+        await view.settled();
         const board = await squares(view);
         const said = (square: string) => board[square] ?? '';
 
@@ -569,8 +569,10 @@ pressing a piece and then a square plays that move.`,
           const wrong = (fen: string) => fen !== DEFAULT_POSITION && fen.split(' ')[0] !== PAWN_TO_E4;
 
           for (let attempt = 0; attempt < 3; attempt++) {
-            await view.waitForNamed(/^e2\s+white\s+pawn\b/iu);
+            await view.settled();
             const from = await pressSquare(view, 'e2');
+
+            await view.settled();
             const selected = await read();
 
             if (wrong(selected.fen)) {
@@ -581,8 +583,10 @@ pressing a piece and then a square plays that move.`,
 
             const to = await pressSquare(view, 'e4');
 
-            const { state, held } = await view.untilState(read, (drawn) => wrong(drawn.fen)
-              || (drawn.fen.split(' ')[0] === PAWN_TO_E4 && /^e4\s+white\s+pawn\b/iu.test(drawn.board.e4 ?? '')));
+            // The move's own render: read once the page has drawn what its move call answered.
+            await view.settled();
+            const state = await read();
+            const held = state.fen.split(' ')[0] === PAWN_TO_E4 && /^e4\s+white\s+pawn\b/iu.test(state.board.e4 ?? '');
 
             attempts.push({ from, to, fen: state.fen, e2: state.board.e2 ?? '', e4: state.board.e4 ?? '', held });
 
@@ -655,7 +659,7 @@ pressing a piece and then a square plays that move.`,
 Everything that already worked keeps working.`,
     verify: async verifier => {
       await builtItself(verifier, [SLATE_ID]);
-      await buildsClean(verifier, DRAWN);
+      await buildsClean(verifier, DRAWN.id);
       await verifier.check("imports-known-games-to-the-right-positions", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);
         const failures: Record<string, Evidence> = {};
@@ -764,7 +768,7 @@ available. The moves of a game loaded with loadPgn count; loadFen and newGame st
 Everything that already worked keeps working.`,
     verify: async verifier => {
       await builtItself(verifier, [SLATE_ID]);
-      await buildsClean(verifier, DRAWN);
+      await buildsClean(verifier, DRAWN.id);
       await verifier.check("detects-threefold-repetition-and-the-fifty-move-rule", async () => {
         const api = verifier.slate(SLATE_ID, METHODS);
         const oracle = new Chess();

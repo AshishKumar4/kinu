@@ -354,18 +354,20 @@ function misreadings(sight: Sight, rows: readonly StatusRow[]): string[] {
   });
 }
 
-/** The board's page in the work surface shows the month as the books after `history` do, with nothing failing in it. */
+/** The board's page in the work surface, once drawn, shows the month as the books after `history` do, with nothing
+ *  failing in it: every misreading is evidence. */
 async function pageShows(verifier: EvalVerifier, history: readonly Step[]): Promise<EvalCheckOutcome> {
   const rows = (await booksAfter(history)).status(QUESTION_MONTH);
 
   return verifier.browse(async (browser) => {
     const board = await browser.workSurface('board');
-    const { sight, held } = await board.until(TEAMS, (seen) => misreadings(seen, rows).length === 0);
+    const sight = await board.drawn(TEAMS);
+    const misread = misreadings(sight, rows);
     const faults = await board.faults();
 
     return {
-      pass: held && faults.errors.length === 0 && faults.scripts.length === 0,
-      evidence: { misread: misreadings(sight, rows), faults, seen: sightEvidence(sight) },
+      pass: misread.length === 0 && faults.errors.length === 0 && faults.scripts.length === 0,
+      evidence: { misread, faults, seen: sightEvidence(sight) },
     };
   });
 }
@@ -418,7 +420,7 @@ Leave both empty when you are done: I will enter the expenses and budgets myself
 
       await builtItself(verifier, ['ledger', 'board']);
 
-      for (const id of ['ledger', 'board']) await buildsClean(verifier, { id, names: [], done: () => true });
+      for (const id of ['ledger', 'board']) await buildsClean(verifier, id);
     },
   }, {
     prompt: `I've entered our expenses and budgets. Give the board a page I can work from. It opens on the
@@ -443,8 +445,8 @@ how far over budget the team is, in dollars, and which of its expenses that mont
         const reached = await verifier.browse(async (browser) => {
           const board = await browser.workSurface('board');
 
-          await board.until(TEAMS, (seen) => (seen.regions.design ?? []).some((region) => region.controls.some((label) => ASK.test(label))));
-
+          // Pressed once drawn; a page drawn with no such button offers no way to ask, which `press` says.
+          await board.settled();
           let faults = null;
 
           // What the page said as it was clicked, read before the agent's answer redraws the workspace around the frame.
@@ -474,19 +476,19 @@ how far over budget the team is, in dollars, and which of its expenses that mont
 
         const page = await verifier.browse(async (browser) => {
           const board = await browser.workSurface('board');
-
-          await board.until(TEAMS, (seen) => misreadings(seen, rows).length === 0);
+          const before = misreadings(await board.drawn(TEAMS), rows);
           const pressed = await board.press(TEAMS, { name: 'design', label: COVER.source });
-          const { sight, held } = await board.until(TEAMS, (seen) => misreadings(seen, covered).length === 0);
+          // The press's own render: what the page drew once Cover's call was answered.
+          const sight = await board.drawn(TEAMS);
 
-          return { pressed, held, misread: misreadings(sight, covered), seen: sightEvidence(sight) };
+          return { before, pressed, misread: misreadings(sight, covered), seen: sightEvidence(sight) };
         });
 
         const stored = await matchesReference({
           slate: slates(verifier), reference: (await booksAfter([TURN_1, COVER_DESIGN])).client(), script: readTheMonth, normalize: normalizer(false),
         });
 
-        return { pass: page.pressed && page.held && stored.pass, evidence: { page, stored: stored.evidence } };
+        return { pass: page.pressed && page.misread.length === 0 && stored.pass, evidence: { page, stored: stored.evidence } };
       });
 
       await verifier.check('the-page-reads-new-expenses', async () => {
@@ -500,12 +502,13 @@ how far over budget the team is, in dollars, and which of its expenses that mont
 
         return verifier.browse(async (browser) => {
           const preview = await browser.chatPreview(await browser.open(), 'board');
-          const { sight, held } = await preview.until(TEAMS, (seen) => misreadings(seen, rows).length === 0);
+          const sight = await preview.drawn(TEAMS);
+          const misread = misreadings(sight, rows);
           const faults = await preview.faults();
 
           return {
-            pass: held && faults.errors.length === 0 && faults.scripts.length === 0,
-            evidence: { misread: misreadings(sight, rows), faults, seen: sightEvidence(sight) },
+            pass: misread.length === 0 && faults.errors.length === 0 && faults.scripts.length === 0,
+            evidence: { misread, faults, seen: sightEvidence(sight) },
           };
         });
       });
@@ -533,7 +536,7 @@ asked.`,
       });
 
       await builtItself(verifier, ['ledger', 'board']);
-      await buildsClean(verifier, await boardPage(AFTER_EUROS));
+      await buildsClean(verifier, 'board');
     },
     verifyAfterEviction: async (verifier) => {
       await sameAsReference(verifier, 'expenses-survive-an-eviction', { history: AFTER_EUROS, script: listEverything, currency: true });
@@ -570,7 +573,7 @@ return the following ones, or null on the last page. limit is 1 to 50; answer an
       await verifier.check('the-page-still-shows-the-month', () => pageShows(verifier, AFTER_EUROS));
 
       await builtItself(verifier, ['ledger', 'board']);
-      await buildsClean(verifier, await boardPage(AFTER_EUROS));
+      await buildsClean(verifier, 'board');
     },
     verifyAfterEviction: async (verifier) => {
       await verifier.check('pages-survive-an-eviction', () => pagesMatch(verifier, AFTER_EUROS));
