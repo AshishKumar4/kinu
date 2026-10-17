@@ -15,10 +15,9 @@ it("an editor changes a shared slate in its owner's workspace, built from its ow
 
   // The owner's access is suspended by the editor's change, stays so through the owner's own next build, and comes
   // back only when the owner approves it again.
-  expect(seen.afterEdit).toBe('edited-by:pat@probe.test');
-  expect(seen.afterOwnBuild).toBe('edited-by:pat@probe.test');
+  expect(seen.afterEdit).toBe('pat@probe.test');
+  expect(seen.afterOwnBuild).toBe('pat@probe.test');
   expect(seen.reapproved).not.toBeNull();
-  expect(seen.reapproved?.startsWith('edited-by:')).toBe(false);
 
   // A change that imports the owner's file outside the slate does not build: it is taken back whole, the slate keeps
   // running what it ran, and the owner's approval stands.
@@ -44,4 +43,84 @@ it("a shared slate runs only as its own tree builds: the image built before it w
   expect(seen.shared).not.toContain("the owner's secret");
   // Theirs alone again: it runs as it did.
   expect(seen.afterUnshare).toContain("the owner's secret");
+});
+
+it('an editor batch whose second write fails changes no file and leaves no edit mark', async () => {
+  const probe = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('editor-atomic'));
+  const seen = await probe.editorBatch({ owner: 'atomic-owner', workspace: 'editor-atomic', kind: 'atomic' });
+
+  expect(seen.answers[0]).toContain('"ok":false');
+  expect(seen.files.find((file) => file.path === 'a.ts')?.text).toBe('before-a');
+  expect(seen.files.find((file) => file.path === 'b.ts')?.text).toBe('before-b');
+  expect(seen.marks).toEqual([null]);
+});
+
+it('an editor cannot follow a leaf or parent symlink outside the shared slate', async () => {
+  const probe = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('editor-links'));
+  const seen = await probe.editorBatch({ owner: 'links-owner', workspace: 'editor-links', kind: 'links' });
+
+  expect(seen.answers).toHaveLength(2);
+
+  for (const answer of seen.answers) {
+    expect(answer).toContain('"ok":false');
+    expect(answer).toContain('symlink');
+  }
+
+  expect(seen.outside).toContain('outside-private');
+  expect(seen.outside).not.toContain('stolen');
+  expect(seen.marks).toEqual([null, null]);
+});
+
+it('an editor stale base conflicts by path and refuses the whole batch', async () => {
+  const probe = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('editor-stale'));
+  const seen = await probe.editorBatch({ owner: 'stale-owner', workspace: 'editor-stale', kind: 'stale' });
+
+  expect(seen.answers[0]).toContain('File conflict: b.ts');
+  expect(seen.files.find((file) => file.path === 'a.ts')?.text).toBe('before-a');
+  expect(seen.files.find((file) => file.path === 'b.ts')?.text).toBe('before-b');
+  expect(seen.files.every((file) => /^[a-f0-9]{64}$/u.test(file.sha256))).toBe(true);
+  expect(seen.marks).toEqual([null]);
+});
+
+it('a shared HTML browser entry cannot read an outside file through an in-tree symlink', async () => {
+  const probe = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('editor-html-scope'));
+  const seen = await probe.sharedHtmlScope({ owner: 'html-owner', workspace: 'editor-html-scope' });
+
+  expect(seen.before).toContain('private-html-from-another-slate');
+  expect(seen.shared).not.toContain('private-html-from-another-slate');
+  expect(seen.shared).toMatch(/linked.html|own files build/);
+});
+
+it('a shared build cannot read a package manifest linked outside the tree', async () => {
+  const probe = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('editor-manifest-scope'));
+  const seen = await probe.sharedHtmlScope({ owner: 'manifest-owner', workspace: 'editor-manifest-scope', manifestLink: true });
+
+  expect(seen.before).toContain('private-html-from-another-slate');
+  expect(seen.shared).not.toContain('private-html-from-another-slate');
+  expect(seen.shared).toContain('package.json is not a file inside');
+});
+
+it('an owner approval racing an own-mode editor batch is fenced, and owner builds never advance marked shares', async () => {
+  const probe = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('editor-mode-fence'));
+  const seen = await probe.editorFence();
+
+  expect(seen.pending).toContain("pat's change is still building; approve once it has built");
+  expect(seen.afterPendingMode).toBe('own');
+  expect(seen.approved).toBe(true);
+  expect(seen.cleared).toBe(true);
+  expect(seen.lending).toBe('grant');
+  expect(seen.afterOwnerBuild).toEqual({ grantRevision: 'r1', editedBy: 'sam' });
+  expect(seen.stopped).toBe('none');
+});
+
+it('the latest editor batch fences approval of the first build while the second edit is still pending', async () => {
+  const probe = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('editor-latest-fence'));
+  const seen = await probe.editorFence(true);
+
+  expect(seen.pending).toContain("sam's change is still building; approve once it has built");
+  expect(seen.revisionBefore).toBe('r1');
+  expect(seen.afterPendingMode).toBe('own');
+  expect(seen.approved).toBe(true);
+  expect(seen.cleared).toBe(true);
+  expect(seen.lending).toBe('grant');
 });

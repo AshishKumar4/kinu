@@ -311,6 +311,14 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<{ before: string; after: string; says: string }>;
   craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; waited: string; approved: string[]; viewer: string }>;
   sharedRunsOwnTree(input: { owner: string; workspace: string }): Promise<{ unshared: string; shared: string; afterUnshare: string }>;
+  editorBatch(input: { owner: string; workspace: string; kind: 'atomic' | 'links' | 'stale' }): Promise<{
+    answers: string[]; files: { path: string; text: string; sha256: string }[]; marks: (string | null)[]; outside: string;
+  }>;
+  sharedHtmlScope(input: { owner: string; workspace: string; manifestLink?: boolean }): Promise<{ before: string; shared: string }>;
+  editorFence(latest?: boolean): Promise<{
+    pending: string; afterPendingMode: string | null; approved: boolean; cleared: boolean; lending: string;
+    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string; revisionBefore: string | null;
+  }>;
   editorsEdit(input: { owner: string; workspace: string; editor: string; user: string }): Promise<{
     files: string; edited: string; runs: string; afterEdit: string | null; afterOwnBuild: string | null; reapproved: string | null;
     reached: string; runsAfter: string; filesAfter: string; afterRefused: string | null; used: string; revoked: string;

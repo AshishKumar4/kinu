@@ -9,10 +9,10 @@ import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import {
-  escapeHtml, SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
+  escapeHtml, parseSlateProject, SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
-import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
+import { confinedTo, SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 
 export interface ResidentSlateProcess extends SlateProcess {
@@ -471,42 +471,6 @@ interface SlateBuild {
  * still one this compile made. The resolver's own reads count as the bundled files' do, so a package.json whose
  * `exports` moves is a change.
  */
-/** An absolute path with every `.` and `..` resolved, as the compiler's resolution resolves them. */
-function normalPath(path: string): string {
-  const parts: string[] = [];
-
-  for (const part of path.split('/')) {
-    if (part === '' || part === '.') continue;
-
-    if (part === '..') parts.pop();
-    else parts.push(part);
-  }
-
-  return `/${parts.join('/')}`;
-}
-
-/**
- * The file plane a scoped build reads: inside `roots` (each a directory, its subtree included) or one of `files`, by the
- * path a symlink finally names. Anything else is not there, so an import of it does not resolve and the build fails.
- */
-function confinedTo(fs: NamespaceFs, roots: readonly string[], files: readonly string[]): EsbuildReadFs {
-  const inside = (path: string): boolean => {
-    const at = normalPath(path);
-    // A path not there has no link to follow (and resolving one throws): its own name is all there is to check.
-    const real = fs.exists(at) ? normalPath(fs.resolveSymlink(at) ?? at) : at;
-
-    return files.includes(real) || roots.some((root) => real === root || real.startsWith(`${root}/`));
-  };
-
-  // A path outside is never there: resolution, which asks first, finds nothing, and a read of one is read as empty.
-  return {
-    exists: (path) => inside(path) && fs.exists(path),
-    isDirectory: (path) => inside(path) && fs.isDirectory(path),
-    readFile: (path) => (inside(path) ? fs.readFile(path) : new Uint8Array()),
-    readFileString: (path) => (inside(path) ? fs.readFileString(path) : ''),
-  };
-}
-
 function looking(fs: EsbuildReadFs, looked: Set<string>): EsbuildReadFs {
   const seen = (path: string) => { looked.add(path.startsWith('/') ? path : `/${path}`); };
 
@@ -609,14 +573,14 @@ interface BrowserSurface {
 }
 
 /** What the page is served: an HTML entry as written, needing no build; a component compiled into the shell; or none. */
-function browserSurface(build: SlateBuild, id: string, project: SlateProject, read: (entry: string) => string): Effect.Effect<BrowserSurface, KinuError> {
+function browserSurface(build: SlateBuild, id: string, project: SlateProject, read: (entry: string) => Promise<string | null>): Effect.Effect<BrowserSurface, KinuError> {
   return Effect.gen(function* () {
     const { browser } = project;
 
     if (browser === undefined) return { assets: [], shell: undefined };
 
     // Served as written: the runner opens every page it answers, this one with the rest.
-    if (isPageEntry(browser)) return { assets: [], shell: read(browser) };
+    if (isPageEntry(browser)) return { assets: [], shell: (yield* Effect.promise(async () => read(browser))) ?? '' };
     const clientEntry = `${build.entries}/client.js`;
 
     build.provision('client.js', `import App from "${build.root}/${browser}";\nimport { mount } from "kinu:slate";\nmount(App);\nexport default App;\n`);
@@ -654,15 +618,6 @@ export class ResidentSlateProcesses {
 
     return settle(Effect.catchIf(Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.deps.session());
-      const main = input.project.main;
-      const browser = input.project.browser;
-
-      for (const [field, entry] of [['main', main], ['browser', browser]] as const) {
-        if (entry !== undefined && input.read(entry) === null) {
-          return yield* new KinuError('bad_input', `package.json "${field}" names ${entry}, which is not a file in ${input.root}`);
-        }
-      }
-
       const bundlerKey = slateAuthority(input.cred);
       let bundler = this.bundlers.get(bundlerKey);
 
@@ -695,8 +650,29 @@ export class ResidentSlateProcesses {
       const runtime = Object.keys(runtimeFiles(slateVendor.reactStub)).map((name) => `${RUNTIME_DIR}/${name}`);
       const read = input.scope === 'tree' ? confinedTo(files, [input.root, entriesDir], runtime) : files;
       const build: SlateBuild = { bundler, root: input.root, entries: entriesDir, provision, fs: looking(read, looked) };
-      const application = yield* serverModule(build, input.project);
-      const { assets, shell } = yield* browserSurface(build, input.owner, input.project, (entry) => input.read(entry) ?? '');
+
+      const source = async (entry: string): Promise<string | null> => {
+        if (input.scope !== 'tree') return input.read(entry);
+        const path = `${input.root}/${entry}`;
+
+        return await build.fs.exists(path) ? build.fs.readFileString(path) : null;
+      };
+
+      // Shared manifests, entry validation and verbatim HTML all use the same resolved reader as esbuild.
+      const manifest = input.scope === 'tree' ? yield* Effect.promise(async () => source('package.json')) : null;
+
+      if (input.scope === 'tree' && manifest === null) return yield* new KinuError('bad_input', `package.json is not a file inside ${input.root}`);
+      const project = manifest === null ? input.project : parseSlateProject(JSON.parse(manifest));
+      const { main, browser } = project;
+
+      for (const [field, entry] of [['main', main], ['browser', browser]] as const) {
+        if (entry !== undefined && (yield* Effect.promise(async () => source(entry))) === null) {
+          return yield* new KinuError('bad_input', `package.json "${field}" names ${entry}, which is not a file in ${input.root}`);
+        }
+      }
+
+      const application = yield* serverModule(build, project);
+      const { assets, shell } = yield* browserSurface(build, input.owner, project, source);
 
       const modules = {
         [MAIN_MODULE]: slateRunnerSource(assets, shell, main === undefined ? 'surface' : 'class'),
