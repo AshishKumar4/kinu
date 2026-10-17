@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
+import { DeploymentAnswer } from '@kinu.run/test-utils';
 import { prepareExecutors, runClosings } from './harness';
 import type { PublicExecutorResult } from './session';
 
-test('a turn\'s executors are prepared in order, and the first command that fails stops the rest with its own words', async () => {
+test('a turn\'s executors are prepared in order, and the first command the build fails stops the rest as the build\'s answer', async () => {
   const ran: string[] = [];
 
   const session = {
@@ -15,12 +16,13 @@ test('a turn\'s executors are prepared in order, and the first command that fail
 
   await prepareExecutors(session, [{ executor: 'computer', command: 'start' }]);
 
+  // The build's own box failed the task's command, or refused it: the build's answer, never the harness's error.
   await expect(prepareExecutors(session, [{ executor: 'computer', command: 'lock' }, { executor: 'computer', command: 'launch' }]))
-    .rejects.toThrow('preparing the computer executor failed (exit 1): chmod: cannot access /usr/bin/xterm');
+    .rejects.toEqual(new DeploymentAnswer('preparing the computer executor failed (exit 1): chmod: cannot access /usr/bin/xterm'));
   expect(ran).toEqual(['computer: start', 'computer: lock']);
 
   await expect(prepareExecutors({ execute: () => Promise.resolve({ error: 'the computer is not running' }) }, [{ executor: 'computer', command: 'start' }]))
-    .rejects.toThrow('preparing the computer executor failed (the computer is not running)');
+    .rejects.toEqual(new DeploymentAnswer('preparing the computer executor failed (the computer is not running)'));
 });
 
 test('every part closes as the trial does, and a closing that fails is named while the next still runs', async () => {

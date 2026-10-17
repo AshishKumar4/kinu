@@ -164,14 +164,21 @@ export async function runClosings(box: TrialBox, closings: readonly Closing[]): 
 /** What a closing trial does before its teardown: each part's closing, then the evidence reads. */
 type ClosingReads = { readonly evidence: readonly EvidenceReads[]; readonly closings: readonly Closing[] };
 
-/** A turn's executors prepared, each command in order as the Env pane runs one; the first refused or failing ends it. */
+/**
+ * A turn's executors prepared, each command in order as the Env pane runs one; the first refused or failing ends it.
+ * The commands are the task's, the same on every build, and run on the build's own executor: one it refuses, or that
+ * fails there, is the build's answer (a box that cannot load a page the task names), so the turn is refused, never a
+ * harness error. Only a transport failure, which `execute` raises itself, is around the build.
+ */
 export async function prepareExecutors(session: Pick<KinuPublicSession, 'execute'>, commands: readonly PrepareCommand[]): Promise<void> {
   for (const { executor, command } of commands) {
     const answer = await session.execute(executor, command);
     const refused = answer.refusal?.error ?? answer.error;
 
     if (refused !== undefined || answer.exitCode !== 0) {
-      throw new Error(`preparing the ${executor} executor failed (${refused ?? `exit ${String(answer.exitCode)}`}): ${(answer.stderr ?? answer.stdout ?? '').trim().slice(-2_000)}`);
+      const said = (answer.stderr ?? answer.stdout ?? '').trim().slice(-2_000);
+
+      throw new DeploymentAnswer(`preparing the ${executor} executor failed (${refused ?? `exit ${String(answer.exitCode)}`})${said === '' ? '' : `: ${said}`}`);
     }
   }
 }
