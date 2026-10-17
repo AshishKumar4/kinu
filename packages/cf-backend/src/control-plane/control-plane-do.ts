@@ -123,6 +123,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
   ): Promise<void> {
     await this.gate(caller, 'index.forget');
     cpStore.forgetWorkspace(this.store, target);
+    this.gallery.forgetWorkspaces(cpStore.removedWorkspaceNames(this.store, target.userId));
   }
 
   /** Commit point for a submission: the caller deletes the R2 object when no id returns. */
@@ -186,8 +187,12 @@ export class ControlPlaneDO extends DurableObject<Env> {
     caller: PresentedCaller, userId: string, live: readonly RosterWorkspace[],
   ): Promise<{ present: number; tombstoned: number }> {
     await this.gate(caller, 'index.reconcile');
+    const reconciled = cpStore.replaceUserWorkspaces(this.store, userId, live);
 
-    return cpStore.replaceUserWorkspaces(this.store, userId, live);
+    // A workspace the registry no longer holds sends the Gallery nothing more: its listings go with it.
+    this.gallery.forgetWorkspaces(cpStore.removedWorkspaceNames(this.store, userId));
+
+    return reconciled;
   }
 
   async overview(caller: PresentedCaller): Promise<ControlOverview> {

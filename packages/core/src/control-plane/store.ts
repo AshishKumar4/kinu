@@ -305,6 +305,13 @@ export function forgetWorkspace(
 }
 
 
+/** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now. */
+export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string): string[] {
+  return select(sql, v.object({ name: v.string() }),
+    `SELECT w.name FROM cp_workspaces w WHERE w.user_id = ? AND w.removed_at IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM cp_workspaces v WHERE v.name = w.name AND v.removed_at IS NULL)`, userId).map((row) => row.name);
+}
+
 export interface ReconcileOutcome {
   present: number;
   tombstoned: number;
