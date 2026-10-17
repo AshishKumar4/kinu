@@ -55,7 +55,7 @@ import { ASK_OWNER_TOOL } from '../tools/registry';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
 /** What the owner reads when a run a dead process left is not run on, by why recovery closed it. */
-const RESTORE_REFUSALS: Readonly<Record<Extract<InterruptedTurnVerdict, { kind: 'closed' }>['cause'], string>> = {
+const RESTORE_REFUSALS: Readonly<Record<Exclude<Extract<InterruptedTurnVerdict, { kind: 'closed' }>['cause'], 'out_of_memory'>, string>> = {
   settled: 'This turn ended before the last process did, so it is not run again.',
   stopped: 'This turn was stopped before the last process ended, so it is not run again.',
   answered: 'This turn had already given its report before the last process ended, so it is not run again.',
@@ -583,21 +583,25 @@ export class ActorSession {
 
   /**
    * A run a dead process left open goes on only if recovery says it may: the recovery sweep's own decision. Any other
-   * ends as a stop ends it, before anything runs.
+   * ends as a stop ends it, before anything runs, save one its memory ended, which fails with the words its owner reads.
    */
   resumeOrClose(lease: ActorTurnLease): Promise<void> {
     const active = this.requireTurn(lease);
 
-    return settle(Effect.map(decideInterruptedTurn({
+    return settle(Effect.flatMap(decideInterruptedTurn({
       source: (version) => scaffoldSource(this.runtime, version),
       stores: { claims: this.options.claims, history: this.options.history }, runs: this.options.recording ?? null,
       installedBuild: this.options.installedBuild, workspace: this.options.workspace ?? '', actor: this.runtime.identity.name,
       runId: lease.runId, claim: this.options.claims.read(lease.turnId),
       ...(this.options.answered !== undefined && { answered: this.options.answered }),
-      // This session holds the turn: it is the one deciding.
-      turnOpen: () => false,
+      // This session holds the turn: it is the one deciding, and the one to end it for its memory.
+      turnOpen: () => false, endsOutOfMemory: true,
     }), (verdict) => {
-      if (verdict.kind === 'closed') active.abort.abort(new KinuError('cancelled', RESTORE_REFUSALS[verdict.cause]));
+      if (verdict.kind !== 'closed') return Effect.void;
+
+      if (verdict.cause === 'out_of_memory') return Effect.fail(new KinuError('oom', verdict.reason));
+
+      return Effect.sync(() => { active.abort.abort(new KinuError('cancelled', RESTORE_REFUSALS[verdict.cause])); });
     }));
   }
 

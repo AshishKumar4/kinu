@@ -133,6 +133,8 @@ export interface AgentFacetCalls {
   admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
+  /** The platform reported its isolate out of memory at `diedAt`. */
+  outOfMemory(snapshot: AgentSnapshot, diedAt: number): Promise<void>;
   archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
   /** Its plan reviews, in its own store: submitted by its turn's own tools, and reviewed by the owner through its window. */
   activePlanReview(snapshot: AgentSnapshot): Promise<PlanReview | null>;
@@ -529,6 +531,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async recover(snapshot: AgentSnapshot): Promise<AgentRecovery> {
     return await this.open(snapshot).recover();
+  }
+
+  async outOfMemory(snapshot: AgentSnapshot, diedAt: number): Promise<void> {
+    this.open(snapshot).outOfMemory(diedAt);
   }
 
 }

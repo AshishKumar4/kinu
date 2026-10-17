@@ -976,6 +976,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     for (const { event, detail } of lines) this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`);
   }
 
+  /**
+   * The platform reported an agent's isolate out of memory at `diedAt` (its tail heard it, `AgentIsolateTail`): marked on
+   * the execution it killed, so recovery ends a turn whose step dies of memory each time rather than run it again. Not
+   * @callable: only this script's tail reaches it.
+   */
+  async isolateOutOfMemory(actorId: string, diedAt: number): Promise<void> {
+    if (!this.liveActor(actorId) || this.admitting.signal.aborted) return;
+    diagnostics.event('agent.isolate_out_of_memory', { workspace: this.name, actor: actorId, diedAt });
+    await this.agentCall(actorId, (isolate, snapshot) => isolate.outOfMemory(snapshot, diedAt));
+  }
+
   agentWorkspace(actorId: string): AgentWorkspaceHost {
     if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
     this.agentKey(actorId);

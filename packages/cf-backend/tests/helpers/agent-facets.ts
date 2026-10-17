@@ -905,6 +905,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     admitted: (...args) => settle(through(() => isolate.admitted(...args))),
     interrupt: (...args) => settle(through(() => isolate.interrupt(...args))),
     recover: (...args) => settle(through(() => isolate.recover(...args))),
+    outOfMemory: (...args) => settle(through(() => isolate.outOfMemory(...args))),
     archivePage: (...args) => settle(through(() => isolate.archivePage(...args))),
   };
 }
