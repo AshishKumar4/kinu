@@ -35,7 +35,7 @@ test('a live share round-trips its grant and refuses viewers once revoked', () =
     const added = shares.add(liveShare());
     expect(added).toEqual({
       id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789',
-      grant, createdAt: 1_000, revokedAt: null, users: [], editors: [], mode: 'own', grantRevision: null, gallery: null,
+      grant, createdAt: 1_000, revokedAt: null, users: [], editors: [], mode: 'own', grantRevision: null, editedBy: null, gallery: null,
     });
 
     expect(shares.get('s1')).toMatchObject({ id: 's1', slate: 'issues', visibility: 'users', handle: '0123456789', grant });
@@ -59,6 +59,25 @@ test('a live share round-trips its grant and refuses viewers once revoked', () =
   } finally {
     db.close();
   }
+});
+
+test('edit attribution comes from the slate mark in every mode, never from an encoded grant revision', () => {
+  const { db, shares } = shareDb();
+
+  shares.add(liveShare());
+  shares.markEdit('issues', 'pat@example.test', 'r0');
+  shares.markEdit('issues', 'sam@example.test', 'r1');
+
+  expect(shares.editMark('issues')).toEqual({ editor: 'sam@example.test', revisionBefore: 'r1' });
+  expect(shares.get('s1')).toMatchObject({ mode: 'own', grantRevision: null, editedBy: 'sam@example.test' });
+  expect(shares.byHandle('0123456789')?.editedBy).toBe('sam@example.test');
+  expect(shares.add({ ...liveShare(), id: 's2', handle: '1123456789', authority: { mode: 'owner', grantRevision: 'r0' } }))
+    .toMatchObject({ grantRevision: 'r0', editedBy: 'sam@example.test' });
+  shares.restoreEditMark('issues', null);
+
+  expect(shares.list().every((row) => row.editedBy === null)).toBe(true);
+  expect(shares.get('s2')?.grantRevision).toBe('r0');
+  db.close();
 });
 
 test('named users land on the share and a revoked share takes no more', () => {

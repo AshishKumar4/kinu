@@ -58,13 +58,15 @@ export const SlateFilePath = v.pipe(
   v.check((path) => !/^(?:node_modules|\.git)(?:\/|$)/u.test(path), 'A slate file is its source, not its dependencies or history'),
 );
 
-/** An editor's change to a shared slate's files: each path's new text, or null to delete it. */
-export const SlateFileChangeSchema = v.pipe(v.record(SlateFilePath, v.nullable(v.string())), v.check((files) => Object.keys(files).length > 0, 'A change names a file'));
+const FileDigest = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u, 'A file base is its full SHA-256'));
+
+/** One atomic edit: each path's next text (null deletes) and the digest read before editing (null means absent). */
+export const SlateFileChangeSchema = v.pipe(v.record(SlateFilePath, v.strictObject({ text: v.nullable(v.string()), base: v.nullable(FileDigest) })), v.check((files) => Object.keys(files).length > 0, 'A change names a file'));
 
 export type SlateFileChange = v.InferOutput<typeof SlateFileChangeSchema>;
 
 /** A shared slate's text files, as an editor's agent reads them. */
-export const SharedSlateFilesSchema = v.object({ files: v.array(v.object({ path: v.string(), text: v.string() })) });
+export const SharedSlateFilesSchema = v.object({ files: v.array(v.object({ path: v.string(), text: v.string(), sha256: FileDigest })) });
 
 export type SharedSlateFiles = v.InferOutput<typeof SharedSlateFilesSchema>;
 

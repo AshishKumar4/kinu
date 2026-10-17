@@ -12,14 +12,16 @@ import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { handleNimbusPreviewHostRequest, previewEntry, previewRefusalText } from '../../src/nimbus-route';
 import { previewViewerKey, selfPreviewPass, viewerCookieResponse } from '../../src/viewer-pass';
-import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH } from '@kinu.run/core';
+import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH, sha256Hex, SharedSlateFilesSchema, type SlateFileChange } from '@kinu.run/core';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { initSlateBuildTable, initSlateLiveShareTables, initSlateUsageTable, ROOT_SLATE_CALLER, serverAuthority, SlateBuilds, SlateController } from '@kinu.run/core/slates';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { ownerCaller } from '@kinu.run/core';
+import { ownerCaller, parseSlateProject, slateAuthority } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
@@ -502,10 +504,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
     };
 
-    const approvedAt = async () => {
+    const approvedAt = async (column: 'grantRevision' | 'editedBy' = 'grantRevision') => {
       const listed = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
 
-      return listed.ok ? v.parse(v.array(v.object({ id: v.string(), grantRevision: v.nullable(v.string()) })), listed.value).find((share) => share.id === id)?.grantRevision ?? null : null;
+      return listed.ok ? v.parse(v.array(v.object({ id: v.string(), grantRevision: v.nullable(v.string()), editedBy: v.nullable(v.string()) })), listed.value).find((share) => share.id === id)?.[column] ?? null : null;
     };
 
     await approve();
@@ -526,18 +528,18 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       }
     };
 
-    const change = (text: string) => JSON.stringify({ 'server.ts': text });
+    const change = (text: string, before = `${BOARD('v3')}\n`) => JSON.stringify({ 'server.ts': { text, base: sha256Hex(before) } });
     const files = await ask(editorTarget, `$sharedFiles(${JSON.stringify(input.workspace)}, "board")`);
-    const edited = await ask(editorTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(BOARD('v2'))})`);
+    const edited = await ask(editorTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(BOARD('v2'), BOARD('v1'))})`);
     const runs = await target.runProgram('return await workspace.slates.board.version();');
-    const afterEdit = await approvedAt();
+    const afterEdit = await approvedAt('editedBy');
 
     // The owner's own change after it builds: the reach the editor's change suspended stays suspended.
     await target.executeInExecutor('workspace', `cat > /slates/board/server.ts <<'END'\n${BOARD('v3')}\nEND`);
     const ownBuild = await target.runProgram('return await workspace.slates.board.version();');
 
     if (!ownBuild.includes('v3')) throw new Error(`the owner's change did not run: ${ownBuild}`);
-    const afterOwnBuild = await approvedAt();
+    const afterOwnBuild = await approvedAt('editedBy');
 
     await approve();
     const reapproved = await approvedAt();
@@ -583,6 +585,183 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     await owned.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: v.parse(SharedValueSchema, made.value).share.id });
 
     return { unshared, shared, afterUnshare: await run() };
+  }
+
+  /** Actual editor RPCs over a real workspace: each refused batch must leave both source and provenance untouched. */
+  async editorBatch(input: { owner: string; workspace: string; kind: 'atomic' | 'links' | 'stale' }): Promise<{
+    answers: string[]; files: { path: string; text: string; sha256: string }[]; marks: (string | null)[]; outside: string;
+  }> {
+    const target = await this.workspaceTarget(input.workspace);
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/board/package.json', JSON.stringify({ main: 'server.ts' }));
+    await this.writeSlateFile(target, '/slates/board/server.ts', BOARD('v1'));
+    await this.writeSlateFile(target, '/slates/board/a.ts', 'before-a');
+    await this.writeSlateFile(target, '/slates/board/b.ts', 'before-b');
+    await this.writeSlateFile(target, '/slates/notes/package.json', JSON.stringify({}));
+    await this.writeSlateFile(target, '/slates/notes/secret.ts', 'outside-private');
+    const owned = workspaceOwner(this.env, input.workspace);
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'board', visibility: 'users', approved: [] });
+
+    if (!shared.ok) throw new Error(shared.error);
+    const { id } = v.parse(SharedValueSchema, shared.value).share;
+    const editor = { userId: `${input.owner}-editor`, email: 'pat@probe.test' };
+    await owned.shareLiveWith(id, [{ ...editor, role: 'edit' }]);
+    await target.runProgram('return await workspace.slates.board.version();');
+    const changes: SlateFileChange[] = [];
+
+    if (input.kind === 'atomic') {
+      await target.executeInExecutor('workspace', 'chmod 444 /slates/board/b.ts');
+      changes.push({ 'a.ts': { text: 'after-a', base: sha256Hex('before-a') }, 'b.ts': { text: 'after-b', base: sha256Hex('before-b') } });
+    } else if (input.kind === 'links') {
+      await target.executeInExecutor('workspace', 'ln -s /slates/notes/secret.ts /slates/board/notes.md\nln -s /slates/notes /slates/board/linked');
+      changes.push({ 'notes.md': { text: 'stolen', base: sha256Hex('outside-private') } }, { 'linked/secret.ts': { text: 'stolen', base: sha256Hex('outside-private') } });
+    } else {
+      changes.push({ 'a.ts': { text: 'after-a', base: sha256Hex('before-a') }, 'b.ts': { text: 'stale-overwrite', base: sha256Hex('stale-b') } });
+    }
+
+    const answers: string[] = [];
+    const marks: (string | null)[] = [];
+
+    for (const change of changes) {
+      const answer = await owned.editSlateAs('board', editor, change);
+      answers.push(JSON.stringify(answer));
+      const listed = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
+      marks.push(listed.ok ? v.parse(v.array(v.object({ id: v.string(), editedBy: v.nullable(v.string()) })), listed.value).find((row) => row.id === id)?.editedBy ?? null : 'listing failed');
+    }
+
+    const read = await owned.slateFilesFor('board', editor);
+
+    if (!read.ok) throw new Error(read.error);
+
+    return {
+      answers, files: v.parse(SharedSlateFilesSchema, read.value).files, marks,
+      outside: await target.runProgram('return await workspace.readFile("/slates/notes/secret.ts");'),
+    };
+  }
+
+  /** A raw HTML browser entry must cross exactly the same resolved tree boundary as an esbuild import. */
+  async sharedHtmlScope(input: { owner: string; workspace: string; manifestLink?: boolean }): Promise<{ before: string; shared: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/notes/package.json', JSON.stringify({}));
+    await this.writeSlateFile(target, '/slates/notes/private.html', '<!doctype html><p>private-html-from-another-slate</p>');
+    await this.writeSlateFile(target, '/slates/page/package.json', JSON.stringify({ browser: 'linked.html' }));
+    await target.executeInExecutor('workspace', 'ln -s /slates/notes/private.html /slates/page/linked.html');
+
+    if (input.manifestLink) {
+      await this.writeSlateFile(target, '/slates/notes/private-package.json', JSON.stringify({ browser: 'linked.html' }));
+      await target.executeInExecutor('workspace', 'rm /slates/page/package.json\nln -s /slates/notes/private-package.json /slates/page/package.json');
+    }
+
+    const page = async (): Promise<string> => {
+      try {
+        const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'page' });
+
+        if (!preview.ok) return JSON.stringify(preview);
+        const { url } = v.parse(PreviewValueSchema, preview.value);
+        const response = await this.drivePreview(url);
+
+        return response.body;
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    const before = await page();
+    const shared = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'page', visibility: 'public', approved: [] });
+
+    if (!shared.ok) throw new Error(shared.error);
+
+    return { before, shared: await page() };
+  }
+
+  /** Hold the graph await while a real editor batch commits, reproducing the own-to-owner R0 approval race. */
+  async editorFence(latest = false): Promise<{
+    pending: string; afterPendingMode: string | null; approved: boolean; cleared: boolean; lending: string;
+    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string; revisionBefore: string | null;
+  }> {
+    const { sql } = this.ctx.storage;
+    const raw = (ddl: string) => { sql.exec(ddl); };
+
+    initSlateLiveShareTables(raw);
+    initSlateBuildTable(raw);
+    initSlateUsageTable(raw);
+    const bundle = createWorkspace({ sql, transactions: this.ctx, generation: workspaceGenerationStorage(sql) });
+    const session = await bundle.session();
+    const files = session.vfs.as(CRED_SESSION_USER);
+    files.mkdir('/slates/board', { recursive: true });
+    files.writeFile('/slates/board/server.ts', 'r0');
+    const builds = new SlateBuilds(sql);
+    const ready = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let waiting = true;
+
+    const controller = new SlateController({
+      workspace: 'fence-probe', sql, builds, transaction: (body) => this.ctx.storage.transactionSync(body), session: async () => session,
+      catalog: async () => {
+        if (waiting) {
+          ready.resolve();
+          await release.promise;
+        }
+
+        return { mcp: [], slates: ['board'] };
+      },
+      shareEntry: () => null,
+      apps: { ensure: async () => ({ port: 3100, capability: 'test' }), remove: async () => ({ removed: true, port: 3100 }), url: async () => ({ url: 'https://example.test' }), owners: async () => new Map() },
+      resolve: async () => ({ kind: 'files' as const, root: '/slates/board', project: parseSlateProject({ main: 'server.ts' }) }), digest: async () => 'source',
+      build: async () => ({ modules: {}, inputs: [] }),
+      launch: async () => ({ id: 'test', port: null, methods: [], isRunning: async () => true, stop: async () => {} }),
+      call: async () => ({ ok: true, value: null }),
+    });
+
+    const revision = (key: string) => builds.built('board', slateAuthority(ROOT_SLATE_CALLER.cred), key, { modules: {}, inputs: [] });
+    const share = controller.live.add({ id: 'fence', slate: 'board', visibility: 'users', handle: '0123456789', grant: { slates: ['board'], members: [] } });
+    revision('r0');
+    const approval = controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: 'r0', approved: [] });
+    await ready.promise;
+    const written = await controller.writeShared('board', { 'server.ts': { text: 'r1', base: sha256Hex('r0') } }, 'pat');
+
+    if (!written.ok) throw new Error(written.error);
+    waiting = false;
+    release.resolve();
+    const pending = await approval;
+    const afterPendingMode = controller.live.get(share.id)?.mode ?? null;
+    revision('r1');
+
+    if (latest) {
+      // R1 built, but is not approved. R2 now lands while the good build still says R1.
+      const second = await controller.writeShared('board', { 'server.ts': { text: 'r2', base: sha256Hex('r1') } }, 'sam');
+
+      if (!second.ok) throw new Error(second.error);
+      const revisionBefore = controller.live.editMark('board')?.revisionBefore ?? null;
+      const firstBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: 'r1', approved: [] });
+      const mode = controller.live.get(share.id)?.mode ?? null;
+      revision('r2');
+      const secondBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: 'r2', approved: [] });
+
+      return {
+        pending: JSON.stringify(firstBuildApproval), afterPendingMode: mode, revisionBefore,
+        approved: secondBuildApproval.ok, cleared: controller.live.editMark('board') === null,
+        lending: serverAuthority(controller.live.authoritiesOf('board'), 'r2').kind,
+        afterOwnerBuild: null, stopped: 'none',
+      };
+    }
+
+    const approved = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: 'r1', approved: [] });
+    const cleared = controller.live.editMark('board') === null;
+    const lending = serverAuthority(controller.live.authoritiesOf('board'), 'r1').kind;
+    const later = await controller.writeShared('board', { 'server.ts': { text: 'r2', base: sha256Hex('r1') } }, 'sam');
+
+    if (!later.ok) throw new Error(later.error);
+    revision('r2');
+    revision('r3');
+    const after = controller.live.get(share.id);
+
+    return {
+      pending: JSON.stringify(pending), afterPendingMode, approved: approved.ok, cleared, lending,
+      afterOwnerBuild: after === undefined ? null : { grantRevision: after.grantRevision, editedBy: after.editedBy },
+      stopped: serverAuthority(controller.live.authoritiesOf('board'), 'r3').kind, revisionBefore: controller.live.editMark('board')?.revisionBefore ?? null,
+    };
   }
 
   async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {

@@ -14,7 +14,7 @@ import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
-import { SlateBinding } from '../../src/slates/bindings';
+import { SlateBinding, type SlateBindingProps } from '../../src/slates/bindings';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
 import { isJsonAnswer, SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
@@ -339,7 +339,8 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
   // Each relay is built here, in this isolate, so the answer read is the one it hands the platform.
   async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>> {
     await this.target(workspace);
-    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER };
+    // Minted as the host mints a process's bindings: with its lineage, here a process of an unshared slate.
+    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER, lineage: { incarnation: 'probe', generation: 0 } } satisfies SlateBindingProps;
     const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
     await binding.call(['put'], ['seen', 'kept'], null);
     const answer = await binding.call(['get'], ['seen'], null);

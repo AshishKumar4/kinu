@@ -11,7 +11,8 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { requireWorkModePermission } from '../execution/work-mode';
 import { classifyErrorCode, KinuError, type Refusal } from '../obs/error';
-import { refusing, settle } from '../obs/effect';
+import { refusing, settle, settleSync } from '../obs/effect';
+import { sha256Hex } from '../safety/argument-digest';
 import type { MissionGovernor } from '../mission-budget';
 import type { SqlExec } from '../types/primitives';
 import { projectJsonValue, type JsonValue } from '../utils/json';
@@ -33,14 +34,15 @@ import { SlateProcesses, type RunnableSlateSource, type RunningSlate, type Slate
 import type { SlateProcess } from './process';
 import { parseSlateProject, slateTitle, type SlateProject } from './project';
 import {
-  requireSlateWorkMode, slateIdFor, SlateFileChangeSchema, SlateFilePath, SlateOperationSchema,
+  requireSlateWorkMode, slateIdFor, SlateFilePath, SlateOperationSchema,
   type SharedSlateFiles, type SlateAnswer, type SlateCallResult, type SlateFileChange, type SlateOperation, type SlateProblem, type SlateSummary,
 } from './rpc';
 import { WorkspaceSlates } from './runtime';
 import { SlateShareViewers } from './share-viewers';
 import { SharedServers, type OwnerEffects } from './shared-server';
 import { slateRevision } from './share-policy';
-import { editedBy, editedRevision } from './share-revision';
+import { confinedTo } from './scoped-reader';
+import { rollbackSlateBatch, writeSlateBatch, type SlateFileBatch } from './slate-writer';
 import type {
   BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SlatePreapprovals, SlatePreapprovalWithdraw,
   SlateReach, SlateShareCard, SlateShareRecord,
@@ -198,7 +200,18 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   /** A slate's package.json, as `cred` reads it. */
   async project(cred: VfsCred, id: string): Promise<SlateProject> {
     const session = await this.ports.session();
-    const path = `${slateDirectory(new SlateId(id))}/package.json`;
+    const root = slateDirectory(new SlateId(id));
+    const path = `${root}/package.json`;
+
+    if (this.live.isShared(id)) {
+      const reader = confinedTo(session.vfs.as(cred), [root], []);
+
+      return settle(Effect.gen(function* () {
+        if (!(yield* Effect.promise(async () => reader.exists(path)))) return yield* new KinuError('bad_input', `package.json is not a file inside ${root}`);
+
+        return parseSlateProject(JSON.parse(yield* Effect.promise(async () => reader.readFileString(path))));
+      }));
+    }
 
     return parseSlateProject(JSON.parse(session.vfs.as(cred).readFileString(path)));
   }
@@ -431,7 +444,9 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       const root = `${SLATES_ROOT}/${slate}`;
 
       if (!vfs.exists(root)) return yield* new KinuError('missing', `No slate ${slate}`);
-      const files: { path: string; text: string }[] = [];
+
+      if (vfs.lstat(root).type !== 'directory') return yield* new KinuError('bad_input', 'A shared slate must be a real directory, not a symlink');
+      const files: SharedSlateFiles['files'] = [];
       const pending = [root];
 
       for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
@@ -446,7 +461,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
           if (entry.type !== 'file') continue;
           const bytes = vfs.readFile(path);
 
-          if (!bytes.includes(0)) files.push({ path: relative, text: new TextDecoder().decode(bytes) });
+          if (!bytes.includes(0)) files.push({ path: relative, text: new TextDecoder().decode(bytes), sha256: sha256Hex(bytes) });
         }
       }
 
@@ -455,41 +470,28 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   }
 
   /** An editor's change to `slate`'s files, written where the workspace keeps them, with what each held before. */
-  writeShared(slate: string, files: SlateFileChange): Promise<SlateAnswer<{ readonly paths: readonly string[]; readonly before: SlateFileChange }>> {
+  writeShared(slate: string, files: SlateFileChange, editor: string): Promise<SlateAnswer<SlateFileBatch>> {
     return settle(answer(`changing slate ${slate}'s files`, Effect.gen({ self: this }, function* () {
-      const change = v.safeParse(SlateFileChangeSchema, files);
-
-      if (!change.success) return yield* new KinuError('bad_input', change.issues[0].message);
-      const vfs = (yield* Effect.promise(async () => this.ports.session())).vfs.as(CRED_SESSION_USER);
+      const session = yield* Effect.promise(async () => this.ports.session());
       const root = `${SLATES_ROOT}/${slate}`;
+      const batch = writeSlateBatch({ session, root, files, slate, editor, marks: this.live, revision: slateRevision(this.builds, slate) });
 
-      if (!vfs.exists(root)) return yield* new KinuError('missing', `No slate ${slate}`);
-      // What each file held before, so a change that does not build is taken back whole: text, or null for none.
-      const before: Record<string, string | null> = {};
+      for (const share of this.live.list().filter((row) => row.slate === slate && row.revokedAt === null && row.mode === 'owner')) this.ports.ownerEffects?.retire(share.slate);
+      this.filesChanged(batch.paths.map((path) => `${root}/${path}`));
 
-      for (const path of Object.keys(change.output)) {
-        const at = `${root}/${path}`;
-        const bytes = vfs.exists(at) ? vfs.readFile(at) : null;
+      return batch;
+    })));
+  }
 
-        if (bytes !== null && bytes.includes(0)) return yield* new KinuError('bad_input', `${path} is not a text file: an editor changes text`);
-        before[path] = bytes === null ? null : new TextDecoder().decode(bytes);
-      }
+  /** Failed builds may take back only the revision their editor wrote, never a later save. */
+  rollbackShared(slate: string, batch: SlateFileBatch): Promise<SlateAnswer<{ readonly restored: readonly string[]; readonly conflicts: readonly string[] }>> {
+    return settle(answer(`taking back slate ${slate}'s edit`, Effect.gen({ self: this }, function* () {
+      const session = yield* Effect.promise(async () => this.ports.session());
+      const root = `${SLATES_ROOT}/${slate}`;
+      const rolled = rollbackSlateBatch({ session, root, slate, batch, marks: this.live });
+      this.filesChanged(rolled.restored.map((path) => `${root}/${path}`));
 
-      for (const [path, text] of Object.entries(change.output)) {
-        const at = `${root}/${path}`;
-
-        if (text === null) {
-          if (vfs.exists(at)) vfs.unlink(at);
-          continue;
-        }
-
-        vfs.mkdir(at.slice(0, at.lastIndexOf('/')), { recursive: true });
-        vfs.writeFile(at, text);
-      }
-
-      this.filesChanged(Object.keys(change.output).map((path) => `${root}/${path}`));
-
-      return { paths: Object.keys(change.output).sort(), before };
+      return rolled;
     })));
   }
 
@@ -626,34 +628,6 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return live.length > 0;
   }
 
-  /**
-   * `editor`, whom a live share adds to edit `slate`, changed it: each of its `owner` shares is suspended until its owner
-   * approves the reach again (`editedRevision`), and their effects still waiting retire. Answers what each held before,
-   * for {@link restoreAuthorities} when the change is taken back.
-   */
-  suspendForEdit(slate: string, editor: string): ReadonlyMap<string, string> {
-    const held = new Map<string, string>();
-
-    for (const share of this.live.list().filter((row) => row.slate === slate && row.revokedAt === null && row.mode === 'owner')) {
-      if (share.grantRevision !== null) held.set(share.id, share.grantRevision);
-      this.live.setAuthority(share.id, { mode: 'owner', grantRevision: editedRevision(editor) }, share.grant);
-      this.ports.ownerEffects?.retire(share.slate);
-    }
-
-    return held;
-  }
-
-  /** An editor's change taken back whole: each share it suspended, still as it left it, holds its approval again. */
-  restoreAuthorities(held: ReadonlyMap<string, string>, editor: string): void {
-    for (const [id, revision] of held) {
-      const share = this.live.get(id);
-
-      if (share?.revokedAt === null && share.mode === 'owner' && share.grantRevision === editedRevision(editor)) {
-        this.live.setAuthority(id, { mode: 'owner', grantRevision: revision }, share.grant);
-      }
-    }
-  }
-
   /** An `owner` share whose slate was built anew since its reach was approved: its server acts with nothing. */
   private stale(share: LiveShareRecord): boolean {
     return share.mode === 'owner' && share.grantRevision !== slateRevision(this.builds, share.slate);
@@ -675,15 +649,25 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
         return yield* new KinuError('bad_input', 'Take it off the Gallery first: a share on your access is never listed there');
       }
 
-      const revision = slateRevision(this.builds, held.slate);
-
-      if (input.mode === 'owner' && input.revision !== revision) {
-        return yield* new KinuError('bad_input', 'This slate changed since you reviewed what it reaches; review it again');
-      }
-
       const graph = yield* Effect.promise(async () => this.graph(held.slate));
 
-      setShareMode({ shares: this.live, share: held.id, graph, mode: input.mode, approved: input.mode === 'owner' ? input.approved : [], revision });
+      // The graph may await a build. Check the current revision and mark only after that await, in the update's turn.
+      yield* Effect.sync(() => this.ports.transaction(() => settleSync(Effect.gen({ self: this }, function* () {
+        const revision = slateRevision(this.builds, held.slate);
+        const mark = this.live.editMark(held.slate);
+
+        if (input.mode === 'owner' && input.revision !== revision) {
+          return yield* new KinuError('bad_input', 'This slate changed since you reviewed what it reaches; review it again');
+        }
+
+        if (input.mode === 'owner' && mark !== null && revision === mark.revisionBefore) {
+          return yield* new KinuError('bad_input', `${mark.editor}'s change is still building; approve once it has built`);
+        }
+
+        setShareMode({ shares: this.live, share: held.id, graph, mode: input.mode, approved: input.mode === 'owner' ? input.approved : [], revision });
+
+        if (input.mode === 'owner' && mark !== null) this.live.restoreEditMark(held.slate, null);
+      }))));
       this.ports.ownerEffects?.retire(held.slate);
       yield* Effect.promise(async () => this.sharingChanged(held.slate));
 
@@ -757,9 +741,9 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    * a build as anyone else (a viewer's part) is not their edit.
    */
   reapproveOnBuild(slate: string, revision: string): void {
-    // A reach an editor's change suspended stays suspended: only its owner's own approval brings it back.
-    for (const share of this.live.list().filter((row) => row.slate === slate && row.revokedAt === null && row.mode === 'owner' && row.grantRevision !== revision
-      && editedBy(row.grantRevision) === null)) {
+    if (this.live.editMark(slate) !== null) return;
+
+    for (const share of this.live.list().filter((row) => row.slate === slate && row.revokedAt === null && row.mode === 'owner' && row.grantRevision !== revision)) {
       this.live.setAuthority(share.id, { mode: 'owner', grantRevision: revision }, share.grant);
       this.ports.ownerEffects?.retire(slate);
     }
@@ -916,6 +900,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
         this.state.forget(id);
         this.usage.forget(id);
         this.builds.forget(id);
+        this.live.restoreEditMark(id, null);
       });
       yield* Effect.promise(async () => this.ports.forgetPicture?.(id));
 

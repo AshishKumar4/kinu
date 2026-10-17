@@ -46,6 +46,18 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT, share_id TEXT NOT NULL, viewer TEXT NOT NULL,
     path TEXT NOT NULL, calls TEXT NOT NULL, outcome TEXT NOT NULL, created_at INTEGER NOT NULL, settled_at INTEGER
   )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_edit_marks (
+    slate_id TEXT PRIMARY KEY,
+    editor TEXT NOT NULL,
+    revision_before TEXT
+  )`);
+}
+
+const EditMarkRow = v.object({ editor: v.string(), revision_before: v.nullable(v.string()) });
+
+export interface SlateEditMark {
+  readonly editor: string;
+  readonly revisionBefore: string | null;
 }
 
 const LiveShareRow = v.object({
@@ -74,7 +86,7 @@ const LIVE_SHARES: ShareTable<v.InferOutput<typeof LiveShareRow>, LiveShareRecor
   record: (row, users) => ({
     id: row.id, slate: row.slate_id, visibility: row.visibility, handle: row.handle,
     grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)),
-    createdAt: row.created_at, revokedAt: row.revoked_at, users, editors: [], mode: row.mode, grantRevision: row.grant_revision,
+    createdAt: row.created_at, revokedAt: row.revoked_at, users, editors: [], mode: row.mode, grantRevision: row.grant_revision, editedBy: null,
     // A revoked share is listed nowhere, whatever its row still holds.
     gallery: row.revoked_at === null && row.listing_line !== null && row.listing_category !== null ? { line: row.listing_line, category: row.listing_category } : null,
   }),
@@ -98,7 +110,7 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
 
     return {
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,
-      grant: share.grant, createdAt, revokedAt: null, users: [], editors: [], mode: authority.mode, grantRevision: authority.grantRevision, gallery: null,
+      grant: share.grant, createdAt, revokedAt: null, users: [], editors: [], mode: authority.mode, grantRevision: authority.grantRevision, editedBy: this.editMark(share.slate)?.editor ?? null, gallery: null,
     };
   }
 
@@ -139,7 +151,31 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
     const editors = this.db.exec(`SELECT email FROM slate_live_share_users WHERE share_id = ? AND role = 'edit' ORDER BY created_at, email`, row.id).toArray()
       .map((each) => v.parse(v.object({ email: v.string() }), each).email);
 
-    return { ...super.record(row, users), editors };
+    return { ...super.record(row, users), editors, editedBy: this.editMark(row.slate_id)?.editor ?? null };
+  }
+
+  /** The latest unapproved batch's prior built revision fences approval until that batch has built. */
+  editMark(slate: string): SlateEditMark | null {
+    const row = this.db.exec('SELECT editor, revision_before FROM slate_edit_marks WHERE slate_id = ?', slate).toArray()[0];
+
+    if (row === undefined) return null;
+    const mark = v.parse(EditMarkRow, row);
+
+    return { editor: mark.editor, revisionBefore: mark.revision_before };
+  }
+
+  markEdit(slate: string, editor: string, revisionBefore: string | null): void {
+    this.db.exec(`INSERT INTO slate_edit_marks (slate_id, editor, revision_before) VALUES (?, ?, ?)
+      ON CONFLICT(slate_id) DO UPDATE SET editor = excluded.editor, revision_before = excluded.revision_before`, slate, editor, revisionBefore);
+    markStoreChanged(this.db);
+  }
+
+  /** Used only by a complete rollback, or to remove a mark on current-revision approval or slate deletion. */
+  restoreEditMark(slate: string, mark: SlateEditMark | null): void {
+    this.db.exec('DELETE FROM slate_edit_marks WHERE slate_id = ?', slate);
+
+    if (mark !== null) this.markEdit(slate, mark.editor, mark.revisionBefore);
+    markStoreChanged(this.db);
   }
 
   /** A live share listed in the Gallery with its card's words, or taken off it (null). A slate is listed once, so

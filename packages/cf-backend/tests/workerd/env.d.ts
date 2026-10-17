@@ -311,6 +311,14 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<{ before: string; after: string; says: string }>;
   craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; waited: string; approved: string[]; viewer: string }>;
   sharedRunsOwnTree(input: { owner: string; workspace: string }): Promise<{ unshared: string; shared: string; afterUnshare: string }>;
+  editorBatch(input: { owner: string; workspace: string; kind: 'atomic' | 'links' | 'stale' }): Promise<{
+    answers: string[]; files: { path: string; text: string; sha256: string }[]; marks: (string | null)[]; outside: string;
+  }>;
+  sharedHtmlScope(input: { owner: string; workspace: string; manifestLink?: boolean }): Promise<{ before: string; shared: string }>;
+  editorFence(latest?: boolean): Promise<{
+    pending: string; afterPendingMode: string | null; approved: boolean; cleared: boolean; lending: string;
+    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string; revisionBefore: string | null;
+  }>;
   editorsEdit(input: { owner: string; workspace: string; editor: string; user: string }): Promise<{
     files: string; edited: string; runs: string; afterEdit: string | null; afterOwnBuild: string | null; reapproved: string | null;
     reached: string; runsAfter: string; filesAfter: string; afterRefused: string | null; used: string; revoked: string;
@@ -368,6 +376,9 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
   viewerRefusals(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string; mutate: string }>;
   viewerCall(handle: string, claim: { userId: string | null; source: string; consented: boolean }, method: string): Promise<string>;
+  ownersOwnWrite(): Promise<{ first: string; asked: string[]; second: string; after: number }>;
+  exerciseHop(): Promise<void>;
+  hopWrites(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ viewer: string; owner: string; asked: number }>;
   viewerAfterLastRevoke(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string): Promise<ProbeAnswer>;
   launchAcrossShare(): Promise<{ actors: number; afterShare: number; refused: string; running: number }>;
   viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
@@ -401,6 +412,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   workspaceHolds(text: string): Promise<string[]>;
   notesOnOwnerAccess(): Promise<void>;
   revokeDuringNextCall(): Promise<void>;
+  revokeBeforeNextSend(): Promise<void>;
   resumePart(viewer: string, part: string, continuation: string, args?: import('@kinu.run/core').JsonValue[]): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
   withdrawConsent(viewer: string, server: string, root: Record<string, string>): Promise<void>;
 }

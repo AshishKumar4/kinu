@@ -519,17 +519,15 @@ export class SlateHost {
 
   /**
    * An editor's change to one of this workspace's slates (docs/SLATE-SHARING-NIMBUS.md §2): refused unless a live share
-   * adds `editor` to edit it now. Its files are written, every `owner` share of it suspended until its owner approves
-   * the reach again, and it is built from its own tree; a change that does not build is taken back whole, the shares'
-   * approvals with it, and says why.
+   * adds `editor` to edit it now. One version-checked batch commits its files and edit mark, then builds from its own
+   * tree. A failed build takes back only bytes this batch still owns; newer saves survive and are named as conflicts.
    */
   editAs(id: string, editor: { readonly userId: string; readonly email: string }, files: SlateFileChange): Promise<SlateCallResult> {
     return settle(slateAnswer(`${editor.email}'s edit of slate ${id}`, Effect.gen({ self: this }, function* () {
       if (!this.controller.live.editsSlate(id, editor.userId)) return yield* new KinuError('denied', `Slate ${id} is not shared with ${editor.email} to edit`);
-      const written = yield* Effect.promise(async () => this.controller.writeShared(id, files));
+      const written = yield* Effect.promise(async () => this.controller.writeShared(id, files, editor.email));
 
       if (!written.ok) return yield* new KinuError(written.reason, written.error);
-      const suspended = this.controller.suspendForEdit(id, editor.email);
 
       const built = yield* Effect.result(Effect.flatMap(
         attempt({ doing: `building slate ${id}`, otherwise: 'io' }, async () => this.controller.processes.booted(ROOT_SLATE_CALLER, id)),
@@ -537,12 +535,12 @@ export class SlateHost {
       ));
 
       if (built._tag === 'Failure') {
-        const undone = yield* Effect.promise(async () => this.controller.writeShared(id, written.value.before));
+        const undone = yield* Effect.promise(async () => this.controller.rollbackShared(id, written.value));
 
-        if (!undone.ok) return yield* new KinuError(undone.reason, `${built.failure.message}; taking the change back failed too: ${undone.error}`);
-        this.controller.restoreAuthorities(suspended, editor.email);
+        if (!undone.ok) return yield* new KinuError(undone.reason, `${built.failure.message}; taking the change back failed too: ${undone.error}`, { cause: built.failure });
+        const conflicts = undone.value.conflicts;
 
-        return yield* Effect.fail(built.failure);
+        return yield* new KinuError(built.failure.code, `${built.failure.message}${conflicts.length === 0 ? '' : `; rollback conflict: kept newer changes to ${conflicts.join(', ')}`}`, { cause: built.failure });
       }
 
       return [...written.value.paths];
