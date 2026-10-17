@@ -109,13 +109,15 @@ type Open<T> = (last: boolean, clock: AttemptClock) => Promise<Opened<T>>;
 
 /** One attempt's times as `ModelAttemptInfo` tells them: sent at its start, then its answer's headers, its first and
  *  last output parts, and how it ended, told once, by whichever of the retry and its answer's stream sees it end. An
- *  answer whose stream closed after an error part, or a finish for an error, ended broken. */
+ *  answer whose stream closed after an error part, or a finish for an error, ended broken; one its reader let go of
+ *  after a finish for anything else was answered, as a generate collected from a stream is (`stream-generate.ts`). */
 class AttemptClock {
   private readonly sent: number;
   private headers: number | null = null;
   private first: number | null = null;
   private last: number | null = null;
   private faulted = false;
+  private finished = false;
   private told = false;
 
   constructor(private readonly now: () => number, private readonly attempt: number, private readonly tell: (info: Omit<ModelAttemptInfo, 'provider' | 'modelId'>) => void) {
@@ -129,12 +131,18 @@ class AttemptClock {
   /** A part of its answer arrived: output (any after `BEFORE_OUTPUT` but its finish), or word that it failed. */
   heard(part: LanguageModelV4StreamPart): void {
     if (part.type === 'error' || (part.type === 'finish' && part.finishReason.unified === 'error')) this.faulted = true;
+    else if (part.type === 'finish') this.finished = true;
 
     if (BEFORE_OUTPUT.has(part.type) || part.type === 'finish' || part.type === 'error') return;
     const at = this.now();
 
     this.first ??= at;
     this.last = at;
+  }
+
+  /** Its reader let go of the answer: after a finish, the answer was whole. */
+  cancelled(): void {
+    this.ended(this.finished ? 'answered' : 'broken');
   }
 
   ended(outcome: ModelAttemptInfo['outcome']): void {
@@ -577,7 +585,7 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
     },
     cancel: () => {
       bound.stop();
-      clock.ended('broken');
+      clock.cancelled();
 
       return parts.cancel();
     },

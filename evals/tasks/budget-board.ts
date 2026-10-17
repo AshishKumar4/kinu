@@ -477,7 +477,7 @@ how far over budget the team is, in dollars, and which of its expenses that mont
         const page = await verifier.browse(async (browser) => {
           const board = await browser.workSurface('board');
           const before = misreadings(await board.drawn(TEAMS), rows);
-          const pressed = await board.press(TEAMS, { name: 'design', label: COVER.source });
+          const pressed = await board.press(TEAMS, { name: 'design', label: COVER.source }, 'call');
           // The press's own render: what the page drew once Cover's call was answered.
           const sight = await board.drawn(TEAMS);
 

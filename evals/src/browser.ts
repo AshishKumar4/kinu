@@ -194,11 +194,13 @@ const Waiting = v.object({ complete: v.boolean(), waiting: v.number(), calls: v.
  *  drawn. A render after a call's answer lands within a frame (16 ms), so one poll spans several. */
 const SETTLE_POLL_MS = 100;
 
-/** Why a page has not settled, as last found (`found`). */
-function settling(found: v.InferOutput<typeof Waiting>, pressing: boolean): string {
+/** Why a page has not settled, as last found (`found`), while it owes a press its `answer`, if it does. */
+function settling(found: v.InferOutput<typeof Waiting>, answer: PressAnswer | null): string {
   if (!found.complete) return 'its document still loading';
 
-  return pressing ? 'it answered its press with no call and no redraw' : `${String(found.waiting)} call(s) in flight`;
+  if (answer === 'call') return 'its press made no call to its slate';
+
+  return answer === 'redraw' ? 'its press made no call and no redraw' : `${String(found.waiting)} call(s) in flight`;
 }
 
 /** What a page says when asked one thing it may not hold. */
@@ -230,9 +232,14 @@ function controlNamed(source: string, flags: string): Element | null {
 }
 
 /** One slate's page as it is drawn inside the workspace: in the work surface or in the chat. */
+/** How a press is answered: by a call to the page's slate (`call`, a press that asks it to change something: a move, a
+ *  sign-in, a budget covered), or by a call or a redraw, whichever comes first (`redraw`, a press the page may answer
+ *  alone: a square selected, a room opened). */
+export type PressAnswer = 'call' | 'redraw';
+
 export class SlateView {
-  /** What the page had asked and drawn as it was last pressed, until it answers the press (`settled`). */
-  #pressed: { readonly calls: number; readonly mutations: number } | null = null;
+  /** What the page had asked and drawn as it was last pressed, and how it answers, until it has (`settled`). */
+  #pressed: { readonly calls: number; readonly mutations: number; readonly answer: PressAnswer } | null = null;
 
   constructor(readonly frame: Frame) {}
 
@@ -242,10 +249,11 @@ export class SlateView {
   }
 
   /**
-   * Once the page has drawn what it reads: its document loaded, no call to its slate in flight nor a session still
-   * connecting, and nothing redrawn between two looks a poll apart (`RECORD_SLATE_CALLS`); after a press, once the page
-   * has answered it too, by calling its slate or redrawing, however long its handler takes to begin. Readiness, never
-   * correctness: a page drawn wrong is as settled as one drawn right, so what it shows is read once and judged at once.
+   * Once the page has drawn what it reads: its document loaded, and no call to its slate in flight nor a session still
+   * connecting at two looks a poll apart, none begun between them (`RECORD_SLATE_CALLS`), so the last answer came a poll
+   * before the read, time for the page to draw it; after a press, once the page has answered it too (`PressAnswer`),
+   * however long its handler takes to begin. Readiness, never correctness: a page drawn wrong is as settled as one drawn
+   * right, so what it shows is read once and judged at once; and a page that keeps redrawing a clock is still settled.
    * Polled from here, not by animation frames, which Chrome stops in a cross-origin frame scrolled out of view. A page
    * still waiting after the draw budget, or that never answers its press, shows a person nothing more either, and fails.
    */
@@ -257,12 +265,12 @@ export class SlateView {
       const now = v.parse(Waiting, await bounded('the slate page, asked what it waits on', this.frame.evaluate(WAITING)));
       const pressed = this.#pressed;
 
-      if (pressed !== null && (now.calls > pressed.calls || now.mutations > pressed.mutations)) this.#pressed = null;
+      if (pressed !== null && (now.calls > pressed.calls || (pressed.answer === 'redraw' && now.mutations > pressed.mutations))) this.#pressed = null;
 
-      if (this.#pressed === null && now.complete && now.waiting === 0 && before?.waiting === 0 && before.mutations === now.mutations) return;
+      if (this.#pressed === null && now.complete && now.waiting === 0 && before?.waiting === 0 && before.calls === now.calls) return;
 
       if (Date.now() >= due) {
-        throw new Error(`the slate page did not settle in ${String(DRAW_MS / 1000)} s: ${settling(now, this.#pressed !== null)}`);
+        throw new Error(`the slate page did not settle in ${String(DRAW_MS / 1000)} s: ${settling(now, this.#pressed?.answer ?? null)}`);
       }
 
       before = now;
@@ -270,11 +278,11 @@ export class SlateView {
     }
   }
 
-  /** What the page had asked and drawn, kept as it is pressed, so `settled` waits for its answer to the press. */
-  async #press(control: ElementHandle): Promise<void> {
+  /** What the page had asked and drawn, kept as it is pressed, so `settled` waits for its `answer` to the press. */
+  async #press(control: ElementHandle, answer: PressAnswer): Promise<void> {
     const { calls, mutations } = v.parse(Waiting, await this.frame.evaluate(WAITING));
 
-    this.#pressed = { calls, mutations };
+    this.#pressed = { calls, mutations, answer };
     await control.click();
   }
 
@@ -285,8 +293,9 @@ export class SlateView {
     return this.read(names);
   }
 
-  /** Press the control `press` names, as a person's pointer does; false when the page has no such one control. */
-  async press(names: readonly string[], press: Press): Promise<boolean> {
+  /** Press the control `press` names, as a person's pointer does, the page to `answer` it; false when the page has no
+   *  such one control. */
+  async press(names: readonly string[], press: Press, answer: PressAnswer = 'redraw'): Promise<boolean> {
     return bounded(`the slate page, pressed for ${press.name}`, (async () => {
       const found = await this.frame.evaluateHandle(look, names, press);
       const control = await found.evaluateHandle((looked) => looked.control);
@@ -294,20 +303,21 @@ export class SlateView {
       await found.dispose();
 
       if (!(control instanceof ElementHandle)) return false;
-      await this.#press(control);
+      await this.#press(control, answer);
       await control.dispose();
 
       return true;
     })());
   }
 
-  /** Press the first control whose accessible name, its `aria-label`, else its `title`, else its text, `name` matches. */
-  async pressNamed(name: RegExp): Promise<boolean> {
+  /** Press the first control whose accessible name, its `aria-label`, else its `title`, else its text, `name` matches, the
+   *  page to `answer` it. */
+  async pressNamed(name: RegExp, answer: PressAnswer = 'redraw'): Promise<boolean> {
     return bounded(`the slate page, pressed for ${name.source}`, (async () => {
       const control = await this.frame.evaluateHandle(controlNamed, name.source, name.flags);
 
       if (!(control instanceof ElementHandle)) return false;
-      await this.#press(control);
+      await this.#press(control, answer);
       await control.dispose();
 
       return true;

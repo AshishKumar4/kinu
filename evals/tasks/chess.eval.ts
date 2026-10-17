@@ -4,7 +4,7 @@ import { Seeded } from './seeded';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type EvalPart } from '../src/task';
 import type { Evidence, EvalVerifier, SlateClient } from '../src/verifier';
-import type { SlateView } from '../src/browser';
+import type { PressAnswer, SlateView } from '../src/browser';
 import { builtItself, buildsClean, slateQuality, type DrawnSlate } from './slate-quality';
 
 // The workshop-evals chess task: a complete engine authored without a chess package, extended
@@ -79,8 +79,9 @@ async function squares(view: SlateView): Promise<Record<string, string>> {
 }
 
 /** Press the square whose accessible name starts with `square`, as a person's pointer does. */
-function pressSquare(view: SlateView, square: string): Promise<boolean> {
-  return view.pressNamed(new RegExp(`^${square}\\b`, 'iu'));
+/** Press `square`: a selection the page may answer alone (`redraw`), a move its slate must keep (`call`). */
+function pressSquare(view: SlateView, square: string, answer: PressAnswer): Promise<boolean> {
+  return view.pressNamed(new RegExp(`^${square}\\b`, 'iu'), answer);
 }
 
 const MISSION = 'A shared chess workspace where a friend and I play, import games and share our own.';
@@ -570,7 +571,7 @@ pressing a piece and then a square plays that move.`,
 
           for (let attempt = 0; attempt < 3; attempt++) {
             await view.settled();
-            const from = await pressSquare(view, 'e2');
+            const from = await pressSquare(view, 'e2', 'redraw');
 
             await view.settled();
             const selected = await read();
@@ -581,7 +582,7 @@ pressing a piece and then a square plays that move.`,
               return { pass: false, evidence: { attemptCount: attempts.length, attempts, wrongMove: true } };
             }
 
-            const to = await pressSquare(view, 'e4');
+            const to = await pressSquare(view, 'e4', 'call');
 
             // The move's own render: read once the page has drawn what its move call answered.
             await view.settled();

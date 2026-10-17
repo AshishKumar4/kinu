@@ -34,7 +34,8 @@ async function draw() {
   document.getElementById('root').innerHTML = rows.map((row) => '<section><h2>' + row.team + '</h2><p>budget $' + row.budget + ', spent $' + row.spent + '</p>'
     + (row.spent > row.budget ? '<button>Cover</button>' : '') + '</section>').join('');
   for (const button of document.querySelectorAll('button')) button.onclick = async () => {
-    // A handler may begin its work late: here once the test lets it, where one is set.
+    // A handler shows it is working at once, and may begin its call late: here once the test lets it, where one is set.
+    button.disabled = true;
     await window.coverBegins;
     await board.cover(button.closest('section').querySelector('h2').textContent);
     await draw();
@@ -249,6 +250,17 @@ describe('a slate page', () => {
     expect({ call, early, misread: misread(await drawn, ROWS) }).toEqual({ call: 'status', early: false, misread: [] });
   });
 
+  test('that keeps redrawing a clock is read once its data is drawn, the clock never holding it', async () => {
+    const page = await opened(origin(ROWS, AT_ONCE));
+
+    await page.evaluate(`(() => {
+      const clock = document.body.appendChild(document.createElement('time'));
+      setInterval(() => { clock.textContent = new Date().toISOString(); }, 20);
+    })()`);
+
+    expect(misread(await new SlateView(page.mainFrame()).drawn(TEAMS), ROWS)).toEqual([]);
+  });
+
   test('drawn wrong is read as it is, with every team it misreads: nothing waits for it to become right', async () => {
     const wrong = ROWS.map((row) => row.team === 'growth' ? row : { ...row, spent: row.spent + 1 });
     const page = await opened(origin(wrong, AT_ONCE));
@@ -264,7 +276,7 @@ describe('a slate page', () => {
     await held.arrived();
     held.release();
     const before = await view.drawn(TEAMS);
-    const pressed = await view.press(TEAMS, { name: 'design', label: '\\bcover\\b' });
+    const pressed = await view.press(TEAMS, { name: 'design', label: '\\bcover\\b' }, 'call');
     const call = await held.arrived();
 
     await countLooks(page);
@@ -282,18 +294,19 @@ describe('a slate page', () => {
       .toEqual({ before: true, pressed: true, call: 'cover', early: false, after: true });
   });
 
-  test('pressed is read once it has answered the press, though its handler begins its call late', async () => {
+  test('pressed is read once it has answered the press, though its handler redraws at once and begins its call late', async () => {
     const page = await opened(origin(ROWS, AT_ONCE));
     const view = new SlateView(page.mainFrame());
 
     await view.drawn(TEAMS);
     await page.evaluate('window.coverBegins = new Promise((begin) => { window.beginCover = begin; })');
-    const pressed = await view.press(TEAMS, { name: 'design', label: '\\bcover\\b' });
+    const pressed = await view.press(TEAMS, { name: 'design', label: '\\bcover\\b' }, 'call');
 
     await countLooks(page);
     const drawn = view.drawn(TEAMS);
 
-    // Quiet, with nothing in flight, the page has not yet answered its press: three looks on, it is still not read.
+    // Its button disabled, then quiet with nothing in flight, the page has not yet made the call its press asked for:
+    // three looks on, it is still not read.
     await Promise.race([looked(page, 3), drawn]);
     const early = await settledNow(drawn);
 

@@ -96,7 +96,7 @@ async function signInOnPage(view: SlateView, person: Person): Promise<boolean> {
   await name.type(person.name);
   await password.type(person.password);
 
-  return view.pressNamed(/^(?:sign|log) ?in$/iu);
+  return view.pressNamed(/^(?:sign|log) ?in$/iu, 'call');
 }
 
 const build: EvalPart = {

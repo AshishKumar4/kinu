@@ -91,16 +91,17 @@ describe('the product\'s own clock on each request', () => {
     });
   });
 
-  test('counts a tool that ran while the answer still streamed only for its time after the answer ended', () => {
+  test('counts a tool that ran while the answer still streamed only for its time after the request ended', () => {
     const at = (ms: number): string => new Date(Date.UTC(2026, 9, 17) + ms).toISOString();
 
     const ledger: LedgerRow[] = [
-      // The tool ran 4-7 s, recorded before the request it ran under ended at 6 s.
+      // The tool ran 4-7 s, recorded before the request it ran under, its last output at 6 s, ended at 6.5 s.
       { type: 'tool_call_end', runId: 'r1', eventIndex: 1, timestamp: at(7_000), durationMs: 3_000 },
-      { type: 'model_attempt', runId: 'r1', eventIndex: 2, timestamp: at(7_000), sentAt: at(0), firstOutputMs: 1_000, lastOutputMs: 6_000, outcome: 'answered' },
+      { type: 'model_attempt', runId: 'r1', eventIndex: 2, timestamp: at(6_500), sentAt: at(0), firstOutputMs: 1_000, lastOutputMs: 6_000, outcome: 'answered' },
       { type: 'model_attempt', runId: 'r1', eventIndex: 3, timestamp: at(9_000), sentAt: at(8_000), firstOutputMs: 500, lastOutputMs: 1_000, outcome: 'answered' },
     ];
 
-    expect(attemptTiming(ledger)).toMatchObject({ betweenMs: 2_000, toolsMs: 1_000, otherMs: 1_000 });
+    // Between 6.5 s and the next send at 8 s, the tool covers half a second; the request's tail is no one's here.
+    expect(attemptTiming(ledger)).toMatchObject({ generationMs: 5_000 + 500, betweenMs: 1_500, toolsMs: 500, otherMs: 1_000 });
   });
 });

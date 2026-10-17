@@ -280,7 +280,8 @@ export function attemptTiming(ledger: readonly LedgerRow[]): AttemptTiming {
     const requests = rows.flatMap((row) => row.type === 'model_attempt' && row.sentAt !== undefined ? [{ row, sent: Date.parse(row.sentAt) }] : [])
       .sort((left, right) => left.sent - right.sent);
 
-    // From one request's end, its last output or else the word it ended, to the next request's send.
+    // From one request's end, when it was told (its stream's close, or its collector letting go), to the next's send:
+    // a request's tail after its last output is the provider's, not the product's.
     let ended: number | null = null;
 
     for (const { row, sent } of requests) {
@@ -302,7 +303,7 @@ export function attemptTiming(ledger: readonly LedgerRow[]): AttemptTiming {
         timing.otherMs += sent - ended - either;
       }
 
-      ended = row.lastOutputMs === undefined ? at(row) : sent + row.lastOutputMs;
+      ended = at(row);
     }
   }
 

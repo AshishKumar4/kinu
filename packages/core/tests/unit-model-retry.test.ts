@@ -255,8 +255,9 @@ describe('the model stack retries every call once, in one place', () => {
   const USAGE = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 2, text: 2, reasoning: 0 } };
 
   /** A provider refused once and then answered with `ending`'s parts after two words, each part 100 ms after it is
-   *  asked for, on a clock starting at 2026-10-17; and what its attempts told. */
-  function attempted(ending: readonly ModelStreamPart[]) {
+   *  asked for, on a clock starting at 2026-10-17, its stream then closed or, `held`, left open until its reader lets
+   *  go; and the model, generating by stream where `generateByStream`, and what its attempts told. */
+  function attempted(ending: readonly ModelStreamPart[], { held = false, generateByStream = false } = {}) {
     let nowMs = Date.UTC(2026, 9, 17);
     let opened = 0;
     const told: ModelAttemptInfo[] = [];
@@ -281,24 +282,27 @@ describe('the model stack retries every call once, in one place', () => {
 
           nowMs += 100;
 
-          if (part === undefined) controller.close();
-          else controller.enqueue(part);
+          if (part !== undefined) controller.enqueue(part);
+          else if (held) return new Promise<void>(() => {});
+          else controller.close();
+
+          return Promise.resolve();
         } }, { highWaterMark: 0 }) };
       },
     });
 
     const model = wrapLanguageModel({ model: inner, middleware: retryMiddleware({
-      provider: 'example', modelId: 'm', lane: LANE, warn: () => {}, now: () => nowMs, random: () => 0,
+      provider: 'example', modelId: 'm', lane: LANE, warn: () => {}, now: () => nowMs, random: () => 0, generateByStream,
       sleep: async () => {}, pacer: new ProviderPacer(), onAttempt: (info) => { told.push(info); },
     }) });
 
-    return { told, result: streamText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES, providerOptions: callRetries(1) }) };
+    return { told, model, streamed: () => streamText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES, providerOptions: callRetries(1) }) };
   }
 
   test('tells each request as it ends, on the call\'s clock: a refusal at once, an answer once its stream has closed', async () => {
-    const { told, result } = attempted([{ type: 'text-end', id: 't' }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE }]);
+    const { told, streamed } = attempted([{ type: 'text-end', id: 't' }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE }]);
 
-    expect(await result.text).toBe('hello');
+    expect(await streamed().text).toBe('hello');
     const [refused, answered] = told;
 
     // Sent at 300 after the refusal, headers 300 on, the first text the third part read, its last output the text's
@@ -316,9 +320,16 @@ describe('the model stack retries every call once, in one place', () => {
     const errored = attempted([{ type: 'error', error: new Error('the provider lost its place') }]);
     const finishedInError = attempted([{ type: 'finish', finishReason: { unified: 'error', raw: 'error' }, usage: USAGE }]);
 
-    for (const { result } of [errored, finishedInError]) await result.consumeStream();
+    for (const { streamed } of [errored, finishedInError]) await streamed().consumeStream();
 
     expect([errored.told.map((info) => info.outcome), finishedInError.told.map((info) => info.outcome)]).toEqual([['refused', 'broken'], ['refused', 'broken']]);
+  });
+
+  test('tells a generate collected from a stream answered, though the collector lets go of it at its finish', async () => {
+    const { told, model } = attempted([{ type: 'text-end', id: 't' }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE }], { held: true, generateByStream: true });
+
+    expect((await generateText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES, providerOptions: callRetries(1) })).text).toBe('hello');
+    expect(told.map((info) => info.outcome)).toEqual(['refused', 'answered']);
   });
 
   async function streamRefusal(model: LanguageModel): Promise<Error> {
