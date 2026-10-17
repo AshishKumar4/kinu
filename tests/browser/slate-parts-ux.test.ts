@@ -227,7 +227,9 @@ describe("a slate's personal parts", () => {
         expect(await stateOf(team)).toBe('failed');
         const deploy = await page.waitForFrame((frame) => frame.url().includes('frame=part-frame&part=deploy'), SOON);
 
-        await deploy.waitForSelector('[role="alert"]', SOON);
+        // A refusal says why in the server's own words, not as the app's internal failure.
+        expect(await (await deploy.waitForSelector('[role="alert"]', SOON))?.evaluate((node) => node.textContent)).toContain("The workspace didn't answer in time.");
+        expect(await deploy.$eval('[role="alert"]', (node) => node.textContent)).not.toContain('Cause(');
 
         // Refused, failed or never answered, each part frame holds the one nested frame every other state holds.
         for (const part of [standup, deploy, team]) expect(await framesHeld(part)).toEqual(ONE_FRAME_THROUGHOUT);
