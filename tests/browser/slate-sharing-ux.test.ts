@@ -129,15 +129,23 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-share-access-option="public"]');
             expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
 
+            // A slate shared whose own files do not build alone says why it does not run.
+            expect(await live.$('[data-share-broken]')).not.toBeNull();
+
+            // A team share says who edits and who uses it, and that an editor's change stopped it on the owner's access.
+            expect(await live.$$eval('[data-live-share="live-team-2"] [data-live-share-person]', (rows) => rows.map((row) => [row.getAttribute('data-live-share-person'), row.getAttribute('data-live-share-role')])))
+              .toEqual([['pat@example.com', 'edit'], ['sam@example.com', 'use']]);
+            expect(await live.$eval('[data-live-share="live-team-2"] [data-live-share-mode]', (element) => element.textContent ?? '')).toContain('pat@example.com');
+
             // A share on the owner's access whose code changed is stopped; the owner sees its reach again, then approves it
             // at the slate's revision now.
-            expect(await live.$eval('[data-live-share-mode]', (element) => element.getAttribute('data-live-share-mode'))).toBe('owner');
-            await live.click('[data-live-share-review]');
+            expect(await live.$eval('[data-live-share="live-board-1"] [data-live-share-mode]', (element) => element.getAttribute('data-live-share-mode'))).toBe('owner');
+            await live.click('[data-live-share="live-board-1"] [data-live-share-review]');
             await live.waitForSelector('[data-share-approve-reach]');
             expect(await live.$('[data-share-reach]')).not.toBeNull();
             expect(await live.$('[data-share-submit]')).toBeNull();
             await live.click('[data-share-approve-reach]');
-            await live.waitForFunction(() => document.querySelector('[data-live-share-review]') === null);
+            await live.waitForFunction(() => document.querySelector('[data-live-share="live-board-1"] [data-live-share-review]') === null);
             expect(await live.$('[data-share-submit]')).not.toBeNull();
 
             // On the owner's access it is never listed, and the row says why.
@@ -145,9 +153,9 @@ describe('slate sharing surfaces', () => {
             expect(await live.$('[data-share-gallery]')).toBeNull();
 
             // And it moves to each person's own access in one press: nothing of the owner's is used.
-            await live.click('[data-live-share-own]');
-            await live.waitForSelector('[data-live-share-mode="own"]');
-            expect(await live.$('[data-live-share-own]')).toBeNull();
+            await live.click('[data-live-share="live-board-1"] [data-live-share-own]');
+            await live.waitForSelector('[data-live-share="live-board-1"] [data-live-share-mode="own"]');
+            expect(await live.$('[data-live-share="live-board-1"] [data-live-share-own]')).toBeNull();
 
             // Then it can be listed, by a line and a category asked for first.
             await live.click('[data-share-gallery]');
@@ -168,13 +176,17 @@ describe('slate sharing surfaces', () => {
           try {
             expect(await first.$eval('[data-share-start][aria-checked="true"]', (element) => element.getAttribute('data-share-start'))).toBe('as-is');
             await first.click('[data-share-start="empty"]');
-            await first.click('[data-share-access]');
-            await first.click('[data-share-access-option="public"]');
+            // Each person added uses it, or edits it too.
+            await first.type('[data-share-emails]', 'pat@example.com, sam@example.com');
+            await first.waitForSelector('[data-share-person="sam@example.com"]');
+            expect(await first.$('[data-share-editors-note]')).toBeNull();
+            await first.click('[data-share-person="pat@example.com"] [data-share-person-role="edit"]');
+            await first.waitForSelector('[data-share-editors-note]');
             await first.click('[data-share-submit]');
             await first.waitForSelector('[data-share-created]');
             const sent = JSON.parse(await first.$eval('html', (root) => root.getAttribute('data-gallery-shared')) ?? '{}');
 
-            expect([sent.slate, sent.start]).toEqual(['issue-triage', 'empty']);
+            expect([sent.slate, sent.start, sent.emails, sent.editors]).toEqual(['issue-triage', 'empty', ['pat@example.com', 'sam@example.com'], ['pat@example.com']]);
           } finally {
             await first.close();
           }

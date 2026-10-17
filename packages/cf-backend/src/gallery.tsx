@@ -5662,6 +5662,15 @@ const LIVE_SHARE: LiveShareRecord = {
   createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", stale: true, gallery: null,
 };
 
+/** Its team's share: Pat edits it, Sam uses it, and Pat's last change stopped it on the owner's access. */
+const TEAM_SHARE: LiveShareRecord = {
+  ...LIVE_SHARE, id: "live-team-2", visibility: "users", handle: "8b2e5d1f40", users: ["pat@example.com", "sam@example.com"], editors: ["pat@example.com"],
+  createdAt: NOW - 2 * 864e5, grantRevision: "edited-by:pat@example.com",
+};
+
+/** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
+const SHARED_REFUSAL = "Slate issue-triage is shared, so it runs only as its own files build; they do not build alone yet";
+
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
 /** `first`: the slate's first share, before anyone has it, which asks what they start with. */
 function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint"; first?: boolean }) {
@@ -5671,7 +5680,7 @@ function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint";
       <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
         fixture={{
           mode,
-          live: { graph: SHARE_GRAPH, liveShares: first ? [] : [LIVE_SHARE] },
+          live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
             { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },
