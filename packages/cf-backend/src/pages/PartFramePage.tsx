@@ -57,10 +57,10 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
     return () => { stop?.(); };
   }, [workspace, slate, part, args]);
 
-  const run = useCallback((action: Pressed | null, approval: string | null) => {
+  const run = useCallback((action: Pressed | null, resume: boolean) => {
     if (bridge === null) return;
     setFailure(null);
-    detach(Effect.map(Effect.promise(() => bridge.run(action, approval)), (ran) => {
+    detach(Effect.map(Effect.promise(() => bridge.run(action, resume)), (ran) => {
       if (typeof ran === "string") {
         setFailure(ran);
 
@@ -73,17 +73,19 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
   }, [bridge]);
 
   // The first run, once the top answers.
-  useEffect(() => { run(null, null); }, [run]);
+  useEffect(() => { run(null, false); }, [run]);
 
   const decide = useCallback((kind: "consent" | "approval" | "show") => {
     if (bridge === null) return;
     detach(Effect.map(Effect.promise(() => bridge.decide(kind)), (decided) => {
-      // Allowed: the waiting run resumes under the new consent; approved: again, with that one effect admitted.
-      if (decided.kind === "consented") run(waiting.current, null);
+      // Allowed or approved: the stopped run resumes, the same press in it.
+      if (decided.kind === "consented" || decided.kind === "approved") run(waiting.current, true);
 
-      if (decided.kind === "approved") run(waiting.current, decided.approval);
-
-      if (decided.kind === "declined") waiting.current = null;
+      // Declined, the stopped run is let go, never resumed: the part runs afresh, without the press.
+      if (decided.kind === "declined" && kind !== "show") {
+        waiting.current = null;
+        run(null, false);
+      }
     }));
   }, [bridge, run]);
 
@@ -97,7 +99,7 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
   if (drawn !== null) {
     body = (
       <>
-        <PartView answer={drawn} slate={bridge?.title ?? slate} controls={{ act: (action) => run(action, null), decide, signIn: () => bridge?.signIn(), retry: () => run(null, null) }} />
+        <PartView answer={drawn} slate={bridge?.title ?? slate} controls={{ act: (action) => run(action, false), decide, signIn: () => bridge?.signIn(), retry: () => run(null, false) }} />
         {failure !== null && <p role="alert" className="p-meta p-danger">{failure}</p>}
       </>
     );

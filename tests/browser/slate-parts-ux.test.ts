@@ -90,6 +90,8 @@ const reaches = (frame: Frame, state: string) => frame.waitForSelector(`[data-pa
 
 const AskedSchema = v.array(v.object({ path: v.string(), body: v.nullable(v.string()) }));
 
+const RunSentSchema = v.object({ args: v.array(v.unknown()), action: v.unknown(), continuation: v.nullable(v.string()) });
+
 const asked = async (page: Page) => v.parse(AskedSchema, JSON.parse(await page.$eval('html', (root) => root.getAttribute('data-gallery-asked')) ?? '[]'));
 
 /** No decision of any kind is drawn inside a part's frame: they open at the top alone. */
@@ -198,11 +200,11 @@ describe("a slate's personal parts", () => {
           const pressed = { id: 'deploy', input: 'release-7' };
 
           expect(after.some((each) => each.path.endsWith('/approvals/approval-1') && JSON.parse(each.body ?? '{}').decision === 'approve')).toBe(true);
-          // The press, its resumption once allowed, and once approved.
+          // The press; then, once allowed, the run its consent stopped, and once approved, the run its approval stopped.
           expect(after.filter((each) => each.path.endsWith('/parts/deploy/run')).slice(-3).map((each) => JSON.parse(each.body ?? '{}'))).toEqual([
-            { args: [], action: pressed, approval: null },
-            { args: [], action: pressed, approval: null },
-            { args: [], action: pressed, approval: 'approval-1' },
+            { args: [], action: pressed, continuation: null },
+            { args: [], action: pressed, continuation: expect.stringMatching(/^run-deploy-/u) },
+            { args: [], action: pressed, continuation: expect.stringMatching(/^run-deploy-/u) },
           ]);
 
           // Through every state each part showed, its frame held one nested frame, the same one.
@@ -242,6 +244,44 @@ describe("a slate's personal parts", () => {
         ]);
 
         expect(new URL(login.url()).searchParams.get('return_to')).toBe(here.pathname + here.search);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a declined decision lets its run go: the part asks afresh, and allowing then resumes the new run, not the one let go', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'part-host', 'light', 'desktop');
+
+      try {
+        const standup = await partFrame(page, 'standup');
+        const runs = async () => (await asked(page)).filter((each) => each.path.endsWith('/parts/standup/run')).map((each) => v.parse(RunSentSchema, JSON.parse(each.body ?? '{}')));
+
+        expect(await stateOf(standup)).toBe('needs-consent');
+        await standup.click('[data-part-needs="consent"] button');
+        await page.waitForSelector('[data-consent-allow]', SOON);
+        await page.click('[data-consent-dismiss]');
+        await page.waitForFunction(() => (document.documentElement.getAttribute('data-gallery-asked') ?? '').includes('/parts/standup/release'), SOON);
+
+        // Let go, the run is never resumed: the part runs afresh and asks again, for a run of its own.
+        await page.waitForFunction(() => JSON.parse(document.documentElement.getAttribute('data-gallery-asked') ?? '[]').filter((each: { path: string }) => each.path.endsWith('/parts/standup/run')).length >= 2, SOON);
+        const [first, again] = await runs();
+        const released = (await asked(page)).find((each) => each.path.endsWith('/parts/standup/release'));
+
+        expect(again?.continuation).toBeNull();
+        expect(released === undefined ? null : v.parse(v.object({ continuation: v.string() }), JSON.parse(released.body ?? '{}')).continuation).toMatch(/^run-standup-/u);
+        expect(first?.continuation).toBeNull();
+        await reaches(standup, 'needs-consent');
+
+        await standup.click('[data-part-needs="consent"] button');
+        await page.waitForSelector('[data-consent-allow]', SOON);
+        await page.click('[data-consent-allow]');
+        await reaches(standup, 'shown');
+        const resumed = (await runs()).at(-1)?.continuation;
+
+        expect(resumed).toMatch(/^run-standup-/u);
+        expect(resumed).not.toBe(v.parse(v.object({ continuation: v.string() }), JSON.parse(released?.body ?? '{}')).continuation);
       } finally {
         await page.close();
       }

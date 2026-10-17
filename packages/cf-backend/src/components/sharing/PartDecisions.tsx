@@ -45,7 +45,7 @@ export function ConsentDecision({ slate, ask, changed, onAllow, onClose }: {
 
   return (
     <Modal title={changed ? `${slate} changed since you allowed it` : `Let ${slate} use your ${server}?`} icon={<PlugIcon size={18} className="p-accent" />} onClose={onClose}
-      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><FilledButton data-consent-allow onClick={onAllow}>{changed ? "Allow again" : "Allow"}</FilledButton></div>}>
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><FilledButton data-consent-allow onClick={onAllow}>{changed ? "Allow again" : "Allow"}</FilledButton></div>}>
       {changed && <p data-consent-changed className="p-row-text p-text-2">Its code changed after you allowed it to use your {server}. Allow it again to keep seeing your part.</p>}
       <Lets
         yes={[

@@ -28,13 +28,10 @@ interface LastAnswer {
   answer: PartRunAnswer | null;
 }
 
-/** What a decision the frame asked for came to; `approval`, the effect the viewer let run once. */
-export type Decided = { readonly kind: "consented" | "shown" | "declined" } | { readonly kind: "approved"; readonly approval: string };
+/** What a decision the frame asked for came to. */
+export type Decided = { readonly kind: "consented" | "approved" | "shown" | "declined" };
 
-const DecidedSchema = v.variant("kind", [
-  v.object({ kind: v.picklist(["consented", "shown", "declined"] as const) }),
-  v.object({ kind: v.literal("approved"), approval: v.string() }),
-]);
+const DecidedSchema = v.object({ kind: v.picklist(["consented", "approved", "shown", "declined"] as const) });
 
 /** The decisions a frame may ask the top for: each opens on the answer the top last gave that frame. */
 const DecisionKindSchema = v.picklist(["consent", "approval", "show"] as const);
@@ -47,9 +44,12 @@ const HelloSchema = v.object({
   kind: v.literal(HELLO), workspace: v.string(), slate: v.string(), part: v.string(), args: v.array(JsonValueSchema),
 });
 
-/** A frame's request over its port; `id` pairs a run with its answer. */
+/**
+ * A frame's request over its port; `id` pairs a run with its answer. `resume`: the run the frame's last answer stopped
+ * on a decision, which its viewer has since allowed or approved; the top resumes it by the continuation it holds.
+ */
 const RequestSchema = v.variant("op", [
-  v.object({ op: v.literal("run"), id: v.number(), action: v.nullable(v.object({ id: v.string(), input: JsonValueSchema })), approval: v.nullable(v.string()) }),
+  v.object({ op: v.literal("run"), id: v.number(), action: v.nullable(v.object({ id: v.string(), input: JsonValueSchema })), resume: v.boolean() }),
   v.object({ op: v.literal("decide"), kind: DecisionKindSchema }),
   v.object({ op: v.literal("sign-in") }),
 ]);
@@ -89,8 +89,10 @@ export function hostPartFrames(host: PartHost): () => void {
   const serve = (port: MessagePort, address: PartAddress, last: LastAnswer, request: Request): Effect.Effect<void> => {
     switch (request.op) {
       case "run": {
-        // A rerun after a decision resumes the run that asked it: the top attaches its continuation, never the frame.
-        const paused = last.answer?.kind === "needs-consent" || last.answer?.kind === "needs-approval" ? last.answer.continuation : null;
+        // A rerun after a decision resumes the run that asked it: the top attaches its continuation, never the frame, and
+        // only to the resumption the frame asks for. Any other run starts afresh.
+        const stopped = last.answer?.kind === "needs-consent" || last.answer?.kind === "needs-approval" ? last.answer.continuation : null;
+        const paused = request.resume ? stopped : null;
         const asked: PartRunRequest = { args: [...address.args], action: request.action, continuation: paused };
 
         return Effect.map(Effect.promise(() => host.run(address, asked)), (answer) => {
@@ -156,8 +158,8 @@ export function hostPartFrames(host: PartHost): () => void {
 export interface PartBridge {
   /** The slate's title, as the top names it. */
   readonly title: string;
-  /** The part's answer, or the refusal in the app's words. Never rejects. */
-  readonly run: (action: { id: string; input: JsonValue } | null, approval: string | null) => Promise<PartRunAnswer | string>;
+  /** The part's answer, or the refusal in the app's words; `resume`, the run its last answer stopped. Never rejects. */
+  readonly run: (action: { id: string; input: JsonValue } | null, resume: boolean) => Promise<PartRunAnswer | string>;
   /** Asks the top to open a decision on the last answer; settles with what the viewer decided. */
   readonly decide: (kind: DecisionKind) => Promise<Decided>;
   readonly signIn: () => void;
@@ -208,10 +210,10 @@ export function connectPartBridge(address: PartAddress, onBridge: (bridge: PartB
     given.start();
     onBridge({
       title: hello.output.title,
-      run: (action, approval) => new Promise((resolve) => {
+      run: (action, resume) => new Promise((resolve) => {
         next += 1;
         runs.set(next, resolve);
-        given.postMessage({ op: "run", id: next, action, approval } satisfies Request);
+        given.postMessage({ op: "run", id: next, action, resume } satisfies Request);
       }),
       decide: (kind) => new Promise((resolve) => {
         decisions.push(resolve);

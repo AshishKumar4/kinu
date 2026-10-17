@@ -95,12 +95,15 @@ export function installPartsFixture(frame: string): void {
   const consents: SlateConsent[] = [{ workspace: WORKSPACE, slate: SLATE, ...GITHUB, revision: "r1" }];
   const approved = new Set<string>();
   const asked: { path: string; body: string | null }[] = [];
+  // Each stopped run is its own: the server names it afresh every time a run stops on a decision.
+  let stopped = 0;
+  const stop = (part: string) => `run-${part}-${String(stopped += 1)}`;
 
   const answerFor = (part: string, { action, continuation }: PartRunRequest): PartRunAnswer => {
     if (part === "standup") {
       return consents.some((given) => given.server === GITHUB.server && given.revision === REVISION)
         ? { kind: "shown", revision: REVISION, html: STANDUP.html, actions: [{ id: "refresh", label: "Refresh" }], show: STANDUP.show }
-        : { kind: "needs-consent", ask: GITHUB, continuation: "run-standup" };
+        : { kind: "needs-consent", ask: GITHUB, continuation: stop("standup") };
     }
 
     if (part === "deploy") {
@@ -110,11 +113,11 @@ export function installPartsFixture(frame: string): void {
         return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#1f2937">site is on main in production.</p>`, actions: [{ id: "deploy", label: "Deploy", input: { kind: "text", maxLength: 64 } }], show: null };
       }
 
-      if (!consents.some((given) => given.server === VERCEL.server)) return { kind: "needs-consent", ask: VERCEL, continuation: "run-deploy" };
+      if (!consents.some((given) => given.server === VERCEL.server)) return { kind: "needs-consent", ask: VERCEL, continuation: stop("deploy") };
 
       if (continuation !== null && approved.has("approval-1")) return { kind: "shown", revision: REVISION, html: `<p style="margin:0;font:13px system-ui;color:#166534">Deployed ${ref} to production.</p>`, actions: [], show: null };
 
-      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref } }, continuation: "run-deploy" };
+      return { kind: "needs-approval", ask: { id: "approval-1", server: VERCEL.server, serverTitle: VERCEL.serverTitle, tool: "deploy", toolTitle: "Create deployment", root: VERCEL.root, payload: { project: "site", target: "production", ref } }, continuation: stop("deploy") };
     }
 
     return { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." };
@@ -139,7 +142,7 @@ export function installPartsFixture(frame: string): void {
       return new Response(null, { status: 204 });
     }
 
-    if (kind === "parts" && verb === "show") return new Response(null, { status: 204 });
+    if (kind === "parts" && (verb === "show" || verb === "release")) return new Response(null, { status: 204 });
 
     return Response.json({ error: "No such route." }, { status: 404 });
   };

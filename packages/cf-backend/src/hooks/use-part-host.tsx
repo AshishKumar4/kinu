@@ -96,7 +96,7 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
 
     return (
       <ApprovalDecision slate={title} ask={ask}
-        onApprove={() => detach(after(() => decideEffect(address.workspace, address.slate, ask.id, "approve"), { kind: "approved", approval: ask.id }))}
+        onApprove={() => detach(after(() => decideEffect(address.workspace, address.slate, ask.id, "approve"), { kind: "approved" }))}
         onDecline={() => detach(after(async () => {
           await decideEffect(address.workspace, address.slate, ask.id, "decline");
           // Declined, the run it stopped is let go on the server: it is never resumed.
