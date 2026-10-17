@@ -351,6 +351,19 @@ async function main(): Promise<void> {
     }
   };
 
+  /** A box's processes, as the fixture reads them beside whatever the box is doing, or why they could not be read. */
+  const processesOf = async (name: string): Promise<string> => {
+    const [read] = await Promise.allSettled([(async () => {
+      const reply = await fetch(new URL(`/processes?box=${encodeURIComponent(name)}`, origin), { headers: { authorization: `Bearer ${identity}` } });
+
+      const answer = v.parse(v.object({ processes: v.optional(v.nullable(v.string())), error: v.optional(v.string()) }), await reply.json());
+
+      return answer.processes ?? answer.error ?? 'no container is running';
+    })()]);
+
+    return read?.status === 'fulfilled' ? read.value : `unread: ${String(read?.reason)}`;
+  };
+
   const call = async <Schema extends v.GenericSchema>(path: string, schema: Schema, body?: Record<string, string>, name = box): Promise<v.InferOutput<Schema>> => {
     if (origin === undefined) throw new Error('the fixture has not deployed');
     const url = new URL(path, origin);
@@ -360,7 +373,12 @@ async function main(): Promise<void> {
     // again; a contract asks again, as an agent does, rather than read a platform refusal as the contract broken
     // (390ad4e4c's disk-chain: "Network connection lost." after /lose-snapshot).
     for (let asked = 1; ; asked += 1) {
-      const reply = await fixtureFetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+      const [answered] = await Promise.allSettled([fixtureFetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) })]);
+
+      // A call the fixture never answered (on 2026-10-16 and 10-17, the first operation on a fresh box, until fetch's own
+      // 300 s ended it) names itself, and the box's processes say what it was waiting on.
+      if (answered?.status !== 'fulfilled') throw new Error(`${path} on ${name} was never answered (${String(answered?.reason)}); the box's processes:\n${await processesOf(name)}`);
+      const reply = answered.value;
       const value: unknown = await reply.json();
 
       if (reply.ok) return v.parse(schema, value);

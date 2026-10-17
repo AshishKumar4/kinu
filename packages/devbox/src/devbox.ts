@@ -3166,8 +3166,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   #checkDesktop(running: RunningExec): Effect.Effect<DesktopScreen, DevboxError> {
     return Effect.gen({ self: this }, function* () {
+      this.#trace('desktop.check.enter', {});
       const process = yield* this.#spawn(['/bin/bash', '-c', DESKTOP_CHECK, 'devbox-desktop', this.desktopMark ?? ''], {}, running);
+
+      this.#trace('desktop.check.started', {});
       const checked = decoded(yield* attempt('process', () => process.output()));
+
+      this.#trace('desktop.check.exit', { exitCode: checked.exitCode });
 
       if (running.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'the desktop check was stopped by its caller'));
       const [size = '', fresh] = checked.stdout.trim().split('\n');

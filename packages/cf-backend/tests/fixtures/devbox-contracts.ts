@@ -196,6 +196,17 @@ export class ContractBox extends Devbox<Env> {
     await runContainerContract(kind, this, container, this.toolsPin);
   }
 
+  /** The container's processes, read by an exec of its own and not through the box's readiness: what a call that never
+   *  answers is waiting on. Null with no container running. */
+  async processes(): Promise<string | null> {
+    const container = this.ctx.container;
+
+    if (container?.running !== true) return null;
+    const read = await (await container.exec(['python3', '-c', PROCESS_TABLE])).output();
+
+    return new TextDecoder().decode(read.stdout) + new TextDecoder().decode(read.stderr);
+  }
+
   async inspection() {
     await this.ensureReady();
 
@@ -298,6 +309,35 @@ export class ContractBox extends Devbox<Env> {
   }
 }
 
+/** Each process from /proc, the golden having no `ps`: pid, parent, group, age, state, kernel wait, what its stdin, stdout
+ *  and stderr are (an exec's pipes, so a process still holding one is what keeps its exec open), and its program's name
+ *  (`comm`) alone, never its arguments, which can carry what a report must not. */
+const PROCESS_TABLE = String.raw`
+import os
+uptime = float(open('/proc/uptime').read().split()[0])
+tick = os.sysconf('SC_CLK_TCK')
+def read(path, mode='r'):
+    try:
+        with open(path, mode) as file:
+            return file.read()
+    except OSError:
+        return None
+def link(path):
+    try:
+        return os.readlink(path)
+    except OSError:
+        return '-'
+for pid in sorted(int(name) for name in os.listdir('/proc') if name.isdigit()):
+    stat = read('/proc/%d/stat' % pid)
+    if stat is None:
+        continue
+    fields = stat.rsplit(')', 1)[1].split()
+    # comm, not cmdline: reading a process's cmdline takes its memory lock, which a process stuck in a fault holds.
+    program = (read('/proc/%d/comm' % pid) or '-').strip()
+    fds = ' '.join(link('/proc/%d/fd/%d' % (pid, fd)) for fd in (0, 1, 2))
+    print(pid, fields[1], fields[2], '%ds' % round(uptime - int(fields[19]) / tick), fields[0], read('/proc/%d/wchan' % pid) or '-', '[%s]' % fds, program)
+`;
+
 const Body = v.object({
   command: v.optional(v.string()), driver: v.optional(v.string()), member: v.optional(v.string()), args: v.optional(v.string()), stop: v.optional(v.string()),
 });
@@ -348,6 +388,7 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/view': return new Response(`<iframe src="${desktopClientUrl(url, name)}" style="width:1280px;height:800px;border:0"></iframe>`, { headers: { 'content-type': 'text/html' } });
     case '/golden': return Response.json({ id: await box.ensureGolden() });
     case '/inspection': return Response.json(await box.inspection());
+    case '/processes': return Response.json({ processes: await box.processes() });
     case '/file-contract': return Response.json(await box.fileContract());
     case '/contract': await box.contract(v.parse(v.picklist(CONTAINER_CONTRACTS), url.searchParams.get('kind')));
 
