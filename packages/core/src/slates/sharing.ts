@@ -154,6 +154,7 @@ export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
 
 export const LiveShareCreatedSchema = v.object({
   share: LiveShareRecordSchema,
+  /** Its one link: the app's page for it (`APP_ROUTES.sharedLive`), which frames its host; null with no app origin. */
   url: v.nullable(v.string()),
 });
 

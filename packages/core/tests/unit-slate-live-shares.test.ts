@@ -146,10 +146,10 @@ test('sharing a live slate cuts the grant the dialog approved and opens at the h
       usage: () => [{ namespace: 'workspace', member: 'readFile' }, { namespace: 'workspace', member: 'writeFile' }],
     });
 
-    const created = await shareLiveSlate({
+    const created = shareLiveSlate({
       shares, graph, visibility: 'users',
       approved: [{ slate: 'issues', namespace: 'workspace', member: 'writeFile' }], fork: true,
-      url: async (handle) => `https://${handle}-token0-ws.kinu.run`,
+      url: (share) => `https://app.kinu.run/shared/live/ws/${share}`,
     });
 
     expect(created.share.handle).toMatch(/^[a-f0-9]{10}$/);
@@ -157,7 +157,8 @@ test('sharing a live slate cuts the grant the dialog approved and opens at the h
     expect(grantAdmits(created.share.grant, 'issues', 'workspace', 'readFile')?.impact).toBe('observe');
     expect(grantAdmits(created.share.grant, 'issues', 'workspace', 'exec')).toBeNull();
     expect(created.share.grant.fork).toBe(true);
-    expect(created.url).toBe(`https://${created.share.handle}-token0-ws.kinu.run`);
+    // Its one link is the app's page for it, never its bare host.
+    expect(created.url).toBe(`https://app.kinu.run/shared/live/ws/${created.share.id}`);
 
     expect(shares.list().map((share) => share.id)).toEqual([created.share.id]);
     expect(shares.byHandle(created.share.handle)?.id).toBe(created.share.id);

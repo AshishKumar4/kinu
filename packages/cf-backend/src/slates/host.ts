@@ -52,8 +52,7 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   browserActor(caller: SlateCaller): Promise<string | null>;
   readonly apps: SlateApps;
   catalog(): Promise<SlateSurfaceCatalog>;
-  shareUrl(handle: string): Promise<string | null>;
-  /** The app's page a `users` share is entered through, or null where this deployment names no app origin. */
+  /** The app's page a share is entered through, its one link, or null where this deployment names no app origin. */
   shareEntry(share: string): string | null;
   /** Absent means no per-viewer rate bound, as at the edge. */
   kv?: KvStore;
@@ -146,7 +145,6 @@ export class SlateHost {
       },
       call: (request) => this.call(request),
       catalog: () => deps.catalog(),
-      shareUrl: (handle) => deps.shareUrl(handle),
       shareEntry: (share) => deps.shareEntry(share),
       ...(kv !== undefined && { admitted: async (key: string, perMinute: number) => ingressAdmitted(kv, 'slate-share', key, perMinute) }),
       ...(deps.budget !== undefined && { budget: deps.budget.bind(deps) }),

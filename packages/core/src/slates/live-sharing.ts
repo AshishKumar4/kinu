@@ -13,21 +13,22 @@ function shareHandle(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(5)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** `url` answers the public address a handle serves, or null where no share host is wired; a share forks unless told not to. */
-export async function shareLiveSlate(input: {
+/** `url` answers the share's one link, the app's page for it, or null where no app origin is wired; a share forks unless told not to. */
+export function shareLiveSlate(input: {
   readonly shares: SlateLiveShareStore;
   readonly graph: SlateCapabilityGraph;
   readonly visibility: LiveShareVisibility;
   readonly approved: readonly { slate: string; namespace: string; member: string }[];
   readonly fork?: boolean;
-  readonly url: (handle: string) => Promise<string | null>;
-}): Promise<LiveShareCreated> {
+  /** The share's one link, by its id: the app's page for it, never its bare host. */
+  readonly url: (share: string) => string | null;
+}): LiveShareCreated {
   // Every share starts in `own` mode: only its owner turns on `owner`, over the share sheet's reach ({@link setShareMode}).
   const grant = { ...cutShareGrant(input.graph, input.approved), fork: input.fork ?? true };
   const handle = shareHandle();
   const share = input.shares.add({ id: nanoid(), slate: input.graph.slate, visibility: input.visibility, handle, grant });
 
-  return { share, url: await input.url(handle) };
+  return { share, url: input.url(share.id) };
 }
 
 /**

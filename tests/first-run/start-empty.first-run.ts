@@ -9,6 +9,7 @@ import { callSharedSlate, consentToShare, type EvalObservation, type EvalSubgoal
 import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { shareHost } from './share-entry';
 
 const SUITE = 'First-run · start-empty';
 
@@ -71,7 +72,7 @@ END`));
 
         const created = made.ok ? v.safeParse(LiveShareCreatedSchema, await made.json()) : null;
         const copy = created?.success === true ? created.output.share.slate : null;
-        const url = created?.success === true ? created.output.url : null;
+        const url = await shareHost(plan.origin, session.workspace, created?.success === true ? created.output.share.id : undefined);
         const titled = (await session.listSlates()).slates.find((slate) => slate.id === copy)?.title ?? null;
         const visitor: SlateViewerAnswer<JsonValue> | null = url === null ? null : await callSharedSlate(url, 'count', JsonValueSchema, await consentToShare(url));
         const own = v.safeParse(Answered, await session.slateOp({ op: 'call', id: SLATE, method: 'count', args: [] }));

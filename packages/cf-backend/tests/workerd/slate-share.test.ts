@@ -25,7 +25,8 @@ it('a public share serves the slate, admits the granted member, refuses the rest
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), shared).value);
   const handle = created.share.handle;
 
-  expect(created.url).toBe(`https://${handle}.share.test/`);
+  // Its one link is the app's page for it, which frames its host: never the bare host.
+  expect(created.url).toBe(`https://app.test/shared/live/probe/${created.share.id}`);
 
   expect(await probe.viewerFetch(handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
 

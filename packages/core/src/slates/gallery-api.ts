@@ -29,7 +29,8 @@ const GalleryListingSchema = v.object({
   picture: v.optional(v.string()),
   /** One of this week's top two by trending. */
   featured: v.boolean(),
-  /** Its link, the one way in: the share's address. Unlisted the moment the share goes off. */
+  /** Its link, the one way in: the app's page for its share, which frames the share's host. Unlisted the moment the
+   *  share goes off. */
   url: v.string(),
 });
 
