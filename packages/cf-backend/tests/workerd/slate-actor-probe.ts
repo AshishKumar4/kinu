@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { CodemodeSurface, CraftedTool } from '@kinu.run/core';
-import { craftedToolDeclarations, DynamicContextLedger, selectInjectableCraftedTools, settleWorkspaceRoot, settleWorkspaceSlates, WORKSPACE_ROOT } from '@kinu.run/core';
+import { craftedToolDeclarations, DynamicContextLedger, selectInjectableCraftedTools, settleWorkspaceRoot, settleSharedRoots, WORKSPACE_ROOT } from '@kinu.run/core';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
@@ -42,7 +42,7 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
     web: { search: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
     memory: unreached, files: unreached, tasks: unreached,
     db: createAppDataStore({ sql, actor: handle, transactionSync: (write) => storage.transactionSync(write), events: unreached, runId: () => 'probe' }),
-    programState: handle.programState, agents: null, self: null,
+    programState: handle.programState, agents: null, self: null, ownerWaits: null,
   };
 }
 
@@ -56,7 +56,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
   async craftedSlate(): Promise<string> {
     const vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
     // As the Kinu boot leaves every workspace: /slates is the kernel's, shared with the workspace's agents.
-    settleWorkspaceSlates(vfs.as(CRED_KERNEL), (path) => { vfs.registerSharedDirectory(path); });
+    settleSharedRoots(vfs.as(CRED_KERNEL), (path) => { vfs.registerSharedDirectory(path); });
     const files = vfs.as(CRED_SESSION_USER);
     files.mkdir('/slates/crafted', { recursive: true });
     files.writeFile('/slates/crafted/package.json', JSON.stringify({ main: 'server.ts' }));

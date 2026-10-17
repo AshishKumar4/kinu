@@ -3,7 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { present } from '@kinu.run/test-utils';
 
 import { readSources } from './sources';
-import { audit, auditConstructors, auditFile, MODEL_SINKS } from './do-init-gate';
+import { ALARM_WORK } from '@kinu.run/core/obs';
+import { audit, auditAlarmWork, auditConstructors, auditFile, MODEL_SINKS } from './do-init-gate';
 
 /**
  * The fixture is not invented. This is `SubordinateAgent.onStart` exactly as it
@@ -419,5 +420,41 @@ describe('a Durable Object constructor is held to the synchronous start rule', (
     const planted = real.replace(anchor, `${anchor}    for (const row of this.ctx.storage.sql.exec('SELECT id FROM user_devices')) this.ctx.storage.sql.exec('DELETE FROM user_devices WHERE id = ?', row.id);\n`);
     const found = auditConstructors(new Map([...SOURCES, [file, planted]]), ['UserDO']).violations;
     expect(found.map((v) => `${v.owner}.${v.member}`)).toEqual(['UserDO.initTables']);
+  });
+});
+
+describe('every class that arms an alarm names its own work', () => {
+  const box = new Map([['box.ts', `
+export class Box extends DurableObject {
+  override async alarm(): Promise<void> {
+    diagnostics.event('box.swept', {});
+  }
+}
+export class Jobs extends LifecycleCapability {
+  async onJob(): Promise<void> {}
+}
+export class Quiet extends LifecycleCapability {
+  ready(): void {}
+}
+`]]);
+
+  const alarmReasons = (declared: Readonly<Record<string, readonly string[]>>): string[] =>
+    auditAlarmWork(box, declared).violations.map((violation) => `${violation.owner} ${violation.reason}`);
+
+  test('a class overriding alarm() and a capability with jobs are the owners; a capability with none is not', () => {
+    expect(auditAlarmWork(box, { Box: ['box.swept'], Jobs: [] })).toEqual({ owners: ['Box', 'Jobs'], violations: [] });
+  });
+
+  test('an owner left out of the list, a key no class arms, and an event no code logs are each a violation', () => {
+    expect(alarmReasons({ Box: ['box.swept'] })).toEqual([expect.stringMatching(/^Jobs arms an alarm and is no key of `ALARM_WORK`/u)]);
+    expect(alarmReasons({ Box: ['box.swept'], Jobs: [], Gone: [] })).toEqual(['Gone is a key of `ALARM_WORK`, and no class of that name arms an alarm']);
+    expect(alarmReasons({ Box: ['box.swept', 'box.drained'], Jobs: [] })).toEqual(["Box names `box.drained` as its alarm's work, and no code logs it"]);
+  });
+
+  test('this repository: every alarm it arms names its work, and each work it names is logged', () => {
+    const audited = auditAlarmWork(readSources(), ALARM_WORK);
+
+    expect(audited.violations).toEqual([]);
+    expect(audited.owners).toEqual(Object.keys(ALARM_WORK).sort());
   });
 });

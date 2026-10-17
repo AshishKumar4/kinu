@@ -14,7 +14,10 @@
   // `new_module_registry` compiles a module when it is first imported. The legacy registry compiled every uploaded module
   // at load and copied its source into each isolate's heap, so an `import()` deferred evaluation only: 45.4 MB used after
   // setup against 36.2 MB with the flag (worker-heap, armada 20261007153529-2df416df, 2026-10-07).
-  "compatibility_flags": ["nodejs_compat", "new_module_registry"],
+  // `enable_request_signal` aborts an incoming request's signal when its client goes away; without it the signal
+  // never aborts (no default date), so the terminal and desktop attach, a run's event stream and the model proxies
+  // never saw their caller leave (D101: measured on a scratch Worker, 2026-10-17).
+  "compatibility_flags": ["nodejs_compat", "new_module_registry", "enable_request_signal"],
   // Durable Objects allow up to 300,000 ms of CPU per invocation (DO limits docs); the 30 s default killed
   // in-workspace commands measured at 32 s of CPU (kinu-logs/nimbus-integration/REPORT.md, 2026-09-23).
   // Nimbus 0.16 requires both of its facet maxima on the hosting Worker (@nimbus-sh/fabric MAX_FACET_CPU_MS,

@@ -20,7 +20,7 @@
   "compatibility_date": "2026-09-30",
   // `nodejs_compat` for the same reason the product sets it. A different runtime
   // is a different measurement.
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
 
   // One reachable origin and nothing else: no custom domain, no route.
   // `wrangler dev --remote` is not an option — wrangler refuses it for Durable

@@ -168,7 +168,7 @@ const FACET_CALLS = Object.keys({
   step: true, frozen: true, history: true, historyPage: true, messageCount: true, inspect: true,
   inheritedContext: true, workingContext: true, turnRequests: true, turnRequest: true, spend: true, context: true,
   searchConversations: true, scrollConversation: true, browseConversations: true, admitted: true, interrupt: true,
-  recover: true, archivePage: true,
+  recover: true, outOfMemory: true, archivePage: true,
 } satisfies Record<keyof AgentFacetCalls, true>);
 
 // The relay and the host whole, but what each keeps to itself; the account by the surface it serves.

@@ -10,6 +10,7 @@ import {
   classifyErrorCode,
   CODE_IS_REFUSAL,
   CODE_WORK_DID_NOT_START,
+  exceededSubrequests,
   KinuError,
   refusalOf,
   renderCauseChain,
@@ -178,6 +179,23 @@ describe("the platform's overload refusal is classified from the catalogue", () 
       expect(classifyErrorCode({ cause: new Error(message) })).toBe('unavailable');
       expect(classifyErrorCode({ cause: new Error('issuing a token', { cause: new Error(`${message}.`) }) })).toBe('unavailable');
     }
+  });
+});
+
+describe("the platform's subrequest refusal is recognised from the catalogue", () => {
+  // Selected by key, not wording: a facet's and a Worker's refusal alike.
+  const refusals = (['do.facet.subrequests', 'worker.subrequests'] as const).flatMap((key) => PLATFORM_CATALOG[key].observable.map((seen) => seen.message));
+
+  test('bare and wrapped, with the platform\'s pointer to its configuration after it', () => {
+    expect(refusals.length).toBe(2);
+
+    for (const message of refusals) {
+      expect(exceededSubrequests({ cause: new Error(message) })).toBe(true);
+      expect(exceededSubrequests({ cause: new Error('calling the model', { cause: new Error(`${message} To configure this limit, refer to https://developers.cloudflare.com/workers/wrangler/configuration/#limits`) }) })).toBe(true);
+    }
+
+    expect(exceededSubrequests({ cause: new Error('Too many requests') })).toBe(false);
+    expect(exceededSubrequests({ cause: 'Too many subrequests.' })).toBe(false);
   });
 });
 

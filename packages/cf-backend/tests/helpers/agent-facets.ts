@@ -405,6 +405,17 @@ function withUndurableAnswers(ctx: AgentContext, storageKey: string): AgentConte
   return ctx;
 }
 
+/** The calls each agent's isolate made on its workspace binding, by actor: in production each is a subrequest of the
+ *  10,000 its isolate's invocation may make, where a call on what one answered costs none (platform catalog
+ *  `do.facet.subrequests`). */
+const crossings = new Map<string, number>();
+
+/** How many calls the agent `actorId`'s isolate has made on its workspace binding: each session, state session, port or
+ *  memory it opened, and each program. */
+export function workspaceCrossings(actorId: string): number {
+  return crossings.get(actorId) ?? 0;
+}
+
 /** Every model call routed under `conversation`, in any isolate, is answered by `model`; null answers it as shipped. */
 export function scriptConversationModel(conversation: string, model: (() => LanguageModel) | null): void {
   if (model === null) scriptedModels.delete(conversation);
@@ -512,6 +523,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
   return facets;
 
   async function openFacet(placement: AgentFacetPlacement, opener: AgentWorkspaceHost) {
+      const crossing = (): void => { crossings.set(placement.actorId, workspaceCrossings(placement.actorId) + 1); };
+
       // Each call reaches the activation that opened this agent last, as its stub's would after a reset.
       const host = (): AgentWorkspaceHost => hosts.get(placement.storageKey) ?? opener;
 
@@ -671,6 +684,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         },
         birthContext: (drainTurnId) => host().birthContext(drainTurnId),
         steerSkills: (text, alreadyActive) => host().steerSkills(text, alreadyActive),
+        releaseForeground: (executing) => host().releaseForeground(executing),
         openWork: async () => {
           const delayed = delayedOpenWork;
 
@@ -761,11 +775,32 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
       const env: AgentFacetEnv = {
         WORKSPACE: {
-          session: async () => session(),
-          stateSession: async () => stateSession(),
-          memory: async () => host().memory(),
-          program: (...args) => host().program(...args),
-          port: async () => port,
+          // Each call here is one on the binding, a crossing.
+          session: async () => {
+            crossing();
+
+            return session();
+          },
+          stateSession: async () => {
+            crossing();
+
+            return stateSession();
+          },
+          memory: async () => {
+            crossing();
+
+            return host().memory();
+          },
+          program: (...args) => {
+            crossing();
+
+            return host().program(...args);
+          },
+          port: async () => {
+            crossing();
+
+            return port;
+          },
         },
         WORKSPACE_NAME: placement.workspaceName,
         HOME: placement.home,
@@ -905,6 +940,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     admitted: (...args) => settle(through(() => isolate.admitted(...args))),
     interrupt: (...args) => settle(through(() => isolate.interrupt(...args))),
     recover: (...args) => settle(through(() => isolate.recover(...args))),
+    outOfMemory: (...args) => settle(through(() => isolate.outOfMemory(...args))),
     archivePage: (...args) => settle(through(() => isolate.archivePage(...args))),
   };
 }

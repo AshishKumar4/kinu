@@ -73,10 +73,12 @@ export function initActorClaimTables(exec: RawSqlExec): void {
     PRIMARY KEY(actor_id,turn_id))`);
   exec(`CREATE INDEX IF NOT EXISTS idx_actor_claims_outcome ON actor_turn_claims(actor_id,outcome,claimed_at DESC)`);
   // Where each execution of a turn stands, so the next knows where a dead one was cut ({@link TurnCut}).
+  // `oom`: the platform reported this execution's isolate out of memory; `oom_cuts`, the executions before it that were.
   exec(`CREATE TABLE IF NOT EXISTS actor_turn_cuts (
     actor_id TEXT NOT NULL, turn_id TEXT NOT NULL, epoch INTEGER NOT NULL, build TEXT,
     phase TEXT NOT NULL CHECK(phase IN ('provider','work')), phase_at INTEGER NOT NULL,
     work_cuts INTEGER NOT NULL, provider_cuts INTEGER NOT NULL,
+    oom INTEGER NOT NULL DEFAULT 0 CHECK(oom IN (0,1)), oom_cuts INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(actor_id,turn_id))`);
   initTurnFactsTables(exec);
   initSessionContextTables(exec);
@@ -93,7 +95,9 @@ export function programIdentityOf(program: ActorTurnProgram, installedBuild: str
  * Where an execution of a turn stood when it was last seen: waiting on the provider's answer to a step (`provider`), or
  * doing the step's own work, a tool or the processing around a call (`work`). The counts are of the executions before
  * this one, on this build since the turn last finished a step, that ended in each: an outside reset (a deploy, a storage
- * reset, an eviction) can land anywhere, and only a cut in the step's own work can be the step's fault.
+ * reset, an eviction) can land anywhere, and only a cut in the step's own work can be the step's fault. Apart from
+ * where it was, an execution may be known to have died of memory: the platform said its isolate ran out
+ * ({@link ActorClaimStore.outOfMemory}).
  */
 export interface TurnCut {
   readonly epoch: number;
@@ -102,11 +106,17 @@ export interface TurnCut {
   readonly phaseAt: number;
   readonly workCuts: number;
   readonly providerCuts: number;
+  readonly outOfMemory: boolean;
+  readonly outOfMemoryCuts: number;
 }
 
 /** A cut's counts with the execution it describes counted too: what the next execution inherits. */
 export function cutsThrough(cut: TurnCut) {
-  return { work: cut.workCuts + (cut.phase === 'work' ? 1 : 0), provider: cut.providerCuts + (cut.phase === 'provider' ? 1 : 0) };
+  return {
+    work: cut.workCuts + (cut.phase === 'work' ? 1 : 0),
+    provider: cut.providerCuts + (cut.phase === 'provider' ? 1 : 0),
+    outOfMemory: cut.outOfMemoryCuts + (cut.outOfMemory ? 1 : 0),
+  };
 }
 
 /** A claim row as one reads it: its program only once bound. */
@@ -275,16 +285,28 @@ export class ActorClaimStore {
 
   /** A step finished: the turn moved, so no cut before it says anything about the next. */
   progressed(claim: ActorTurnClaim): void {
-    void this.sql`UPDATE actor_turn_cuts SET phase='work',phase_at=${nowMs()},work_cuts=0,provider_cuts=0
+    void this.sql`UPDATE actor_turn_cuts SET phase='work',phase_at=${nowMs()},work_cuts=0,provider_cuts=0,oom=0,oom_cuts=0
       WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
   }
 
+  /**
+   * The platform reported the agent's isolate out of memory at `diedAt`: the execution it killed was the agent's newest,
+   * if that one was open and admitted by then. One opened since is not the one that died, and a report about an earlier
+   * one, late, names nothing: an undercount, never a death charged twice. Each death of one execution marks it once.
+   */
+  outOfMemory(diedAt: number): void {
+    void this.sql`UPDATE actor_turn_cuts SET oom=1 WHERE actor_id=${this.actorId} AND (turn_id,epoch) IN (
+      SELECT turn_id,epoch FROM (SELECT turn_id,epoch,outcome,claimed_at FROM actor_turn_claims WHERE actor_id=${this.actorId} ORDER BY epoch DESC LIMIT 1)
+      WHERE outcome IS NULL AND claimed_at <= ${diedAt})`;
+  }
+
   cutOf(turnId: string): TurnCut | null {
-    const row = this.sql<{ epoch: number; build: string | null; phase: 'provider' | 'work'; phase_at: number; work_cuts: number; provider_cuts: number }>`
-      SELECT epoch,build,phase,phase_at,work_cuts,provider_cuts FROM actor_turn_cuts WHERE actor_id=${this.actorId} AND turn_id=${turnId}`[0];
+    const row = this.sql<{ epoch: number; build: string | null; phase: 'provider' | 'work'; phase_at: number; work_cuts: number; provider_cuts: number; oom: number; oom_cuts: number }>`
+      SELECT epoch,build,phase,phase_at,work_cuts,provider_cuts,oom,oom_cuts FROM actor_turn_cuts WHERE actor_id=${this.actorId} AND turn_id=${turnId}`[0];
 
     return row === undefined ? null : {
       epoch: row.epoch, build: row.build, phase: row.phase, phaseAt: row.phase_at, workCuts: row.work_cuts, providerCuts: row.provider_cuts,
+      outOfMemory: row.oom === 1, outOfMemoryCuts: row.oom_cuts,
     };
   }
 
@@ -292,12 +314,12 @@ export class ActorClaimStore {
    *  may have fixed what cut them, so they start over. */
   private carryCuts(turnId: string, epoch: number, previousEpoch: number, build: string | null): void {
     const cut = this.cutOf(turnId);
-    const carried = cut === null || cut.epoch !== previousEpoch || cut.build !== build ? { work: 0, provider: 0 } : cutsThrough(cut);
+    const carried = cut === null || cut.epoch !== previousEpoch || cut.build !== build ? { work: 0, provider: 0, outOfMemory: 0 } : cutsThrough(cut);
 
-    void this.sql`INSERT INTO actor_turn_cuts(actor_id,turn_id,epoch,build,phase,phase_at,work_cuts,provider_cuts)
-      VALUES(${this.actorId},${turnId},${epoch},${build},'work',${nowMs()},${carried.work},${carried.provider})
+    void this.sql`INSERT INTO actor_turn_cuts(actor_id,turn_id,epoch,build,phase,phase_at,work_cuts,provider_cuts,oom,oom_cuts)
+      VALUES(${this.actorId},${turnId},${epoch},${build},'work',${nowMs()},${carried.work},${carried.provider},0,${carried.outOfMemory})
       ON CONFLICT(actor_id,turn_id) DO UPDATE SET epoch=excluded.epoch,build=excluded.build,phase=excluded.phase,
-        phase_at=excluded.phase_at,work_cuts=excluded.work_cuts,provider_cuts=excluded.provider_cuts`;
+        phase_at=excluded.phase_at,work_cuts=excluded.work_cuts,provider_cuts=excluded.provider_cuts,oom=0,oom_cuts=excluded.oom_cuts`;
   }
 
   private markCut(claim: ActorTurnClaim, phase: TurnCut['phase']): void {

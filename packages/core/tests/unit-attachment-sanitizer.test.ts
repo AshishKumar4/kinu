@@ -9,10 +9,13 @@ import * as v from 'valibot';
 import {
   acceptedMediaForModel,
   sanitizeAttachmentsForModel,
+  saveUploads,
   type MediaModality,
 } from '../src/prompting/attachment-sanitizer';
 
-import { TurnContextBudget } from '../src/context-budget';
+import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
+import { shownEntries } from '../src/read-models/files';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createMemoryVFS } from './helpers';
 import { KinuError, renderCauseChain } from '../src/obs/index';
 
@@ -104,7 +107,7 @@ describe('sanitizeAttachmentsForModel', () => {
     expect(text.text).toBe('I have shared the resume.');
 
     const path = savedPath(replacement.text);
-    expect(path).toStartWith('attachments/');
+    expect(path).toStartWith('.offloaded/');
     const stored = await vfs.readFile(path);
     expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
     expect(writes()).toBe(1);
@@ -117,7 +120,7 @@ describe('sanitizeAttachmentsForModel', () => {
     const second = await sanitizeAttachmentsForModel([pdfMessage()], policy);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
     expect(writes()).toBe(1);
-    expect((await vfs.readdir('attachments')).map(({ name }) => name)).toHaveLength(1);
+    expect((await vfs.readdir(SPILL_DIRS.offloaded)).map(({ name }) => name)).toHaveLength(1);
   });
 
   test('a spill path that does not hold the attachment bytes is not reused', async () => {
@@ -155,8 +158,8 @@ describe('sanitizeAttachmentsForModel', () => {
     const replaced = await sanitizeAttachmentsForModel([message], { accepts: accepts(), vfs });
     const parts = textParts(replaced[0]);
     expect(parts.every((p) => p.type === 'text')).toBe(true);
-    expect(parts[0].text).toContain('attachments/');
-    expect(parts[1].text).toContain('attachments/');
+    expect(parts[0].text).toContain('.offloaded/');
+    expect(parts[1].text).toContain('.offloaded/');
   });
 
   test('an SVG never goes out as an image: the image modality carries raster pictures, and the model reads the markup', async () => {
@@ -224,7 +227,7 @@ describe('sanitizeAttachmentsForModel', () => {
 
     const out = await sanitizeAttachmentsForModel([message], { accepts: accepts('image'), vfs });
     const part = textParts(out[0])[0];
-    expect(part.text).toContain('attachments/');
+    expect(part.text).toContain('.offloaded/');
     expect(part.text).not.toContain(body);
     expect(writes()).toBe(1);
   });
@@ -276,7 +279,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     expect(text).toContain('PASTE-HEAD');
     expect(text).toContain(`${HUGE_PASTE.length} bytes`);
     const path = savedPath(text);
-    expect(path).toStartWith('attachments/');
+    expect(path).toStartWith('.offloaded/');
     expect(new TextDecoder().decode(v.parse(v.instance(Uint8Array), await vfs.readFile(path)))).toBe(HUGE_PASTE);
     expect(writes()).toBe(1);
     expect(budget.snapshot().trips).toEqual({ pasted_text: 1 });
@@ -295,7 +298,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const parts = textParts(output[0]);
     expect(parts).toHaveLength(2);
     expect(parts[0].text).toBe('here is the log:');
-    expect(parts[1].text).toContain('attachments/');
+    expect(parts[1].text).toContain('.offloaded/');
   });
 
   test('ordinary messages inline untouched — the root must not starve on normal material', async () => {
@@ -354,7 +357,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const part = textParts(spilled[0])[0];
     expect(part.type).toBe('text');
     expect(part.text).toContain('thesis.pdf');
-    expect(part.text).toContain('attachments/');
+    expect(part.text).toContain('.offloaded/');
     expect(budget.snapshot().trips).toEqual({ attachment: 1 });
 
     const small = pdfMessage();
@@ -372,6 +375,69 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const out = await sanitizeAttachmentsForModel([bigImage], { accepts: accepts('image', 'pdf'), vfs });
     expect(out[0]).toBe(bigImage);
     expect(writes()).toBe(0);
+  });
+});
+
+describe("the owner's uploads keep their own names, in /uploads", () => {
+  const upload = (filename: string, bytes: Uint8Array, mediaType = 'application/pdf'): ModelMessage => ({
+    role: 'user',
+    content: [{ type: 'file', data: `data:${mediaType};base64,${btoa(String.fromCharCode(...bytes))}`, mediaType, filename }, { type: 'text', text: 'here' }],
+  });
+
+  /** Where the admitted message's file part says it was saved. */
+  const savedAs = (message: ModelMessage): string => v.parse(
+    v.object({ kinu: v.object({ upload: v.string() }) }),
+    Array.isArray(message.content) ? message.content.find((part) => part.type === 'file')?.providerOptions : undefined,
+  ).kinu.upload;
+
+  test('saved once under its name, which the sanitizer names in place of the part, storing nothing again', async () => {
+    const { vfs, writes } = countingVfs();
+    const admitted = await saveUploads(upload('resume.pdf', PDF_BYTES), { vfs });
+
+    expect(savedAs(admitted)).toBe('/uploads/resume.pdf');
+    const stored = await vfs.readFile('/uploads/resume.pdf');
+    expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
+
+    const first = await sanitizeAttachmentsForModel([admitted], { accepts: accepts(), vfs });
+    const again = await sanitizeAttachmentsForModel([admitted], { accepts: accepts(), vfs });
+
+    expect(textParts(first[0])[0]?.text).toBe(`[Attachment resume.pdf (application/pdf, ${PDF_BYTES.length} bytes) saved to /uploads/resume.pdf (read it with your file tools)]`);
+    expect(JSON.stringify(again)).toBe(JSON.stringify(first));
+    expect(writes()).toBe(1);
+  });
+
+  test('a name holding other bytes takes the next copy; the same bytes are the same file', async () => {
+    const { vfs } = countingVfs();
+    const other = new Uint8Array([...PDF_BYTES, 7]);
+    const saved = async (bytes: Uint8Array): Promise<string> => savedAs(await saveUploads(upload('resume.pdf', bytes), { vfs }));
+
+    expect([await saved(PDF_BYTES), await saved(other), await saved(PDF_BYTES), await saved(other)])
+      .toEqual(['/uploads/resume.pdf', '/uploads/resume (2).pdf', '/uploads/resume.pdf', '/uploads/resume (2).pdf']);
+  });
+
+  test('a name keeps no folder, separator or control character, and an empty one is named by its type', async () => {
+    const { vfs } = countingVfs();
+    const saved = async (filename: string): Promise<string> => savedAs(await saveUploads(upload(filename, PDF_BYTES), { vfs }));
+
+    expect(await saved('../../etc/my\u0007 cv.pdf')).toBe('/uploads/my cv.pdf');
+    expect(await saved('C:\\Users\\a\\..')).toBe('/uploads/upload.pdf');
+  });
+
+  test('what is offloaded by its digest instead is hidden in the Files tab until asked for, and is no platform state', () => {
+    const name = SPILL_DIRS.offloaded.split('/')[0] ?? '';
+
+    expect(shownEntries([{ name, type: 'dir' }], WORKSPACE_ROOT, false)).toEqual([]);
+    expect(shownEntries([{ name, type: 'dir' }], WORKSPACE_ROOT, true)).toEqual([{ name, type: 'dir', hidden: true }]);
+  });
+
+  test('an upload the model takes as it is still names where it was saved, just before it', async () => {
+    const { vfs } = countingVfs();
+    const admitted = await saveUploads(upload('screen.png', new TextEncoder().encode('fake-png-bytes'), 'image/png'), { vfs });
+    const [out] = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('image'), vfs });
+    const parts = Array.isArray(out?.content) ? out.content : [];
+
+    expect(parts.map((part) => part.type)).toEqual(['text', 'file', 'text']);
+    expect(parts[0]).toEqual({ type: 'text', text: '[Attachment screen.png (image/png) saved to /uploads/screen.png, shown below]' });
   });
 });
 

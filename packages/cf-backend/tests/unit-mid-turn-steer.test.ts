@@ -110,7 +110,7 @@ describe('a message typed while the agent is working', () => {
     await expect(h.agent.send('   ', 'steer-blank')).rejects.toThrow(/requires the message text/);
   });
 
-  test('a pending steer with an attachment survives a reset intact — the rerun carries real file data', async () => {
+  test('a pending steer with an attachment survives a reset intact — the rerun carries real file data, saved in /uploads', async () => {
     const h = steerHarness();
     const actorId = workspaceMainActor(h.db).actorId;
 
@@ -138,7 +138,7 @@ describe('a message typed while the agent is working', () => {
     expect((await rerun).messages.at(-1)).toEqual({
       role: 'user',
       content: [
-        { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'chart.png' },
+        { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'chart.png', providerOptions: { kinu: { upload: '/uploads/chart.png' } } },
         { type: 'text', text: 'attach this too' },
       ],
     });

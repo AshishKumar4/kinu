@@ -1,6 +1,7 @@
 import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Replaces parts the resolved model cannot accept with content-addressed VFS copies plus a text reference.
+ * Replaces parts the resolved model cannot accept with a text reference to their bytes: the owner's upload where the
+ * file part says it was saved ({@link saveUploads}), else a content-addressed copy in the hidden offloaded directory.
  * Applied to the whole history each turn, never mutating it; byte-stable (prompt-cache prefix); message count
  * never changes, so index-anchored consumers stay valid.
  */
@@ -10,7 +11,11 @@ import { untagged } from '../utils/file-data';
 
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
-import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { classify, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { UPLOADS_ROOT } from '../vfs/workspace-path';
+import { resolvePath, vfsReference, type PathPlanes } from '../vfs/resolve';
+import * as v from 'valibot';
 import { sha256Hex } from '../safety/argument-digest';
 
 /** Every model accepts text. */
@@ -19,6 +24,8 @@ export type MediaModality = Exclude<ModelInputModality, 'text'>;
 export interface AttachmentPolicy {
   readonly accepts: ReadonlySet<MediaModality>;
   readonly vfs: VFS;
+  /** Where the workspace's own paths sit on this machine, by which an upload is named; absent, they are its own. */
+  readonly planes?: PathPlanes;
   /** Counters show how often real traffic crosses the spill threshold. */
   readonly budget?: TurnContextBudget;
 }
@@ -54,7 +61,7 @@ const PASTED_TEXT_PREVIEW_CHARS = 2_000;
 /** Inline documents are re-priced every turn, so large ones spill anyway. Images always stay inline: no read-back recipe exists. */
 const OVERSIZE_ACCEPTED_DOC_MAX_BYTES = 1024 * 1024;
 
-const ATTACHMENTS_DIR = SPILL_DIRS.attachments;
+const OFFLOADED_DIR = SPILL_DIRS.offloaded;
 
 /** Copy-on-write per message, and of the list from its first changed message: untouched messages keep referential
  *  identity, and an untouched history is returned as given. Every step sanitizes the whole history. */
@@ -105,8 +112,12 @@ async function sanitizeUserMessage(
 
   for (const part of content) {
     const replacement = await sanitizePart(part, policy);
+    const upload = part.type === 'file' ? uploadOf(part) : null;
 
-    if (replacement) changed = true;
+    // An upload the model takes as it is still names where it was saved, so the agent can work on the file.
+    if (replacement === null && upload !== null && part.type === 'file') parts.push(uploadNote(part, onThisMachine(upload, policy.planes)));
+
+    if (replacement || upload !== null) changed = true;
     parts.push(replacement ?? part);
   }
 
@@ -151,7 +162,7 @@ async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Pro
 
   if (data === null || policy.accepts.has('image')) return null;
 
-  return replaceMedia(data, part.mediaType ?? 'image', undefined, policy);
+  return replaceMedia(data, { mediaType: part.mediaType ?? 'image', filename: undefined, upload: null }, policy);
 }
 
 async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promise<TextPart | null> {
@@ -160,16 +171,17 @@ async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promi
   // The provider's own handle to a file it already holds: nothing here to read or store.
   if (data === null) return null;
   const modality = mediaModalityFor(part.mediaType);
+  const upload = uploadOf(part);
 
   if (modality !== null && policy.accepts.has(modality)) {
     return modality !== 'image' && oversizeForInlineDocument(data)
-      ? replaceMedia(data, part.mediaType, part.filename, policy)
+      ? replaceMedia(data, { mediaType: part.mediaType, filename: part.filename, upload }, policy)
       : null;
   }
 
   if (isTextMediaType(part.mediaType)) return inlineOrStoreText(data, part, policy);
 
-  return replaceMedia(data, part.mediaType, part.filename, policy);
+  return replaceMedia(data, { mediaType: part.mediaType, filename: part.filename, upload }, policy);
 }
 
 async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
@@ -183,7 +195,7 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
   const bytes = new TextEncoder().encode(text);
 
   if (bytes.length <= INLINE_TEXT_MAX_BYTES) return null;
-  const path = await storeAttachment(policy.vfs, ATTACHMENTS_DIR, bytes, 'text/plain');
+  const path = await storeAttachment(policy.vfs, OFFLOADED_DIR, bytes, 'text/plain');
   const head = text.slice(0, PASTED_TEXT_PREVIEW_CHARS);
   policy.budget?.recordSpill({
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
@@ -235,50 +247,164 @@ function isTextMediaType(mediaType: string): boolean {
 
 async function inlineOrStoreText(data: DataContent | URL, file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
   const payload = decodePayload(data);
+  const upload = uploadOf(file);
 
   if (payload.kind === 'remote') return remoteReference(payload.url, file.mediaType, file.filename);
 
   if (payload.bytes.length < INLINE_TEXT_MAX_BYTES) {
     const name = file.filename ?? 'attachment.txt';
     const text = new TextDecoder().decode(payload.bytes);
+    const saved = upload === null ? '' : ` saved to ${onThisMachine(upload, policy.planes)},`;
 
     return {
       type: 'text',
-      text: `[Attachment ${name} (${file.mediaType}, ${payload.bytes.length} bytes) inlined below]\n\n${text}`,
+      text: `[Attachment ${name} (${file.mediaType}, ${payload.bytes.length} bytes)${saved} inlined below]\n\n${text}`,
     };
   }
 
-  return storeAndReference(payload.bytes, file.mediaType, file.filename, policy);
+  return storeAndReference(payload.bytes, { mediaType: file.mediaType, filename: file.filename, upload }, policy);
 }
 
-async function replaceMedia(
-  data: DataContent | URL,
-  mediaType: string,
-  filename: string | undefined,
-  policy: AttachmentPolicy,
-): Promise<TextPart> {
+/** What a part's bytes are: their type, the name they came with, and the upload they were saved as, if any. */
+interface Carried {
+  readonly mediaType: string;
+  readonly filename: string | undefined;
+  readonly upload: string | null;
+}
+
+async function replaceMedia(data: DataContent | URL, carried: Carried, policy: AttachmentPolicy): Promise<TextPart> {
   const payload = decodePayload(data);
 
-  if (payload.kind === 'remote') return remoteReference(payload.url, mediaType, filename);
+  if (payload.kind === 'remote') return remoteReference(payload.url, carried.mediaType, carried.filename);
 
-  return storeAndReference(payload.bytes, mediaType, filename, policy);
+  return storeAndReference(payload.bytes, carried, policy);
 }
 
-async function storeAndReference(
-  bytes: Uint8Array,
-  mediaType: string,
-  filename: string | undefined,
-  policy: AttachmentPolicy,
-): Promise<TextPart> {
-  const path = await storeAttachment(policy.vfs, ATTACHMENTS_DIR, bytes, mediaType);
-  const basename = path.slice(ATTACHMENTS_DIR.length + 1);
+/** An upload is named where it was saved, and never stored again; any other bytes are offloaded by their digest. */
+async function storeAndReference(bytes: Uint8Array, carried: Carried, policy: AttachmentPolicy): Promise<TextPart> {
+  const path = carried.upload === null
+    ? await storeAttachment(policy.vfs, OFFLOADED_DIR, bytes, carried.mediaType)
+    : onThisMachine(carried.upload, policy.planes);
+
   policy.budget?.recordSpill({ producer: 'attachment', omitted: bytes.length, referenced: true });
-  const name = filename ?? basename;
+  const name = carried.filename ?? path.slice(path.lastIndexOf('/') + 1);
 
   return {
     type: 'text',
-    text: `[Attachment ${name} (${mediaType}, ${bytes.length} bytes) saved to ${path} (read it with your file tools)]`,
+    text: `[Attachment ${name} (${carried.mediaType}, ${bytes.length} bytes) saved to ${path} (read it with your file tools)]`,
   };
+}
+
+/** An upload the model takes inline, named where it was saved. */
+function uploadNote(part: FilePart, path: string): TextPart {
+  return { type: 'text', text: `[Attachment ${part.filename ?? path} (${part.mediaType}) saved to ${path}, shown below]` };
+}
+
+/** Where a path of the workspace's own tree sits on this machine: the same path on the cloud, under the space locally. */
+function onThisMachine(path: string, planes: PathPlanes | undefined): string {
+  return planes === undefined ? path : resolvePath(vfsReference(path), planes).absolute;
+}
+
+/** Where an admitted file part says its upload was saved ({@link saveUploads}); a key no provider reads. */
+const UploadedSchema = v.object({ kinu: v.object({ upload: v.string() }) });
+
+function uploadOf(part: FilePart): string | null {
+  const read = v.safeParse(UploadedSchema, part.providerOptions);
+
+  return read.success ? read.output.kinu.upload : null;
+}
+
+/** Copies of one name an upload may take before it is refused: `name (2).ext` up to this. */
+const UPLOAD_COPIES = 1_000;
+
+/** NAME_MAX, in UTF-8 bytes, less room for a copy's ` (1000)`. */
+const UPLOAD_NAME_BYTES = 248;
+
+/**
+ * The owner's files, each saved once as the words they came with are admitted: under {@link UPLOADS_ROOT} by the name it
+ * came with, as `name (2).ext` when that name holds other bytes, and to the same file when it holds these. Each file
+ * part then says where (`providerOptions.kinu.upload`), which the sanitizer names and never stores again. A part with no
+ * bytes here (a URL, a provider's own handle) is left as it is.
+ */
+export function saveUploads(message: ModelMessage, files: Pick<AttachmentPolicy, 'vfs' | 'planes'>): Promise<ModelMessage> {
+  if (message.role !== 'user' || !Array.isArray(message.content)) return Promise.resolve(message);
+  const offered: readonly UserPart[] = message.content;
+
+  return settle(Effect.gen(function* () {
+    let changed = false;
+    const content: UserPart[] = [];
+
+    for (const part of offered) {
+      const data = part.type === 'file' && uploadOf(part) === null ? untagged(part.data) : null;
+      const payload = data === null ? null : decodePayload(data);
+
+      if (part.type !== 'file' || payload === null || payload.kind === 'remote') {
+        content.push(part);
+        continue;
+      }
+
+      const upload = yield* saveUpload(files, uploadName(part.filename, part.mediaType), payload.bytes);
+      content.push({ ...part, providerOptions: { ...part.providerOptions, kinu: { upload } } });
+      changed = true;
+    }
+
+    return changed ? { ...message, content } : message;
+  }));
+}
+
+/** Its own name, with no folder, separator or control character left in it, cut to fit; `upload.<ext>` when nothing is. */
+function uploadName(filename: string | undefined, mediaType: string): string {
+  const last = (filename ?? '').split(/[/\\]/u).at(-1) ?? '';
+  const name = Array.from(last).filter((character) => (character.codePointAt(0) ?? 0) > 0x1f && character !== '\u007f').join('').trim();
+
+  if (name === '' || name === '.' || name === '..') return `upload.${extensionFor(mediaType)}`;
+  const encoder = new TextEncoder();
+
+  if (encoder.encode(name).length <= UPLOAD_NAME_BYTES) return name;
+  const { stem, extension } = splitExtension(name);
+  let cut = stem;
+
+  while (cut !== '' && encoder.encode(`${cut}${extension}`).length > UPLOAD_NAME_BYTES) cut = Array.from(cut).slice(0, -1).join('');
+
+  return `${cut}${extension}`;
+}
+
+function splitExtension(name: string): { readonly stem: string; readonly extension: string } {
+  const dot = name.lastIndexOf('.');
+
+  return dot > 0 ? { stem: name.slice(0, dot), extension: name.slice(dot) } : { stem: name, extension: '' };
+}
+
+/** `bytes` under {@link UPLOADS_ROOT} as `name`, or as `name (2).ext`, `(3)`… past names holding other bytes: the
+ *  workspace's path of the file holding them. */
+function saveUpload({ vfs, planes }: Pick<AttachmentPolicy, 'vfs' | 'planes'>, name: string, bytes: Uint8Array): Effect.Effect<string, KinuError> {
+  const { stem, extension } = splitExtension(name);
+
+  return Effect.gen(function* () {
+    for (let copy = 1; copy <= UPLOAD_COPIES; copy += 1) {
+      const path = `${UPLOADS_ROOT}/${copy === 1 ? name : `${stem} (${String(copy)})${extension}`}`;
+      const here = onThisMachine(path, planes);
+
+      if (!(yield* Effect.promise(() => exists(vfs, here)))) {
+        yield* Effect.promise(() => madeDirectory(vfs, onThisMachine(UPLOADS_ROOT, planes), 'creating the uploads directory'));
+        yield* Effect.promise(async () => vfs.writeFile(here, bytes));
+
+        return path;
+      }
+
+      if (yield* Effect.promise(() => holdsBytes(vfs, here, bytes))) return path;
+    }
+
+    return yield* new KinuError('bad_input', `${String(UPLOAD_COPIES)} uploads are named ${name} already: rename the file to upload it`);
+  });
+}
+
+async function madeDirectory(vfs: VFS, directory: string, doing: string): Promise<void> {
+  try {
+    await vfs.mkdir(directory, { recursive: true });
+  } catch (err) {
+    if (classify({ cause: err }) !== 'eexist') throw toKinuError({ doing, cause: err, otherwise: 'io' });
+  }
 }
 
 /**
@@ -290,15 +416,7 @@ export async function storeAttachment(vfs: VFS, directory: string, bytes: Uint8A
   const path = `${directory}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
 
   if (await holdsBytes(vfs, path, bytes)) return path;
-
-  try {
-    await vfs.mkdir(directory, { recursive: true });
-  } catch (err) {
-    if (classify({ cause: err }) !== 'eexist') {
-      throw toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' });
-    }
-  }
-
+  await madeDirectory(vfs, directory, 'creating the offloaded spill directory');
   await vfs.writeFile(path, bytes);
 
   return path;

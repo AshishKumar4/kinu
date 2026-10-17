@@ -143,6 +143,13 @@ export const openWaits = new Set<{ readonly what: string }>();
 /** Each live frame ledger's account of the traffic since its restart, printed with the open waits it may hold. */
 const liveLedgers = new Set<() => string>();
 
+/** What each live page sent and was answered since its ledger's last restart: the account a wait ended from outside
+ *  names beside itself, so a page whose asks stopped says whether they were never sent, sent and unanswered, or sent
+ *  on a socket that had closed (2026-10-17, production's desktop-resize row: six minutes on one wait, named alone). */
+export function pagesTraffic(): string {
+  return [...liveLedgers].map((account) => `the page's traffic since its ledger's last restart: ${account()}`).join('\n');
+}
+
 let dropWaitsHold: (() => void) | null = null;
 
 /** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. A step
@@ -218,6 +225,8 @@ export async function waitOn<Value>(page: Page, what: string, promise: Promise<V
 
 export async function openWorkspacePage(target: FlowTarget, path: string): Promise<Page> {
   const page = await signedInPage(target.browser, target);
+  // From before the first load, for the page's life: what a wait ended on it from outside names (`pagesTraffic`).
+  await frameLedger(page);
 
   // 'load', not 'networkidle0': the app holds its event socket open from
   // first paint, so there is never a zero-connection window to wait for.
@@ -370,7 +379,14 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
   const socketPaths = new Map<string, string>();
   const retiredSockets = new Set<string>();
   const framesSent = new Map<string, number>();
+  const framesReceived = new Map<string, number>();
   const requests = new Map<string, number>();
+  // What the page itself threw or logged as an error, newest last.
+  const errors: string[] = [];
+  const failed = (said: string): void => { errors.push(said.slice(0, 300)); errors.splice(0, Math.max(0, errors.length - 5)); };
+
+  page.on('pageerror', (error) => { failed(`thrown: ${error instanceof Error ? error.message : String(error)}`); });
+  page.on('console', (message) => { if (message.type() === 'error') failed(message.text()); });
 
   const pathOf = (url: string | undefined): string => new URL(url ?? 'ws://unknown/').pathname;
   const tally = (into: Map<string, number>, key: string): void => { into.set(key, (into.get(key) ?? 0) + 1); };
@@ -410,6 +426,7 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
   cdp.on('Network.webSocketFrameReceived', (event: { requestId: string; response?: { payloadData?: string } }) => {
     if (retiredSockets.has(event.requestId)) return;
 
+    tally(framesReceived, socketPaths.get(event.requestId) ?? event.requestId);
     const received = frame(event.response?.payloadData);
 
     if (received === null) return;
@@ -455,10 +472,19 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
     const open = [...asked].filter(([key]) => !answered.has(key))
       .map(([key, ask]) => `${ask.method} #${key.split(' ')[1] ?? ''} on ${socketPaths.get(ask.socket) ?? ask.socket}`);
 
-    return `rpc: ${counted(counts)}; unanswered: ${open.join(', ') || 'none'}; frames sent: ${counted(framesSent)}; requests: ${counted(requests)}`;
+    const sockets = [...socketPaths].map(([id, path]) => `${path} ${retiredSockets.has(id) ? 'closed' : 'open'}`);
+
+    return `rpc: ${counted(counts)}; unanswered: ${open.join(', ') || 'none'}; frames sent: ${counted(framesSent)}; `
+      + `frames received: ${counted(framesReceived)}; sockets: ${sockets.join(', ') || 'none'}; requests: ${counted(requests)}; `
+      + `page errors: ${errors.join(' | ') || 'none'}`;
   };
 
   liveLedgers.add(account);
+  // A closed page's session ends with it, and it has nothing more to account for.
+  page.once('close', () => {
+    liveLedgers.delete(account);
+    filesReplies.delete(page);
+  });
 
   const quiet = (...methods: readonly string[]): boolean =>
     methods.every((method) => [...asked].some(([key, ask]) => ask.method === method && answered.has(key)))
@@ -474,6 +500,7 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
       answered.clear();
       arrived.clear();
       framesSent.clear();
+      framesReceived.clear();
       requests.clear();
       filesReplies.delete(page);
     },

@@ -534,6 +534,8 @@ declare global {
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */
       PUBLIC_SURFACE: Fetcher;
+      REQUEST_SIGNAL_ENTRY: Fetcher;
+      REQUEST_SIGNAL_PROBE: DurableObjectNamespace<import('./request-signal-probe').RequestSignalProbeDO>;
       HIRE_APP: Fetcher;
       SURFACE_CONTROL: Service<SurfaceControlRpc>;
       /** Production deploy run, hosted by `deploy-probe` as a subclass with read-only storage windows. */

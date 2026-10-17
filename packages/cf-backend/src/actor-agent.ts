@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, OwnerWaitsHost, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
@@ -68,7 +68,7 @@ import {
   browserSessions,
   type PromptIdentity,
   currentDateForPrompt,
-  turnTags, authoredTurnMetadata,
+  turnTags, authoredTurnMetadata, answerDrawsPages,
   type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -382,8 +382,9 @@ interface TurnMemoryReads {
  */
 function hostedActorSurface(
   actor: SeatedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall,
-  account?: AccountMemory,
+  reach: { readonly account?: AccountMemory | undefined; readonly ownerWaits: OwnerWaitsHost | null },
 ) {
+  const { account } = reach;
   const webSearch = web.search;
   // A slate's call is no turn of the actor's: it accounts into ledgers of its own.
   const ledgers = scopedTurnSurface()?.ledgers ?? turnLedgers();
@@ -397,6 +398,7 @@ function hostedActorSurface(
   const surface = hostedSurfaceActor(actor, {
     web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
     conversations, vectorStore: runtime.vectorStore, ...(account !== undefined && { account }), ledgers: () => ledgers,
+    ownerWaits: reach.ownerWaits,
   });
 
   const native = buildBuiltinTools({
@@ -719,6 +721,9 @@ export abstract class ActorAgent extends Agent<Env> {
   /** The workspace's one actor host; every logical actor is acquired from it over this object's SQL.
    * Abstract because it is built from root state this base class does not hold. */
   protected abstract actorHost(): ActorHost<CFSeat>;
+
+  /** A hire's `agent.*` of what waits on its owner from its own work; null for an actor that holds none. */
+  protected abstract hireOwnerWaits(actor: SeatedActor): OwnerWaitsHost | null;
 
   /** The workspace agent's stores, bound as its root actor. */
   protected rootBound(): BoundActor {
@@ -2396,9 +2401,10 @@ export abstract class ActorAgent extends Agent<Env> {
           throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
         }
 
+        // A slate's call reaches no `agent.*`.
         const surface = hostedActorSurface(actor, {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(actor.handle.actorId),
-        }, this.agentStores(actor.handle.actorId).conversations());
+        }, this.agentStores(actor.handle.actorId).conversations(), { ownerWaits: null });
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.slate);
         // Narrow by the child's own durable, per-actor role, in the mode that role leaves the caller.
@@ -2685,7 +2691,11 @@ export abstract class ActorAgent extends Agent<Env> {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
         const surface = hostedActorSurface(hosted, {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
-        }, this.agentStores(hosted.handle.actorId).conversations(), this.account.ownedMemory({ by: 'agent', agent: hosted.record.name }));
+        }, this.agentStores(hosted.handle.actorId).conversations(), {
+          account: this.account.ownedMemory({ by: 'agent', agent: hosted.record.name }),
+          // Its own turn's programs and an outside caller reach what waits on its owner from its work, as it does in eval.
+          ownerWaits: this.hireOwnerWaits(hosted),
+        });
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
         const authority = await this.hostedSlateAuthority(hosted, requested, providers, Object.keys(surface.native));
@@ -2763,6 +2773,8 @@ export abstract class ActorAgent extends Agent<Env> {
       programState: this.rt.actor.programState,
       agents: () => this.ownAgentsToolDeps(mode),
       self: this.agentSelf(),
+      // The workspace's agent reads what waits on its owner through its own `agent.*`.
+      ownerWaits: null,
     };
   }
 
@@ -3470,7 +3482,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const assembled = await assembleActorTurn(
       { ...surface.sources, toolset: () => surface.tools, externalTools: async () => surface.surface.external },
-      { userText: extractLastUserText(history), workMode: mode, ...(explicitTier !== undefined && { explicitTier }) },
+      {
+        userText: extractLastUserText(history), workMode: mode, ...(explicitTier !== undefined && { explicitTier }),
+        pagesInAnswer: answerDrawsPages(this.turnDrivingMetadata()),
+      },
     );
 
     this._settledProfile = assembled.profile;

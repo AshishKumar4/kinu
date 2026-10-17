@@ -49,9 +49,10 @@ The browser sends the sign-in back to this machine. If it cannot, paste the
 address it opened, or the code Claude shows, when Kinu asks. `kinu provider
 connect claude work` signs in a second account, used as `claude@work/<model>`.
 
-Web search needs no keys: the `web` tool's `search` and `fetch` actions run
-over DuckDuckGo and Cloudflare's HTML-to-markdown conversion. For ranked,
-answer-augmented results, store a Tavily key as the `tavily` credential.
+Web search runs on the Kinu deployment you sign in to: the `web` tool's `search`
+reaches Cloudflare's Web Search API through your account, and `fetch` converts
+pages with Cloudflare's HTML-to-markdown. Signed out, store a Tavily key as the
+`tavily` credential to search; a stored Tavily key is used first either way.
 
 ## Web UI development
 

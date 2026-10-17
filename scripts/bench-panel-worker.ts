@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   // A panel member does no live research — every arm must see the same world,
   // and a flaky search result is variance charged to whichever arm drew it.
   const noWeb: WebSearchProvider = {
-    search: async () => ({ query: '', results: [], source: 'duckduckgo' }),
+    search: async () => ({ query: '', results: [], source: 'ceramic' }),
     fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
     render: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
     screenshot: async () => ({ url: '', retrievedAt: '', bytes: new Uint8Array() }),

@@ -165,6 +165,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     programState: rt.actor.programState,
     agents: () => agents,
     self: null,
+    ownerWaits: null,
   };
 
   // No session takes a wake here, so its calls run inline: the raw surface, over a runner nothing detaches into.

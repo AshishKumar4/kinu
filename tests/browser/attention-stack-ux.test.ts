@@ -6,6 +6,7 @@ import { expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
+import { answerStackCard, untickOwnRow } from '../../scripts/product-flows';
 
 /** The stack's cards: the open one first, then those behind it, nearest first. */
 function stacked(page: Page): Promise<(string | null)[]> {
@@ -331,6 +332,25 @@ test("a card that arrives while the owner is on the open one waits behind it, so
     // The commands decided, the next opens: the newest that waits.
     await press(page, 'Approve all');
     await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:proposal-late');
+    await page.close();
+  });
+});
+
+// 2026-10-17, staging's approval-stack row: a card another run raised took the front between the flow finding its
+// batch's box and pressing it ("Node is detached from document"). The flow's steps open its own card in the press.
+test("the flow's untick and answer land on its own batch card after another card took the front", async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await opened(page, origin, '&asks=two');
+    await page.waitForSelector('[data-attention-stack]');
+    await page.evaluate(() => { window.dispatchEvent(new Event('gallery:arrive-ask')); });
+    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:proposal-late');
+
+    await untickOwnRow(page, 'action:park-publish', 'park-push');
+    await answerStackCard(page, 'action:park-publish', 'Approve 1');
+    await page.waitForFunction(() => (document.documentElement.dataset.galleryDecisions ?? '[]') !== '[]');
+
+    expect(await decisions(page)).toEqual([['park-publish', 'approved']]);
     await page.close();
   });
 });

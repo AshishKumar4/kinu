@@ -537,6 +537,11 @@ export class AgentDatabase {
     };
   }
 
+  /** The platform reported its isolate out of memory at `diedAt`: marked on the execution it killed (recovery decides). */
+  outOfMemory(diedAt: number): void {
+    this.actorHost().bindStores(this.reference()).stores.claims.outOfMemory(diedAt);
+  }
+
   /** Its runs, as the Runs panel, `/runs`, MCP and the CLI read a workspace's. */
   runs(): RunEventRecorder {
     return this.actorHost().bindStores(this.reference()).stores.eventRecorder;

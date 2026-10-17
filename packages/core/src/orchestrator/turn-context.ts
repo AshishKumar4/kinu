@@ -3,6 +3,10 @@
  * → pairing invariant → admission. Sanitization never changes message count; the transform sees durable history with
  * every call paired, so a summary keeps what each call came to. Dynamic context stays out: the step pipeline weaves it
  * (prompting/prepare-step.ts), and admission measures the unapproved instructions with the request.
+ *
+ * A turn starts once. A step reassembled from its plane, or a fallback taking the turn over, continues it: an extension's
+ * turn state outlives its steps. Compaction's moved screenshots were forgotten at every step, so each step stored them
+ * all again, a stat and a whole read each: staging's turns of 104-154 steps ran out of subrequests (rc16, 2026-10-17).
  */
 
 import { Effect } from 'effect';
@@ -30,6 +34,8 @@ export interface TurnContextInput {
   /** Omitted = no sanitization pass. */
   attachments?: AttachmentPolicy;
   extensions?: ExtensionHost;
+  /** A later assembly of a turn already started, whose extensions heard its start at the first. */
+  continuing?: boolean;
   sessionKey: string;
   /** Null when unknown: nothing compacts by size. */
   contextWindow: number | null;
@@ -109,7 +115,7 @@ export function assembleTurnMessages(input: TurnContextInput): Promise<Assembled
       return { messages, turnStart: at < 0 ? turnInputStart(messages) : at };
     };
 
-    yield* Effect.promise(async () => input.extensions?.emitTurnStart({ system: input.system, history }));
+    if (input.continuing !== true) yield* Effect.promise(async () => input.extensions?.emitTurnStart({ system: input.system, history }));
 
     // One closure: admission may re-run it with trigger:'force' and the ordering must match.
     const assemble = async (trigger: CompactionTrigger): Promise<AssembledTurnMessages> => {

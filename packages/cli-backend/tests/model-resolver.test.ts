@@ -4,7 +4,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport, ModelCallSpend } from '@kinu.run/core';
-import { cloudProxyBaseURL } from '@kinu.run/core';
+import { cloudProxyBaseURL, createDefaultWebSearchProvider, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
 import { createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
 import { createFileOAuthStore } from '../src/oauth-store';
 import { writeFileSync } from 'node:fs';
@@ -57,6 +57,28 @@ describe('createLocalModelResolver', () => {
       await parent.session.end();
 
       for (const actor of actors) actor.db.close();
+      await server.stop(true);
+    }
+  });
+
+  test("a signed-in CLI searches through its account's route; signed out it has no search of its own", async () => {
+    const seen: Array<{ path: string; authorization: string | null; body: string }> = [];
+
+    // The platform at its HTTP edge, answering as Cloudflare's Web Search API does through the route.
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      seen.push({ path: new URL(request.url).pathname, authorization: request.headers.get('authorization'), body: await request.text() });
+
+      return Response.json({ items: [{ url: 'https://example.com/a', title: 'First', description: 'The first.' }] });
+    } });
+
+    try {
+      const signedIn = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_search' } });
+      const provider = createDefaultWebSearchProvider({ fetch, browser: { quickActions: async () => new Response('this test renders no page', { status: 500 }) }, ...(signedIn.firstPartySearch !== undefined && { firstParty: signedIn.firstPartySearch }) });
+
+      expect(await provider.search('raleigh events', { limit: 4 })).toMatchObject({ source: 'ceramic', results: [{ url: 'https://example.com/a', title: 'First' }] });
+      expect(seen).toEqual([{ path: USER_WEB_SEARCH_PATH, authorization: 'Bearer ptc_search', body: JSON.stringify({ query: 'raleigh events', limit: 4 }) }]);
+      expect(createLocalModelResolver({ llm: null }).firstPartySearch).toBeUndefined();
+    } finally {
       await server.stop(true);
     }
   });

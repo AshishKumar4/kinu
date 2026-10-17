@@ -45,7 +45,7 @@ import {
   type RoleCatalog, type SqlExecutor,
   type TierAssignments,
   BackgroundJobStore, parseJsonValue, type JsonValue,
-  type WorkMode, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown,
+  type WorkMode, type PromptFile, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
   type EgressSecretSummary,
@@ -927,8 +927,8 @@ export function scriptedSleepTime(agent: HarnessOrchestratorAgent, answer: Sleep
   return prompts;
 }
 
-export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id: string, mode?: WorkMode): Promise<void> {
-  await agent.send(text, id, [], mode);
+export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id: string, sent: { readonly mode?: WorkMode; readonly files?: readonly PromptFile[] } = {}): Promise<void> {
+  await agent.send(text, id, sent.files ?? [], sent.mode);
   await agent.harnessMainLanding(id);
   await agent.harnessAgentsIdle();
 }

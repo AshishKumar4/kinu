@@ -144,7 +144,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           browser: { sessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} }, prelude: BROWSER_PRELUDE },
         },
         memory: unreached, files: unreached, tasks: unreached,
-        db: this.stores.appData, programState: this.rt.actor.programState, agents: null, self: null,
+        db: this.stores.appData, programState: this.rt.actor.programState, agents: null, self: null, ownerWaits: null,
       }, SURFACE_POLICY.confined, { executor }),
     });
 

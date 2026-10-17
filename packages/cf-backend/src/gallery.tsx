@@ -46,6 +46,7 @@ import { ACTIVITY_SURFACE, type SurfaceKind } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
+import { seedToolRuns } from "@/gallery-tool-runs";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -2393,6 +2394,8 @@ function galleryOweIntent(intent: OwedOwnerIntent): JsonValue {
 }
 
 function seedFrameTranscript(transcript: string | null): void {
+  seedToolRuns(transcript);
+
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
 
   if (transcript === "asked") seedGalleryChat(ASKED_THREAD);

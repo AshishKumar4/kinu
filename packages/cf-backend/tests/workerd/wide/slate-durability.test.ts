@@ -470,6 +470,21 @@ it('a print past the row limit runs, and its row keeps the head a reader shows w
   expect(plain).toEqual({ stdout: lookalike, stdout_len: lookalike.length });
 });
 
+// Issue #60: mysql2 always passes tls.connect a checkServerIdentity, which workerd's TLS cannot call (it holds no peer
+// certificate, NIMBUS-ASKS #48), and the refusal named neither why nor where such a client does connect.
+it('TLS with a custom identity check is refused in a workspace program, naming the computer, where it works', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('tls-identity'));
+  const workspace = 'durability-tls-identity';
+  await subject().serveSlate({ workspace, owner: 'durability-owner', id: 'beside-tls-identity', body: 'served' });
+
+  const program = "try { require('node:tls').connect({ host: 'db.example', port: 3306, checkServerIdentity: () => undefined }); console.log('connected') } catch (e) { console.log(e.code + ': ' + e.message) }";
+  const ran = await subject().runInWorkspace(workspace, `node -e "${program}"`);
+
+  expect(ran.stdout).toContain('ERR_OPTION_NOT_IMPLEMENTED');
+  expect(ran.stdout).toContain("TLS with a custom identity check isn't available in workspace programs");
+  expect(ran.stdout).toContain('Run it on the computer, where raw TCP with TLS leaves directly');
+});
+
 it('a node run leaves its log janitor as an alarm the object sleeps on, not a timer it stays awake for', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('janitor'));
   const workspace = 'durability-janitor';

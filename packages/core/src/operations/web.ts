@@ -25,7 +25,7 @@ export const WEB = {
       query: v.string(),
       answer: v.optional(v.string()),
       results: v.array(v.strictObject({ title: v.string(), url: v.string(), snippet: v.string(), date: v.optional(v.string()), position: v.number() })),
-      source: v.picklist(['tavily', 'duckduckgo']),
+      source: v.picklist(['tavily', 'ceramic']),
     }),
     text: ({ query, answer, results, source }) => {
       if (results.length === 0) return `No web results for "${query}".`;

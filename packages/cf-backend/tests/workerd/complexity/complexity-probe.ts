@@ -11,7 +11,7 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { DurableObject } from 'cloudflare:workers';
 import type { ModelMessage } from 'ai';
 import { SlateId } from '@agent-core/core/slates';
-import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, TerminalTransitions, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initTerminalEffectTable, initToolEffectClaimTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts, withMountTable, type ActorHandle, type AgentStores, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT, readAgentFigures } from '@kinu.run/core';
+import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, TerminalTransitions, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initTerminalEffectTable, initToolEffectClaimTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, openTurnRun, resetWorkspaceBaseline, settleSharedRoots, standardMounts, withMountTable, type ActorHandle, type AgentStores, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT, readAgentFigures } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { SlateFiles, WorkspaceSlateContentStore, slateDirectory } from '@kinu.run/core/slates';
 import { storeFiles } from '@kinu.run/core/workspace';
@@ -131,7 +131,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     this.opened ??= NimbusWorkspace.create({ sql: this.sql, transactions: { storage: this.ctx.storage } })
       .then((workspace) => {
         // As a workspace boot leaves it: /slates the kernel's, shared with the workspace's agents.
-        settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
+        settleSharedRoots(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
 
         return workspace;
       });

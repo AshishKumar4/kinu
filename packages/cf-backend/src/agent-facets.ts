@@ -81,15 +81,47 @@ function invoked(event: TraceItem['event']) {
   return { kind: 'request' in event ? 'fetch' : 'other', method: '' };
 }
 
+/** When an invocation's isolate ran out of memory, as the platform says it: the invocation's outcome, or an exception it
+ *  threw that names the memory limit. Null for any other end. */
+function outOfMemoryAt(item: TraceItem): number | null {
+  const named = item.exceptions.some((exception) => {
+    const thrown = new Error(exception.message);
+
+    thrown.name = exception.name;
+
+    return toKinuError({ doing: "running the agent's isolate", cause: thrown, otherwise: 'unavailable' }).code === 'oom';
+  });
+
+  if (item.outcome !== 'exceededMemory' && !named) return null;
+
+  // It died as the invocation ended.
+  return (item.eventTimestamp ?? Date.now()) + item.wallTime;
+}
+
 /**
  * Where an agent's isolate is heard (#65): a Dynamic Worker's console, exceptions and invocations reach no log store of
- * their own, so its loader names this tail, which writes each invocation's as this workspace's lines.
+ * their own, so its loader names this tail, which writes each invocation's as this workspace's lines. An isolate that ran
+ * out of memory is told to its workspace too, which marks the execution it killed.
  */
 export class AgentIsolateTail extends WorkerEntrypoint<Env, AgentIsolateTailProps> {
-  override tail(events: TraceItem[]): void {
+  override tail(events: TraceItem[]): Promise<void> {
     installAnalyticsDiagnostics(this.env, { workspace: this.ctx.props.workspace });
 
     for (const item of events) relayIsolateTrace(item, this.ctx.props);
+    const deaths = events.map(outOfMemoryAt).filter((diedAt) => diedAt !== null);
+
+    // Told within this invocation, so a tail that ends cannot drop it.
+    return settle(Effect.forEach(deaths, (diedAt) => this.outOfMemory(diedAt), { discard: true }));
+  }
+
+  private outOfMemory(diedAt: number): Effect.Effect<void> {
+    const workspaces = this.env.OrchestratorAgent;
+    const { actor, object } = this.ctx.props;
+
+    return Effect.catch(
+      attempt({ doing: "telling the workspace its agent's isolate ran out of memory", otherwise: 'unavailable' }, () => workspaces.get(workspaces.idFromString(object)).isolateOutOfMemory(actor, diedAt)),
+      (failure) => Effect.sync(() => { diagnostics.failure('agent.isolate_oom_report_failed', failure, this.ctx.props); }),
+    );
   }
 }
 
@@ -186,6 +218,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   owes(seq: number, next: number | null, holds: boolean, report: AgentReport) { return this.open(() => this.answers.owes(seq, next, holds, report)); }
   birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }
+  releaseForeground(executing: number) { return this.open(() => this.answers.releaseForeground(executing)); }
   openWork() { return this.open(() => this.answers.openWork()); }
   armCacheWarm(input: CacheWarmArm) { return this.open(() => this.answers.armCacheWarm(input)); }
   getAuth(key: string, opts?: AuthRequest) { return this.open(() => this.answers.getAuth(key, opts)); }

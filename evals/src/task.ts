@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { JsonValue } from 'vitest-evals';
-import type { EvalVerifier } from './verifier';
+import type { EvalVerifier, VerifierSession } from './verifier';
 
 /** A file the harness writes into the workspace before a prompt: data a person would drop in, text or bytes. */
 export type SeedFile = { readonly path: string; readonly content: string | Uint8Array<ArrayBuffer> };
@@ -33,7 +33,13 @@ export type EvalPart = {
   readonly turns: readonly [EvalTurn, ...EvalTurn[]];
   /** Reads that show the data the part's slates hold, made at the end of every trial and kept with its evidence. */
   readonly evidence?: (call: EvidenceCall, workspace: string) => Promise<void>;
+  /** Run as every trial closes, whatever its turns came to and before its workspace's files are read: what the part
+   *  leaves in the workspace for the evidence to keep while the workspace's machines are still there. */
+  readonly closing?: (box: TrialBox) => Promise<void>;
 };
+
+/** What a closing part reaches: the workspace's machines and its files. */
+export type TrialBox = Pick<VerifierSession, 'execute' | 'writeFile'>;
 
 /** A slate call as a trial's evidence makes it: `slate.method(input)`, answered with what the slate returned. */
 export type EvidenceCall = (slate: string, method: string, input?: JsonValue) => Promise<JsonValue>;

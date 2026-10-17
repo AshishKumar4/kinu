@@ -1,5 +1,5 @@
 import { Effect, Cause } from 'effect';
-import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import {
   ArrowClockwiseIcon,
   WrenchIcon, CaretRightIcon,
@@ -14,7 +14,7 @@ import {
 import { Link } from "react-router-dom";
 import { AskRecord } from "@/components/QuestionCard";
 import { isToolUIPart, getToolName } from "ai";
-import type { UIMessage, FileUIPart } from "ai";
+import type { UIMessage, FileUIPart, ReasoningUIPart } from "ai";
 import {
   describeToolCall, executorLabel, rowText, summarizeToolCall,
 } from "@kinu.run/core";
@@ -39,6 +39,7 @@ import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure, 
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import { StatusDot } from "@/components/ui/Status";
+import { ChatDisclosure, ToolRun, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 
 const MessageCreatedAtSchema = v.looseObject({
@@ -97,16 +98,6 @@ const BLOCK_GAP = {
   section: "mt-4 first:mt-0",
 } as const;
 
-// A pause and a reasoning block share one "Thinking" label, so the indicator keeps its shape.
-function ThinkingLabel({ live }: { live: boolean }) {
-  return (
-    <span className="flex items-center gap-2">
-      <span className={`size-1.5 rounded-full p-dot-accent${live ? " p-dot-pulse" : ""}`} aria-hidden />
-      <span className={`p-row-text font-medium${live ? " p-shimmer" : ""}`}>Thinking</span>
-    </span>
-  );
-}
-
 // A sibling of the message list, not a child of its last message: a turn with no assistant
 // row yet has nothing to hang it on.
 export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
@@ -114,56 +105,19 @@ export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
 
   return (
     <div data-live-indicator="thinking" className="animate-fade-in py-1.5" aria-live="polite">
-      <ThinkingLabel live />
+      {/* A pause and a reasoning block share one "Thinking" label, so the indicator keeps its shape. */}
+      <WorkLabel live>Thinking</WorkLabel>
     </div>
   );
 }
 
-/** Folds by rendered height, never source lines (m1111). */
+/** Folds by rendered height, never source lines (m1111); while live, a few lines that follow the newest. */
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  // A guess for the first paint and the server; the measure below settles it.
-  const [long, setLong] = useState(() => text.length > 160 || text.split("\n").length > 3);
-  const viewport = useRef<HTMLDivElement>(null);
-  const prose = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!live) return;
-    setExpanded(false);
-
-    if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
-  }, [live, text]);
-
-  useLayoutEffect(() => {
-    const box = prose.current;
-
-    if (live || expanded || box === null) return;
-    const measure = () => setLong(box.scrollHeight > box.clientHeight + 1);
-    const observer = new ResizeObserver(measure);
-
-    measure();
-    observer.observe(box);
-
-    return () => observer.disconnect();
-  }, [live, expanded, text]);
-
   return (
-    <div className="py-0.5 p-row-text p-text-4" data-reasoning>
-      {live ? (
-        <>
-          <span data-live-indicator="reasoning"><ThinkingLabel live /></span>
-          <div ref={viewport} data-reasoning-viewport className="prose-thinking mt-1 ml-3.5 max-h-[4lh] overflow-y-auto scroll-auto"><MarkdownContent content={text} /></div>
-        </>
-      ) : (
-        <>
-          <button onClick={() => setExpanded(!expanded)} disabled={!long} className="group/reason flex items-center text-left enabled:cursor-pointer" aria-expanded={long ? expanded : undefined}>
-            <ThinkingLabel live={false} />
-            {long && <span className="ml-2 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>}
-          </button>
-          <div ref={prose} className="prose-thinking mt-1 ml-3.5" data-folded={expanded ? undefined : ""} data-overflows={long ? "" : undefined}><MarkdownContent content={text} /></div>
-        </>
-      )}
-    </div>
+    <ChatDisclosure label="Thinking" live={live} folded="preview" follow={text} viewport="max-h-[4lh]" liveIndicator="reasoning"
+      bodyClass="prose-thinking" data-reasoning="">
+      <MarkdownContent content={text} />
+    </ChatDisclosure>
   );
 }
 
@@ -406,39 +360,12 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   );
 }
 
-/** A run of read-only calls long enough to fold: its first and last rows stand,
- *  and the calls between them wait behind one control until the reader asks. */
-function ToolCallFold({ parts, expandedCalls, onToggleCall }: {
-  parts: readonly AnyToolPart[];
-  expandedCalls: ReadonlySet<string>;
-  onToggleCall: (toolCallId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const middle = parts.slice(1, -1);
-
-  const row = (part: AnyToolPart) => (
-    <div key={part.toolCallId} className={BLOCK_GAP.row}>
-      <ToolCallPart part={part} expanded={expandedCalls.has(part.toolCallId)} onToggleExpand={() => onToggleCall(part.toolCallId)} />
-    </div>
-  );
-
-  return (
-    <>
-      {parts.slice(0, 1).map(row)}
-      {open ? middle.map(row) : (
-        <button type="button" onClick={() => setOpen(true)} aria-expanded={false}
-          className={`${BLOCK_GAP.row} w-full px-3 py-1.5 text-left p-t-control p-accent`}>
-          {middle.length} more
-        </button>
-      )}
-      {parts.slice(-1).map(row)}
-    </>
-  );
-}
-
 function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; expanded: boolean; onToggleExpand: () => void }) {
   const output = partOutput(part);
   const input = partInput(part);
+  const running = toolCallRunning(part);
+
+  useSeenRunning(part.toolCallId, running);
 
   // A call the SDK refused asked nothing: it reads as any refused call does.
   if (getToolName(part) === ASK_OWNER_TOOL && part.state !== "output-error") return <AskRecord callId={part.toolCallId} input={input} />;
@@ -452,7 +379,7 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
         input={input}
         output={output}
         effect={partEffect(part)}
-        isRunning={toolCallRunning(part)}
+        isRunning={running}
         isError={callFailed(part)}
         errorText={part.state === "output-error" ? part.errorText : undefined}
         expanded={expanded}
@@ -701,6 +628,12 @@ export const MessageView = memo(function MessageView({
     return null;
   };
 
+  // Thoughts in a row are one block, live while its newest part is the turn's tail.
+  const renderThought = (parts: readonly ReasoningUIPart[]) => (
+    <ReasoningBlock text={parts.flatMap((part) => drawnText(part) ?? []).join("\n\n")}
+      live={tail?.kind === "reasoning" && parts.some((part) => part === tail.part)} />
+  );
+
   const renderToolRow = (part: AnyToolPart) => (
     <ToolCallPart part={part}
       expanded={callExpanded(part)} onToggleExpand={() => toggleCall(part.toolCallId)} />
@@ -725,17 +658,24 @@ export const MessageView = memo(function MessageView({
                   <GitBranchIcon size={12} />
                 </button>
               )}
-              {groupMessageParts(segment.parts).map((block, i) => {
-                if (block.kind === "fold") {
-                  return <ToolCallFold key={block.parts[0]?.toolCallId ?? i} parts={block.parts} expandedCalls={callToggles} onToggleCall={toggleCall} />;
+              {groupMessageParts(segment.parts).map((block, i, blocks) => {
+                if (block.kind === "run") {
+                  // Live while it is the newest thing the turn draws: words after it are the answer starting.
+                  const live = isLive && s === segments.length - 1 && i === blocks.length - 1;
+                  const first = block.steps.find((step) => step.kind === "tool");
+
+                  return (
+                    <div key={first?.kind === "tool" ? first.part.toolCallId : i} className={BLOCK_GAP.section}>
+                      <ToolRun steps={block.steps} live={live}>
+                        {block.steps.map((step, j) => (step.kind === "tool"
+                          ? <div key={step.part.toolCallId} className={BLOCK_GAP.row}>{renderToolRow(step.part)}</div>
+                          : <div key={`thought-${String(j)}`} className={BLOCK_GAP.row}>{renderThought(step.parts)}</div>))}
+                      </ToolRun>
+                    </div>
+                  );
                 }
 
-                if (block.kind === "reasoning") {
-                  const thought = block.parts.flatMap((part) => drawnText(part) ?? []).join("\n\n");
-                  const live = tail?.kind === "reasoning" && block.parts.some((part) => part === tail.part);
-
-                  return thought === "" ? null : <div key={i} className={BLOCK_GAP.section}><ReasoningBlock text={thought} live={live} /></div>;
-                }
+                if (block.kind === "reasoning") return <div key={i} className={BLOCK_GAP.section}>{renderThought(block.parts)}</div>;
 
                 const part = block.part;
 

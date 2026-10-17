@@ -174,7 +174,7 @@ index 8b98f3f..cb8d309 100644
      async _rpcLstat(path, _pid, cred) { return rpc._rpcLstat(this.client(), path, undefined, this.cred(cred)); }
      async _rpcReadlink(path, _pid, cred) { return rpc._rpcReadlink(this.client(), path, undefined, this.cred(cred)); }
 diff --git a/dist/node-shims-artifact.generated.js b/dist/node-shims-artifact.generated.js
-index 5b1c786..93f0df8 100644
+index 5b1c786..c4314c4 100644
 --- a/dist/node-shims-artifact.generated.js
 +++ b/dist/node-shims-artifact.generated.js
 @@ -10,8 +10,8 @@
@@ -183,8 +183,8 @@ index 5b1c786..93f0df8 100644
  export const NODE_SHIMS_ENTRY = "/_assets/runtime/node-shims-7fb968320d7d0418.js";
 -export const NODE_SHIMS_BUILD_ID = "7fb968320d7d0418";
 -export const NODE_SHIMS_SHA256 = "7fb968320d7d04183698263467cc8b7622ebe961cf6f09350472f7c4bf4c7637";
-+export const NODE_SHIMS_BUILD_ID = "b2226f2ea335de28";
-+export const NODE_SHIMS_SHA256 = "b2226f2ea335de28349bedd3b3b587eb6523496700226cf57908b4d230e7851a";
++export const NODE_SHIMS_BUILD_ID = "8ba9420bda7363ac";
++export const NODE_SHIMS_SHA256 = "8ba9420bda7363ac58eb30795e7943206495f010531c783dc6e111039c825755";
  /** @nimbus-sh/core dist/_shared/vfs-write-ledger.js VFS_WRITE_LEDGER_SOURCE */
  export const VFS_WRITE_LEDGER_ENTRY = "/_assets/runtime/vfs-write-ledger-c424322c9d823746.js";
  export const VFS_WRITE_LEDGER_BUILD_ID = "c424322c9d823746";
@@ -424,7 +424,7 @@ index f601507..98a823e 100644
   * Write one host-governed file at a session root and let ordinary Unix
   * permissions keep it that way: the root becomes a sticky 1777 directory owned
 diff --git a/public/_assets/runtime/node-shims-7fb968320d7d0418.js b/public/_assets/runtime/node-shims-7fb968320d7d0418.js
-index a157bac..15c3f9c 100644
+index a157bac..a4599e0 100644
 --- a/public/_assets/runtime/node-shims-7fb968320d7d0418.js
 +++ b/public/_assets/runtime/node-shims-7fb968320d7d0418.js
 @@ -351,6 +351,18 @@ function __nimbusNetworkGate() {
@@ -559,7 +559,7 @@ index a157bac..15c3f9c 100644
        if (token === undefined) return Reflect.apply(original, this, arguments);
        const self = this;
        // workerd's TLSSocket has released the carrier's writer and reader and
-@@ -11568,11 +11672,31 @@ const __tlsMod = (() => {
+@@ -11568,11 +11672,40 @@ const __tlsMod = (() => {
      };
      return socket;
    };
@@ -581,6 +581,15 @@ index a157bac..15c3f9c 100644
 +    return socket;
 +  };
    const connect = (...args) => {
++    // Kinu patch (NIMBUS-ASKS #48): workerd's TLS holds no peer certificate, so
++    // it cannot call a custom server identity check, and refuses the option.
++    // Refused here first, naming the way that works: a client that always
++    // passes one, as mysql2 does, runs on the computer, whose raw TCP leaves
++    // directly with its own TLS.
++    const given = args.find((arg) => arg !== null && typeof arg === 'object');
++    if (given !== undefined && given.checkServerIdentity !== undefined) {
++      throw notImplemented('options.checkServerIdentity', "TLS with a custom identity check isn't available in workspace programs, as a program's TLS here holds no peer certificate to check; a client that always passes one, as mysql2 does, cannot connect here. Run it on the computer, where raw TCP with TLS leaves directly");
++    }
      const proxied = !!(__nimbusReplay && __nimbusReplay.outbound);
      const egressed = globalThis.__nimbusEgress === true;
      if (egressed || !proxied) __nimbusReplay?.effect("tls.connect " + describe(args));

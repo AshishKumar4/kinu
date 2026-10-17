@@ -19,7 +19,7 @@ import {
   APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
-import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH } from '@kinu.run/core';
+import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
 import { crossSiteRejection } from '../src/auth/session';
 import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
@@ -1186,6 +1186,7 @@ const PUBLIC_API = [
   `${USER_AI_PROXY_PATH}/`, // a CLI bearer holding ai.proxy
   `${USER_AI_RUN_PATH}/`, // the same, for the decision models
   `${PROVIDER_PROXY_PATH}/`, // the same
+  USER_WEB_SEARCH_PATH, // the same, for the deployment's web search
   '/api/cli', // a CLI bearer
   `${DEPLOY_API}/`, // the deploy door's run key
   '/api/health', // the build stamp

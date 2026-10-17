@@ -264,6 +264,9 @@ export class BackgroundJobRunner {
   /** Foreground calls; the actor's Stop aborts them. */
   readonly foreground = new Set<AbortController>();
 
+  /** The foreground calls a window would move to the background, each by its trigger ({@link releaseForeground}). */
+  private readonly releasable = new Set<() => void>();
+
   constructor(private readonly deps: BackgroundJobRunnerDeps) {
     this.output = new JobOutputFeeds({ clock: deps.clock ?? REAL_CLOCK, send: (frame) => { deps.jobOutput?.(frame); } });
   }
@@ -329,7 +332,28 @@ export class BackgroundJobRunner {
       clock: this.deps.clock ?? REAL_CLOCK,
       onThreshold: async (kind, promise) =>
         await this.onThreshold({ kind, input, mode, controller, promise, ownership }),
+      released: (release) => {
+        this.releasable.add(release);
+
+        return () => { this.releasable.delete(release); };
+      },
     };
+  }
+
+  /**
+   * A person wrote while the actor's step runs `executing` tool calls: each moves to the background at once, as its
+   * window would move it, when that frees the step, which is when every one is a call a window would move and all fit
+   * under the job cap. False leaves every call as it is, and the words wait for the step to end.
+   */
+  releaseForeground(executing: number): boolean {
+    if (executing === 0 || this.releasable.size !== executing) return false;
+
+    if (this.liveDetachedCount() + executing > MAX_CONCURRENT_DETACHED_JOBS) return false;
+
+    // A release fires its call's trigger, which ends its hold here as the race settles: iterated over a copy.
+    for (const release of Array.from(this.releasable)) release();
+
+    return true;
   }
 
   private async onThreshold(request: DetachRequest): Promise<DetachOutcome> {

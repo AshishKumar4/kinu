@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Hono } from 'hono';
 import * as v from 'valibot';
-import { KinuError } from '@kinu.run/core/obs';
+import { KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import type { UserCaller } from '@kinu.run/core';
 import { routeError } from '../src/api/context';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
@@ -14,7 +14,7 @@ import type { AuthIdentity } from '../src/auth/session';
 import { serveFamily } from './helpers/api';
 import { bootstrappedProfile, userAccount, workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { present } from '@kinu.run/test-utils';
+import { createRecordingLogger, present } from '@kinu.run/test-utils';
 
 const ErrorBodySchema = v.object({ error: v.string(), code: v.string() });
 
@@ -54,6 +54,39 @@ describe('the shared onError answers the class, never the chain', () => {
 
     expect(answer.status).toBe(500);
     expect(answer.body).not.toMatch(LEAK);
+  });
+});
+
+// With `enable_request_signal` a client leaving aborts the call it started, and the call's cancellation reaches here.
+describe('a call whose own client left', () => {
+  test('is answered as closed, and logged as no failure', async () => {
+    const app = new Hono();
+    const leaving = new AbortController();
+
+    app.get('/inference', async (c) => {
+      leaving.abort();
+      await fetch('https://upstream.example.com/', { signal: c.req.raw.signal });
+
+      return c.text('answered');
+    });
+    app.onError(routeError);
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(recording);
+    const response = await app.fetch(new Request('https://kinu.example.com/inference', { signal: leaving.signal }));
+    restore();
+
+    expect({ status: response.status, failures: recording.emitted.filter((line) => line.event === 'http.request_failed').length })
+      .toEqual({ status: 499, failures: 0 });
+  });
+
+  test('a cancellation its client did not cause is still a failure', async () => {
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(recording);
+    const answer = await thrown(new KinuError('cancelled', 'the upstream ended the call'));
+    restore();
+
+    expect({ closed: answer.status === 499, failures: recording.emitted.filter((line) => line.event === 'http.request_failed').length })
+      .toEqual({ closed: false, failures: 1 });
   });
 });
 

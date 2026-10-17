@@ -14,6 +14,8 @@ import { setDiagnosticsSink } from '../src/obs/index';
 import type { MediaModality } from '../src/prompting/attachment-sanitizer';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import { ProviderPacer, providerPacer } from '../src/providers/pacing';
+import { asFetchFunction } from '../src/providers/fetch-shim';
+import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { attemptKey } from '../src/providers/attempt-identity';
 import type { ProviderWaitInfo } from '../src/providers/types';
 import { createRecordingLogger } from '@kinu.run/test-utils';
@@ -65,12 +67,15 @@ interface Served {
 
 const ServedSchema = v.looseObject({ model: v.string(), reasoning_effort: v.optional(v.string()) });
 
-function modelOnEndpoint(modelId: string, baseURL: string) {
+function modelOnEndpoint(modelId: string, baseURL: string, fetch?: typeof globalThis.fetch) {
   return withModelStack(createChatModel({
     kind: 'openai-compat', name: 'openrouter', baseURL,
-    headers: { Authorization: 'Bearer test' }, modelId,
+    headers: { Authorization: 'Bearer test' }, modelId, ...(fetch !== undefined && { fetch }),
   }), { provider: 'openrouter', modelId, lane: `openrouter/${modelId}` });
 }
+
+/** The platform's refusal of a call past the run's subrequests, as a model's fetch throws it on Cloudflare. */
+const SUBREQUESTS_SPENT = `${PLATFORM_CATALOG['do.facet.subrequests'].observable[0]?.message ?? ''} To configure this limit, refer to https://developers.cloudflare.com/workers/wrangler/configuration/#limits`;
 
 /** One endpoint for every model; `answerFor` decides each request from the model it names and how often it asked. */
 async function turn(
@@ -82,9 +87,12 @@ async function turn(
     readonly history?: ModelMessage[];
     /** Media each model takes, by id; the primary's reach the turn as its attachment policy. Unnamed: images. */
     readonly accepts?: Readonly<Record<string, ReadonlySet<MediaModality>>>;
+    /** Models whose calls the platform refuses before they leave, the run's subrequests spent. */
+    readonly spent?: ReadonlySet<string>;
   } = {},
 ) {
   const served: Served[] = [];
+  const refusedBefore: string[] = [];
 
   const server = Bun.serve({
     port: 0,
@@ -98,7 +106,12 @@ async function turn(
   });
 
   // As the registry resolves it: the one stack around the provider's model.
-  const modelFor = (modelId: string) => modelOnEndpoint(modelId, `http://localhost:${String(server.port)}/v1`);
+  const modelFor = (modelId: string) => modelOnEndpoint(modelId, `http://localhost:${String(server.port)}/v1`, opts.spent?.has(modelId) === true
+    ? asFetchFunction(async () => {
+      refusedBefore.push(modelId);
+      throw new Error(SUBREQUESTS_SPENT);
+    })
+    : undefined);
 
   const tools: ToolSet = {
     run: tool({
@@ -135,7 +148,7 @@ async function turn(
     await server.stop(true);
   }
 
-  return { events, threw, served };
+  return { events, threw, served, refusedBefore };
 }
 
 /** A screenshot the turn already holds, as a tool result's image. */
@@ -170,7 +183,7 @@ describe('an image follows the model each attempt calls', () => {
     expect(served.find((entry) => entry.model === 'primary')?.body).toContain(SCREENSHOT);
     const blind = served.find((entry) => entry.model === 'blind')?.body ?? '';
     expect(blind).not.toContain(SCREENSHOT);
-    expect(blind).toContain('attachments/');
+    expect(blind).toContain('.offloaded/');
   });
 
   test('a text-only primary that fails over to a vision model: a stored reference to the first, the attached picture to the second', async () => {
@@ -350,6 +363,22 @@ describe('a failed call hands the turn down its fallback chain', () => {
       expect(threw?.message ?? '').toContain(`HTTP ${String(status)}`);
     });
   }
+
+  test("a run out of subrequests ends the turn once, in the platform's words: the next model would be refused alike", async () => {
+    const { events, threw, served, refusedBefore } = await turn(() => answer('from backup'), ['backup'], { spent: new Set(['primary']) });
+
+    // Not handed over, so the model is not parked either, as if its provider had failed.
+    expect({ refusedBefore, served: served.map((entry) => entry.model), handedOver: events.some((event) => event.type === 'model-fallback') })
+      .toEqual({ refusedBefore: ['primary'], served: [], handedOver: false });
+    expect(threw?.message).toBe("calling the model: this turn made 10,000 calls without a pause, Cloudflare's limit for one run.");
+  });
+
+  test('a lone model out of subrequests is not asked again: a wait keeps the run busy, which spends no fewer', async () => {
+    const { threw, refusedBefore } = await turn(() => answer('never'), [], { spent: new Set(['primary']), retries: 2 });
+
+    expect(refusedBefore).toEqual(['primary']);
+    expect(threw?.message).not.toContain('provider refused');
+  });
 
   for (const status of [403, 404]) {
     test(`a model the account cannot reach (HTTP ${String(status)}) hands the turn to the next model`, async () => {

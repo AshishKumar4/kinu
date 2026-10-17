@@ -162,10 +162,10 @@ export class SessionPayloads extends SessionPayloadReader {
       for (const field of ['image', 'data']) {
         const text = v.safeParse(v.string(), stored[field]);
 
-        if (text.success && !/^https?:\/\//u.test(text.output) && !text.output.startsWith(`${SPILL_DIRS.attachments}/`)) {
+        if (text.success && !/^https?:\/\//u.test(text.output) && !text.output.startsWith(`${SPILL_DIRS.offloaded}/`)) {
           const bytes = new TextEncoder().encode(JSON.stringify(text.output));
           const digest = sha256Hex(bytes);
-          const directory = `${(yield* Effect.promise(() => this.files())).artifactDirectory}/${SPILL_DIRS.attachments}`;
+          const directory = `${(yield* Effect.promise(() => this.files())).artifactDirectory}/${SPILL_DIRS.offloaded}`;
           const path = `${directory}/${digest}.json`;
           yield* this.publish(path, bytes, directory);
           stored[field] = { $sessionStringAttachment: { path, digest } };
@@ -179,7 +179,7 @@ export class SessionPayloads extends SessionPayloadReader {
 
         if (bytes.byteLength !== binary.output.bytes) return yield* new KinuError('io', 'attachment byte length differs from its codec envelope');
         const digest = sha256Hex(bytes);
-        const directory = `${(yield* Effect.promise(() => this.files())).artifactDirectory}/${SPILL_DIRS.attachments}`;
+        const directory = `${(yield* Effect.promise(() => this.files())).artifactDirectory}/${SPILL_DIRS.offloaded}`;
         const path = `${directory}/${digest}.bin`;
         yield* this.publish(path, bytes, directory);
         const reference: JsonObject = { path, digest, bytes: bytes.byteLength };

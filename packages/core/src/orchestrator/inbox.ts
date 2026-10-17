@@ -5,8 +5,8 @@
  * turn; an event's splice is ephemeral, its durable record its own row.
  */
 
-import { Effect } from 'effect';
-import { settle } from '../obs/effect';
+import { Effect, Exit } from 'effect';
+import { attempt as attempted, hold, settle } from '../obs/effect';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { PrepareStepContext } from '../extension';
@@ -353,6 +353,11 @@ export interface UserSteerDeps {
   readonly turnId?: () => string | null;
   /** Skill bodies the landed words activate; spliced as step reference, never a durable row. */
   readonly skills?: (text: string) => Promise<string | null>;
+  /**
+   * Moves the running step's tool calls to the background where that frees the step, so the words land as their handles
+   * return; false where the step goes on (the model is writing, or a call cannot move), when the words wait as queued.
+   */
+  readonly release?: () => Promise<boolean>;
 }
 
 /** A person's words as the chat sends them: what the Inbox alone admits (a delivery reaches it through {@link Inbox.landMidTurn}). */
@@ -441,11 +446,29 @@ export class Inbox {
     if (!this.busy) return this.queueUsers([delivered], { idempotent: false });
     this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
     this.pending.push(delivered);
-    this.host.broadcast({
-      type: 'steer_status', status: 'queued', steerId: delivered.user.id, text: words.text,
-    });
+    const release = this.steers.release;
 
-    return Promise.resolve('mid-turn');
+    if (release === undefined) {
+      this.queued(delivered);
+
+      return Promise.resolve('mid-turn');
+    }
+
+    return (async () => {
+      // A release that fails moved nothing: the words wait as they would have.
+      const answered = await hold(attempted({ doing: "moving the step's tool calls to the background for a person's words", otherwise: 'unavailable' }, release));
+      const released = Exit.isSuccess(answered) && answered.value;
+
+      // Released, the words land at the step the handles end; otherwise they wait, unless the step ended meanwhile.
+      if (!released && this.pending.includes(delivered)) this.queued(delivered);
+
+      return 'mid-turn' as const;
+    })();
+  }
+
+  /** A person's words waiting for the step to end. */
+  private queued(delivered: DeliveredUserSignal): void {
+    this.host.broadcast({ type: 'steer_status', status: 'queued', steerId: delivered.user.id, text: delivered.text });
   }
 
   /** What a delivery hands a running turn, spliced at its next step; false with no turn running, when it waits for a

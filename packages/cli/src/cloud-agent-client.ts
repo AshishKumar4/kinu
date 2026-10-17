@@ -45,7 +45,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { cloudFileLinks, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, WorkspaceBroadcastSchema, type WorkspaceBroadcast, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
+import { cloudFileLinks, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, TERMINAL_TURN_KEY, WorkspaceBroadcastSchema, type WorkspaceBroadcast, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, SendMetadata, ChangelogRevertResult, RefinementListing, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
@@ -360,7 +360,10 @@ export class CloudAgentClient implements AgentClient {
 
       try {
         // A turn this send opens is a one-shot run's own task, run where the CLI is; a send into a running turn steers it.
-        const opened: JsonObject = { ...(this.oneShot && { oneShot: true }), ...(opts.cwd !== undefined && opts.cwd !== '' && { cwd: opts.cwd }) };
+        // The terminal draws no pages, so the agent answering this turn writes none.
+        const opened: JsonObject = {
+          [TERMINAL_TURN_KEY]: true, ...(this.oneShot && { oneShot: true }), ...(opts.cwd !== undefined && opts.cwd !== '' && { cwd: opts.cwd }),
+        };
 
         const metadata: SendMetadata = {
           ...(opts.mode !== undefined && { kinuMode: opts.mode }), ...(opts.tier !== undefined && { kinuTier: opts.tier }),

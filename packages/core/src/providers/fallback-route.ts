@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import type { LanguageModel } from 'ai';
 import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
-import { KinuError, attempt, classifyErrorCode, diagnostics, settle } from '../obs/index';
+import { KinuError, attempt, classifyErrorCode, diagnostics, exceededSubrequests, settle } from '../obs/index';
 import { codeForStatus, describeProviderError, providerFailureFacts } from './util';
 import { statedRetryAfterMs } from './fallback-cooldown';
 import { providerPacer, type ProviderPacer } from './pacing';
@@ -27,9 +27,10 @@ export interface FallbackRouteOptions<E extends FallbackEntry> {
   readonly attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
 }
 
-/** Handover requires a provider/account failure before output; malformed or too-large requests end the call. */
+/** Handover requires a provider/account failure before output; malformed or too-large requests end the call, as does a
+ *  run out of subrequests, which no provider is spared. */
 function handsOver(failure: CallFailure): boolean {
-  if (failure.streamed) return false;
+  if (failure.streamed || exceededSubrequests({ cause: failure.error })) return false;
   const { status } = providerFailureFacts({ cause: failure.cause });
 
   if (status !== undefined) {
