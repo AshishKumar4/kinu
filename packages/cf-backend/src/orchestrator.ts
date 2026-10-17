@@ -6012,6 +6012,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await this.withSizedBox(async (box) => { await box.resize(size); });
   }
 
+  /** The owner's second stop, from the computer's own status: restarts it only where the box reads its last stop
+   *  waiting on a disk that stopped answering (`stopStalled`); else the stop is still finishing and nothing changes. */
+  @callable() async stopStalledComputer(): Promise<ComputerSizeState | null> {
+    return await this.withSizedBox(async (box) => { await box.stopStalled(); });
+  }
+
   /** The computer's terminal sessions (D90), read without waking it; null where the deployment has no computer. */
   @callable() async listComputerSessions(): Promise<readonly TerminalSession[] | null> {
     return await this.computerBox()?.terminalSessions() ?? null;
@@ -6044,7 +6050,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await act(box);
     const size = await box.boxSize();
 
-    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null, startRefused: size.startRefused ?? null };
+    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null, startRefused: size.startRefused ?? null, stalled: size.stalled ?? null };
   }
 
   private async accountComputerSize(): Promise<BoxSize | null> {

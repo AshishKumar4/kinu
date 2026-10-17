@@ -19,4 +19,7 @@ export interface ComputerSizeState {
   readonly size: BoxSize;
   readonly running: BoxSize | null;
   readonly startRefused: string | null;
+  /** Said while the computer's last stop waits on a disk that stopped answering reads; the owner's Stop there restarts
+   *  it (`stopStalledComputer`). */
+  readonly stalled: string | null;
 }

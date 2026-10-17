@@ -10,6 +10,7 @@ import { writeFileIfDigest as writeFileIfDigestInGuest, type DigestWriteRequest 
 import { DEFAULT_EXCLUDES, DiskChainStateSchema, DiskChainStorage, UnboundStorage, diskChain, recoveryNotice, type DiskChain, type DiskChainPorts } from './disk-chain';
 import { STORE_MOUNT, chainStoreRoot, storeObjectUrl } from './store-gateway';
 import { snapshotRegistry, type SnapshotRegistry } from './snapshot-registry';
+import { DISK_PROBE, DISK_STALL_RESTARTED, DISK_STALLED, diskStallOf, type DiskStall } from './disk-stall';
 import { Snapshots } from './snapshots';
 import {
   GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_NAME, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools,
@@ -99,6 +100,10 @@ const CONTAINER_STOP_ATTEMPTS = 50;
 interface RunningExec {
   cancelled: boolean;
   started?: Promise<ExecProcess>;
+  /** Its process, once the container started it: the root of the tree its kill ends. */
+  pid?: number;
+  /** Set once a kill of it began: one that never ends is what the owner's second stop asks after (`stopStalled`). */
+  killing?: true;
   /** Aborted with `killExec`, for a call that waits before its process starts. */
   readonly cancel?: AbortController;
 }
@@ -1793,12 +1798,21 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       : Effect.fail(new DevboxError('invalid-input', `no box size ${size}; the sizes are ${BOX_SIZE_ORDER.join(', ')}`));
   }
 
+  /** `stalled`: said while a stop waits on a disk that stopped answering, which the owner's second stop restarts
+   *  (`stopStalled`); read only while a kill is pinned. */
   boxSize(): Promise<{
     readonly size: BoxSize; readonly chosen: BoxSize | undefined; readonly running: BoxSize | undefined; readonly startRefused: string | undefined;
+    readonly stalled: string | undefined;
   }> {
-    return settle(Effect.sync(() => ({
-      size: this.#size(), chosen: this.#stored(SIZE_KEY), running: this.#runningSize(), startRefused: this.#refusedStart(),
-    })));
+    return settle(Effect.gen({ self: this }, function* () {
+      const pinned = this.#pinned();
+      const stall = pinned.length === 0 ? null : yield* this.#diskStall(pinned);
+
+      return {
+        size: this.#size(), chosen: this.#stored(SIZE_KEY), running: this.#runningSize(), startRefused: this.#refusedStart(),
+        stalled: stall === null ? undefined : `${DISK_STALLED}: ${stall.waiting.join(', ')}`,
+      };
+    }));
   }
 
   useDefaultSize(size: string | null): Promise<BoxSize> {
@@ -1948,7 +1962,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       const process = yield* this.#spawn(command, options, running);
 
-      return decoded(yield* attempt('process', () => process.output()));
+      return decoded(yield* this.#output(process));
     })).pipe(
       Effect.exit,
       Effect.tap((exit) => (answer === undefined ? Effect.void : Deferred.done(answer, exit))),
@@ -2023,8 +2037,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       // Its own group, which its kill ends (D69).
       const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', ...argv], { cwd, env }));
       running.started = started;
+      const process = yield* this.#unlessRestarted(() => started);
 
-      return yield* attempt('process', () => started);
+      running.pid = process.pid;
+
+      return process;
     });
   }
 
@@ -2055,8 +2072,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const container = this.ctx.container;
 
       if (container?.running !== true) return false;
-      const { pid } = yield* attempt('process', () => started);
-      const ended = yield* attempt('process', async () => await (await container.exec(['sh', '-c', `${END_TREE}\nend_tree "$1"`, 'kill-tree', String(pid)])).output());
+      running.killing = true;
+      const { pid } = yield* this.#unlessRestarted(() => started);
+      const ended = yield* this.#unlessRestarted(async () => await (await container.exec(['sh', '-c', `${END_TREE}\nend_tree "$1"`, 'kill-tree', String(pid)])).output());
 
       if (ended.exitCode === 3) return false;
 
@@ -2068,6 +2086,88 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   readonly #running = new Map<string, RunningExec>();
   readonly #answers = new Map<string, Deferred.Deferred<ExecResult, DevboxError>>();
+
+  /** Aborted when a stop restarts the computer under its disk's stall (`stopStalled`): every wait on the old container
+   *  ends with it, so a run whose read never completes ends with the refusal that says why. */
+  #stallRestart = new AbortController();
+
+  /** `work`'s answer, or the restart's refusal once the computer restarted under it: a promise race, not a fiber's, so
+   *  a run inside an uninterruptible action still ends. */
+  #unlessRestarted<T>(work: () => Promise<T>): Effect.Effect<T, DevboxError> {
+    const restarted = this.#stallRestart.signal;
+
+    return attempt('process', async () => {
+      let off = (): void => {};
+
+      const refused = new Promise<{ readonly refused: true }>((resolve) => {
+        const on = (): void => { resolve({ refused: true }); };
+
+        off = () => { restarted.removeEventListener('abort', on); };
+
+        if (restarted.aborted) on();
+        else restarted.addEventListener('abort', on, { once: true });
+      });
+
+      try {
+        return await Promise.race([work().then((value) => ({ value })), refused]);
+      } finally {
+        off();
+      }
+    }).pipe(Effect.flatMap((outcome) => ('refused' in outcome ? Effect.fail(new DevboxError('io', DISK_STALL_RESTARTED)) : Effect.succeed(outcome.value))));
+  }
+
+  #output(process: ExecProcess): Effect.Effect<Awaited<ReturnType<ExecProcess['output']>>, DevboxError> {
+    return this.#unlessRestarted(() => process.output());
+  }
+
+  /** The runs whose kill began and has not ended. */
+  #pinned(): readonly RunningExec[] {
+    return [...this.#running.values()].filter((running) => running.killing === true);
+  }
+
+  /** Whether the pinned kills' trees wait on a disk that stopped answering: read with bash builtins alone, as a program
+   *  not yet read from that disk would wait on it too. A kill whose process never answered its start has no tree to
+   *  name, and the reading takes every process for it. */
+  #diskStall(pinned: readonly RunningExec[]): Effect.Effect<DiskStall | null, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const container = this.ctx.container;
+
+      if (container?.running !== true) return null;
+      const read = yield* attempt('process', async () => await (await container.exec(['/bin/bash', '-c', DISK_PROBE, 'devbox-disk-stall'])).output());
+      const roots = pinned.every((running) => running.pid !== undefined) ? pinned.map((running) => running.pid ?? 0) : undefined;
+      const stall = diskStallOf(new TextDecoder().decode(read.stdout), roots);
+
+      this.#trace('disk.stall.read', { pinned: pinned.length, stalled: stall !== null, waiting: stall?.waiting.join(', '), reads: stall?.reads });
+
+      return stall;
+    });
+  }
+
+  /**
+   * The owner's stop of a computer whose last stop is still waiting. A normal stop never restarts anything: this acts
+   * only on a kill that began before it and has not ended, and restarts the computer only when the box's reading shows
+   * that kill's tree waiting on a disk with reads in flight that never complete (`disk-stall.ts`). The container goes,
+   * every run on it ends with the refusal that says why, and the next operation starts a fresh one from the box's last
+   * save. Otherwise the stop is still finishing, and nothing changes.
+   */
+  stopStalled(): Promise<'restarted' | 'finishing' | 'nothing'> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const pinned = this.#pinned();
+
+      if (pinned.length === 0) return 'nothing' as const;
+      const stall = yield* this.#diskStall(pinned);
+
+      if (stall === null) return 'finishing' as const;
+      const restart = this.#stallRestart;
+
+      this.#stallRestart = new AbortController();
+      this.#trace('disk.stall.restart', { waiting: stall.waiting.join(', '), device: stall.device, reads: stall.reads });
+      restart.abort();
+      yield* attempt('io', () => this.#replaceContainer(DISK_STALL_RESTARTED));
+
+      return 'restarted' as const;
+    }));
+  }
 
   /** The only transition that clears a terminal refusal; keeps the `replace` stage, so a failed
    *  retry refuses again instead of destroying. Also re-runs an incomplete restoration. */
@@ -3170,7 +3270,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const process = yield* this.#spawn(['/bin/bash', '-c', DESKTOP_CHECK, 'devbox-desktop', this.desktopMark ?? ''], {}, running);
 
       this.#trace('desktop.check.started', {});
-      const checked = decoded(yield* attempt('process', () => process.output()));
+      const checked = decoded(yield* this.#output(process));
 
       this.#trace('desktop.check.exit', { exitCode: checked.exitCode });
 
@@ -3230,7 +3330,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (action.kind === 'screenshot' || action.kind === 'watch') {
         const argv = action.kind === 'watch' ? watchArgv(action) : ['/bin/bash', '-c', SCREENSHOT, 'devbox-screenshot'];
         const process = yield* this.#spawn(argv, {}, running);
-        const shot = yield* attempt('process', () => process.output());
+        const shot = yield* this.#output(process);
         const png = new Uint8Array(shot.stdout);
         const size = pngSize(png);
 
@@ -3245,7 +3345,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       // that did not end cleanly, killed by its caller's stop or failed, may have left a key or a button down between
       // its press and its release: once its process has gone, whatever X holds down is let up.
       const ran = yield* this.#spawn(xdotoolOf(action), { env: UTF8 }, running).pipe(
-        Effect.flatMap((process) => attempt('process', async () => decoded(await process.output())).pipe(
+        Effect.flatMap((process) => this.#output(process).pipe(Effect.map(decoded)).pipe(
           Effect.onExit((exit) => (Exit.isSuccess(exit) && exit.value.exitCode === 0 && !running.cancelled ? Effect.void : this.#letUp(action.kind))),
         )),
       );

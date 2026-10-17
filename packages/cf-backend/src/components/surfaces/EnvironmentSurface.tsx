@@ -140,11 +140,14 @@ function statusOf(mount: EnvironmentInfo, exec: ExecutorInfo | undefined): Statu
 }
 
 /**
- * The computer's state: restarting under a resize, waiting on a session's prompt, asleep while stopped (it wakes when
- * used), else as any machine. A session open on it says it woke since its size was read.
+ * The computer's state: restarting under a resize, its last stop waiting on a disk that stopped answering (its Stop is
+ * beside the size), waiting on a session's prompt, asleep while stopped (it wakes when used), else as any machine. A
+ * session open on it says it woke since its size was read.
  */
 function computerStatus(mount: EnvironmentInfo, exec: ExecutorInfo | undefined, size: ComputerSizeControl, seen: { waiting: boolean; awake: boolean }): StatusReading {
   if (size.pending === "resize") return { word: "Restarting", tone: "working" };
+
+  if (size.state?.stalled != null) return { word: "Waiting on its disk", tone: "attention" };
 
   if (seen.waiting) return { word: "Needs input", tone: "attention" };
 

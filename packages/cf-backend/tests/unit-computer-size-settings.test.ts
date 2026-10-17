@@ -13,7 +13,7 @@ import type { KinuDevbox } from '../src/kinu-devbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../src/computer-size';
-import { computerSizeText, sizeSpecs, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/computer-size-text';
+import { computerSizeText, sizeSpecs, stalledNote, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/computer-size-text';
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE } from '@kinu.run/devbox/sizes';
 import { settingsSection } from '../src/components/SettingsRail';
 import { serveFamily } from './helpers/api';
@@ -86,8 +86,8 @@ describe('what the owner reads', () => {
   });
 
   const NOTES = [
-    { name: 'a computer running at its size says nothing more', state: { account: null, chosen: null, size: 'medium', running: 'medium', startRefused: null }, pending: false, says: null },
-    { name: 'a stopped computer says nothing more', state: { account: null, chosen: 'large', size: 'large', running: null, startRefused: null }, pending: false, says: null },
+    { name: 'a computer running at its size says nothing more', state: { account: null, chosen: null, size: 'medium', running: 'medium', startRefused: null, stalled: null }, pending: false, says: null },
+    { name: 'a stopped computer says nothing more', state: { account: null, chosen: 'large', size: 'large', running: null, startRefused: null, stalled: null }, pending: false, says: null },
   ] as const;
 
   for (const { name, state, pending, says } of NOTES) {
@@ -95,6 +95,13 @@ describe('what the owner reads', () => {
       expect(workspaceSizeNote(state, pending)).toBe(says);
     });
   }
+
+  // 2026-10-17: a stop's kill of a run reading a disk that stopped answering never landed, and the owner had nothing to
+  // press: the card says why the stop still waits, and what its own Stop does.
+  test("a stop waiting on the computer's disk says so, and what Stop beside it does", () => {
+    expect(stalledNote("the computer's disk stopped answering reads, so its last stop is still waiting: Xkasmvnc (folio_wait_bit_common)"))
+      .toBe("The computer's disk stopped answering reads, so its last stop is still waiting: Xkasmvnc (folio_wait_bit_common). Stop restarts the computer: files stay as last saved, and what was running starts fresh.");
+  });
 
   test('a start refused for good names the actions the card offers', () => {
     const note = startRefusedNote('[permanent -> refuse] no image to start');
@@ -174,7 +181,7 @@ describe('what the Environment card reads', () => {
 
     const box = {
       useDefaultSize: async (size: string | null) => { stored = size; },
-      boxSize: async () => ({ size: stored ?? 'medium', chosen: undefined, running: undefined, startRefused: undefined }),
+      boxSize: async () => ({ size: stored ?? 'medium', chosen: undefined, running: undefined, startRefused: undefined, stalled: undefined }),
     };
 
     const { agent } = orchestratorHarness(undefined, { userDO: user.userDO, workspace: 'sized', ownerUserId: USER_ID, container: true, box: () => box });
@@ -182,7 +189,34 @@ describe('what the Environment card reads', () => {
 
     try {
       expect((await sizeRoute(routeEnv(user.userDO), 'PUT', 'small')).status).toBe(200);
-      expect(await agent.getComputerSize()).toEqual({ account: 'small', chosen: null, size: 'small', running: null, startRefused: null });
+      expect(await agent.getComputerSize()).toEqual({ account: 'small', chosen: null, size: 'small', running: null, startRefused: null, stalled: null });
+    } finally {
+      user.close();
+    }
+  });
+
+  test("the computer's Stop asks the box to end what its last stop waits on, and reads the computer again", async () => {
+    const user = createTestUserDO({ durableObjectId: USER_ID });
+    await user.userDO.ensureProfile(await testOwner(), IDENTITY.email, IDENTITY.displayName ?? undefined);
+    const token = await provisionTestWorkspace(user, 'stalled', 'Stalled');
+    const waiting = "the computer's disk stopped answering reads, so its last stop is still waiting: setsid (read_extent_buffer_pages)";
+    let stalled: string | undefined = waiting;
+
+    const box = {
+      useDefaultSize: async () => {},
+      boxSize: async () => ({ size: 'medium', chosen: undefined, running: stalled === undefined ? undefined : 'medium', startRefused: undefined, stalled }),
+      stopStalled: async () => {
+        stalled = undefined;
+
+        return 'restarted';
+      },
+    };
+
+    const { agent } = orchestratorHarness(undefined, { userDO: user.userDO, workspace: 'stalled', ownerUserId: USER_ID, container: true, box: () => box });
+    agent.harnessHoldsCapability(token);
+
+    try {
+      expect([(await agent.getComputerSize())?.stalled, (await agent.stopStalledComputer())?.stalled]).toEqual([waiting, null]);
     } finally {
       user.close();
     }
