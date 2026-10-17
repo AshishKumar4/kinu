@@ -1,9 +1,10 @@
 {
-  "measuredAt": "2026-10-11",
-  "machine": "linux x64, AMD EPYC (8 threads)",
+  "measuredAt": "2026-10-17",
+  "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> --no-cache`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN); a post-publish row against the deployment `--deployment=<origin>` named, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to it",
   "rows": {
     "bun run gate:bench-corpus": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 3.55,
       "cpuSeconds": 4.12,
       "peakRssMb": 211.66,
@@ -12,10 +13,10 @@
       "meanThreads": 1.16,
       "samples": 57,
       "loadAtStart": 0.2,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:capability-parity": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 7.69,
       "cpuSeconds": 10.17,
       "peakRssMb": 312.39,
@@ -24,10 +25,10 @@
       "meanThreads": 1.32,
       "samples": 70,
       "loadAtStart": 0.42,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:client-graph": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 3.54,
       "cpuSeconds": 5.03,
       "peakRssMb": 532.04,
@@ -36,10 +37,10 @@
       "meanThreads": 1.42,
       "samples": 56,
       "loadAtStart": 0.37,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:commit-message": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 20.05,
       "cpuSeconds": 32.4,
       "peakRssMb": 401.07,
@@ -48,10 +49,10 @@
       "meanThreads": 1.62,
       "samples": 120,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:complexity": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 6.87,
       "cpuSeconds": 7.87,
       "peakRssMb": 354.61,
@@ -60,10 +61,10 @@
       "meanThreads": 1.14,
       "samples": 69,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:core-layering": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.9,
       "cpuSeconds": 7.3,
       "peakRssMb": 206.16,
@@ -72,10 +73,10 @@
       "meanThreads": 1.24,
       "samples": 62,
       "loadAtStart": 0.65,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:cost-table": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 4.56,
       "cpuSeconds": 5.39,
       "peakRssMb": 207.9,
@@ -84,10 +85,10 @@
       "meanThreads": 1.18,
       "samples": 61,
       "loadAtStart": 0.11,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:dead-code": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 60.83,
       "cpuSeconds": 85.16,
       "peakRssMb": 1175.24,
@@ -96,10 +97,10 @@
       "meanThreads": 1.4,
       "samples": 258,
       "loadAtStart": 0.35,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:dependency-advisories": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 0.99,
       "cpuSeconds": 1.22,
       "peakRssMb": 129.84,
@@ -108,10 +109,10 @@
       "meanThreads": 1.24,
       "samples": 17,
       "loadAtStart": 0.42,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:devbox-e2e": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 500.2,
       "cpuSeconds": 24.78,
       "peakRssMb": 1137.37,
@@ -120,10 +121,10 @@
       "meanThreads": 0.05,
       "samples": 1990,
       "loadAtStart": 0.68,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:do-init": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.65,
       "cpuSeconds": 3.58,
       "peakRssMb": 347.86,
@@ -132,10 +133,10 @@
       "meanThreads": 1.35,
       "samples": 48,
       "loadAtStart": 0.3,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:duplication": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 6.35,
       "cpuSeconds": 7.49,
       "peakRssMb": 262.64,
@@ -144,10 +145,10 @@
       "meanThreads": 1.18,
       "samples": 67,
       "loadAtStart": 0.82,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:effect-diagnostics": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 95.97,
       "cpuSeconds": 148.67,
       "peakRssMb": 2593.67,
@@ -156,10 +157,10 @@
       "meanThreads": 1.55,
       "samples": 376,
       "loadAtStart": 1.4,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:egress-interception": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 8.5,
       "cpuSeconds": 12.07,
       "peakRssMb": 627.42,
@@ -168,10 +169,10 @@
       "meanThreads": 1.42,
       "samples": 75,
       "loadAtStart": 0.23,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:error-model": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 6.94,
       "cpuSeconds": 9.32,
       "peakRssMb": 379.65,
@@ -180,10 +181,10 @@
       "meanThreads": 1.34,
       "samples": 65,
       "loadAtStart": 0.59,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:hammer": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 1281.47,
       "cpuSeconds": 5251.79,
       "peakRssMb": 6597.38,
@@ -192,8 +193,7 @@
       "meanThreads": 4.1,
       "samples": 2457,
       "loadAtStart": 0.84,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:infra": {
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
@@ -208,6 +208,7 @@
       "exit": 0
     },
     "bun run gate:install-scripts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.09,
       "cpuSeconds": 1.85,
       "peakRssMb": 131.79,
@@ -216,10 +217,10 @@
       "meanThreads": 0.89,
       "samples": 38,
       "loadAtStart": 0.23,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:model-text": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 8.33,
       "cpuSeconds": 10.43,
       "peakRssMb": 1241.88,
@@ -228,10 +229,10 @@
       "meanThreads": 1.25,
       "samples": 74,
       "loadAtStart": 0.38,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:mutation-fences": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 4.81,
       "cpuSeconds": 6.53,
       "peakRssMb": 175.7,
@@ -240,10 +241,10 @@
       "meanThreads": 1.36,
       "samples": 60,
       "loadAtStart": 0.72,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:patch-parity": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 3.55,
       "cpuSeconds": 4.06,
       "peakRssMb": 202.45,
@@ -252,10 +253,10 @@
       "meanThreads": 1.14,
       "samples": 57,
       "loadAtStart": 0.36,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:platform": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 4.09,
       "cpuSeconds": 3.57,
       "peakRssMb": 122.88,
@@ -264,10 +265,10 @@
       "meanThreads": 0.87,
       "samples": 57,
       "loadAtStart": 0.47,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:python-suites": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.59,
       "cpuSeconds": 2.85,
       "peakRssMb": 283.34,
@@ -276,10 +277,10 @@
       "meanThreads": 1.1,
       "samples": 46,
       "loadAtStart": 0.39,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:reachability": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 9.78,
       "cpuSeconds": 11,
       "peakRssMb": 385.44,
@@ -288,10 +289,10 @@
       "meanThreads": 1.12,
       "samples": 80,
       "loadAtStart": 0.21,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:scanner-bundle": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.98,
       "cpuSeconds": 1.94,
       "peakRssMb": 111.03,
@@ -300,10 +301,10 @@
       "meanThreads": 0.65,
       "samples": 53,
       "loadAtStart": 0.31,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:scratch-ownership": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 4.35,
       "cpuSeconds": 6.25,
       "peakRssMb": 324.28,
@@ -312,10 +313,10 @@
       "meanThreads": 1.44,
       "samples": 58,
       "loadAtStart": 0.87,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:set-equality": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.34,
       "cpuSeconds": 6.65,
       "peakRssMb": 308.38,
@@ -324,10 +325,10 @@
       "meanThreads": 1.25,
       "samples": 64,
       "loadAtStart": 0.3,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:silent-drop": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.1,
       "cpuSeconds": 5.47,
       "peakRssMb": 241.16,
@@ -336,10 +337,10 @@
       "meanThreads": 1.07,
       "samples": 62,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:skip-ratchet": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 67.33,
       "cpuSeconds": 131.43,
       "peakRssMb": 1432.69,
@@ -348,10 +349,10 @@
       "meanThreads": 1.95,
       "samples": 283,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:test-clocks": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 4.8,
       "cpuSeconds": 5.99,
       "peakRssMb": 286.73,
@@ -360,10 +361,10 @@
       "meanThreads": 1.25,
       "samples": 61,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:typecheck-coverage": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.32,
       "cpuSeconds": 2.13,
       "peakRssMb": 162.13,
@@ -372,10 +373,10 @@
       "meanThreads": 0.92,
       "samples": 42,
       "loadAtStart": 0.39,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:undeclared-imports": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 13.41,
       "cpuSeconds": 16.74,
       "peakRssMb": 351.84,
@@ -384,10 +385,10 @@
       "meanThreads": 1.25,
       "samples": 91,
       "loadAtStart": 0.52,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:vendor-schema": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 9.79,
       "cpuSeconds": 13.59,
       "peakRssMb": 392.9,
@@ -396,10 +397,10 @@
       "meanThreads": 1.39,
       "samples": 80,
       "loadAtStart": 0.3,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:wired": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 21.06,
       "cpuSeconds": 28.06,
       "peakRssMb": 2171.05,
@@ -408,10 +409,10 @@
       "meanThreads": 1.33,
       "samples": 120,
       "loadAtStart": 0.37,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run gate:worker-heap": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 106.09,
       "cpuSeconds": 145.36,
       "peakRssMb": 3332.39,
@@ -420,10 +421,10 @@
       "meanThreads": 1.37,
       "samples": 414,
       "loadAtStart": 0.54,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run layergate": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.74,
       "cpuSeconds": 4.05,
       "peakRssMb": 209.81,
@@ -432,10 +433,10 @@
       "meanThreads": 1.48,
       "samples": 48,
       "loadAtStart": 1.47,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run layergate --matrix": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.95,
       "cpuSeconds": 4.67,
       "peakRssMb": 256.37,
@@ -444,10 +445,10 @@
       "meanThreads": 1.58,
       "samples": 52,
       "loadAtStart": 0.67,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run lint": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 101.86,
       "cpuSeconds": 235,
       "peakRssMb": 5864.4,
@@ -456,10 +457,10 @@
       "meanThreads": 2.31,
       "samples": 391,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run test:cli": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 229.85,
       "cpuSeconds": 592.3,
       "peakRssMb": 1067.6,
@@ -468,10 +469,10 @@
       "meanThreads": 2.58,
       "samples": 868,
       "loadAtStart": 0.42,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run test:core": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 73.39,
       "cpuSeconds": 275.84,
       "peakRssMb": 2046.84,
@@ -480,10 +481,10 @@
       "meanThreads": 3.76,
       "samples": 294,
       "loadAtStart": 0.32,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run test:spine": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 8.78,
       "cpuSeconds": 11.64,
       "peakRssMb": 459.87,
@@ -492,10 +493,10 @@
       "meanThreads": 1.33,
       "samples": 76,
       "loadAtStart": 0.54,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run test:workerd:cf-main": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 256.02,
       "cpuSeconds": 323.9,
       "peakRssMb": 8569.16,
@@ -504,10 +505,10 @@
       "meanThreads": 1.27,
       "samples": 802,
       "loadAtStart": 0.55,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run test:workerd:cf-complexity": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 98.27,
       "cpuSeconds": 123.36,
       "peakRssMb": 2872.27,
@@ -516,10 +517,10 @@
       "meanThreads": 1.26,
       "samples": 381,
       "loadAtStart": 0.48,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run test:workerd:cf-long": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 261.07,
       "cpuSeconds": 93.88,
       "peakRssMb": 3120.17,
@@ -528,10 +529,10 @@
       "meanThreads": 0.36,
       "samples": 932,
       "loadAtStart": 1.06,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run test:workerd:devbox": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 33.92,
       "cpuSeconds": 47.23,
       "peakRssMb": 1277.32,
@@ -540,10 +541,10 @@
       "meanThreads": 1.39,
       "samples": 158,
       "loadAtStart": 0.72,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run typecheck": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 60.8,
       "cpuSeconds": 211.93,
       "peakRssMb": 2804.14,
@@ -552,10 +553,10 @@
       "meanThreads": 3.49,
       "samples": 257,
       "loadAtStart": 0.08,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run verify:lean": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 22.95,
       "cpuSeconds": 23.41,
       "peakRssMb": 892.49,
@@ -564,10 +565,10 @@
       "meanThreads": 1.02,
       "samples": 131,
       "loadAtStart": 0.14,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/census-plants.ts packages/": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 25.21,
       "cpuSeconds": 32.96,
       "peakRssMb": 196.35,
@@ -576,10 +577,10 @@
       "meanThreads": 1.31,
       "samples": 136,
       "loadAtStart": 1.32,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/census-plants.ts scripts/": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 17.94,
       "cpuSeconds": 20.38,
       "peakRssMb": 270.81,
@@ -588,10 +589,10 @@
       "meanThreads": 1.14,
       "samples": 112,
       "loadAtStart": 0.23,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/flake-gate.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.06,
       "cpuSeconds": 2.61,
       "peakRssMb": 165.52,
@@ -600,10 +601,10 @@
       "meanThreads": 1.27,
       "samples": 35,
       "loadAtStart": 0.7,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/gen-cli-docs.ts --check": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 6.66,
       "cpuSeconds": 6.55,
       "peakRssMb": 222.26,
@@ -612,10 +613,10 @@
       "meanThreads": 0.98,
       "samples": 66,
       "loadAtStart": 0.53,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/pattern-inventory.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 6.4,
       "cpuSeconds": 7.26,
       "peakRssMb": 354.83,
@@ -624,10 +625,10 @@
       "meanThreads": 1.13,
       "samples": 68,
       "loadAtStart": 0.23,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/preflight.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.42,
       "cpuSeconds": 2.32,
       "peakRssMb": 167.76,
@@ -636,10 +637,10 @@
       "meanThreads": 0.96,
       "samples": 44,
       "loadAtStart": 0.3,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/schema-drift.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.33,
       "cpuSeconds": 7,
       "peakRssMb": 338.75,
@@ -648,10 +649,10 @@
       "meanThreads": 1.31,
       "samples": 63,
       "loadAtStart": 0.23,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/secret-scan.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 101.52,
       "cpuSeconds": 113.15,
       "peakRssMb": 538.08,
@@ -660,10 +661,10 @@
       "meanThreads": 1.11,
       "samples": 431,
       "loadAtStart": 0.55,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/test-census.ts --ratchet": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 26.98,
       "cpuSeconds": 39.95,
       "peakRssMb": 3541.38,
@@ -672,10 +673,10 @@
       "meanThreads": 1.48,
       "samples": 140,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun scripts/tracing-gate.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.65,
       "cpuSeconds": 7.73,
       "peakRssMb": 487.93,
@@ -684,10 +685,10 @@
       "meanThreads": 1.37,
       "samples": 62,
       "loadAtStart": 0.55,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts --path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts --path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 724.35,
       "cpuSeconds": 725.12,
       "peakRssMb": 5516.09,
@@ -696,10 +697,10 @@
       "meanThreads": 1,
       "samples": 2052,
       "loadAtStart": 0.91,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate ./evals/ scripts/deploy-preflight.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 86.52,
       "cpuSeconds": 133.01,
       "peakRssMb": 1481.61,
@@ -708,10 +709,10 @@
       "meanThreads": 1.54,
       "samples": 359,
       "loadAtStart": 0.43,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate ./tests/live-model/ ./tests/first-run/": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 49.97,
       "cpuSeconds": 100.01,
       "peakRssMb": 1410.25,
@@ -720,10 +721,10 @@
       "meanThreads": 2,
       "samples": 224,
       "loadAtStart": 0.35,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 3.28,
       "cpuSeconds": 4.17,
       "peakRssMb": 194.39,
@@ -732,10 +733,10 @@
       "meanThreads": 1.27,
       "samples": 56,
       "loadAtStart": 0.45,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate packages/devbox/": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 47.34,
       "cpuSeconds": 86.4,
       "peakRssMb": 2357.37,
@@ -744,10 +745,10 @@
       "meanThreads": 1.82,
       "samples": 209,
       "loadAtStart": 0.47,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate packages/pc-agent/": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 31.14,
       "cpuSeconds": 12.37,
       "peakRssMb": 276.83,
@@ -756,10 +757,10 @@
       "meanThreads": 0.4,
       "samples": 163,
       "loadAtStart": 0.46,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate packages/test-utils/": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 9.51,
       "cpuSeconds": 13.03,
       "peakRssMb": 303.78,
@@ -768,10 +769,10 @@
       "meanThreads": 1.37,
       "samples": 79,
       "loadAtStart": 0.38,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/bench-teardown.test.ts scripts/ephemeral-deployment.test.ts scripts/devbox-container-tier.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 35.14,
       "cpuSeconds": 48,
       "peakRssMb": 370.06,
@@ -780,10 +781,10 @@
       "meanThreads": 1.37,
       "samples": 169,
       "loadAtStart": 0.96,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/pre-commit-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts": {
+      "machine": "linux x64, AMD EPYC (4 threads)",
       "wallSeconds": 156.84,
       "cpuSeconds": 226.99,
       "peakRssMb": 4451.78,
@@ -792,10 +793,10 @@
       "meanThreads": 1.45,
       "samples": 613,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (4 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts scripts/mutation-sweep.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 29.59,
       "cpuSeconds": 7.26,
       "peakRssMb": 298.33,
@@ -804,10 +805,10 @@
       "meanThreads": 0.25,
       "samples": 159,
       "loadAtStart": 0.15,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/ladder-proofs.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 60.15,
       "cpuSeconds": 43.61,
       "peakRssMb": 723.54,
@@ -816,10 +817,10 @@
       "meanThreads": 0.72,
       "samples": 276,
       "loadAtStart": 0.13,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 2.57,
       "cpuSeconds": 2.95,
       "peakRssMb": 160.15,
@@ -828,10 +829,10 @@
       "meanThreads": 1.15,
       "samples": 47,
       "loadAtStart": 0.24,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 122.94,
       "cpuSeconds": 134.79,
       "peakRssMb": 1507.97,
@@ -840,10 +841,10 @@
       "meanThreads": 1.1,
       "samples": 488,
       "loadAtStart": 0.74,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.63,
       "cpuSeconds": 5.58,
       "peakRssMb": 227.33,
@@ -852,10 +853,10 @@
       "meanThreads": 0.99,
       "samples": 64,
       "loadAtStart": 0.39,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 174.58,
       "cpuSeconds": 163.37,
       "peakRssMb": 2157.27,
@@ -864,10 +865,10 @@
       "meanThreads": 0.94,
       "samples": 628,
       "loadAtStart": 0.57,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 91.47,
       "cpuSeconds": 103.04,
       "peakRssMb": 2255.97,
@@ -876,10 +877,10 @@
       "meanThreads": 1.13,
       "samples": 346,
       "loadAtStart": 0.38,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --isolate tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 85.3,
       "cpuSeconds": 113.16,
       "peakRssMb": 1734.19,
@@ -888,10 +889,10 @@
       "meanThreads": 1.33,
       "samples": 339,
       "loadAtStart": 0.61,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --parallel=4 packages/cf-backend/": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 129.94,
       "cpuSeconds": 491.43,
       "peakRssMb": 6557.32,
@@ -900,10 +901,10 @@
       "meanThreads": 3.78,
       "samples": 393,
       "loadAtStart": 0.93,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 --parallel=4 packages/cli-backend/": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 42.19,
       "cpuSeconds": 159.46,
       "peakRssMb": 1374.87,
@@ -912,10 +913,10 @@
       "meanThreads": 3.78,
       "samples": 181,
       "loadAtStart": 0.59,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 scripts/deadline-capability.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 1.56,
       "cpuSeconds": 2.11,
       "peakRssMb": 158.32,
@@ -924,10 +925,10 @@
       "meanThreads": 1.35,
       "samples": 27,
       "loadAtStart": 1.36,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 scripts/flake-gate.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 15.89,
       "cpuSeconds": 21.74,
       "peakRssMb": 529.03,
@@ -936,10 +937,10 @@
       "meanThreads": 1.37,
       "samples": 103,
       "loadAtStart": 0.28,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 scripts/gate-set-equality.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.12,
       "cpuSeconds": 7.35,
       "peakRssMb": 328.88,
@@ -948,10 +949,10 @@
       "meanThreads": 1.44,
       "samples": 62,
       "loadAtStart": 0.53,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 scripts/nested-container-resolution.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 48.57,
       "cpuSeconds": 55.85,
       "peakRssMb": 287.52,
@@ -960,10 +961,10 @@
       "meanThreads": 1.15,
       "samples": 228,
       "loadAtStart": 0.49,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 scripts/test-chrome.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 11.91,
       "cpuSeconds": 10.59,
       "peakRssMb": 533.71,
@@ -972,10 +973,10 @@
       "meanThreads": 0.89,
       "samples": 88,
       "loadAtStart": 0.48,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 scripts/wired.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 17.74,
       "cpuSeconds": 26.57,
       "peakRssMb": 2319.51,
@@ -984,10 +985,10 @@
       "meanThreads": 1.5,
       "samples": 106,
       "loadAtStart": 0.27,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/chat-and-files-ux.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 262.31,
       "cpuSeconds": 140.98,
       "peakRssMb": 1511.91,
@@ -996,10 +997,10 @@
       "meanThreads": 0.54,
       "samples": 924,
       "loadAtStart": 0.63,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-layout.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 126.39,
       "cpuSeconds": 264.97,
       "peakRssMb": 4517.59,
@@ -1008,10 +1009,10 @@
       "meanThreads": 2.1,
       "samples": 444,
       "loadAtStart": 1.46,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-own-server.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 253.88,
       "cpuSeconds": 512.61,
       "peakRssMb": 4410.83,
@@ -1020,10 +1021,10 @@
       "meanThreads": 2.02,
       "samples": 763,
       "loadAtStart": 0.25,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-plans.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 171.42,
       "cpuSeconds": 380.69,
       "peakRssMb": 4588.9,
@@ -1032,10 +1033,10 @@
       "meanThreads": 2.22,
       "samples": 581,
       "loadAtStart": 0.84,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-sleep.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 406.44,
       "cpuSeconds": 851.18,
       "peakRssMb": 4555.29,
@@ -1044,10 +1045,10 @@
       "meanThreads": 2.09,
       "samples": 1105,
       "loadAtStart": 1.37,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-turns.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 294.13,
       "cpuSeconds": 602.21,
       "peakRssMb": 4447.18,
@@ -1056,10 +1057,10 @@
       "meanThreads": 2.05,
       "samples": 928,
       "loadAtStart": 1.27,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/react-runtime-identity.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 44.32,
       "cpuSeconds": 75.81,
       "peakRssMb": 2137.74,
@@ -1068,10 +1069,10 @@
       "meanThreads": 1.71,
       "samples": 194,
       "loadAtStart": 0.7,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/swarm-tree-geometry.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 159.3,
       "cpuSeconds": 186.09,
       "peakRssMb": 1330.09,
@@ -1080,10 +1081,10 @@
       "meanThreads": 1.17,
       "samples": 513,
       "loadAtStart": 1.05,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-alerts.test.ts": {
+      "machine": "linux x64, AMD EPYC (4 threads)",
       "wallSeconds": 150.18,
       "cpuSeconds": 312.46,
       "peakRssMb": 4989.66,
@@ -1092,8 +1093,7 @@
       "meanThreads": 2.08,
       "samples": 535,
       "loadAtStart": 0.23,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (4 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-root-turn.test.ts": {
       "wallSeconds": 144.35,
@@ -1104,21 +1104,11 @@
       "meanThreads": 2.29,
       "samples": 517,
       "loadAtStart": 0.38,
-      "exit": 0
-    },
-    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
-      "wallSeconds": 88.51,
-      "cpuSeconds": 81.6,
-      "peakRssMb": 637.73,
-      "peakRunnable": 6,
-      "peakCpuThreads": 2.94,
-      "meanThreads": 0.92,
-      "samples": 386,
-      "loadAtStart": 0.67,
       "exit": 0,
       "machine": "linux x64, AMD EPYC (8 threads)"
     },
     "bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 218.77,
       "cpuSeconds": 343.98,
       "peakRssMb": 4735.29,
@@ -1127,10 +1117,10 @@
       "meanThreads": 1.57,
       "samples": 725,
       "loadAtStart": 0.23,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun run test:workerd:cf-wide": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 249.51,
       "cpuSeconds": 248.38,
       "peakRssMb": 7795.48,
@@ -1139,8 +1129,19 @@
       "meanThreads": 1,
       "samples": 819,
       "loadAtStart": 0.51,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
+      "wallSeconds": 59.73,
+      "cpuSeconds": 46.26,
+      "peakRssMb": 615.97,
+      "peakRunnable": 7,
+      "peakCpuThreads": 3.63,
+      "meanThreads": 0.77,
+      "samples": 271,
+      "loadAtStart": 2.82,
       "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
     }
   }
 }
