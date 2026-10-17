@@ -23,6 +23,8 @@ export interface AgentSelfPorts {
   readonly armCompactNow: () => Promise<void>;
   /** The cloud's owner-approved workspace creation; a local session has none. */
   readonly proposeWorkspace?: AgentSelfHost['proposeWorkspace'];
+  /** What waits on the owner, as the workspace's own agent reads it (read-models/owner-waits.ts `ownerWaitsHost`). */
+  readonly ownerWaits: AgentSelfHost['ownerWaits'];
 }
 
 export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
@@ -46,6 +48,7 @@ export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
     listBackgroundJobs: async (limit) => listBackgroundJobs(ports.jobs(), limit),
     getQuality: async (days) => qualitySeries(rt.storage.sql, rt.actor, days === undefined ? {} : { days }),
     armCompactNow: ports.armCompactNow,
+    ownerWaits: ports.ownerWaits,
   };
 
   return ports.proposeWorkspace === undefined ? host : { ...host, proposeWorkspace: ports.proposeWorkspace };

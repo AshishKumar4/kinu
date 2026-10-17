@@ -42,7 +42,7 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
     web: { search: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
     memory: unreached, files: unreached, tasks: unreached,
     db: createAppDataStore({ sql, actor: handle, transactionSync: (write) => storage.transactionSync(write), events: unreached, runId: () => 'probe' }),
-    programState: handle.programState, agents: null, self: null,
+    programState: handle.programState, agents: null, self: null, ownerWaits: null,
   };
 }
 

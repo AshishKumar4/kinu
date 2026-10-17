@@ -42,6 +42,37 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     }
   });
 
+  test("a program reads what waits on its owner and arms a wake; the owner's decision wakes it, once", async () => {
+    // Turn one runs the program; every later turn only answers.
+    const model = toolSequenceModel([{ name: 'eval', input: { code: 'const waiting = await agent.waitingOnOwner(); return { waiting, wake: await agent.wakeWhenOwnerDone() };' } }]);
+
+    const { rt, session, events } = setup('ok', model);
+    const shell = present(rt.shell, 'the local shell');
+
+    try {
+      expect((await shell.exec('npm publish --access public')).exitCode).not.toBe(0);
+      const [parked] = await session.listDeferredApprovals();
+
+      await session.send('What waits on me? Tell me when it is done.', { id: crypto.randomUUID() });
+      const ran = events.items.find((event) => event.type === 'tool-result' && event.toolName === 'eval');
+
+      expect(JSON.stringify(ran)).toContain('npm publish --access public');
+      expect(JSON.stringify(ran)).toContain('armed');
+
+      await session.decideDeferredApprovals([present(parked, 'the parked command').id], 'denied');
+      await session.flushPendingDrains();
+
+      // Delivered to the agent as a signal of its own, once, its card in the chat; the wait is spent.
+      const cards = () => events.items.filter((event) => JSON.stringify(event).includes('Your owner has handled everything'));
+
+      await events.until(() => cards().length > 0);
+      expect(cards().map((event) => JSON.stringify(event).includes('signal_card'))).toEqual([true]);
+      expect(rt.actor.config.getOwnerWaitsWatch()).toBeNull();
+    } finally {
+      await session.end();
+    }
+  });
+
   test('deferred approval survives a session restart and grants one execution across both runtime surfaces', async () => {
     const { db, rt, session, events } = setup();
     const command = 'git push --force origin main';
