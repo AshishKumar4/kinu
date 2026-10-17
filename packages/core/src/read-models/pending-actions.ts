@@ -41,6 +41,11 @@ export interface PendingAction {
   readonly proposal?: { readonly name: string; readonly brief: string; readonly soul: string };
   /** The actor whose ask it is, by id (a parked command, a plan); absent, the workspace's own (a proposal). */
   readonly raisedBy?: string;
+  /**
+   * A shared slate's effect: the shared slate, the slate whose call it is, and the tool on its root. Answered "always",
+   * that tool on that root stands allowed on the shared slate's shares on its owner's access until its code changes.
+   */
+  readonly effect?: { readonly slate: string; readonly caller: string; readonly server: string; readonly tool: string; readonly root: Readonly<Record<string, string>> };
 }
 
 /** What a workspace asks of the person now. */
@@ -142,6 +147,7 @@ function deferredCard(action: PendingActionInputs['deferredActions'][number]): P
       return {
         ...card, title: `Approve: ${effect.tool} on ${effect.server}, for ${effect.viewer} through a share of ${effect.slate}`,
         detail: JSON.stringify(effect.payload, null, 2),
+        effect: { slate: effect.slate, caller: effect.caller, server: effect.server, tool: effect.tool, root: effect.root },
       };
     }
 

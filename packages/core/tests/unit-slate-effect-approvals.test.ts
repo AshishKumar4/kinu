@@ -97,6 +97,8 @@ test('an effect is the owner\'s decision card, with its payload, and no part of 
 
   expect(card).toMatchObject({ id: 'call-1', title: 'Approve: createIssue on github, for user:ana through a share of board', detail: '{\n  "title": "Ship it"\n}' });
   expect(card?.raisedBy).toBeUndefined();
+  // What "Always for this slate" would stand for, named on the card before the owner answers it.
+  expect(card?.effect).toEqual({ slate: EFFECT.slate, caller: EFFECT.caller, server: EFFECT.server, tool: EFFECT.tool, root: EFFECT.root });
   expect(queue.approvals(store.actorId)).toEqual([]);
 });
 
