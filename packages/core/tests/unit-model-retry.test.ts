@@ -252,7 +252,11 @@ describe('the model stack retries every call once, in one place', () => {
     expect(statedRetryAfterMs({ cause: surfaced })).toBe(0);
   });
 
-  test('tells each request as it ends, on the call\'s clock: a refusal at once, an answer once its stream has closed', async () => {
+  const USAGE = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 2, text: 2, reasoning: 0 } };
+
+  /** A provider refused once and then answered with `ending`'s parts after two words, each part 100 ms after it is
+   *  asked for, on a clock starting at 2026-10-17; and what its attempts told. */
+  function attempted(ending: readonly ModelStreamPart[]) {
     let nowMs = Date.UTC(2026, 9, 17);
     let opened = 0;
     const told: ModelAttemptInfo[] = [];
@@ -268,8 +272,7 @@ describe('the model stack retries every call once, in one place', () => {
 
         const parts: ModelStreamPart[] = [
           { type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'hel' },
-          { type: 'text-delta', id: 't', delta: 'lo' }, { type: 'text-end', id: 't' },
-          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 2, text: 2, reasoning: 0 } } },
+          { type: 'text-delta', id: 't', delta: 'lo' }, ...ending,
         ];
 
         // Each part arrives 100 ms after it is asked for.
@@ -289,19 +292,33 @@ describe('the model stack retries every call once, in one place', () => {
       sleep: async () => {}, pacer: new ProviderPacer(), onAttempt: (info) => { told.push(info); },
     }) });
 
-    const result = streamText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES, providerOptions: callRetries(1) });
+    return { told, result: streamText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES, providerOptions: callRetries(1) }) };
+  }
+
+  test('tells each request as it ends, on the call\'s clock: a refusal at once, an answer once its stream has closed', async () => {
+    const { told, result } = attempted([{ type: 'text-end', id: 't' }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE }]);
 
     expect(await result.text).toBe('hello');
     const [refused, answered] = told;
 
-    // Sent at 300 after the refusal, headers 300 on, the first text the third part read, the end after the last.
+    // Sent at 300 after the refusal, headers 300 on, the first text the third part read, its last output the text's
+    // end, two parts later: not its finish, nor the stream's close.
     expect({ outcomes: told.map((info) => info.outcome), refused: refused?.headersMs, answered: answered && {
       provider: answered.provider, modelId: answered.modelId, attempt: answered.attempt, sentAt: answered.sentAt,
       headersMs: answered.headersMs, firstOutputMs: answered.firstOutputMs, lastOutputMs: answered.lastOutputMs,
     } }).toEqual({
       outcomes: ['refused', 'answered'], refused: undefined,
-      answered: { provider: 'example', modelId: 'm', attempt: 2, sentAt: new Date(Date.UTC(2026, 9, 17) + 300).toISOString(), headersMs: 300, firstOutputMs: 600, lastOutputMs: 1_000 },
+      answered: { provider: 'example', modelId: 'm', attempt: 2, sentAt: new Date(Date.UTC(2026, 9, 17) + 300).toISOString(), headersMs: 300, firstOutputMs: 600, lastOutputMs: 800 },
     });
+  });
+
+  test('tells an answer whose stream closed after an error, or a finish for one, as broken', async () => {
+    const errored = attempted([{ type: 'error', error: new Error('the provider lost its place') }]);
+    const finishedInError = attempted([{ type: 'finish', finishReason: { unified: 'error', raw: 'error' }, usage: USAGE }]);
+
+    for (const { result } of [errored, finishedInError]) await result.consumeStream();
+
+    expect([errored.told.map((info) => info.outcome), finishedInError.told.map((info) => info.outcome)]).toEqual([['refused', 'broken'], ['refused', 'broken']]);
   });
 
   async function streamRefusal(model: LanguageModel): Promise<Error> {

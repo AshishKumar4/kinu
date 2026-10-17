@@ -75,17 +75,32 @@ describe('the product\'s own clock on each request', () => {
 
     const ledger: LedgerRow[] = [
       { type: 'model_attempt', runId: 'r1', eventIndex: 1, timestamp: at(6_000), sentAt: at(0), headersMs: 300, firstOutputMs: 1_200, lastOutputMs: 6_000, outcome: 'answered' },
+      // Two tools side by side, 6.1-8.1 s and 7.1-8.1 s, cover 2 s of the 2.5 s before the next request.
       { type: 'tool_call_end', runId: 'r1', eventIndex: 2, timestamp: at(8_100), durationMs: 2_000 },
-      { type: 'model_attempt', runId: 'r1', eventIndex: 3, timestamp: at(8_800), sentAt: at(8_500), outcome: 'refused' },
-      { type: 'provider_wait', runId: 'r1', eventIndex: 4, timestamp: at(8_800), waitMs: 1_000 },
-      { type: 'model_attempt', runId: 'r1', eventIndex: 5, timestamp: at(13_000), sentAt: at(10_000), headersMs: 200, firstOutputMs: 900, lastOutputMs: 3_000, outcome: 'answered' },
+      { type: 'tool_call_end', runId: 'r1', eventIndex: 3, timestamp: at(8_100), durationMs: 1_000 },
+      { type: 'model_attempt', runId: 'r1', eventIndex: 4, timestamp: at(8_800), sentAt: at(8_500), outcome: 'refused' },
+      { type: 'provider_wait', runId: 'r1', eventIndex: 5, timestamp: at(8_800), waitMs: 1_000 },
+      { type: 'model_attempt', runId: 'r1', eventIndex: 6, timestamp: at(13_000), sentAt: at(10_000), headersMs: 200, firstOutputMs: 900, lastOutputMs: 3_000, outcome: 'answered' },
       // Another run's request is between nothing of this one's.
       { type: 'model_attempt', runId: 'r2', eventIndex: 1, timestamp: at(9_000), sentAt: at(7_000), headersMs: 100, firstOutputMs: 400, lastOutputMs: 2_000, outcome: 'answered' },
     ];
 
     expect(attemptTiming(ledger)).toEqual({
       attempts: 4, outcomes: { answered: 3, refused: 1 }, headersMs: [300, 200, 100], firstOutputMs: [1_200, 900, 400],
-      generationMs: 4_800 + 2_100 + 1_600, betweenMs: 2_500 + 1_200, toolsMs: 2_000, waitMs: 1_000,
+      generationMs: 4_800 + 2_100 + 1_600, betweenMs: 2_500 + 1_200, toolsMs: 2_000, waitMs: 1_000, otherMs: 500 + 200,
     });
+  });
+
+  test('counts a tool that ran while the answer still streamed only for its time after the answer ended', () => {
+    const at = (ms: number): string => new Date(Date.UTC(2026, 9, 17) + ms).toISOString();
+
+    const ledger: LedgerRow[] = [
+      // The tool ran 4-7 s, recorded before the request it ran under ended at 6 s.
+      { type: 'tool_call_end', runId: 'r1', eventIndex: 1, timestamp: at(7_000), durationMs: 3_000 },
+      { type: 'model_attempt', runId: 'r1', eventIndex: 2, timestamp: at(7_000), sentAt: at(0), firstOutputMs: 1_000, lastOutputMs: 6_000, outcome: 'answered' },
+      { type: 'model_attempt', runId: 'r1', eventIndex: 3, timestamp: at(9_000), sentAt: at(8_000), firstOutputMs: 500, lastOutputMs: 1_000, outcome: 'answered' },
+    ];
+
+    expect(attemptTiming(ledger)).toMatchObject({ betweenMs: 2_000, toolsMs: 1_000, otherMs: 1_000 });
   });
 });

@@ -107,12 +107,15 @@ type Opened<T> =
 /** One call to the provider; `last` once no retry is left, `clock` its times. */
 type Open<T> = (last: boolean, clock: AttemptClock) => Promise<Opened<T>>;
 
-/** One attempt's times as `ModelAttemptInfo` tells them: sent at its start, then its answer's headers, its first output
- *  part, and its end, once, by whichever of the retry and its answer's stream sees it end. */
+/** One attempt's times as `ModelAttemptInfo` tells them: sent at its start, then its answer's headers, its first and
+ *  last output parts, and how it ended, told once, by whichever of the retry and its answer's stream sees it end. An
+ *  answer whose stream closed after an error part, or a finish for an error, ended broken. */
 class AttemptClock {
   private readonly sent: number;
   private headers: number | null = null;
   private first: number | null = null;
+  private last: number | null = null;
+  private faulted = false;
   private told = false;
 
   constructor(private readonly now: () => number, private readonly attempt: number, private readonly tell: (info: Omit<ModelAttemptInfo, 'provider' | 'modelId'>) => void) {
@@ -123,20 +126,26 @@ class AttemptClock {
     this.headers ??= this.now();
   }
 
-  output(): void {
-    this.first ??= this.now();
+  /** A part of its answer arrived: output (any after `BEFORE_OUTPUT` but its finish), or word that it failed. */
+  heard(part: LanguageModelV4StreamPart): void {
+    if (part.type === 'error' || (part.type === 'finish' && part.finishReason.unified === 'error')) this.faulted = true;
+
+    if (BEFORE_OUTPUT.has(part.type) || part.type === 'finish' || part.type === 'error') return;
+    const at = this.now();
+
+    this.first ??= at;
+    this.last = at;
   }
 
   ended(outcome: ModelAttemptInfo['outcome']): void {
     if (this.told) return;
     this.told = true;
-    const at = this.now();
 
     this.tell({
-      attempt: this.attempt, sentAt: new Date(this.sent).toISOString(), outcome,
+      attempt: this.attempt, sentAt: new Date(this.sent).toISOString(), outcome: outcome === 'answered' && this.faulted ? 'broken' : outcome,
       ...(this.headers !== null && { headersMs: this.headers - this.sent }),
       ...(this.first !== null && { firstOutputMs: this.first - this.sent }),
-      ...((outcome === 'answered' || outcome === 'broken') && { lastOutputMs: at - this.sent }),
+      ...(this.last !== null && { lastOutputMs: this.last - this.sent }),
     });
   }
 }
@@ -473,8 +482,6 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
       return cutBeforeOutput(part.error);
     }
 
-    attempt.clock.output();
-
     return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: null, clock: attempt.clock });
   }
 }
@@ -538,6 +545,8 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
         await parts.cancel();
       });
 
+      for (const part of held) clock.heard(part);
+
       for (const part of held.filter(shown)) controller.enqueue(part);
 
       if (ended !== null) bound.stop();
@@ -561,6 +570,7 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
         }
 
         bound.hear();
+        clock.heard(read.value);
 
         if (shown(read.value)) return controller.enqueue(read.value);
       }

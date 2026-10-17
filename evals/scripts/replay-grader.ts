@@ -3,7 +3,7 @@ import { JsonValueSchema, RunEventSchema } from '@kinu.run/core';
 import type { Page } from 'puppeteer';
 import { launchTestChrome } from '../../scripts/test-chrome';
 import { collectEvalTasks } from '../src/eval';
-import { SlateView, WorkspaceBrowser } from '../src/browser';
+import { recordSlateCalls, SlateView, WorkspaceBrowser } from '../src/browser';
 import { EvalVerifier, type EvalCheckOutcome, type HelperWork, type ReachedRun, type VerifierSession } from '../src/verifier';
 import { InspectionAnswerSchema, openPublicSession } from '../src/session';
 import { resolveWebIdentity, type WorkspaceWeb } from '../src/workspace-roster';
@@ -158,6 +158,7 @@ async function offline(): Promise<void> {
       pages.push(rendered);
       await rendered.setViewport({ width: 1100, height: 1800 });
       await rendered.setContent(html);
+      await recordSlateCalls(rendered);
       views.push(new SlateView(rendered.mainFrame()));
     }
 

@@ -1,4 +1,5 @@
-const JOB = /^job (\S+)$/mu;
+/** The line armada writes once it has made the job; a whole line only, so an id cut between two chunks is never read. */
+const JOB = /^job (\S+)\r?\n/mu;
 
 /** What an `armada map` writes to stderr: progress, passed through as it arrives, its first line `job <id>` once the
  *  job is made, which `named` hears then, not only once the map ends. */
@@ -22,5 +23,5 @@ export async function drainArmadaProgress(stderr: ReadableStream<Uint8Array>, na
 
   said += decoder.decode();
 
-  return { said, job: job ?? JOB.exec(said)?.[1] };
+  return { said, job: job ?? JOB.exec(`${said}\n`)?.[1] };
 }

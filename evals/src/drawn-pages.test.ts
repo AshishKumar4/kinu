@@ -33,7 +33,12 @@ async function draw() {
   const rows = await board.status();
   document.getElementById('root').innerHTML = rows.map((row) => '<section><h2>' + row.team + '</h2><p>budget $' + row.budget + ', spent $' + row.spent + '</p>'
     + (row.spent > row.budget ? '<button>Cover</button>' : '') + '</section>').join('');
-  for (const button of document.querySelectorAll('button')) button.onclick = async () => { await board.cover(button.closest('section').querySelector('h2').textContent); await draw(); };
+  for (const button of document.querySelectorAll('button')) button.onclick = async () => {
+    // A handler may begin its work late: here once the test lets it, where one is set.
+    await window.coverBegins;
+    await board.cover(button.closest('section').querySelector('h2').textContent);
+    await draw();
+  };
 }
 await draw();
 </script></body></html>`;
@@ -274,6 +279,26 @@ describe('a slate page', () => {
 
     expect({ before: shown(before, 'design', [1500]), pressed, call, early, after: shown(await drawn, 'design', [1700, 1641]) })
       .toEqual({ before: true, pressed: true, call: 'cover', early: false, after: true });
+  });
+
+  test('pressed is read once it has answered the press, though its handler begins its call late', async () => {
+    const page = await opened(origin(ROWS, AT_ONCE));
+    const view = new SlateView(page.mainFrame());
+
+    await view.drawn(TEAMS);
+    await page.evaluate('window.coverBegins = new Promise((begin) => { window.beginCover = begin; })');
+    const pressed = await view.press(TEAMS, { name: 'design', label: '\\bcover\\b' });
+
+    await countLooks(page);
+    const drawn = view.drawn(TEAMS);
+
+    // Quiet, with nothing in flight, the page has not yet answered its press: three looks on, it is still not read.
+    await looked(page, 3);
+    const early = await settledNow(drawn);
+
+    await page.evaluate('window.beginCover()');
+
+    expect({ pressed, early, after: shown(await drawn, 'design', [1700, 1641]) }).toEqual({ pressed: true, early: false, after: true });
   });
 });
 

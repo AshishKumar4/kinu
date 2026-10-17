@@ -71,7 +71,7 @@ function requestSplit(timing: AttemptTiming): string {
   return `${String(timing.attempts)} requests (${outcomes}); headers p50 ${s(quantile(headers, 0.5))}s p95 ${s(quantile(headers, 0.95))}s, `
     + `first output p50 ${s(quantile(first, 0.5))}s p95 ${s(quantile(first, 0.95))}s, generation ${s(timing.generationMs)}s; `
     + `answer to next request ${s(timing.betweenMs)}s: tools ${s(timing.toolsMs)}s, provider waits ${s(timing.waitMs)}s, `
-    + `product ${s(timing.betweenMs - timing.toolsMs - timing.waitMs)}s`;
+    + `product ${s(timing.otherMs)}s`;
 }
 
 const DescendantSchema = v.object({ actor: v.string(), event: LedgerRowSchema });
@@ -114,6 +114,7 @@ const all: AttemptTiming = {
   headersMs: asked.flatMap((each) => each.headersMs), firstOutputMs: asked.flatMap((each) => each.firstOutputMs),
   generationMs: asked.reduce((sum, each) => sum + each.generationMs, 0), betweenMs: asked.reduce((sum, each) => sum + each.betweenMs, 0),
   toolsMs: asked.reduce((sum, each) => sum + each.toolsMs, 0), waitMs: asked.reduce((sum, each) => sum + each.waitMs, 0),
+  otherMs: asked.reduce((sum, each) => sum + each.otherMs, 0),
 };
 
 process.stdout.write(`\nRequests over trials: ${requestSplit(all)}\n`);

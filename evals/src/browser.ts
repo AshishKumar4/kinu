@@ -120,17 +120,19 @@ const RECORD_TURN_ERRORS = `(() => {
   });
 })()`;
 
-/** Records, on `window.__slateCalls`, what a slate page is still waiting on and how often it has redrawn: each call its
- *  slate session (`/__rpc`, capnweb over a WebSocket, as `kinu:slate`'s `slate` and `workspace` make them) has pulled
- *  and not yet had answered, a session still connecting with its first calls queued, and a count of the document's
- *  mutations. capnweb sends one message a frame: a call's result is asked for as `["pull", id]` and answered as
- *  `["resolve", id, …]` or `["reject", id, …]` (capnweb 0.12, `RpcSession.send`). A session that closes answers
- *  nothing more. Installed before each document's scripts run, in every frame, so a slate's own session is recorded. */
+/** Records, on `window.__slateCalls`, what a slate page is still waiting on and how often it has asked and redrawn: each
+ *  call its slate session (`/__rpc`, capnweb over a WebSocket, as `kinu:slate`'s `slate` and `workspace` make them) has
+ *  pulled and not yet had answered, a session still connecting with its first calls queued, a count of the calls it has
+ *  pulled, and a count of the document's mutations. capnweb sends one message a frame: a call's result is asked for as
+ *  `["pull", id]` and answered as `["resolve", id, …]` or `["reject", id, …]` (capnweb 0.12, `RpcSession.send`). A
+ *  session that closes answers nothing more. Installed before each document's scripts run, in every frame, so a slate's
+ *  own session is recorded. */
 const RECORD_SLATE_CALLS = `(() => {
   const waiting = new Set();
+  let calls = 0;
   let mutations = 0;
   let sessions = 0;
-  window.__slateCalls = { waiting: () => waiting.size, mutations: () => mutations, complete: () => document.readyState === 'complete' };
+  window.__slateCalls = { waiting: () => waiting.size, calls: () => calls, mutations: () => mutations, complete: () => document.readyState === 'complete' };
   new MutationObserver(() => { mutations += 1; }).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
   window.WebSocket = new Proxy(window.WebSocket, {
     construct(Socket, args) {
@@ -144,7 +146,10 @@ const RECORD_SLATE_CALLS = `(() => {
       socket.addEventListener('open', () => { waiting.delete(connecting); });
       socket.addEventListener('close', () => { for (const call of [...waiting]) if (call.startsWith(session + ':')) waiting.delete(call); });
       socket.send = (data) => {
-        if (typeof data === 'string' && data.startsWith('["pull",')) waiting.add(mine(JSON.parse(data)[1]));
+        if (typeof data === 'string' && data.startsWith('["pull",')) {
+          calls += 1;
+          waiting.add(mine(JSON.parse(data)[1]));
+        }
         return send(data);
       };
       socket.addEventListener('message', (event) => {
@@ -164,6 +169,12 @@ export async function recordDeadEnds(page: Page): Promise<void> {
   await page.evaluateOnNewDocument(RECORD_SLATE_CALLS);
 }
 
+/** Records what `page`'s document waits on ({@link RECORD_SLATE_CALLS}) from now: for a saved page set as its content,
+ *  which makes no new document for `recordDeadEnds` to record from. */
+export async function recordSlateCalls(page: Page): Promise<void> {
+  await page.evaluate(RECORD_SLATE_CALLS);
+}
+
 /**
  * How long a page has to answer what it was asked: the workspace page to show a slate's frame, the slate to draw what
  * it reads, a click to reach the agent. A page-load budget, as first-run's `PAINT_MS`, not a correctness deadline:
@@ -175,13 +186,20 @@ export const DRAW_MS = 60_000;
 const Faults = v.object({ errors: v.array(v.string()), scripts: v.array(v.string()) });
 
 /** What a slate page waits on now (`RECORD_SLATE_CALLS`), asked in the page. */
-const WAITING = '({ complete: window.__slateCalls.complete(), waiting: window.__slateCalls.waiting(), mutations: window.__slateCalls.mutations() })';
+const WAITING = '({ complete: window.__slateCalls.complete(), waiting: window.__slateCalls.waiting(), calls: window.__slateCalls.calls(), mutations: window.__slateCalls.mutations() })';
 
-const Waiting = v.object({ complete: v.boolean(), waiting: v.number(), mutations: v.number() });
+const Waiting = v.object({ complete: v.boolean(), waiting: v.number(), calls: v.number(), mutations: v.number() });
 
 /** How far apart `SlateView.settled` looks: a page whose look is unchanged across one poll, with nothing in flight, has
  *  drawn. A render after a call's answer lands within a frame (16 ms), so one poll spans several. */
 const SETTLE_POLL_MS = 100;
+
+/** Why a page has not settled, as last found (`found`). */
+function settling(found: v.InferOutput<typeof Waiting>, pressing: boolean): string {
+  if (!found.complete) return 'its document still loading';
+
+  return pressing ? 'it answered its press with no call and no redraw' : `${String(found.waiting)} call(s) in flight`;
+}
 
 /** What a page says when asked one thing it may not hold. */
 const Said = v.nullable(v.string());
@@ -213,6 +231,9 @@ function controlNamed(source: string, flags: string): Element | null {
 
 /** One slate's page as it is drawn inside the workspace: in the work surface or in the chat. */
 export class SlateView {
+  /** What the page had asked and drawn as it was last pressed, until it answers the press (`settled`). */
+  #pressed: { readonly calls: number; readonly mutations: number } | null = null;
+
   constructor(readonly frame: Frame) {}
 
   /** The page as read now: its text, and each name's regions (`sight.ts`). */
@@ -222,11 +243,11 @@ export class SlateView {
 
   /**
    * Once the page has drawn what it reads: its document loaded, no call to its slate in flight nor a session still
-   * connecting, and nothing redrawn between two looks a poll apart (`RECORD_SLATE_CALLS`). Readiness, never
+   * connecting, and nothing redrawn between two looks a poll apart (`RECORD_SLATE_CALLS`); after a press, once the page
+   * has answered it too, by calling its slate or redrawing, however long its handler takes to begin. Readiness, never
    * correctness: a page drawn wrong is as settled as one drawn right, so what it shows is read once and judged at once.
-   * A press that calls the slate is followed by this too, so its answer is drawn before it is read. Polled from here,
-   * not by animation frames, which Chrome stops in a cross-origin frame scrolled out of view. A page still waiting
-   * after the draw budget shows a person nothing more either, and fails.
+   * Polled from here, not by animation frames, which Chrome stops in a cross-origin frame scrolled out of view. A page
+   * still waiting after the draw budget, or that never answers its press, shows a person nothing more either, and fails.
    */
   async settled(): Promise<void> {
     const due = Date.now() + DRAW_MS;
@@ -234,13 +255,27 @@ export class SlateView {
 
     for (;;) {
       const now = v.parse(Waiting, await bounded('the slate page, asked what it waits on', this.frame.evaluate(WAITING)));
+      const pressed = this.#pressed;
 
-      if (now.complete && now.waiting === 0 && before?.waiting === 0 && before.mutations === now.mutations) return;
+      if (pressed !== null && (now.calls > pressed.calls || now.mutations > pressed.mutations)) this.#pressed = null;
 
-      if (Date.now() >= due) throw new Error(`the slate page did not settle in ${String(DRAW_MS / 1000)} s: ${now.complete ? `${String(now.waiting)} call(s) in flight` : 'its document still loading'}`);
+      if (this.#pressed === null && now.complete && now.waiting === 0 && before?.waiting === 0 && before.mutations === now.mutations) return;
+
+      if (Date.now() >= due) {
+        throw new Error(`the slate page did not settle in ${String(DRAW_MS / 1000)} s: ${settling(now, this.#pressed !== null)}`);
+      }
+
       before = now;
       await sleep(SETTLE_POLL_MS);
     }
+  }
+
+  /** What the page had asked and drawn, kept as it is pressed, so `settled` waits for its answer to the press. */
+  async #press(control: ElementHandle): Promise<void> {
+    const { calls, mutations } = v.parse(Waiting, await this.frame.evaluate(WAITING));
+
+    this.#pressed = { calls, mutations };
+    await control.click();
   }
 
   /** The page once it has drawn (`settled`), read: what every independent check of one state reads, once. */
@@ -259,7 +294,7 @@ export class SlateView {
       await found.dispose();
 
       if (!(control instanceof ElementHandle)) return false;
-      await control.click();
+      await this.#press(control);
       await control.dispose();
 
       return true;
@@ -272,7 +307,7 @@ export class SlateView {
       const control = await this.frame.evaluateHandle(controlNamed, name.source, name.flags);
 
       if (!(control instanceof ElementHandle)) return false;
-      await control.click();
+      await this.#press(control);
       await control.dispose();
 
       return true;
