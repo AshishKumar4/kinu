@@ -5951,7 +5951,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async drawLogo(subject: string): Promise<boolean> {
-    const svg = await drawWorkspaceLogo(await this.oneShotOn('logo'), subject);
+    const svg = await drawWorkspaceLogo(await this.oneShotOn('logo'), { subject, name: this.name });
 
     if (svg === null) return false;
     const { stub, caller } = await this.userHub();
