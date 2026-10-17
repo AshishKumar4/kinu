@@ -414,6 +414,11 @@ export function facetTurnSources(turn: {
       ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
     appTitle: 'Kinu',
     onProviderWait: waits.wait,
+    onModelAttempt: (info) => {
+      settleLoggedSync('event.model_attempt_emit_failed', { doing: 'recording a model_attempt run event', otherwise: 'io' }, () => {
+        actor.stores.eventRecorder.emit(turn.runId, { type: 'model_attempt', ...info });
+      }, { provider: info.provider });
+    },
   });
 
   // Its calls are routed under its own conversation, as a CLI hire's are, in its workspace's cache.

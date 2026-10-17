@@ -116,7 +116,7 @@ export interface LocalModelResolver {
    *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
   getAuth: AuthResolver;
-  withCallScope?(scope: Pick<ProviderDeps, 'accountFor' | 'onProviderWait'>): LocalModelResolver;
+  withCallScope?(scope: Pick<ProviderDeps, 'accountFor' | 'onProviderWait' | 'onModelAttempt'>): LocalModelResolver;
 }
 
 export interface LocalModelResolverConfig {

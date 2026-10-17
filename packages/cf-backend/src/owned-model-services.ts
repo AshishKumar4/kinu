@@ -5,7 +5,7 @@ import {
   actorAffinity, parseModelSpec, reasoningEffortOptions,
   providerSnapshotOf, providerListingOf, ProviderListingCache,
   type ModelAffinity, type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
-  type ProviderWaitInfo,
+  type ModelAttemptInfo, type ProviderWaitInfo,
   type WebSearchProvider,
   type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
@@ -50,6 +50,8 @@ export interface OwnedModelServicesOptions<Id> {
   readonly getCredentialsRevision: () => Promise<number>;
   /** Invoked at wait time, so the callback may read live turn state. */
   readonly onProviderWait?: (info: ProviderWaitInfo) => void;
+  /** Invoked as each request ends, likewise. */
+  readonly onModelAttempt?: (info: ModelAttemptInfo) => void;
   readonly accountFor?: (providerId: string) => string | undefined;
   readonly currentTurn?: (actor: ActorReference) => string | null;
   /** Where the web provider's Workers AI conversions are counted, as `platform` spend. */
@@ -99,6 +101,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
         userDO: userObject === null ? null : userCredentials(() => this.options.env.UserDO.get(userObject), this.options.getUserCaller),
         appTitle: this.options.appTitle,
         onProviderWait: this.options.onProviderWait,
+        onModelAttempt: this.options.onModelAttempt,
         accountFor: this.options.accountFor,
         ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
       });

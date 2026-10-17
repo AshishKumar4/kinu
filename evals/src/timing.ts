@@ -16,11 +16,13 @@ import type { TimelineEntry } from './timeline';
 
 /** The ledger fields a split reads; every row is kept, so an unread type still has its place in the order. */
 export const LedgerRowSchema = v.looseObject({
-  type: v.string(), runId: v.string(), eventIndex: v.number(),
+  type: v.string(), runId: v.string(), eventIndex: v.number(), timestamp: v.optional(v.string()),
   userMessage: v.optional(v.string()),
   usage: v.optional(v.looseObject({ output: v.optional(v.number()), reasoning: v.optional(v.number()) })),
   durationMs: v.optional(v.number()),
   waitMs: v.optional(v.number()),
+  sentAt: v.optional(v.string()), headersMs: v.optional(v.number()), firstOutputMs: v.optional(v.number()), lastOutputMs: v.optional(v.number()),
+  outcome: v.optional(v.unknown()),
 });
 
 export type LedgerRow = v.InferOutput<typeof LedgerRowSchema>;
@@ -219,4 +221,63 @@ export function buckets(timing: TrialTiming) {
   add(out, 'unattributed', timing.wallMs - Object.values(out).reduce((sum, ms) => sum + ms, 0));
 
   return out;
+}
+
+/** What the deployment's own clock says of a trial's requests to the provider (`model_attempt`), unlike the split above,
+ *  which a client's arrival times stand in for: each answer's headers and first output after its request was sent, its
+ *  generation, and, from an answer's last output to its run's next request, the tools and provider waits the ledger
+ *  records there and the rest (`betweenMs` less both), the product's own work between steps. Measurements only. */
+export type AttemptTiming = {
+  attempts: number;
+  outcomes: Record<string, number>;
+  headersMs: number[];
+  firstOutputMs: number[];
+  generationMs: number;
+  betweenMs: number;
+  toolsMs: number;
+  waitMs: number;
+};
+
+export function attemptTiming(ledger: readonly LedgerRow[]): AttemptTiming {
+  const timing: AttemptTiming = { attempts: 0, outcomes: {}, headersMs: [], firstOutputMs: [], generationMs: 0, betweenMs: 0, toolsMs: 0, waitMs: 0 };
+  const runs = new Map<string, LedgerRow[]>();
+
+  for (const row of ledger) runs.set(row.runId, [...runs.get(row.runId) ?? [], row]);
+
+  for (const rows of runs.values()) {
+    // From the last attempt's end, the tools and waits the ledger records until the next request goes.
+    let ended: number | null = null;
+    let tools = 0;
+    let waits = 0;
+
+    for (const row of [...rows].sort((left, right) => left.eventIndex - right.eventIndex)) {
+      if (row.type === 'tool_call_end') tools += row.durationMs ?? 0;
+
+      if (row.type === 'provider_wait') waits += row.waitMs ?? 0;
+
+      if (row.type !== 'model_attempt' || row.sentAt === undefined) continue;
+      const sent = Date.parse(row.sentAt);
+
+      timing.attempts += 1;
+      timing.outcomes[String(row.outcome)] = (timing.outcomes[String(row.outcome)] ?? 0) + 1;
+
+      if (row.headersMs !== undefined) timing.headersMs.push(row.headersMs);
+
+      if (row.firstOutputMs !== undefined) timing.firstOutputMs.push(row.firstOutputMs);
+
+      if (row.firstOutputMs !== undefined && row.lastOutputMs !== undefined) timing.generationMs += row.lastOutputMs - row.firstOutputMs;
+
+      if (ended !== null) {
+        timing.betweenMs += sent - ended;
+        timing.toolsMs += tools;
+        timing.waitMs += waits;
+      }
+
+      ended = row.lastOutputMs === undefined ? Date.parse(row.timestamp ?? row.sentAt) : sent + row.lastOutputMs;
+      tools = 0;
+      waits = 0;
+    }
+  }
+
+  return timing;
 }

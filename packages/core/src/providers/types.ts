@@ -153,6 +153,25 @@ export interface ProviderWaitInfo {
 
 export const PROVIDER_WAIT_SOURCES = ['header', 'stated', 'backoff', 'cooldown', 'stall'] as const;
 
+/** One request to a provider, told as it ends: when it was sent, and how long after that its answer's headers, first
+ *  output part and last arrived, each absent where the attempt never got that far. A measurement: nothing bounds a call
+ *  by it. `outcome` is `answered` (its stream closed), `broken` (it failed or was cancelled after output began),
+ *  `refused` (an error before any answer), `cut` (an error before output), `stalled` (silent past the provider's bound)
+ *  or `failed` (a final failure before output). */
+export interface ModelAttemptInfo {
+  readonly provider: string;
+  readonly modelId?: string;
+  /** 1-based, among the call's attempts. */
+  readonly attempt: number;
+  readonly sentAt: string;
+  readonly headersMs?: number;
+  readonly firstOutputMs?: number;
+  readonly lastOutputMs?: number;
+  readonly outcome: (typeof MODEL_ATTEMPT_OUTCOMES)[number];
+}
+
+export const MODEL_ATTEMPT_OUTCOMES = ['answered', 'broken', 'refused', 'cut', 'stalled', 'failed'] as const;
+
 export interface ProviderDeps {
 
   env: ProviderEnv;
@@ -163,6 +182,8 @@ export interface ProviderDeps {
   fetch?: typeof fetch;
   /** Called before each rate-limit sleep, including joined sibling cooldowns. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
+  /** Called as each request to the provider ends (`ModelAttemptInfo`). */
+  onModelAttempt?: (info: ModelAttemptInfo) => void;
   accountFor?: (providerId: string) => string | undefined;
 }
 

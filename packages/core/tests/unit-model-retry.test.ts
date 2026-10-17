@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { APICallError, generateText, streamText, wrapLanguageModel, type LanguageModel } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { callRetries, retryMiddleware, type RetryPolicy } from '../src/providers/middleware/retry';
+import type { ModelAttemptInfo } from '../src/providers/types';
 import { DEFAULT_PROVIDER_RETRIES } from '../src/types/profile';
 import { ProviderPacer } from '../src/providers/pacing';
 import { attemptKey } from '../src/providers/attempt-identity';
@@ -249,6 +250,58 @@ describe('the model stack retries every call once, in one place', () => {
     expect(surfaced.responseBody).toBe(original.responseBody);
     expect(describeProviderError({ cause: surfaced })).toContain(original.message);
     expect(statedRetryAfterMs({ cause: surfaced })).toBe(0);
+  });
+
+  test('tells each request as it ends, on the call\'s clock: a refusal at once, an answer once its stream has closed', async () => {
+    let nowMs = Date.UTC(2026, 9, 17);
+    let opened = 0;
+    const told: ModelAttemptInfo[] = [];
+
+    const inner = new MockLanguageModelV4({
+      doStream: async () => {
+        opened += 1;
+        nowMs += 300;
+
+        if (opened === 1) {
+          throw new APICallError({ message: 'busy', url: 'https://api.example.com/v1/chat/completions', requestBodyValues: undefined, statusCode: 503, isRetryable: true });
+        }
+
+        const parts: ModelStreamPart[] = [
+          { type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'hel' },
+          { type: 'text-delta', id: 't', delta: 'lo' }, { type: 'text-end', id: 't' },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 2, text: 2, reasoning: 0 } } },
+        ];
+
+        // Each part arrives 100 ms after it is asked for.
+        return { stream: new ReadableStream<ModelStreamPart>({ pull(controller) {
+          const part = parts.shift();
+
+          nowMs += 100;
+
+          if (part === undefined) controller.close();
+          else controller.enqueue(part);
+        } }, { highWaterMark: 0 }) };
+      },
+    });
+
+    const model = wrapLanguageModel({ model: inner, middleware: retryMiddleware({
+      provider: 'example', modelId: 'm', lane: LANE, warn: () => {}, now: () => nowMs, random: () => 0,
+      sleep: async () => {}, pacer: new ProviderPacer(), onAttempt: (info) => { told.push(info); },
+    }) });
+
+    const result = streamText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES, providerOptions: callRetries(1) });
+
+    expect(await result.text).toBe('hello');
+    const [refused, answered] = told;
+
+    // Sent at 300 after the refusal, headers 300 on, the first text the third part read, the end after the last.
+    expect({ outcomes: told.map((info) => info.outcome), refused: refused?.headersMs, answered: answered && {
+      provider: answered.provider, modelId: answered.modelId, attempt: answered.attempt, sentAt: answered.sentAt,
+      headersMs: answered.headersMs, firstOutputMs: answered.firstOutputMs, lastOutputMs: answered.lastOutputMs,
+    } }).toEqual({
+      outcomes: ['refused', 'answered'], refused: undefined,
+      answered: { provider: 'example', modelId: 'm', attempt: 2, sentAt: new Date(Date.UTC(2026, 9, 17) + 300).toISOString(), headersMs: 300, firstOutputMs: 600, lastOutputMs: 1_000 },
+    });
   });
 
   async function streamRefusal(model: LanguageModel): Promise<Error> {

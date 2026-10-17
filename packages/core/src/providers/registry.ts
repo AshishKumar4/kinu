@@ -309,6 +309,7 @@ export function createProviderRegistry(): ProviderRegistry {
           return bindModelAttempt(withModelStack(provider.createModel(parsed.modelId, inference), {
             provider: parsed.provider, modelId: parsed.modelId, lane: { route: routeOf(parsed, provider), billed: async () => (await attempt()).lane },
             ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+            ...(deps.onModelAttempt !== undefined && { onAttempt: deps.onModelAttempt }),
             ...(provider.streamsGenerate === true && { generateByStream: true }),
           }), attempt);
         })

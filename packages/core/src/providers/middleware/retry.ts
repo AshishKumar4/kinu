@@ -23,7 +23,7 @@ import { inAttempt, type Attempt } from './attempt';
 import { generateFromStream } from './stream-generate';
 import { providerPacer, type ProviderPacer } from '../pacing';
 import { abortableSleep } from '../../utils/abort';
-import type { ProviderWaitInfo } from '../types';
+import type { ModelAttemptInfo, ProviderWaitInfo } from '../types';
 import { attemptKey, recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 
 /** Full-jitter backoff; unmeasured. */
@@ -62,6 +62,8 @@ export interface RetryPolicy {
   readonly lane: string | LaneLookup;
   /** Called before each sleep, including joined cooldowns; a throw is reported and ignored. */
   readonly onWait?: (info: ProviderWaitInfo) => void;
+  /** Called as each attempt ends, a stream's once it closes (`ModelAttemptInfo`); a throw is reported and ignored. */
+  readonly onAttempt?: (info: ModelAttemptInfo) => void;
   /** The provider streams every call on its wire (the ChatGPT plan): a generate is its stream collected, under the
    *  same silence bound. */
   readonly generateByStream?: boolean;
@@ -102,8 +104,42 @@ type Opened<T> =
   | { readonly kind: 'cut'; readonly error: unknown }
   | { readonly kind: 'stall' };
 
-/** One call to the provider; `last` once no retry is left. */
-type Open<T> = (last: boolean) => Promise<Opened<T>>;
+/** One call to the provider; `last` once no retry is left, `clock` its times. */
+type Open<T> = (last: boolean, clock: AttemptClock) => Promise<Opened<T>>;
+
+/** One attempt's times as `ModelAttemptInfo` tells them: sent at its start, then its answer's headers, its first output
+ *  part, and its end, once, by whichever of the retry and its answer's stream sees it end. */
+class AttemptClock {
+  private readonly sent: number;
+  private headers: number | null = null;
+  private first: number | null = null;
+  private told = false;
+
+  constructor(private readonly now: () => number, private readonly attempt: number, private readonly tell: (info: Omit<ModelAttemptInfo, 'provider' | 'modelId'>) => void) {
+    this.sent = now();
+  }
+
+  answering(): void {
+    this.headers ??= this.now();
+  }
+
+  output(): void {
+    this.first ??= this.now();
+  }
+
+  ended(outcome: ModelAttemptInfo['outcome']): void {
+    if (this.told) return;
+    this.told = true;
+    const at = this.now();
+
+    this.tell({
+      attempt: this.attempt, sentAt: new Date(this.sent).toISOString(), outcome,
+      ...(this.headers !== null && { headersMs: this.headers - this.sent }),
+      ...(this.first !== null && { firstOutputMs: this.first - this.sent }),
+      ...((outcome === 'answered' || outcome === 'broken') && { lastOutputMs: at - this.sent }),
+    });
+  }
+}
 
 export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
   return {
@@ -121,17 +157,23 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
       return call;
     },
     wrapGenerate: ({ doGenerate, doStream, params }) => settle(retrying(policy, params, policy.generateByStream === true
-      ? async (last) => {
-        const opened = await openStream({ provider: policy.provider, start: doStream, last, keepRaw: false, caller: params.abortSignal });
+      ? async (last, clock) => {
+        const opened = await openStream({ provider: policy.provider, start: doStream, last, keepRaw: false, caller: params.abortSignal, clock });
 
         if (opened.kind !== 'answer') return opened;
         const [collected] = await Promise.allSettled([generateFromStream(opened.value)]);
 
         return collected.status === 'fulfilled' ? { kind: 'answer', value: collected.value } : { kind: 'failed', error: collected.reason };
       }
-      : async () => ({ kind: 'answer', value: await doGenerate() }))),
-    wrapStream: ({ doStream, params }) => settle(retrying(policy, params, (last) => openStream({
-      provider: policy.provider, start: doStream, last, keepRaw: kinuOptions(params).raw, caller: params.abortSignal,
+      : async (_last, clock) => {
+        const value = await doGenerate();
+
+        clock.ended('answered');
+
+        return { kind: 'answer', value };
+      })),
+    wrapStream: ({ doStream, params }) => settle(retrying(policy, params, (last, clock) => openStream({
+      provider: policy.provider, start: doStream, last, keepRaw: kinuOptions(params).raw, caller: params.abortSignal, clock,
     }))),
   };
 }
@@ -166,6 +208,18 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
     }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('provider.wait_notify_failed', failure))));
   };
 
+  // Told when an attempt ends, which for an answer is once the SDK has read its stream to the end: no caller awaits it.
+  const tellAttempt = (attempt: Omit<ModelAttemptInfo, 'provider' | 'modelId'>): void => {
+    const onAttempt = policy.onAttempt;
+
+    if (onAttempt === undefined) return;
+
+    detach(Effect.try({
+      try: () => onAttempt({ provider: policy.provider, ...(policy.modelId !== undefined && { modelId: policy.modelId }), ...attempt }),
+      catch: (cause) => toKinuError({ doing: 'reporting a model attempt', cause, otherwise: 'io' }),
+    }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('provider.attempt_notify_failed', failure)))));
+  };
+
   return Effect.gen(function* () {
     let owned: number | null = null;
     let waits = 0;
@@ -178,10 +232,13 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
       if (checked !== null) yield* cooledDown({ policy, pacer, keys: checked, owned, retries, now, signal, reportWait });
 
       capture.identity = null;
-      const [opened] = yield* Effect.promise(() => Promise.allSettled([withAttemptIdentity(capture, () => open(waits >= retries))]));
+      const clock = new AttemptClock(now, attemptNumber, tellAttempt);
+      const [opened] = yield* Effect.promise(() => Promise.allSettled([withAttemptIdentity(capture, () => open(waits >= retries, clock))]));
       const outcome: Opened<T> = opened.status === 'fulfilled' ? opened.value : { kind: 'refused', error: opened.reason };
 
+      // An answer's stream tells its own end; every other outcome ends the attempt here.
       if (outcome.kind === 'answer') return outcome.value;
+      clock.ended(outcome.kind === 'stall' ? 'stalled' : outcome.kind);
 
       if (outcome.kind === 'failed') return yield* Effect.die(outcome.error);
 
@@ -349,6 +406,7 @@ interface StreamAttempt {
   readonly keepRaw: boolean;
   /** The caller's own cancel, which ends the attempt too. */
   readonly caller: AbortSignal | undefined;
+  readonly clock: AttemptClock;
 }
 
 /**
@@ -381,6 +439,7 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
 
   // The answer's headers are in: its body is the provider's to send.
   diagnostics.event('provider.stream_opened', { provider: attempt.provider, ms: Date.now() - started });
+  attempt.clock.answering();
   const parts = partsOf(opened.stream);
   const held: LanguageModelV4StreamPart[] = [];
 
@@ -399,9 +458,9 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
       return cutBeforeOutput(read.reason);
     }
 
-    if (read.status === 'rejected') return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: { reason: read.reason } });
+    if (read.status === 'rejected') return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: { reason: read.reason }, clock: attempt.clock });
 
-    if (read.value === 'end') return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: 'closed' });
+    if (read.value === 'end') return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: 'closed', clock: attempt.clock });
     const part = read.value;
 
     held.push(part);
@@ -415,7 +474,9 @@ async function openStream(attempt: StreamAttempt): Promise<Opened<LanguageModelV
       return cutBeforeOutput(part.error);
     }
 
-    return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: null });
+    attempt.clock.output();
+
+    return answered(opened, { bound, parts, held, keepRaw: attempt.keepRaw, ended: null, clock: attempt.clock });
   }
 }
 
@@ -461,17 +522,19 @@ interface LiveStream {
   readonly held: readonly LanguageModelV4StreamPart[];
   readonly keepRaw: boolean;
   readonly ended: Ended;
+  readonly clock: AttemptClock;
 }
 
 /** The answer's parts, the held ones first, raw events dropped unless the caller asked for them; a silence past the
  *  bound errors it and cancels the provider's stream. */
 function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened<LanguageModelV4StreamResult> {
-  const { bound, parts, held, keepRaw, ended } = live;
+  const { bound, parts, held, keepRaw, ended, clock } = live;
   const shown = (part: LanguageModelV4StreamPart): boolean => keepRaw || part.type !== 'raw';
 
   const stream = new ReadableStream<LanguageModelV4StreamPart>({
     start: (controller) => {
       bound.onSilence(async () => {
+        clock.ended('broken');
         controller.error(bound.failure);
         await parts.cancel();
       });
@@ -479,6 +542,8 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
       for (const part of held.filter(shown)) controller.enqueue(part);
 
       if (ended !== null) bound.stop();
+
+      if (ended !== null) clock.ended(ended === 'closed' ? 'answered' : 'broken');
 
       if (ended === 'closed') controller.close();
       else if (ended !== null) controller.error(ended.reason);
@@ -491,6 +556,7 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
 
         if (read.status === 'rejected' || read.value === 'end') {
           bound.stop();
+          clock.ended(read.status === 'rejected' ? 'broken' : 'answered');
 
           return read.status === 'rejected' ? controller.error(read.reason) : controller.close();
         }
@@ -502,6 +568,7 @@ function answered(opened: LanguageModelV4StreamResult, live: LiveStream): Opened
     },
     cancel: () => {
       bound.stop();
+      clock.ended('broken');
 
       return parts.cancel();
     },
