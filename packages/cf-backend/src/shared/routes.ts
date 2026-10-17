@@ -10,7 +10,8 @@ import {
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen, type LiveShareBody,
+  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
+  LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
   type LiveShareRecord, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
@@ -23,7 +24,7 @@ import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
 /** The owner's workspace, once the app host proved it is theirs. */
-type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'setLiveShareListing' | 'slateAs'>;
+type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'setLiveShareListing' | 'slatePreapprovals' | 'withdrawSlatePreapproval' | 'slateAs'>;
 
 /** Its own salt and info, so preview and blueprint tokens never verify each other. */
 const blueprintSigner = labelSigner('kinu.blueprint.salt', 'kinu.blueprint.v1');
@@ -124,6 +125,16 @@ sharedRoutes.post(LIVE_SHARE_LISTING_PATH, async (c) => shareChange({
   request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareListingBodySchema,
   usage: '{ workspace, share, listed: true, line, category } or { workspace, share, listed: false }',
 }, async (owned, body) => owned.setLiveShareListing(body)));
+
+// A slate's standing approvals that stand now, as its share sheet lists them beside the reach.
+sharedRoutes.post(LIVE_SHARE_PREAPPROVALS_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: SlatePreapprovalsBodySchema, usage: '{ workspace, slate }',
+}, async (owned, body) => owned.slatePreapprovals(body.slate)));
+
+// One taken back, from every share of its slate.
+sharedRoutes.post(LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: SlatePreapprovalWithdrawSchema, usage: '{ workspace, slate, namespace, member, root }',
+}, async (owned, body) => owned.withdrawSlatePreapproval(body)));
 
 
 async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
@@ -323,9 +334,9 @@ async function ownerMode(owned: OwnedWorkspace, made: { workspace: string; share
 }
 
 /** Its owner's word on one of their live shares, from their share sheet: answered with the share as it stands after. */
-async function shareChange<Schema extends v.GenericSchema<unknown, { readonly workspace: string }>>(
+async function shareChange<Schema extends v.GenericSchema<unknown, { readonly workspace: string }>, Answer>(
   input: { readonly request: Request; readonly env: Env; readonly identity: AuthIdentity; readonly schema: Schema; readonly usage: string },
-  change: (owned: OwnedWorkspace, body: v.InferOutput<Schema>) => Promise<SlateAnswer<LiveShareRecord>>,
+  change: (owned: OwnedWorkspace, body: v.InferOutput<Schema>) => Promise<SlateAnswer<Answer>>,
 ): Promise<Response> {
   const body = await safeJson(input.request, input.schema);
 

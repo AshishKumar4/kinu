@@ -298,6 +298,8 @@ export {
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
   LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
+  LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, SlatePreapprovalsSchema,
+  type SharePreapproval, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   SlateReachSchema, LiveShareBodySchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema,
   type SlateReach, type LiveShareBody, type LiveShareModeBody, type LiveShareListingBody,
 } from './slates/sharing';

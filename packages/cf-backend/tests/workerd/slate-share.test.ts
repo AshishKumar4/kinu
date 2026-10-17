@@ -233,6 +233,25 @@ it("a viewer's approved write held while its dispatch prepares is never made onc
   }
 });
 
+it("a standing approval stands at the revision it was given at, and an owner's edit leaves it void", async () => {
+  const probe = subject('live-preapproved');
+  await probe.start();
+
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+
+  expect(await probe.preapproveWrites()).toEqual([created.share.id]);
+  const given = await probe.preapprovals();
+
+  expect(given).toEqual({ revision: expect.any(String), members: ['writeFile'] });
+
+  // The owner's edit is a new revision: what was approved for the old code stands for none of the new.
+  const edited = await probe.editBoard();
+
+  expect(edited).not.toBe(given.revision);
+  expect(await probe.preapprovals()).toEqual({ revision: edited, members: [] });
+});
+
 it("an owner share's approval moves with its owner's own edit, and a review read at the old revision turns nothing on", async () => {
   const probe = subject('live-owner-edit');
   await probe.start();

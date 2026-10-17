@@ -128,7 +128,7 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type LiveShareRecord, type LiveShareModeBody, type LiveShareListingBody, type RoomService,
+  type LiveShareRecord, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
@@ -5968,6 +5968,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  asks it of the share its index names, so nothing of an unlisted share is answered. */
   async galleryNeeds(share: string): Promise<SlateAnswer<RoomService[]>> {
     return (await this.slates()).controller.galleryNeeds(share);
+  }
+
+  /** DO-only, for the same reason: a slate's standing approvals, as its owner's share sheet lists them. */
+  async slatePreapprovals(slate: string): Promise<SlateAnswer<SlatePreapprovals>> {
+    return (await this.slates()).controller.slatePreapprovals(slate);
+  }
+
+  /** DO-only, for the same reason: one standing approval taken back by its owner's share sheet. Nothing grants one here:
+   *  only the owner's answer to an effect's ask does. */
+  async withdrawSlatePreapproval(body: SlatePreapprovalWithdraw): Promise<SlateAnswer<SlatePreapprovals>> {
+    return (await this.slates()).controller.withdrawSlatePreapproval(body);
   }
 
   /** DO-only, for the same reason: a live share listed in the Gallery, or taken off it, by its owner's share sheet. */

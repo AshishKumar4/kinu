@@ -301,3 +301,48 @@ test('people are added to use a slate or to edit it too, a role named again repl
     db.close();
   }
 });
+
+test("an 'Always for this slate' approval stands on each live owner share of its slate, at one revision, until taken back", () => {
+  const { db, shares } = shareDb();
+
+  try {
+    const owner = (id: string, slate = 'issues') => {
+      shares.add({ ...liveShare(), id, slate, handle: `${id.padEnd(10, '0')}` });
+      shares.setAuthority(id, { mode: 'owner', grantRevision: 'rev-1' }, grant);
+    };
+
+    owner('s1');
+    owner('s2');
+    owner('s3', 'notes');
+    shares.add({ ...liveShare(), id: 's4', handle: 's400000000' });
+    owner('s5');
+    shares.revoke('s5');
+
+    const create = { slate: 'issues', namespace: 'mcp.github', member: 'create_issue', root: { repo: 'kinu', owner: 'acme' }, revision: 'rev-1' };
+
+    // Every live owner share of the slate holds it; its own-access, revoked and other slates' shares do not.
+    expect(shares.preapprove(create)).toEqual(['s1', 's2']);
+    expect(shares.preapprovalsOf('issues', 'rev-1')).toEqual([create]);
+    expect(shares.preapprovalsOf('issues', null)).toEqual([]);
+    expect([shares.get('s4')?.grant.preapproved, shares.get('s3')?.grant.preapproved, shares.get('s5')?.grant.preapproved]).toEqual([undefined, undefined, undefined]);
+
+    // The same shape again, its root's keys in any order, is one approval.
+    shares.preapprove({ ...create, root: { owner: 'acme', repo: 'kinu' } });
+    expect(shares.get('s1')?.grant.preapproved).toHaveLength(1);
+
+    // One at a new revision voids the old ones: they go.
+    const comment = { ...create, member: 'add_comment', revision: 'rev-2' };
+
+    shares.preapprove(comment);
+    expect([shares.preapprovalsOf('issues', 'rev-1'), shares.preapprovalsOf('issues', 'rev-2')]).toEqual([[], [comment]]);
+
+    // Taken back from every share of the slate, whatever revision it was given at.
+    expect(shares.withdrawPreapproval({ slate: 'issues', namespace: 'mcp.github', member: 'add_comment', root: { repo: 'kinu', owner: 'acme' } })).toEqual(['s1', 's2']);
+    expect(shares.preapprovalsOf('issues', 'rev-2')).toEqual([]);
+    expect(shares.withdrawPreapproval({ slate: 'issues', namespace: 'mcp.github', member: 'add_comment', root: {} })).toEqual([]);
+    // The rest of the grant is as it was.
+    expect(shares.get('s1')?.grant).toEqual({ ...grant, preapproved: [] });
+  } finally {
+    db.close();
+  }
+});

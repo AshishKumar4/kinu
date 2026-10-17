@@ -561,6 +561,21 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     return { mutateError, written: this.#writes > before };
   }
 
+  /** An "Always for this slate" the owner gave the board's writes at its revision now, as their answer to an ask leaves
+   *  it: the shares it stands on. */
+  preapproveWrites(): string[] {
+    const revision = slateRevision(this.host.controller.builds, SLATE_ID) ?? '';
+
+    return this.host.controller.live.preapprove({ slate: SLATE_ID, namespace: 'workspace', member: 'writeFile', root: {}, revision });
+  }
+
+  /** The board's standing approvals, as its owner's share sheet lists them. */
+  async preapprovals(): Promise<{ revision: string | null; members: string[] }> {
+    const listed = await this.host.controller.slatePreapprovals(SLATE_ID);
+
+    return listed.ok ? { revision: listed.value.revision, members: listed.value.preapproved.map((each) => each.member) } : { revision: null, members: [] };
+  }
+
   /** Its owner lists `share` in the Gallery, as their share sheet does. */
   listShare(share: string) {
     return this.host.controller.setLiveShareListing({ workspace: this.ctx.id.name ?? this.ctx.id.toString(), share, listed: true, line: 'A board', category: 'work' });
