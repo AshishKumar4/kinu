@@ -114,7 +114,8 @@ async function countLooks(page: Page): Promise<void> {
   })()`);
 }
 
-/** Once a view has asked `page` what it waits on `count` times: one that read the page at once would have asked none. */
+/** Once a view has asked `page` what it waits on `count` times: one that read the page at once would have asked fewer,
+ *  so a test races this with the reading itself. */
 async function looked(page: Page, count: number): Promise<void> {
   await page.waitForFunction(`window.__looks >= ${String(count)}`, { timeout: 0 });
 }
@@ -240,7 +241,7 @@ describe('a slate page', () => {
     const drawn = new SlateView(page.mainFrame()).drawn(TEAMS);
 
     // The page shows "Loading the month" while its call is held: looked at three times, it is still not read.
-    await looked(page, 3);
+    await Promise.race([looked(page, 3), drawn]);
     const early = await settledNow(drawn);
 
     held.release();
@@ -269,7 +270,7 @@ describe('a slate page', () => {
     await countLooks(page);
     const drawn = view.drawn(TEAMS);
 
-    await looked(page, 3);
+    await Promise.race([looked(page, 3), drawn]);
     const early = await settledNow(drawn);
 
     // Cover answered, then the page asks for the month again, and draws it.
@@ -293,7 +294,7 @@ describe('a slate page', () => {
     const drawn = view.drawn(TEAMS);
 
     // Quiet, with nothing in flight, the page has not yet answered its press: three looks on, it is still not read.
-    await looked(page, 3);
+    await Promise.race([looked(page, 3), drawn]);
     const early = await settledNow(drawn);
 
     await page.evaluate('window.beginCover()');
