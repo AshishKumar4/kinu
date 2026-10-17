@@ -38,7 +38,8 @@ import {
 } from './rpc';
 import { WorkspaceSlates } from './runtime';
 import { SlateShareViewers, type OwnerEffects } from './share-viewers';
-import { editedBy, editedRevision, slateRevision } from './share-policy';
+import { slateRevision } from './share-policy';
+import { editedBy, editedRevision } from './share-revision';
 import type { BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SlateReach, SlateShareCard, SlateShareRecord } from './sharing';
 import { SlateShareStore, type ShareUser } from './shares';
 import { SqliteSlateStateStore } from './state';
