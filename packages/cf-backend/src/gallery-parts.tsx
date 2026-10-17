@@ -9,7 +9,8 @@
  * - `team` is a part the slate does not declare for this share: a stub that says what to do.
  *
  * `shared-live` is the same slate entered as a share: the share's page opens it (`/api/shared/live/open`) and frames it
- * under Kinu's bar, hosting its parts as the visitor.
+ * under Kinu's bar, hosting its parts as the visitor. `part-previews` is the owner's own two previews of it, in the
+ * workspace's column and in an answer in the chat; their page is the slate's server's, served by a test.
  *
  * What the page asked is on the root for a test to read; the slate's page is drawn here, as its own author would.
  */
@@ -20,8 +21,12 @@ import {
   APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareBodySchema, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
   type PartRunAnswer, type SlateConsent,
 } from "@kinu.run/core";
+import { InlineSlate } from "@/components/slates/InlineSlate";
+import { SlateInlineContext } from "@/components/slates/context";
 import { PartView } from "@/components/sharing/PartView";
+import { SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import { usePartHost } from "@/hooks/use-part-host";
+import { workspaceRpc } from "@/lib/workspace-rpc";
 import LiveSharePage from "@/pages/LiveSharePage";
 import PartFramePage from "@/pages/PartFramePage";
 
@@ -59,7 +64,7 @@ function slatePage(gallery: string): string {
 
 /** The part routes, answered at the top as the server answers its one viewer. */
 export function installPartsFixture(frame: string): void {
-  if (frame !== "part-host" && frame !== "shared-live") return;
+  if (frame !== "part-host" && frame !== "shared-live" && frame !== "part-previews") return;
 
   const next = window.fetch.bind(window);
   const consents: SlateConsent[] = [{ workspace: WORKSPACE, slate: SLATE, ...GITHUB, revision: "r1" }];
@@ -203,6 +208,35 @@ export function SharedLiveFrame() {
 }
 
 export const SHARED_LIVE_ENTRY = `/shared/live/${WORKSPACE}/share-1`;
+
+/** The workspace's previews ask where the slate's page is served; its preview host answers there. */
+const previewRpc = workspaceRpc(async <T,>(method: string): Promise<T> => {
+  if (method !== "previewSlate") throw new Error(`The previews fixture answers previewSlate alone, not ${method}`);
+
+  return new Response(JSON.stringify({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } })).json<T>();
+});
+
+/** The owner's own previews of the slate, in its workspace: in the column, and in an answer in the chat. */
+export function PartPreviewsFrame() {
+  return (
+    <Routes>
+      <Route path={APP_ROUTES.workspace} element={
+        <SlateInlineContext.Provider value={{ rpc: previewRpc }}>
+          <div className="grid h-dvh grid-cols-2 gap-4 p-bg p-4 p-text">
+            <section data-slate-preview-display="pane" className="flex min-h-0 flex-col">
+              <InlineSlate id={SLATE} rpc={previewRpc} display="pane" />
+            </section>
+            <section data-slate-preview-display="inline" className="min-h-0 overflow-y-auto p-row-text">
+              <p>Here is the board.<span className="block my-2"><InlineSlate id={SLATE} rpc={previewRpc} display="inline" /></span></p>
+            </section>
+          </div>
+        </SlateInlineContext.Provider>
+      } />
+    </Routes>
+  );
+}
+
+export const PART_PREVIEWS_ENTRY = `/workspace/${WORKSPACE}`;
 
 /** One part frame, at its route as the slate's page addresses it. */
 export function PartFrameFrame() {

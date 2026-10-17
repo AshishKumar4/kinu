@@ -5,8 +5,10 @@
  * fixture (gallery-parts.tsx), which records what the page asked.
  */
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
+import { detach } from '@kinu.run/core/obs';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
@@ -44,6 +46,41 @@ const asked = async (page: Page) => v.parse(AskedSchema, JSON.parse(await page.$
 
 /** No decision of any kind is drawn inside a part's frame: they open at the top alone. */
 const noDecisionIn = async (frame: Frame) => expect(await frame.$('[data-consent-allow], [data-approval-approve], [data-show-confirm]')).toBeNull();
+
+/**
+ * The preview host is answered here, as a public address, and frames the gallery's part frame on loopback. Chrome refuses
+ * a public page's frame onto a more private address, which deployed hosts never meet: the slate's page and the app are
+ * both public there.
+ */
+const PREVIEW_ON_LOOPBACK = { browserArgs: ['--disable-features=LocalNetworkAccessChecks'] };
+
+/** The slate's server, as its preview host serves the owner's previews: its page, framing its standup part. */
+async function serveSlatePage(page: Page, gallery: string): Promise<void> {
+  await page.setRequestInterception(true);
+  page.on('request', (request) => detach(Effect.promise(async () => {
+    if (!new URL(request.url()).hostname.endsWith('.preview.example.test')) {
+      await request.continue();
+
+      return;
+    }
+
+    await request.respond({ status: 200, contentType: 'text/html', body: [
+      '<!doctype html><body style="margin:0">',
+      `<iframe data-slate-part="standup" src="${gallery}/gallery.html?frame=part-frame&part=standup&scheme=light" style="border:0;width:100%;height:220px"></iframe>`,
+    ].join('') });
+  })));
+}
+
+/** The standup part's frame inside one of the owner's previews (`pane` or `inline`), once it has drawn its state. */
+async function previewPart(page: Page, display: string): Promise<Frame> {
+  const preview = await page.waitForSelector(`[data-slate-preview-display="${display}"] iframe`, SOON);
+  const slate = await preview?.contentFrame();
+  const found = await page.waitForFrame((frame) => frame.parentFrame() === slate && frame.url().includes('frame=part-frame&part=standup'), SOON);
+
+  await found.waitForSelector('[data-part-frame]', SOON);
+
+  return found;
+}
 
 describe("a slate's personal parts", () => {
   test('each asks its viewer at the top, then shows; an effect waits for approval of its exact payload; a showing is confirmed as it leaves', async () => {
@@ -138,6 +175,31 @@ describe("a slate's personal parts", () => {
         }
       }
     });
+  });
+
+  test("the owner's previews, in the column and in an answer, each host their slate's parts and open its decisions at the top", async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        await page.setViewport(VIEWPORTS.desktop);
+        await serveSlatePage(page, gallery.origin);
+        await page.goto(`${gallery.origin}/gallery.html?frame=part-previews`, { waitUntil: 'load' });
+
+        for (const display of ['inline', 'pane']) {
+          const standup = await previewPart(page, display);
+
+          expect(await stateOf(standup)).toBe('needs-consent');
+          await standup.click('[data-part-needs="consent"] button');
+          await page.waitForSelector('[data-consent-allow]', SOON);
+          await noDecisionIn(standup);
+          await page.click('[data-consent-allow]');
+          await reaches(standup, 'shown');
+        }
+      } finally {
+        await page.close();
+      }
+    }, PREVIEW_ON_LOOPBACK);
   });
 
   test('a part frame opened on its own, with no app page above it, runs nothing and shows nothing of a viewer', async () => {

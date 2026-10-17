@@ -78,7 +78,7 @@ import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
 import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
-import { installPartsFixture, installShareModeFixture, PartFrameFrame, partFrameEntry, PartHostFrame, PartStatesFrame, SHARED_LIVE_ENTRY, SharedLiveFrame } from "@/gallery-parts";
+import { installPartsFixture, installShareModeFixture, PART_PREVIEWS_ENTRY, PartFrameFrame, partFrameEntry, PartHostFrame, PartPreviewsFrame, PartStatesFrame, SHARED_LIVE_ENTRY, SharedLiveFrame } from "@/gallery-parts";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
@@ -7701,6 +7701,7 @@ async function mount() {
     ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
     ["shared-live", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
     ["part-frame", { node: <PartFrameFrame />, entries: [partFrameEntry(new URLSearchParams(location.search))] }],
+    ["part-previews", { node: <PartPreviewsFrame />, entries: [PART_PREVIEWS_ENTRY] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
