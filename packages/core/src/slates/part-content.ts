@@ -6,15 +6,20 @@
  * might miss.
  */
 
-/** Elements kept; any other is dropped, keeping its text. `script`, `style`, `template` and their kind go with their contents. */
+/**
+ * Elements kept; any other is dropped, keeping its text. `script`, `style`, `template` and their kind go with their
+ * contents, and so does every element whose inside the parser reads as text: unwrapped, that text would be read as markup
+ * once the frame parses the cut again.
+ */
 const KEPT = new Set([
   'p', 'div', 'span', 'br', 'hr', 'b', 'strong', 'i', 'em', 'u', 's', 'small', 'code', 'pre', 'blockquote',
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
   'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'section', 'article', 'header', 'footer', 'figure', 'figcaption',
 ]);
 
-/** Elements dropped with everything inside them. */
-const GONE = 'script, style, template, noscript, iframe, object, embed, svg, math, link, meta, base, form, input, button, textarea, select, img, video, audio, source, picture, canvas';
+/** Elements dropped with everything inside them: what runs, loads or takes input, and what holds raw text. */
+const GONE = 'script, style, template, noscript, iframe, object, embed, svg, math, link, meta, base, form, input, button, textarea, select, img, video, audio, source, picture, canvas, '
+  + 'xmp, plaintext, title, noembed, noframes';
 
 /** Attributes kept on a kept element, and then only as a small number: none that styles, names or links anything. */
 const SPANS = ['colspan', 'rowspan'] as const;
