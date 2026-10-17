@@ -405,6 +405,16 @@ function withUndurableAnswers(ctx: AgentContext, storageKey: string): AgentConte
   return ctx;
 }
 
+/** The calls each agent's isolate made into its workspace, by actor: in production each is an RPC, which its isolate's
+ *  invocation counts against its subrequests. */
+const crossings = new Map<string, number>();
+
+/** How many calls the agent `actorId`'s isolate has made into its workspace: a session opened for each file operation,
+ *  a program, its memory, and each call through its port. */
+export function workspaceCrossings(actorId: string): number {
+  return crossings.get(actorId) ?? 0;
+}
+
 /** Every model call routed under `conversation`, in any isolate, is answered by `model`; null answers it as shipped. */
 export function scriptConversationModel(conversation: string, model: (() => LanguageModel) | null): void {
   if (model === null) scriptedModels.delete(conversation);
@@ -512,8 +522,15 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
   return facets;
 
   async function openFacet(placement: AgentFacetPlacement, opener: AgentWorkspaceHost) {
-      // Each call reaches the activation that opened this agent last, as its stub's would after a reset.
-      const host = (): AgentWorkspaceHost => hosts.get(placement.storageKey) ?? opener;
+      const crossing = (): void => { crossings.set(placement.actorId, workspaceCrossings(placement.actorId) + 1); };
+
+      // Each call reaches the activation that opened this agent last, as its stub's would after a reset. Each is a
+      // crossing: a call through its port, a program, its memory.
+      const host = (): AgentWorkspaceHost => {
+        crossing();
+
+        return hosts.get(placement.storageKey) ?? opener;
+      };
 
       const db = agentDatabase(workspace(), placement.storageKey);
       // The root agent's own turns relay too; a suite counting a node's calls counts the node's alone.
@@ -761,8 +778,17 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
       const env: AgentFacetEnv = {
         WORKSPACE: {
-          session: async () => session(),
-          stateSession: async () => stateSession(),
+          // A session is opened for each file operation, as the shipped client opens one: each a crossing.
+          session: async () => {
+            crossing();
+
+            return session();
+          },
+          stateSession: async () => {
+            crossing();
+
+            return stateSession();
+          },
           memory: async () => host().memory(),
           program: (...args) => host().program(...args),
           port: async () => port,

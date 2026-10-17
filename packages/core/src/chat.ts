@@ -797,7 +797,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
 
       const base = await stepContext.base();
-      const assembled = await assembleTurnMessages({ ...serving, history: base.messages, turnStart: base.turnStart, admission: undefined });
+      const assembled = await assembleTurnMessages({ ...serving, history: base.messages, turnStart: base.turnStart, admission: undefined, continuing: true });
 
       return { ...assembled, changed: base.changed };
     },
@@ -1125,7 +1125,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     serving = { ...assembly, model: next.spec, contextWindow: served };
     initialContextAvailable = false;
     const history = initialContext?.messages ?? assembly.history;
-    const { messages } = await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined });
+    const { messages } = await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined, continuing: true });
 
     servingRoute = { providerId: bound.provider, modelId: parseModelSpec(next.spec).modelId, retention: turnRoute.retention };
     cache = attemptCachePlan(opts, servingRoute, messages, tools);
