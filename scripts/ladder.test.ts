@@ -27,7 +27,7 @@ import {
   GATE_DEADLINE_SECONDS, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, jobDrove, onArmada, secretGroup,
+  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, jobDrove, onArmada, secretGroup, recordArmadaRow,
 } from './ladder';
 import { ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite, isVitestEvalSuite, readMatching } from './sources';
 import { REPO_ROOT as root } from './repo-root';
@@ -37,7 +37,8 @@ import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
 import { armadaVerdict, ciVerdictRow, readFileTimings, readHostedCosts, withRunnerCosts } from './ci-verdicts';
-import { KILL_AFTER_SECONDS } from './deadline';
+import { KILL_AFTER_SECONDS, ROW_NOTICES_ENV } from './deadline';
+import { rowNotice, rowNotices } from './row-verdicts';
 import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 import { PRODUCT_FLOW_ROWS } from './product-flow-rows';
@@ -1425,6 +1426,40 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
     expect(entries.filter((entry) => entry.kind !== 'notice').map(({ kind, what, command }) => ({ kind, what, command })))
       .toEqual([{ kind: 'timing', what: unit.label, command: run }, { kind: 'red', what: unit.label, command: run }]);
+  });
+
+  // 2026-10-17: a container's disk stopped answering under the devbox contracts, the platform's, and the row has no
+  // other way to say it met a known blind spot than red. A notice it appends rides its verdict to the report.
+  test('a notice a row appends rides its verdict and lands in the report as a notice, beside a green exit', () => {
+    const notices = join(scratchDir('row-notices'), 'notices.txt');
+    const was = process.env[ROW_NOTICES_ENV];
+
+    process.env[ROW_NOTICES_ENV] = notices;
+
+    try {
+      rowNotice('the contracts after /agent-desktop did not run:\nthe container\'s disk stopped answering reads');
+    } finally {
+      if (was === undefined) delete process.env[ROW_NOTICES_ENV];
+      else process.env[ROW_NOTICES_ENV] = was;
+    }
+
+    const gate = armadaPhaseRows(['source']).find((each) => each.run === 'bun run gate:devbox-e2e');
+
+    if (gate === undefined) throw new Error('the devbox contracts are not a deploy row');
+    const verdict = ciVerdictRow(gate, { exitCode: 0, seconds: 300, stdout: '', stderr: '', notices: rowNotices(notices) }, undefined, undefined);
+    const report = scratchDir('row-notice-report');
+
+    expect(recordArmadaRow(report, gate, verdict, { green: true, found: 'job wave', reproduce: gate.run, said: '' })).toBe(true);
+    reportCIVerdicts({ sha, part: 'all', rows: [verdict] }, 'armada verdict', report);
+
+    const said = readFileSync(join(report, 'entries.jsonl'), 'utf8').split('\n').filter((line) => line !== '')
+      .map((line) => v.parse(v.looseObject({ kind: v.string(), what: v.string(), notice: v.optional(v.string()) }), JSON.parse(line)))
+      .filter((entry) => entry.kind !== 'timing' && entry.what === gate.label);
+
+    expect(said).toEqual([
+      { kind: 'notice', phase: 'source', what: gate.label, notice: 'the contracts after /agent-desktop did not run: the container\'s disk stopped answering reads' },
+      { kind: 'notice', phase: 'ci', what: gate.label, notice: 'the contracts after /agent-desktop did not run: the container\'s disk stopped answering reads' },
+    ]);
   });
 
   // armada's own row for a task that ended before its verdict (`underExit`) has the planned name and no command.

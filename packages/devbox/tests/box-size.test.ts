@@ -38,7 +38,7 @@ test('a box with no size chosen starts at the default size, from the golden', as
   await box.start();
 
   expect(container.startOptions).toEqual([{ containerSnapshot: { id: HARNESS_GOLDEN }, entrypoint: GOLDEN_ENTRYPOINT, instance: instance('medium'), enableInternet: true }]);
-  expect(await box.boxSize()).toEqual({ size: 'medium', chosen: undefined, running: 'medium', startRefused: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'medium', chosen: undefined, running: 'medium', startRefused: undefined, stalled: undefined });
   await box.destroy();
 });
 
@@ -52,7 +52,7 @@ test('resizing a box that has never started records the size and starts nothing;
   await box.writeFile('/workspace/first.txt', 'first');
 
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('large')]);
-  expect(await box.boxSize()).toEqual({ size: 'large', chosen: 'large', running: 'large', startRefused: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: 'large', running: 'large', startRefused: undefined, stalled: undefined });
   await box.destroy();
 });
 
@@ -74,7 +74,7 @@ test('an unknown size is refused and the recorded size stays', async () => {
 
   expect(refused.status === 'rejected' ? devboxFailure({ cause: refused.reason }) : refused)
     .toMatchObject({ code: 'invalid-input' });
-  expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: undefined, startRefused: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: undefined, startRefused: undefined, stalled: undefined });
   const [refusedDefault] = await Promise.allSettled([box.useDefaultSize('huge')]);
   expect(refusedDefault.status === 'rejected' ? devboxFailure({ cause: refusedDefault.reason }) : refusedDefault)
     .toMatchObject({ code: 'invalid-input' });
@@ -105,9 +105,9 @@ test('a box\'s own choice wins over the stored default, and dropping the choice 
   await box.resize('small');
   await box.start();
 
-  expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: 'small', startRefused: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: 'small', startRefused: undefined, stalled: undefined });
   expect(await box.resize(null)).toMatchObject({ kind: 'restarted', size: 'large', previous: 'small' });
-  expect(await box.boxSize()).toEqual({ size: 'large', chosen: undefined, running: 'large', startRefused: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: undefined, running: 'large', startRefused: undefined, stalled: undefined });
   expect(await box.devboxState()).toMatchObject({ size: 'large', runningSize: 'large' });
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('small'), instance('large')]);
   await box.destroy();
@@ -118,7 +118,7 @@ test('a new stored default is recorded and waits for the running container\'s ne
   await box.start();
 
   expect(await box.useDefaultSize('small')).toBe('small');
-  expect(await box.boxSize()).toEqual({ size: 'small', chosen: undefined, running: 'medium', startRefused: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: undefined, running: 'medium', startRefused: undefined, stalled: undefined });
   await box.quiesce();
   await box.start();
   expect(await box.useDefaultSize(null)).toBe('medium');
@@ -145,7 +145,7 @@ test('resizing a running box commits and starts it again at the new size; a runn
   expect(ended.exitCode).not.toBe(0);
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('medium'), instance('large')]);
   expect(container.starts.filter((start) => start.processId === supervised.processId)).toHaveLength(2);
-  expect(await box.boxSize()).toEqual({ size: 'large', chosen: 'large', running: 'large', startRefused: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: 'large', running: 'large', startRefused: undefined, stalled: undefined });
   expect((await box.devboxState()).ready).toBe(true);
   await box.destroy();
 });

@@ -70,6 +70,72 @@ describe('a command on the runtime\'s exec', () => {
     expect(await box.killExec('held')).toBe(false);
   });
 
+  // 2026-10-17: a stop's kill of a command reading a disk that stopped answering never landed, and nothing but a new
+  // container clears that disk. The runtime here answers the command and its kill never, and reads the box as such a
+  // disk would show it, or as a disk that answers.
+  const pinnedBox = (disk: 'stalled' | 'answering') => {
+    const launched = Promise.withResolvers<void>();
+    const killing = Promise.withResolvers<void>();
+
+    const { box, container } = harness(TestBox, undefined, async (argv, options) => {
+      if (argv[3] === 'devbox-disk-stall') {
+        const reading = `process 1 S 0 - tini\nprocess 500 ${disk === 'stalled' ? 'D' : 'S'} 1 read_extent_buffer_pages setsid\nroot /dev/vdc 27       16\n`;
+
+        return await localExec(['printf', '%s', reading], options);
+      }
+
+      if (argv.includes('kill-tree') || argv[0] === 'setsid') {
+        const never = new Promise<never>(() => {});
+
+        (argv[0] === 'setsid' ? launched : killing).resolve();
+
+        // Its process as the container's: no such work directory here.
+        return { ...await localExec(['true']), pid: 500, output: async () => await never };
+      }
+
+      return await localExec(argv, options);
+    });
+
+    // The command started, and its kill began: what the owner's first stop leaves.
+    const pinned = async () => {
+      const ran = Promise.allSettled([box.exec(`cat /a/file/not/yet/read`, { execId: 'pinned' })]);
+
+      await launched.promise;
+      const killed = Promise.allSettled([box.killExec('pinned')]);
+
+      await killing.promise;
+
+      return { ran, killed };
+    };
+
+    return { box, container, pinned };
+  };
+
+  test('a stop never restarts the computer, and a second one restarts it only where the stopped tree waits on its disk', async () => {
+    const stalled = pinnedBox('stalled');
+    await stalled.box.devboxStartup();
+
+    expect(await stalled.box.stopStalled()).toBe('nothing');
+    const { ran, killed } = await stalled.pinned();
+    const destroysBefore = stalled.container.destroys;
+
+    expect((await stalled.box.boxSize()).stalled).toBe('the computer\'s disk stopped answering reads, so its last stop is still waiting: setsid (read_extent_buffer_pages)');
+    expect(await stalled.box.stopStalled()).toBe('restarted');
+
+    const refused = 'the computer\'s disk stopped answering reads, so Stop restarted the computer';
+
+    expect([(await ran)[0], (await killed)[0]].map((outcome) => outcome?.status === 'rejected' ? devboxFailure({ cause: outcome.reason })?.message : outcome?.status))
+      .toEqual([refused, refused]);
+    expect(stalled.container.destroys - destroysBefore).toBe(1);
+
+    const answering = pinnedBox('answering');
+    await answering.box.devboxStartup();
+    await answering.pinned();
+    const kept = answering.container.destroys;
+
+    expect([(await answering.box.boxSize()).stalled, await answering.box.stopStalled(), answering.container.destroys - kept]).toEqual([undefined, 'finishing', 0]);
+  });
+
   test('a kill that arrives while the command is still starting ends it once it has started', async () => {
     // The runtime's exec holds its answer until released, so the kill lands before the process has a pid.
     const starting = gate();

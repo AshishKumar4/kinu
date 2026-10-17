@@ -5,9 +5,23 @@
  * break and end go to the run's log under the suite's name, so a run a tier's
  * deadline ends still names the row it was in.
  */
-import { watch } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, watch } from 'node:fs';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { SILENCE_NOTICE_ENV } from './deadline';
+import { ROW_NOTICES_ENV, SILENCE_NOTICE_ENV } from './deadline';
+
+/** A notice of the row's: a known blind spot it met, which its verdict carries to the report beside a green exit. With
+ *  no runner it is printed. */
+export function rowNotice(notice: string): void {
+  const path = process.env[ROW_NOTICES_ENV];
+
+  if (path === undefined || path === '') console.log(`notice: ${notice}`);
+  else appendFileSync(path, `${notice.replaceAll('\n', ' ')}\n`);
+}
+
+/** The notices a row appended to `path`. */
+export function rowNotices(path: string): string[] {
+  return existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter((line) => line !== '') : [];
+}
 
 export interface RowVerdicts {
   /** Run `measure` as `row`: its verdict, or null once its failure is recorded. */
