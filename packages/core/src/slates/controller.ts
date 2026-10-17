@@ -655,9 +655,10 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       }
 
       const graph = yield* Effect.promise(async () => this.graph(held.slate));
+      const session = yield* Effect.promise(async () => this.ports.session());
 
       // The graph may await a build. Check the current revision and mark only after that await, in the update's turn.
-      yield* Effect.sync(() => this.ports.transaction(() => settleSync(Effect.gen({ self: this }, function* () {
+      yield* Effect.sync(() => session.vfs.withTransaction(() => settleSync(Effect.gen({ self: this }, function* () {
         const revision = slateRevision(this.builds, held.slate);
         const mark = this.live.editMark(held.slate);
 
@@ -665,8 +666,21 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
           return yield* new KinuError('bad_input', 'This slate changed since you reviewed what it reaches; review it again');
         }
 
-        if (input.mode === 'owner' && mark !== null && revision === mark.revisionBefore) {
-          return yield* new KinuError('bad_input', `${mark.editor}'s change is still building; approve once it has built`);
+        if (input.mode === 'owner' && mark !== null) {
+          // A different last-good revision can belong to an older in-flight build. The reviewed tree must itself be
+          // the one the current root image compiled, not merely newer than revisionBefore. Capture joins this VFS/SQL
+          // transaction directly, without an await or a nested files.transaction().
+          const content = this.content ?? new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
+          const files = new SlateFiles(session.vfs.as(CRED_SESSION_USER), content, this.ports.sql, (body) => session.vfs.withTransaction(body));
+          const id = new SlateId(held.slate);
+          // Approval proves bytes, not a stat-based cache entry; rebuild this slate's manifest from fresh reads.
+          forgetSlateFiles(this.ports.sql, id);
+          const source = files.capture(id);
+          const good = this.builds.good(held.slate, slateAuthority(ROOT_SLATE_CALLER.cred));
+
+          if (good?.image.scope !== 'tree' || !revision?.startsWith(`${source.digest.value}:tree:`)) {
+            return yield* new KinuError('bad_input', `${mark.editor}'s change is still building; approve once it has built`);
+          }
         }
 
         setShareMode({ shares: this.live, share: held.id, graph, mode: input.mode, approved: input.mode === 'owner' ? input.approved : [], revision });

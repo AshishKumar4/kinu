@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { SlateId } from '@agent-core/core/slates';
 import { createTestWorkspace, makeSqlExec } from './helpers';
 import { sha256Hex } from '../src/safety/argument-digest';
 import { SlateController } from '../src/slates/controller';
@@ -13,6 +14,10 @@ import { serverAuthority } from '../src/slates/share-policy';
 import { rollbackSlateBatch, writeSlateBatch } from '../src/slates/slate-writer';
 import type { SlateFileChange } from '../src/slates/rpc';
 import { parseSlateProject } from '../src/slates/project';
+import { SlateFiles } from '../src/slates/files';
+import { WorkspaceSlateContentStore } from '../src/slates/content';
+import { SharedServers } from '../src/slates/shared-server';
+import { slateRevision } from '../src/slates/share-policy';
 
 const databases: Database[] = [];
 
@@ -41,6 +46,41 @@ async function editorTree() {
 }
 
 const replace = (text: string | null, base: string | null) => ({ text, base: base === null ? null : sha256Hex(base) });
+
+test('a fully no-op batch neither changes files nor creates an edit mark', async () => {
+  const { user, root, marks, write, bundle } = await editorTree();
+  const changes: string[] = [];
+  const stop = bundle.onFilesChanged((paths) => changes.push(...paths));
+  const before = user.lstat(`${root}/a.ts`);
+  const batch = write({ 'a.ts': replace('before-a', 'before-a'), 'absent.txt': replace(null, null) });
+  stop();
+
+  expect(batch.paths).toEqual([]);
+  expect(batch.before).toEqual({});
+  expect(batch.wrote).toEqual({});
+  expect(user.lstat(`${root}/a.ts`)).toEqual(before);
+  expect(changes).toEqual([]);
+  expect(marks.editMark('board')).toBeNull();
+});
+
+test('a no-op batch keeps an existing editor mark exactly as it was', async () => {
+  const { marks, write } = await editorTree();
+  write({ 'a.ts': replace('actual edit', 'before-a') }, 'pat', 'r0');
+  const before = marks.editMark('board');
+  const batch = write({ 'a.ts': replace('actual edit', 'actual edit'), absent: replace(null, null) }, 'sam', 'r1');
+
+  expect(batch.paths).toEqual([]);
+  expect(marks.editMark('board')).toEqual(before);
+});
+
+test('a mixed batch reports and snapshots only paths whose bytes actually change', async () => {
+  const { write } = await editorTree();
+  const batch = write({ 'a.ts': replace('before-a', 'before-a'), 'b.ts': replace('changed-b', 'before-b'), absent: replace(null, null) });
+
+  expect(batch.paths).toEqual(['b.ts']);
+  expect(batch.before).toEqual({ 'b.ts': { text: 'before-b', sha256: sha256Hex('before-b') } });
+  expect(batch.wrote).toEqual({ 'b.ts': sha256Hex('changed-b') });
+});
 
 test('an atomic batch rolls back the first write when the second write fails and leaves no edit mark', async () => {
   const { user, kernel, root, marks, write } = await editorTree();
@@ -208,42 +248,52 @@ async function controlledTree(catalog: () => Promise<{ mcp: never[]; slates: str
     call: async () => ({ ok: true, value: null }),
   });
 
-  const revision = (key: string) => builds.built('board', slateAuthority(ROOT_SLATE_CALLER.cred), key, { modules: {}, inputs: [] });
-  const share = controller.live.add({ id: 'share', slate: 'board', visibility: 'users', handle: '0123456789', grant: { slates: ['board'], members: [] } });
-  revision('r0');
+  const content = tree.session.vfs.withTransaction(() => new WorkspaceSlateContentStore(tree.kernel));
+  const files = new SlateFiles(tree.user, content, makeSqlExec(tree.db), (body) => tree.session.vfs.withTransaction(body));
+  const snapshot = () => files.transaction(() => files.capture(new SlateId('board')).digest.value);
 
-  return { ...tree, controller, revision, share };
+  const revision = (label: string, source = snapshot()): string => {
+    const key = `${source}:tree:${label}`;
+    builds.built('board', slateAuthority(ROOT_SLATE_CALLER.cred), key, { modules: {}, inputs: [], scope: 'tree' });
+
+    return key;
+  };
+
+  const share = controller.live.add({ id: 'share', slate: 'board', visibility: 'users', handle: '0123456789', grant: { slates: ['board'], members: [] } });
+  const initial = revision('r0');
+
+  return { ...tree, controller, revision, share, snapshot, initial };
 }
 
 test('owner-mode approval is fenced at the revision before an own-mode edit, and only a built current revision clears the mark', async () => {
-  const { controller, revision, share } = await controlledTree();
+  const { controller, revision, share, initial } = await controlledTree();
   const batch = await controller.writeShared('board', { 'a.ts': replace('r1', 'before-a') }, 'pat');
   expect(batch.ok).toBe(true);
-  const pending = await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: 'r0', approved: [] });
+  const pending = await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: initial, approved: [] });
 
   expect(pending).toMatchObject({ ok: false, reason: 'bad_input' });
   expect(!pending.ok && pending.error).toContain("pat's change is still building; approve once it has built");
   expect(controller.live.get(share.id)).toMatchObject({ mode: 'own', editedBy: 'pat' });
-  revision('r1');
-  const stale = await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: 'r0', approved: [] });
+  const current = revision('r1');
+  const stale = await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: initial, approved: [] });
   expect(stale).toMatchObject({ ok: false, reason: 'bad_input' });
   expect(controller.live.editMark('board')?.editor).toBe('pat');
-  const approved = await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: 'r1', approved: [] });
+  const approved = await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: current, approved: [] });
 
-  expect(approved).toMatchObject({ ok: true, value: { mode: 'owner', grantRevision: 'r1', editedBy: null } });
+  expect(approved).toMatchObject({ ok: true, value: { mode: 'owner', grantRevision: current, editedBy: null } });
   expect(controller.live.editMark('board')).toBeNull();
-  expect(serverAuthority(controller.live.authoritiesOf('board'), 'r1').kind).toBe('grant');
+  expect(serverAuthority(controller.live.authoritiesOf('board'), current).kind).toBe('grant');
 });
 
 test('an owner build never advances any owner share while the slate has an editor mark', async () => {
-  const { controller, revision, share } = await controlledTree();
-  await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: 'r0', approved: [] });
+  const { controller, revision, share, initial } = await controlledTree();
+  await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: initial, approved: [] });
   await controller.writeShared('board', { 'a.ts': replace('r1', 'before-a') }, 'pat');
   revision('r1');
-  revision('r2');
+  const current = revision('r2');
 
-  expect(controller.live.get(share.id)).toMatchObject({ mode: 'owner', grantRevision: 'r0', editedBy: 'pat' });
-  expect(serverAuthority(controller.live.authoritiesOf('board'), 'r2').kind).toBe('none');
+  expect(controller.live.get(share.id)).toMatchObject({ mode: 'owner', grantRevision: initial, editedBy: 'pat' });
+  expect(serverAuthority(controller.live.authoritiesOf('board'), current).kind).toBe('none');
   await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'own' });
   expect(controller.live.editMark('board')).not.toBeNull();
 });
@@ -252,18 +302,64 @@ test('an edit arriving while approval awaits the capability graph is fenced in t
   const ready = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
 
-  const { controller, share } = await controlledTree(async () => {
+  const { controller, share, initial } = await controlledTree(async () => {
     ready.resolve();
     await release.promise;
 
     return { mcp: [], slates: ['board'] };
   });
 
-  const approval = controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: 'r0', approved: [] });
+  const approval = controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: initial, approved: [] });
   await ready.promise;
   await controller.writeShared('board', { 'a.ts': replace('r1', 'before-a') }, 'pat');
   release.resolve();
 
   expect(await approval).toMatchObject({ ok: false });
   expect(controller.live.get(share.id)?.mode).toBe('own');
+});
+
+test('a pending editor mark denies owner authority at the send before any new build publishes', async () => {
+  const { controller, share, initial } = await controlledTree();
+  controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: initial }, {
+    slates: ['board'], members: [{ slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe' }],
+  });
+
+  const servers = new SharedServers({
+    authoritiesOf: (slate) => controller.live.authoritiesOf(slate), revision: (slate) => slateRevision(controller.builds, slate), generation: () => 0,
+  });
+
+  const call = { slate: 'board', chain: [], address: { namespace: 'workspace', member: 'readFile' } };
+  servers.within(call);
+  await controller.writeShared('board', { 'a.ts': replace('redirected runtime config', 'before-a') }, 'pat');
+
+  expect(() => servers.within(call)).toThrow();
+  expect(servers.authorityOf('board').kind).toBe('none');
+  expect(controller.live.authoritiesOf('board')).toMatchObject([{ mode: 'owner', grantRevision: null, editedBy: 'pat' }]);
+});
+
+test('an unrelated in-flight build cannot clear a newer editor mark', async () => {
+  const { controller, share, revision, snapshot, user, root } = await controlledTree();
+  user.writeFile(`${root}/a.ts`, 'r1 earlier source');
+  const earlierSource = snapshot();
+  await controller.writeShared('board', { 'a.ts': replace('r2 editor source', 'r1 earlier source') }, 'pat');
+  const unrelated = revision('r1', earlierSource);
+  const approval = await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: unrelated, approved: [] });
+
+  expect(approval).toMatchObject({ ok: false, reason: 'bad_input' });
+  expect(!approval.ok && approval.error).toContain("pat's change is still building");
+  expect(controller.live.editMark('board')?.editor).toBe('pat');
+  const built = revision('r2');
+  const reviewed = await controller.setLiveShareMode({ workspace: 'writer-test', share: share.id, mode: 'owner', revision: built, approved: [] });
+
+  expect(reviewed).toMatchObject({ ok: true, value: { editedBy: null } });
+  expect(controller.live.editMark('board')).toBeNull();
+});
+
+test('a no-op rollback cannot change a later pending edit mark', async () => {
+  const { write, rollback, marks } = await editorTree();
+  const noop = write({ 'a.ts': replace('before-a', 'before-a') });
+  write({ 'b.ts': replace('actual edit', 'before-b') }, 'sam');
+
+  expect(rollback(noop)).toEqual({ restored: [], conflicts: [] });
+  expect(marks.editMark('board')?.editor).toBe('sam');
 });
