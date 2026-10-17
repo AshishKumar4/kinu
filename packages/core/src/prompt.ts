@@ -32,6 +32,7 @@ import {
   OPERATING_GUIDANCE,
   ROLE_SECTION,
   OUTPUT_FORMAT_SECTION,
+  ANSWERING_SECTION,
   PERSISTENCE_SECTION,
   COMPUTER_EXECUTOR_LINE,
   TOOLS_SECTION,
@@ -178,7 +179,13 @@ function renderExecutorLine(exec: PromptExecutorInfo, render: RenderSection, { b
   }
 }
 
-function renderExecutorSection(surface: PromptSurface, render: RenderSection, seesImages: boolean): string {
+/** Whether the chat draws this workspace's slates: the slate route exists only where the workspace itself can publish a
+ *  preview on its own origin. */
+function drawsSlates(surface: PromptSurface): boolean {
+  return surface.executors.some((exec) => exec.name === 'workspace' && exec.capabilities?.includes('net_inbound') === true);
+}
+
+function renderExecutorSection(surface: PromptSurface, render: RenderSection, seesImages: boolean, answersPerson: boolean): string {
   const context: ExecutorLineContext = { backend: surface.backend, seesImages };
 
   const tools = surface.builtinTools;
@@ -208,8 +215,8 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, se
     hasComputer: devices.some((exec) => exec.name === 'computer'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
     hasPreview: previewExecutors.length > 0,
-    // The slate route exists only on workspaces that can publish a preview on their own origin.
-    workspacePreview: previewExecutors.some((exec) => exec.name === 'workspace'),
+    workspacePreview: drawsSlates(surface),
+    answersPerson: answersPerson && drawsSlates(surface),
     exposeCalls: previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or '),
     hasHire: surface.agentsActions.includes('hire'),
   });
@@ -272,6 +279,9 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection, 
     hasShell: hasTool(tools, 'shell') || hasTool(tools, 'eval'),
   }));
   parts.push(render(OUTPUT_FORMAT_SECTION, { familyDelta: promptFamilyDelta(OUTPUT_FORMAT_SECTION.id, surface.model.family) }));
+
+  // A hired agent's answer goes to the agent that hired it, which reads its words, not its pages.
+  if (!isHired && drawsSlates(surface)) parts.push(render(ANSWERING_SECTION, {}));
 
   return parts.join('\n\n');
 }
@@ -353,7 +363,7 @@ export function buildSystemPromptParts(
   const shared = [
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
-    renderExecutorSection(surface, render, opts.model?.seesImages !== false),
+    renderExecutorSection(surface, render, opts.model?.seesImages !== false, rt.actor.parentActorId === null),
     renderToolsSection(surface, render),
     hasTool(surface.builtinTools, 'file') && hasTool(surface.builtinTools, 'shell') && hasTool(surface.builtinTools, 'eval')
       ? render(TOOL_USE_SECTION, { familyDelta: promptFamilyDelta(TOOL_USE_SECTION.id, surface.model.family) })
