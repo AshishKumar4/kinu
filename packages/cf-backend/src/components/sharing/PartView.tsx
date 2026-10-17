@@ -3,6 +3,9 @@
  * the part's own markup, already cut by Kinu, in a nested frame that runs no scripts; Kinu's own controls under it; and,
  * when the part cannot show yet, what stands in its place and the one thing to do about it. The decisions it leads to
  * (allow, approve, show everyone) open in the app page at the top, where the slate's script cannot cover them.
+ *
+ * The slate's page can count the frames inside a part's frame, though it can read nothing else of it. So every state
+ * holds the same one nested frame (`SealedContent`), drawn only when the part is shown, and no state differs in frames.
  */
 import { useState, type ReactNode } from "react";
 import { EyeIcon, LockSimpleIcon, PlugIcon, SignInIcon, WarningCircleIcon } from "@phosphor-icons/react";
@@ -64,21 +67,33 @@ function ActionControl({ action, onAct }: { action: PartAction; onAct: PartContr
   );
 }
 
-/** The part as its last answer says, with the slate's title to name it by. */
+/**
+ * The part's markup in the one nested frame every state of its frame holds, kept in place from the first render on:
+ * `html`, Kinu's cut of it, is drawn when the part is shown, and otherwise the frame stays, empty and out of view.
+ */
+export function SealedContent({ html }: { html: string | null }) {
+  // Sealed: Kinu cut it to script-free, resource-free markup, and its frame runs nothing besides.
+  return (
+    <iframe srcDoc={html ?? ""} sandbox="" title="Part" data-part-content
+      className={html === null ? "hidden" : "block h-0 min-h-0 w-full flex-1 border-0 bg-transparent"} />
+  );
+}
+
+/** What a shown part draws in its `SealedContent`, null in every other state. */
+export const shownMarkup = (answer: PartRunAnswer | null): string | null => (answer?.kind === "shown" ? answer.html : null);
+
+/** The part as its last answer says, beside its `SealedContent`, with the slate's title to name it by. */
 export function PartView({ answer, slate, controls }: { answer: PartRunAnswer; slate: string; controls: PartControls }) {
   switch (answer.kind) {
     case "shown": {
+      // Its markup is in the sealed frame above; under it, Kinu's own controls.
+      if (answer.actions.length === 0 && answer.show === null) return null;
+
       return (
-        <div className="flex min-h-0 flex-1 flex-col gap-1.5">
-          {/* Sealed: Kinu cut it to script-free, resource-free markup, and its frame runs nothing besides. */}
-          <iframe srcDoc={answer.html} sandbox="" title="Part" data-part-content className="block h-0 min-h-0 w-full flex-1 border-0 bg-transparent" />
-          {(answer.actions.length > 0 || answer.show !== null) && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {answer.actions.map((action) => <ActionControl key={action.id} action={action} onAct={controls.act} />)}
-              {answer.show !== null && (
-                <PartButton data-part-show onClick={() => controls.decide("show")}><EyeIcon size={13} />Show to everyone…</PartButton>
-              )}
-            </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {answer.actions.map((action) => <ActionControl key={action.id} action={action} onAct={controls.act} />)}
+          {answer.show !== null && (
+            <PartButton data-part-show onClick={() => controls.decide("show")}><EyeIcon size={13} />Show to everyone…</PartButton>
           )}
         </div>
       );
@@ -114,7 +129,7 @@ export function PartView({ answer, slate, controls }: { answer: PartRunAnswer; s
 /** A part frame opened outside its slate's page, or one whose page has no app above it: nothing of the viewer shows. */
 export function PartOutsideItsSlate() {
   return (
-    <div data-part-outside className="flex h-dvh items-center justify-center px-4 text-center">
+    <div data-part-outside className="flex flex-1 items-center justify-center px-4 text-center">
       <p className="max-w-sm p-row-text p-text-2">This part shows only inside its slate, opened from Kinu.</p>
     </div>
   );

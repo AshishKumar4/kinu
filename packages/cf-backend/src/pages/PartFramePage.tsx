@@ -3,14 +3,14 @@
  * (docs/SLATE-SHARING-NIMBUS.md §3). It runs and decides only through the app page at the top of its window
  * (lib/part-bridge.ts); opened any other way it shows nothing of its viewer.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
 import { JsonValueSchema, safeJsonParse, type PartRunAnswer } from "@kinu.run/core";
 import { detach } from "@kinu.run/core/obs";
-import { PartOutsideItsSlate, PartView } from "@/components/sharing/PartView";
+import { PartOutsideItsSlate, PartView, SealedContent, shownMarkup } from "@/components/sharing/PartView";
 import { connectPartBridge, type PartBridge } from "@/lib/part-bridge";
 
 /**
@@ -87,14 +87,27 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
     }));
   }, [bridge, run]);
 
-  if (outside) return <PartOutsideItsSlate />;
+  const drawn = outside ? null : answer;
+  let body: ReactNode = <PartOutsideItsSlate />;
 
-  if (answer === null) return <div className="flex h-dvh items-center justify-center">{failure === null ? <Loader size="sm" /> : <p role="alert" className="p-meta p-danger">{failure}</p>}</div>;
+  if (!outside && answer === null) {
+    body = <div className="flex flex-1 items-center justify-center">{failure === null ? <Loader size="sm" /> : <p role="alert" className="p-meta p-danger">{failure}</p>}</div>;
+  }
 
+  if (drawn !== null) {
+    body = (
+      <>
+        <PartView answer={drawn} slate={bridge?.title ?? slate} controls={{ act: (action) => run(action, null), decide, signIn: () => bridge?.signIn(), retry: () => run(null, null) }} />
+        {failure !== null && <p role="alert" className="p-meta p-danger">{failure}</p>}
+      </>
+    );
+  }
+
+  // The sealed frame first and always, whatever the state: the slate's page can count this frame's frames.
   return (
-    <div data-part-frame={answer.kind} className="flex h-dvh flex-col p-2 p-text">
-      <PartView answer={answer} slate={bridge?.title ?? slate} controls={{ act: (action) => run(action, null), decide, signIn: () => bridge?.signIn(), retry: () => run(null, null) }} />
-      {failure !== null && <p role="alert" className="mt-1.5 p-meta p-danger">{failure}</p>}
+    <div data-part-frame={drawn?.kind} className="flex h-dvh flex-col gap-1.5 p-2 p-text">
+      <SealedContent html={shownMarkup(drawn)} />
+      {body}
     </div>
   );
 }

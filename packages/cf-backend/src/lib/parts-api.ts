@@ -3,7 +3,7 @@
  * signed-in viewer: a part's run, what the viewer confirmed to show everyone, their consents and their decision on an
  * effect. Never called from a part's frame, whose requests carry no session (lib/part-bridge.ts).
  */
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import {
   PartRunAnswerSchema, slateApprovalPath, SlateConsentsAnswerSchema, slateConsentsPath, slatePartRunPath, slatePartShowPath, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateConsent,
 } from "@kinu.run/core";
@@ -36,7 +36,7 @@ export function runPart({ workspace, slate, part, title }: RunPartAt, asked: Par
 
       return v.parse(PartRunAnswerSchema, yield* Effect.promise(async () => res.json()));
     }),
-    (cause) => Effect.succeed(renderThrownChain({ cause })),
+    (failed) => Effect.succeed(renderThrownChain({ cause: Cause.squash(failed) })),
   ));
 }
 

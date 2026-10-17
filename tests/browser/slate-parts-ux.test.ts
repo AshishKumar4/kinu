@@ -16,11 +16,59 @@ const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390,
 
 const SOON = { timeout: 15_000 } as const;
 
+/**
+ * In each part frame, from its first render on: every count of nested frames it held, as the slate's page can read it
+ * off the frame's window, and whether a nested frame was ever taken out. A count that differs by state, or a frame
+ * replaced, would tell the slate's page something of its viewer.
+ */
+function sampleFrames(): void {
+  if (new URLSearchParams(location.search).get('frame') !== 'part-frame') return;
+  const lengths: number[] = [];
+  let replaced = false;
+
+  // Kept on the root, where the test reads it back.
+  const keep = () => document.documentElement.setAttribute('data-frames-held', JSON.stringify({ lengths, replaced }));
+
+  const note = () => {
+    if ((document.getElementById('root')?.childElementCount ?? 0) === 0 || lengths.at(-1) === window.length) return;
+    lengths.push(window.length);
+    keep();
+  };
+
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        if (node instanceof Element && (node.matches('iframe') || node.querySelector('iframe') !== null)) {
+          replaced = true;
+          keep();
+        }
+      }
+    }
+
+    note();
+  }).observe(document, { childList: true, subtree: true });
+
+  const tick = () => {
+    note();
+    requestAnimationFrame(tick);
+  };
+
+  requestAnimationFrame(tick);
+}
+
+const FramesHeldSchema = v.object({ lengths: v.array(v.number()), replaced: v.boolean() });
+
+/** What a part frame held throughout: one nested frame, never replaced, is the only answer that tells nothing. */
+const framesHeld = async (frame: Frame) => v.parse(FramesHeldSchema, JSON.parse(await frame.$eval('html', (root) => root.getAttribute('data-frames-held')) ?? 'null'));
+
+const ONE_FRAME_THROUGHOUT = { lengths: [1], replaced: false };
+
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
 
   await page.setViewport(VIEWPORTS[viewport]);
   await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
+  await page.evaluateOnNewDocument(sampleFrames);
   await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'load' });
 
   return page;
@@ -156,6 +204,9 @@ describe("a slate's personal parts", () => {
             { args: [], action: pressed, approval: null },
             { args: [], action: pressed, approval: 'approval-1' },
           ]);
+
+          // Through every state each part showed, its frame held one nested frame, the same one.
+          for (const part of [standup, deploy, team]) expect(await framesHeld(part)).toEqual(ONE_FRAME_THROUGHOUT);
         } finally {
           await page.close();
         }
@@ -174,6 +225,12 @@ describe("a slate's personal parts", () => {
         expect(await stateOf(standup)).toBe('stub');
         await standup.waitForSelector('[data-part-stub="signed-out"] button', SOON);
         expect(await stateOf(team)).toBe('failed');
+        const deploy = await page.waitForFrame((frame) => frame.url().includes('frame=part-frame&part=deploy'), SOON);
+
+        await deploy.waitForSelector('[role="alert"]', SOON);
+
+        // Refused, failed or never answered, each part frame holds the one nested frame every other state holds.
+        for (const part of [standup, deploy, team]) expect(await framesHeld(part)).toEqual(ONE_FRAME_THROUGHOUT);
 
         const here = new URL(page.url());
 
@@ -265,6 +322,7 @@ describe("a slate's personal parts", () => {
       try {
         await page.waitForSelector('[data-part-outside]', SOON);
         expect(await page.$('[data-part-frame]')).toBeNull();
+        expect(await framesHeld(page.mainFrame())).toEqual(ONE_FRAME_THROUGHOUT);
       } finally {
         await page.close();
       }

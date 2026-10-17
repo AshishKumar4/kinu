@@ -28,7 +28,7 @@ import {
 } from "@kinu.run/core";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
-import { PartView } from "@/components/sharing/PartView";
+import { PartView, SealedContent, shownMarkup } from "@/components/sharing/PartView";
 import { SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import { usePartHost } from "@/hooks/use-part-host";
 import { workspaceRpc } from "@/lib/workspace-rpc";
@@ -76,6 +76,17 @@ function refusedRun(part: string): Response {
   return Response.json({ kind: "failed", message: "Team board's code failed: digest is not a function." } satisfies PartRunAnswer);
 }
 
+/**
+ * The share's entry (`LIVE_SHARE_OPEN_PATH`): the slate's page as its host serves it, at an address of the page's own
+ * origin. A share that names people answers no one signed out.
+ */
+function openedShare(frame: string): Response {
+  if (frame === "shared-live-signed-out") return Response.json({ error: "Sign in to open this share" }, { status: 401 });
+  const page = URL.createObjectURL(new Blob([slatePage(location.origin + location.pathname)], { type: "text/html" }));
+
+  return Response.json({ url: page, slate: SLATE, title: TITLE });
+}
+
 /** The part routes, answered at the top as the server answers its one viewer. */
 export function installPartsFixture(frame: string): void {
   if (!["part-host", "part-host-refused", "shared-live", "shared-live-signed-out", "part-previews"].includes(frame)) return;
@@ -109,20 +120,36 @@ export function installPartsFixture(frame: string): void {
     return { kind: "stub", reason: "no-part", message: "Sam can turn on My access for this part in the slate's share sheet." };
   };
 
+  // The viewer's decisions: a consent read or given, an effect approved or declined, a showing confirmed.
+  const decided = ({ kind, verb, part, method, body }: { kind?: string; verb?: string; part: string; method: string; body: string | null }): Response => {
+    if (kind === "consents" && method === "GET") return Response.json({ consents });
+
+    if (kind === "consents") {
+      const given = v.parse(v.object({ server: v.string(), revision: v.string() }), JSON.parse(body ?? "{}"));
+      const ask = given.server === GITHUB.server ? GITHUB : VERCEL;
+
+      consents.push({ workspace: WORKSPACE, slate: SLATE, ...ask });
+
+      return new Response(null, { status: 204 });
+    }
+
+    if (kind === "approvals") {
+      if (v.parse(v.object({ decision: v.string() }), JSON.parse(body ?? "{}")).decision === "approve") approved.add(part);
+
+      return new Response(null, { status: 204 });
+    }
+
+    if (kind === "parts" && verb === "show") return new Response(null, { status: 204 });
+
+    return Response.json({ error: "No such route." }, { status: 404 });
+  };
+
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     const [, api, area, workspace, slate, kind, part, verb] = url.pathname.split("/");
 
-    // A share that names people answers no one signed out.
-    if (url.pathname === LIVE_SHARE_OPEN_PATH && frame === "shared-live-signed-out") return Response.json({ error: "Sign in to open this share" }, { status: 401 });
-
-    // The share's entry: the slate's page as its host serves it, at an address of the page's own origin.
-    if (url.pathname === LIVE_SHARE_OPEN_PATH) {
-      const page = URL.createObjectURL(new Blob([slatePage(location.origin + location.pathname)], { type: "text/html" }));
-
-      return Response.json({ url: page, slate: SLATE, title: TITLE });
-    }
+    if (url.pathname === LIVE_SHARE_OPEN_PATH) return openedShare(frame);
 
     if (api !== "api" || area !== "slates" || workspace !== WORKSPACE || decodeURIComponent(slate ?? "") !== SLATE) return next(input, init);
 
@@ -137,26 +164,7 @@ export function installPartsFixture(frame: string): void {
       return Response.json(answerFor(decodeURIComponent(part ?? ""), v.parse(PartRunRequestSchema, JSON.parse(body ?? "{}"))));
     }
 
-    if (kind === "consents" && request.method === "GET") return Response.json({ consents });
-
-    if (kind === "consents") {
-      const given = v.parse(v.object({ server: v.string(), revision: v.string() }), JSON.parse(body ?? "{}"));
-      const ask = given.server === GITHUB.server ? GITHUB : VERCEL;
-
-      consents.push({ workspace: WORKSPACE, slate: SLATE, ...ask });
-
-      return new Response(null, { status: 204 });
-    }
-
-    if (kind === "approvals") {
-      if (v.parse(v.object({ decision: v.string() }), JSON.parse(body ?? "{}")).decision === "approve") approved.add(decodeURIComponent(part ?? ""));
-
-      return new Response(null, { status: 204 });
-    }
-
-    if (kind === "parts" && verb === "show") return new Response(null, { status: 204 });
-
-    return Response.json({ error: "No such route." }, { status: 404 });
+    return decided({ kind, verb, part: decodeURIComponent(part ?? ""), method: request.method, body });
   }, { preconnect: window.fetch.preconnect });
 }
 
@@ -294,7 +302,10 @@ export function PartStatesFrame() {
         {STATES.map((state) => (
           <section key={state.name} data-part-state={state.answer.kind} className="flex flex-col overflow-hidden rounded-xl border p-border p-surface">
             <h2 className="border-b p-border px-3 py-2 p-meta font-medium p-text-2">{state.name}</h2>
-            <div className="flex h-56 flex-col p-3 p-text"><PartView answer={state.answer} slate={TITLE} controls={controls} /></div>
+            <div className="flex h-56 flex-col gap-1.5 p-3 p-text">
+              <SealedContent html={shownMarkup(state.answer)} />
+              <PartView answer={state.answer} slate={TITLE} controls={controls} />
+            </div>
           </section>
         ))}
       </div>
