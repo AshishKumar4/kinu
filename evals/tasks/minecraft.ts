@@ -3,7 +3,7 @@ import { parseSync, type Argument, type ArrayExpressionElement, type CallExpress
 import { JsonValueSchema, WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core';
 import { DESKTOP_MEMBERS } from '../../packages/core/src/execution/desktop';
 import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
-import type { EvalCheck, EvalPart, PrepareCommand } from '../src/task';
+import type { EvalCheck, EvalPart, PrepareCommand, TrialBox } from '../src/task';
 import type { EvalVerifier } from '../src/verifier';
 
 // Minecraft Classic on the agent's own desktop, played by hand: every move a desktop action the agent chose from what it
@@ -774,15 +774,16 @@ async function verifyTower(verifier: EvalVerifier): Promise<void> {
     return { pass: refused.length === 0, evidence: refused.slice(0, 50) };
   });
 
-  await verifier.record('frames', async () => {
-    await box.closed();
-    const strip = v.parse(StripSchema, JSON.parse(await verifier.execute('computer', python(STRIP))));
+  // The screen as the grader saw it; the strip is the closing's, which every trial gets.
+  await verifier.writeFile(`${PICTURES}/final.png`, await box.frame());
+}
 
-    if (strip.frames > 0) await verifier.writeFile(`${PICTURES}/frames.jpg`, Uint8Array.from(Buffer.from(strip.jpeg, 'base64')));
-    await verifier.writeFile(`${PICTURES}/final.png`, await box.frame());
+/** The trial's frame strip, left in its workspace before the box goes, whatever the turn came to. */
+async function keepFrames(box: TrialBox): Promise<void> {
+  const answer = await box.execute('computer', python(STRIP));
+  const strip = v.parse(StripSchema, JSON.parse(answer.stdout ?? 'null'));
 
-    return { pass: strip.frames > 0, evidence: { frames: strip.frames, shown: strip.shown, kept: PICTURES } };
-  });
+  if (strip.frames > 0) await box.writeFile(`${PICTURES}/frames.jpg`, Uint8Array.from(Buffer.from(strip.jpeg, 'base64')));
 }
 
 /** A browser opened at a page off the game, as a link would open one, then closed: what its history says it loaded. */
@@ -837,6 +838,7 @@ export const minecraftTower: EvalPart = {
     'Optionally, stand on top of it (recorded, not graded).',
   ],
   turns: [{ prepare: MINECRAFT_PREPARE, prompt: PROMPT, verify: verifyTower }],
+  closing: keepFrames,
 };
 
 /** The task's mission: what the workspace is for. */
