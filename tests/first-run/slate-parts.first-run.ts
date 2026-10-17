@@ -26,8 +26,9 @@ const DEFECT: FirstRunDefect = {
     + 'share one origin and no header is served, or called the part routes with no browser; none framed a part from a '
     + 'deployed preview host under the deployed app.',
   provedRedAt: null,
-  redDirection: 'RED on any build without the part routes (next-rc): POST /api/slates/:ws/:slate/parts/:part/run answers 404 '
-    + 'and the part never draws. RED on c4015d141, whose part frame the browser refuses under the app. Green requires the part '
+  redDirection: 'RED on any build without personal parts: its package.json reader refuses `slate.parts` ("Invalid key"), so '
+    + 'the slate never builds, as staging answered on 2026-10-17. RED on c4015d141, whose part frame the browser refuses '
+    + 'under the app page. Green requires the slate to build with its part, the part '
     + 'to draw in its sealed frame with its own words and none of its script or image, its Again control to run it again '
     + 'with that press, and Show to everyone, confirmed at the top, to reach the slate\'s server as exactly its value, from '
     + 'the signed-in account.',
