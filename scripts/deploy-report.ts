@@ -451,6 +451,11 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  if (command === 'notice' && rest.length === 3) {
+    recordNotice(first, { phase: rest[0] ?? '', what: rest[1] ?? '', notice: rest[2] ?? '' });
+    process.exit(0);
+  }
+
   if (command === 'dispatched' && rest.length === 2) {
     append(first, { kind: 'dispatched', what: rest[0] ?? '', url: rest[1] ?? '' });
     process.exit(0);

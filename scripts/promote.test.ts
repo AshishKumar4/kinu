@@ -5,8 +5,9 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
-  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, evalVerdictRefusal, imagesStagingNeverRan, planRollback, readDownloads,
-  readEvalsVerdict, verifyServing, type EvalVerdict, type Promotion, type Verified,
+  adoptDownloads, adoptTarball, adoptedRecord, artifactDigest, builtKey, downloadsServed, evalVerdictRefusal, imagesStagingNeverRan, overrideKey,
+  planRollback, readDownloads, readEvalsVerdict, stagingReds, verifiedKey, verifyServing, writeOverride, type EvalVerdict, type Promotion, type Records,
+  type Verified,
 } from './promote';
 import { ResetSchema, type Reset } from './reset';
 
@@ -310,5 +311,59 @@ describe('the eval verdict a promotion waits for', () => {
     }));
 
     expect(() => readEvalsVerdict(dir, 'abcdef1')).toThrow('full statistical matrix');
+  });
+});
+
+// 2026-10-14 and 2026-10-16: the owner's emergency promotions went through only on a hand-written verified record and a
+// local skip of `promote.ts check`, a false green record each time. The override says what it is.
+describe('an owner override', () => {
+  const sha = 'a'.repeat(40);
+  const built: Verified = { sha, digest: 'd'.repeat(64), stagingVersion: '7c1a', recordedAt: '2026-10-16T14:00:00.000Z', downloads: { 'kinu-version.json': 'e'.repeat(64) } };
+  const owner = { words: 'the owner: production is down, ship the fix', reds: ['source: Devbox contracts on real golden containers'], at: '2026-10-16T15:00:00.000Z' };
+
+  /** A staging bucket's records in memory, with every key written. */
+  const bucket = (held: Readonly<Record<string, string>>): Records & { readonly written: string[] } => {
+    const keys = new Map(Object.entries(held));
+    const written: string[] = [];
+
+    return { written, read: (key) => keys.get(key), write: (key, text) => { written.push(key); keys.set(key, text); } };
+  };
+
+  test('is written under its own key, never verified/, as staging served the build, UNVERIFIED with the words and the reds', async () => {
+    const staging = bucket({ [builtKey(sha)]: JSON.stringify(built) });
+    const proven: unknown[] = [];
+    const overridden = await writeOverride(staging, sha, owner, async (downloads) => { proven.push(downloads); });
+
+    expect({ written: staging.written, proven, overridden }).toEqual({
+      written: [overrideKey(sha)], proven: [built.downloads],
+      overridden: { ...built, verdict: 'UNVERIFIED', words: owner.words, reds: owner.reds, overriddenAt: owner.at },
+    });
+  });
+
+  test('names nothing for a build staging never served, nor without the owner\'s words, and writes nothing', async () => {
+    const never = bucket({});
+    const wordless = bucket({ [builtKey(sha)]: JSON.stringify(built) });
+
+    await expect(writeOverride(never, sha, owner, async () => undefined)).rejects.toThrow(`staging never served ${sha}`);
+    await expect(writeOverride(wordless, sha, { ...owner, words: '  ' }, async () => undefined)).rejects.toThrow();
+    expect([never.written, wordless.written]).toEqual([[], []]);
+  });
+
+  test('a promotion without one still refuses a build staging did not verify, and one with one adopts only it', async () => {
+    const staging = bucket({ [builtKey(sha)]: JSON.stringify(built) });
+
+    await writeOverride(staging, sha, owner, async () => undefined);
+    expect(() => adoptedRecord(staging, sha, false)).toThrow(`staging has not verified ${sha}: ${verifiedKey(sha)} holds no record`);
+    expect(adoptedRecord(staging, sha, true)).toEqual({ ...built, verdict: 'UNVERIFIED', words: owner.words, reds: owner.reds, overriddenAt: owner.at });
+    expect(() => adoptedRecord(bucket({ [verifiedKey(sha)]: JSON.stringify(built) }), sha, true)).toThrow(`no owner override of ${sha} was recorded`);
+  });
+
+  test('names the reds of the last staging deploy of its build, and refuses where none reported here', () => {
+    const index = join(scratchDir('promote-override-index'), 'index.jsonl');
+    const line = (of: string, reds: readonly string[]) => JSON.stringify({ sha: of, reds });
+
+    writeFileSync(index, [line(sha, ['an earlier red']), line('b'.repeat(40), []), line(sha, owner.reds)].join('\n') + '\n');
+    expect(stagingReds(index, sha)).toEqual(owner.reds);
+    expect(() => stagingReds(index, 'c'.repeat(40))).toThrow('its open reds are unknown');
   });
 });

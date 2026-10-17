@@ -19,19 +19,26 @@
  *   bun scripts/promote.ts record <staging version> [reset record]
  *                                                                   staging's deploy, when every phase passed
  *   bun scripts/promote.ts evals <verdict dir>                      store HEAD's completed armada evaluation beside its record
+ *   bun scripts/promote.ts built <staging version> [reset record]   staging's deploy, once staging serves HEAD, whatever goes red
+ *                                                                   after: the build, not a verdict on it
  *   bun scripts/promote.ts check                                    before promotion builds: HEAD is verified, staging serves it,
  *                                                                   and its evals verdict is green
- *   bun scripts/promote.ts adopt                                    after the production build: downloads, digest, release tarball
- *   bun scripts/promote.ts promoted <version> [reset record]        production's deploy, after every post-deploy tier passed
+ *   bun scripts/promote.ts override "<owner's words>"               before an owner's promotion of a build staging did not verify:
+ *                                                                   HEAD's built record, staging's open reds and the words, kept
+ *                                                                   as an UNVERIFIED override
+ *   bun scripts/promote.ts adopt [override]                         after the production build: downloads, digest, release tarball
+ *   bun scripts/promote.ts promoted [--override] <version> [reset record]
+ *                                                                   production's deploy, after every post-deploy tier passed
  *   bun scripts/promote.ts rollback                                 production back to the build it took before the one it serves
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { deployment, environmentArgs, r2Text, why, wrangler } from './infra-cloudflare';
+import { REPORTS } from './deploy-report';
 import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
 import { type Reset, ResetSchema, latestReset } from './reset';
 import { DEFAULT_TRIALS } from '../evals/src/config';
@@ -199,6 +206,79 @@ function assertEvalVerdict(sha: string, bucket: string): void {
 
 export const verifiedKey = (sha: string): string => `verified/${sha}.json`;
 
+/** Staging's build of `sha` as it served it, written once it served it whatever went red after: never a verdict. */
+export const builtKey = (sha: string): string => `built/${sha}.json`;
+
+/** The owner's promotion of `sha` without staging's verification: kept apart from every verified record. */
+export const overrideKey = (sha: string): string => `overrides/${sha}.json`;
+
+/** An owner's word that production take a build staging did not verify: the build as staging served it (its digest and
+ *  every download), marked unverified, with the owner's words and the reds staging's deploy of it left open. */
+export const OverrideSchema = v.object({
+  ...VerifiedSchema.entries,
+  verdict: v.literal('UNVERIFIED'),
+  words: v.pipe(v.string(), v.trim(), v.nonEmpty()),
+  reds: v.array(v.string()),
+  overriddenAt: v.string(),
+});
+
+export type Override = v.InferOutput<typeof OverrideSchema>;
+
+/** A staging bucket's records, by key: absent is undefined. */
+export interface Records {
+  read(key: string): string | undefined;
+  write(key: string, text: string): void;
+}
+
+/**
+ * The override record of `sha`, written under its own key and nowhere else: staging's built record of it, proven still
+ * served (`served`), with the owner's words and staging's open reds.
+ */
+export async function writeOverride(
+  staging: Records,
+  sha: string,
+  owner: { readonly words: string; readonly reds: readonly string[]; readonly at: string },
+  served: (downloads: Downloads) => Promise<void>,
+): Promise<Override> {
+  const text = staging.read(builtKey(sha));
+
+  if (text === undefined) throw new Error(`staging never served ${sha}: no deploy of it reached a serving build, so there is nothing to override with`);
+  const built = v.parse(VerifiedSchema, JSON.parse(text));
+
+  await served(built.downloads);
+  const record = v.parse(OverrideSchema, { ...built, verdict: 'UNVERIFIED', words: owner.words, reds: owner.reds, overriddenAt: owner.at });
+
+  staging.write(overrideKey(sha), JSON.stringify(record));
+
+  return record;
+}
+
+/** The record a promotion of `sha` adopts: staging's verified one, or under `override` the owner's override, never the
+ *  one in place of the other. */
+export function adoptedRecord(staging: Records, sha: string, override: boolean): Verified | Override {
+  const key = override ? overrideKey(sha) : verifiedKey(sha);
+  const text = staging.read(key);
+
+  if (text === undefined) {
+    throw new Error(override ? `no owner override of ${sha} was recorded` : `staging has not verified ${sha}: ${key} holds no record`);
+  }
+
+  return override ? v.parse(OverrideSchema, JSON.parse(text)) : v.parse(VerifiedSchema, JSON.parse(text));
+}
+
+/** The reds the last staging deploy of `sha` reported here, from the environment's report index: an override names them. */
+export function stagingReds(index: string, sha: string): readonly string[] {
+  if (!existsSync(index)) throw new Error(`no staging deploy reported here (${index}), so ${sha}'s open reds are unknown`);
+
+  const summary = readFileSync(index, 'utf8').split('\n').filter((line) => line !== '')
+    .map((line) => v.parse(v.looseObject({ sha: v.string(), reds: v.array(v.string()) }), JSON.parse(line)))
+    .filter((each) => each.sha === sha).at(-1);
+
+  if (summary === undefined) throw new Error(`no staging deploy of ${sha} reported here, so its open reds are unknown`);
+
+  return summary.reds;
+}
+
 /** A build production took: the version that served it, its commit, and every download it served. A build a
  *  rollback left is withdrawn, and no later rollback returns to it. */
 export const PromotionSchema = v.object({
@@ -208,6 +288,8 @@ export const PromotionSchema = v.object({
   downloads: DownloadsSchema,
   withdrawnAt: v.optional(v.string()),
   reset: v.optional(ResetSchema),
+  /** A build the owner promoted without staging's verification: owner override, unverified. */
+  override: v.optional(v.object({ verdict: v.literal('UNVERIFIED'), words: v.string(), reds: v.array(v.string()) })),
 });
 
 export type Promotion = v.InferOutput<typeof PromotionSchema>;
@@ -451,11 +533,6 @@ function resetIn(file: string | undefined): { readonly reset?: Reset } {
   return file === undefined ? {} : { reset: v.parse(ResetSchema, JSON.parse(readFileSync(file, 'utf8'))) };
 }
 
-/** The record staging wrote for `sha`; a commit staging never verified has none, and promotion refuses it. */
-function verified(bucket: string, sha: string): Verified {
-  return v.parse(VerifiedSchema, JSON.parse(r2(['get', `${bucket}/${verifiedKey(sha)}`, '--pipe'])));
-}
-
 /** Production's history, oldest first: empty before the first promotion. */
 function promotions(bucket: string): Promotion[] {
   const text = r2Text(bucket, HISTORY_KEY);
@@ -522,9 +599,182 @@ function verifiedRecord(sha: string, [version = '', reset]: readonly string[]): 
   return record;
 }
 
+/** What every command but `digest` works on: HEAD, both environments' origins and release buckets, and staging's records. */
+interface Context {
+  readonly sha: string;
+  readonly origins: Targets['origins'];
+  readonly buckets: Targets['buckets'];
+  readonly staging: ReturnType<typeof bucketAt>;
+  readonly production: ReturnType<typeof bucketAt>;
+  readonly records: Records;
+}
+
+/** Refused unless production names only the container images staging ran. */
+function refuseImageDrift(): void {
+  const drift = imagesStagingNeverRan(deriveInfrastructure('production').worker.images, deriveInfrastructure('staging').worker.images);
+
+  if (drift.length > 0) throw new Error(`production names container images staging never ran: ${drift.join(', ')}`);
+}
+
+function forgetCommand({ sha, buckets }: Context): number {
+  r2(['delete', `${buckets.staging}/${verifiedKey(sha)}`]);
+  r2(['delete', `${buckets.staging}/${builtKey(sha)}`]);
+  r2(['delete', `${buckets.staging}/${evalsKey(sha)}`]);
+  console.log(`promote: ${sha} is not verified on staging until this deploy's tiers pass`);
+
+  return 0;
+}
+
+async function recordCommand({ sha, origins, records }: Context, rest: readonly string[]): Promise<number> {
+  const verified = verifiedRecord(sha, rest);
+
+  await servedAs(origins.staging, sha, verified.downloads);
+  records.write(verifiedKey(sha), JSON.stringify(verified));
+  console.log(`promote: ${sha} verified on staging (${verified.digest}, ${String(Object.keys(verified.downloads).length)} downloads)`);
+
+  return 0;
+}
+
+async function builtCommand({ sha, origins, records }: Context, rest: readonly string[]): Promise<number> {
+  const build = verifiedRecord(sha, rest);
+
+  await servedAs(origins.staging, sha, build.downloads);
+  records.write(builtKey(sha), JSON.stringify(build));
+  console.log(`promote: staging serves ${sha} (${build.digest}); this is its build, not a verdict on it`);
+
+  return 0;
+}
+
+async function evalsCommand({ sha, records }: Context, [dir = '']: readonly string[]): Promise<number> {
+  const proof = readEvalsVerdict(dir, sha);
+
+  records.write(evalsKey(sha), JSON.stringify(proof));
+  console.log(`promote: ${sha}'s eval verdict from armada ${proof.run.jobs.join(', ')}: ${proof.verdict.reason}`);
+
+  return 0;
+}
+
+async function checkCommand({ sha, origins, buckets, records }: Context): Promise<number> {
+  refuseImageDrift();
+  const verified = adoptedRecord(records, sha, false);
+
+  await servedAs(origins.staging, sha, verified.downloads);
+  assertEvalVerdict(sha, buckets.staging);
+  console.log(`promote: ${sha} was verified on staging (version ${verified.stagingVersion}), staging serves that run's downloads, and its evals verdict is green`);
+
+  return 0;
+}
+
+async function overrideCommand({ sha, origins, records }: Context, [words = '']: readonly string[]): Promise<number> {
+  refuseImageDrift();
+
+  const owner = { words, reds: stagingReds(join(REPORTS, 'staging', 'index.jsonl'), sha), at: new Date().toISOString() };
+  const written = await writeOverride(records, sha, owner, async (downloads) => { await servedAs(origins.staging, sha, downloads); });
+
+  console.log(`promote: OWNER OVERRIDE, UNVERIFIED: ${sha} as staging served it (${written.digest}), with ${String(written.reds.length)} open red(s) there: ${written.reds.join('; ') || 'none reported'}`);
+
+  return 0;
+}
+
+async function adoptCommand({ sha, origins, buckets, staging, production, records }: Context, rest: readonly string[]): Promise<number> {
+  const adopted = adoptedRecord(records, sha, rest[0] === 'override');
+  const digest = artifactDigest(DIST);
+
+  if (digest !== adopted.digest) throw new Error(`this build is ${digest}; staging verified ${adopted.digest}`);
+  const tarball = await adoptDownloads(origins.staging, adopted, DOWNLOADS);
+
+  await adoptTarball(
+    tarball,
+    readFileSync(join(DOWNLOADS, `${tarball.name}.sha256`)),
+    async (name) => staging.get(name),
+    async (name, bytes, contentType) => { production.put(name, bytes, contentType); },
+  );
+
+  // The first promotion starts production's history with the build it replaces, the one its rollback returns to.
+  if (promotions(buckets.production).length === 0) {
+    const before: Promotion = { ...await downloadsServed(origins.production), version: servingVersion(), at: new Date().toISOString() };
+
+    production.put(HISTORY_KEY, JSON.stringify([before]), 'application/json');
+    console.log(`promote: production's history starts with ${before.sha} (version ${before.version}), the build it serves now`);
+  }
+
+  console.log(`promote: the production build is staging's (${digest}); its downloads and ${tarball.name} are the ones staging verified`);
+
+  return 0;
+}
+
+async function promotedCommand({ sha, origins, buckets, production, records }: Context, rest: readonly string[]): Promise<number> {
+  const overridden = rest[0] === '--override';
+  const [version = '', reset] = overridden ? rest.slice(1) : rest;
+
+  if (!/^[0-9a-f-]{36}$/u.test(version)) throw new Error(`'${version}' is not a Worker version id, so no rollback could return to it`);
+  const owner = overridden ? v.parse(OverrideSchema, adoptedRecord(records, sha, true)) : undefined;
+  const promotion: Promotion = { sha, version, at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(reset) };
+
+  if (owner !== undefined) promotion.override = { verdict: owner.verdict, words: owner.words, reds: owner.reds };
+
+  const serving = servingVersion();
+
+  if (serving !== version) throw new Error(`production serves version ${serving}, not ${version}`);
+  await servedAs(origins.production, sha, promotion.downloads);
+
+  production.put(HISTORY_KEY, JSON.stringify([...promotions(buckets.production), promotion]), 'application/json');
+  console.log(`promote: production took ${sha} as version ${version}${owner === undefined ? '' : ': owner override, unverified'}`);
+
+  return 0;
+}
+
+async function rollbackCommand({ origins, buckets, production }: Context): Promise<number> {
+  const serving = servingVersion();
+  const plan = planRollback(promotions(buckets.production), serving, new Date().toISOString(), latestReset(buckets.production));
+
+  if ('refused' in plan) throw new Error(plan.refused);
+  const { target } = plan;
+
+  const run = wrangler(['rollback', target.version, '--message', `Rollback to ${target.sha}`, '--yes', ...environmentArgs('production')], { timeoutMs: 600_000 });
+
+  if (!run.ok) throw new Error(`wrangler rollback ${target.version} failed: ${why(run)}`);
+  production.put(HISTORY_KEY, JSON.stringify(plan.history), 'application/json');
+  await verifyServing(origins.production, target);
+  console.log(`promote: production serves ${target.sha} again (version ${target.version}), its downloads byte for byte`);
+
+  return 0;
+}
+
+/** A command, with the argument counts it takes. */
+interface Command {
+  readonly takes: readonly number[];
+  readonly run: (context: Context, rest: readonly string[]) => number | Promise<number>;
+}
+
+const COMMANDS = new Map<string, Command>([
+  ['forget', { takes: [0], run: forgetCommand }],
+  ['record', { takes: [1, 2], run: recordCommand }],
+  ['built', { takes: [1, 2], run: builtCommand }],
+  ['evals', { takes: [1], run: evalsCommand }],
+  ['check', { takes: [0], run: checkCommand }],
+  ['override', { takes: [1], run: overrideCommand }],
+  ['adopt', { takes: [0, 1], run: adoptCommand }],
+  ['promoted', { takes: [1, 2, 3], run: promotedCommand }],
+  ['rollback', { takes: [0], run: rollbackCommand }],
+]);
+
+const USAGE = 'usage: bun scripts/promote.ts digest | forget | record <staging version> [reset record] | built <staging version> [reset record] '
+  + '| evals <verdict dir> | check | override "<owner\'s words>" | adopt [override] | promoted [--override] <version> [reset record] | rollback';
+
+/** Whether `rest` is a shape the command takes beyond its count: adopt's one word is `override`, and promoted takes a
+ *  version and a reset record after an optional `--override`. */
+function wellFormed(command: string, rest: readonly string[]): boolean {
+  if (command === 'adopt' && rest.length === 1) return rest[0] === 'override';
+
+  if (command !== 'promoted') return true;
+  const args = rest[0] === '--override' ? rest.slice(1) : rest;
+
+  return args.length === 1 || args.length === 2;
+}
+
 async function main(argv: readonly string[], scratch: string): Promise<number> {
-  const [command, ...rest] = argv;
-  const sha = head();
+  const [command = '', ...rest] = argv;
 
   if (command === 'digest' && rest.length === 0) {
     console.log(artifactDigest(DIST));
@@ -532,115 +782,19 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
+  const chosen = COMMANDS.get(command);
+
+  if (chosen === undefined || !chosen.takes.includes(rest.length) || !wellFormed(command, rest)) {
+    console.error(USAGE);
+
+    return 2;
+  }
+
   const { origins, buckets } = targets();
   const staging = bucketAt(buckets.staging, scratch);
-  const production = bucketAt(buckets.production, scratch);
+  const records: Records = { read: (key) => r2Text(buckets.staging, key), write: (key, text) => { staging.put(key, text, 'application/json'); } };
 
-  if (command === 'forget' && rest.length === 0) {
-    r2(['delete', `${buckets.staging}/${verifiedKey(sha)}`]);
-    r2(['delete', `${buckets.staging}/${evalsKey(sha)}`]);
-    console.log(`promote: ${sha} is not verified on staging until this deploy's tiers pass`);
-
-    return 0;
-  }
-
-  if (command === 'record' && [1, 2].includes(rest.length)) {
-    const record = verifiedRecord(sha, rest);
-
-    await servedAs(origins.staging, sha, record.downloads);
-    staging.put(verifiedKey(sha), JSON.stringify(record), 'application/json');
-    console.log(`promote: ${sha} verified on staging (${record.digest}, ${String(Object.keys(record.downloads).length)} downloads)`);
-
-    return 0;
-  }
-
-  if (command === 'evals' && rest.length === 1) {
-    const proof = readEvalsVerdict(rest[0] ?? '', sha);
-
-    staging.put(evalsKey(sha), JSON.stringify(proof), 'application/json');
-    console.log(`promote: ${sha}'s eval verdict from armada ${proof.run.jobs.join(', ')}: ${proof.verdict.reason}`);
-
-    return 0;
-  }
-
-  if (command === 'check' && rest.length === 0) {
-    const drift = imagesStagingNeverRan(deriveInfrastructure('production').worker.images, deriveInfrastructure('staging').worker.images);
-
-    if (drift.length > 0) throw new Error(`production names container images staging never ran: ${drift.join(', ')}`);
-    const record = verified(buckets.staging, sha);
-
-    await servedAs(origins.staging, sha, record.downloads);
-
-    assertEvalVerdict(sha, buckets.staging);
-    console.log(`promote: ${sha} was verified on staging (version ${record.stagingVersion}), staging serves that run's downloads, and its evals verdict is green`);
-
-    return 0;
-  }
-
-  if (command === 'adopt' && rest.length === 0) {
-    const record = verified(buckets.staging, sha);
-    const digest = artifactDigest(DIST);
-
-    if (digest !== record.digest) throw new Error(`this build is ${digest}; staging verified ${record.digest}`);
-    const tarball = await adoptDownloads(origins.staging, record, DOWNLOADS);
-
-    await adoptTarball(
-      tarball,
-      readFileSync(join(DOWNLOADS, `${tarball.name}.sha256`)),
-      async (name) => staging.get(name),
-      async (name, bytes, contentType) => { production.put(name, bytes, contentType); },
-    );
-
-    // The first promotion starts production's history with the build it replaces, the one its rollback returns to.
-    if (promotions(buckets.production).length === 0) {
-      const before: Promotion = { ...await downloadsServed(origins.production), version: servingVersion(), at: new Date().toISOString() };
-
-      production.put(HISTORY_KEY, JSON.stringify([before]), 'application/json');
-      console.log(`promote: production's history starts with ${before.sha} (version ${before.version}), the build it serves now`);
-    }
-
-    console.log(`promote: the production build is staging's (${digest}); its downloads and ${tarball.name} are the ones staging verified`);
-
-    return 0;
-  }
-
-  if (command === 'promoted' && (rest.length === 1 || rest.length === 2)) {
-    const version = rest[0] ?? '';
-
-    if (!/^[0-9a-f-]{36}$/u.test(version)) throw new Error(`'${version}' is not a Worker version id, so no rollback could return to it`);
-    const promotion: Promotion = { sha, version, at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(rest[1]) };
-    const serving = servingVersion();
-
-    if (serving !== version) throw new Error(`production serves version ${serving}, not ${version}`);
-    await servedAs(origins.production, sha, promotion.downloads);
-
-    production.put(HISTORY_KEY, JSON.stringify([...promotions(buckets.production), promotion]), 'application/json');
-    console.log(`promote: production took ${sha} as version ${version}`);
-
-    return 0;
-  }
-
-  if (command === 'rollback' && rest.length === 0) {
-    const serving = servingVersion();
-    const plan = planRollback(promotions(buckets.production), serving, new Date().toISOString(), latestReset(buckets.production));
-
-    if ('refused' in plan) throw new Error(plan.refused);
-    const { target } = plan;
-
-    const run = wrangler(['rollback', target.version, '--message', `Rollback to ${target.sha}`, '--yes', ...environmentArgs('production')], { timeoutMs: 600_000 });
-
-    if (!run.ok) throw new Error(`wrangler rollback ${target.version} failed: ${why(run)}`);
-    production.put(HISTORY_KEY, JSON.stringify(plan.history), 'application/json');
-    await verifyServing(origins.production, target);
-    console.log(`promote: production serves ${target.sha} again (version ${target.version}), its downloads byte for byte`);
-
-    return 0;
-  }
-
-  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> [reset record] | evals <verdict dir> | check | adopt '
-    + '| promoted <version> [reset record] | rollback');
-
-  return 2;
+  return await chosen.run({ sha: head(), origins, buckets, staging, production: bucketAt(buckets.production, scratch), records }, rest);
 }
 
 if (import.meta.main) {

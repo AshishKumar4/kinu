@@ -563,6 +563,36 @@ describe("deploy gate", () => {
     );
   });
 
+  // 2026-10-14 and 2026-10-16: the owner's emergency promotions went through only on a hand-written verified record and
+  // a local skip of `promote.ts check`, a false green record each time.
+  const OVERRIDE = "bun scripts/promote.ts override the owner: production is down, ship the fix";
+
+  test("an owner override names the build by the owner's words and staging's reds in place of its record, and writes no verified record", async () => {
+    const run = await runDeploy({ option: "--promote", options: ["--override", "the owner: production is down, ship the fix"] });
+
+    expect(besideTheBuild(run.events, armadaBuild("production", "--promote"))).toEqual({
+      events: [phaseRun("preflight"), OVERRIDE, phaseRun("upload"), skipped("production does not serve this build: the build on armada failed")],
+      started: true,
+    });
+    expect(run.report).toContain("notice promote owner override, unverified the owner: production is down, ship the fix");
+    expect(run.events.some((event) => event.startsWith("bun scripts/promote.ts check") || event.startsWith("bun scripts/promote.ts record"))).toBe(false);
+  });
+
+  test("an override of a build staging never served builds nothing", async () => {
+    const run = await runDeploy({ option: "--promote", options: ["--override", "the owner: production is down, ship the fix"], failingGate: OVERRIDE });
+
+    expect([run.status, run.events]).toEqual([1, [phaseRun("preflight"), OVERRIDE]]);
+    expect(run.report).toContain("note promote the owner override staging never served testsha, or its reds are unknown here, so not even an override can name the build.");
+  });
+
+  test("--override needs the owner's words, and a promotion", async () => {
+    const wordless = await runDeploy({ option: "--promote", options: ["--override"] });
+    const blank = await runDeploy({ option: "--promote", options: ["--override", "  "] });
+    const staging = await runDeploy({ option: "--override", options: ["the owner: ship it"] });
+
+    expect([wordless, blank, staging].map((run) => [run.status, run.events])).toEqual([[2, []], [2, []], [2, []]]);
+  });
+
   // Review job 150, P2: a red promotion leaves production serving it, and one command must undo it.
   test("--rollback runs production's rollback and nothing else, and takes no other option", async () => {
     const rollback = await runDeploy({ option: "--rollback" });

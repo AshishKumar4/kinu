@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-16",
-  "files": 3350,
-  "functions": 87733,
+  "files": 3358,
+  "functions": 87990,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -259,10 +259,6 @@
     },
     {
       "key": "scripts/pattern-inventory.ts#patternToken",
-      "complexity": 27
-    },
-    {
-      "key": "scripts/promote.ts#main",
       "complexity": 27
     },
     {
