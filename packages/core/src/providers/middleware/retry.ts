@@ -254,7 +254,7 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
 
       // An answer's stream tells its own end; every other outcome ends the attempt here.
       if (outcome.kind === 'answer') return outcome.value;
-      clock.ended(outcome.kind === 'stall' ? 'stalled' : outcome.kind);
+      clock.ended(outcome.kind);
 
       if (outcome.kind === 'failed') return yield* Effect.die(outcome.error);
 
