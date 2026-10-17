@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 import { deviceConsentCanApprove } from '../src/tui/overlays';
 import { executorLabel, type DeferredApproval, type DeferredApprovalAnswer, type ShellApprovalRequest, type ShellApprovalOutcome } from '@kinu.run/core';
-import type { WaitingApprovalSurface } from '../src/agent-client';
+import type { AgentClient, WaitingApprovalSurface } from '../src/agent-client';
 
 afterEach(cleanupChats);
 
@@ -298,11 +298,16 @@ describe('waiting approvals', () => {
     return { waiting, decided, approvals };
   }
 
+  // A row already parked opens its prompt as the chat mounts, and the composer takes keys only once no prompt is open
+  // (`composerTakesKeys`): whether a frame first shows the composer focused or the prompt drawn is the renderer's order,
+  // and on 2026-10-17 a mount that waited for the composer waited 5 times in 180 for a frame that never came. A mount
+  // with a row waiting is settled when that row's prompt is drawn.
+  const mountWaiting = async (client: AgentClient, first: string) => await mountChat(client, { settled: (frame) => frame.includes(first) });
+
   test('the chat asks each parked command with the web\'s answers, and later leaves the rest waiting', async () => {
     const parkedQueue = queue([parked('park-1', 'git push --force origin main'), parked('park-2', 'rm -rf build')]);
-    const screen = await mountChat(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client);
+    const screen = await mountWaiting(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client, 'git push --force origin main');
 
-    await screen.waitFor('the first waiting approval', () => screen.frame().includes('git push --force origin main'));
     expect(screen.frame()).toContain('rewrites history');
     screen.mockInput.pressKey('a');
     await screen.waitFor('the second waiting approval', () => screen.frame().includes('rm -rf build'));
@@ -317,9 +322,8 @@ describe('waiting approvals', () => {
   test('a key pressed as one answer lands never answers the next, and a file write is not approved here', async () => {
     const write = parked('park-2', `file write /home/main/notes.md sha256:${'a'.repeat(64)} over sha256:${'b'.repeat(64)}`);
     const parkedQueue = queue([parked('park-1', 'ls -la'), write]);
-    const screen = await mountChat(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client);
+    const screen = await mountWaiting(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client, 'ls -la');
 
-    await screen.waitFor('the first waiting approval', () => screen.frame().includes('ls -la'));
     // Both keys arrive before the first answer lands or the next prompt is drawn.
     screen.mockInput.pressKey('o');
     screen.mockInput.pressKey('o');
@@ -330,9 +334,8 @@ describe('waiting approvals', () => {
 
   test('a file write offers only deny and later in the terminal', async () => {
     const parkedQueue = queue([parked('park-1', `file write /home/main/notes.md sha256:${'a'.repeat(64)} over sha256:${'b'.repeat(64)}`)]);
-    const screen = await mountChat(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client);
+    const screen = await mountWaiting(fakeClient({ name: 'parked', approvals: parkedQueue.approvals }).client, '/home/main/notes.md');
 
-    await screen.waitFor('the parked write', () => screen.frame().includes('/home/main/notes.md'));
     screen.mockInput.pressKey('o');
     screen.mockInput.pressKey('a');
     await screen.renderOnce();
@@ -369,9 +372,8 @@ describe('waiting approvals', () => {
     };
 
     const agent = fakeClient({ name: 'parked', approvals });
-    const screen = await mountChat(agent.client);
+    const screen = await mountWaiting(agent.client, 'git push --force origin main');
 
-    await screen.waitFor('the waiting approval', () => screen.frame().includes('git push --force origin main'));
     screen.mockInput.pressKey('o');
     await screen.waitFor('the refusal said', () => screen.frame().includes('the workspace is unreachable'));
     await screen.mockInput.typeText('still here');
