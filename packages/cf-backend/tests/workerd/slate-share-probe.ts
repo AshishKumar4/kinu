@@ -295,7 +295,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         ask: (id, effect) => this.deferrals.slateEffect(id, effect),
         take: (id) => this.deferrals.takeSlateEffect(id),
         settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
-        retire: (share) => { this.deferrals.retireSlateEffects(share); },
+        retire: (slate, only) => { this.deferrals.retireSlateEffects(slate, only); },
       },
       listingChanged: async (share) => { this.galleryTold.push(share.id); },
       relisted: (shares) => { this.galleryTold.push(...shares.map((share) => share.id)); },
@@ -615,6 +615,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const revision = slateRevision(this.host.controller.builds, SLATE_ID) ?? '';
 
     return this.host.controller.live.preapprove(SLATE_ID, { slate: SLATE_ID, namespace: 'workspace', member: 'writeFile', root: {}, revision });
+  }
+
+  /** Its owner takes the board's standing approval of its writes back, from their share sheet. */
+  async withdrawWrites(): Promise<void> {
+    await this.host.controller.withdrawSlatePreapproval({
+      workspace: this.ctx.id.name ?? this.ctx.id.toString(), slate: SLATE_ID, entry: { slate: SLATE_ID, namespace: 'workspace', member: 'writeFile', root: {} },
+    });
   }
 
   /** The board's standing approvals, as its owner's share sheet lists them. */

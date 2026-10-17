@@ -254,6 +254,29 @@ it("the owner's 'Always for this slate' on a viewer's write lets every such writ
   expect((await probe.viewerBatch(created.share.handle, CLAIM)).mutateError).toContain('waits for the owner to approve it');
 });
 
+it("an approval taken back on the sheet leaves no approved ask of its shape to run on: the same write asks again", async () => {
+  const probe = subject('live-withdrawn');
+  await probe.start();
+
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+
+  const write = async () => (await probe.viewerBatch(created.share.handle, CLAIM)).mutateError;
+
+  // 'Always', the write runs on it, and it is taken back: the very write it was given on asks again.
+  await write();
+  expect(await probe.ownerAlways()).toBe(1);
+  expect(await write()).toBe('mutate answered');
+  await probe.withdrawWrites();
+  expect(await write()).toContain('waits for the owner to approve it');
+
+  // An ask of that shape approved once and not yet run is retired with the standing approval it lay beside.
+  expect(await probe.ownerDecides(true)).toBe(1);
+  expect(await probe.preapproveWrites()).toEqual([created.share.id]);
+  await probe.withdrawWrites();
+  expect(await write()).toContain('waits for the owner to approve it');
+});
+
 it("a standing approval stands at the revision it was given at, and an owner's edit leaves it void", async () => {
   const probe = subject('live-preapproved');
   await probe.start();

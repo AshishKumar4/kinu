@@ -27,6 +27,8 @@ import {
 } from './approval-gate';
 import type { ApprovalContent, BoundFileWrite } from './bound-write';
 import { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './approval-kind';
+import { canonicalRoot } from '../slates/share-policy';
+import type { SharePreapproval } from '../slates/sharing';
 import { nanoid } from '../utils/nanoid';
 import { parseJsonValue } from '../utils/json';
 import { diagnostics, KinuError, settle, settleLoggedSync, toKinuError } from '../obs/index';
@@ -248,14 +250,16 @@ export class DeferredApprovalStore {
     return swept.map(approvalKindOf);
   }
 
-  /** Every ask still open on `executor` (queued, or approved and not yet taken) retired: a share's effects, when the
-   *  share is revoked, leaves `owner` mode, or its slate is built anew. Their ids. */
-  retireOpen(executor: string): string[] {
+  /** Every ask still open on `executor` (queued, or approved and not yet taken) retired, or those of them `which`
+   *  names: a share's effects, when the share is revoked, leaves `owner` mode, or its slate is built anew. Their ids. */
+  retireOpen(executor: string, which?: (action: DeferredApproval) => boolean): string[] {
     this.actor.assertCurrent();
+    const named = which === undefined ? null : JSON.stringify(this.openOn(executor).filter(which).map((action) => action.id));
 
     const retired = this.sql<{ id: string }>`
       DELETE FROM deferred_approvals
       WHERE actor_id = ${this.actorId} AND executor = ${executor} AND status IN ('queued', 'approved')
+        AND (${named} IS NULL OR id IN (SELECT value FROM json_each(${named})))
       RETURNING id`;
 
     if (retired.length > 0) markStoreChanged(this.sql);
@@ -263,6 +267,13 @@ export class DeferredApprovalStore {
     for (const { id } of retired) this.dropHits(id);
 
     return retired.map((row) => row.id);
+  }
+
+  /** The asks still open on `executor`, as {@link retireOpen} would retire them. */
+  private openOn(executor: string): DeferredApproval[] {
+    return this.sql<Row>`
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at FROM deferred_approvals
+      WHERE actor_id = ${this.actorId} AND executor = ${executor} AND status IN ('queued', 'approved')`.map(toAction);
   }
 
   create(action: Omit<DeferredApproval, 'actor' | 'status' | 'decidedAt'>, hits: readonly DeferredApprovalHit[]): DeferredApproval {
@@ -731,7 +742,13 @@ export class DeferredApprovalQueue {
       // environment's: it stands for that slate alone.
       this.deps.remember(kinds.flatMap(({ action, kind }) => (kind.kind === 'slate-effect' ? [] : gatedGrants(this.storeOf(action.actor).hits(action.id), action.executor))));
 
-      for (const { kind } of kinds) if (kind.kind === 'slate-effect') await this.deps.preapprove?.(kind.effect);
+      // A shared slate's effect stands pre-approved for its slate now, the call it was asked on included: the one-shot
+      // approval would outlive a later withdrawal of that, so it goes.
+      for (const { action, kind } of kinds) {
+        if (kind.kind !== 'slate-effect' || this.deps.preapprove === undefined) continue;
+        await this.deps.preapprove(kind.effect);
+        this.storeOf(action.actor).retireOpen(action.executor, (open) => open.id === action.id);
+      }
     }
 
     // An ask blocked on its row hears the answer there, at the moment it is recorded, and runs on it now; only an ask
@@ -849,9 +866,20 @@ export class DeferredApprovalQueue {
     return this.deps.store.spend(id)?.spend ?? null;
   }
 
-  /** A shared server's open effects retired: one of its shares was revoked or changed mode, or it was built anew. */
-  retireSlateEffects(slate: string): string[] {
-    return this.deps.store.retireOpen(slateEffectExecutor(slate));
+  /**
+   * A shared server's open effects retired: one of its shares was revoked or changed mode, or it was built anew; or,
+   * where `only` names one standing approval its owner took back, the asks of that shape (its calling slate, tool and
+   * root), approved or not, which would otherwise outlive it.
+   */
+  retireSlateEffects(slate: string, only?: Omit<SharePreapproval, 'revision'>): string[] {
+    const takenBack = only === undefined ? undefined : (open: DeferredApproval) => {
+      const kind = approvalKindOf(open);
+
+      return kind.kind === 'slate-effect' && kind.effect.caller === only.slate && kind.effect.server === only.namespace
+        && kind.effect.tool === only.member && canonicalRoot(kind.effect.root) === canonicalRoot(only.root);
+    };
+
+    return this.deps.store.retireOpen(slateEffectExecutor(slate), takenBack);
   }
 
   /** A queued write's change, whoever parked it. */

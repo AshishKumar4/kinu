@@ -395,6 +395,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   ownerAlways(): Promise<number>;
   editBoard(): Promise<string>;
   preapproveWrites(): Promise<string[]>;
+  withdrawWrites(): Promise<void>;
   preapprovals(): Promise<{ revision: string | null; members: string[] }>;
   heldWrite(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string, change: 'revoke' | 'own'): Promise<{ mutateError: string; written: boolean }>;
   listShare(share: string): Promise<ProbeAnswer>;

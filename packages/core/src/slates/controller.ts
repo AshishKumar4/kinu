@@ -44,7 +44,7 @@ import { slateRevision } from './share-policy';
 import { confinedTo } from './scoped-reader';
 import { rollbackSlateBatch, writeSlateBatch, type SlateFileBatch } from './slate-writer';
 import type {
-  BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SlatePreapprovals, SlatePreapprovalWithdraw,
+  BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SharePreapproval, SlatePreapprovals, SlatePreapprovalWithdraw,
   SlateReach, SlateShareCard, SlateShareRecord,
 } from './sharing';
 import { SlateShareStore, type ShareUser } from './shares';
@@ -113,8 +113,9 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   shareChanged?(slate: string): Promise<void>;
   /** How the workspace's owner is named to people a share refuses: absent, "Its owner". */
   ownerTitle?(): Promise<string>;
-  /** Where `owner` shares' effects wait for the owner, and how a share's open ones retire with it. */
-  readonly ownerEffects?: OwnerEffects & { retire(slate: string): void };
+  /** Where `owner` shares' effects wait for the owner, and how a share's open ones retire with it; `only`, those of one
+   *  standing approval's shape, as its owner takes it back. */
+  readonly ownerEffects?: OwnerEffects & { retire(slate: string, only?: Omit<SharePreapproval, 'revision'>): void };
   /** The Gallery's copy of a live share's listing is behind it, where its owner waits on the change: told now. The host
    *  logs its own failure, which the next start's {@link SlateController.relist} mends. */
   listingChanged?(share: LiveShareRecord): Promise<void>;
@@ -688,6 +689,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   /** Its owner takes one standing approval back, from their share sheet only: from every share of its slate at once. */
   withdrawSlatePreapproval(input: SlatePreapprovalWithdraw): Promise<SlateAnswer<SlatePreapprovals>> {
     this.live.withdrawPreapproval(input.slate, input.entry);
+    // An ask of its shape still open, approved or not, would otherwise run a call the owner no longer allows.
+    this.ports.ownerEffects?.retire(input.slate, input.entry);
 
     return this.slatePreapprovals(input.slate);
   }
