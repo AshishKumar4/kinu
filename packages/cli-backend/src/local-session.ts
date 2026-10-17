@@ -548,6 +548,7 @@ export class LocalAgentSession {
         openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
         driverGate: () => this.driverGate?.() ?? null,
+        releaseForeground: (executing) => this.jobRunner.releaseForeground(executing),
         steerSkills: (text) => steerSkillsBlock({
           vfs: this.rt.ownFiles,
           config: this.config,

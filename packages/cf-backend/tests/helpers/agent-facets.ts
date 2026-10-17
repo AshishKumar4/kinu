@@ -684,6 +684,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         },
         birthContext: (drainTurnId) => host().birthContext(drainTurnId),
         steerSkills: (text, alreadyActive) => host().steerSkills(text, alreadyActive),
+        releaseForeground: (executing) => host().releaseForeground(executing),
         openWork: async () => {
           const delayed = delayedOpenWork;
 

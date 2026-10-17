@@ -59,6 +59,13 @@ export function serverBox(clock: HandClock, killed: string[] = []) {
       return promise;
     },
     resolveReadiness: async () => ({ kind: 'restored' as const }),
+    // An empty box: a turn that reads the workspace's files there (a wake's) finds its root and nothing in it.
+    statFile: async (path: string) => {
+      if (path === '/') return { type: 'directory', size: 0, mode: 0o40755, mtimeMs: 0, uid: 0, gid: 0, atimeMs: 0, ctimeMs: 0 };
+
+      throw new Error(`ENOENT: ${path}`, { cause: { kind: 'devbox.file', code: 'ENOENT', path, operation: 'stat' } });
+    },
+    listFiles: async () => ({ files: [] }),
     configureEgress: async () => {},
     restoreStatus: async () => ({ restoring: false, refused: undefined }),
     getExposedPorts: async () => (stamps.size === 0 ? [] : [{ port: SERVED_PORT, name: undefined, url: `https://${String(SERVED_PORT)}-box-token.preview.test` }]),

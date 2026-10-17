@@ -165,6 +165,8 @@ export class FacetChat {
           armAfterTurn: (input) => workspace.armCacheWarm(input),
         },
         steerSkills: (text) => workspace.steerSkills(text, this.activeSkills),
+        // Its tools run in the workspace, which holds their foreground calls.
+        releaseForeground: (executing) => workspace.releaseForeground(executing),
         stillOwed: (metadata) => planHandoffStillOwed(metadata, actor.stores.planReviews),
         birthContext: (drainTurnId) => workspace.birthContext(drainTurnId),
         // The owner's decision as its intent delivers it: its plans are this store's, and an approval hands off its turn.

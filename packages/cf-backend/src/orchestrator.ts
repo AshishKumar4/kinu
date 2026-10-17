@@ -28,7 +28,7 @@ import {
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubordinateReportLedger, type ActorToolsets,
-  invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
+  invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type BackgroundJobRunner, type JobAuthority,
   createTeamToolDeps,
   agentNamer,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
@@ -1096,6 +1096,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       hireAdvisor: async (advisor) => { await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor); },
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
       birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
+      releaseForeground: async (executing) => this.foregroundRunnerOf(actorId)?.releaseForeground(executing) ?? false,
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
         vfs: this.rt.storage.vfs,
         config: this.agentBound(actorId).stores.config,
@@ -3837,6 +3838,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async dismissBackgroundJob(jobId: string, actor?: string): Promise<{ ok: boolean }> {
     return await settle(this.jobOperation('dismiss', jobId, actor, (authority) => dismissBackgroundJob(authority.store, jobId)));
+  }
+
+  /** The runner `actorId`'s tools run their foreground calls under: main's the workspace's, a hire's its own; null for a
+   *  hire whose jobs no turn of it has opened. */
+  private foregroundRunnerOf(actorId: string): BackgroundJobRunner | null {
+    return actorReach(actorPolicy(this.agentBound(actorId).record)).kind === 'workspace' ? this.jobRunner : this.jobAuthorities.live(actorId)?.runner ?? null;
   }
 
   /** A hire's own jobs; a settle wakes it with a message. */

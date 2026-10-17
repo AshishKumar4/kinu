@@ -2,12 +2,13 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // BackgroundJobRunner lifecycle over a fake fiber and fake BackendHost, no DO.
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
   type JobHarvester, type JobHolder, type JobResumer,
 } from '../src/jobs/runner';
 import {
-  BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, DeviceRequestOwnership,
+  BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, DeviceRequestOwnership, withBackgroundThreshold,
   type BackgroundPolicy, type BackgroundJob, type InvocationSurface,
 } from '../src/jobs/index';
 import { jobRedriveResumeGate } from '../src/heads/reconcile';
@@ -27,6 +28,9 @@ import { scratchPath } from '@kinu.run/test-utils';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import type { Clock } from '../src/types/clock';
 import { silenceBoundMs } from '../src/platform-catalog';
+
+/** What a call moved to the background because the person wrote is told (core `jobs/threshold.ts`). */
+const RELEASED_FOR_PERSON = 'The person wrote while this ran; backgrounded: still running, not cancelled.';
 
 /** Runs the body inline; exposes in-flight bodies so a test can await detach completion. */
 function fakeFiber() {
@@ -1156,6 +1160,46 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(await later.runner.recoverOrphans()).toEqual([]);
     expect(later.runner.inFlight).toBe(0);
     expect(later.store.get('jp')?.status).toBe('failed');
+  });
+});
+
+describe('BackgroundJobRunner.releaseForeground: a person wrote while the step runs its calls', () => {
+  /** `count` calls in the foreground through the threshold, each still running, with what each answers. */
+  function running(runner: BackgroundJobRunner, count: number) {
+    return Array.from({ length: count }, () => withBackgroundThreshold('shell', () => new Promise<never>(() => {}), runner.thresholdDeps({}, 'build', new AbortController())));
+  }
+
+  test('moves every call the step runs to a job at once, told why, where all of them are calls a window moves', async () => {
+    const { runner, store } = setup();
+    const answers = running(runner, 2);
+
+    expect(runner.releaseForeground(2)).toBe(true);
+    const handles = await Promise.all(answers);
+
+    expect(handles).toEqual([
+      expect.objectContaining({ background: true, kind: 'shell', message: expect.stringContaining(RELEASED_FOR_PERSON) }),
+      expect.objectContaining({ background: true, kind: 'shell', message: expect.stringContaining(RELEASED_FOR_PERSON) }),
+    ]);
+    expect(handles.map((handle) => (v.is(v.object({ jobId: v.string() }), handle) ? store.get(handle.jobId)?.status : null))).toEqual(['running', 'running']);
+    // Moved, the calls are no longer the step's to release.
+    expect(runner.releaseForeground(2)).toBe(false);
+  });
+
+  test('moves nothing where the step runs a call no window moves, or more calls than the job cap takes', () => {
+    const { runner } = setup();
+
+    // Never answered: the test reads only what a release does to the calls still running.
+    const lone = running(runner, 1);
+
+    // Two calls run in the step; only one is the threshold's.
+    expect(runner.releaseForeground(2)).toBe(false);
+    expect(runner.releaseForeground(0)).toBe(false);
+
+    const capped = setup();
+    const crowd = running(capped.runner, MAX_CONCURRENT_DETACHED_JOBS + 1);
+
+    expect(capped.runner.releaseForeground(MAX_CONCURRENT_DETACHED_JOBS + 1)).toBe(false);
+    expect([lone.length, crowd.length]).toEqual([1, MAX_CONCURRENT_DETACHED_JOBS + 1]);
   });
 });
 
