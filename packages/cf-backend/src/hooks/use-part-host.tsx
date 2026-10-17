@@ -33,15 +33,16 @@ function asks(kind: DecisionKind, answer: PartRunAnswer): boolean {
   }
 }
 
-interface HostedSlate {
-  readonly workspace: string | null;
-  readonly slate: string;
-  readonly title: string;
-  readonly slateFrame: RefObject<HTMLIFrameElement | null>;
-}
-
-/** Hosts the part frames, and draws the decision open now, or why the last one was refused, where it renders. */
-function usePartDecision({ workspace, slate, title, slateFrame }: HostedSlate): ReactNode {
+/**
+ * Hosts the part frames inside `slateFrame`, the frame that shows `workspace`/`slate`'s page, named `title` in what it
+ * says; none while `workspace` is unknown. Returns the decision open now, to render anywhere on the page.
+ */
+export function usePartHost({ workspace, slate, title, slateFrame }: {
+  workspace: string | null;
+  slate: string;
+  title: string;
+  slateFrame: RefObject<HTMLIFrameElement | null>;
+}): ReactNode {
   const [open, setOpen] = useState<Open | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -113,17 +114,9 @@ function usePartDecision({ workspace, slate, title, slateFrame }: HostedSlate): 
 }
 
 /**
- * Hosts the part frames inside `slateFrame`, the frame that shows `workspace`/`slate`'s page, named `title` in what it
- * says; none while `workspace` is unknown. Returns the decision open now, to render anywhere on the page: it opens over
- * the whole page, as a preview may sit in an answer's text.
+ * The parts of a slate the owner's own workspace page shows in `slateFrame`: its workspace is the page's own. Its
+ * decisions open over the whole page, as the preview may sit in an answer's text.
  */
-export function usePartHost(hosted: HostedSlate): ReactNode {
-  const drawn = usePartDecision(hosted);
-
-  return drawn === null ? null : createPortal(drawn, document.body);
-}
-
-/** The parts of a slate the owner's own workspace page shows in `slateFrame`: its workspace is the page's own. */
 export function WorkspacePartHost({ slate, titled, slateFrame }: {
   slate: string;
   /** The slate's preview once read, which names its title. */
@@ -131,6 +124,7 @@ export function WorkspacePartHost({ slate, titled, slateFrame }: {
   slateFrame: RefObject<HTMLIFrameElement | null>;
 }) {
   const { agentId = null } = useParams();
+  const decision = usePartHost({ workspace: agentId, slate, title: titled?.title ?? slate, slateFrame });
 
-  return usePartHost({ workspace: agentId, slate, title: titled?.title ?? slate, slateFrame });
+  return decision === null ? null : createPortal(decision, document.body);
 }
