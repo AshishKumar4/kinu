@@ -1,0 +1,179 @@
+/**
+ * The chat's one disclosure for the work a turn does on its way to its answer (the owner, 2026-10-17): a dot and a line,
+ * live while the work goes on; and a body that, while live, is a small view following its newest line, and opens in
+ * full on a click. A turn's thinking and a run of its tool calls both draw through it; what the owner reads or answers
+ * never does.
+ */
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { toolRunSummary, type RunStep } from "@kinu.run/core";
+
+/** The dot and words a piece of work is headed by: pulsing and shimmering while it runs. */
+export function WorkLabel({ live, failed = false, children }: { live: boolean; failed?: boolean; children: ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span className={`size-1.5 shrink-0 rounded-full ${failed ? "p-dot-danger" : "p-dot-accent"}${live ? " p-dot-pulse" : ""}`} aria-hidden />
+      <span className={`min-w-0 truncate p-row-text font-medium${live ? " p-shimmer" : ""}`}>{children}</span>
+    </span>
+  );
+}
+
+/** What a closed, settled body shows: its first lines, or nothing. */
+type Folded = "preview" | "hidden";
+
+/** Whether a body folded to its first lines holds more than they show; one that folds away entirely always does. */
+function useOverflows(body: RefObject<HTMLDivElement | null>, folded: Folded, measuring: boolean, follow: string): boolean {
+  const [long, setLong] = useState(folded === "hidden");
+
+  useLayoutEffect(() => {
+    const box = body.current;
+
+    if (folded === "hidden" || !measuring || box === null) return;
+    const measure = () => setLong(box.scrollHeight > box.clientHeight + 1);
+    const observer = new ResizeObserver(measure);
+
+    measure();
+    observer.observe(box);
+
+    return () => observer.disconnect();
+  }, [body, folded, measuring, follow]);
+
+  return long;
+}
+
+export function ChatDisclosure({ label, after, live, failed = false, folded, follow, viewport, liveIndicator, bodyClass = "", children, ...data }: {
+  /** The header's words, shimmering while live. */
+  label: ReactNode;
+  /** Said after them and never shimmering: a failure, a duration. */
+  after?: ReactNode;
+  live: boolean;
+  failed?: boolean;
+  folded: Folded;
+  /** Changes as a live body grows, so its view follows to the newest line. */
+  follow: string;
+  /** The live view's height. */
+  viewport: string;
+  /** Names the header as the chat's live state while it is one. */
+  liveIndicator?: string;
+  bodyClass?: string;
+  children: ReactNode;
+  [attribute: `data-${string}`]: string | number | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const body = useRef<HTMLDivElement>(null);
+  const following = live && !open;
+  const long = useOverflows(body, folded, !live && !open, follow);
+  const canOpen = live || long;
+
+  useEffect(() => {
+    if (following && body.current !== null) body.current.scrollTop = body.current.scrollHeight;
+  }, [following, follow]);
+
+  let shown = "";
+  let bodyState = open ? "open" : "closed";
+
+  if (following) bodyState = "live";
+
+  // Following, it fades in at the top, so a step scrolled half out of view reads as going rather than cut.
+  if (following) shown = `${viewport} overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,#000_1.25rem)]`;
+  else if (!open && folded === "hidden") shown = "hidden";
+
+  return (
+    <div className="py-0.5 p-row-text p-text-4" {...data}>
+      <button type="button" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}
+        className="flex max-w-full items-center gap-2 text-left enabled:cursor-pointer">
+        <span className="min-w-0" {...(live && liveIndicator !== undefined ? { "data-live-indicator": liveIndicator } : {})}><WorkLabel live={live} failed={failed}>{label}</WorkLabel></span>
+        {after}
+        {canOpen && <span className="shrink-0 font-medium p-accent">{open ? "collapse" : "expand"}</span>}
+      </button>
+      <div ref={body} className={`mt-1 ml-3.5 ${bodyClass} ${shown}`} data-disclosure-body={bodyState}
+        data-folded={!live && !open && folded === "preview" ? "" : undefined} data-overflows={long ? "" : undefined}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** When this tab first saw each call run, and when each run settled under its eyes: what a run's line says it took. */
+const seen = { running: new Map<string, number>(), settled: new Map<string, number>() };
+
+/** Held for this many calls and runs at most, the oldest let go first. */
+const SEEN_KEPT = 2000;
+
+function keep(moments: Map<string, number>, id: string): void {
+  if (moments.has(id)) return;
+  moments.set(id, Date.now());
+
+  for (const oldest of moments.keys()) {
+    if (moments.size <= SEEN_KEPT) break;
+    moments.delete(oldest);
+  }
+}
+
+/** A call drawn running: its run's time counts from the first call this tab saw start. */
+export function useSeenRunning(callId: string, running: boolean): void {
+  useEffect(() => { if (running) keep(seen.running, callId); }, [callId, running]);
+}
+
+/** "38 s", "2 min 5 s". */
+function spanWords(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+
+  if (s < 60) return `${String(s)} s`;
+
+  return s % 60 === 0 ? `${String(Math.floor(s / 60))} min` : `${String(Math.floor(s / 60))} min ${String(s % 60)} s`;
+}
+
+/**
+ * How long a run took, from the first of its calls this tab saw run to when it saw the run settle; null for one it only
+ * ever saw done.
+ */
+function useRunSpan(calls: readonly string[], live: boolean): string | null {
+  const firstCall = calls[0] ?? "";
+  const wasLive = useRef(live);
+  // Drawn again once it is seen to settle, as the moment is kept after the draw that saw it.
+  const [, settled] = useState(false);
+
+  useEffect(() => {
+    if (live) {
+      wasLive.current = true;
+
+      return;
+    }
+
+    if (!wasLive.current) return;
+    keep(seen.settled, firstCall);
+    settled(true);
+  }, [firstCall, live]);
+
+  const started = calls.flatMap((call) => seen.running.get(call) ?? []);
+  const from = started.length === 0 ? undefined : Math.min(...started);
+  const to = seen.settled.get(firstCall);
+
+  return live || from === undefined || to === undefined ? null : spanWords(to - from);
+}
+
+/**
+ * A run of tool calls and the thinking among them, as one group: while it runs, what it is doing and a small view of
+ * its newest steps; settled, what it used and took, its steps a click away. A failure inside says so on its line.
+ */
+export function ToolRun({ steps, live, children }: { steps: readonly RunStep[]; live: boolean; children: ReactNode }) {
+  const summary = toolRunSummary(steps);
+  const span = useRunSpan(steps.flatMap((step) => (step.kind === "tool" ? [step.part.toolCallId] : [])), live);
+  const last = steps.at(-1);
+  const follow = `${String(steps.length)}:${last?.kind === "tool" ? last.part.state : String(last?.parts.map((part) => part.text.length).join())}`;
+  const used = `Used ${String(summary.calls)} tool${summary.calls === 1 ? "" : "s"}`;
+
+  return (
+    <ChatDisclosure live={live} failed={!live && summary.failed > 0} folded="hidden" follow={follow} viewport="max-h-36"
+      label={live ? `${summary.doing || "Working"}…` : used}
+      after={(summary.failed > 0 || span !== null) && (
+        <span className="shrink-0 p-row-text p-text-3">
+          {summary.failed > 0 && <> · <span className="p-danger" data-tool-run-failed={summary.failed}>{summary.failed} failed</span></>}
+          {span !== null && <> · {span}</>}
+        </span>
+      )}
+      data-tool-run={live ? "live" : "settled"} data-tool-run-calls={summary.calls} data-tool-run-span={span ?? undefined}>
+      {children}
+    </ChatDisclosure>
+  );
+}

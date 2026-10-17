@@ -2307,7 +2307,10 @@ export { callRetries } from './providers/middleware/retry';
 
 export {
   type AnyToolPart,
+  type RunStep,
+  type ToolRunSummary,
   groupMessageParts,
+  toolRunSummary,
   parseProvisionError,
   partOutput,
   partInput,
