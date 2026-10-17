@@ -43,7 +43,10 @@ import { SharedServers, type OwnerEffects } from './shared-server';
 import { slateRevision } from './share-policy';
 import { confinedTo } from './scoped-reader';
 import { rollbackSlateBatch, writeSlateBatch, type SlateFileBatch } from './slate-writer';
-import type { BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SlateReach, SlateShareCard, SlateShareRecord } from './sharing';
+import type {
+  BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SlatePreapprovals, SlatePreapprovalWithdraw,
+  SlateReach, SlateShareCard, SlateShareRecord,
+} from './sharing';
 import { SlateShareStore, type ShareUser } from './shares';
 import { SqliteSlateStateStore } from './state';
 import { SqliteSlateStore } from './store';
@@ -670,6 +673,23 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
       return this.live.get(held.id) ?? held;
     })));
+  }
+
+  /** The standing approvals its owner gave `slate`'s shared server that stand now, at its revision: what its share
+   *  sheet lists beside the reach. */
+  slatePreapprovals(slate: string): Promise<SlateAnswer<SlatePreapprovals>> {
+    return settle(answer(`reading slate ${slate}'s standing approvals`, Effect.sync(() => {
+      const revision = slateRevision(this.builds, slate);
+
+      return { slate, revision, preapproved: this.live.preapprovalsOf(slate, revision) };
+    })));
+  }
+
+  /** Its owner takes one standing approval back, from their share sheet only: from every share of its slate at once. */
+  withdrawSlatePreapproval(input: SlatePreapprovalWithdraw): Promise<SlateAnswer<SlatePreapprovals>> {
+    this.live.withdrawPreapproval(input.slate, input.entry);
+
+    return this.slatePreapprovals(input.slate);
   }
 
   /**

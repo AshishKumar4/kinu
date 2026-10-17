@@ -82,7 +82,7 @@ import { installPartsFixture, installShareModeFixture, PART_PREVIEWS_ENTRY, Part
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
-import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateReach } from "@kinu.run/core";
+import type { BlueprintInspection, BlueprintView, LiveShareRecord, SharePreapproval, SlateReach } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
@@ -1277,7 +1277,7 @@ installGalleryFixture(frame);
 
 installPartsFixture(frame);
 
-installShareModeFixture(frame, () => LIVE_SHARE);
+installShareModeFixture(frame, () => LIVE_SHARE, () => STANDING);
 
 
 // Stands in for the runtime's terminal facet (core execution/workspace-terminal.ts): echoes input, runs a line at CR,
@@ -5668,6 +5668,12 @@ const TEAM_SHARE: LiveShareRecord = {
   createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com",
 };
 
+/** The owner's "Always for this slate" answers at the slate's revision now: a GitHub change on one org, and a file write. */
+const STANDING: SharePreapproval[] = [
+  { slate: "issue-triage", namespace: "mcp.github", member: "create_issue", root: { org: "acme" }, revision: "r2" },
+  { slate: "issue-triage", namespace: "workspace", member: "writeFile", root: {}, revision: "r2" },
+];
+
 /** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
 const SHARED_REFUSAL = "Slate issue-triage is shared, so it runs only as its own files build; they do not build alone yet";
 
@@ -5680,7 +5686,7 @@ function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint";
       <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
         fixture={{
           mode,
-          live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL },
+          live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL, preapproved: STANDING },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
             { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },

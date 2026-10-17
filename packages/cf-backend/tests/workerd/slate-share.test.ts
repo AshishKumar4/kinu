@@ -233,6 +233,46 @@ it("a viewer's approved write held while its dispatch prepares is never made onc
   }
 });
 
+it("the owner's 'Always for this slate' on a viewer's write lets every such write run unasked, until their edit", async () => {
+  const probe = subject('live-always');
+  await probe.start();
+
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+
+  await probe.viewerBatch(created.share.handle, CLAIM);
+  expect(await probe.ownerAlways()).toBe(1);
+
+  // Every later write of that tool on that root runs with nothing asked.
+  expect([await probe.viewerBatch(created.share.handle, CLAIM), await probe.viewerBatch(created.share.handle, CLAIM)])
+    .toEqual([{ probe: 'fixture-bytes', mutateError: 'mutate answered' }, { probe: 'fixture-bytes', mutateError: 'mutate answered' }]);
+  expect(await probe.ownerQueue()).toEqual([]);
+  expect((await probe.preapprovals()).members).toEqual(['writeFile']);
+
+  // The owner's edit is new code: it asks again.
+  await probe.editBoard();
+  expect((await probe.viewerBatch(created.share.handle, CLAIM)).mutateError).toContain('waits for the owner to approve it');
+});
+
+it("a standing approval stands at the revision it was given at, and an owner's edit leaves it void", async () => {
+  const probe = subject('live-preapproved');
+  await probe.start();
+
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+
+  expect(await probe.preapproveWrites()).toEqual([created.share.id]);
+  const given = await probe.preapprovals();
+
+  expect(given).toEqual({ revision: expect.any(String), members: ['writeFile'] });
+
+  // The owner's edit is a new revision: what was approved for the old code stands for none of the new.
+  const edited = await probe.editBoard();
+
+  expect(edited).not.toBe(given.revision);
+  expect(await probe.preapprovals()).toEqual({ revision: edited, members: [] });
+});
+
 it("an owner share's approval moves with its owner's own edit, and a review read at the old revision turns nothing on", async () => {
   const probe = subject('live-owner-edit');
   await probe.start();

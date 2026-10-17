@@ -7,13 +7,18 @@ import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { ShareStore, type ShareTable, type ShareUser } from './shares';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
-import { ShareModeSchema } from './share-modes';
-import type { LiveShareAuthority } from './share-policy';
+import { ShareModeSchema, type ShareMode } from './share-modes';
+import { canonicalRoot, type LiveShareAuthority } from './share-policy';
 import { GalleryCategorySchema, type GalleryCategory } from './gallery-api';
 import {
   ShareGrantSchema, ViewerCallSchema, ViewerRequestRecordSchema,
-  type LiveShareRecord, type ShareGrant, type ViewerCall, type ViewerRequestRecord,
+  type LiveShareRecord, type ShareGrant, type SharePreapproval, type ViewerCall, type ViewerRequestRecord,
 } from './sharing';
+
+/** One standing approval's shape of call, whatever revision it was given at. */
+function preapprovalKey(entry: Omit<SharePreapproval, 'revision'>): string {
+  return JSON.stringify([entry.slate, entry.namespace, entry.member, canonicalRoot(entry.root)]);
+}
 
 export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
   // `mode` is whose access a viewer's calls act with (docs/SLATE-SHARING-NIMBUS.md §2): `own`, their own, which is
@@ -195,6 +200,60 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
       authority.mode, authority.grantRevision, JSON.stringify(grant), id,
     );
     markStoreChanged(this.db);
+  }
+
+  /**
+   * "Always for this slate": `entry` stands on every live `owner` share of `shared`, beside the others at its revision;
+   * any at another revision is void, so it goes. The shares it now stands on.
+   */
+  preapprove(shared: string, entry: SharePreapproval): string[] {
+    return this.rewriteGrants(shared, 'owner', (held) => [
+      ...held.filter((each) => each.revision === entry.revision && preapprovalKey(each) !== preapprovalKey(entry)),
+      entry,
+    ]);
+  }
+
+  /** A standing approval taken back from every live share of `shared`, at any revision. The shares it was taken from. */
+  withdrawPreapproval(shared: string, entry: Omit<SharePreapproval, 'revision'>): string[] {
+    return this.rewriteGrants(shared, null, (held) => {
+      const kept = held.filter((each) => preapprovalKey(each) !== preapprovalKey(entry));
+
+      return kept.length === held.length ? null : kept;
+    });
+  }
+
+  /** `shared`'s standing approvals at its `revision`, one of each, whichever live `owner` share holds it; none where it
+   *  has no revision. */
+  preapprovalsOf(shared: string, revision: string | null): SharePreapproval[] {
+    const found = new Map<string, SharePreapproval>();
+
+    for (const { mode, grant } of revision === null ? [] : this.authoritiesOf(shared)) {
+      for (const each of mode === 'owner' ? grant.preapproved ?? [] : []) if (each.revision === revision) found.set(preapprovalKey(each), each);
+    }
+
+    return [...found.values()];
+  }
+
+  /** Each live share of `slate` (in `mode` where named) has its standing approvals rewritten by `change`, which answers
+   *  null to leave one as it is. The shares rewritten. */
+  private rewriteGrants(slate: string, mode: ShareMode | null, change: (held: readonly SharePreapproval[]) => SharePreapproval[] | null): string[] {
+    const rows = this.db.exec('SELECT id, mode, grant_json FROM slate_live_shares WHERE slate_id = ? AND revoked_at IS NULL', slate).toArray()
+      .map((row) => v.parse(v.object({ id: v.string(), mode: ShareModeSchema, grant_json: v.string() }), row));
+
+    const rewritten: string[] = [];
+
+    for (const row of rows.filter((each) => mode === null || each.mode === mode)) {
+      const grant = v.parse(ShareGrantSchema, JSON.parse(row.grant_json));
+      const preapproved = change(grant.preapproved ?? []);
+
+      if (preapproved === null) continue;
+      this.db.exec('UPDATE slate_live_shares SET grant_json = ? WHERE id = ?', JSON.stringify({ ...grant, preapproved }), row.id);
+      rewritten.push(row.id);
+    }
+
+    if (rewritten.length > 0) markStoreChanged(this.db);
+
+    return rewritten;
   }
 
   /** What each of `slate`'s live shares lets its server act with: the server's authority is read from all of them

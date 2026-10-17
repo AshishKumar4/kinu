@@ -137,6 +137,19 @@ describe('slate sharing surfaces', () => {
               .toEqual([['pat@example.com', 'edit'], ['sam@example.com', 'use']]);
             expect(await live.$eval('[data-live-share="live-team-2"] [data-live-share-mode]', (element) => element.textContent ?? '')).toContain('pat@example.com');
 
+            // What the owner answered "Always for this slate" to is listed by what it reaches, on its root, and taken back
+            // from every share of the slate in one press, sent as the list named it.
+            expect(await live.$$eval('[data-share-always-entry]', (rows) => rows.map((row) => row.getAttribute('data-share-always-entry'))))
+              .toEqual(['issue-triage/mcp.github.create_issue', 'issue-triage/workspace.writeFile']);
+            const standing = await live.$eval('[data-share-always]', (element) => element.textContent ?? '');
+            expect(standing).toContain('GitHub');
+            expect(standing).toContain('acme');
+            await live.click('[data-share-always-entry="issue-triage/mcp.github.create_issue"] [data-share-always-withdraw]');
+            await live.waitForFunction(() => document.querySelector('[data-share-always-entry="issue-triage/mcp.github.create_issue"]') === null);
+            expect(JSON.parse(await live.$eval('html', (root) => root.getAttribute('data-gallery-withdrawn')) ?? 'null'))
+              .toEqual({ slate: 'issue-triage', namespace: 'mcp.github', member: 'create_issue', root: { org: 'acme' } });
+            expect(await live.$('[data-share-always-entry="issue-triage/workspace.writeFile"]')).not.toBeNull();
+
             // A share on the owner's access whose code changed is stopped; the owner sees its reach again, then approves it
             // at the slate's revision now.
             expect(await live.$eval('[data-live-share="live-board-1"] [data-live-share-mode]', (element) => element.getAttribute('data-live-share-mode'))).toBe('owner');

@@ -20,7 +20,7 @@ import {
   type ActorHandle, MissionGovernor, provisionAgentHome, settleWorkspaceSlates, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
-import { initSlateLiveShareTables, slateDirectory } from '@kinu.run/core/slates';
+import { initSlateLiveShareTables, preapproveSlateEffect, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCallFrom, type SlateCaller, type SlateConsent, type SlateLineage } from '@kinu.run/core/slates';
@@ -199,6 +199,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     // The owner's one queue of parked actions, as the orchestrator's: an `owner` share's acting calls wait in it.
     this.deferrals = new DeferredApprovalQueue({
       store: new DeferredApprovalStore(sql, this.mainAgent()), writes: null, remember: () => undefined, wake: () => Effect.void,
+      preapprove: async (effect) => { preapproveSlateEffect(this.host.controller.live, effect); },
     });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
     initSlateBuildTable((ddl: string) => ctx.storage.sql.exec(ddl));
@@ -564,6 +565,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
+  /** The owner answers everything their shares asked of them "Always for this slate"; how many they answered. */
+  async ownerAlways(): Promise<number> {
+    const asked = this.deferrals.list().filter((action) => approvalKindOf(action).kind === 'slate-effect').map((action) => action.id);
+
+    return asked.length === 0 ? 0 : (await this.deferrals.decide(asked, 'always')).length;
+  }
+
   /** The owner answers everything their shares asked of them; how many they answered. */
   async ownerDecides(approve: boolean): Promise<number> {
     const asked = this.deferrals.list().filter((action) => approvalKindOf(action).kind === 'slate-effect').map((action) => action.id);
@@ -599,6 +607,21 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     stub[Symbol.dispose]();
 
     return { mutateError, written: this.#writes > before };
+  }
+
+  /** An "Always for this slate" the owner gave the board's writes at its revision now, as their answer to an ask leaves
+   *  it: the shares it stands on. */
+  preapproveWrites(): string[] {
+    const revision = slateRevision(this.host.controller.builds, SLATE_ID) ?? '';
+
+    return this.host.controller.live.preapprove(SLATE_ID, { slate: SLATE_ID, namespace: 'workspace', member: 'writeFile', root: {}, revision });
+  }
+
+  /** The board's standing approvals, as its owner's share sheet lists them. */
+  async preapprovals(): Promise<{ revision: string | null; members: string[] }> {
+    const listed = await this.host.controller.slatePreapprovals(SLATE_ID);
+
+    return listed.ok ? { revision: listed.value.revision, members: listed.value.preapproved.map((each) => each.member) } : { revision: null, members: [] };
   }
 
   /** Its owner lists `share` in the Gallery, as their share sheet does. */

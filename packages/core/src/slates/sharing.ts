@@ -30,14 +30,18 @@ const ShareGrantMemberSchema = v.object({
 export type ShareGrantMember = v.InferOutput<typeof ShareGrantMemberSchema>;
 
 /**
- * An effect its owner chose to let an `owner` share's server run unasked ("Always for this slate"): that slate's exact
- * tool on that root, at that revision alone. A widening of the grant, chosen only by its owner, void at any other revision.
+ * An "Always for this slate" decision: its owner's standing approval of one shape of call the shared server makes on
+ * their access (a member, on one root, as `partCallRoot` reads it) at one revision of the shared slate. Held on the
+ * shared slate's `owner` shares; written only by the owner's answer to an effect's ask; void once the shared slate is at
+ * another revision (share-policy.ts `preapprovedEffect`).
  */
 const SharePreapprovalSchema = v.object({
+  /** The slate that makes the call, as grant members name it: the shared slate, or one it hops to. */
   slate: v.string(),
   namespace: v.string(),
   member: v.string(),
   root: v.record(v.string(), v.string()),
+  /** The shared slate's revision it was given at. */
   revision: v.string(),
 });
 
@@ -48,7 +52,7 @@ export const ShareGrantSchema = v.object({
   members: v.array(ShareGrantMemberSchema),
   /** Absent on old rows means forkable (D4). */
   fork: v.optional(v.boolean()),
-  /** `owner` mode: the effects its owner pre-approved; absent, none. */
+  /** An `owner` share's standing approvals; absent means none. */
   preapproved: v.optional(v.array(SharePreapprovalSchema)),
 });
 
@@ -169,6 +173,35 @@ export const LIVE_SHARE_OPEN_PATH = '/api/shared/live/open';
 export const LiveShareOpenSchema = v.object({ url: v.string(), slate: v.string(), title: v.string() });
 
 export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
+
+/** `POST`, its owner's: the standing approvals of a slate's shared server that stand now, as its share sheet lists
+ *  them beside the reach. */
+export const LIVE_SHARE_PREAPPROVALS_PATH = '/api/shared/live/preapprovals';
+
+export const SlatePreapprovalsBodySchema = v.object({ workspace: v.string(), slate: v.string() });
+
+/** `POST`, its owner's: one standing approval taken back, from every share of the shared slate; answered as they stand
+ *  after. */
+export const LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH = '/api/shared/live/preapprovals/withdraw';
+
+export const SlatePreapprovalWithdrawSchema = v.object({
+  workspace: v.string(),
+  /** The shared slate, whose sheet it is. */
+  slate: v.string(),
+  entry: v.object({ slate: v.string(), namespace: v.string(), member: v.string(), root: v.record(v.string(), v.string()) }),
+});
+
+export type SlatePreapprovalWithdraw = v.InferOutput<typeof SlatePreapprovalWithdrawSchema>;
+
+/** A shared slate's standing approvals at its revision now (null where it has not built), one of each, whichever share
+ *  holds it. */
+export const SlatePreapprovalsSchema = v.object({
+  slate: v.string(),
+  revision: v.nullable(v.string()),
+  preapproved: v.array(SharePreapprovalSchema),
+});
+
+export type SlatePreapprovals = v.InferOutput<typeof SlatePreapprovalsSchema>;
 
 export const LiveShareCreatedSchema = v.object({
   share: LiveShareRecordSchema,

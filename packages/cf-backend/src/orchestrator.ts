@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, ownerCaller, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
-import { ROOT_SLATE_CALLER, slateAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
+import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -129,7 +129,7 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type LiveShareRecord, type LiveShareModeBody, type LiveShareListingBody, type RoomService,
+  type LiveShareRecord, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
@@ -4106,6 +4106,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       wake: this.ownerAnswerWake('decision'),
       // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
+      // "Always for this slate" on a shared slate's effect stands on that slate's owner shares, its sheet's to take back.
+      preapprove: async (effect) => { preapproveSlateEffect((await this.slates()).controller.live, effect); },
       // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
       // was. A hire's, or the root's outside any turn, falls back to the workspace run: the root's turn is not theirs.
       audit: (record) => {
@@ -5984,6 +5986,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  asks it of the share its index names, so nothing of an unlisted share is answered. */
   async galleryNeeds(share: string): Promise<SlateAnswer<RoomService[]>> {
     return (await this.slates()).controller.galleryNeeds(share);
+  }
+
+  /** DO-only, for the same reason: a slate's standing approvals, as its owner's share sheet lists them. */
+  async slatePreapprovals(slate: string): Promise<SlateAnswer<SlatePreapprovals>> {
+    return (await this.slates()).controller.slatePreapprovals(slate);
+  }
+
+  /** DO-only, for the same reason: one standing approval taken back by its owner's share sheet. Nothing grants one here:
+   *  only the owner's answer to an effect's ask does. */
+  async withdrawSlatePreapproval(body: SlatePreapprovalWithdraw): Promise<SlateAnswer<SlatePreapprovals>> {
+    return (await this.slates()).controller.withdrawSlatePreapproval(body);
   }
 
   /** DO-only, for the same reason: a live share listed in the Gallery, or taken off it, by its owner's share sheet. */

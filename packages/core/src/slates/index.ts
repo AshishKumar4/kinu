@@ -33,7 +33,7 @@ export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
 
 export { confinedTo } from './scoped-reader';
 
-export { shareLiveSlate } from './live-sharing';
+export { preapproveSlateEffect, shareLiveSlate } from './live-sharing';
 
 export { SlateBuilds, initSlateBuildTable, slateImage, type FailingSlateBuild, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from './builds';
 

@@ -10,6 +10,7 @@ import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/liv
 import { SlateShareViewers } from '../src/slates/share-viewers';
 import { SharedServers } from '../src/slates/shared-server';
 import { approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable } from '../src/index';
+import { preapproveSlateEffect } from '../src/slates/live-sharing';
 import { settle } from '../src/obs/effect';
 import type { ShareGrant } from '../src/slates/sharing';
 import type { JsonValue } from '../src/utils/json';
@@ -38,8 +39,12 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
   const live = new SlateLiveShareStore(makeSqlExec(db));
   const sql = makeSql(db);
 
+  const remembered: unknown[] = [];
+
   const queue = new DeferredApprovalQueue({
-    store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main), writes: null, remember: () => undefined, wake: () => Effect.void,
+    store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main), writes: null, remember: (grants) => { remembered.push(...grants); }, wake: () => Effect.void,
+    // As the orchestrator hands it over: the owner's "Always for this slate" stands on the slate's owner shares.
+    preapprove: async (effect) => { preapproveSlateEffect(live, effect); },
   });
 
   live.add({ id: 's1', slate: 'board', visibility: 'public', handle: '0123456789', grant });
@@ -96,9 +101,9 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 
   // The owner's decision stack: what the shared slate asked of them, as their Work tab lists it.
   const asked = () => queue.list().map((row) => approvalKindOf(row));
-  const approveAll = async () => queue.decide(queue.list().map((row) => row.id), 'approved');
+  const approveAll = async (answer: 'approved' | 'always' = 'approved') => queue.decide(queue.list().map((row) => row.id), answer);
 
-  return { call, ownersCall, ran, asked, approveAll, live, queue, servers, generations };
+  return { call, ownersCall, ran, asked, approveAll, live, queue, servers, generations, remembered };
 }
 
 test('an owner share\'s acting call waits for the owner, then runs once on their approval', async () => {
@@ -245,4 +250,36 @@ test('a server started, or a request made, under other sharing of its slate acts
   generations.set('board', 1);
   expect(servers.lineage('board', { incarnation: 'p1', generation: 0 }, null)?.message).toContain('started before its sharing changed');
   expect(servers.lineage('board', { incarnation: 'p1', generation: 1 }, record)?.message).toContain("sharing changed since this request began");
+});
+
+test("'Always for this slate' runs the asked call, then that tool on that root unasked at this revision; another root asks", async () => {
+  const { call, ran, asked, approveAll, live, remembered } = world('owner');
+  const write = (path: string) => call('writeFile', { args: [{ path, text: 'hello' }] });
+
+  await expect(write('notes.md')).rejects.toThrow('waits for the owner');
+  await approveAll('always');
+  // It stands for this slate alone: no standing grant of the environment's is recorded for it.
+  expect({ preapproved: live.get('s1')?.grant.preapproved, remembered }).toEqual({ preapproved: [{ slate: 'board', namespace: 'workspace', member: 'writeFile', root: {}, revision: 'rev-1' }], remembered: [] });
+
+  // The asked call runs on it, and every other write of the same tool and root runs unasked after it.
+  expect(await write('notes.md')).toMatchObject({ ok: true });
+  expect(await write('todo.md')).toMatchObject({ ok: true });
+  expect({ ran: ran.length, asked: asked().length }).toEqual({ ran: 2, asked: 0 });
+
+  // Taken back on the sheet: the next write asks again.
+  live.withdrawPreapproval('board', { slate: 'board', namespace: 'workspace', member: 'writeFile', root: {} });
+  await expect(write('todo.md')).rejects.toThrow('waits for the owner');
+});
+
+test("'Always' on a call another slate made names that caller, on the shared slate's shares", async () => {
+  const { asked, approveAll, live, servers } = world('owner');
+  const args = [{ path: 'notes.md' }];
+  const reaching: ShareGrant = { ...grant, members: [...grant.members, { slate: 'digest', namespace: 'workspace', member: 'writeFile', impact: 'mutate' }] };
+
+  live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, reaching);
+
+  await expect(settle(servers.gate({ slate: 'digest', chain: ['board'], address: { namespace: 'workspace', member: 'writeFile' }, effect: true, args, on: 'user:ana' }))).rejects.toThrow('waits for the owner');
+  expect(asked().map((kind) => (kind.kind === 'slate-effect' ? [kind.effect.slate, kind.effect.caller] : null))).toEqual([['board', 'digest']]);
+  await approveAll('always');
+  expect(live.get('s1')?.grant.preapproved).toEqual([{ slate: 'digest', namespace: 'workspace', member: 'writeFile', root: {}, revision: 'rev-1' }]);
 });

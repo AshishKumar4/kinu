@@ -23,8 +23,8 @@ import { useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
-  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareBodySchema, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
-  type PartRunAnswer, type PartRunRequest, type SlateConsent,
+  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, LiveShareBodySchema, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
+  type PartRunAnswer, type PartRunRequest, type SharePreapproval, type SlateConsent, type SlatePreapprovals,
 } from "@kinu.run/core";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -170,14 +170,16 @@ export function installPartsFixture(frame: string): void {
 
 /**
  * The share dialog's mode switch and Gallery listing (`sharedialog`), answered as the routes do: each answers the share as
- * it now is, and a share on the owner's access is refused a listing. `shown` is read at the first call, as the gallery
- * defines its share further down.
+ * it now is, and a share on the owner's access is refused a listing. A standing approval taken back answers the rest of
+ * `standing`, and what was sent is on the root for a test to read. `shown` and `standing` are read at the first call, as
+ * the gallery defines them further down.
  */
-export function installShareModeFixture(frame: string, shown: () => LiveShareRecord): void {
+export function installShareModeFixture(frame: string, shown: () => LiveShareRecord, standing: () => readonly SharePreapproval[]): void {
   if (frame !== "sharedialog" && frame !== "sharedialog-first") return;
 
   const next = window.fetch.bind(window);
   let share: LiveShareRecord | null = null;
+  let left: readonly SharePreapproval[] | null = null;
 
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -192,6 +194,15 @@ export function installShareModeFixture(frame: string, shown: () => LiveShareRec
       const made: LiveShareRecord = { ...shown(), id: "live-new", slate: body.start === "empty" ? `${body.slate}-copy` : body.slate, mode: body.mode ?? "own", grantRevision: body.revision ?? null, stale: false, gallery: null };
 
       return Response.json({ share: made, url: `https://${made.slate}.example.kinu.run/` });
+    }
+
+    if (path === LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH) {
+      const { slate, entry } = v.parse(SlatePreapprovalWithdrawSchema, await request.json());
+
+      document.documentElement.setAttribute("data-gallery-withdrawn", JSON.stringify(entry));
+      left = (left ?? standing()).filter((each) => JSON.stringify([each.slate, each.namespace, each.member, each.root]) !== JSON.stringify([entry.slate, entry.namespace, entry.member, entry.root]));
+
+      return Response.json({ slate, revision: "r2", preapproved: [...left] } satisfies SlatePreapprovals);
     }
 
     if (path !== LIVE_SHARE_MODE_PATH && path !== LIVE_SHARE_LISTING_PATH) return next(input, init);

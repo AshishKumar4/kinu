@@ -8,7 +8,7 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, GallerySlateSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  APP_ROUTES, GallerySlateSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type GalleryCategory, type GallerySlate, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
@@ -871,4 +871,36 @@ test("a slate removed, or its workspace deleted, ends its shares and takes its l
   await world.owner.agent.quietForDeletion(OWNER_ID);
   expect(synced.map((sync) => [sync.share, sync.listed])).toEqual([[deleted, false]]);
   expect(await open()).toEqual([]);
+});
+
+test("a slate's standing approvals are its owner's to list and take back, from every share of it, and no one else's", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const stranger = identityOf(VIEWER_ID, 'pat@example.test');
+  const made = [await sharePublic(world, 'public'), await sharePublic(world, 'public')];
+  const create = { slate: 'issues', namespace: 'mcp.github', member: 'create_issue', root: { owner: 'acme', repo: 'kinu' } };
+
+  // As an owner's "Always for this slate" leaves its owner shares (the decision is the queue's): seeded in their rows.
+  for (const { share } of made) {
+    world.owner.db.query("UPDATE slate_live_shares SET mode = 'owner', grant_revision = 'rev-1', grant_json = ? WHERE id = ?")
+      .run(JSON.stringify({ ...share.grant, preapproved: [{ ...create, revision: 'rev-1' }] }), share.id);
+  }
+
+  const ask = (identity: AuthIdentity, path: string, body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, identity, post(path, { workspace: 'issues-owner', ...body }));
+  const held = async () => (await openShares(world)).map((share) => share.grant.preapproved ?? []);
+
+  // Another account reaches no slate of this workspace's, to read or to take back.
+  expect((await ask(stranger, LIVE_SHARE_PREAPPROVALS_PATH, { slate: 'issues' }))?.status).toBe(404);
+  expect((await ask(stranger, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, { slate: 'issues', entry: create }))?.status).toBe(404);
+  expect(await held()).toEqual([[{ ...create, revision: 'rev-1' }], [{ ...create, revision: 'rev-1' }]]);
+
+  // The slate is at no revision here, so none of them stands to list.
+  expect(await jsonBody(present(await ask(owner, LIVE_SHARE_PREAPPROVALS_PATH, { slate: 'issues' }), 'the list'), SlatePreapprovalsSchema))
+    .toEqual({ slate: 'issues', revision: null, preapproved: [] });
+
+  const withdrawn = present(await ask(owner, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, { slate: 'issues', entry: create }), 'the withdrawal');
+
+  expect(await jsonBody(withdrawn, SlatePreapprovalsSchema)).toEqual({ slate: 'issues', revision: null, preapproved: [] });
+  expect(await held()).toEqual([[], []]);
 });

@@ -14,7 +14,7 @@ import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
-import { SlateBinding } from '../../src/slates/bindings';
+import { SlateBinding, type SlateBindingProps } from '../../src/slates/bindings';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
 import { isJsonAnswer, SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';

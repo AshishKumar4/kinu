@@ -335,9 +335,12 @@ const ORCHESTRATOR_METHODS = [
   'readLiveShare',
   'shareLiveWith',
   'liveShareBundle',
-  // The owner's share sheet's mode and Gallery listing, and a listed share's needs for the Gallery's public page.
+  // The owner's share sheet's mode, Gallery listing and standing approvals, and a listed share's needs for the Gallery's
+  // public page.
   'setLiveShareMode',
   'setLiveShareListing',
+  'slatePreapprovals',
+  'withdrawSlatePreapproval',
   'galleryNeeds',
   'liveShareUrl',
   'viewerEntryUrl',
