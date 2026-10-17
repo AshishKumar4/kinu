@@ -780,8 +780,9 @@ describe("a turn's runs of tool calls, in the real chat", () => {
     });
   });
 
-  // Main, 2026-10-17: the line reads as the thinking block's does, a quiet chevron that turns, not a word like a link.
-  test("a run's line is one control: no word but what it says, a chevron that turns as it opens, and anywhere on it opens it", async () => {
+  // Main, 2026-10-17: the line reads as the thinking block's does, a quiet chevron mark, not a word like a link; the
+  // shots show it turning.
+  test("a run's line is one control: no word but what it says, a chevron mark, and anywhere on it opens it", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1000 });
@@ -793,32 +794,25 @@ describe("a turn's runs of tool calls, in the real chat", () => {
         open: button.getAttribute('aria-expanded'),
         extra: (button.textContent ?? '').replace(button.querySelector('[data-disclosure-label]')?.textContent ?? '', '')
           .replace(button.querySelector('[data-disclosure-after]')?.textContent ?? '', '').trim(),
-        turn: (() => {
-          const mark = button.querySelector('[data-disclosure-turn]');
-
-          // A turn is either property's: `rotate` or `transform`.
-          return mark === null ? null : `${getComputedStyle(mark).rotate} ${getComputedStyle(mark).transform}`;
-        })(),
+        mark: button.querySelector('[data-disclosure-turn]') !== null,
       }));
 
-      const closed = await read();
+      expect(await read()).toEqual({ open: 'false', extra: '', mark: true });
 
-      expect([closed.open, closed.extra, closed.turn === null]).toEqual(['false', '', false]);
-
-      // Pressed at its far end, past its words: the line is one control the width of the chat.
+      // Pressed past its words and its mark, at the line's far end: the line is the control, not its words.
       await page.$eval(line, (button) => { button.scrollIntoView({ block: 'center' }); });
-      const box = await (await page.$(line))?.boundingBox();
 
-      if (box === null || box === undefined) throw new Error('the run line has no box');
-      expect(box.width).toBeGreaterThan(600);
-      await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+      const far = await page.$eval(line, (button) => {
+        const whole = button.getBoundingClientRect();
+        const mark = button.querySelector('[data-disclosure-turn]')?.getBoundingClientRect();
+
+        return { x: whole.right - 2, y: whole.top + whole.height / 2, pastMark: mark === undefined ? false : whole.right - 2 > mark.right };
+      });
+
+      expect(far.pastMark).toBe(true);
+      await page.mouse.click(far.x, far.y);
       await page.waitForFunction((selector: string) => document.querySelector(selector)?.getAttribute('aria-expanded') === 'true', {}, line);
-      await page.waitForFunction((selector: string, before: string | null) => {
-        const turn = document.querySelector(`${selector} [data-disclosure-turn]`);
-
-        return turn !== null && `${getComputedStyle(turn).rotate} ${getComputedStyle(turn).transform}` !== before;
-      }, {}, line, closed.turn);
-      expect((await read()).extra).toBe('');
+      expect(await read()).toEqual({ open: 'true', extra: '', mark: true });
       await page.close();
     });
   });
