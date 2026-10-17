@@ -16,9 +16,10 @@ import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH, sha256Hex, 
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { initSlateBuildTable, initSlateLiveShareTables, initSlateUsageTable, ROOT_SLATE_CALLER, serverAuthority, SlateBuilds, SlateController } from '@kinu.run/core/slates';
+import { initSlateBuildTable, initSlateLiveShareTables, initSlateUsageTable, ROOT_SLATE_CALLER, serverAuthority, SlateBuilds, SlateController, SlateFiles, WorkspaceSlateContentStore } from '@kinu.run/core/slates';
+import { SlateId } from '@agent-core/core/slates';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller, parseSlateProject, slateAuthority } from '@kinu.run/core';
@@ -686,6 +687,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     initSlateLiveShareTables(raw);
     initSlateBuildTable(raw);
     initSlateUsageTable(raw);
+    raw(`CREATE TABLE IF NOT EXISTS slate_file_manifest (
+      slate_id TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, mtime_ms INTEGER NOT NULL,
+      ino INTEGER NOT NULL, content TEXT NOT NULL, recorded_at INTEGER NOT NULL, PRIMARY KEY (slate_id, path)
+    )`);
     const bundle = createWorkspace({ sql, transactions: this.ctx, generation: workspaceGenerationStorage(sql) });
     const session = await bundle.session();
     const files = session.vfs.as(CRED_SESSION_USER);
@@ -714,10 +719,23 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       call: async () => ({ ok: true, value: null }),
     });
 
-    const revision = (key: string) => builds.built('board', slateAuthority(ROOT_SLATE_CALLER.cred), key, { modules: {}, inputs: [] });
+    const content = session.vfs.withTransaction(() => new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL)));
+    const source = new SlateFiles(files, content, sql, (body) => session.vfs.withTransaction(body));
+    const labels = new Map<string, string>();
+    const labelOf = (key: string | null): string | null => key === null ? null : labels.get(key) ?? key;
+
+    const revision = (label: string): string => {
+      const digest = source.transaction(() => source.capture(new SlateId('board')).digest.value);
+      const key = `${digest}:tree:${label}`;
+      labels.set(key, label);
+      builds.built('board', slateAuthority(ROOT_SLATE_CALLER.cred), key, { modules: {}, inputs: [], scope: 'tree' });
+
+      return key;
+    };
+
     const share = controller.live.add({ id: 'fence', slate: 'board', visibility: 'users', handle: '0123456789', grant: { slates: ['board'], members: [] } });
-    revision('r0');
-    const approval = controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: 'r0', approved: [] });
+    const initial = revision('r0');
+    const approval = controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: initial, approved: [] });
     await ready.promise;
     const written = await controller.writeShared('board', { 'server.ts': { text: 'r1', base: sha256Hex('r0') } }, 'pat');
 
@@ -726,41 +744,41 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     release.resolve();
     const pending = await approval;
     const afterPendingMode = controller.live.get(share.id)?.mode ?? null;
-    revision('r1');
+    const first = revision('r1');
 
     if (latest) {
       // R1 built, but is not approved. R2 now lands while the good build still says R1.
       const second = await controller.writeShared('board', { 'server.ts': { text: 'r2', base: sha256Hex('r1') } }, 'sam');
 
       if (!second.ok) throw new Error(second.error);
-      const revisionBefore = controller.live.editMark('board')?.revisionBefore ?? null;
-      const firstBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: 'r1', approved: [] });
+      const revisionBefore = labelOf(controller.live.editMark('board')?.revisionBefore ?? null);
+      const firstBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: first, approved: [] });
       const mode = controller.live.get(share.id)?.mode ?? null;
-      revision('r2');
-      const secondBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: 'r2', approved: [] });
+      const secondBuilt = revision('r2');
+      const secondBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: secondBuilt, approved: [] });
 
       return {
         pending: JSON.stringify(firstBuildApproval), afterPendingMode: mode, revisionBefore,
         approved: secondBuildApproval.ok, cleared: controller.live.editMark('board') === null,
-        lending: serverAuthority(controller.live.authoritiesOf('board'), 'r2').kind,
+        lending: serverAuthority(controller.live.authoritiesOf('board'), secondBuilt).kind,
         afterOwnerBuild: null, stopped: 'none',
       };
     }
 
-    const approved = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: 'r1', approved: [] });
+    const approved = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: first, approved: [] });
     const cleared = controller.live.editMark('board') === null;
-    const lending = serverAuthority(controller.live.authoritiesOf('board'), 'r1').kind;
+    const lending = serverAuthority(controller.live.authoritiesOf('board'), first).kind;
     const later = await controller.writeShared('board', { 'server.ts': { text: 'r2', base: sha256Hex('r1') } }, 'sam');
 
     if (!later.ok) throw new Error(later.error);
     revision('r2');
-    revision('r3');
+    const current = revision('r3');
     const after = controller.live.get(share.id);
 
     return {
       pending: JSON.stringify(pending), afterPendingMode, approved: approved.ok, cleared, lending,
-      afterOwnerBuild: after === undefined ? null : { grantRevision: after.grantRevision, editedBy: after.editedBy },
-      stopped: serverAuthority(controller.live.authoritiesOf('board'), 'r3').kind, revisionBefore: controller.live.editMark('board')?.revisionBefore ?? null,
+      afterOwnerBuild: after === undefined ? null : { grantRevision: labelOf(after.grantRevision), editedBy: after.editedBy },
+      stopped: serverAuthority(controller.live.authoritiesOf('board'), current).kind, revisionBefore: labelOf(controller.live.editMark('board')?.revisionBefore ?? null),
     };
   }
 

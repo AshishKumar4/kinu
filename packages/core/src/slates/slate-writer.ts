@@ -20,7 +20,7 @@ export interface SlateFileBatch {
   readonly before: Readonly<Record<string, FileBefore>>;
   readonly markBefore: SlateEditMark | null;
   /** Every source entry after this batch, so its rollback cannot erase provenance for a disjoint later edit. */
-  readonly tree: string;
+  readonly tree: string | null;
 }
 
 type Files = ReturnType<WorkspaceSession['vfs']['as']>;
@@ -123,19 +123,29 @@ export function writeSlateBatch(input: {
 
     if (!parsed.success) return yield* new KinuError('bad_input', parsed.issues[0].message);
     const files = input.session.vfs.as(CRED_SESSION_USER);
-    const paths = Object.keys(parsed.output).sort();
-    const before: Record<string, FileBefore> = {};
+    const proposed = Object.keys(parsed.output).sort();
+    const observed: Record<string, FileBefore> = {};
     const wrote: Record<string, string | null> = {};
     const conflicts: string[] = [];
 
-    for (const path of paths) {
-      before[path] = yield* checkedFile(files, input.root, path);
+    for (const path of proposed) {
+      observed[path] = yield* checkedFile(files, input.root, path);
 
-      if (before[path].sha256 !== parsed.output[path].base) conflicts.push(path);
+      if (observed[path].sha256 !== parsed.output[path].base) conflicts.push(path);
     }
 
     if (conflicts.length > 0) return yield* new KinuError('bad_input', `File conflict: ${conflicts.join(', ')} changed since you read them; read them again`);
     const markBefore = input.marks.editMark(input.slate);
+
+    const paths = proposed.filter((path) => {
+      const { text } = parsed.output[path];
+
+      return observed[path].sha256 !== (text === null ? null : sha256Hex(text));
+    });
+
+    const before = Object.fromEntries(paths.map((path) => [path, observed[path]]));
+
+    if (paths.length === 0) return { paths, wrote, before, markBefore, tree: null };
 
     for (const path of paths) {
       const { text } = parsed.output[path];
@@ -161,6 +171,7 @@ export function rollbackSlateBatch(input: {
   readonly batch: SlateFileBatch;
 }): { readonly restored: readonly string[]; readonly conflicts: readonly string[] } {
   const restore = Effect.gen(function* () {
+    if (input.batch.paths.length === 0) return { restored: [], conflicts: [] };
     const files = input.session.vfs.as(CRED_SESSION_USER);
     const restored: string[] = [];
     const conflicts: string[] = [];

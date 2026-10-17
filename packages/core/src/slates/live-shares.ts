@@ -259,9 +259,15 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   /** What each of `slate`'s live shares lets its server act with: the server's authority is read from all of them
    *  together on every call (share-policy.ts `serverAuthority`). A revoked share lends nothing. */
   authoritiesOf(slate: string): LiveShareAuthority[] {
+    const mark = this.editMark(slate);
+
     return this.db.exec('SELECT mode, grant_json, grant_revision FROM slate_live_shares WHERE slate_id = ? AND revoked_at IS NULL', slate).toArray()
       .map((row) => v.parse(AuthorityRow, row))
-      .map((row) => ({ mode: row.mode, grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)), grantRevision: row.grant_revision }));
+      .map((row) => ({
+        mode: row.mode, grant: v.parse(ShareGrantSchema, JSON.parse(row.grant_json)),
+        grantRevision: mark !== null && row.mode === 'owner' ? null : row.grant_revision,
+        ...(mark !== null && row.mode === 'owner' && { editedBy: mark.editor }),
+      }));
   }
 
   /** A revoked share has no address. */
