@@ -2,7 +2,9 @@
  * Whether a turn a dead process left open may run on: the one decision for the recovery sweep and for the session
  * re-opening its own open run. A turn the decision closes is settled here; its run is the caller's to close.
  */
+import type { ModelMessage } from 'ai';
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { attempt, diagnostics } from '../obs/index';
 import type { AgentStores } from '../state/agent-stores';
@@ -16,12 +18,14 @@ type ClosedBy = 'stopped' | 'answered' | 'record_unreadable' | 'stalled' | 'unve
 
 /**
  * `continue`: owed and verified, or never claimed, so it consumed nothing. `active`: a live turn here opened while this
- * read, so this decides nothing. `closed`: settled already (`settled`), or by this decision.
+ * read, so this decides nothing. `closed`: settled already (`settled`), or by this decision; `out_of_memory` with the
+ * words its owner reads, as a failure.
  */
 export type InterruptedTurnVerdict =
   | { readonly kind: 'continue' }
   | { readonly kind: 'active' }
-  | { readonly kind: 'closed'; readonly cause: 'settled' | ClosedBy };
+  | { readonly kind: 'closed'; readonly cause: 'settled' | ClosedBy }
+  | { readonly kind: 'closed'; readonly cause: 'out_of_memory'; readonly reason: string };
 
 export interface InterruptedTurn {
   /** Reads retained program bytes; recovery never needs a composed execution seat. */
@@ -38,6 +42,9 @@ export interface InterruptedTurn {
   readonly claim: StoredActorClaim | null;
   /** Read between the awaits: a turn that opened meanwhile owns the claim. */
   readonly turnOpen: () => boolean;
+  /** The decider that fails the turn for its memory ({@link OUT_OF_MEMORY_CUTS}): the turn's own session, as it re-opens
+   *  the run, so the run ends once, with the words, told to whoever waits on it. The sweep leaves the turn to it. */
+  readonly endsOutOfMemory?: true;
 }
 
 /** Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. */
@@ -50,25 +57,38 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
     if (turn.turnOpen()) return { kind: 'active' } as const;
     const stopped = turn.runs?.stopRequested(turn.runId) === true;
 
-    const settled = (open: StoredActorClaim, outcome: ClaimOutcome, cause: ClosedBy): InterruptedTurnVerdict => {
+    const settled = (open: StoredActorClaim, outcome: ClaimOutcome, cause: ClosedBy | 'out_of_memory'): void => {
       stores.claims.settleRecovered(open.turnId, open.epoch, outcome);
       recordRecoverySettled({ workspace: turn.workspace, actor: turn.actor, cause, sameBuild: sameBuildOf(open.program?.build ?? null, turn.installedBuild) });
+    };
+
+    const closed = (open: StoredActorClaim, outcome: ClaimOutcome, cause: ClosedBy): InterruptedTurnVerdict => {
+      settled(open, outcome, cause);
 
       return { kind: 'closed', cause };
     };
+
+    // Its isolate ran out of memory each time the step ran: running it again would die again, so it ends here.
+    if (claim !== null && !stopped && diedOfMemory(turn)) {
+      const reason = outOfMemoryReason(yield* consumedEvidence(stores, claim));
+
+      settled(claim, 'error', 'out_of_memory');
+
+      return { kind: 'closed', cause: 'out_of_memory', reason } as const;
+    }
 
     // Never claimed, or claimed only to prepare: it consumed nothing, so it prepares again under the next epoch.
     if (claim === null || claim.status === 'preparing') {
       if (!stopped) return { kind: 'continue' } as const;
 
-      return claim === null ? { kind: 'closed', cause: 'stopped' } as const : settled(claim, 'aborted', 'stopped');
+      return claim === null ? { kind: 'closed', cause: 'stopped' } as const : closed(claim, 'aborted', 'stopped');
     }
 
     // The outcome the stopped turn would have settled its claim with.
-    if (stopped) return settled(claim, 'aborted', 'stopped');
+    if (stopped) return closed(claim, 'aborted', 'stopped');
 
     // Its hirer holds the answer already: run again, it would answer a closed assignment a second time.
-    if (turn.answered?.(claim) === true) return settled(claim, 'indeterminate', 'answered');
+    if (turn.answered?.(claim) === true) return closed(claim, 'indeterminate', 'answered');
 
     const evidence = yield* consumedEvidence(stores, claim);
 
@@ -77,7 +97,7 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
     if ('failure' in evidence) {
       diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.actor, turn: claim.turnId });
 
-      return settled(claim, 'error', 'record_unreadable');
+      return closed(claim, 'error', 'record_unreadable');
     }
 
     const verdict = yield* Effect.promise(() => verifyClaimedProgram(
@@ -94,13 +114,13 @@ export function decideInterruptedTurn(turn: InterruptedTurn): Effect.Effect<Inte
     if (cuts.work >= POISON_WORK_CUTS || cuts.provider >= STALLED_PROVIDER_CUTS) {
       diagnostics.event('actor.turn_stalled', { actor: turn.actor, turn: claim.turnId, epoch: claim.epoch, workCuts: cuts.work, providerCuts: cuts.provider });
 
-      return settled(claim, 'error', 'stalled');
+      return closed(claim, 'error', 'stalled');
     }
 
     // A host that stamps no build (the CLI) recorded none at admission either: nothing to compare, so nothing changed.
     if (verdict.kind === 'verified' || (verdict.kind === 'build_unknown' && turn.installedBuild === null)) return { kind: 'continue' } as const;
 
-    return settled(claim, 'indeterminate', 'unverified');
+    return closed(claim, 'indeterminate', 'unverified');
   });
 }
 
@@ -128,11 +148,84 @@ const POISON_WORK_CUTS = 6;
  */
 const STALLED_PROVIDER_CUTS = 20;
 
+/**
+ * Executions of one step whose isolate the platform reported out of memory, on one build with no step finishing between,
+ * that end the turn: the second death of the same request says the request does not fit, and one says only that the
+ * isolate did not hold it once (other work shares it).
+ */
+const OUT_OF_MEMORY_CUTS = 2;
+
 /** The dead execution's cuts, itself counted ({@link TurnCut}); a host that stamps no build counts none. */
 function cutsOf(stores: Pick<AgentStores, 'claims'>, claim: StoredActorClaim, installedBuild: string | null) {
   const cut = stores.claims.cutOf(claim.turnId);
 
-  if (installedBuild === null || cut === null || cut.epoch !== claim.epoch || cut.build !== installedBuild) return { work: 0, provider: 0 };
+  if (installedBuild === null || cut === null || cut.epoch !== claim.epoch || cut.build !== installedBuild) return { work: 0, provider: 0, outOfMemory: 0 };
 
   return cutsThrough(cut);
+}
+
+/** Whether the turn's step died of memory each time it ran, for the decider that ends it ({@link InterruptedTurn.endsOutOfMemory}). */
+function diedOfMemory(turn: InterruptedTurn): boolean {
+  return turn.endsOutOfMemory === true && turn.claim !== null && cutsOf(turn.stores, turn.claim, turn.installedBuild).outOfMemory >= OUT_OF_MEMORY_CUTS;
+}
+
+/** What the owner reads of a turn its memory ended: the images its last request carried inline, and their bytes. */
+function outOfMemoryReason(evidence: { readonly context: ContextRevision } | { readonly failure: KinuError }): string {
+  const images = 'context' in evidence ? imagesIn(evidence.context.messages) : null;
+
+  if (images === null || images.count === 0) return 'this turn ran out of memory each time it ran the same step';
+
+  return `this turn ran out of memory: its context holds ${String(images.count)} image${images.count === 1 ? '' : 's'}, `
+    + `${(images.bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+/** Image bytes as a message part holds them: base64 text (a data URL's too), the bytes, or a URL, which has none here. */
+const ImageBytesSchema = v.union([v.string(), v.instance(Uint8Array), v.instance(ArrayBuffer), v.instance(URL)]);
+
+/** An image a message carries: the user's, or an entry of a tool's result, its bytes held inline or in a `data` carrier. */
+const ImagePartSchema = v.union([
+  v.object({ type: v.literal('image'), image: ImageBytesSchema }),
+  v.object({
+    type: v.picklist(['file', 'media', 'image-data', 'file-data']),
+    mediaType: v.pipe(v.string(), v.startsWith('image/')),
+    data: v.union([ImageBytesSchema, v.object({ type: v.literal('data'), data: ImageBytesSchema }), v.object({ type: v.literal('url') })]),
+  }),
+]);
+
+type ImagePart = v.InferOutput<typeof ImagePartSchema>;
+
+/** The images `messages` carry, the user's and the tools', with their decoded bytes. */
+function imagesIn(messages: readonly ModelMessage[]) {
+  const images: ImagePart[] = [];
+
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+
+    for (const part of message.content) {
+      const tools = part.type === 'tool-result' && part.output.type === 'content' ? part.output.value : [];
+
+      for (const entry of part.type === 'tool-result' ? tools : [part]) {
+        const image = v.safeParse(ImagePartSchema, entry);
+
+        if (image.success) images.push(image.output);
+      }
+    }
+  }
+
+  return { count: images.length, bytes: images.reduce((total, image) => total + imageBytes(image), 0) };
+}
+
+/** An image's decoded bytes. */
+function imageBytes(image: ImagePart): number {
+  const held = image.type === 'image' ? image.image : image.data;
+
+  if (typeof held === 'object' && 'type' in held) return held.type === 'data' ? imageBytes({ type: 'image', image: held.data }) : 0;
+  const bytes = held;
+
+  if (bytes instanceof URL) return 0;
+
+  if (typeof bytes !== 'string') return bytes.byteLength;
+  const base64 = bytes.startsWith('data:') ? bytes.slice(bytes.indexOf(',') + 1) : bytes;
+
+  return Math.floor(base64.replace(/=+$/u, '').length * 3 / 4);
 }

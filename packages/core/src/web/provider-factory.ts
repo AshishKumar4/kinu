@@ -2,13 +2,16 @@
 
 import { createDefaultWebSearchProvider, type BrowserCookie, type WebSearchProvider } from './provider';
 import { bindingQuickActions, type BrowserRunQuickActions } from './browser-run';
+import { bindingWebSearch } from './first-party-search';
 import type { AuthResolver } from '../providers/types';
 import type { ModelCallSink } from '../events/model-call';
-import { workersAiHtmlToMarkdown, type WorkersAiMarkdown } from '../providers/model-invocation';
+import { workersAiHtmlToMarkdown, type WorkersAiMarkdown, type WorkersAiWebSearch } from '../providers/model-invocation';
 
 /** Structural so core compiles without the Worker's ambient `Env`. */
 interface WebProviderEnv {
-  readonly AI?: WorkersAiMarkdown;
+  readonly AI?: WorkersAiMarkdown & Partial<WorkersAiWebSearch>;
+  /** The platform's gateway, which the deployment's own search runs on (`first-party-search.ts`). */
+  readonly AI_GATEWAY_URL?: string;
   readonly BROWSER: BrowserRunQuickActions;
 }
 
@@ -37,6 +40,9 @@ export function buildCfWebSearchProvider(
   const htmlToMarkdown = workersAiHtmlToMarkdown(env, reportModelCall);
 
   if (htmlToMarkdown) options.htmlToMarkdown = htmlToMarkdown;
+  const firstParty = bindingWebSearch(env, reportModelCall);
+
+  if (firstParty !== null) options.firstParty = firstParty;
 
   return createDefaultWebSearchProvider(options);
 }

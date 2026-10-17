@@ -116,6 +116,8 @@ export async function sessionFixture(input: {
       driverGate: () => null,
       openWork: async () => ({ tasks: actor.stores.taskList.listOpen(), asyncWakePending: false }),
       steerSkills: async () => null, stillOwed: () => true,
+      // No tool here runs as a job.
+      releaseForeground: () => false,
       ...(lane !== undefined && { cacheWarming: warmingOver(lane) }),
       ...input.ports,
     },

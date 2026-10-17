@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import { SOUL_FILE, SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
 import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
-import { SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
+import { SHARED_ROOTS, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
 export const MAIN_AGENT = 'main';
@@ -252,29 +252,31 @@ export function provisionWorkspaceSoul(kernel: SoulVfs, content?: string | Uint8
   }));
 }
 
-type SlatesRootVfs = Pick<CredentialedVfs, 'exists' | 'mkdir' | 'stat' | 'chown' | 'chmod' | 'getDefaultAcl' | 'setDefaultAcl'>;
+type SharedRootVfs = Pick<CredentialedVfs, 'exists' | 'mkdir' | 'stat' | 'chown' | 'chmod' | 'getDefaultAcl' | 'setDefaultAcl'>;
 
 /**
- * Kernel-owned, group-shared, setgid, and registered with Nimbus as a shared directory (`register`: once per
- * engine boot, from trusted host init).
+ * Each of the workspace's {@link SHARED_ROOTS}: kernel-owned, group-shared, setgid, and registered with Nimbus as a shared
+ * directory (`register`: once per engine boot, from trusted host init).
  */
-export function settleWorkspaceSlates(kernel: SlatesRootVfs, register: (path: string) => void): void {
-  if (!kernel.exists(SLATES_ROOT)) kernel.mkdir(SLATES_ROOT);
+export function settleSharedRoots(kernel: SharedRootVfs, register: (path: string) => void): void {
+  for (const path of SHARED_ROOTS) {
+    if (!kernel.exists(path)) kernel.mkdir(path);
 
-  const root = kernel.stat(SLATES_ROOT);
+    const root = kernel.stat(path);
 
-  // What Nimbus asks of a shared directory before it registers one: root's, setgid, and a default ACL
-  // (`setfacl -d -m g::rwx`) that lets the group write what a member makes there.
-  const shared = root.uid === 0 && root.gid === WORKSPACE_GID && (root.mode & 0o7777) === SHARED_DIRECTORY_MODE
-    && kernel.getDefaultAcl(SLATES_ROOT) === SHARED_DEFAULT_ACL;
+    // What Nimbus asks of a shared directory before it registers one: root's, setgid, and a default ACL
+    // (`setfacl -d -m g::rwx`) that lets the group write what a member makes there.
+    const shared = root.uid === 0 && root.gid === WORKSPACE_GID && (root.mode & 0o7777) === SHARED_DIRECTORY_MODE
+      && kernel.getDefaultAcl(path) === SHARED_DEFAULT_ACL;
 
-  if (!shared) {
-    kernel.chown(SLATES_ROOT, 0, WORKSPACE_GID);
-    kernel.chmod(SLATES_ROOT, SHARED_DIRECTORY_MODE);
-    kernel.setDefaultAcl(SLATES_ROOT, SHARED_DEFAULT_ACL);
+    if (!shared) {
+      kernel.chown(path, 0, WORKSPACE_GID);
+      kernel.chmod(path, SHARED_DIRECTORY_MODE);
+      kernel.setDefaultAcl(path, SHARED_DEFAULT_ACL);
+    }
+
+    register(path);
   }
-
-  register(SLATES_ROOT);
 }
 
 /** Make `/tmp` resolve to this agent's own tmp for this agent's uid. */

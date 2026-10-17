@@ -60,7 +60,7 @@ deletes it); each part is Nimbus's own build of the source change its ask propos
   Worker's startup is bounded by Cloudflare (code 10021), which refused 89759ebcc's on staging (2026-10-13).
 
 Asked of Nimbus and not carried: mysql2's `checkServerIdentity` under workerd's
-TLS (#48), connections keeping the host's socket type (#49), the Cloudflare accounts envelope (#50), a credentialed
+TLS (#48; a program passing one is refused, told to run the client on the computer, issue #60), connections keeping the host's socket type (#49), the Cloudflare accounts envelope (#50), a credentialed
 SqliteVFS view walking `..` after a link (#53; Kinu's store planes still key lexically), and the shell resolving an
 operand as POSIX does rather than lexically (#54; a command still reads `./missing/../f` and `f/` where the file plane
 refuses them).

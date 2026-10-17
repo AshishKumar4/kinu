@@ -28,7 +28,7 @@ import {
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubordinateReportLedger, type ActorToolsets,
-  invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type JobAuthority,
+  invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type BackgroundJobRunner, type JobAuthority,
   createTeamToolDeps,
   agentNamer,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
@@ -234,7 +234,8 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
+  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type OwnerWaitsHost,
+  ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal, bearWorkspaceIdentity,
@@ -976,6 +977,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     for (const { event, detail } of lines) this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`);
   }
 
+  /**
+   * The platform reported an agent's isolate out of memory at `diedAt` (its tail heard it, `AgentIsolateTail`): marked on
+   * the execution it killed, so recovery ends a turn whose step dies of memory each time rather than run it again. Not
+   * @callable: only this script's tail reaches it.
+   */
+  async isolateOutOfMemory(actorId: string, diedAt: number): Promise<void> {
+    if (!this.liveActor(actorId) || this.admitting.signal.aborted) return;
+    diagnostics.event('agent.isolate_out_of_memory', { workspace: this.name, actor: actorId, diedAt });
+    await this.agentCall(actorId, (isolate, snapshot) => isolate.outOfMemory(snapshot, diedAt));
+  }
+
   agentWorkspace(actorId: string): AgentWorkspaceHost {
     if (this.deleting.signal.aborted) return settleSync(Effect.fail(new KinuError('missing', 'This workspace was deleted.')));
     this.agentKey(actorId);
@@ -1085,6 +1097,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       hireAdvisor: async (advisor) => { await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor); },
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
       birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
+      releaseForeground: async (executing) => this.foregroundRunnerOf(actorId)?.releaseForeground(executing) ?? false,
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
         vfs: this.rt.storage.vfs,
         config: this.agentBound(actorId).stores.config,
@@ -1505,8 +1518,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** A hire's, a head's or a swarm node's programs, as they reach its own planes (`SURFACE_POLICY.confined`). */
+  /** A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none. */
+  protected hireOwnerWaits(actor: SeatedActor): OwnerWaitsHost | null {
+    return isSubordinateOrigin(actor.record.origin) ? this.ownerWaitsOf(actor.handle.actorId, false) : null;
+  }
+
   private confinedActor(actor: SeatedActor, runtime: CFRuntime, search: WebSearchProvider, ledgers: TurnLedgers): SurfaceActor {
     return hostedSurfaceActor(actor, {
+      ownerWaits: this.hireOwnerWaits(actor),
       web: { search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
       conversations: this.agentStores(actor.handle.actorId).conversations(), vectorStore: runtime.vectorStore, ledgers: () => ledgers,
     });
@@ -3311,7 +3330,57 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Main's turns are assembled in its own isolate, which reads and clears the arm (D9).
       armCompactNow: async () => { await this.mainCall((isolate, snapshot) => isolate.armCompaction(snapshot)); },
       proposeWorkspace: (proposal) => this.proposals.propose(proposal),
+      ownerWaits: this.ownerWaitsOf(this.actorHandle().actorId, true),
     });
+  }
+
+  /**
+   * Whether an agent may hold an armed wait on its owner (read-models/owner-waits.ts): unknown (null) at start, so the
+   * first change looks; false once a look found none, until one is armed.
+   */
+  private ownerWaitsArmed: boolean | null = null;
+
+  /** One agent's `agent.waitingOnOwner` and its wake, over every row the attention stack holds the owner on. */
+  private ownerWaitsOf(actorId: string, workspaceAgent: boolean): OwnerWaitsHost {
+    return ownerWaitsHost({
+      reader: this.ownerWaitReader(actorId, workspaceAgent),
+      read: () => this.ownerWaitRows(),
+      armed: () => { this.ownerWaitsArmed = true; },
+    });
+  }
+
+  private ownerWaitReader(actorId: string, workspaceAgent: boolean): OwnerWaitReader {
+    return { actorId, workspaceAgent, config: actorId === this.actorHandle().actorId ? this.config : this.agentBound(actorId).stores.config };
+  }
+
+  /** Every row that waits on the owner now, from the reads the attention stack and the roster's tile are built from. */
+  private async ownerWaitRows(): Promise<ScopedOwnerWait[]> {
+    const [hostedPlans, questions] = await Promise.all([this.hostedPlans(), this.questionsAsked()]);
+
+    return ownerWaits({
+      deferred: this.deferrals.list(),
+      plans: this.hostedPendingPlans(hostedPlans),
+      proposals: this.proposals.open(),
+      consents: this.consents.list(),
+      questions,
+      nameOf: (actorId) => this.actorHost().describe(actorId)?.name ?? actorId,
+    });
+  }
+
+  /**
+   * What waits on the owner may have moved (every such change moves the roster's tile): each armed wait it now meets
+   * wakes its agent, once. Read only while one may be armed.
+   */
+  private ownerWaitsMoved(): void {
+    if (this.ownerWaitsArmed === false) return;
+
+    const main = this.actorHandle().actorId;
+
+    this.detachOwned(logged('owner_waits.wake_failed', { doing: 'waking the agents whose wait on their owner is met', otherwise: 'io' }, wakeMetOwnerWaits({
+      readers: this.workspaceActors().list().map((record) => this.ownerWaitReader(record.actorId, record.actorId === main)),
+      rows: () => this.ownerWaitRows(),
+      wake: (actorId, signal) => Effect.asVoid(attempt({ doing: 'waking an agent with its owner\'s word', otherwise: 'io' }, () => this.agentDeliveries(actorId).signals.send(signal))),
+    }).pipe(Effect.map((stillArmed) => { this.ownerWaitsArmed = stillArmed; }))));
   }
 
   protected notifyOwner(subject: string, body: string): void {
@@ -3826,6 +3895,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async dismissBackgroundJob(jobId: string, actor?: string): Promise<{ ok: boolean }> {
     return await settle(this.jobOperation('dismiss', jobId, actor, (authority) => dismissBackgroundJob(authority.store, jobId)));
+  }
+
+  /** The runner `actorId`'s tools run their foreground calls under: main's the workspace's, a hire's its own; null for a
+   *  hire whose jobs no turn of it has opened. */
+  private foregroundRunnerOf(actorId: string): BackgroundJobRunner | null {
+    return actorReach(actorPolicy(this.agentBound(actorId).record)).kind === 'workspace' ? this.jobRunner : this.jobAuthorities.live(actorId)?.runner ?? null;
   }
 
   /** A hire's own jobs; a settle wakes it with a message. */
@@ -6420,6 +6495,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override overviewChanged(force = false): void {
     this.overview.changed(force);
+    // The tile counts what waits on the owner, so every change to it passes here.
+    this.ownerWaitsMoved();
   }
 
   /** The workspace's executors: a command, the file plane, the Files routes' transfers, terminals and ports. */

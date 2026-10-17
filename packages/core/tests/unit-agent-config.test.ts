@@ -261,6 +261,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.countIsolateGeneration(),
     (c) => c.setEmailNotificationsEnabled(false),
     (c) => c.setChatTitle('Coupon fix'),
+    (c) => c.setOwnerWaitsWatch({ id: 'w1', key: null, what: null, armedAt: 1 }),
   ];
 
   test('no key is readable-but-unwritable', () => {

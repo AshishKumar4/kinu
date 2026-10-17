@@ -1135,8 +1135,9 @@ describe('LocalAgentHost', () => {
     const { state, project } = makeRoots();
     await seedAgent(state, 'root');
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
-    // What a program reaches of the workspace's own planes: delegation, the agent's own lifecycle, its tasks and memory.
-    const probe = 'return [typeof agents, typeof agent, typeof tasks, typeof memory];';
+    // What a program reaches of the workspace's own planes: delegation, the agent's own lifecycle, its tasks and memory;
+    // and of `agent.*`, what waits on its owner, which a hire reads of its own work.
+    const probe = 'return [typeof agents, typeof agent?.schedule, typeof tasks, typeof memory, typeof agent?.waitingOnOwner];';
 
     // Every turn runs the probe once, then answers.
     const model = new TestLanguageModelV2({
@@ -1168,7 +1169,7 @@ describe('LocalAgentHost', () => {
       const seen = (agent: string): JsonValue => v.parse(v.object({ result: JsonValueSchema }), JSON.parse(present(reached.get(agent), `${agent}'s program`))).result;
 
       expect({ root: seen('root'), hire: seen('root/auditor') })
-        .toEqual({ root: ['object', 'object', 'object', 'object'], hire: ['undefined', 'undefined', 'undefined', 'undefined'] });
+        .toEqual({ root: ['object', 'function', 'object', 'object', 'function'], hire: ['undefined', 'undefined', 'undefined', 'undefined', 'function'] });
     } finally {
       await host.close();
     }

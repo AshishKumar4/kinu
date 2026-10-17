@@ -196,8 +196,18 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 10_500
  *  workspace's is mostly that serialization and the 1.7 MB frame. With both cuts, 167.5-175.5 MB over 9 runs on
  *  5a5a155be, 110.7-116.6 MB of it main's. Until 2026-10-12 the heap step's turns, still queued when their reads came, took half the long turn's scripted steps, so every post-D9 long-turn row measured 75-76 steps (debug/heap-idle 50bb62a22, armada 20261012111719-547cfddc): at the full 150, 298.4-313.3 MB
  *  together over 10 runs, 57.3-64.0 MB in the workspace's and 240.4-250.9 MB in main's (armada 20261012110831-e3858893,
- *  20261012111603-1a3edf49), against the single isolate's 274.5-285.5 MB before D9. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 335_000_000;
+ *  20261012111603-1a3edf49), against the single isolate's 274.5-285.5 MB before D9.
+ *  No platform limit bounds this figure: it is what the turn allocates over its life, garbage included, while the
+ *  isolate's limit is on what it holds at once (platform-catalog `worker.isolate.memory`, 128 MB published; a Durable
+ *  Object's real wall higher, `do.isolate.oom_catchable`), which {@link LONG_TURN_PEAK_BOUND_BYTES} guards. Churn matters
+ *  to that limit only as a burst (`worker.memory_kill_is_burst_sensitive`), so this row is a tripwire for a per-step
+ *  rebuild coming back, set from its spread. On next-rc b19324bc8, 2026-10-17: 315.1-332.8 MB over 12 runs alone
+ *  (armada map, one gate a container) and 318.6-330.5 MB over 12 beside 48 suites of the tier's heaviest on 60 containers
+ *  at once; 315.1-333.3 MB over 8 more alone on 162bdf552 and the tip; and 337.3 and 338.4 MB in two tiers
+ *  (20261017130149-357d290c, 20261017141010-0990fca1), which the old 335 MB bound read red. Over all 34: mean 325.1 MB,
+ *  standard deviation 5.65 MB. So the bound is the mean and four deviations, 9.6 MB above the highest read: a per-step
+ *  rebuild the size of the one 3e0c5614c cut (347-348 MB to 316-321 MB, above) still trips it. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 348_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on

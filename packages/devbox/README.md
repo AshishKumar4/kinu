@@ -34,13 +34,15 @@ export default {
 "durable_objects": { "bindings": [{ "class_name": "ExampleBox", "name": "Box" }] },
 "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ExampleBox"] }],
 "containers": [{ "class_name": "ExampleBox", "scheduling_policy": "durable_object" }],
-"r2_buckets": [{ "binding": "DEVBOX_STORE", "bucket_name": "kinu-devbox-example" }]
+"r2_buckets": [{ "binding": "DEVBOX_STORE", "bucket_name": "kinu-devbox-example" }],
+"compatibility_flags": ["nodejs_compat", "enable_request_signal"]
 ```
 
 - The store is the R2 bucket bound as `DEVBOX_STORE` (override `store` to name another binding). A box keeps its disk there, and starts from one golden snapshot of `cloudflare/debian-trixie` with the pinned tools installed, built by the box named `GOLDEN_NAME` in the same namespace (D66). Publish the pinned tools to the bucket once: `bun scripts/devbox-tools.ts publish <bucket>`. A box with no bucket bound is refused at its first start, naming the binding (D85).
 - The box finds its own namespace among the Worker's exports, the one that accepts its id (D85), so the class must be exported from the Worker.
 - The Worker must export `DevboxGateway`. It routes the container's web traffic, and answers its S3 calls from the R2 binding, so no key pair exists (D41).
 - Previews are optional: set `DEVBOX_PREVIEW_HOST` to a zone routed to the Worker, and route it with `previewBox` ([Ports and previews](#ports-and-previews)).
+- A desktop or terminal socket that closes ends what it waited on only through its request's signal, which aborts on a client leaving only under `enable_request_signal` (D101).
 
 ## Lifecycle
 

@@ -9,8 +9,10 @@ import type { JsonValue } from './utils/json';
 export const SPILL_DIRS = {
   /** tools/clamp.ts */
   toolOutput: '.kinu/tool-output',
-  /** attachment-sanitizer */
-  attachments: 'attachments',
+  /** Bytes the model's context could not carry, kept by their digest and hidden in the Files tab: pasted text over its
+   *  budget and media a model cannot take (attachment-sanitizer), screenshots compaction moved out, and a session's
+   *  stored binaries. The owner's uploads keep their own names, in /uploads. */
+  offloaded: '.offloaded',
   /** events/hub/content-spill.ts */
   eventContent: '.kinu/event-content',
   /** @kinu.run/compaction stores.ts */

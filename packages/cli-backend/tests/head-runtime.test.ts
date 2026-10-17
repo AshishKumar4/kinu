@@ -32,7 +32,7 @@ import { LocalAgentSession } from '../src/local-session';
 // A head owns no store: its rows are actor-keyed in the parent's one database.
 
 const stubWeb: WebSearchProvider = {
-  search: async () => ({ query: '', results: [], source: 'duckduckgo' }),
+  search: async () => ({ query: '', results: [], source: 'ceramic' }),
   fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
   render: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
   screenshot: async () => ({ url: '', retrievedAt: '', bytes: new Uint8Array() }),

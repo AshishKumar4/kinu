@@ -107,6 +107,10 @@ export function ownerGate<E extends FamilyEnv<OwnerCapabilityEnv, { owner: UserC
 /** Every router's `onError`: the chain goes to `http.request_failed` by route pattern; the client gets its class. */
 export function routeError(cause: Error, c: Context): Response {
   const error = cause instanceof KinuError ? cause : toKinuError({ doing: 'answering an HTTP request', cause, otherwise: 'io' });
+
+  // A call its own client left, cancelled by the request's signal (`enable_request_signal`), failed nothing: no one
+  // reads the answer.
+  if (error.code === 'cancelled' && c.req.raw.signal.aborted) return new Response(null, { status: 499 });
   diagnostics.failure('http.request_failed', error, { route: routePath(c) });
 
   return publicError(cause instanceof KinuError ? cause : new KinuError(error.code, PUBLIC_MESSAGE[error.code]));

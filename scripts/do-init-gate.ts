@@ -2,6 +2,7 @@
  *  restore has no SDK callOnStart path; its gate and deadline are measured in DEVBOX-DECISIONS. */
 
 
+import { ALARM_WORK } from '@kinu.run/core/obs';
 import { readSources } from './sources';
 import { deployedConfig } from './infra-manifest';
 import {
@@ -591,6 +592,68 @@ export function auditConstructors(sources: ReadonlyMap<string, string>, declared
 }
 
 
+/** Where `ALARM_WORK` is declared: it names each event, so it is not where one is logged. */
+const ALARM_WORK_DECLARATION = 'packages/core/src/obs/alarm-work.ts';
+
+/**
+ * Every class that arms an alarm names the events its alarm logs when it does work of its own, in core `ALARM_WORK`, the
+ * idle-wake rule's one list (`scripts/prod-logs.ts`): a class overriding `alarm()`, or a Lifecycle capability with jobs
+ * (`onJob`), is a key there, no more and no fewer, and each event named is logged somewhere. Staging 7aa75f05e,
+ * 2026-10-17: a deploy run's expiry alarm read as an idle wake because a hand-kept list in the rule did not name its work.
+ */
+export interface AlarmWorkAudit {
+  /** The classes that arm an alarm, by name. */
+  readonly owners: readonly string[];
+  readonly violations: readonly Violation[];
+}
+
+export function auditAlarmWork(sources: ReadonlyMap<string, string>, declared: Readonly<Record<string, readonly string[]>>): AlarmWorkAudit {
+  const owners = new Map<string, { file: string; line: number }>();
+
+  for (const [file, text] of sources) {
+    if (!text.includes('alarm(') && !text.includes('onJob(')) continue;
+    const parsed = parse(file, text);
+
+    walk(parsed.root, (node) => {
+      const name = node.type === 'ClassDeclaration' ? declaredName(node) : undefined;
+
+      if (name === undefined) return;
+      const methods = classMembers(node).filter((m) => m.type === 'MethodDefinition' && methodKind(m) === 'method').map((m) => declaredName(m));
+
+      if (methods.includes('alarm') || (superClassName(node) === 'LifecycleCapability' && methods.includes('onJob'))) {
+        owners.set(name, { file, line: parsed.lineAt(node.start) });
+      }
+    });
+  }
+
+  const violations: Violation[] = [];
+
+  for (const [owner, at] of owners) {
+    if (!Object.hasOwn(declared, owner)) {
+      violations.push({ ...at, owner, member: 'alarm', reason: `arms an alarm and is no key of \`ALARM_WORK\` (${ALARM_WORK_DECLARATION}): name the events it logs when it does work of its own, or none` });
+    }
+  }
+
+  for (const owner of Object.keys(declared)) {
+    if (!owners.has(owner)) {
+      violations.push({ file: ALARM_WORK_DECLARATION, line: 0, owner, member: 'alarm', reason: 'is a key of `ALARM_WORK`, and no class of that name arms an alarm' });
+    }
+  }
+
+  const logged = (event: string): boolean => [...sources].some(([file, text]) => file !== ALARM_WORK_DECLARATION
+    && (text.includes(`'${event}'`)
+      // The box logs through its own trace, which prefixes its name.
+      || (event.startsWith('devbox.') && text.includes(`#trace('${event.slice('devbox.'.length)}'`))));
+
+  for (const [owner, events] of Object.entries(declared)) {
+    for (const event of events.filter((named) => !logged(named))) {
+      violations.push({ file: ALARM_WORK_DECLARATION, line: 0, owner, member: 'alarm', reason: `names \`${event}\` as its alarm's work, and no code logs it` });
+    }
+  }
+
+  return { owners: [...owners.keys()].sort(), violations };
+}
+
 if (import.meta.main) {
   const sources = readSources();
   const audited = audit(sources);
@@ -610,11 +673,14 @@ if (import.meta.main) {
   // this gate can assert. Named, never silently dropped.
   const vendor = declared.filter((cls) => !ours.includes(cls));
   const constructors = auditConstructors(sources, declared);
+  const alarms = auditAlarmWork(sources, ALARM_WORK);
 
   const problems: string[] = [];
 
   if (constructors.inspected.length === 0) problems.push('found 0 Durable Object constructors — the class scan is not matching');
-  violations.push(...constructors.violations);
+  violations.push(...constructors.violations, ...alarms.violations);
+
+  if (alarms.owners.length === 0) problems.push('found 0 classes that arm an alarm — the alarm scan is not matching');
 
 
   if (inspected.length === 0) {
@@ -650,6 +716,7 @@ if (import.meta.main) {
       `do-init-gate: ok — ${inspected.length} onStart hook(s) across `
       + `${new Set(inspected.map((i) => i.owner)).size} class(es), no SDK-awaited recovery hook, `
       + `${String(constructors.inspected.length)} DO constructors with the same-class methods they call; `
+      + `${String(alarms.owners.length)} classes arming an alarm, each naming its work in ALARM_WORK; `
       + `${ours.length}/${declared.length} wrangler-declared DO classes defined here and parsed`
       + (vendor.length > 0 ? `; not ours: ${vendor.join(', ')}` : '')
       // The blind spots, on the SUCCESS path, because a limitation visible only

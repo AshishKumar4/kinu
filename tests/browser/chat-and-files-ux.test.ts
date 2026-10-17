@@ -123,41 +123,30 @@ interface Observed {
   /** Exploration's run-node rows on the mixed-status run, by node id. */
   readonly runNodes: Record<string, RunNode>;
   readonly toolActivity: {
-    /** Call rows drawn before the reader clicks anything, and once the fold's
-     *  control is pressed, each split into reads and everything else. */
+    /** The call rows on screen before the reader clicks anything, and once every run's line is opened. */
     folded: ToolRows;
     unfolded: ToolRows;
-    /** The one control standing for the calls a fold holds back, by its words. */
-    foldLabel: string | null;
-    /** What the preview card shows while the run is still folded. */
+    /** Each run's line, in order, as its calls and its state. */
+    runs: { calls: string | null; state: string | null }[];
+    /** What the preview card shows while the runs are still closed. */
     collapsedPreview: { text: string | null; visible: boolean };
   };
 }
 
-/** The call rows a message draws: how many read, how many did anything else,
- *  and every row's height, so "the same compact row" is a measurement. */
+/** The call rows on screen, by the effect each row declares. */
 interface ToolRows {
   readonly reads: number;
   readonly others: number;
-  readonly heights: readonly number[];
 }
 
-/** The call rows on the page now, by the effect each row declares. Runs in
- *  the page. */
+/** The call rows the reader can see now, by the effect each row declares. Runs in the page. */
 function toolRows(): ToolRows {
-  const rows = [...document.querySelectorAll<HTMLElement>('[data-tool-state]')];
+  const rows = [...document.querySelectorAll<HTMLElement>('[data-tool-state]')].filter((row) => row.getClientRects().length > 0);
 
   return {
     reads: rows.filter((row) => row.dataset.toolEffect === 'read').length,
     others: rows.filter((row) => row.dataset.toolEffect !== 'read').length,
-    heights: rows.map((row) => Math.round(row.getBoundingClientRect().height)),
   };
-}
-
-/** A fold's control, found by what it says: the only button whose words are a
- *  count of calls held back. Runs in the page. */
-function foldControl(): HTMLButtonElement | undefined {
-  return [...document.querySelectorAll('button')].find((button) => /^\d+ more$/u.test((button.textContent ?? '').trim()));
 }
 
 /** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
@@ -226,7 +215,7 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
         streaming.classList.add('p-streaming');
       }
 
-      const viewport = row.querySelector('[data-reasoning-viewport]');
+      const viewport = row.querySelector('[data-reasoning] [data-disclosure-body="live"]');
 
       // The word the user reads, wherever the block places it: the innermost
       // element of the live indicator whose text is the word (an ancestor's
@@ -362,14 +351,13 @@ async function run(): Promise<Observed> {
     await tools.waitForSelector('[data-tool-state]');
 
     const folded = await tools.evaluate(toolRows);
-    const fold = await tools.evaluateHandle(foldControl);
-    const foldLabel = await tools.evaluate((button: HTMLButtonElement | undefined) => button?.textContent?.trim() ?? null, fold);
+    const runs = await tools.$$eval('[data-tool-run]', (lines) => lines.map((line) => ({ calls: line.getAttribute('data-tool-run-calls'), state: line.getAttribute('data-tool-run') })));
 
-    // The preview card, read while the group is still folded: the reader has
-    // clicked nothing, and the app the turn started is on screen.
+    // The preview card, read while the runs are still closed: the reader has clicked nothing, and the app the turn
+    // started is on screen.
     const previewFrameHandle = await tools.waitForSelector('iframe');
 
-    if (previewFrameHandle === null) throw new Error('the collapsed run drew no preview frame');
+    if (previewFrameHandle === null) throw new Error('the closed runs drew no preview frame');
     const previewDocument = await previewFrameHandle.contentFrame();
 
     if (!previewDocument) throw new Error('the preview frame created no document');
@@ -380,17 +368,14 @@ async function run(): Promise<Observed> {
       visible: await previewFrameHandle.isIntersectingViewport(),
     };
 
-    // No fold drawn is a finding for the assertions below, never a wait on a
-    // control that is not there.
-    if (foldLabel !== null) {
-      await tools.evaluate((button: HTMLButtonElement | undefined) => { button?.click(); }, fold);
-      await tools.waitForFunction((drawn: number) => document.querySelectorAll('[data-tool-state]').length > drawn,
-        {}, folded.reads + folded.others);
-    }
+    // Every run's line opened, as a reader opens them.
+    await tools.$$eval('[data-tool-run] > button[aria-expanded="false"]', (lines) => { for (const line of lines) if (line instanceof HTMLButtonElement) line.click(); });
+    await tools.waitForFunction((shown: number) => document.querySelectorAll('[data-tool-state]').length > shown
+      && [...document.querySelectorAll('[data-tool-run] [data-tool-state]')].every((row) => row.getClientRects().length > 0), {}, folded.reads + folded.others);
 
     const unfolded = await tools.evaluate(toolRows);
 
-    const toolActivity = { folded, unfolded, foldLabel, collapsedPreview };
+    const toolActivity = { folded, unfolded, runs, collapsedPreview };
     await tools.close();
 
     const files = await newPage();
@@ -669,30 +654,186 @@ describe('the streaming turn, as a browser lays it out', () => {
 });
 
 describe('large tool runs, as the timeline draws them', () => {
-  // The owner's rule, 2026-09-23: no activity card. Every call is one compact
-  // row; only a run of nine or more adjacent read-only calls folds, and only
-  // its middle, behind one "N more".
-  test('the run of reads keeps its first and last rows and folds the rest behind one count', () => {
-    const { folded, unfolded } = observed.toolActivity;
-
-    expect(folded.reads).toBe(2);
-    expect(unfolded.reads).toBeGreaterThan(folded.reads);
+  // The owner's rule, 2026-10-17: a run of calls in a row is one line, closed once the turn has moved on, and what the
+  // owner reads (a preview the run started) stands outside it. Fifty reads, the preview, then three more calls.
+  test('each run of calls is one closed line that counts them, and the preview between them splits the runs', () => {
+    expect(observed.toolActivity.runs).toEqual([{ calls: '50', state: 'settled' }, { calls: '3', state: 'settled' }]);
   });
 
-  test('nothing but reads folds', () => {
+  test('no call row shows until its run is opened, and opening the runs shows every one', () => {
     const { folded, unfolded } = observed.toolActivity;
 
-    expect(folded.others).toBeGreaterThan(0);
-    expect(folded.others).toBe(unfolded.others);
+    // The preview call stands outside the runs, its own row on screen.
+    expect(folded).toEqual({ reads: 0, others: 1 });
+    expect(unfolded).toEqual({ reads: 50, others: 4 });
   });
 
   test('the app a mid-run call started is on screen before any click', () => {
-    const { collapsedPreview, foldLabel } = observed.toolActivity;
+    const { collapsedPreview } = observed.toolActivity;
 
-    // Read while the reads were still folded: the reader has clicked nothing.
-    expect(foldLabel).not.toBeNull();
     expect(collapsedPreview.text).toBe('the running app');
     expect(collapsedPreview.visible).toBe(true);
+  });
+});
+
+/** Each run of calls in the chat, in order: its calls, its state, its failures, how long it took, and its rows on screen. */
+function chatRuns(page: Page): Promise<{ calls: string | null; state: string | null; failed: string | null; span: boolean; rowsShown: number }[]> {
+  return page.$$eval('.p-thread-column [data-tool-run]', (runs) => runs.map((line) => ({
+    calls: line.getAttribute('data-tool-run-calls'),
+    state: line.getAttribute('data-tool-run'),
+    failed: line.querySelector('[data-tool-run-failed]')?.getAttribute('data-tool-run-failed') ?? null,
+    span: line.hasAttribute('data-tool-run-span'),
+    rowsShown: [...line.querySelectorAll('[data-tool-state]')].filter((row) => row.getClientRects().length > 0).length,
+  })));
+}
+
+/** Shows the newest turn as a run of `calls` calls so far (gallery-tool-runs.tsx), as its stream would. */
+async function runSoFar(page: Page, detail: { calls: number; failAt?: number; answer?: boolean; agent?: string }): Promise<void> {
+  await page.evaluate((asked) => { window.dispatchEvent(new CustomEvent('gallery:tool-run', { detail: asked })); }, detail);
+}
+
+/** The live run's view: its height, and whether its newest row is inside what it shows. */
+function liveView(page: Page): Promise<{ height: number; newestShown: boolean } | null> {
+  return page.evaluate(() => {
+    const view = document.querySelector('[data-tool-run="live"] [data-disclosure-body="live"]');
+    const newest = [...(view?.querySelectorAll('[data-tool-state]') ?? [])].at(-1);
+
+    if (view === null || newest === undefined) return null;
+    const box = view.getBoundingClientRect();
+    const row = newest.getBoundingClientRect();
+
+    return { height: Math.round(box.height), newestShown: row.top >= box.top - 1 && row.bottom <= box.bottom + 1 };
+  });
+}
+
+/**
+ * The owner, 2026-10-17: a run of tool calls in a row, and the thinking between them, collapses into one line, as
+ * thinking does. While it runs, the line says what it is doing over a small view that follows its newest step; once
+ * the answer starts it settles closed, saying how many tools it used and how long it took. The answer, a preview and a
+ * question for the owner stay outside it, and a failure inside shows on its line.
+ */
+describe("a turn's runs of tool calls, in the real chat", () => {
+  test('each run is one closed line; the answer, the preview and the question stand outside, and a failure says so', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column [data-tool-run]');
+
+      expect(await chatRuns(page)).toEqual([
+        { calls: '6', state: 'settled', failed: null, span: false, rowsShown: 0 },
+        { calls: '20', state: 'settled', failed: '1', span: false, rowsShown: 0 },
+        { calls: '2', state: 'settled', failed: null, span: false, rowsShown: 0 },
+        { calls: '2', state: 'settled', failed: null, span: false, rowsShown: 0 },
+      ]);
+      expect(await page.evaluate(() => ({
+        answers: [...document.querySelectorAll('.p-thread-column .prose-chat')].filter((answer) => answer.closest('[data-tool-run]') === null && answer.getClientRects().length > 0).length,
+        previewOutside: document.querySelector('.p-thread-column iframe') !== null && document.querySelector('[data-tool-run] iframe') === null,
+        askOutside: document.querySelector('.p-thread-column [data-ask-record]') !== null && document.querySelector('[data-tool-run] [data-ask-record]') === null,
+      }))).toEqual({ answers: 3, previewOutside: true, askOutside: true });
+
+      // Opened, the run with the failure shows every step, the failed one among them.
+      const failedRun = '.p-thread-column [data-tool-run-calls="20"]';
+
+      await page.click(`${failedRun} > button`);
+      await page.waitForFunction((line: string) => document.querySelector(`${line} [data-tool-state="failed"]`)?.getClientRects().length === 1, {}, failedRun);
+      expect(await page.$eval(failedRun, (line) => [...line.querySelectorAll('[data-tool-state]')].filter((row) => row.getClientRects().length > 0).length)).toBe(20);
+      await page.close();
+    });
+  });
+
+  test('a live run follows its newest step in a small view, says a failure on its line, and settles closed once the answer starts', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      await claimIs(page, { kind: 'admitted', turnId: 'tr-u4', claimedAt: 1 });
+
+      // One call is its own row; a second makes a run, live, its view on screen.
+      await runSoFar(page, { calls: 1 });
+      await page.waitForSelector('.p-thread-column [data-tool-state="running"]');
+      await runSoFar(page, { calls: 3 });
+      await page.waitForSelector('[data-tool-run="live"]');
+      expect((await liveView(page))?.newestShown).toBe(true);
+
+      // Twenty-two calls in, one failed: the view stays small and still shows the newest, and the line names the failure.
+      await runSoFar(page, { calls: 22, failAt: 4 });
+      await page.waitForFunction(() => document.querySelector('[data-tool-run="live"]')?.getAttribute('data-tool-run-calls') === '22');
+      await page.waitForFunction(() => {
+        const view = document.querySelector('[data-tool-run="live"] [data-disclosure-body="live"]');
+
+        return view !== null && Math.abs(view.scrollTop + view.clientHeight - view.scrollHeight) <= 1;
+      });
+      const view = await liveView(page);
+
+      expect(view?.newestShown).toBe(true);
+      expect(view === null ? null : view.height <= 160).toBe(true);
+      expect((await chatRuns(page)).at(-1)?.failed).toBe('1');
+
+      // The answer starts: the run settles closed, saying how long it took, and the answer is outside it.
+      await runSoFar(page, { calls: 22, failAt: 4, answer: true });
+      await page.waitForFunction(() => document.querySelector('[data-tool-run="live"]') === null);
+      expect((await chatRuns(page)).at(-1)).toEqual({ calls: '22', state: 'settled', failed: '1', span: true, rowsShown: 0 });
+      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column .prose-chat')].at(-1)?.closest('[data-tool-run]') === null)).toBe(true);
+      await page.close();
+    });
+  });
+
+  // Main, 2026-10-17: the line reads as the thinking block's does, a quiet chevron mark, not a word like a link; the
+  // shots show it turning.
+  test("a run's line is one control: no word but what it says, a chevron mark, and anywhere on it opens it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      const line = '.p-thread-column [data-tool-run-calls="6"] > button';
+
+      const read = () => page.$eval(line, (button) => ({
+        open: button.getAttribute('aria-expanded'),
+        extra: (button.textContent ?? '').replace(button.querySelector('[data-disclosure-label]')?.textContent ?? '', '')
+          .replace(button.querySelector('[data-disclosure-after]')?.textContent ?? '', '').trim(),
+        mark: button.querySelector('[data-disclosure-turn]') !== null,
+      }));
+
+      expect(await read()).toEqual({ open: 'false', extra: '', mark: true });
+
+      // Pressed past its words and its mark, at the line's far end: the line is the control, not its words.
+      await page.$eval(line, (button) => { button.scrollIntoView({ block: 'center' }); });
+
+      const far = await page.$eval(line, (button) => {
+        const whole = button.getBoundingClientRect();
+        const mark = button.querySelector('[data-disclosure-turn]')?.getBoundingClientRect();
+
+        return { x: whole.right - 2, y: whole.top + whole.height / 2, pastMark: mark === undefined ? false : whole.right - 2 > mark.right };
+      });
+
+      expect(far.pastMark).toBe(true);
+      await page.mouse.click(far.x, far.y);
+      await page.waitForFunction((selector: string) => document.querySelector(selector)?.getAttribute('aria-expanded') === 'true', {}, line);
+      expect(await read()).toEqual({ open: 'true', extra: '', mark: true });
+      await page.close();
+    });
+  });
+
+  test("a hired agent's chat and a search node's transcript draw their runs the same way", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/checkout-fixes/agents/coupon-auditor'); });
+      await page.waitForFunction(() => document.querySelector('[data-composer-root] textarea')?.getAttribute('placeholder')?.includes('coupon-auditor') === true);
+      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      expect((await chatRuns(page)).map((line) => [line.calls, line.state, line.rowsShown])).toEqual([['6', 'settled', 0], ['20', 'settled', 0], ['2', 'settled', 0], ['2', 'settled', 0]]);
+
+      await page.goto(`${origin}/gallery.html?frame=transcript`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-tool-run]');
+      expect(await page.$$eval('[data-tool-run]', (runs) => runs.every((line) => line.getAttribute('data-tool-run') === 'settled'
+        && [...line.querySelectorAll('[data-tool-state]')].every((row) => row.getClientRects().length === 0)))).toBe(true);
+      await page.close();
+    });
   });
 });
 
@@ -756,7 +897,10 @@ describe('thinking in a settled turn', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-chat-row="a1"] [data-reasoning]');
+      // The thoughts lead a run of calls, so they are opened with it.
+      await page.waitForSelector('[data-chat-row="a1"] [data-tool-run] [data-reasoning]');
+      await page.click('[data-chat-row="a1"] [data-tool-run] > button');
+      await page.waitForSelector('[data-chat-row="a1"] [data-reasoning] button[aria-expanded="false"]');
       await page.click('[data-chat-row="a1"] [data-reasoning] button[aria-expanded="false"]');
 
       const thinking = await page.$$eval('[data-chat-row="a1"] [data-reasoning]', (blocks) => blocks.map((block) => ({

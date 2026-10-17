@@ -429,27 +429,6 @@
     },
     {
       "file": "packages/core/src/web/provider.ts",
-      "kind": "hand-parser",
-      "owner": "parseDuckDuckGoHtml",
-      "sourceSha256": "122174e1dfee8c9722f6238e2726ebb0f1c85fda4890859a661e7ab97906f67d",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/provider.ts",
-      "kind": "regex-literal",
-      "owner": "linkRe",
-      "sourceSha256": "f9aa95563c78fffb8c409895e49e26403b35b808893f81a7d4c8ef6f060ba2b8",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/provider.ts",
-      "kind": "regex-literal",
-      "owner": "snippetRe",
-      "sourceSha256": "f76dad9e0761568a5027fcca4d47ed682e4bebf9da0f7c212fbacb8b0e9d21bd",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/provider.ts",
       "kind": "regex-literal",
       "owner": "m",
       "sourceSha256": "ea46e30ffdff6ee4d93bfa439c9f7ffe2d87d7e88cbcd1c8864bc48b67f5ee06",

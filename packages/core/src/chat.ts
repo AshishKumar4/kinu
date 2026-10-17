@@ -183,6 +183,8 @@ export interface ChatOptions {
   paceStep?: (signal: AbortSignal) => Promise<() => void>;
   /** The step's own work began (a tool started), or the step finished: what a cut after it is charged to. */
   stepPhase?: (phase: 'work' | 'finished') => void;
+  /** Each tool call as it starts executing and as it ends: what a step is running while its model waits. */
+  toolExecuting?: (toolCallId: string, executing: boolean) => void;
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
   activeTools?: readonly string[];
@@ -797,7 +799,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
 
       const base = await stepContext.base();
-      const assembled = await assembleTurnMessages({ ...serving, history: base.messages, turnStart: base.turnStart, admission: undefined });
+      const assembled = await assembleTurnMessages({ ...serving, history: base.messages, turnStart: base.turnStart, admission: undefined, continuing: true });
 
       return { ...assembled, changed: base.changed };
     },
@@ -993,8 +995,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       onToolExecutionStart: ({ toolCall }) => {
         call.dispatched(toolCall);
         opts.stepPhase?.('work');
+        opts.toolExecuting?.(toolCall.toolCallId, true);
       },
-      onToolExecutionEnd: ({ toolCall, toolExecutionMs }) => { call.settled(toolCall.toolCallId, toolExecutionMs); },
+      onToolExecutionEnd: ({ toolCall, toolExecutionMs }) => {
+        call.settled(toolCall.toolCallId, toolExecutionMs);
+        opts.toolExecuting?.(toolCall.toolCallId, false);
+      },
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
       providerOptions: { ...current.providerOptions, ...callRetries(route.callRetries) },
@@ -1125,7 +1131,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     serving = { ...assembly, model: next.spec, contextWindow: served };
     initialContextAvailable = false;
     const history = initialContext?.messages ?? assembly.history;
-    const { messages } = await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined });
+    const { messages } = await assembleTurnMessages({ ...serving, history, turnStart: initialContext?.turnStart, admission: undefined, continuing: true });
 
     servingRoute = { providerId: bound.provider, modelId: parseModelSpec(next.spec).modelId, retention: turnRoute.retention };
     cache = attemptCachePlan(opts, servingRoute, messages, tools);

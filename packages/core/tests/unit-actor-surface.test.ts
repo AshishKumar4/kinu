@@ -36,6 +36,7 @@ function actorWith(input: { executors?: ExecutorProviderSurface[]; roleSwitch?: 
     programState: rt.actor.programState,
     agents: () => ({ mode: 'build', swarms: false }),
     self: null,
+    ownerWaits: null,
   };
 }
 

@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import { spawnTest, runToExit } from '@kinu.run/test-utils'
 import { withBrowser } from '../../scripts/live-app-harness';
 import { recordDeadEnds } from '../../evals/src/browser';
-import { frameLedger, HOST_NETWORK_CHANGED, hostNetworkChange, settledAfter, until, waitOn } from '../../scripts/browser-page';
+import { frameLedger, HOST_NETWORK_CHANGED, hostNetworkChange, pagesTraffic, settledAfter, until, waitOn } from '../../scripts/browser-page';
 
 const NETWORK_CHANGE_SCENARIO = join(import.meta.dir, '..', '..', 'scripts', 'network-change-scenario.ts');
 
@@ -392,6 +392,49 @@ test('the same RPC id asked on two live sockets stays open until its own socket 
 
       await settledAfter(page, ledger, 'getWorkspaceSnapshot');
       await ledger.stop();
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+/**
+ * 2026-10-17, production's desktop-resize row: six minutes on "the computer in the Environment panel", ended by the
+ * row's silence bound and named alone, and production's own logs had dropped events for that minute, so whether the
+ * page's asks were never sent, sent and unanswered, or sent on a closed socket could not be told. Named now with the
+ * waits: the ask still open, its socket still open, and what that socket was answered.
+ */
+test('a wait ended from outside names the page\'s unanswered asks, their socket\'s state and what it received', async () => {
+  const { server, held } = snapshotServer('hold');
+
+  try {
+    await withBrowser(async (browser) => {
+      const page = await blankPage(browser);
+      const ledger = await frameLedger(page);
+
+      await page.goto(`http://127.0.0.1:${String(server.port)}/`);
+      await page.evaluate(async (url) => {
+        const socket = new WebSocket(url);
+
+        await new Promise<void>((resolve) => { socket.onopen = () => { resolve(); }; });
+        socket.send(JSON.stringify({ type: 'rpc', id: '1', method: 'getWorkspaceSnapshot' }));
+        await new Promise<void>((resolve) => { socket.onmessage = () => { resolve(); }; });
+        socket.send(JSON.stringify({ type: 'rpc', id: '2', method: 'listMounts' }));
+        console.error('the Environment panel could not read its machines');
+      }, `ws://127.0.0.1:${String(server.port)}/`);
+      await ledger.received('rpc');
+      await page.waitForFunction(() => true);
+
+      const named = pagesTraffic();
+
+      for (const socket of held) socket.close();
+      await ledger.stop();
+
+      expect(named).toContain('unanswered: listMounts #2 on /;');
+      expect(named).toContain('sockets: / open;');
+      expect(named).toContain('frames received: / ×1');
+      expect(named).toContain('page errors: the Environment panel could not read its machines');
+      expect(pagesTraffic()).toBe('');
     });
   } finally {
     await server.stop(true);

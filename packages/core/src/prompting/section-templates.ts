@@ -25,6 +25,7 @@ import delegationSection from "../prompts/delegation-section.md" with { type: 't
 import backgroundWorkSection from "../prompts/background-work-section.md" with { type: 'text' };
 import verificationSection from "../prompts/verification-section.md" with { type: 'text' };
 import outputFormatSection from "../prompts/output-format-section.md" with { type: 'text' };
+import answeringSection from "../prompts/answering-section.md" with { type: 'text' };
 import workspaceInstructionsSection from "../prompts/workspace-instructions-section.md" with { type: 'text' };
 // Lead/worker doctrine adapted from AshishKumar4/oh-my-pi c6a7d56cc6,
 // fusion-lead and agents/sidekick (MIT-licensed sources:
@@ -148,7 +149,7 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  */
 export const EXECUTORS_SECTION = definePromptSection(
   "executors/section",
-  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasComputer}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}{{#if hasHire}}{{/if}}",
+  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasComputer}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}{{#if answersPerson}}{{/if}}{{#if hasHire}}{{/if}}",
   executorsSection.trimEnd(),
 );
 
@@ -201,6 +202,17 @@ export const OUTPUT_FORMAT_SECTION = definePromptSection(
   "state/output-format",
   "{{familyDelta}}",
   outputFormatSection.trimEnd(),
+);
+
+/**
+ * How an answer the person reads is shown, where the chat draws `<slate-ui>` pages: few words, and a page for what is
+ * looked at or chosen from, written from this section alone (the slates skill stays the full spec). Rendered only for
+ * an agent whose answer a person reads, on a workspace whose chat draws slates.
+ */
+export const ANSWERING_SECTION = definePromptSection(
+  "state/answering",
+  "",
+  answeringSection.trimEnd(),
 );
 
 /** Tells the model what the unapproved-instructions delimiter means (KINU-N028). Lives
@@ -280,6 +292,7 @@ export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   BACKGROUND_WORK_SECTION,
   VERIFICATION_SECTION,
   OUTPUT_FORMAT_SECTION,
+  ANSWERING_SECTION,
   WORKSPACE_INSTRUCTIONS_SECTION,
   LEAD_RESPONSIBILITY,
   LEAD_BRIEF,

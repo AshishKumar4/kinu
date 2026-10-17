@@ -94,6 +94,9 @@ export interface AgentWorkspace {
   owes(seq: number, next: number | null, holds: boolean, report: AgentReport): Promise<void>;
   birthContext(drainTurnId: string): Promise<SerializedMessage[]>;
   steerSkills(text: string, alreadyActive: readonly string[]): Promise<string | null>;
+  /** A person wrote while the agent's step runs `executing` tool calls: each, held by the workspace's job runner, moves to
+   *  the background where that frees the step. */
+  releaseForeground(executing: number): Promise<boolean>;
   /** Its open tasks and running jobs, where its tools wrote them. */
   openWork(): Promise<OpenWork>;
   /** The workspace's lane that keeps its prompt cache warm (`CacheWarming`): a chat turn's preparation notes its request

@@ -31,6 +31,9 @@ import { setDiagnosticsSink } from '../src/obs/index';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 import { wrapDatabase } from '../src/identity/inline-primitives';
+import { decideInterruptedTurn } from '../src/orchestrator/turn-recovery';
+import type { ModelMessage } from 'ai';
+import { Effect } from 'effect';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };
 
@@ -587,7 +590,7 @@ describe('one workspace database, many logical actors', () => {
 
   /** A turn whose program verifies, and one run of it: admitted again on `installedBuild`, its model called at each
    *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
-  async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null, cut?: 'provider' | 'work') => Promise<void>; fx: Fixture }> {
+  async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null, cut?: 'provider' | 'work', messages?: ModelMessage[]) => Promise<void>; fx: Fixture; source: string }> {
     const fx = build(undefined, undefined, false, hostBuild);
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const source = 'export default async function main() { return "retained"; }';
@@ -595,14 +598,14 @@ describe('one workspace database, many logical actors', () => {
     const program: ActorProgramIdentity = { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null };
 
     return {
-      actor, fx,
+      actor, fx, source,
       // Each run ends where `cut` says: waiting on the provider for its last step, or running that step's own work.
-      run: async (steps, installedBuild = fx.host.installedBuild, cut = 'provider') => {
+      run: async (steps, installedBuild = fx.host.installedBuild, cut = 'provider', messages = [{ role: 'user', content: 'the brief' }]) => {
         const claim = await admitTestClaim(actor.stores.claims, {
           runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program, installedBuild,
         });
 
-        for (const index of steps) await actor.stores.claims.consume(claim, { index, messages: [{ role: 'user', content: 'the brief' }] });
+        for (const index of steps) await actor.stores.claims.consume(claim, { index, messages });
 
         if (cut === 'work') actor.stores.claims.working(claim);
       },
@@ -685,6 +688,79 @@ describe('one workspace database, many logical actors', () => {
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', epoch: POISON_WORK_CUTS });
     fx.host.releaseAll();
     fx.db.close();
+  });
+
+  describe('a step its isolate runs out of memory in', () => {
+    // A screenshot as a desktop tool returns one: 3 KB of PNG, base64, in a tool result.
+    const SCREEN = Buffer.alloc(3_000, 7).toString('base64');
+
+    const screenshots = (count: number): ModelMessage[] => [
+      { role: 'user', content: 'Play the game.' },
+      ...Array.from({ length: count }, (_, n): ModelMessage[] => [
+        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: `shot_${String(n)}`, toolName: 'eval', input: { code: 'await computer.screenshot();' } }] },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: `shot_${String(n)}`, toolName: 'eval', output: { type: 'content', value: [{ type: 'text', text: '[image 1]' }, { type: 'file', data: { type: 'data', data: SCREEN }, mediaType: 'image/png' }] } }] },
+      ]).flat(),
+    ];
+
+    /** The turn's session deciding as it re-opens the run, as `resumeOrClose` asks. */
+    const reopened = (actor: BoundActor, fx: Fixture, source: string) => Effect.runPromise(decideInterruptedTurn({
+      source: async () => source, stores: actor.stores, runs: actor.stores.eventRecorder, installedBuild: fx.host.installedBuild,
+      workspace: 'hosted', actor: 'alpha', runId: actor.stores.claims.read('turn-a')?.runId ?? '', claim: actor.stores.claims.read('turn-a'),
+      turnOpen: () => false, endsOutOfMemory: true,
+    }));
+
+    test('twice ends the turn once, as an out-of-memory failure its owner reads, where once runs it again', async () => {
+      const { actor, run, fx, source } = await interruptedRuns();
+
+      await run([0], undefined, 'provider', screenshots(20));
+      actor.stores.claims.outOfMemory(Date.now());
+      expect(await reopened(actor, fx, source)).toEqual({ kind: 'continue' });
+
+      await run([0], undefined, 'provider', screenshots(20));
+      actor.stores.claims.outOfMemory(Date.now());
+
+      // Its sweep leaves it to its session, which ends it with the words and tells whoever waits on it.
+      expect(await recoverActorTurns(fx.host)).toMatchObject({ verified: ['turn-a'], stalled: [] });
+      expect(await reopened(actor, fx, source)).toEqual({
+        kind: 'closed', cause: 'out_of_memory', reason: 'this turn ran out of memory: its context holds 20 images, 0.1 MB',
+      });
+      expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error' });
+      fx.host.releaseAll();
+      fx.db.close();
+    });
+
+    test('a death one execution reports twice counts once, a late report names nothing, and a finished step starts over', async () => {
+      const { actor, run, fx, source } = await interruptedRuns();
+
+      await run([0]);
+      const died = Date.now();
+
+      // Each invocation the death ended says so.
+      actor.stores.claims.outOfMemory(died);
+      actor.stores.claims.outOfMemory(died);
+      expect(await reopened(actor, fx, source)).toEqual({ kind: 'continue' });
+
+      // The next execution opened before the last report of the one before reached it.
+      await run([0]);
+      actor.stores.claims.outOfMemory(died - 60_000);
+      expect(await reopened(actor, fx, source)).toEqual({ kind: 'continue' });
+
+      // It dies too, then a run finishes the step: the deaths before it say nothing about the next one.
+      actor.stores.claims.outOfMemory(Date.now());
+
+      const claim = await admitTestClaim(actor.stores.claims, {
+        runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
+        program: actor.stores.claims.read('turn-a')?.program ?? { kind: 'builtin', version: 0, digest: null, build: null },
+        installedBuild: fx.host.installedBuild,
+      });
+
+      await actor.stores.claims.consume(claim, { index: 0, messages: [{ role: 'user', content: 'the brief' }] });
+      actor.stores.claims.progressed(claim);
+      actor.stores.claims.outOfMemory(Date.now());
+      expect(await reopened(actor, fx, source)).toEqual({ kind: 'continue' });
+      fx.host.releaseAll();
+      fx.db.close();
+    });
   });
 
   test('a run that got further than the run before it stays owed', async () => {

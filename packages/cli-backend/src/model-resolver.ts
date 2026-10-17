@@ -1,5 +1,5 @@
 import type { ModelAttemptIdentity } from '@kinu.run/core';
-import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
+import { createChatModel, routeWebSearch, type FirstPartySearch, type LLMProviderConfig } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   credentialToHeaders,
@@ -116,6 +116,8 @@ export interface LocalModelResolver {
    *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
   getAuth: AuthResolver;
+  /** The signed-in account's web search, through its gated route; absent signed out. */
+  readonly firstPartySearch?: FirstPartySearch;
   withCallScope?(scope: Pick<ProviderDeps, 'accountFor' | 'onProviderWait' | 'onModelAttempt'>): LocalModelResolver;
 }
 
@@ -269,8 +271,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const normalizeSpecSync = (specOrNull?: string | null): string =>
     normalizeModelSpec(specOrNull, registry, { spec: defaultSpec, missing: noDefaultModelMessage() });
 
+  const firstPartySearch = cloud === undefined ? undefined : routeWebSearch({ origin: cloud.origin, token: cloud.token, fetch: opts.fetch ?? globalThis.fetch });
+
   const resolverWith = (own: ProviderDeps): LocalModelResolver => ({
     normalizeSpecSync,
+    ...(firstPartySearch !== undefined && { firstPartySearch }),
     resolveModel(specOrNull, affinity) {
       return registry.resolve(normalizeSpecSync(specOrNull), { ...own, ...affinity });
     },

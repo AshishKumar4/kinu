@@ -266,7 +266,7 @@ function writeFixtureConfig(worker: string, bucket: string, scratch: string, pri
   if (declared !== artifact.base) containers[0] = { class_name: 'ContractBox', scheduling_policy: 'durable_object', images: { devbox: { image: declared } } };
   writeFileSync(config, JSON.stringify({
     name: worker, account_id: ACCOUNT, main: join(REPO, 'packages/cf-backend/tests/fixtures/devbox-contracts.ts'),
-    compatibility_date: '2026-09-30', compatibility_flags: ['nodejs_compat'], workers_dev: true,
+    compatibility_date: '2026-09-30', compatibility_flags: ['nodejs_compat', 'enable_request_signal'], workers_dev: true,
     observability: { enabled: true },
     durable_objects: { bindings: [{ name: 'Box', class_name: 'ContractBox' }] },
     migrations: [{ tag: 'v1', new_sqlite_classes: ['ContractBox'] }],

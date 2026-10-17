@@ -13,21 +13,21 @@ const console$ = spyOn(console, 'error');
 afterEach(() => { console$.mockClear(); });
 
 /** One invocation of an agent's isolate as the platform's tail delivers it: a `jsrpc` call, its console, its exceptions. */
-function invocation(logs: TraceLog[], exceptions: TraceException[] = []): TraceItem {
+function invocation(logs: TraceLog[], exceptions: TraceException[] = [], outcome = 'ok'): TraceItem {
   return {
     event: { rpcMethod: 'admit' }, eventTimestamp: 1_000, logs, exceptions, diagnosticsChannelEvents: [], scriptName: null,
-    entrypoint: 'AgentFacet', outcome: 'ok', executionModel: 'durableObject', truncated: false, cpuTime: 12, wallTime: 340,
+    entrypoint: 'AgentFacet', outcome, executionModel: 'durableObject', truncated: false, cpuTime: 12, wallTime: 340,
   };
 }
 
-test("an agent's isolate's lines are written as the workspace's, the agent named, then its invocation", () => {
+test("an agent's isolate's lines are written as the workspace's, the agent named, then its invocation", async () => {
   const written: string[] = [];
   // What the isolate's own diagnostics wrote on its console.
   createLineLogger((line) => { written.push(line); }).event('provider.stream_opened', { provider: 'openai-compat:cmp', ms: 71 });
   const tail = new AgentIsolateTail({ ...workerContext(), props: { workspace: 'acme', actor: 'agent-1', object: 'acme-object' } }, makeEnv());
 
   console$.mockClear();
-  tail.tail([invocation([
+  await tail.tail([invocation([
     { timestamp: 1_001, level: 'error', message: [written[0]] },
     { timestamp: 1_002, level: 'log', message: ['a library said', 3] },
   ], [{ timestamp: 1_003, name: 'TypeError', message: 'x is not a function' }])]);
@@ -47,4 +47,27 @@ test("an agent's isolate's lines are written as the workspace's, the agent named
       },
     },
   ]);
+});
+
+test("an isolate the platform ran out of memory is told to its workspace, with when it died; any other end is not", async () => {
+  const told: [string, number][] = [];
+  const env = makeEnv();
+
+  // The workspace's object, as the tail reaches it by the id its props carry.
+  Object.assign(env, {
+    OrchestratorAgent: {
+      idFromString: (id: string) => id,
+      get: () => ({ isolateOutOfMemory: async (actor: string, diedAt: number) => { told.push([actor, diedAt]); } }),
+    },
+  });
+  const tail = new AgentIsolateTail({ ...workerContext(), props: { workspace: 'acme', actor: 'agent-1', object: 'acme-object' } }, env);
+
+  await tail.tail([
+    invocation([], [], 'exceededMemory'),
+    invocation([], [{ timestamp: 1_300, name: 'Error', message: 'Worker exceeded memory limit.' }], 'exception'),
+    invocation([], [{ timestamp: 1_300, name: 'TypeError', message: 'x is not a function' }], 'exception'),
+    invocation([]),
+  ]);
+
+  expect(told).toEqual([['agent-1', 1_340], ['agent-1', 1_340]]);
 });

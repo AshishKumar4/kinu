@@ -323,6 +323,10 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         })],
+// The Worker's own compatibility: whether a client going away aborts the request its entry forwarded to an object.
+['request-signal-probe', async () => ({ ...workerCompatibility, modules: probeModules('request-signal-probe.ts'), durableObjects: {
+          REQUEST_SIGNAL_PROBE: { className: 'RequestSignalProbeDO', useSQLite: true },
+        }, })],
 ["slate-durability-probe", async () => ({
           // Nimbus port reservations live in workspace storage, so preview URLs survive
           // `abortAllDurableObjects()`.
@@ -506,6 +510,7 @@ const runnerOptions = {
           // The relay's own host under a collection, in a runtime of its own whose Tail closes before disposal.
           RELAY_HOST: async () => await realWorkerdOracle(['packages/cf-backend/tests/fixtures/relay-host-workerd.mjs', 'program-codemode-callback-pressure']),
           PUBLIC_SURFACE: { name: 'public-surface-probe' },
+          REQUEST_SIGNAL_ENTRY: { name: 'request-signal-probe' },
           HIRE_APP: { name: 'hire-probe' },
           // Node-side fake state is shared across workers; these entrypoints reset and read it.
           SURFACE_CONTROL: { name: 'public-surface-probe', entrypoint: 'SurfaceControl' },
@@ -559,6 +564,7 @@ const runnerOptions = {
           // The shipped account object, sealed as the product seals it.
           SEALED_USER_DO: { className: 'UserDO', scriptName: 'public-surface-probe', useSQLite: true },
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
+          REQUEST_SIGNAL_PROBE: { className: 'RequestSignalProbeDO', scriptName: 'request-signal-probe', useSQLite: true },
         },
       } satisfies NonNullable<Parameters<typeof getDurableObjectDesignators>[0]['miniflare']>;
 

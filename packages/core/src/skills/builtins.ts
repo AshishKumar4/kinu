@@ -66,7 +66,7 @@ a recap of what you implemented.
 
 const SLATES_SRC = `---
 name: slates
-description: Build any interface the user asks for, an app, game, dashboard, chart, form, picker or card, as a slate. Read this before writing one.
+description: Build any interface the user asks for, an app, game, dashboard, chart, form, picker or card, as a slate, and the full spec of a slate-ui page in an answer. Read this before writing a slate with files.
 ---
 
 # Slates

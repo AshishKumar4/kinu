@@ -43,7 +43,7 @@ import {
 import { answeringGateway, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
 import { copyNextOpening, delayNextTurnEnd, loseNextOpeningAnswer, type TurnOpeningRequest } from './helpers/agent-facets';
-import { MISSION_LABELS_METADATA_KEY } from '@kinu.run/core';
+import { MISSION_LABELS_METADATA_KEY, turnFailure } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 
 const FrameSchema = v.looseObject({
@@ -715,6 +715,47 @@ test("a step its root's isolate dies inside six times is settled, and no later w
 
       expect({ wake, next, outcome: claimOf(workspace, 'req-poison-isolate')?.outcome ?? null }).toEqual({ wake, next: 'at rest', outcome: 'error' });
     }
+  } finally {
+    setSystemTime();
+  }
+});
+
+test('a step its isolate runs out of memory in twice ends once, its owner reading why, and is not run a third time', async () => {
+  const asked = new AwaitedList<true>();
+  const workspace = gatewayWorkspace(poisonedModel(asked));
+  const main = workspaceMainActor(workspace.db).actorId;
+  const before = poisoned.items.length;
+  let at = Date.now();
+
+  await poisonedOnSocket(workspace, 'req-oom');
+
+  try {
+    // As each run of the step dies, the platform says its isolate ran out of memory (the tail tells the workspace).
+    await workspace.agent.isolateOutOfMemory(main, Date.now());
+    at += PAST_BACKOFF_MS;
+    setSystemTime(new Date(at));
+    await resetRootIsolate(workspace);
+    await poisoned.until((all) => all.length - before === 2);
+    await workspace.agent.isolateOutOfMemory(main, Date.now());
+
+    // The third re-opening ends it rather than run the step again.
+    at += PAST_BACKOFF_MS;
+    setSystemTime(new Date(at));
+    await resetRootIsolate(workspace);
+
+    const next = await Promise.race([
+      workspace.agent.harnessAgentsIdle().then(() => 'at rest' as const),
+      poisoned.until((all) => all.length - before > 2).then(() => 'ran again' as const),
+    ]);
+
+    expect(next).toBe('at rest');
+    await driveUntil(workspace, 'the turn never ended', () => claimOf(workspace, 'req-oom')?.outcome != null);
+    const answer = (await storedChat(workspace)).filter((message) => message.role === 'assistant').at(-1);
+
+    expect({ state: await workspace.agent.sendState('req-oom'), why: turnFailure({ metadata: answer?.metadata }) }).toEqual({
+      state: expect.objectContaining({ status: 'settled', outcome: 'error' }),
+      why: expect.stringContaining('this turn ran out of memory'),
+    });
   } finally {
     setSystemTime();
   }

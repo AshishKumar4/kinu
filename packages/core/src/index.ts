@@ -437,7 +437,7 @@ export { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
 export type { LLMProviderConfig } from './llm';
 
 export {
-  createWorkersAIEmbedder, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
+  createWorkersAIEmbedder, type WorkersAiWebSearch, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
 } from './providers/model-invocation';
 
 // Every surface that counts tokens speaks this usage report.
@@ -603,7 +603,7 @@ export { actorReach, surfaceReach, turnLane, turnReach, type ActorReach, type Su
 
 export { AGENTS_OPS, type AgentsOp } from './operations/agents';
 
-export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
+export { createAgentSelfProvider, type AgentSelfHost, type OwnerWaitsHost } from './tools/agent-self';
 
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
@@ -1092,13 +1092,13 @@ export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  isHiddenEntry, workspacePath, SLATES_ROOT, WORKSPACE_ROOT,
+  isHiddenEntry, workspacePath, SHARED_ROOTS, SLATES_ROOT, UPLOADS_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
-  settleWorkspaceSlates,
+  settleSharedRoots,
   actorHomeName,
   MAIN_AGENT, SESSION_UID, AGENT_UID_FLOOR,
   type HomeRootVfs, type TmpConfiner,
@@ -1729,7 +1729,7 @@ export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead }
 export type { TurnAuthorship } from './types/turn';
 
 export {
-  turnTags, stampTurnAuthor, authoredTurnMetadata, stampAuthorship, TURN_AUTHOR_METADATA_KEY, MISSION_LABELS_METADATA_KEY,
+  turnTags, stampTurnAuthor, authoredTurnMetadata, stampAuthorship, TURN_AUTHOR_METADATA_KEY, MISSION_LABELS_METADATA_KEY, TERMINAL_TURN_KEY, answerDrawsPages,
   type TurnTags,
 } from './types/turn-metadata';
 
@@ -1963,6 +1963,12 @@ export type {
 } from './read-models/node-transcript';
 
 export { buildPendingActions, needsTheUser, ownerAsks, type OwnerAsk } from './read-models/pending-actions';
+
+export {
+  ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
+} from './read-models/owner-waits';
+
+export { OwnerWaitSchema, type OwnerWait } from './types/owner-waits';
 
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
@@ -2307,7 +2313,10 @@ export { callRetries } from './providers/middleware/retry';
 
 export {
   type AnyToolPart,
+  type RunStep,
+  type ToolRunSummary,
   groupMessageParts,
+  toolRunSummary,
   parseProvisionError,
   partOutput,
   partInput,

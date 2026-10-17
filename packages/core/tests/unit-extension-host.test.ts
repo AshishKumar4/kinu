@@ -74,6 +74,11 @@ function toolThenTextModel() {
   return { model, toolNames: () => toolNames };
 }
 
+/** The tool `toolThenTextModel` calls at its first step. */
+function pingTool() {
+  return { ping: tool({ description: 'ping', inputSchema: z.object({}), execute: async () => 'pong' }) };
+}
+
 describe('extension seam through runChat', () => {
   test('hooks fire in order around a turn, and registerTools reaches the model', async () => {
     const { model, toolNames } = toolThenTextModel();
@@ -92,9 +97,7 @@ describe('extension seam through runChat', () => {
 
         return undefined;
       },
-      registerTools: () => ({
-        ping: tool({ description: 'ping', inputSchema: z.object({}), execute: async () => 'pong' }),
-      }),
+      registerTools: pingTool,
     };
 
     const events: ChatEvent[] = [];
@@ -122,6 +125,37 @@ describe('extension seam through runChat', () => {
     expect(startedSteps).toBeGreaterThan(0);
     const done = events.find((e) => e.type === 'done');
     expect(done?.type === 'done' && done.text).toBe('all done');
+  });
+
+  test('a turn whose steps reassemble from its plane starts once, so what its extensions keep for it lasts its steps', async () => {
+    const { model } = toolThenTextModel();
+    const history: ModelMessage[] = [{ role: 'user', content: 'go' }];
+    let stored: ModelMessage[] = [...history];
+    let starts = 0;
+    let steps = 0;
+
+    const ext: KinuExtension = {
+      name: 'starts',
+      onTurnStart: () => { starts += 1; },
+      onStepEnd: () => { steps += 1; },
+      registerTools: pingTool,
+    };
+
+    for await (const event of runChat({
+      modelSpec: 'test/model',
+      model,
+      system: 'sys',
+      history,
+      tools: {},
+      stopWhen: isStepCount(3),
+      extensions: new ExtensionHost().register(ext),
+      stepContext: { base: async () => ({ messages: [...stored], changed: false, turnStart: 0 }), consume: async () => {} },
+      persistStep: async (record) => { stored = [...history, ...record.messages]; },
+    })) {
+      if (event.type === 'done') expect(event.text).toBe('all done');
+    }
+
+    expect({ steps, starts }).toEqual({ steps: 2, starts: 1 });
   });
 
   test('a turn with no extensions still streams (seam is optional)', async () => {

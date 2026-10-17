@@ -203,7 +203,6 @@ describe('OwnedModelServices', () => {
 
   test('invalidate rebuilds owner-bound registry while the cached web provider resolves auth per call', async () => {
     const mock = createMockFetch([
-      { match: 'duckduckgo.com', respond: { status: 200, body: '<html></html>', headers: { 'content-type': 'text/html' } } },
       {
         match: 'tavily.com',
         respond: {
@@ -232,7 +231,8 @@ describe('OwnedModelServices', () => {
     const web = services.getWebSearchProvider();
     const beforeRegistry = services.providerRegistry();
 
-    expect((await web.search('before claim')).source).toBe('duckduckgo');
+    // No AI binding that searches in this env, and no owner's Tavily key yet: it says so instead of answering nothing.
+    await expect(web.search('before claim')).rejects.toThrow('Web search is not available here');
     owner = 'owner-1';
     services.invalidate();
     expect(services.providerRegistry()).not.toBe(beforeRegistry);

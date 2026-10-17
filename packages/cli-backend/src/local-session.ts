@@ -116,7 +116,7 @@ import { ActorSession, type ActorTurnLease,
   narrowToolSurface, codemodeCapabilitiesFor,
   type ResolvedTurnProfile,
   decodeJsonValue, projectJsonValue,
-  agentSelfHost,
+  agentSelfHost, ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, isSubordinateOrigin, type OwnerWaitsHost, type ScopedOwnerWait,
   cancelBackgroundJob, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, type ApprovalGrant,
@@ -138,7 +138,7 @@ import { ActorSession, type ActorTurnLease,
   type ChatTurnInput, type CompactOutcome, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
-  attempt, diagnostics, KinuError, renderThrownChain, settleSync, tolerate, toKinuError, detach, type Refusal,
+  attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, settleSync, tolerate, toKinuError, detach, logged, type Refusal,
 } from '@kinu.run/core/obs';
 import { cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { createLocalActorHost } from './actor-host';
@@ -281,6 +281,8 @@ export class LocalAgentSession {
   private readonly actorSession: ActorSession;
   private readonly chat: ChatSession;
   private readonly deferrals: DeferredApprovalQueue;
+  /** The root's host binding of this session, if any: a hire's holds the root's queue and its way to wake a hire. */
+  private readonly hostedHere: LocalHostedSession | undefined;
   /** Host for every logical actor this session creates; built here when no {@link LocalAgentHost} owns the tree. */
   private readonly actorHost: ActorHost;
   /** Loop origin each created actor was named with, read by `loopFor` before the first claim. */
@@ -551,6 +553,7 @@ export class LocalAgentSession {
         openWork: async () => ({ tasks: this.taskList.listOpen(), asyncWakePending: this.jobs.listRunning(1).total > 0 }),
         terminal: () => this.terminal,
         driverGate: () => this.driverGate?.() ?? null,
+        releaseForeground: (executing) => this.jobRunner.releaseForeground(executing),
         steerSkills: (text) => steerSkillsBlock({
           vfs: this.rt.ownFiles,
           config: this.config,
@@ -575,6 +578,7 @@ export class LocalAgentSession {
     this.rt.setModelCallSink?.(this.modelCallSink);
     this.rt.setModelOperations?.(this.modelOperations);
     // One queue per workspace (core safety/deferred-approval.ts): a hire parks on its root's, as itself.
+    this.hostedHere = opts.hosted;
     this.deferrals = this.workspaceQueue(opts.hosted);
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channelFor(this.rt.actor.actorId));
@@ -718,17 +722,10 @@ export class LocalAgentSession {
    */
   private workspaceQueue(hosted: LocalHostedSession | undefined): DeferredApprovalQueue {
     if (hosted?.approvals !== undefined) return hosted.approvals;
-    const wakeHire = hosted?.wakeHire;
 
     return new DeferredApprovalQueue({
       store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
-      wake: (actorId, signal) => {
-        if (actorId === this.rt.actor.actorId) {
-          return Effect.asVoid(attempt({ doing: 'waking this agent with the owner\'s decision', otherwise: 'io' }, () => this.actorSession.orchestrator.signals.send(signal)));
-        }
-
-        return wakeHire === undefined ? this.admitDecision(actorId, signal) : wakeHire(actorId, signal);
-      },
+      wake: (actorId, signal) => this.wakeForOwner(actorId, signal),
       remember: (grants) => { this.config.grantShellApproval(grants); },
       // A hire's consumption, or the root's outside a turn, is the workspace run's: the root's turn is not theirs.
       audit: (record) => {
@@ -737,9 +734,77 @@ export class LocalAgentSession {
         this.eventRecorder.emit(runId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
       // The frame a cloud workspace sends for the same rows, so every terminal re-reads the queue one way.
-      announce: () => { this.host.broadcast({ type: READS_CHANGED_EVENT, reads: readsOfTables(['deferred_approvals']) }); },
+      announce: () => {
+        this.host.broadcast({ type: READS_CHANGED_EVENT, reads: readsOfTables(['deferred_approvals']) });
+        // What waits on the owner moved: each wait it now meets wakes its agent, in the session's join set.
+        this.tracked(() => this.ownerWaitsChanged());
+      },
       writes: null,
     });
+  }
+
+  /**
+   * Every row that waits on the owner: the workspace's queue, and this session's own plan and questions. A hire's plans
+   * and questions are its parent's to answer here, never the owner's; a CLI holds no device consent or proposed workspace.
+   */
+  private async ownerWaitRows(): Promise<ScopedOwnerWait[]> {
+    const active = this.stores.planReviews.getActive(CHAT_SESSION_ID);
+    const ownsAsks = this.actorReach.kind === 'workspace';
+
+    return ownerWaits({
+      deferred: this.deferrals.list(),
+      plans: ownsAsks && active?.status === 'pending'
+        ? [{ actor: this.rt.actor.actorId, id: active.id, revision: active.revision, content: active.content, updatedAt: active.updatedAt }]
+        : [],
+      proposals: [],
+      consents: [],
+      questions: ownsAsks ? await this.listOwnerQuestions() : [],
+      nameOf: (actorId) => localActorDirectory(this.rt.actor).directory.retained(actorId)?.name ?? actorId,
+    });
+  }
+
+  /** This session's agent's `agent.waitingOnOwner` and its wake. */
+  private ownerWaitsHost(): OwnerWaitsHost {
+    return ownerWaitsHost({
+      reader: { actorId: this.rt.actor.actorId, workspaceAgent: this.actorReach.kind === 'workspace', config: this.config },
+      read: () => this.ownerWaitRows(),
+      // The root reads every agent's wait at each change; nothing to mark.
+      armed: () => undefined,
+    });
+  }
+
+  /** What waits on the owner moved: each armed wait it now meets wakes its agent, once; a failure is logged. */
+  async ownerWaitsChanged(): Promise<void> {
+    return settleEffect(logged('owner_waits.wake_failed', { doing: 'waking the agents whose wait on their owner is met', otherwise: 'io' }, this.ownerWaitsMoved()));
+  }
+
+  /**
+   * What waits on the owner may have moved: each agent's armed wait it now meets wakes that agent, once, as the
+   * owner's decision would. Run by the root, which holds the queue; a hire's session holds none of the others' waits.
+   */
+  private ownerWaitsMoved(): Effect.Effect<void, KinuError> {
+    if (this.hostedHere?.approvals !== undefined) return Effect.void;
+    const root = this.rt.actor.actorId;
+
+    return Effect.asVoid(wakeMetOwnerWaits({
+      readers: localActorDirectory(this.rt.actor).directory.list().map((record) => ({
+        actorId: record.actorId, workspaceAgent: record.actorId === root,
+        config: record.actorId === root ? this.config : this.actorHost.bindStores(actorReferenceOf(record)).stores.config,
+      })),
+      rows: () => this.ownerWaitRows(),
+      wake: (actorId, signal) => this.wakeForOwner(actorId, signal),
+    }));
+  }
+
+  /** An agent told something of its owner's: this session's own through its signals, a hire on its own durable queue. */
+  private wakeForOwner(actorId: string, signal: AgentSignal): Effect.Effect<void, KinuError> {
+    if (actorId === this.rt.actor.actorId) {
+      return Effect.asVoid(attempt({ doing: 'waking this agent with the owner\'s word', otherwise: 'io' }, () => this.actorSession.orchestrator.signals.send(signal)));
+    }
+
+    const wakeHire = this.hostedHere?.wakeHire;
+
+    return wakeHire === undefined ? this.admitDecision(actorId, signal) : wakeHire(actorId, signal);
   }
 
   /**
@@ -2045,10 +2110,12 @@ export class LocalAgentSession {
     return conversationKey(this.conversation(), this.sessionId);
   }
 
-  /** Key-less by default (DuckDuckGo + local HTML→markdown); a stored `tavily` credential upgrades search. */
+  /** Search through the signed-in account's own (Cloudflare's Web Search API), or a stored `tavily` credential, which
+   *  wins; local HTML→markdown. */
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
     const getAuth = this.modelResolver?.getAuth;
+    const firstParty = this.modelResolver?.firstPartySearch;
 
     const options: DefaultWebSearchProviderDeps = {
       fetch: globalThis.fetch,
@@ -2057,6 +2124,8 @@ export class LocalAgentSession {
     };
 
     if (getAuth) options.getAuth = getAuth;
+
+    if (firstParty !== undefined) options.firstParty = firstParty;
     this._webSearchProvider = createDefaultWebSearchProvider(options);
 
     return this._webSearchProvider;
@@ -2476,6 +2545,8 @@ export class LocalAgentSession {
     return actorNamespaces(hostedSurfaceActor(this.seat, {
       web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
       conversations: this.ownConversations(), vectorStore: null, ledgers: () => acc.ledgers,
+      // A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none.
+      ownerWaits: isSubordinateOrigin(this.seat.record.origin) ? this.ownerWaitsHost() : null,
     }), SURFACE_POLICY.confined, reported);
   }
 
@@ -2506,7 +2577,10 @@ export class LocalAgentSession {
         budget: () => this.budget,
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
         armCompactNow: async () => { this.compactionState.armCompaction(this.compactionKey()); },
+        ownerWaits: this.ownerWaitsHost(),
       }),
+      // The workspace's agent reads what waits on its owner through its own `agent.*`.
+      ownerWaits: null,
     };
   }
 

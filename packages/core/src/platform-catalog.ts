@@ -1561,6 +1561,35 @@ export const PLATFORM_CATALOG = {
       + 'one call that hands it over, was killed after 22 steps.',
   },
 
+  'do.facet.subrequests': {
+    subject: 'Subrequests a Durable Object facet from a loaded Worker may make while it stays busy, across every call into it',
+    limit: { value: 10_000, unit: 'count' },
+    origin: 'platform',
+    bounds: 'count',
+    evidence: 'proven-by-probe',
+    provenance: '~/kinu-logs/research/FACET-SUBREQUEST-LIMIT-1017.md §1-§3',
+    date: '2026-10-17',
+    trigger: 'a facet\'s calls on its bindings and its fetches, summed while it has a call in flight or work pending',
+    onBreach: 'each further call on a binding and each fetch throws until the facet has been idle past about 10 s',
+    observable: [{ context: 'the refused call, a model fetch included', message: 'Too many subrequests by single Worker invocation.' }],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'calls on a service binding before the throw', value: 10_000, unit: 'count' },
+      { scenario: 'calls on a held stub a binding answered: none refused', value: 12_000, unit: 'count' },
+      { scenario: 'idle that did not reset an exhausted facet (2 runs)', value: 10_000, unit: 'ms' },
+      { scenario: 'idle that did reset it, the instance kept (first call 1 ms)', value: 12_000, unit: 'ms' },
+      { scenario: 'first call after ctx.facets.abort, which also resets it', value: 4_723, unit: 'ms' },
+      { scenario: 'staging rc16: steps of a Minecraft turn before its model call was refused', value: 148, unit: 'count' },
+    ],
+    notes:
+      'Not per call into the facet: back-to-back calls of 6,000 made 6,000 then 4,000, as did two calls from separate '
+      + 'invocations of the parent seconds apart, and a step grant (do.facet.cpu_ms) renews CPU but not this. The facet\'s own '
+      + 'timer keeps it busy. A pipelined call on the stub a binding call returns adds none; a fetch through a binding '
+      + 'counts one. The parent\'s limits.subrequests does not reach the facet. So an agent holds what it calls into its '
+      + 'workspace through (agent-facet/workspace-rpc.ts), and its steps cost about one each, their model call. The '
+      + 'invocation worker.subrequests counts is, for a facet, this busy span.',
+  },
+
   'do.facet.abort_reuses_isolate': {
     subject:
       'ctx.facets.abort(name) rejects pending work but REUSES the same isolate, only rotating the '

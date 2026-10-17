@@ -15,7 +15,7 @@ import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle, tolerate, type ErrorCode } from '../obs/index';
 import { shellQuote } from '../utils/shell';
-import { SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { SHARED_ROOTS, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 /**
  * A side past one SQLite row is listed as large, without a body (a write's preview too). Nimbus's diff does not say
@@ -41,8 +41,9 @@ function reviewed(name: string): boolean {
   return !name.startsWith('.') && !DEPENDENCY_TREES.has(name);
 }
 
-/** Under the store's root the change-set reviews every agent's home and the slates, and nothing else (owner, 2026-09-25). */
-const REVIEWED_UNDER_ROOT = ['home', SLATES_ROOT.slice(1)];
+/** Under the store's root the change-set reviews every agent's home and the shared roots, and nothing else (owner,
+ *  2026-09-25). */
+const REVIEWED_UNDER_ROOT = ['home', ...SHARED_ROOTS.map((root) => root.slice(1))];
 
 /** Where the change-set names a path relative to the working directory, as the shell starting there does. */
 const WORKING_DIRECTORY = `${WORKSPACE_ROOT.slice(1)}/`;

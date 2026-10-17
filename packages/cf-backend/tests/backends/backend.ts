@@ -178,7 +178,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
     history: main.history,
     chat: { sql: wrapDatabase(mainDatabase(harness)).sql, actor: main.actor },
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
-    holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), mode)),
+    holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), { mode })),
     sleepTime: (answer, enabled) => {
       const prompts = scriptedSleepTime(agent, answer);
       actor.config.setSleepTimeComputeEnabled(enabled);
