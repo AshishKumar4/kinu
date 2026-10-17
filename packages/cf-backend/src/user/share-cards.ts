@@ -7,6 +7,7 @@
 import * as v from 'valibot';
 import { LifecycleCapability, type LifecycleJobContext, type LifecycleJobOutcome } from 'agents/lifecycle';
 import { ShareCardSchema, type ShareCard, type SqlExec, type UserCaller, type WorkspaceOverviewShare } from '@kinu.run/core';
+import { diagnostics } from '@kinu.run/core/obs';
 import { retriedLater } from '../wake-jobs';
 
 const SHARE_CARD_JOB = 'share-card';
@@ -161,6 +162,9 @@ export class ShareCardJobs extends LifecycleCapability {
     } finally {
       this.#sending.delete(sending);
     }
+
+    // The alarm's own work: a call into the recipient's account, none into this one (core `ALARM_WORK`).
+    diagnostics.event('share.card_sent', { op: write.op });
 
     return undefined;
   }

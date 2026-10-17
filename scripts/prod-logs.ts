@@ -24,8 +24,8 @@
  *    an invocation that ended in an uncaught exception or that the platform ended (a reset), a terminal effect that
  *    failed or was left owed, an object started {@link ALERT_THRESHOLDS}.startupsPerHour or more times in an hour (a
  *    wake loop), and any idle wake: an alarm with nothing to watch, no invocation of its object but alarms and no
- *    model call, sweep or teardown the object made within {@link IDLE_WAKE_DISTANCE_MS}, read that far past the
- *    window's end ({@link workWindow}), the same target 0 as the durability canary's
+ *    model call or alarm's own work (core `ALARM_WORK`) the object made within {@link IDLE_WAKE_DISTANCE_MS}, read
+ *    that far past the window's end ({@link workWindow}), the same target 0 as the durability canary's
  *    idle window. It does not count alarms busy beside their object's work: the SDK's keepAlive heartbeat, a lap or
  *    a timer that served a live turn, or a turn that runs inside alarm invocations; nor a delivery the platform
  *    cancelled, before any code ran, to an object deleted before it ({@link alarmsThatRan}). Raw alarm counts measured that
@@ -77,7 +77,7 @@
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
-import { classifyErrorCode } from '@kinu.run/core/obs';
+import { ALARM_WORK, classifyErrorCode, HOSTED_ALARM_WORK } from '@kinu.run/core/obs';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
@@ -107,6 +107,9 @@ const MINUTE_MS = 60_000;
 
 /** An alarm this close to its object's own work served it; past it, nothing was left to watch. */
 export const IDLE_WAKE_DISTANCE_MS = 5 * MINUTE_MS;
+
+/** Every line that is an alarm's own work, as each alarm the code arms names it, and each hosted library's. */
+const ALARM_WORK_EVENTS = [...new Set<string>([...Object.values(ALARM_WORK), ...Object.values(HOSTED_ALARM_WORK)].flat())];
 
 /** A read's timeframe, in epoch milliseconds. */
 export interface TimeWindow {
@@ -1272,13 +1275,10 @@ async function versionRead(t: Telemetry, around: Telemetry, versionId: string): 
   const alarms = alarmsThatRan(await perMinute(t, alarm), await perMinute(t, [...alarm, eq('$workers.outcome', 'canceled')]), destroyedAt);
   const called = await perMinute(around, [...invocations, { key: '$workers.eventType', operation: 'neq', value: 'alarm', type: 'string' }]);
   const modelCalls = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'provider.stream_opened')]);
-  // Mossaic's UserDO alarm does its maintenance on ShardDOs and says so in one line when it did (`maintenance_swept`,
-  // AshishKumar4/Mossaic#6): staging c6dc27da1, 2026-10-13, read one such sweep, 30 shard calls in its trace, as an
-  // idle wake.
-  const swept = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'maintenance_swept')]);
-  // A teardown an alarm did (an eval account's lease, `EvalLeaseJobs`) is that alarm's work: it comes a lease after the
-  // object's last call.
-  const toreDown = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'workspace.destroyed')]);
+  // An alarm's own work, as each alarm names it ({@link ALARM_WORK_EVENTS}): a teardown, a run's expiry, a sweep
+  // comes long after the object's last call. Staging c6dc27da1 (Mossaic's sweep) and 7aa75f05e (a deploy run's expiry)
+  // each read one as an idle wake.
+  const alarmWork = (await Promise.all(ALARM_WORK_EVENTS.map(async (event) => await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', event)])))).flat();
   const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
 
   const read = {
@@ -1298,7 +1298,7 @@ async function versionRead(t: Telemetry, around: Telemetry, versionId: string): 
       terminal: terminalEffectStates(terminal, destroyedAt),
     },
     startups: await startupHours(t, scope),
-    idleWakes: idleWakeHours(alarms, [...called, ...modelCalls, ...swept, ...toreDown]),
+    idleWakes: idleWakeHours(alarms, [...called, ...modelCalls, ...alarmWork]),
   };
 }
 
