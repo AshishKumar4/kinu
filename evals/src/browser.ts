@@ -194,13 +194,16 @@ const Waiting = v.object({ complete: v.boolean(), waiting: v.number(), calls: v.
  *  drawn. A render after a call's answer lands within a frame (16 ms), so one poll spans several. */
 const SETTLE_POLL_MS = 100;
 
-/** Why a page has not settled, as last found (`found`), while it owes a press its `answer`, if it does. */
-function settling(found: v.InferOutput<typeof Waiting>, answer: PressAnswer | null): string {
+/** Why a page has not settled, as last found (`found`, and a poll before, `before`), while it owes a press its
+ *  `answer`, if it does. */
+function settling(found: v.InferOutput<typeof Waiting>, before: v.InferOutput<typeof Waiting> | null, answer: PressAnswer | null): string {
   if (!found.complete) return 'its document still loading';
 
   if (answer === 'call') return 'its press made no call to its slate';
 
-  return answer === 'redraw' ? 'its press made no call and no redraw' : `${String(found.waiting)} call(s) in flight`;
+  if (answer === 'redraw') return 'its press made no call and no redraw';
+
+  return found.waiting === 0 && before !== null ? `it kept calling its slate, ${String(found.calls - before.calls)} call(s) in a poll` : `${String(found.waiting)} call(s) in flight`;
 }
 
 /** What a page says when asked one thing it may not hold. */
@@ -256,6 +259,9 @@ export class SlateView {
    * right, so what it shows is read once and judged at once; and a page that keeps redrawing a clock is still settled.
    * Polled from here, not by animation frames, which Chrome stops in a cross-origin frame scrolled out of view. A page
    * still waiting after the draw budget, or that never answers its press, shows a person nothing more either, and fails.
+   * Calls are the page's, not the press's: a page that polls its slate settles between two polls (one a second does at
+   * once), one that polls faster than a look apart never does, and a poll can answer for a `call` press whose handler
+   * has not called yet. Telling a press's calls from the page's own would take the page's code.
    */
   async settled(): Promise<void> {
     const due = Date.now() + DRAW_MS;
@@ -270,7 +276,7 @@ export class SlateView {
       if (this.#pressed === null && now.complete && now.waiting === 0 && before?.waiting === 0 && before.calls === now.calls) return;
 
       if (Date.now() >= due) {
-        throw new Error(`the slate page did not settle in ${String(DRAW_MS / 1000)} s: ${settling(now, this.#pressed?.answer ?? null)}`);
+        throw new Error(`the slate page did not settle in ${String(DRAW_MS / 1000)} s: ${settling(now, before, this.#pressed?.answer ?? null)}`);
       }
 
       before = now;

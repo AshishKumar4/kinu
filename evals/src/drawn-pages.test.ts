@@ -250,13 +250,24 @@ describe('a slate page', () => {
     expect({ call, early, misread: misread(await drawn, ROWS) }).toEqual({ call: 'status', early: false, misread: [] });
   });
 
-  test('that keeps redrawing a clock is read once its data is drawn, the clock never holding it', async () => {
-    const page = await opened(origin(ROWS, AT_ONCE));
-
-    await page.evaluate(`(() => {
+  /** What a loaded page goes on doing: redrawing a clock, or polling its slate twice a second. */
+  const BUSY: readonly (readonly [string, string])[] = [
+    ['keeps redrawing a clock', `(() => {
       const clock = document.body.appendChild(document.createElement('time'));
       setInterval(() => { clock.textContent = new Date().toISOString(); }, 20);
-    })()`);
+    })()`],
+    ['polls its slate twice a second', `(() => {
+      import('/capnweb.js').then(({ newWebSocketRpcSession }) => {
+        const board = newWebSocketRpcSession(new URL('/__rpc', location.href).href);
+        setInterval(() => { void board.status(); }, 500);
+      });
+    })()`],
+  ];
+
+  test.each(BUSY)('that %s is read once its data is drawn, never held by what it goes on doing', async (_, busy) => {
+    const page = await opened(origin(ROWS, AT_ONCE));
+
+    await page.evaluate(busy);
 
     expect(misread(await new SlateView(page.mainFrame()).drawn(TEAMS), ROWS)).toEqual([]);
   });
@@ -299,7 +310,8 @@ describe('a slate page', () => {
     const view = new SlateView(page.mainFrame());
 
     await view.drawn(TEAMS);
-    await page.evaluate('window.coverBegins = new Promise((begin) => { window.beginCover = begin; })');
+    // Nothing returned: a promise returned would be awaited, and this one is the test's to keep.
+    await page.evaluate('(() => { window.coverBegins = new Promise((begin) => { window.beginCover = begin; }); })()');
     const pressed = await view.press(TEAMS, { name: 'design', label: '\\bcover\\b' }, 'call');
 
     await countLooks(page);
