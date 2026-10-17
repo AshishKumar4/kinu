@@ -4,6 +4,7 @@ import { Devbox, GOLDEN_NAME, type DevboxState } from '../../../devbox/src/index
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace/nimbus-workspace.js';
 import { GOLDEN_BASE, GoldenStateSchema, pipeParts } from '../../../devbox/src/golden';
 import { DESKTOP_SIZE, WATCH_SHEET } from '../../../devbox/src/desktop';
+import { DISK_PROBE } from '../../../devbox/src/disk-stall';
 import { DevboxError, settle } from '../../../devbox/src/errors';
 import { DEFAULT_DEVBOX_POLICY, describeThrown } from '../../../devbox/src/lifecycle';
 import { fileErrorContract, runContainerContract } from '../../../devbox/bench/container-contracts';
@@ -196,13 +197,14 @@ export class ContractBox extends Devbox<Env> {
     await runContainerContract(kind, this, container, this.toolsPin);
   }
 
-  /** The container's processes, read by an exec of its own and not through the box's readiness: what a call that never
-   *  answers is waiting on. Null with no container running. */
+  /** The box as the devbox reads a stop waiting on its disk (`DISK_PROBE`), by an exec of its own beside whatever the box
+   *  is doing: each process, and the root's reads in flight. Bash builtins alone, as a program not yet read from a disk
+   *  that stopped answering would wait on it too. Null with no container running. */
   async processes(): Promise<string | null> {
     const container = this.ctx.container;
 
     if (container?.running !== true) return null;
-    const read = await (await container.exec(['python3', '-c', PROCESS_TABLE])).output();
+    const read = await (await container.exec(['/bin/bash', '-c', DISK_PROBE, 'devbox-disk-stall'])).output();
 
     return new TextDecoder().decode(read.stdout) + new TextDecoder().decode(read.stderr);
   }
@@ -309,35 +311,6 @@ export class ContractBox extends Devbox<Env> {
   }
 }
 
-/** Each process from /proc, the golden having no `ps`: pid, parent, group, age, state, kernel wait, what its stdin, stdout
- *  and stderr are (an exec's pipes, so a process still holding one is what keeps its exec open), and its program's name
- *  (`comm`) alone, never its arguments, which can carry what a report must not. */
-const PROCESS_TABLE = String.raw`
-import os
-uptime = float(open('/proc/uptime').read().split()[0])
-tick = os.sysconf('SC_CLK_TCK')
-def read(path, mode='r'):
-    try:
-        with open(path, mode) as file:
-            return file.read()
-    except OSError:
-        return None
-def link(path):
-    try:
-        return os.readlink(path)
-    except OSError:
-        return '-'
-for pid in sorted(int(name) for name in os.listdir('/proc') if name.isdigit()):
-    stat = read('/proc/%d/stat' % pid)
-    if stat is None:
-        continue
-    fields = stat.rsplit(')', 1)[1].split()
-    # comm, not cmdline: reading a process's cmdline takes its memory lock, which a process stuck in a fault holds.
-    program = (read('/proc/%d/comm' % pid) or '-').strip()
-    fds = ' '.join(link('/proc/%d/fd/%d' % (pid, fd)) for fd in (0, 1, 2))
-    print(pid, fields[1], fields[2], '%ds' % round(uptime - int(fields[19]) / tick), fields[0], read('/proc/%d/wchan' % pid) or '-', '[%s]' % fds, program)
-`;
-
 const Body = v.object({
   command: v.optional(v.string()), driver: v.optional(v.string()), member: v.optional(v.string()), args: v.optional(v.string()), stop: v.optional(v.string()),
 });
@@ -399,6 +372,9 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
     case '/exec': return Response.json(await box.exec(body.command ?? ''));
     case '/agent-desktop': return Response.json(await box.agentDesktop(body.driver ?? 'agent', body.member ?? '', v.parse(v.array(JsonValueSchema), JSON.parse(body.args ?? '[]')), body.stop));
     case '/agent-desktop-stop': return Response.json({ stopped: await box.stopAgentDesktop(body.stop ?? '') });
+    // The computer's own status and its Stop there, as the owner's Environment card reads and presses them.
+    case '/box-size': return Response.json(await box.boxSize());
+    case '/stop-stalled': return Response.json({ stopped: await box.stopStalled() });
     case '/storage-probe': return Response.json(await box.storageProbe(body.command ?? ''));
     default: return await lifecycleRoute(url, box) ?? new Response('no route', { status: 404 });
   }

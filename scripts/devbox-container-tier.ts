@@ -24,7 +24,8 @@ import { snapshotRegistry } from '../packages/devbox/src/snapshot-registry';
 import artifact from '../packages/devbox/block-lower/upstream.json';
 import { CONTAINER_CONTRACTS, DISK_CONTRACTS } from '../packages/devbox/bench/contract-types';
 import { shellQuote } from '../packages/core/src/utils/shell';
-import { endedNearSilence } from './row-verdicts';
+import { endedNearSilence, rowNotice } from './row-verdicts';
+import { diskStallOf, type DiskStall } from '../packages/devbox/src/disk-stall';
 import { withTestChrome } from './test-chrome';
 import { contextSignedInAt } from '../evals/src/browser';
 import { BOX_CHROMIUM_POLICY, CHROMIUM_PROFILES, DESKTOP_COLOURS, DESKTOP_LOG, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox/src/desktop';
@@ -41,6 +42,44 @@ const ASK_AGAIN = 'A startup is armed, so ask again';
 const ASK_AGAIN_TIMES = 12;
 
 const ASK_AGAIN_MS = 5_000;
+
+/** How often a box is read while a call to it is out: the reading a call fetch's own timeout ends is classified by. */
+const STALL_SAMPLE_MS = 30_000;
+
+/** Where the platform stall a call can meet is measured and reported. */
+const DISK_STALL_REPORT = 'kinu-logs/container-btrfs-wedge-2026-10-17';
+
+/** The report's step for what ended the run. */
+function failureStep({ cause }: { readonly cause: unknown }) {
+  return { contract: cause instanceof PlatformStall ? 'platform-stall' : 'failure', ms: 0, detail: String(cause) };
+}
+
+/** A platform stall is a known blind spot, said as one: the contracts after the stalled call did not run, and the
+ *  platform is why. Anything else is the run's failure. */
+function noticeOrThrow({ cause }: { readonly cause: unknown }): void {
+  if (!(cause instanceof PlatformStall)) throw cause;
+  rowNotice(`the contracts after ${cause.path} did not run: ${cause.message}`);
+}
+
+/** Whether `work` settled within `ms`: a sampling interval, which ends no wait. */
+async function answeredWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const slept = new Promise<boolean>((resolve) => { timer = setTimeout(() => { resolve(false); }, ms); });
+
+  try {
+    return await Promise.race([slept, work.then(() => true)]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A call the box never answered because its disk stopped answering: the platform's, read from the box itself. */
+class PlatformStall extends Error {
+  constructor(readonly path: string, readonly name: string, readonly stall: DiskStall) {
+    super(`${path} on ${name} was never answered: the container's disk ${stall.device} stopped answering reads (${String(stall.reads)} in flight), `
+      + `with ${stall.waiting.join(', ')} waiting on it (${DISK_STALL_REPORT})`);
+  }
+}
 
 /** The name the fixture's boxes answer to (its `hostname`, set through the Worker's vars). */
 const BOX_NAME = 'contract-box';
@@ -373,11 +412,25 @@ async function main(): Promise<void> {
     // again; a contract asks again, as an agent does, rather than read a platform refusal as the contract broken
     // (390ad4e4c's disk-chain: "Network connection lost." after /lose-snapshot).
     for (let asked = 1; ; asked += 1) {
-      const [answered] = await Promise.allSettled([fixtureFetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) })]);
+      const asking = fixtureFetch(url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+      const settled = Promise.allSettled([asking]);
+      let latest: string | undefined;
+
+      // While the call is out the box is read beside it, as a disk that stopped answering takes the container's own
+      // exec channel down once the call is cancelled (2026-10-17): the reading taken while it waited is the evidence.
+      while (!await answeredWithin(settled, STALL_SAMPLE_MS)) latest = await Promise.race([processesOf(name), settled.then(() => latest)]);
+      const [answered] = await settled;
 
       // A call the fixture never answered (on 2026-10-16 and 10-17, the first operation on a fresh box, until fetch's own
-      // 300 s ended it) names itself, and the box's processes say what it was waiting on.
-      if (answered?.status !== 'fulfilled') throw new Error(`${path} on ${name} was never answered (${String(answered?.reason)}); the box's processes:\n${await processesOf(name)}`);
+      // 300 s ended it) is the platform's where the box read its disk stalled under it, and names itself either way.
+      if (answered?.status !== 'fulfilled') {
+        const stall = latest === undefined ? null : diskStallOf(latest);
+
+        if (stall !== null) throw new PlatformStall(path, name, stall);
+
+        throw new Error(`${path} on ${name} was never answered (${String(answered?.reason)}); the box as last read while it waited:\n${latest ?? 'never read'}`);
+      }
+
       const reply = answered.value;
       const value: unknown = await reply.json();
 
@@ -1235,9 +1288,9 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
       if (failed !== undefined) throw failed.reason;
     }
   } catch (cause) {
-    steps.push({ contract: 'failure', ms: 0, detail: String(cause) });
+    steps.push(failureStep({ cause }));
     await writeReport();
-    throw cause;
+    noticeOrThrow({ cause });
   } finally {
     await runTeardownOnce();
     process.stdout.write(`[${run}] cleanup ${cleanupErrors.length === 0 ? 'verified' : cleanupErrors.join('; ')}; report ${report}\n`);

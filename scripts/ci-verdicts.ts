@@ -16,6 +16,8 @@ const RowSchema = v.object({
   name: v.string(),
   /** The row's command, which armada's own row for a task that ended before its verdict does not know. */
   run: v.optional(v.string()), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
+  /** Known blind spots the row met (`rowNotice`), said in the report as notices beside its exit. */
+  notices: v.optional(v.array(v.string())),
   timings: v.optional(v.record(v.string(), v.number())),
   /** The revision whose run this unchanged row reuses. */
   cached: v.optional(v.string()),
@@ -32,9 +34,11 @@ export interface Evidence {
 }
 
 /** One copier for deploy rows and eval trials: the exact files copied are the row's declared artifacts. */
-export function ciVerdictRow(gate: { readonly label: string; readonly run?: string; readonly evidence?: string }, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
+export function ciVerdictRow(gate: { readonly label: string; readonly run?: string; readonly evidence?: string }, outcome: { readonly exitCode: number; readonly seconds: number; readonly stdout: string; readonly stderr: string; readonly notices?: readonly string[] }, timings: CIVerdict['timings'], evidence: Evidence | undefined): CIVerdict {
   const output = outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr;
   const row: CIVerdict = { name: gate.label, run: gate.run, exitCode: outcome.exitCode, seconds: outcome.seconds, output, timings };
+
+  if ((outcome.notices?.length ?? 0) > 0) row.notices = [...outcome.notices ?? []];
 
   if (evidence === undefined || gate.evidence === undefined || !existsSync(evidence.dir)) return row;
   const into = join(evidence.artifacts, gate.evidence);
