@@ -10,7 +10,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../activation-gate';
 
 import {
-  objectNamed,
+  isEvalAccountEmail, objectNamed,
   ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
@@ -51,6 +51,7 @@ import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, 
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
+import { EvalLeaseJobs } from './eval-leases';
 import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -100,6 +101,7 @@ export class UserDO extends Agent<Env> {
     const gate = new ActivationGate(() => this.storageRefusal);
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
+    this.lifecycle.use(this.evalLeases);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
@@ -147,8 +149,14 @@ export class UserDO extends Agent<Env> {
     caller: () => ownerCaller(this.env),
   });
 
+  private readonly evalLeases = new EvalLeaseJobs({
+    evalAccount: () => isEvalAccountEmail(this.env.DEV_USER_EMAIL ?? '', this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? ''),
+    markOf: (workspace) => this.workspaces.markOf(workspace),
+    tearDown: (workspace) => this.workspaces.tearDownWorkspace(workspace, this.name),
+  });
+
   private readonly workspaces = new UserWorkspaces({
-    ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, nudgeUnreported: () => { this.nudgeUnreported(); },
+    ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, nudgeUnreported: () => { this.nudgeUnreported(); },
   });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });

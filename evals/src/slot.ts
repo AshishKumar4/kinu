@@ -7,8 +7,11 @@
 // account is checked: a workspace another run marks live means the slot is taken, one a stopped run left is deleted,
 // and a row the trial could inherit stops it, named.
 import * as v from 'valibot';
-import { EVAL_TRIAL_ACCOUNTS, inheritedRows, JsonValueSchema, parseEvalAccount, ProfileCatalogEnvelopeSchema, type EvalAccount, type JsonValue } from '@kinu.run/core';
-import { deleteWorkspace, listWorkspaces, webHeaders, WORKSPACE_LEASE_MS } from './workspace-roster';
+import {
+  EVAL_TRIAL_ACCOUNTS, EVAL_WORKSPACE_LEASE_MS, inheritedRows, JsonValueSchema, parseEvalAccount, ProfileCatalogEnvelopeSchema, type EvalAccount,
+  type JsonValue,
+} from '@kinu.run/core';
+import { deleteWorkspace, listWorkspaces, webHeaders } from './workspace-roster';
 import type { EvalMatrix } from './config';
 import type { EvalTarget } from './workspace-roster';
 
@@ -78,7 +81,7 @@ export async function trialInheritedRows(target: EvalTarget): Promise<{ inherite
 /** Make `target`'s trial account its trial's own before the trial opens on it. */
 export async function prepareTrialAccount(target: EvalTarget, now: number): Promise<void> {
   const workspaces = await listWorkspaces(target.origin, target.identity);
-  const live = workspaces.find((workspace) => now - workspace.lastVisited < WORKSPACE_LEASE_MS);
+  const live = workspaces.find((workspace) => now - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS);
 
   if (live !== undefined) {
     throw new Error(`${accountOf(target)} is in use by another run: its workspace ${live.name} was marked live `
@@ -104,7 +107,7 @@ export async function prepareTrialAccount(target: EvalTarget, now: number): Prom
  */
 export async function claimTrialAccount(target: EvalTarget, own: string, now: number): Promise<void> {
   const rival = (await listWorkspaces(target.origin, target.identity))
-    .find((workspace) => workspace.name !== own && now - workspace.lastVisited < WORKSPACE_LEASE_MS);
+    .find((workspace) => workspace.name !== own && now - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS);
 
   if (rival !== undefined) throw new Error(`${accountOf(target)} is occupied by another run's workspace ${rival.name}; ${own} cannot claim it`);
 }

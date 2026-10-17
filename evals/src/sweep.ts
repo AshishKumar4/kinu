@@ -1,31 +1,17 @@
 // At a run's start, every `eval-` workspace on the run's account that no run on any machine still marks
-// live, and no one holds, is deleted. Teardown lives in the process that made a workspace, so one that
-// dies mid-turn leaves its workspace behind, waking on its own schedule, until something deletes it.
-// Liveness is the deployment's own: a run beats its workspace's roster mark (`beatWorkspace`), and a
-// mark older than the lease belongs to a run that stopped. Holds are the reviewed held-workspaces.json.
-// A delete the deployment fails is reported, not thrown: a workspace left behind does not change what the
-// run measures, and on 2026-10-01 one failed delete cancelled every trial of the task that met it.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import * as v from 'valibot';
+// live is deleted. The account itself tears such a workspace down once its mark is a lease old (its `EvalLeaseJobs`);
+// this catches what no mark leased, a workspace older than that rule. Liveness is the deployment's own: a run beats its
+// workspace's roster mark (`beatWorkspace`), and a mark older than the lease belongs to a run that stopped. A delete the
+// deployment fails is reported, not thrown: a workspace left behind does not change what the run measures, and on
+// 2026-10-01 one failed delete cancelled every trial of the task that met it.
+import { EVAL_WORKSPACE_LEASE_MS, EVAL_WORKSPACE_PREFIX } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { EVAL_WORKSPACE_PREFIX } from '@kinu.run/test-utils';
-import { WORKSPACE_LEASE_MS, type RosterRow } from './workspace-roster';
-
-const HeldSchema = v.record(v.string(), v.record(v.string(), v.pipe(v.string(), v.minLength(1))));
-
-/** The workspaces a person holds on `origin`, each with why: `evals/held-workspaces.json`, changed by review. */
-export function heldWorkspaces(origin: string): ReadonlyMap<string, string> {
-  const held = v.parse(HeldSchema, JSON.parse(readFileSync(join(import.meta.dirname, '../held-workspaces.json'), 'utf8')));
-
-  return new Map(Object.entries(held[new URL(origin).origin] ?? {}));
-}
+import type { RosterRow } from './workspace-roster';
 
 /** One deployment's account, as the run's identity reaches it, and the sweeper's own clock. */
 export interface SweptAccount {
   list(): Promise<readonly RosterRow[]>;
   remove(name: string): Promise<void>;
-  readonly held: ReadonlyMap<string, string>;
   readonly now: number;
 }
 
@@ -33,8 +19,6 @@ export interface EvalSweep {
   readonly deleted: readonly string[];
   /** Marked live within the lease, by a run on this machine or any other. */
   readonly live: readonly string[];
-  /** Held, with the reason the file gives. */
-  readonly held: readonly { readonly name: string; readonly reason: string }[];
   /** Due for deletion, and the deployment would not delete it: why, as it answered. */
   readonly failed: readonly { readonly name: string; readonly reason: string }[];
 }
@@ -42,16 +26,12 @@ export interface EvalSweep {
 export async function sweepEvalWorkspaces(account: SweptAccount): Promise<EvalSweep> {
   const deleted: string[] = [];
   const live: string[] = [];
-  const held: { name: string; reason: string }[] = [];
   const failed: { name: string; reason: string }[] = [];
 
   for (const { name, lastVisited } of await account.list()) {
     if (!name.startsWith(EVAL_WORKSPACE_PREFIX)) continue;
-    const reason = account.held.get(name);
 
-    if (reason !== undefined) {
-      held.push({ name, reason });
-    } else if (account.now - lastVisited < WORKSPACE_LEASE_MS) {
+    if (account.now - lastVisited < EVAL_WORKSPACE_LEASE_MS) {
       live.push(name);
     } else {
       try {
@@ -63,5 +43,5 @@ export async function sweepEvalWorkspaces(account: SweptAccount): Promise<EvalSw
     }
   }
 
-  return { deleted, live, held, failed };
+  return { deleted, live, failed };
 }

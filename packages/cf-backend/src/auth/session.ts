@@ -3,7 +3,7 @@
 import { Cause, Data, Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import {
-  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, err, json, parseEvalAccount, timingSafeEqual, type EvalAccount,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, err, evalAccountEmail, json, parseEvalAccount, timingSafeEqual,
 } from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, accountIdFor, verifySession,
@@ -127,13 +127,6 @@ export function devIdentityEmail(request: Request, env: Pick<AuthEnv, 'DEV_USER_
       && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));
 
   return held ? namedAccountEmail(env.DEV_USER_EMAIL, request.headers.get(DEV_IDENTITY_ACCOUNT_HEADER)) : Effect.succeed(null);
-}
-
-/** `eval@x` → `eval+devices@x`: a separate user, so its machines reach no other eval account's workspaces. */
-export function evalAccountEmail(email: string, account: EvalAccount): string {
-  const at = email.lastIndexOf('@');
-
-  return `${email.slice(0, at)}+${account}${email.slice(at)}`;
 }
 
 /** The email `account` names under the dev identity's own, which is its own account when none is named. */

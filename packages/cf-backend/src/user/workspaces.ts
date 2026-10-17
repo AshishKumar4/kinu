@@ -13,6 +13,7 @@ import { notInRegistry } from './workspace-ownership';
 import type { UserMcpServers } from './mcp-servers';
 import type { UserObjectHost } from './user-host';
 import type { ShareCardJobs } from './share-cards';
+import type { EvalLeaseJobs } from './eval-leases';
 
 /** Renewed as each fork frame lands, so this bounds the gap between frames, not the transfer. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
@@ -39,6 +40,8 @@ class WorkspaceReservationNotPendingError extends Error {
 
 export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx' | 'sessionStands'> {
   readonly mcpServers: Pick<UserMcpServers, 'stopWorkspaceMcpCalls'>;
+  /** An eval run's workspaces' leases, moved by each mark and ended by the teardown. */
+  readonly evalLeases: Pick<EvalLeaseJobs, 'marked' | 'ended'>;
   /** Brings a workspace's share recipients to the shares its overview names. */
   readonly shareCards: Pick<ShareCardJobs, 'reconcile'>;
   nudgeUnreported(): void;
@@ -204,6 +207,7 @@ export class UserWorkspaces {
         now, name,
       );
       this.rosterChanged(name);
+      await this.host.evalLeases.marked(name, now);
 
       return {
         status: 'active',
@@ -229,6 +233,8 @@ export class UserWorkspaces {
       name, title, origin, now, now,
     );
     this.rosterChanged(name);
+    // The create is the first mark.
+    await this.host.evalLeases.marked(name, now);
 
     return {
       status: 'created',
@@ -422,16 +428,28 @@ export class UserWorkspaces {
     validateWorkspaceName(name);
 
     // Rows being torn down or not yet published are not visitable, matching ordinary reads.
+    const now = Date.now();
+
     const touched = this.host.sqlx<{ name: string }>(
       `UPDATE user_workspaces SET last_visited = ?
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0
        RETURNING name`,
-      Date.now(), name,
+      now, name,
     ).length > 0;
 
-    if (touched) this.rosterChanged(name);
+    if (touched) {
+      this.rosterChanged(name);
+      await this.host.evalLeases.marked(name, now);
+    }
 
     return touched;
+  }
+
+  /** `name`'s last mark, or null once it is gone, being torn down or not yet published. */
+  markOf(name: string): number | null {
+    return this.host.sqlx<{ last_visited: number }>(
+      `SELECT last_visited FROM user_workspaces WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
+    )[0]?.last_visited ?? null;
   }
 
   /**
@@ -481,6 +499,7 @@ export class UserWorkspaces {
 
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
     this.deleteWorkspaceRows(name, 'after-destroy');
+    await this.host.evalLeases.ended(name);
     // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
   }

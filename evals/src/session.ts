@@ -96,7 +96,7 @@
 import * as v from 'valibot';
 import {
   browserOwner, createWorkspace, deleteWorkspace, openPreviewAsOwner, readJson, resolveWebIdentity, settleCatalog, sweptAway, webHeaders,
-  WORKSPACE_BEAT_MS, type CatalogNeed, type CreateWorkspaceBody, type PublicWebIdentity, type WorkspaceWeb,
+  type CatalogNeed, type CreateWorkspaceBody, type PublicWebIdentity, type WorkspaceWeb,
 } from './workspace-roster';
 import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
@@ -106,7 +106,7 @@ import { StepOutputInspectionSchema } from '../../packages/core/src/subordinates
 import { helperAddress, ROOT, type HelperAddress } from './helper-address';
 
 import {
-  hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
+  EVAL_WORKSPACE_BEAT_MS, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
   RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, renderSoulMarkdown, rowText, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
   type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
@@ -611,16 +611,16 @@ async function markLive(origin: string, identity: PublicWebIdentity, name: strin
   }
 }
 
-/** Runs `beat` every {@link WORKSPACE_BEAT_MS} until the returned stop is called. */
+/** Runs `beat` every {@link EVAL_WORKSPACE_BEAT_MS} until the returned stop is called. */
 function everyBeat(beat: () => Promise<boolean>): () => void {
-  const timer = setInterval(() => detach(Effect.promise(async () => { await beat(); })), WORKSPACE_BEAT_MS);
+  const timer = setInterval(() => detach(Effect.promise(async () => { await beat(); })), EVAL_WORKSPACE_BEAT_MS);
 
   timer.unref();
 
   return () => { clearInterval(timer); };
 }
 
-/** Mark `name` live every {@link WORKSPACE_BEAT_MS} until the returned stop is called; its create is the first mark. */
+/** Mark `name` live every {@link EVAL_WORKSPACE_BEAT_MS} until the returned stop is called; its create is the first mark. */
 export function beatWorkspace(origin: string, identity: PublicWebIdentity, name: string): () => void {
   return everyBeat(() => markLive(origin, identity, name));
 }

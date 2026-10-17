@@ -19,10 +19,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import * as v from 'valibot';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, type EvalAccount } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { DEFAULT_MODELS, DEFAULT_TRIALS, evalMatrix, PASS_FIRST_SLOT } from '../evals/src/config';
-import { listWorkspaces, settleCatalog, webHeaders, WORKSPACE_LEASE_MS, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
+import { listWorkspaces, settleCatalog, webHeaders, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { trialAccounts, trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
@@ -123,7 +123,7 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
   if (inherited.length > 0) {
     const rows = inherited.map(([table, count]) => `${table} ${String(count)}`).join(', ');
     // Every page: a run on a workspace past the first would otherwise be reset under it.
-    const live = (await listWorkspaces(input.origin, identity)).find((workspace) => Date.now() - workspace.lastVisited < WORKSPACE_LEASE_MS);
+    const live = (await listWorkspaces(input.origin, identity)).find((workspace) => Date.now() - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS);
 
     if (live !== undefined) {
       return { given: false, reset: false, note: `${account} at ${input.origin} holds rows a trial would inherit (${rows}), and a run is on it (${live.name}): not reset` };

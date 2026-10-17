@@ -7,10 +7,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { cloudProxyBaseURL } from '@kinu.run/core';
+import { EVAL_WORKSPACE_PREFIX } from '@kinu.run/core';
 import { LIVE_MODEL_ENV } from '../src/ambient-env';
 import {
   EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, EVAL_SERVICE_ACCOUNT, EVAL_STAGING_ORIGIN,
-  EVAL_WORKSPACE_PREFIX, deploymentPublicOrigin, evalModelEndpointVerdict, evalTargetVerdict, evalWorkspaceName,
+  deploymentPublicOrigin, evalModelEndpointVerdict, evalTargetVerdict, evalWorkspaceName,
   refusedEvalEndpoint, resolveEvalIdentity,
 } from '../src/eval-identity';
 

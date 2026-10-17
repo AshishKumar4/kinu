@@ -1,19 +1,18 @@
 import { expect, test } from 'bun:test';
-import { WORKSPACE_LEASE_MS } from './workspace-roster';
+import { EVAL_WORKSPACE_LEASE_MS } from '@kinu.run/core';
 import { sweepEvalWorkspaces } from './sweep';
 
 const NOW = Date.parse('2026-09-26T06:00:00.000Z');
 
-test('a run deletes the eval workspaces whose mark outlived the lease and no one holds, and nothing else', async () => {
+test('a run deletes the eval workspaces whose mark outlived the lease, and nothing else', async () => {
   const removed: string[] = [];
 
   const sweep = await sweepEvalWorkspaces({
-    // Marked a beat ago on some machine; stopped marking past the lease; held since long ago; not an eval's.
+    // Marked a beat ago on some machine; stopped marking past the lease; not an eval's.
     list: () => Promise.resolve([
       { name: 'eval-order-book-3-live01', lastVisited: NOW - 60_000 },
-      { name: 'eval-order-book-3-edge01', lastVisited: NOW - WORKSPACE_LEASE_MS + 1 },
-      { name: 'eval-order-book-2-dead01', lastVisited: NOW - WORKSPACE_LEASE_MS },
-      { name: 'eval-trajectory-evals-pu-eedw1v', lastVisited: Date.parse('2026-09-22T12:00:00.000Z') },
+      { name: 'eval-order-book-3-edge01', lastVisited: NOW - EVAL_WORKSPACE_LEASE_MS + 1 },
+      { name: 'eval-order-book-2-dead01', lastVisited: NOW - EVAL_WORKSPACE_LEASE_MS },
       { name: 'fernhill-bakery', lastVisited: Date.parse('2026-09-01T12:00:00.000Z') },
     ]),
     remove: (name) => {
@@ -21,7 +20,6 @@ test('a run deletes the eval workspaces whose mark outlived the lease and no one
 
       return Promise.resolve();
     },
-    held: new Map([['eval-trajectory-evals-pu-eedw1v', 'the reproduction of the 30 s wake loop']]),
     now: NOW,
   });
 
@@ -29,7 +27,6 @@ test('a run deletes the eval workspaces whose mark outlived the lease and no one
   expect(sweep).toEqual({
     deleted: ['eval-order-book-2-dead01'],
     live: ['eval-order-book-3-live01', 'eval-order-book-3-edge01'],
-    held: [{ name: 'eval-trajectory-evals-pu-eedw1v', reason: 'the reproduction of the 30 s wake loop' }],
     failed: [],
   });
 });
@@ -39,7 +36,7 @@ test('a delete the deployment fails is reported with its reason, and the sweep g
   // first workspace within 2 ms; one deleted it and eight were answered 500 "no such table: workspace_identity". Each
   // of those eight sweeps threw, and with it the 24 trials of its task were skipped.
   const removed: string[] = [];
-  const dead = (name: string) => ({ name, lastVisited: NOW - WORKSPACE_LEASE_MS });
+  const dead = (name: string) => ({ name, lastVisited: NOW - EVAL_WORKSPACE_LEASE_MS });
 
   const sweep = await sweepEvalWorkspaces({
     list: () => Promise.resolve([dead('eval-budget-board-7-7fo67r'), dead('eval-site-preview-9-s0sgip')]),
@@ -53,7 +50,6 @@ test('a delete the deployment fails is reported with its reason, and the sweep g
 
       return Promise.resolve();
     },
-    held: new Map(),
     now: NOW,
   });
 

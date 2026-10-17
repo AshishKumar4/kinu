@@ -24,8 +24,8 @@
  *    an invocation that ended in an uncaught exception or that the platform ended (a reset), a terminal effect that
  *    failed or was left owed, an object started {@link ALERT_THRESHOLDS}.startupsPerHour or more times in an hour (a
  *    wake loop), and any idle wake: an alarm with nothing to watch, no invocation of its object but alarms and no
- *    model call the object opened within {@link IDLE_WAKE_DISTANCE_MS}, read that far past the window's end
- *    ({@link workWindow}), the same target 0 as the durability canary's
+ *    model call, sweep or teardown the object made within {@link IDLE_WAKE_DISTANCE_MS}, read that far past the
+ *    window's end ({@link workWindow}), the same target 0 as the durability canary's
  *    idle window. It does not count alarms busy beside their object's work: the SDK's keepAlive heartbeat, a lap or
  *    a timer that served a live turn, or a turn that runs inside alarm invocations; nor a delivery the platform
  *    cancelled, before any code ran, to an object deleted before it ({@link alarmsThatRan}). Raw alarm counts measured that
@@ -1276,6 +1276,9 @@ async function versionRead(t: Telemetry, around: Telemetry, versionId: string): 
   // AshishKumar4/Mossaic#6): staging c6dc27da1, 2026-10-13, read one such sweep, 30 shard calls in its trace, as an
   // idle wake.
   const swept = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'maintenance_swept')]);
+  // A teardown an alarm did (an eval account's lease, `EvalLeaseJobs`) is that alarm's work: it comes a lease after the
+  // object's last call.
+  const toreDown = await perMinute(around, [...scope, eq('$metadata.type', 'cf-worker'), eq('event', 'workspace.destroyed')]);
   const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
 
   const read = {
@@ -1295,7 +1298,7 @@ async function versionRead(t: Telemetry, around: Telemetry, versionId: string): 
       terminal: terminalEffectStates(terminal, destroyedAt),
     },
     startups: await startupHours(t, scope),
-    idleWakes: idleWakeHours(alarms, [...called, ...modelCalls, ...swept]),
+    idleWakes: idleWakeHours(alarms, [...called, ...modelCalls, ...swept, ...toreDown]),
   };
 }
 

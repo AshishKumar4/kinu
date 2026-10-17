@@ -211,6 +211,8 @@ export interface TestUserDOOptions {
   deviceRosterMoved?: (name: string) => Promise<boolean>;
   /** The slate-picture bucket; absent, a teardown has no pictures to delete. */
   slatePictures?: PictureBucket;
+  /** The deployment's eval identity, whose accounts lease their `eval-` workspaces; absent, no account is an eval's. */
+  devUserEmail?: string;
 }
 
 export interface FakeDaemon {
@@ -276,6 +278,7 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 interface TestUserEnvironment {
   UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient };
   CREDENTIAL_ENCRYPTION_KEY: string;
+  DEV_USER_EMAIL?: string;
   SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
   ASSETS?: { fetch(input: Request): Promise<Response> };
@@ -570,6 +573,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     ...(options.cloudflareOAuthClientId !== undefined && { CLOUDFLARE_OAUTH_CLIENT_ID: options.cloudflareOAuthClientId }),
     ...(options.cloudflareOAuthClientSecret !== undefined && { CLOUDFLARE_OAUTH_CLIENT_SECRET: options.cloudflareOAuthClientSecret }),
     CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
+    ...(options.devUserEmail !== undefined && { DEV_USER_EMAIL: options.devUserEmail }),
     ...(options.accounts !== undefined && { UserDO: { idFromName: (name: string) => name, get: options.accounts } }),
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     SLATE_PICTURES: options.slatePictures,
