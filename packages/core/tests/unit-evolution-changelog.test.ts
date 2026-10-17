@@ -7,7 +7,7 @@
 import { describe, test, expect } from 'bun:test';
 import { renderChangelogText } from '../src/tui/index';
 import {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog,
+  awaitingTheOwner, buildChangelog, countUnseenChangelog,
   revertChangelogEntryById,
   initScaffoldTables, initTurnRatingTables,
   initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
@@ -59,6 +59,33 @@ function rate(rt: AgentRuntime, input: Partial<RecordTurnRatingInput> & Pick<Rec
     turnId: crypto.randomUUID(), corrected: input.score <= 2 ? 1 : 0, wrong: null, request: 'q', answer: 'a', ...input,
   });
 }
+
+describe('what waits on the owner', () => {
+  test('what the agent did by itself waits on no one: facts learned, turns rated, a tuning run', () => {
+    const { rt, facts } = setup();
+
+    facts.upsert('computer.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
+    rate(rt, { score: 4, source: 'model' });
+    const runId = startGepaRun(rt.storage.sql, rt.actor, { target: 'scaffold' });
+
+    finishGepaRun(rt.storage.sql, rt.actor, {
+      runId, status: 'completed', stopReason: 'metric_budget_exhausted', winnerId: 'cand-1', metricCalls: 12, iterations: 3,
+    });
+
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
+
+    expect(entries.map((entry) => entry.kind).sort()).toEqual(['fact', 'gepa', 'ratings']);
+    expect(awaitingTheOwner(entries)).toEqual([]);
+  });
+
+  test('a skill held for the owner\'s approval waits on them, wherever in the journal it sits', () => {
+    const held = { id: 'refinement:r1:0', kind: 'refinement', at: 2, summary: 'Staged a skill: brevity', evidence: '', decision: { requestId: 'r1', routeIndex: 0 } } as const;
+    const applied = { id: 'refinement:r1:1', kind: 'refinement', at: 2, summary: 'Learned: answers run one line', evidence: '' } as const;
+
+    expect(awaitingTheOwner([{ id: 'refinement:r1', kind: 'refinement', at: 2, summary: 'A refinement', evidence: '', items: [applied, held] }]))
+      .toEqual([held]);
+  });
+});
 
 describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('a scaffold proposal entry waits for the owner\'s decision', async () => {
@@ -374,7 +401,7 @@ describe('unseen-count logic (the badge)', () => {
     expect(agg.items?.map((item) => item.at)).toEqual([now]);
   });
 
-  /** The needs-you queue must never count what the journal would not show. */
+  /** The journal's new entries are ones it renders. */
   test('every unseen entry is one the digest itself renders', () => {
     const { rt, facts } = setup();
     const sql = rt.storage.sql;
@@ -382,21 +409,19 @@ describe('unseen-count logic (the badge)', () => {
     rate(rt, { score: 4.5, source: 'model', request: 'hi', answer: 'hello' });
     facts.upsert('computer.node_version', 'v22');
 
-    const unseen = listUnseenChangelog(sql, actor, 0);
-    const rendered = new Set(buildChangelog(sql, actor, { limit: 30 }).map((entry) => entry.id));
-    expect(unseen.length).toBeGreaterThan(0);
-    expect(unseen.filter((entry) => !rendered.has(entry.id))).toEqual([]);
-    expect(countUnseenChangelog(sql, actor, 0)).toBe(unseen.length);
+    expect(countUnseenChangelog(sql, actor, 0)).toBe(buildChangelog(sql, actor, { limit: 30 }).length);
   });
 
-  /** A first rating is unseen but carries no revert to decide. */
-  test('the first rated turn of a fresh workspace produces an unseen entry with nothing to decide', () => {
+  /** A first rating is new to the owner but asks nothing of them. */
+  test('the first rated turn of a fresh workspace is new in the journal, with nothing to decide', () => {
     const { rt } = setup();
     rate(rt, { score: 4.5, source: 'model', request: 'hi', answer: 'hello' });
 
-    const unseen = listUnseenChangelog(rt.storage.sql, rt.actor, 0);
-    expect(unseen.map((entry) => entry.kind)).toEqual(['ratings']);
-    expect(unseen.filter((entry) => entry.revert !== undefined)).toEqual([]);
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
+
+    expect(countUnseenChangelog(rt.storage.sql, rt.actor, 0)).toBe(1);
+    expect(entries.map((entry) => entry.kind)).toEqual(['ratings']);
+    expect(awaitingTheOwner(entries)).toEqual([]);
   });
 });
 

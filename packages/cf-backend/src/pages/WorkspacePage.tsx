@@ -971,7 +971,6 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
             onRefreshJobs={(...args: Parameters<typeof state.refreshBackgroundJobs>) => detach(Effect.promise(async () => state.refreshBackgroundJobs(...args)))}
             pendingActions={state.pendingActions}
             onOpenAsk={openAsk}
-            onChangelogSeen={state.clearChangelogUnseen}
             slates={state.slates}
             slateReloads={state.slateReloads}
             changesMoved={state.changesMoved}

@@ -63,8 +63,6 @@ export interface AgentSurfaceProps {
   memoryContent: string;
   onSearchMemory: (q: string) => void;
   onRetryLoad: () => void;
-  /** The changelog was read: what the agent changed in itself stops counting as unseen. */
-  onChangelogSeen?: (() => void) | undefined;
   rpc: WorkspaceRpc;
   /** `reads_changed` frames per live read, as WorkTab takes them. */
   readMoves?: ReadMoves;
@@ -200,10 +198,10 @@ function readOf(loaded: boolean, failed: boolean, retry: () => void): Read {
   return failed ? { state: "failed", retry } : { state: "loading" };
 }
 
-function Changing({ rpc, readMoves, onChangelogSeen, version }: {
-  rpc: WorkspaceRpc; readMoves: ReadMoves; onChangelogSeen: (() => void) | undefined; version: number | null;
+function Changing({ rpc, readMoves, version }: {
+  rpc: WorkspaceRpc; readMoves: ReadMoves; version: number | null;
 }) {
-  const { view, seenAt, seenError, resource, reload } = useChangelog(rpc, onChangelogSeen, readMoves.getEvolutionChangelog ?? 0);
+  const { view, seenAt, seenError, resource, reload } = useChangelog(rpc, readMoves.getEvolutionChangelog ?? 0);
   const entries = view?.entries ?? [];
 
   return (
@@ -237,7 +235,7 @@ function Changing({ rpc, readMoves, onChangelogSeen, version }: {
 }
 
 export function AgentSurface(
-  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, onChangelogSeen, rpc, readMoves = {}, workspace }: AgentSurfaceProps,
+  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, rpc, readMoves = {}, workspace }: AgentSurfaceProps,
 ) {
   // "Nothing noticed" may only be claimed about a listing that came back.
   const loadFacts = useCallback(() => rpc("getFacts", [100]), [rpc]);
@@ -253,7 +251,7 @@ export function AgentSurface(
       <Section id="agent-doing" title="How it's doing" icon={<ChartLineUpIcon size={14} className="p-text-2" />}>
         <QualityView rpc={rpc} moved={readMoves.getQuality ?? 0} />
       </Section>
-      <Changing rpc={rpc} readMoves={readMoves} onChangelogSeen={onChangelogSeen} version={as?.scaffoldVersion ?? null} />
+      <Changing rpc={rpc} readMoves={readMoves} version={as?.scaffoldVersion ?? null} />
     </div>
   );
 }

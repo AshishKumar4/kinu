@@ -508,7 +508,7 @@ export function buildChangelog(
 const UNSEEN_WINDOW_LIMIT = 99;
 
 /** Entries newer than the seen marker, newest first. */
-export function listUnseenChangelog(
+function listUnseenChangelog(
   sql: SqlExecutor, actor: ActorHandle, seenAt: number,
 ): ChangelogEntry[] {
   return buildChangelog(sql, actor, { since: seenAt, limit: UNSEEN_WINDOW_LIMIT });
@@ -516,6 +516,16 @@ export function listUnseenChangelog(
 
 export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenAt: number): number {
   return listUnseenChangelog(sql, actor, seenAt).length;
+}
+
+/**
+ * The changes that wait on the owner: a skill the agent wrote for itself, held until they approve it. Everything else
+ * in the journal it did by itself and only records (facts learned, turns rated, tools made, a tuning run, a trial's
+ * verdict, a refinement applied or refused), so none of it is a request (the owner, 2026-10-16). A pending scaffold
+ * is the queue's own row.
+ */
+export function awaitingTheOwner(entries: readonly ChangelogEntry[]): ChangelogEntry[] {
+  return entries.flatMap((entry) => [...(entry.decision === undefined ? [] : [entry]), ...awaitingTheOwner(entry.items ?? [])]);
 }
 
 export interface ChangelogRevertContext {

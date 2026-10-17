@@ -908,9 +908,9 @@ function deviceConnectFixture(path: string, method: string, body: BodyInit | nul
 
 /* One tile per card state; `gallery:overview` ({name, overview}) changes one and the roster socket carries it. */
 const STOCK_OVERVIEWS = new Map(Object.entries({
-  "checkout-fixes": { activity: "working", awaitsSettings: false, decisionsWaiting: 2, hasUpdates: true, latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration", run: null }, slates: [{ id: "coupon-board", title: "Coupon board", picture: null, visibility: null }], shares: [] },
+  "checkout-fixes": { activity: "working", awaitsSettings: false, decisionsWaiting: 2, hasUpdates: false, latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration", run: null }, slates: [{ id: "coupon-board", title: "Coupon board", picture: null, visibility: null }], shares: [] },
   "perf-audit": { activity: "working", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: null, task: "Make sync resume after a dropped connection", run: null }, slates: [], shares: [] },
-  "email-triage": { activity: "idle", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: true, latestRun: { status: "completed", task: "Answer this week's refund requests", run: null }, slates: [], shares: [] },
+  "email-triage": { activity: "idle", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: "completed", task: "Answer this week's refund requests", run: null }, slates: [], shares: [] },
   "design-sys": { activity: "unfinished", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: "error", task: "Kinu website", run: null }, slates: [], shares: [] },
   "handwrought-walnut-4166c321": { activity: "idle", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [] },
   "audit-sweep": { activity: "unfinished", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: "completed", task: "Recount the quarter's shares against the register", run: null }, slates: [], shares: [] },
@@ -5567,9 +5567,9 @@ const PENDING_ACTIONS: PendingAction[] = [
     detail: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
   },
   {
-    id: "unseen-changes", kind: "unseen_changes", at: NOW - 10e5,
-    title: "2 self-changes you have not seen",
-    detail: "Keep or revert them in the journal below.",
+    id: "change-approvals", kind: "change_approval", at: NOW - 10e5,
+    title: "A skill the agent wrote waits for your approval",
+    detail: null,
   },
 ];
 

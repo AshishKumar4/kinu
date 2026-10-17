@@ -27,19 +27,15 @@ const EMPTY: WorkspaceOverviewInputs = {
 };
 
 describe('buildWorkspaceOverview', () => {
-  test('decisions count; unseen changes are updates; curriculum proposals are neither', () => {
+  test('every row the queue holds waits on the owner, a skill held for approval among them', () => {
     const overview = buildWorkspaceOverview({
       ...EMPTY,
-      pendingActions: [
-        action('deferred_action'),
-        action('plan_review'),
-        action('unseen_changes'),
-        action('curriculum_task'),
-      ],
+      pendingActions: [action('deferred_action'), action('plan_review'), action('change_approval')],
     });
 
-    expect(overview.decisionsWaiting).toBe(2);
-    expect(overview.hasUpdates).toBe(true);
+    expect(overview.decisionsWaiting).toBe(3);
+    // What the agent did by itself never reaches the queue, so nothing marks the tile as updated.
+    expect(overview.hasUpdates).toBe(false);
   });
 
   test('an open question to the owner waits on them, and puts the tile among those that need them', () => {
@@ -113,16 +109,6 @@ describe('rosterHeadline', () => {
   test('a sealed error outranks durable leftovers', () => {
     expect(headline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, latestRun: { status: 'error', task: null, run: 'run-1' } })))
       .toEqual({ label: 'Last run failed', status: 'failed' });
-  });
-
-  test('durable leftovers outrank unread updates', () => {
-    expect(headline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, pendingActions: [action('unseen_changes')] })))
-      .toEqual({ label: 'Unfinished', status: 'unfinished' });
-  });
-
-  test('unread updates outrank a plain idle line', () => {
-    expect(headline(buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('unseen_changes')] })))
-      .toEqual({ label: 'Updated', status: 'updated' });
   });
 
   test('a workspace with no tile is not yet reported, unless the owner holds its approvals', () => {
