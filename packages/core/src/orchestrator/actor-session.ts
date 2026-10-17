@@ -262,18 +262,30 @@ export class ActorSession {
     readonly prepareDrain?: (rows: readonly LandedSteerRow[], atStep: number, reference: MessageReference) => Promise<(selection: ContextSelection) => void>;
     readonly turnId?: () => string | null;
     readonly skills?: (text: string) => Promise<string | null>;
+    /** Moves the actor's `executing` foreground calls to the background, where that frees the step (`BackgroundJobRunner.release`). */
+    readonly releaseForeground?: (executing: number) => boolean | Promise<boolean>;
   }): void {
+    const { releaseForeground } = deps;
+
     this.orchestrator.inbox.bindSteerDeps({
       onAccept: deps.onAccept,
       onDrain: (steers, atStep) => this.landSteers(steers, atStep, deps.prepareDrain),
       turnId: () => deps.turnId?.() ?? this.active?.lease.turnId ?? null,
       skills: deps.skills,
+      ...(releaseForeground !== undefined && { release: async () => await this.releaseStep(releaseForeground) }),
     });
   }
 
   /** The owner's words as they are admitted, each file they came with saved under its own name in /uploads, once. */
   withUploads(message: ModelMessage): Promise<ModelMessage> {
     return saveUploads(message, { vfs: this.runtime.storage.vfs, planes: this.runtime.planes });
+  }
+
+  /** Whether the running step's tool calls all moved to the background, so a person's words land as they return. */
+  private async releaseStep(releaseForeground: (executing: number) => boolean | Promise<boolean>): Promise<boolean> {
+    if (this.active?.phase !== 'running' || this.executing.size === 0) return false;
+
+    return await releaseForeground(this.executing.size);
   }
 
   private async landSteers(steers: readonly UserSteer[], atStep: number, prepareDrain?: (rows: readonly LandedSteerRow[], atStep: number, reference: MessageReference) => Promise<(selection: ContextSelection) => void>): Promise<ModelMessage> {
@@ -707,6 +719,9 @@ export class ActorSession {
 
   private liveStream: SessionStream | null = null;
 
+  /** The running step's tool calls still executing, by call id. */
+  private readonly executing = new Set<string>();
+
   durableCall(callId: string, signal?: AbortSignal): Promise<void> {
     return this.liveStream?.durable(callId, signal) ?? Promise.resolve();
   }
@@ -789,6 +804,8 @@ export class ActorSession {
     } finally {
       active.phase = 'settling';
       this.liveStream = null;
+      // A call cut with its turn reports no end.
+      this.executing.clear();
       await this.settleOutput(active, durableOutput);
     }
 
@@ -923,6 +940,7 @@ export class ActorSession {
         persistStreamPart: part => stream.nativePart(part),
         persistStep: (record) => stream.nativeStep(record, (parts) => this.recordStep(record, parts, claim)),
         stepPhase: (phase) => { if (phase === 'work') this.options.claims.working(claim); else this.options.claims.progressed(claim); },
+        toolExecuting: (toolCallId, executing) => { if (executing) this.executing.add(toolCallId); else this.executing.delete(toolCallId); },
         dynamicContext: {
           ledger: this.dynamic,
           snapshot: () => {

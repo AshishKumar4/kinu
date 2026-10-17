@@ -58,7 +58,15 @@ export interface ThresholdDeps {
   clock?: Clock;
   /** Mint a background job that keeps `promise` alive durably, or refuse; a refusal leaves it foreground-owned. */
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome | Promise<DetachOutcome>;
+  /**
+   * Registers how the call is moved to the background before its window ends, when a person writes while it runs
+   * (`BackgroundJobRunner.releaseForeground`); answers how to stop asking. Absent, only the window moves it.
+   */
+  released?: (release: () => void) => () => void;
 }
+
+/** What a call moved to the background because the person wrote while it ran is told. */
+const RELEASED_FOR_PERSON = 'The person wrote while this ran; backgrounded: still running, not cancelled. The settled result will wake you.';
 
 /** Outcome is a value either way, so the race's loser is observed and never an unhandled rejection. */
 function settlement<T>(promise: Promise<T>): Promise<{ value: T } | { error: unknown }> {
@@ -79,7 +87,8 @@ function detachOn<T>(input: {
   readonly trigger: Promise<null>;
   readonly release?: () => void;
   readonly onThreshold: ThresholdDeps['onThreshold'];
-  readonly message: string;
+  /** Read once the trigger fired: what moved the call decides what it is told. */
+  readonly message: () => string;
 }): Effect.Effect<T | BackgroundHandle> {
   return Effect.gen(function* () {
     const settled = settlement(input.promise);
@@ -89,7 +98,7 @@ function detachOn<T>(input: {
 
     const answered = winner === null ? yield* Effect.promise(async () => input.onThreshold(input.kind, input.promise)) : null;
 
-    if (answered?.detached === true) return { background: true, jobId: answered.jobId, kind: input.kind, message: input.message };
+    if (answered?.detached === true) return { background: true, jobId: answered.jobId, kind: input.kind, message: input.message() };
     const foreground = winner ?? (yield* Effect.promise(() => settled));
 
     return 'error' in foreground ? yield* Effect.die(foreground.error) : foreground.value;
@@ -104,11 +113,20 @@ export function withBackgroundThreshold<T>(
   const thresholdMs = deps.thresholdMs ?? BACKGROUND_POLICY.interactive.detachAfterMs;
   const promise = exec();
   const { promise: trigger, resolve: expire } = Promise.withResolvers<null>();
+  let message = `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded: still running, not cancelled. The settled result will wake you.`;
   const cancel = (deps.clock ?? REAL_CLOCK).after(thresholdMs, () => { expire(null); });
 
+  const unregister = deps.released?.(() => {
+    message = RELEASED_FOR_PERSON;
+    expire(null);
+  });
+
   return settle(detachOn({
-    kind, promise, trigger, release: cancel, onThreshold: deps.onThreshold,
-    message: `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded: still running, not cancelled. The settled result will wake you.`,
+    kind, promise, trigger, onThreshold: deps.onThreshold, message: () => message,
+    release: () => {
+      cancel();
+      unregister?.();
+    },
   }));
 }
 
@@ -122,7 +140,7 @@ export function withSpawnDetach<T>(
   const { promise: trigger, resolve: announce } = Promise.withResolvers<null>();
 
   return settle(detachOn({
-    kind, promise: exec(() => { announce(null); }), trigger, onThreshold: deps.onThreshold, message: 'Spawned; the settled result will wake you.',
+    kind, promise: exec(() => { announce(null); }), trigger, onThreshold: deps.onThreshold, message: () => 'Spawned; the settled result will wake you.',
   }));
 }
 

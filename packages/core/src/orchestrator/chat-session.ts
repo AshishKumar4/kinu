@@ -306,6 +306,11 @@ export interface ChatSessionPorts {
    */
   openWork(): Promise<OpenWork>;
   steerSkills(text: string): Promise<string | null>;
+  /**
+   * A person wrote while the agent's step runs `executing` tool calls: each moves to the background at once where that
+   * frees the step, as its foreground window would move it (`BackgroundJobRunner.release`), wherever its jobs run.
+   */
+  releaseForeground(executing: number): boolean | Promise<boolean>;
   /** Asked at dequeue; false drops the turn. */
   stillOwed(metadata: JsonObject | undefined): boolean;
   /** Where the assignment lives in another database (a facet's hirer's). */
@@ -449,6 +454,7 @@ export class ChatSession {
       prepareDrain: (rows, _atStep, reference) => this.prepareLandedSteers(rows, reference),
       turnId: () => this.steerTurnId(),
       skills: (text) => this.ports.steerSkills(text),
+      releaseForeground: (executing) => this.ports.releaseForeground(executing),
     });
     this.reopenedRunId = restoreChat({
       recorder: this.eventRecorder,

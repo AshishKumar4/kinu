@@ -246,6 +246,7 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): WorkspaceClient
     owes: (...args) => settle(viaPort((port) => port.owes(...args))),
     birthContext: (...args) => settle(viaPort((port) => port.birthContext(...args))),
     steerSkills: (...args) => settle(viaPort((port) => port.steerSkills(...args))),
+    releaseForeground: (...args) => settle(viaPort((port) => port.releaseForeground(...args))),
     openWork: () => settle(viaPort((port) => port.openWork())),
     armCacheWarm: (...args) => settle(viaPort((port) => port.armCacheWarm(...args))),
     enqueueTurn: (...args) => settle(viaPort((port) => port.enqueueTurn(...args))),

@@ -218,6 +218,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   owes(seq: number, next: number | null, holds: boolean, report: AgentReport) { return this.open(() => this.answers.owes(seq, next, holds, report)); }
   birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }
+  releaseForeground(executing: number) { return this.open(() => this.answers.releaseForeground(executing)); }
   openWork() { return this.open(() => this.answers.openWork()); }
   armCacheWarm(input: CacheWarmArm) { return this.open(() => this.answers.armCacheWarm(input)); }
   getAuth(key: string, opts?: AuthRequest) { return this.open(() => this.answers.getAuth(key, opts)); }
