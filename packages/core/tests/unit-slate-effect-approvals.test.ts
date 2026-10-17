@@ -91,8 +91,8 @@ test('an effect is the owner\'s decision card, with its payload, and no part of 
   queue.slateEffect('call-1', EFFECT);
 
   const [card] = buildPendingActions({
-    scaffoldVersions: [], deferredActions: queue.list(), unseenChanges: { count: 0, revertable: 0, latestAt: 0 },
-    curriculum: [], workspaceProposals: [], pendingPlans: [],
+    scaffoldVersions: [], deferredActions: queue.list(), changeApprovals: { count: 0, latestAt: 0 },
+    workspaceProposals: [], pendingPlans: [],
   });
 
   expect(card).toMatchObject({ id: 'call-1', title: 'Approve: createIssue on github, for user:ana through a share of board', detail: '{\n  "title": "Ship it"\n}' });
