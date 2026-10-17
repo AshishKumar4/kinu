@@ -485,7 +485,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       writeEvidence(result.metadata.evidence, {
         run: v.parse(HarnessRunSchema, normalizeHarnessRun(input, result)),
         verdict: { status: success ? 'passed' : 'failed', durationMs: Date.now() - startedAt },
-        events, workspace, timeline: timeline.entries,
+        events, ledgers, workspace, timeline: timeline.entries,
       });
 
       if (scrubbed.length > 0) {
