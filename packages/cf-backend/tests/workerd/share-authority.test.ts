@@ -1,0 +1,64 @@
+import { env } from 'cloudflare:workers';
+import { expect, it } from 'vitest';
+import * as v from 'valibot';
+import { LiveShareRecordSchema } from '@kinu.run/core';
+import type { SlateShareProbeRpc } from './env';
+
+type Probe = DurableObjectStub<SlateShareProbeRpc>;
+
+const subject = (name: string): Probe =>
+  // SAFETY: the binding is the probe worker's own class; the Rpc interface is its exact surface.
+  env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName(name));
+
+const ShareCreated = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
+
+const CLAIM = { userId: null, source: 'vitest', consented: true };
+
+// Review of c4015d141 (MechanicalToad, 2026-10-17): authority comes from a record this host issued, never from what a call
+// leaves out, and a viewer's request is held to every bound on the one server it shares.
+it('R-P1 grant intersection. a viewer of the broader of two owner shares reaches only what both grant', async () => {
+  const probe = subject('review-intersection');
+  await probe.start();
+
+  const broad = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+
+  await probe.share([]);
+
+  // One server, one storage: the narrower share's bound holds for the broader share's viewers too. Not even asked.
+  expect((await probe.viewerBatch(broad.share.handle, CLAIM)).mutateError).toContain('does not reach workspace.writeFile');
+  expect(await probe.ownerQueue()).toEqual([]);
+});
+
+it('R-P1 owner lineage. a shared slate calling its binding under no request of the host is refused, never taken for the owner', async () => {
+  const probe = subject('review-lineage');
+  await probe.start();
+
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
+    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+
+  // Asked by a viewer, the slate skips its runner and calls with no invocation: no write, and nothing for the owner to approve.
+  expect(await probe.viewerCall(created.share.handle, CLAIM, 'raw')).toContain('called out under no request');
+  expect(await probe.ownerQueue()).toEqual([]);
+});
+
+it('R-P1 stale viewer. a request admitted before the last share was revoked is refused, not promoted to the owner', async () => {
+  const probe = subject('review-stale-viewer');
+  await probe.start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+
+  expect(await probe.viewerAfterLastRevoke(created.share.handle, CLAIM, created.share.id)).toMatchObject({ ok: false, reason: 'denied' });
+});
+
+it("R-P1 in-flight launch. a launch that chose the owner's network before the slate was shared never runs with it", async () => {
+  const probe = subject('review-launch-fence');
+  await probe.start();
+  const raced = await probe.launchAcrossShare();
+
+  // The launch held where it took the owner's browser is stopped once shared and starts again, taking none: its image,
+  // built before the share, is refused, and nothing it started is left running with the owner's network.
+  expect(raced.actors).toBe(1);
+  expect(raced.afterShare).toBe(1);
+  expect(raced.refused).toContain('runs only as its own files build');
+  expect(raced.running).toBe(0);
+});
