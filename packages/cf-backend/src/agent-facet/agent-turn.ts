@@ -401,12 +401,15 @@ export function facetTurnSources(turn: {
   readonly turnId: string;
   readonly epoch: number | null;
   readonly pacer: StepPacer;
+  /** The run of this actor's log its provider's words are recorded in (`provider_wait`, `model_attempt`): its own, or,
+   *  for a call outside any run (the title), the workspace's, which no run listing shows (WORKSPACE_RUN_ID). */
+  readonly recordsIn: string;
 }) {
   const { actor, prepared, spend } = turn;
   const bound: TurnBound = { turnId: turn.turnId, runId: turn.runId, epoch: turn.epoch };
   // The profile the turn assembled on, until its first step's pace carries it to the workspace (D5).
   let unbound: ResolvedTurnProfile | null = null;
-  const waits = new TurnWaits(actor, turn.runId);
+  const waits = new TurnWaits(actor, turn.recordsIn);
 
   const registry = turn.models({
     userDO: brokeredCredentials(turn.workspace, prepared.credentialsRevision),
@@ -416,7 +419,7 @@ export function facetTurnSources(turn: {
     onProviderWait: waits.wait,
     onModelAttempt: (info) => {
       settleLoggedSync('event.model_attempt_emit_failed', { doing: 'recording a model_attempt run event', otherwise: 'io' }, () => {
-        actor.stores.eventRecorder.emit(turn.runId, { type: 'model_attempt', ...info });
+        actor.stores.eventRecorder.emit(turn.recordsIn, { type: 'model_attempt', ...info });
       }, { provider: info.provider });
     },
   });
@@ -550,7 +553,7 @@ export async function deliveredRun(
     run.opened = bound;
     database.prepare(bound, prepared);
     const live: LiveTurn = { dynamic: prepared.dynamic, openWork: null };
-    const { sources, trigger } = facetTurnSources({ actor, workspace, models, prepared, spend, live, runId, turnId: task.sequenceId, epoch: bound.epoch, pacer });
+    const { sources, trigger } = facetTurnSources({ actor, workspace, models, prepared, spend, live, runId, turnId: task.sequenceId, epoch: bound.epoch, pacer, recordsIn: runId });
 
     const inference: HeadInferenceDeps = {
       actor,

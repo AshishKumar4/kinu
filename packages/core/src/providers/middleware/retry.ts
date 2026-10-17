@@ -14,7 +14,7 @@ import type { LanguageModelV4CallOptions, LanguageModelV4StreamPart, LanguageMod
 import { APICallError, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { detach, diagnostics, KinuError, settle, tolerate, toKinuError } from '../../obs/index';
+import { detach, diagnostics, KinuError, settle, settleLoggedSync, tolerate, toKinuError } from '../../obs/index';
 import { silenceBoundMs } from '../../platform-catalog';
 import { DEFAULT_PROVIDER_RETRIES } from '../../types/profile';
 import { fmtSpan } from '../../utils/format';
@@ -208,16 +208,15 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
     }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('provider.wait_notify_failed', failure))));
   };
 
-  // Told when an attempt ends, which for an answer is once the SDK has read its stream to the end: no caller awaits it.
+  // Told when an attempt ends, which for an answer is once the SDK has read its stream to the end; a hook that throws
+  // is reported, and the call goes on.
   const tellAttempt = (attempt: Omit<ModelAttemptInfo, 'provider' | 'modelId'>): void => {
     const onAttempt = policy.onAttempt;
 
     if (onAttempt === undefined) return;
 
-    detach(Effect.try({
-      try: () => onAttempt({ provider: policy.provider, ...(policy.modelId !== undefined && { modelId: policy.modelId }), ...attempt }),
-      catch: (cause) => toKinuError({ doing: 'reporting a model attempt', cause, otherwise: 'io' }),
-    }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('provider.attempt_notify_failed', failure)))));
+    settleLoggedSync('provider.attempt_notify_failed', { doing: 'reporting a model attempt', otherwise: 'io' },
+      () => { onAttempt({ provider: policy.provider, ...(policy.modelId !== undefined && { modelId: policy.modelId }), ...attempt }); });
   };
 
   return Effect.gen(function* () {

@@ -172,6 +172,7 @@
     "armada": "github:AshishKumar4/armada#eefcd6df3d152799c4e0b97c10f4310239457c2b",
     "aws4fetch": "^1.0.20",
     "bun": "1.4.3",
+    "capnweb": "^0.12.0",
     "chess.js": "^1.4.0",
     "effect": "4.0.0-rc.117",
     "esbuild": "^0.28.1",
