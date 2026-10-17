@@ -4956,6 +4956,19 @@ box's stop ends the browser with the container, and every restart opened it on "
 correctly" (the step's second-start shots, 2026-10-16). Chromium 154 on Linux has no switch for it; its own setting,
 "Continue where you left off", still brings a person's tabs back.
 
+D101. A host sets `enable_request_signal`, so a client leaving reaches the box as its request's signal (2026-10-17;
+rc17's desktop-switch row). The desktop's first check stalled on the platform's disk, the page closed its socket, and
+nothing ended the check: the desktop route ends a check its caller stops through `request.signal` (D89), and an incoming
+request's signal aborts on its client going away only under that flag, which has no default date. Kinu's Worker set
+`nodejs_compat` and `new_module_registry` alone, so no kill was ever pinned, the computer never said it waited on its
+disk, and the owner had no Stop to press (`stopStalled`). Measured on a scratch Worker forwarding to its Durable Object
+as the terminal route does, three runs each, the client leaving at 3 s: without the flag neither the Worker's signal nor
+the object's ever aborted, for a plain request or a pending WebSocket upgrade; with it the Worker's aborted at 2.5-2.8 s
+and the object's 25-50 ms after (probe in kinu-logs/request-signal-2026-10-17). The flag is the Worker's, so every
+route reading its caller's signal starts ending its work: the terminal and desktop attach, a run's event stream, and the
+model proxies, whose cancelled call the shared `onError` now answers 499 and logs as no failure. The workerd test
+`request-signal` runs on the Worker's own flags; the contract fixture carries the flag too.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

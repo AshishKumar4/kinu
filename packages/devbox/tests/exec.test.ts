@@ -108,7 +108,7 @@ describe('a command on the runtime\'s exec', () => {
       return { ran, killed };
     };
 
-    return { box, container, pinned };
+    return { box, container, pinned, launched, killing };
   };
 
   test('a stop never restarts the computer, and a second one restarts it only where the stopped tree waits on its disk', async () => {
@@ -134,6 +134,25 @@ describe('a command on the runtime\'s exec', () => {
     const kept = answering.container.destroys;
 
     expect([(await answering.box.boxSize()).stalled, await answering.box.stopStalled(), answering.container.destroys - kept]).toEqual([undefined, 'finishing', 0]);
+  });
+
+  // 2026-10-17, rc17's desktop-switch row: the desktop's first check stalled on the platform's disk, the page closed
+  // its socket, and nothing ended the check, so the computer never said it waited on its disk and offered no Stop.
+  // A desktop socket's close is its request's signal (the Worker's `enable_request_signal`, request-signal.test.ts).
+  test('a desktop closed while its check waits on a stalled disk pins the check\'s kill, so the computer offers its Stop', async () => {
+    const stalled = pinnedBox('stalled');
+    await stalled.box.devboxStartup();
+    const closing = new AbortController();
+    const opened = Promise.allSettled([stalled.box.fetch(new Request('https://box/_devbox/desktop', { headers: { upgrade: 'websocket' }, signal: closing.signal }))]);
+
+    expect((await stalled.box.boxSize()).stalled).toBeUndefined();
+    await stalled.launched.promise;
+    closing.abort();
+    await stalled.killing.promise;
+
+    expect((await stalled.box.boxSize()).stalled).toBe('the computer\'s disk stopped answering reads, so its last stop is still waiting: setsid (read_extent_buffer_pages)');
+    expect(await stalled.box.stopStalled()).toBe('restarted');
+    expect((await opened)[0]?.status).toBe('rejected');
   });
 
   test('a kill that arrives while the command is still starting ends it once it has started', async () => {
