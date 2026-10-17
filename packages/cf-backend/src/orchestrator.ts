@@ -5788,7 +5788,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ask: (id, effect) => this.deferrals.slateEffect(id, effect),
         take: (id) => this.deferrals.takeSlateEffect(id),
         settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
-        retire: (share) => { this.deferrals.retireSlateEffects(share); },
+        retire: (slate, only) => { this.deferrals.retireSlateEffects(slate, only); },
       },
       // The Gallery's index is a copy of the shares listed here: told as the owner lists, unlists or revokes, and again in
       // the background at each start of the slates, which mends one it missed.

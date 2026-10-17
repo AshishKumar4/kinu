@@ -297,6 +297,20 @@ test("'Always for this slate' runs the asked call, then that tool on that root u
   await expect(write('todo.md')).rejects.toThrow('waits for the owner');
 });
 
+test("'Always' leaves no one-shot approval behind it: taken back, the very call it was given on asks again", async () => {
+  const { call, ran, asked, approveAll, live } = world('owner');
+  const write = () => call('writeFile', { args: [{ path: 'notes.md', text: 'hello' }] });
+
+  await expect(write()).rejects.toThrow('waits for the owner');
+  await approveAll('always');
+  expect(await write()).toMatchObject({ ok: true });
+
+  // Taken back on the sheet; the call it was given on, made again, is the owner's to answer again.
+  live.withdrawPreapproval('board', { slate: 'board', namespace: 'workspace', member: 'writeFile', root: {} });
+  await expect(write()).rejects.toThrow('waits for the owner');
+  expect({ ran: ran.length, asked: asked().length }).toEqual({ ran: 1, asked: 1 });
+});
+
 test("'Always' on a call another slate made names that caller, on the shared slate's shares", async () => {
   const { asked, approveAll, live, servers } = world('owner');
   const args = [{ path: 'notes.md' }];
