@@ -7700,6 +7700,7 @@ async function mount() {
     ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
     ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
     ["shared-live", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
+    ["shared-live-signed-out", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
     ["part-frame", { node: <PartFrameFrame />, entries: [partFrameEntry(new URLSearchParams(location.search))] }],
     ["part-previews", { node: <PartPreviewsFrame />, entries: [PART_PREVIEWS_ENTRY] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],

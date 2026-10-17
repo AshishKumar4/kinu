@@ -187,6 +187,26 @@ describe("a slate's personal parts", () => {
     });
   });
 
+  test("a share that names people, entered signed out, signs its visitor in and lands them back on it", async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'shared-live-signed-out', 'light', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-shared-sign-in] button', SOON);
+        const here = new URL(page.url());
+
+        const [login] = await Promise.all([
+          page.waitForRequest((request) => new URL(request.url()).pathname === '/login', SOON),
+          page.click('[data-shared-sign-in] button'),
+        ]);
+
+        expect(new URL(login.url()).searchParams.get('return_to')).toBe(here.pathname + here.search);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test("the owner's previews, in the column and in an answer, each host their slate's parts and open its decisions at the top", async () => {
     await withGallery(async (gallery) => {
       const page = await gallery.newPage();
