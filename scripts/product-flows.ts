@@ -228,26 +228,46 @@ const STACK_KEYS = `(() => {
 })()`;
 
 /**
- * Opens the flow's own card, then presses its answer named `words`, in one page task: the account's other runs raise
+ * The flow's own card, opened first if another holds the front, as a page expression: the account's other runs raise
  * cards too (account memory reaches every workspace), and one created meanwhile takes the front of a stack no pointer
- * is on, so a card opened in one step can be behind by the next.
+ * is on, so a card opened in one step can be behind by the next. Each step that touches the card opens it in the
+ * same page task.
  */
-function answerOwnCard(key: string, words: string): string {
+function ownCard(key: string): string {
   return `(() => {
     const open = () => document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)});
 
     if (open() === null) document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
-    const button = [...(open()?.querySelectorAll('button') ?? [])].find((each) => each.textContent?.trim() === ${JSON.stringify(words)});
 
-    button?.click();
-
-    return button !== undefined;
+    return open();
   })()`;
 }
 
 /** Presses `words` on the flow's own card, opening it first if another took the front, until the press lands. */
-async function answerStackCard(page: Page, key: string, words: string): Promise<void> {
-  await until(page, `the flow's own card answered ${words}`, answerOwnCard(key, words));
+export async function answerStackCard(page: Page, key: string, words: string): Promise<void> {
+  await until(page, `the flow's own card answered ${words}`, `(() => {
+    const button = [...(${ownCard(key)}?.querySelectorAll('button') ?? [])].find((each) => each.textContent?.trim() === ${JSON.stringify(words)});
+
+    button?.click();
+
+    return button !== undefined;
+  })()`);
+}
+
+/**
+ * Unticks the parked command `row` on the flow's own batch card `key`, opening it first, until its box stands
+ * unticked. On 2026-10-17 a card another run raised took the front between finding the box and pressing it, and the
+ * press met a box no longer in the page ("Node is detached from document").
+ */
+export async function untickOwnRow(page: Page, key: string, row: string): Promise<void> {
+  await until(page, `the flow's command ${row} unticked on its own card`, `(() => {
+    const box = ${ownCard(key)}?.querySelector(${JSON.stringify(`[data-parked-command=${JSON.stringify(row)}] input`)});
+
+    if (!(box instanceof HTMLInputElement)) return false;
+    if (box.checked) box.click();
+
+    return !box.checked;
+  })()`);
 }
 
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
@@ -280,7 +300,7 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
     // The older unticked, the newer approved alone.
-    await page.click(`[data-attention-card] [data-parked-command="${stacked[1].slice('action:'.length)}"] input`);
+    await untickOwnRow(page, stacked[0], stacked[1].slice('action:'.length));
     await answerStackCard(page, stacked[0], 'Approve 1');
     // The batch card stands for both under one key until the answer lands, so the other is only alone once it ends.
     await until(page, "the flow's other card remains", `${PARKED_ROWS}.length < 2 && ${remaining}.length === 1`);
