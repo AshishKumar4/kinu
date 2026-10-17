@@ -633,7 +633,7 @@ describe('CloudAgentClient protocol', () => {
       await turn;
 
       expect(v.parse(ChatMessagesSchema, request.body.messages)[0]?.metadata)
-        .toEqual({ kinuTier: 'deep', kinuTurn: { oneShot: true, cwd: '/work/dir' } });
+        .toEqual({ kinuTier: 'deep', kinuTurn: { terminal: true, oneShot: true, cwd: '/work/dir' } });
       await client.close();
     } finally {
       for (const [key, value] of Object.entries({ KINU_TOKEN: saved.token, KINU_ORIGIN: saved.origin })) {

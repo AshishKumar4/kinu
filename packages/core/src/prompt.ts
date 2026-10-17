@@ -32,6 +32,7 @@ import {
   OPERATING_GUIDANCE,
   ROLE_SECTION,
   OUTPUT_FORMAT_SECTION,
+  ANSWERING_SECTION,
   PERSISTENCE_SECTION,
   COMPUTER_EXECUTOR_LINE,
   TOOLS_SECTION,
@@ -74,6 +75,9 @@ export type {
 
 export interface SystemPromptOptions extends PromptSurfaceOptions {
   soulOverride?: string;
+  /** A person reads this turn's answer where its `<slate-ui>` pages are drawn: the host's to say, from who drives the
+   *  turn and which client opened it (`answerDrawsPages`). */
+  pagesInAnswer?: boolean;
   /** Skill name+description index as the turn's allocation admitted it; resolved by the backend, since this
    *  builder does no I/O. */
   availableSkills?: SkillsIndex;
@@ -178,7 +182,13 @@ function renderExecutorLine(exec: PromptExecutorInfo, render: RenderSection, { b
   }
 }
 
-function renderExecutorSection(surface: PromptSurface, render: RenderSection, seesImages: boolean): string {
+/** Whether the chat draws this workspace's slates: the slate route exists only where the workspace itself can publish a
+ *  preview on its own origin. */
+function drawsSlates(surface: PromptSurface): boolean {
+  return surface.executors.some((exec) => exec.name === 'workspace' && exec.capabilities?.includes('net_inbound') === true);
+}
+
+function renderExecutorSection(surface: PromptSurface, render: RenderSection, seesImages: boolean, pagesInAnswer: boolean): string {
   const context: ExecutorLineContext = { backend: surface.backend, seesImages };
 
   const tools = surface.builtinTools;
@@ -208,8 +218,8 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection, se
     hasComputer: devices.some((exec) => exec.name === 'computer'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
     hasPreview: previewExecutors.length > 0,
-    // The slate route exists only on workspaces that can publish a preview on their own origin.
-    workspacePreview: previewExecutors.some((exec) => exec.name === 'workspace'),
+    workspacePreview: drawsSlates(surface),
+    answersPerson: pagesInAnswer && drawsSlates(surface),
     exposeCalls: previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or '),
     hasHire: surface.agentsActions.includes('hire'),
   });
@@ -241,7 +251,7 @@ function listed(items: readonly string[]): string {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
 }
 
-function renderAgentStateSection(surface: PromptSurface, render: RenderSection, isHired: boolean): string {
+function renderAgentStateSection(surface: PromptSurface, render: RenderSection, isHired: boolean, pagesInAnswer: boolean): string {
   const tools = surface.builtinTools;
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
@@ -272,6 +282,9 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection, 
     hasShell: hasTool(tools, 'shell') || hasTool(tools, 'eval'),
   }));
   parts.push(render(OUTPUT_FORMAT_SECTION, { familyDelta: promptFamilyDelta(OUTPUT_FORMAT_SECTION.id, surface.model.family) }));
+
+  // Only a person in the web chat sees pages: a hirer reads the words, and a terminal folds each page to a line.
+  if (pagesInAnswer && drawsSlates(surface)) parts.push(render(ANSWERING_SECTION, {}));
 
   return parts.join('\n\n');
 }
@@ -353,12 +366,12 @@ export function buildSystemPromptParts(
   const shared = [
     renderOperatingGuidance(surface, render),
     // Execution doctrine before the tool index: a rule read after the menu is applied late.
-    renderExecutorSection(surface, render, opts.model?.seesImages !== false),
+    renderExecutorSection(surface, render, opts.model?.seesImages !== false, opts.pagesInAnswer === true),
     renderToolsSection(surface, render),
     hasTool(surface.builtinTools, 'file') && hasTool(surface.builtinTools, 'shell') && hasTool(surface.builtinTools, 'eval')
       ? render(TOOL_USE_SECTION, { familyDelta: promptFamilyDelta(TOOL_USE_SECTION.id, surface.model.family) })
       : '',
-    renderAgentStateSection(surface, render, rt.actor.parentActorId !== null),
+    renderAgentStateSection(surface, render, rt.actor.parentActorId !== null, opts.pagesInAnswer === true),
     ...(lead ? [
       render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),
       render(LEAD_BRIEF, { familyDelta: promptFamilyDelta(LEAD_BRIEF.id, surface.model.family) }),

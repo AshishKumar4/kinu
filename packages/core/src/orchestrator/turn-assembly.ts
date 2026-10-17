@@ -113,6 +113,8 @@ export interface TurnAssemblyRequest {
   /** A recovered execution's authority, as it froze at its bind: it assembles on it and drafts nothing from the current
    *  settings, so a setting changed since cannot answer it differently. */
   readonly frozen?: FrozenAuthority;
+  /** A person reads this turn's answer where its `<slate-ui>` pages are drawn (the web chat), not an agent or a terminal. */
+  readonly pagesInAnswer?: boolean;
 }
 
 export interface AssembledTurn {
@@ -242,6 +244,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     ...(availableSkills.lines.length > 0 && { availableSkills }),
     ...(pinned && { activeSkills: pinned }),
     ...(soul !== undefined && { soulOverride: soul }),
+    ...(request.pagesInAnswer === true && { pagesInAnswer: true }),
   };
 
   const { provider, modelId } = parseModelSpec(spec);

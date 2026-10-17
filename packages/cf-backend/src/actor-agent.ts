@@ -68,7 +68,7 @@ import {
   browserSessions,
   type PromptIdentity,
   currentDateForPrompt,
-  turnTags, authoredTurnMetadata,
+  turnTags, authoredTurnMetadata, answerDrawsPages,
   type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -3477,7 +3477,10 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const assembled = await assembleActorTurn(
       { ...surface.sources, toolset: () => surface.tools, externalTools: async () => surface.surface.external },
-      { userText: extractLastUserText(history), workMode: mode, ...(explicitTier !== undefined && { explicitTier }) },
+      {
+        userText: extractLastUserText(history), workMode: mode, ...(explicitTier !== undefined && { explicitTier }),
+        pagesInAnswer: answerDrawsPages(this.turnDrivingMetadata()),
+      },
     );
 
     this._settledProfile = assembled.profile;
