@@ -1114,9 +1114,13 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       await page.waitForFunction(
         () => !(document.querySelector('aside')?.textContent ?? '').includes('loading...'),
       );
+      // The account shows in the sidebar's account menu, which opens from its head.
+      await page.click('aside [data-account-menu]');
+      await page.waitForSelector('aside [data-account-panel]');
+      await page.waitForFunction(() => !(document.querySelector('aside [data-account-panel]')?.textContent ?? '').includes('Loading'));
 
       const shell = await page.evaluate(() => ({
-        footer: document.querySelector('aside')?.textContent ?? '',
+        account: document.querySelector('aside [data-account-panel]')?.textContent ?? '',
         chatShown: (document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0) > 0,
         chatWidth: Math.round(document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0),
         composerWidth: Math.round(document.querySelector('[data-composer-root] > .p-composer')?.getBoundingClientRect().width ?? 0),
@@ -1125,8 +1129,8 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       }));
 
       await page.close();
-      expect(shell.footer).not.toContain('Could not load your profile');
-      expect(shell.footer).toContain('@');
+      expect(shell.account).not.toContain('Could not load your profile');
+      expect(shell.account).toContain('@');
       expect(shell.chatShown).toBe(true);
       expect(shell.composerWidth).toBe(shell.chatWidth);
       expect(shell.headerSettings).toBe(1);

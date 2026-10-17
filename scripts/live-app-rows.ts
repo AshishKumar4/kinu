@@ -474,7 +474,10 @@ async function measureOwnServerSlate(page: Page): Promise<OwnServerVerdict> {
   const first = await page.evaluate(() => (document.documentElement.dataset['mode'] === 'light' ? 'light' : 'dark'));
   const before = await read(first);
 
-  await page.click(first === 'light' ? 'button[aria-label="Switch to dark mode"]' : 'button[aria-label="Switch to light mode"]');
+  // The theme switch is in the sidebar's account menu, opened from its head.
+  await page.click('aside [data-account-menu]');
+  await page.waitForSelector('aside [data-mode-toggle]');
+  await page.click('aside [data-mode-toggle]');
   const after = await read(first === 'light' ? 'dark' : 'light');
 
   return first === 'light' ? { light: before, dark: after } : { dark: before, light: after };
