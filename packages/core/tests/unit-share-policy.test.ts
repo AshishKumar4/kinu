@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { containedTool, EffectApprovals, partCallVerdict, serverAuthority, type EffectCall, type LiveShareAuthority } from '../src/slates/share-policy';
+import type { JsonValue } from '../src/utils/json';
+import { containedTool, EffectApprovals, partCallVerdict, plainData, serverAuthority, type EffectCall, type LiveShareAuthority } from '../src/slates/share-policy';
 import type { ShareGrant } from '../src/slates/sharing';
 import type { SlateConsent } from '../src/slates/share-modes';
 
@@ -94,5 +95,27 @@ describe('an approval', () => {
     expect(approvals.take({ ...call, payload: { to: 'everyone', body: 'hi' } })).toBe(false);
     expect(approvals.decide(approvals.ask({ ...call, tool: 'other' }).id, false)).toBe(true);
     expect(approvals.take({ ...call, tool: 'other' })).toBe(false);
+  });
+});
+
+describe('plain data', () => {
+  test('is the one form an approval is keyed by: two different timestamps never share an approval, and neither is data', () => {
+    // What the wire may hand over typed as data: an object holding something that is not (set past the type, as RPC does).
+    const holding = (value: Date | Map<string, string>): JsonValue => {
+      const payload: JsonValue = {};
+
+      Reflect.set(payload, 'at', value);
+
+      return payload;
+    };
+
+    const call = (when: Date): EffectCall => ({ workspace: 'w', slate: 's', revision: 'r1', server: 'mcp.Cal', tool: 'book', root: {}, payload: holding(when) });
+
+    // A Date (or a Map, or any class instance) the wire handed in is refused, never hashed as an empty object.
+    expect(() => EffectApprovals.idOf(call(new Date(0)))).toThrow('is not plain data');
+    expect(() => plainData(holding(new Map()))).toThrow('is not plain data');
+    expect(() => plainData([Number.NaN])).toThrow('not a finite number');
+    // Plain data is copied as it is.
+    expect(plainData({ at: '1970-01-01T00:00:00.000Z', n: [1, { b: null }] })).toEqual({ at: '1970-01-01T00:00:00.000Z', n: [1, { b: null }] });
   });
 });
