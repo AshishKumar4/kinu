@@ -1267,6 +1267,11 @@
     "revision TEXT NOT NULL",
     "PRIMARY KEY (workspace, slate, server, root)"
   ],
+  "slate_edit_marks@packages/core/src/slates/live-shares.ts": [
+    "slate_id TEXT PRIMARY KEY",
+    "editor TEXT NOT NULL",
+    "revision_before TEXT"
+  ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",
     "path TEXT NOT NULL",

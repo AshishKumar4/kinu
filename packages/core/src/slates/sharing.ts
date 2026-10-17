@@ -104,6 +104,8 @@ export const LiveShareRecordSchema = v.object({
   mode: ShareModeSchema,
   /** `owner` mode: the revision whose reach the owner approved; null in `own` mode. */
   grantRevision: v.nullable(v.string()),
+  /** The last editor of an unapproved batch, from the slate's edit mark; null once approved or rolled back. */
+  editedBy: v.nullable(v.string()),
   /** Its card's words while its owner lists it in the Gallery; null when not listed, and always on an `owner` share. */
   gallery: v.nullable(v.object({ line: v.string(), category: GalleryCategorySchema })),
   /** Computed where the row is answered, never stored. */

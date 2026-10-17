@@ -5659,13 +5659,13 @@ const LIVE_SHARE: LiveShareRecord = {
     { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
   ] },
   // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
-  createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", stale: true, gallery: null,
+  createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", editedBy: null, stale: true, gallery: null,
 };
 
 /** Its team's share: Pat edits it, Sam uses it, and Pat's last change stopped it on the owner's access. */
 const TEAM_SHARE: LiveShareRecord = {
   ...LIVE_SHARE, id: "live-team-2", visibility: "users", handle: "8b2e5d1f40", users: ["pat@example.com", "sam@example.com"], editors: ["pat@example.com"],
-  createdAt: NOW - 2 * 864e5, grantRevision: "edited-by:pat@example.com",
+  createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com",
 };
 
 /** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
