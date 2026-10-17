@@ -89,6 +89,15 @@ export class GalleryIndex {
     );
   }
 
+  /** Removed workspaces' listings, and the stars on them: a removed workspace sends no more syncs, so a listing it left
+   *  would be found forever. */
+  forgetWorkspaces(workspaces: readonly string[]): void {
+    for (const workspace of workspaces) {
+      this.db.exec('DELETE FROM gallery_listings WHERE workspace = ?', workspace);
+      this.db.exec('DELETE FROM gallery_stars WHERE workspace = ?', workspace);
+    }
+  }
+
   /** A deleted account's stars and reports: its email is kept nowhere here after it. */
   forget(email: string): void {
     this.db.exec('DELETE FROM gallery_stars WHERE email = ?', email);

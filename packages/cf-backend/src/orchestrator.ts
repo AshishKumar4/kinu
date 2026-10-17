@@ -5321,6 +5321,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const ownerUserId = this.storageRefusal === undefined ? this.getOwnerUserId() : null;
 
       if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to quiet for deletion.');
+
+      // Its shares end while it still holds its authority, each listed one taken off the Gallery: a deleted workspace
+      // sends nothing after, and the control plane forgets it only when it learns of it.
+      if (ownerUserId !== null) {
+        yield* logged('workspace.shares_end_failed', { doing: "ending a deleted workspace's live shares", otherwise: 'unavailable' },
+          async () => { await (await this.slates()).controller.endLiveShares(); }, { workspace: this.name });
+      }
+
       yield* Effect.promise(async () => this.quietAgents());
     }));
   }

@@ -565,17 +565,37 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     const held = this.live.get(share);
 
     if (held === undefined) return projectJsonValue({ value: blueprints.unshare(share) });
-    const revoked = this.live.revoke(share);
+
+    return projectJsonValue({ value: await this.endLiveShare(held) });
+  }
+
+  /** A live share revoked: what its owner's access still owed it retires, it leaves the Gallery (a revoked share is
+   *  listed nowhere), and its viewers' processes stop. */
+  private async endLiveShare(held: LiveShareRecord): Promise<LiveShareRecord> {
+    const revoked = this.live.revoke(held.id);
 
     this.ports.ownerEffects?.retire(revoked.id);
 
-    // Off the Gallery with its address: a revoked share is listed nowhere.
     if (held.gallery !== null) await this.ports.listingChanged?.(revoked);
 
     await this.processes.stopWhere((running) => running.caller.share === revoked.id);
     await this.ports.shareChanged?.(revoked.slate);
 
-    return projectJsonValue({ value: revoked });
+    return revoked;
+  }
+
+  /**
+   * Every live share of `slate` ended, or of every slate here: before a slate's source is removed, or its workspace is
+   * deleted, so nothing removed is still shared or found in the Gallery. Whether any was.
+   */
+  async endLiveShares(slate?: string): Promise<boolean> {
+    const live = this.live.list().filter((row) => row.revokedAt === null && (slate === undefined || row.slate === slate));
+
+    for (const share of live) await this.endLiveShare(share);
+
+    if (live.length > 0) await this.ports.sharesChanged?.();
+
+    return live.length > 0;
   }
 
   /**
@@ -840,6 +860,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       const session = yield* Effect.promise(async () => this.ports.session());
       const root = slateDirectory(new SlateId(id));
 
+      yield* Effect.promise(async () => this.endLiveShares(id));
       yield* Effect.promise(async () => this.processes.stopWhere((running) => running.id === id));
       const removed = yield* Effect.promise(async () => this.ports.apps.remove(id));
       const vfs = session.vfs.as(caller.cred);

@@ -187,6 +187,16 @@ const openShare = (world: World, body: { workspace: string; share: string }, ema
   email === undefined ? world.env : { ...world.env, DEV_USER_EMAIL: email },
 );
 
+/** The owner's live shares not yet revoked. */
+const openShares = async (world: World) => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema)).filter((row) => row.revokedAt === null);
+
+/** The control plane, as far as the owner's workspace tells it its Gallery listings: each sync it is sent, in `synced`. */
+function tellGalleryInto(world: World, synced: GalleryListingSync[]): void {
+  world.owner.agent.harnessDeclareEnv({
+    ControlPlaneDO: { idFromName: (name: string) => name, get: () => ({ gallerySync: async (_caller: ControlCaller, sync: GalleryListingSync) => { synced.push(sync); } }) },
+  });
+}
+
 /** A share's bare host, which only the app's page for it is handed (`LIVE_SHARE_OPEN_PATH`): what a visit reaches. */
 const hostOf = async (world: World, handle: string) => present(await world.owner.agent.liveShareUrl(handle), 'the share host');
 
@@ -663,7 +673,7 @@ test("a share on its owner's access is refused where the slate is not at the rev
   cleanups.push(world.close);
   const owner = identityOf(OWNER_ID, 'owner@example.test');
   const approved = [{ slate: 'issues', namespace: 'mcp.github', member: 'create_issue' }];
-  const open = async () => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema)).filter((row) => row.revokedAt === null);
+  const open = async () => openShares(world);
   const mode = (body: Readonly<Record<string, JsonValue>>) => sharedRequest(world.env, owner, post(LIVE_SHARE_MODE_PATH, { workspace: 'issues-owner', ...body }));
 
   // No slate process runs here, so the slate has no revision a review could have read.
@@ -698,10 +708,7 @@ test("a live share its owner lists tells the Gallery its card, stays off the own
     return synced.splice(0);
   };
 
-  // The one member a listing reaches on the control plane.
-  world.owner.agent.harnessDeclareEnv({
-    ControlPlaneDO: { idFromName: (name: string) => name, get: () => ({ gallerySync: async (_caller: ControlCaller, sync: GalleryListingSync) => { synced.push(sync); } }) },
-  });
+  tellGalleryInto(world, synced);
   const made = await sharePublic(world, 'public');
   const card = { line: 'Triage the open issues', category: 'work' } satisfies { line: string; category: GalleryCategory };
 
@@ -826,4 +833,39 @@ test("a share's one link is the app's page for it: a public share opens there si
   const named = await sharePublic(world, 'users');
 
   expect((await open(named.share.id)).status).toBe(401);
+});
+
+test("a slate removed, or its workspace deleted, ends its shares and takes its listing off the Gallery first", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const synced: GalleryListingSync[] = [];
+  const open = async () => openShares(world);
+
+  tellGalleryInto(world, synced);
+
+  const list = async () => {
+    const made = await sharePublic(world, 'public');
+
+    await sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', share: made.share.id, listed: true, line: 'Triage', category: 'work' }));
+    synced.splice(0);
+
+    return made.share.id;
+  };
+
+  const removed = await list();
+
+  // No app runs here for the removal to stop, so the op answers that after the rest; its shares end before it.
+  await world.owner.agent.slate({ op: 'remove', id: 'issues' });
+  expect(synced.map((sync) => [sync.share, sync.listed])).toEqual([[removed, false]]);
+  expect(await open()).toEqual([]);
+
+  // The slate made again and shared, then its whole workspace deleted.
+  await authorIssuesSlate(workspaceFiles(world.owner.agent));
+  await exerciseIssuesSlate(world.owner.agent);
+  const deleted = await list();
+
+  await world.owner.agent.quietForDeletion(OWNER_ID);
+  expect(synced.map((sync) => [sync.share, sync.listed])).toEqual([[deleted, false]]);
+  expect(await open()).toEqual([]);
 });
