@@ -323,3 +323,12 @@ test("'Always' on a call another slate made names that caller, on the shared sla
   await approveAll('always');
   expect(live.get('s1')?.grant.preapproved).toEqual([{ slate: 'digest', namespace: 'workspace', member: 'writeFile', root: {}, revision: 'rev-1' }]);
 });
+
+test("R3-P1 pending edit. while an editor's change awaits review, the owner share lends nothing and says whose change it is", async () => {
+  const { live, servers, call } = world('owner');
+
+  live.markEdit('board', 'pat@example.test', 'rev-1');
+  expect(live.authoritiesOf('board')).toMatchObject([{ mode: 'owner', grantRevision: null, editedBy: 'pat@example.test' }]);
+  expect(servers.authorityOf('board')).toEqual({ kind: 'none' });
+  await expect(call('readFile')).rejects.toThrow("pat@example.test's change to slate board is awaiting Sam's review");
+});
