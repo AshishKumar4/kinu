@@ -313,7 +313,7 @@ export type {
 } from './slates/room-api';
 
 export {
-  GALLERY_CATEGORIES, GALLERY_SORTS, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
   GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
   type GalleryReport,
 } from './slates/gallery-api';

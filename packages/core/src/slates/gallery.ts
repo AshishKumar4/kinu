@@ -8,7 +8,7 @@
  */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
-import { GALLERY_CATEGORIES, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort } from './gallery-api';
+import { GALLERY_CATEGORIES, GALLERY_PAGE_SIZE, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort } from './gallery-api';
 import type { GalleryListingSync } from './share-modes';
 
 export function initGalleryTables(execRaw: RawSqlExec): void {
@@ -47,8 +47,6 @@ export function initGalleryTables(execRaw: RawSqlExec): void {
   execRaw('CREATE INDEX IF NOT EXISTS gallery_reports_email ON gallery_reports (email)');
 }
 
-/** One page of listings. */
-const GALLERY_PAGE_SIZE = 24;
 
 /** The window stars count toward trending, and toward this week's featured two. */
 const TRENDING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;

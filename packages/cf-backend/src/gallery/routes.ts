@@ -6,7 +6,7 @@
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { err, json, safeJson, GALLERY_CATEGORIES, GALLERY_SORTS, type GallerySlate } from '@kinu.run/core';
+import { err, json, safeJson, GALLERY_CATEGORIES, GALLERY_LAST_PAGE, GALLERY_SORTS, type GallerySlate } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { crossSiteRejection, requestIdentity } from '../auth/session';
@@ -27,7 +27,7 @@ const Query = v.object({
   q: v.optional(v.pipe(v.string(), v.maxLength(200)), ''),
   sort: v.optional(v.picklist(GALLERY_SORTS), 'trending'),
   category: v.optional(v.picklist(GALLERY_CATEGORIES)),
-  page: v.optional(v.pipe(v.string(), v.transform(Number), v.integer(), v.minValue(0), v.maxValue(1000)), '0'),
+  page: v.optional(v.pipe(v.string(), v.transform(Number), v.safeInteger(), v.minValue(0), v.maxValue(GALLERY_LAST_PAGE)), '0'),
 });
 
 /** A star's body says `on`; a report's says its `reason`. */
