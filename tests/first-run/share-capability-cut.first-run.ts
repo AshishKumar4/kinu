@@ -14,6 +14,7 @@ import { JsonValueSchema, LiveShareCreatedSchema, ViewerRequestRecordSchema, typ
 import { ERROR_CODES } from '@kinu.run/core/obs';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { lendShares } from './my-access';
+import { shareHost } from './share-entry';
 import { webHeaders } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · share-capability-cut';
@@ -95,7 +96,7 @@ END`));
         const shared = await session.slateOp({ op: 'share', id: SLATE, visibility: 'public', approved: [] });
         const answered = v.safeParse(Answered, shared);
         const created = answered.success ? v.safeParse(LiveShareCreatedSchema, answered.output.value) : null;
-        const url = created?.success === true ? created.output.url : null;
+        const url = await shareHost(plan.origin, session.workspace, created?.success === true ? created.output.share.id : undefined);
         const refusal = v.safeParse(Refused, shared);
         const controlShared = await session.slateOp({ op: 'share', id: CONTROL_SLATE, visibility: 'public', approved: [] });
 
@@ -124,7 +125,7 @@ END`));
 
         const controlAnswered = v.safeParse(Answered, controlShared);
         const controlCreated = controlAnswered.success ? v.safeParse(LiveShareCreatedSchema, controlAnswered.output.value) : null;
-        controlUrl = controlCreated?.success === true ? controlCreated.output.url : null;
+        controlUrl = await shareHost(plan.origin, session.workspace, controlCreated?.success === true ? controlCreated.output.share.id : undefined);
 
         if (controlUrl !== null) ctrl = await callSharedSlate(controlUrl, 'ctrl', JsonValueSchema, await consentToShare(controlUrl));
 

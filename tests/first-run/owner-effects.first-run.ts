@@ -9,6 +9,7 @@ import { callSharedSlate, consentToShare, type EvalObservation, type EvalSubgoal
 import { approvalKindOf, JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { turnOnMyAccess } from './my-access';
+import { shareHost } from './share-entry';
 import { webHeaders } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · owner-effects';
@@ -73,7 +74,7 @@ END`));
         const shared = v.safeParse(Answered, await session.slateOp({ op: 'share', id: SLATE, visibility: 'public', approved: [WRITE] }));
         const created = shared.success ? v.safeParse(LiveShareCreatedSchema, shared.output.value) : null;
         const share = created?.success === true ? created.output.share.id : null;
-        const url = created?.success === true ? created.output.url : null;
+        const url = await shareHost(plan.origin, session.workspace, share ?? undefined);
 
         const lent = share === null ? null : await turnOnMyAccess({
           origin: plan.origin, headers: webHeaders(plan.identity), workspace: session.workspace, share,

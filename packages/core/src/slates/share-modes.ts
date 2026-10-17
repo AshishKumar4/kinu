@@ -70,8 +70,8 @@ const SharedAs = { share: Name, workspace: Name, slate: Name, handle: Name };
 /**
  * The workspace's word to the Gallery about one share: sent on listing on/off, revoke, re-key, mode change and each
  * new published revision, and again for every live share when the Gallery refills. Listed only for a live share in
- * `own` mode that its owner listed (the Gallery lists nothing else: §2), with its card and its address, the share's
- * `shareUrl(handle)`; unlisted, the share alone.
+ * `own` mode that its owner listed (the Gallery lists nothing else: §2), with its card and its link, the app's page for
+ * the share; unlisted, the share alone.
  */
 export const GalleryListingSyncSchema = v.variant('listed', [
   v.object({

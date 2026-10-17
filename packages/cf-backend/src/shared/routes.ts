@@ -14,7 +14,7 @@ import {
   type LiveShareRecord, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
-import type { AuthIdentity } from '../auth/session';
+import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { OrchestratorAgent } from '../orchestrator';
@@ -55,6 +55,8 @@ const NOT_FOUND = 'No such blueprint';
 
 /** Public half: before the session gate; answers nothing but page data. */
 export const sharedPublicRoutes = new Hono<FamilyEnv<Env, object>>();
+
+sharedPublicRoutes.post(LIVE_SHARE_OPEN_PATH, async (c) => crossSiteRejection(c.req.raw) ?? openLive(c.req.raw, c.env, await requestIdentity(c.req.raw, c.env)));
 
 sharedPublicRoutes.get('/api/shared/blueprint/:id', async (c) => {
   const id = decodeURIComponent(rawParam(c, 'id'));
@@ -123,7 +125,6 @@ sharedRoutes.post(LIVE_SHARE_LISTING_PATH, async (c) => shareChange({
   usage: '{ workspace, share, listed: true, line, category } or { workspace, share, listed: false }',
 }, async (owned, body) => owned.setLiveShareListing(body)));
 
-sharedRoutes.post(LIVE_SHARE_OPEN_PATH, async (c) => openLive(c.req.raw, c.env, c.get('identity')));
 
 async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
   const userDO = objectNamed(env.UserDO, identity.userId);
@@ -352,18 +353,24 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
   return json({ body: { ...v.parse(v.record(v.string(), v.unknown()), revoked.value), ...listed(revoked) } });
 }
 
-async function openLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+/**
+ * Where the app's page for a share frames it (`LiveSharePage`, the share's one link): a public share answers anyone,
+ * signed in or not; one that names people answers them, with their signed entry, and its owner. A named share asks no
+ * one signed out for more than to sign in, and says nothing of itself to anyone else.
+ */
+async function openLive(request: Request, env: Env, identity: AuthIdentity | null): Promise<Response> {
   const body = await safeJson(request, LiveIdBody);
 
   if (!body) return err(400, 'Body must be { workspace, share }');
-  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share, identity.userId);
+  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share, identity?.userId ?? null);
 
-  // A share that names people says what it is to them and its owner only, as its address admits only them.
+  if (reading.ok && !reading.value.admits && identity === null) return err(401, 'Sign in to open this share');
+
   if (!reading.ok || !reading.value.admits) return err(404, NOT_FOUND);
 
   const { handle, visibility, slate } = reading.value.record;
 
-  const url = visibility === 'public'
+  const url = identity === null || visibility === 'public'
     ? await slateShareUrl(env, body.workspace, handle)
     : await viewerEntryUrl(env, body.workspace, handle, identity.userId);
 

@@ -102,7 +102,6 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       },
       browserActor: async () => null,
       catalog: async () => ({ mcp: [], slates: [] }),
-      shareUrl: async () => null,
       shareEntry: () => null,
     });
 

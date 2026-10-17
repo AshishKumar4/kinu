@@ -33,7 +33,8 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
   return v.parse(schema, result.value);
 }
 
-const OWNER_ID = '0123456789abcdef0123456789abcdef';
+/** The owner's account, named by their email as the deployment's sign-in names it. */
+const OWNER_ID = await accountIdFor({}, 'owner@example.test');
 
 /** The account pat@example.test is on the harness's deployment, which declares no sign-in provider: a share naming
  *  pat reaches the account pat signs in to. */
@@ -177,6 +178,18 @@ const sharePublic = (world: World, visibility: 'users' | 'public', fork?: boolea
   op: 'share', id: 'issues', visibility, approved: [], fork,
 }).then((result) => answered(result, v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) })));
 
+/**
+ * The app's page for a share asking where to frame it, as `email` signed in on this deployment's own machine (its dev
+ * identity), or signed out: the route answers before any session gate.
+ */
+const openShare = (world: World, body: { workspace: string; share: string }, email?: string) => serveFamily(sharedPublicRoutes)(
+  new Request(`http://localhost${LIVE_SHARE_OPEN_PATH}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  email === undefined ? world.env : { ...world.env, DEV_USER_EMAIL: email },
+);
+
+/** A share's bare host, which only the app's page for it is handed (`LIVE_SHARE_OPEN_PATH`): what a visit reaches. */
+const hostOf = async (world: World, handle: string) => present(await world.owner.agent.liveShareUrl(handle), 'the share host');
+
 /** A visit to the share's own URL through the edge route; `ip` is the viewer the edge names by its address. */
 function visit(world: World, url: string, ip: string, init?: { path?: string; cookie?: string }) {
   const headers = new Headers({ 'cf-connecting-ip': ip });
@@ -193,7 +206,7 @@ test('S2: the per-viewer request bound refuses past its limit, per viewer and on
   cleanups.push(world.close);
 
   const created = await sharePublic(world, 'public');
-  const url = present(created.url, 'the share URL');
+  const url = await hostOf(world, created.share.handle);
 
   // The ingress count resets on the wall-clock minute; this burst belongs to one window.
   const now = Date.now();
@@ -223,7 +236,7 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   cleanups.push(world.close);
 
   const created = await sharePublic(world, 'public');
-  const url = present(created.url, 'the share URL');
+  const url = await hostOf(world, created.share.handle);
 
   const before = await visit(world, url, '203.0.113.4');
 
@@ -251,7 +264,7 @@ test('a users share link sends each visitor to sign in, then lets in its owner a
   cleanups.push(world.close);
 
   const created = await sharePublic(world, 'users');
-  const url = present(created.url, 'the share URL');
+  const url = await hostOf(world, created.share.handle);
   await world.owner.agent.shareLiveWith(created.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
 
   // Each follows the link as a browser does: to the app's page for the share, whose open hands them a ticket and names
@@ -262,7 +275,7 @@ test('a users share link sends each visitor to sign in, then lets in its owner a
 
     expect([sent.status, page.origin]).toEqual([303, APP_ORIGIN]);
     const { params } = present(matchPath(APP_ROUTES.sharedLive, page.pathname), 'the share\'s entry page');
-    const opened = present(await sharedRequest(world.env, identity, post(LIVE_SHARE_OPEN_PATH, { workspace: params.workspace, share: params.share })), 'the open answer');
+    const opened = present(await openShare(world, { workspace: params.workspace ?? '', share: params.share ?? '' }, identity.email), 'the open answer');
 
     if (opened.status === 404) return [opened.status, undefined];
     const entry = await jsonBody(opened, LiveShareOpenSchema);
@@ -343,8 +356,8 @@ test('D2: one revoke route ends a public live share and a blueprint link', async
     post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility: 'public' })), 'the live share answer');
 
   expect(liveResp.status).toBe(201);
-  const live = await jsonBody(liveResp, v.object({ share: v.object({ id: v.string() }), url: v.nullable(v.string()) }));
-  const url = present(live.url, 'the share URL');
+  const live = await jsonBody(liveResp, v.object({ share: v.object({ id: v.string(), handle: v.string() }), url: v.nullable(v.string()) }));
+  const url = await hostOf(world, live.share.handle);
 
   expect((await visit(world, url, '203.0.113.9'))?.status).toBe(200);
   expect((await revoke(live.share.id))?.status).toBe(200);
@@ -767,7 +780,7 @@ test("a viewer's cookie acts on its share only from the share's own origin: a si
   cleanups.push(world.close);
 
   const created = await sharePublic(world, 'public');
-  const url = present(created.url === null ? null : await world.owner.agent.liveShareUrl(created.share.handle), 'the share host');
+  const url = await hostOf(world, created.share.handle);
   const minted = await visit(world, url, '203.0.113.4', { path: CONSENT_PATH });
   const cookie = present(minted?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
   const own = new URL(url).origin;
@@ -792,4 +805,25 @@ test("a viewer's cookie acts on its share only from the share's own origin: a si
   expect(await send({ cookie, origin: own })).not.toBe(403);
   // With no cookie a request acts as no one in particular, from wherever it comes.
   expect(await send({ origin: 'https://hostile-preview.share.test' })).not.toBe(403);
+});
+
+test("a share's one link is the app's page for it: a public share opens there signed out, a named one asks to sign in", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+
+  const made = await sharePublic(world, 'public');
+  const entry = new URL(present(made.url, 'the share link'));
+  const { params } = present(matchPath(APP_ROUTES.sharedLive, entry.pathname), 'the app page for the share');
+
+  expect([entry.origin, params.workspace, params.share]).toEqual([APP_ORIGIN, 'issues-owner', made.share.id]);
+
+  // The page asks where to frame it, signed out, and is told its bare host, which it alone ever holds.
+  const open = async (share: string) => present(await openShare(world, { workspace: 'issues-owner', share }), 'the open answer');
+
+  expect(await jsonBody(await open(made.share.id), LiveShareOpenSchema))
+    .toEqual({ url: present(await world.owner.agent.liveShareUrl(made.share.handle), 'the share host'), slate: 'issues', title: 'Issue triage' });
+
+  const named = await sharePublic(world, 'users');
+
+  expect((await open(named.share.id)).status).toBe(401);
 });

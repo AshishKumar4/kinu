@@ -12,6 +12,7 @@ import { callSharedSlate, consentToShare, type EvalObservation, type SlateViewer
 import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { firstRunCaseId, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
+import { shareHost } from './share-entry';
 
 const CASE = firstRunCaseId(import.meta.url);
 
@@ -74,7 +75,8 @@ END`]));
         const shared = await session.rpcAt(session.workspace, 'slate', [{ op: 'share', id: SLATE, visibility: 'public', approved: [] }]);
         const answered = v.safeParse(Answered, shared);
         const created = answered.success ? v.safeParse(LiveShareCreatedSchema, answered.output.value) : null;
-        const url = created?.success === true ? created.output.url : null;
+        // Its link is the app's page for it; the visitor here drives the host that page frames.
+        const url = await shareHost(session.origin, session.workspace, created?.success === true ? created.output.share.id : undefined);
         const refusal = v.safeParse(Refused, shared);
         let served: { status: number; body: string } | null = null;
         let probe: SlateViewerAnswer<JsonValue> | null = null;

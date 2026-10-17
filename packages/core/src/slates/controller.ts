@@ -91,8 +91,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   /** Invokes a method in the slate's process. */
   call(request: SlateAppCall): Promise<SlateCallResult>;
   catalog(): Promise<SlateSurfaceCatalog>;
-  shareUrl(handle: string): Promise<string | null>;
-  /** The app's page a `users` share is entered through, or null where this deployment names no app origin. */
+  /** The app's page a share is entered through, its one link (LiveSharePage frames its host and hosts its parts), or
+   *  null where this deployment names no app origin. */
   shareEntry(share: string): string | null;
   /** Whether one more viewer request under `key` fits `perMinute`; absent means no per-viewer rate bound. */
   admitted?(key: string, perMinute: number): Promise<boolean>;
@@ -356,7 +356,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
       if (record === undefined) return yield* new KinuError('missing', 'No such share');
 
-      return { share: record, url: yield* Effect.promise(async () => this.ports.shareUrl(record.handle)) };
+      return { share: record, url: this.ports.shareEntry(record.id) };
     })));
   }
 
@@ -516,9 +516,9 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
   /** `slate` shared live as the op asks, in `own` mode. */
   private async shareSlateLive(operation: Extract<SlateOperation, { op: 'share' }>, slate: string): Promise<SlateCallResult> {
-    const created = await shareLiveSlate({
+    const created = shareLiveSlate({
       shares: this.live, graph: await this.graph(slate), visibility: operation.visibility, approved: operation.approved,
-      fork: operation.fork, url: (handle) => this.ports.shareUrl(handle),
+      fork: operation.fork, url: (share) => this.ports.shareEntry(share),
     });
 
     await this.ports.shareChanged?.(slate);

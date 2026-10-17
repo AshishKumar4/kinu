@@ -5759,7 +5759,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         owners: async () => new Map([...await listPortReservations(this.ctx)].flatMap(([port, held]) => (held.owner === null ? [] : [[port, held.owner] as const]))),
       },
       ownerMcpSurface: async () => await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
-      shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
       shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
@@ -5927,13 +5926,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** The share row re-read through the S6 gate, plus title and description from the slate's package.json, and whether
-   *  its address admits `reader`: anyone to a public share, else its owner and the people it names, as the host does. */
-  async readLiveShare(share: string, reader: string): Promise<SlateAnswer<LiveShareReading>> {
+   *  its address admits `reader`: anyone to a public share, else its owner and the people it names, as the host does.
+   *  No one signed in (`null`) is admitted to a public share alone. */
+  async readLiveShare(share: string, reader: string | null): Promise<SlateAnswer<LiveShareReading>> {
     const { controller } = await this.slates();
     const read = await controller.readLiveShareRecord(share);
 
     if (!read.ok) return read;
-    const admits = read.value.record.visibility === 'public' || reader === this.getOwnerUserId() || controller.live.hasUser(share, reader);
+    const admits = read.value.record.visibility === 'public' || (reader !== null && (reader === this.getOwnerUserId() || controller.live.hasUser(share, reader)));
 
     return { ...read, value: { ...read.value, admits } };
   }
@@ -5980,7 +5980,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const share = (await this.slates()).controller.live.get(asked.id) ?? asked;
       const shared = { share: share.id, workspace: this.name, slate: share.slate, handle: share.handle };
       const listing = share.gallery;
-      const url = listing === null ? null : await slateShareUrl(this.env, this.name, share.handle);
+      // Its link is the app's page for the share, which hosts the parts a bare share host never could.
+      const url = listing === null ? null : liveShareEntryPage(this.env, this.name, share.id);
 
       // A deployment that gives shares no address has nothing to list.
       if (listing === null || url === null) {
