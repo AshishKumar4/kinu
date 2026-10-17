@@ -14,7 +14,7 @@ import type { LanguageModelV4CallOptions, LanguageModelV4StreamPart, LanguageMod
 import { APICallError, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { detach, diagnostics, KinuError, settle, tolerate, toKinuError } from '../../obs/index';
+import { detach, diagnostics, exceededSubrequests, KinuError, settle, tolerate, toKinuError } from '../../obs/index';
 import { silenceBoundMs } from '../../platform-catalog';
 import { DEFAULT_PROVIDER_RETRIES } from '../../types/profile';
 import { fmtSpan } from '../../utils/format';
@@ -196,7 +196,8 @@ function retrying<T>(policy: RetryPolicy, params: LanguageModelV4CallOptions, op
 
       const failure: unknown = outcome.error;
 
-      if (!APICallError.isInstance(failure) || !failure.isRetryable) return yield* Effect.die(failure);
+      // A run out of subrequests is refused again: a wait here keeps the run busy, and only a pause renews them.
+      if (!APICallError.isInstance(failure) || !failure.isRetryable || exceededSubrequests({ cause: failure })) return yield* Effect.die(failure);
       const limit = rateLimitOf(failure);
 
       const header = retryAfterOf(new Headers(failure.responseHeaders ?? {}), now());

@@ -12,8 +12,9 @@ import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
 import { sha256Hex } from '../safety/argument-digest';
 import {
-  KinuError, classifyErrorCode, diagnostics, settle, tolerate, type ErrorCode,
+  KinuError, classifyErrorCode, diagnostics, exceededSubrequests, settle, tolerate, type ErrorCode,
 } from '../obs/index';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 
 export interface AuthedFetchOptions {
   credKey: string;
@@ -351,6 +352,17 @@ export function codeForStatus(status: number): ErrorCode | null {
   return null;
 }
 
+/** The platform refusing the call past the run's subrequests is no refusal of the provider's: it ends the turn in its
+ *  own words, and no other provider is tried, as each is refused alike (platform-catalog.ts do.facet.subrequests). */
+function exhaustedRun(input: { readonly doing: string; readonly cause: unknown }): KinuError {
+  const limit = PLATFORM_CATALOG['do.facet.subrequests'].limit.value.toLocaleString('en-US');
+  const error = new KinuError('unavailable', `${input.doing}: this turn made ${limit} calls without a pause, Cloudflare's limit for one run.`, { cause: input.cause });
+
+  diagnostics.failure('platform.subrequests_exhausted', error);
+
+  return error;
+}
+
 /** Classified Kinu error whose message carries only code, facts, and a generic sentence;
  *  provider prose is unsafe there and stays on `cause` and diagnostics. */
 export function toProviderError(input: {
@@ -358,6 +370,7 @@ export function toProviderError(input: {
   cause: unknown;
   provider?: string;
 }): KinuError {
+  if (exceededSubrequests(input)) return exhaustedRun(input);
   const facts = providerFailureFacts({ cause: input.cause });
 
   const code = classifyErrorCode({ cause: input.cause })

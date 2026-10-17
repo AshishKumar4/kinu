@@ -197,6 +197,16 @@ const OOM_SIGNATURES: readonly RegExp[] = [
 
 const OVERLOADED_SIGNATURE = /Durable Object is overloaded/iu;
 
+/** The platform refusing a call past the subrequests one run may make: platform-catalog.ts do.facet.subrequests and
+ *  worker.subrequests, pinned by a test. */
+const SUBREQUEST_LIMIT_SIGNATURE = /Too many subrequests/iu;
+
+/** Whether `cause` is the platform refusing a call past the run's subrequests: another provider, or the same one again,
+ *  is refused alike until the run has paused (do.facet.subrequests). */
+export function exceededSubrequests(input: { readonly cause: unknown }): boolean {
+  return input.cause instanceof Error && SUBREQUEST_LIMIT_SIGNATURE.test(renderCauseChain(input.cause));
+}
+
 /**
  * Class of a caught value, or null when nothing pinned recognises it; callers supply the fallback.
  * Reads the cause chain outermost first; the first recognised class wins.
