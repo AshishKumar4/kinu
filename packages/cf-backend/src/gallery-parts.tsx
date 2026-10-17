@@ -10,7 +10,8 @@
  * - `team` is a part the slate does not declare for this share: a stub that says what to do.
  *
  * `shared-live` is the same slate entered as a share: the share's page opens it (`/api/shared/live/open`) and frames it
- * under Kinu's bar, hosting its parts as the visitor. `part-previews` is the owner's own two previews of it, in the
+ * under Kinu's bar, hosting its parts as the visitor; `shared-live-signed-out` is a share that names people, entered
+ * signed out. `part-previews` is the owner's own two previews of it, in the
  * workspace's column and in an answer in the chat; their page is the slate's server's, served by a test.
  *
  * What the page asked is on the root for a test to read; the slate's page is drawn here, as its own author would.
@@ -65,7 +66,7 @@ function slatePage(gallery: string): string {
 
 /** The part routes, answered at the top as the server answers its one viewer. */
 export function installPartsFixture(frame: string): void {
-  if (frame !== "part-host" && frame !== "shared-live" && frame !== "part-previews") return;
+  if (frame !== "part-host" && frame !== "shared-live" && frame !== "shared-live-signed-out" && frame !== "part-previews") return;
 
   const next = window.fetch.bind(window);
   const consents: SlateConsent[] = [{ workspace: WORKSPACE, slate: SLATE, ...GITHUB, revision: "r1" }];
@@ -100,6 +101,9 @@ export function installPartsFixture(frame: string): void {
     const request = new Request(input, init);
     const url = new URL(request.url);
     const [, api, area, workspace, slate, kind, part, verb] = url.pathname.split("/");
+
+    // A share that names people answers no one signed out.
+    if (url.pathname === LIVE_SHARE_OPEN_PATH && frame === "shared-live-signed-out") return Response.json({ error: "Sign in to open this share" }, { status: 401 });
 
     // The share's entry: the slate's page as its host serves it, at an address of the page's own origin.
     if (url.pathname === LIVE_SHARE_OPEN_PATH) {

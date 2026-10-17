@@ -84,9 +84,20 @@ export async function revokeShare(input: { workspace: string; share: string }): 
   return settle(api(v.object({ listing: Listing }), 'POST', '/api/shared/revoke', input));
 }
 
-/** Share origin for a public share; a ticket-bearing entry for one that names people; with the slate and its title. */
-export function openLiveShare(input: { workspace: string; share: string }): Promise<LiveShareOpen> {
-  return settle(api(LiveShareOpenSchema, 'POST', LIVE_SHARE_OPEN_PATH, input));
+/**
+ * Share origin for a public share; a ticket-bearing entry for one that names people; with the slate and its title. Null
+ * when a share that names people is entered signed out.
+ */
+export function openLiveShare(input: { workspace: string; share: string }): Promise<LiveShareOpen | null> {
+  return settle(Effect.gen(function* () {
+    const res = yield* respond(LIVE_SHARE_OPEN_PATH, { method: 'POST', json: input });
+
+    if (res.status === 401) return null;
+
+    if (!res.ok) return yield* Effect.die(yield* refusal(res, 'POST', LIVE_SHARE_OPEN_PATH));
+
+    return v.parse(LiveShareOpenSchema, yield* Effect.promise(async () => res.json()));
+  }));
 }
 
 /** Switches a share's mode, or approves the reach again at the slate's new revision: the share as it now is. */
