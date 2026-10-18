@@ -1,11 +1,5 @@
-// Under `--parallel` every test file runs in a fresh global, and a file's
-// global is released only if nothing process-wide still points into it. The
-// preload's plugins and a suite's `mock.module` both did, so every file of the
-// cf-backend suite stayed resident until its worker exited: 1.4 GB of heap per
-// worker and a 12 GB cgroup peak (measured 2026-09-24; scripts/test-preload.ts
-// has the figures). This runs four throwaway files through the real preload, each
-// holding a module mock and the plugin-served `cloudflare:workers`, and counts
-// the live globals after a full GC as each file starts.
+// Measured 2026-10-18 on Bun 1.4.3: isolated files release their plugins and module mocks without manual cleanup.
+// Four files retain at most two globals after GC, including when each file runs twice in the same process.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,20 +17,27 @@ Bun.gc(true);
 appendFileSync(process.env.KINU_PRELOAD_PROBE_LOG, JSON.stringify({ file: Bun.main, globals: heapStats().globalObjectCount }) + '\\n');
 `;
 
-/** A file that pins its global both ways: a module mock and a plugin-served module. */
+/** A file that pins its global both ways and loads a new worker on each rerun. */
 const HELD_FILE = `import { expect, mock, test } from 'bun:test';
-import { DurableObject } from 'cloudflare:workers';
+import { inProcessWorkerLoader } from ${JSON.stringify(join(import.meta.dir, '../../cf-backend/tests/helpers/worker-loader.ts'))};
 const held = new Array(1_000_000).fill(1);
 mock.module('node:os', () => ({ hostname: () => String(held.length) }));
-test('holds its global', async () => {
-  // Dynamic: a static import would load node:os before the mock above exists.
+test('loads a worker with its platform module and bindings', async () => {
+  // The mock must register before the module loads.
   const os = await import('node:os');
-  expect([os.hostname(), typeof DurableObject]).toEqual(['1000000', 'function']);
+  const worker = inProcessWorkerLoader().load({
+    mainModule: 'worker.js',
+    modules: {
+      'worker.js': "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { inspect() { return { context: this.ctx, bindings: this.env }; } }",
+    },
+    env: { held: os.hostname() },
+  });
+  expect(await worker.getEntrypoint().inspect()).toEqual({ context: { props: {} }, bindings: { held: '1000000' } });
 });
 `;
 
 describe('the bun test preload', () => {
-  test('a file\'s global is released when the file ends, plugins and module mocks included', async () => {
+  test('reruns can load workers, and each file releases its global, plugins and module mocks', async () => {
     const dir = scratchDir('preload-release');
     const log = join(dir, 'globals.jsonl');
     const probe = join(dir, 'probe.ts');
@@ -47,8 +48,7 @@ describe('the bun test preload', () => {
 
     for (const file of files) writeFileSync(file, HELD_FILE);
 
-    // From the repository root, so bunfig.toml's preload (the one under test) runs first.
-    const run = Bun.spawn(['bun', 'test', '--timeout=0', '--parallel=1', '--preload', probe, ...files], {
+    const run = Bun.spawn(['bun', 'test', '--timeout=0', '--parallel=1', '--rerun-each=2', '--preload', probe, ...files], {
       cwd: join(import.meta.dir, '..', '..', '..'),
       env: { ...process.env, KINU_PRELOAD_PROBE_LOG: log },
       stdout: 'pipe',
